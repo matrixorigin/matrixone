@@ -935,3 +935,32 @@ func Test_batchRowCount(t *testing.T) {
 	bat.SetRowCount(3)
 	assert.Equal(t, 3, batchRowCount(bat))
 }
+
+func Test_compUriInfo(t *testing.T) {
+	ret, _ := compositedUriInfo("", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefix", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:65536", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
+	assert.True(t, ret)
+}
+
+func Test_uriHasPrefix(t *testing.T) {
+	assert.False(t, uriHasPrefix("ab", "abc"))
+}
+
+func Test_extractUriInfo(t *testing.T) {
+	_, _, err := ExtractUriInfo(context.Background(), "abc", "t")
+	assert.Error(t, err)
+}
