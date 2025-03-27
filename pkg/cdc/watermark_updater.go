@@ -32,31 +32,7 @@ import (
 
 const (
 	watermarkUpdateInterval = time.Second
-
-	maxErrMsgLen = 256
-
-	updateWatermarkFormat = "UPDATE " +
-		"`mo_catalog`.`mo_cdc_watermark` " +
-		"SET watermark='%s' " +
-		"WHERE account_id = %d " +
-		"AND task_id = '%s' " +
-		"AND db_name = '%s' " +
-		"AND table_name = '%s'"
-
-	deleteWatermarkByTableFormat = "DELETE " +
-		"FROM `mo_catalog`.`mo_cdc_watermark` " +
-		"WHERE account_id = %d " +
-		"AND task_id = '%s' " +
-		"AND db_name = '%s' " +
-		"AND table_name = '%s'"
-
-	updateErrMsgFormat = "UPDATE " +
-		"`mo_catalog`.`mo_cdc_watermark` " +
-		"SET err_msg='%s' " +
-		"WHERE account_id = %d " +
-		"AND task_id = '%s' " +
-		"AND db_name = '%s' " +
-		"AND table_name = '%s'"
+	maxErrMsgLen            = 256
 )
 
 var _ IWatermarkUpdater = new(WatermarkUpdater)
@@ -153,7 +129,7 @@ func (u *WatermarkUpdater) DeleteFromMem(dbName, tblName string) {
 }
 
 func (u *WatermarkUpdater) DeleteFromDb(dbName, tblName string) error {
-	sql := fmt.Sprintf(deleteWatermarkByTableFormat, u.accountId, u.taskId, dbName, tblName)
+	sql := fmt.Sprintf(CDCDeleteWatermarkByTableSqlTemplate, u.accountId, u.taskId, dbName, tblName)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
@@ -162,7 +138,9 @@ func (u *WatermarkUpdater) SaveErrMsg(dbName, tblName string, errMsg string) err
 	if len(errMsg) > maxErrMsgLen {
 		errMsg = errMsg[:maxErrMsgLen]
 	}
-	sql := fmt.Sprintf(updateErrMsgFormat, errMsg, u.accountId, u.taskId, dbName, tblName)
+	sql := CDCSQLBuilder.UpdateWatermarkErrMsgSQL(
+		uint64(u.accountId), u.taskId.String(), dbName, tblName, errMsg,
+	)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
@@ -180,7 +158,7 @@ func (u *WatermarkUpdater) flushAll() {
 
 func (u *WatermarkUpdater) flush(key string, watermark types.TS) error {
 	dbName, tblName := SplitDbTblKey(key)
-	sql := fmt.Sprintf(updateWatermarkFormat, watermark.ToString(), u.accountId, u.taskId, dbName, tblName)
+	sql := fmt.Sprintf(CDCUpdateWatermarkSqlTemplate, watermark.ToString(), u.accountId, u.taskId, dbName, tblName)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
