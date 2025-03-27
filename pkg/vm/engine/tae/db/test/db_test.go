@@ -7391,7 +7391,6 @@ func TestPitrMeta(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
-	db.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	db.DiskCleaner.GetCleaner().EnableGC()
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
