@@ -603,9 +603,10 @@ func compatibilityForV12(
 			vector.AppendFixed(ckpData.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], rowID, false, mp)
 		}
 		tids := vector.MustFixedColNoTypeCheck[uint64](src.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector())
+		deletes := vector.MustFixedColNoTypeCheck[types.TS](src.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector())
 		for i := 0; i < src.Length(); i++ {
 			objectStats := objectio.ObjectStats(src.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector().GetBytesAt(i))
-			ckputil.EncodeCluser(encoder, tids[i], dataType, objectStats.ObjectName().ObjectId())
+			ckputil.EncodeCluser(encoder, tids[i], dataType, objectStats.ObjectName().ObjectId(), deletes[i].IsEmpty())
 			vector.AppendBytes(ckpData.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp)
 			encoder.Reset()
 		}

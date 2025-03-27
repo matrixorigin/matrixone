@@ -408,7 +408,7 @@ func appendValToBatch(
 		return
 	}
 	encoder.Reset()
-	ckputil.EncodeCluser(encoder, tbl, objType, id.ObjectName().ObjectId())
+	ckputil.EncodeCluser(encoder, tbl, objType, id.ObjectName().ObjectId(), delete.IsEmpty())
 	if err = vector.AppendBytes(
 		dst.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp,
 	); err != nil {
