@@ -35,8 +35,6 @@ const (
 
 	maxErrMsgLen = 256
 
-	getWatermarkFormat = "select watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
-
 	updateWatermarkFormat = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
 
 	deleteWatermarkByTableFormat = "delete from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
@@ -106,7 +104,9 @@ func (u *WatermarkUpdater) GetFromMem(dbName, tblName string) types.TS {
 }
 
 func (u *WatermarkUpdater) GetFromDb(dbName, tblName string) (watermark types.TS, err error) {
-	sql := fmt.Sprintf(getWatermarkFormat, u.accountId, u.taskId, dbName, tblName)
+	sql := CDCSQLBuilder.GetTableWatermarkSQL(
+		uint64(u.accountId), u.taskId.String(), dbName, tblName,
+	)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	res := u.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
