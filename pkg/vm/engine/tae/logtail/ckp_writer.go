@@ -95,7 +95,7 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 		if node.IsAborted() {
 			continue
 		}
-		isObjectTombstone := node.End.Equal(&entry.CreatedAt)
+		isObjectTombstone := !node.End.Equal(&entry.CreatedAt)
 		if err := collectObjectBatch(
 			collector.data.batch, entry, isObjectTombstone, collector.packer, collector.data.allocator,
 		); err != nil {
@@ -195,7 +195,7 @@ func collectObjectBatch(
 	); err != nil {
 		return
 	}
-	ckputil.EncodeCluser(encoder, srcObjectEntry.GetTable().ID, objType, srcObjectEntry.ID())
+	ckputil.EncodeCluser(encoder, srcObjectEntry.GetTable().ID, objType, srcObjectEntry.ID(), isObjectTombstone)
 	if err = vector.AppendBytes(
 		data.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp,
 	); err != nil {
@@ -206,7 +206,7 @@ func collectObjectBatch(
 	); err != nil {
 		return
 	}
-	if isObjectTombstone {
+	if !isObjectTombstone {
 		if err = vector.AppendFixed(
 			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp,
 		); err != nil {
