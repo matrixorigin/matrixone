@@ -35,8 +35,6 @@ const (
 
 	maxErrMsgLen = 256
 
-	insertWatermarkFormat = "insert into mo_catalog.mo_cdc_watermark values (%d, '%s', '%s', '%s', '%s', '%s')"
-
 	getWatermarkFormat = "select watermark from mo_catalog.mo_cdc_watermark where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
 
 	updateWatermarkFormat = "update mo_catalog.mo_cdc_watermark set watermark='%s' where account_id = %d and task_id = '%s' and db_name = '%s' and table_name = '%s'"
@@ -89,10 +87,13 @@ func (u *WatermarkUpdater) Run(ctx context.Context, ar *ActiveRoutine) {
 }
 
 func (u *WatermarkUpdater) InsertIntoDb(dbTableInfo *DbTableInfo, watermark types.TS) error {
-	sql := fmt.Sprintf(insertWatermarkFormat,
-		u.accountId, u.taskId,
-		dbTableInfo.SourceDbName, dbTableInfo.SourceTblName,
-		watermark.ToString(), "")
+	sql := CDCSQLBuilder.InsertWatermarkSQL(
+		uint64(u.accountId),
+		u.taskId.String(),
+		dbTableInfo.SourceDbName,
+		dbTableInfo.SourceTblName,
+		watermark.ToString(),
+	)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }

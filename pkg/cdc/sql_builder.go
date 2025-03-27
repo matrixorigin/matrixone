@@ -104,11 +104,14 @@ const (
 		"WHERE " +
 		"1=1 AND account_id = %d AND task_id = '%s'"
 
+	CDCGetDataKeySqlTemplate = "SELECT encrypted_key FROM mo_catalog.mo_data_key WHERE account_id = %d and key_id = '%s'"
+
+	// Watermark Related SQL
+	CDCInsertWatermarkSqlTemplate = "INSERT INTO `mo_catalog`.`mo_cdc_watermark` VALUES (%d, '%s', '%s', '%s', '%s', '%s')"
+
 	CDCDeleteWatermarkSqlTemplate = "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s'"
 
 	CDCGetWatermarkSqlTemplate = "SELECT db_name, table_name, watermark, err_msg FROM mo_catalog.mo_cdc_watermark WHERE account_id = %d and task_id = '%s'"
-
-	CDCGetDataKeySqlTemplate = "SELECT encrypted_key FROM mo_catalog.mo_data_key WHERE account_id = %d and key_id = '%s'"
 )
 
 type cdcSQLBuilder struct{}
@@ -272,6 +275,24 @@ func (b cdcSQLBuilder) GetTaskIdSQL(
 // ------------------------------------------------------------------------------------------------
 // Watermark SQL
 // ------------------------------------------------------------------------------------------------
+func (b cdcSQLBuilder) InsertWatermarkSQL(
+	accountId uint64,
+	taskId string,
+	dbName string,
+	tableName string,
+	watermark string,
+) string {
+	return fmt.Sprintf(
+		CDCInsertWatermarkSqlTemplate,
+		accountId,
+		taskId,
+		dbName,
+		tableName,
+		watermark,
+		"",
+	)
+}
+
 func (b cdcSQLBuilder) DeleteWatermarkSQL(
 	accountId uint64,
 	taskId string,
