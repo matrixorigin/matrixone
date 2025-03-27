@@ -132,28 +132,13 @@ func (obj *aobject) PrepareCompact() bool {
 	}
 	if droppedCommitted {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				obj.meta.Load().PrintPrepareCompactDebugLog()
-			}
 			return false
 		}
 	} else {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				obj.meta.Load().PrintPrepareCompactDebugLog()
-			}
 			return false
 		}
 		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
-				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
-					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
-					obj.RLock()
-					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
-					obj.RUnlock()
-				}
-			}
 			return false
 		}
 	}
