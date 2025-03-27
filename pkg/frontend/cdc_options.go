@@ -29,6 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
+type CDCUserInfo struct {
+	UserName    string
+	AccountId   uint32
+	AccountName string
+}
+
 type CDCShowCDCTaskOptions struct {
 	AccountId uint64
 	ShowAll   bool
@@ -44,7 +50,7 @@ func (opts *CDCShowCDCTaskOptions) ToSQL() string {
 type CDCCreateTaskOptions struct {
 	TaskName     string
 	TaskId       string
-	AccountInfo  *TenantInfo
+	UserInfo     *CDCUserInfo
 	Exclude      string
 	StartTs      string
 	EndTs        string
@@ -78,7 +84,7 @@ func (opts *CDCCreateTaskOptions) Reset() {
 	opts.ConfigFile = ""
 	opts.SrcUriInfo = cdc.UriInfo{}
 	opts.SinkUriInfo = cdc.UriInfo{}
-	opts.AccountInfo = nil
+	opts.UserInfo = nil
 }
 
 func (opts *CDCCreateTaskOptions) ValidateAndFill(
@@ -90,7 +96,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	taskId := cdc.NewTaskId()
 	opts.TaskName = req.TaskName.String()
 	opts.TaskId = taskId.String()
-	opts.AccountInfo = ses.GetTenantInfo()
+	opts.UserInfo = &CDCUserInfo{
+		UserName:    ses.GetTenantInfo().GetUser(),
+		AccountId:   ses.GetTenantInfo().GetTenantID(),
+		AccountName: ses.GetTenantInfo().GetTenant(),
+	}
 
 	tmpOpts := make(map[string]string, len(req.Option)/2)
 	for i := 0; i < len(req.Option)-1; i += 2 {
@@ -247,21 +257,18 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
-	accountInfo := opts.AccountInfo
-	accountId := accountInfo.GetTenantID()
-	accountName := accountInfo.GetTenant()
 	details = &task.Details{
-		AccountID: accountId,
-		Account:   accountName,
-		Username:  accountInfo.GetUser(),
+		AccountID: opts.UserInfo.AccountId,
+		Account:   opts.UserInfo.AccountName,
+		Username:  opts.UserInfo.UserName,
 		Details: &task.Details_CreateCdc{
 			CreateCdc: &task.CreateCdcDetails{
 				TaskName: opts.TaskName,
 				TaskId:   opts.TaskId,
 				Accounts: []*task.Account{
 					{
-						Id:   uint64(accountId),
-						Name: accountName,
+						Id:   uint64(opts.UserInfo.AccountId),
+						Name: opts.UserInfo.AccountName,
 					},
 				},
 			},
@@ -288,7 +295,7 @@ func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 	}
 
 	sql = cdc.CDCSQLBuilder.InsertTaskSQL(
-		uint64(opts.AccountInfo.GetTenantID()),
+		uint64(opts.UserInfo.AccountId),
 		opts.TaskId,
 		opts.TaskName,
 		opts.SrcUri,
