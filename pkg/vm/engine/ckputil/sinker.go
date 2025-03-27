@@ -27,10 +27,12 @@ func EncodeCluser(
 	tableId uint64,
 	objectType int8,
 	obj *objectio.ObjectId,
+	isDeleted bool,
 ) {
 	packer.EncodeUint64(tableId)
 	packer.EncodeInt8(objectType)
 	packer.EncodeObjectid(obj)
+	packer.EncodeBool(isDeleted)
 }
 
 var DataSinkerFactory ioutil.FileSinkerFactory
