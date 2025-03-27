@@ -13,6 +13,7 @@ import (
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	rpc "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -1238,7 +1239,7 @@ func (mr *MockWorkspaceMockRecorder) SetHaveDDL(flag interface{}) *gomock.Call {
 }
 
 // StartStatement mocks base method.
-func (m *MockWorkspace) StartStatement(arg0 string) {
+func (m *MockWorkspace) StartStatement(arg0 tree.Statement) {
 	m.ctrl.T.Helper()
 	m.ctrl.Call(m, "StartStatement", arg0)
 }

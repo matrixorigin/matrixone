@@ -621,7 +621,7 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
-		ws.EXPECT().StartStatement("").AnyTimes()
+		ws.EXPECT().StartStatement(nil).AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
 		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
 		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
@@ -729,7 +729,7 @@ func TestGetExprValue(t *testing.T) {
 
 		ws := mock_frontend.NewMockWorkspace(ctrl)
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		ws.EXPECT().StartStatement("").AnyTimes()
+		ws.EXPECT().StartStatement(nil).AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
 		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
 		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()

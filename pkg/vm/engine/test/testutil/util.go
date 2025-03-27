@@ -444,7 +444,7 @@ func WriteToRelation(
 	bat *batch.Batch,
 	isDelete, toEndStatement bool,
 ) (err error) {
-	txn.GetWorkspace().StartStatement("")
+	txn.GetWorkspace().StartStatement(nil)
 	if isDelete {
 		err = relation.Delete(ctx, bat, catalog2.Row_ID)
 	} else {

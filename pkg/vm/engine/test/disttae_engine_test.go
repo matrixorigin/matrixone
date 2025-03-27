@@ -163,7 +163,7 @@ func TestSystemDB1(t *testing.T) {
 	txnop = p.StartCNTxn()
 	dbs, err = p.D.Engine.Databases(p.Ctx, txnop)
 	require.NoError(t, err)
-	txnop.GetWorkspace().StartStatement("")
+	txnop.GetWorkspace().StartStatement(nil)
 	require.Equal(t, 2+1, len(dbs))
 
 	txn, err := p.T.StartTxn()
@@ -561,7 +561,7 @@ func TestColumnsTransfer(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	txnop = p.StartCNTxn()
-	txnop.GetWorkspace().StartStatement("")
+	txnop.GetWorkspace().StartStatement(nil)
 	p.DeleteTableInDB(txnop, "db", schema2.Name)
 
 	txn, _ := tae.StartTxn(nil)

@@ -2689,7 +2689,7 @@ func executeStmtWithWorkspace(ses FeSession,
 	defer ses.ExitFPrint(FPExecStmtWithWorkspaceBeforeStart)
 	//!!!NOTE!!!: statement management
 	//2. start statement on workspace
-	txnOp.GetWorkspace().StartStatement(execCtx.stmt.String())
+	txnOp.GetWorkspace().StartStatement(execCtx.stmt)
 	//3. end statement on workspace
 	// defer Start/End Statement management, called after finishTxnFunc()
 	defer func() {

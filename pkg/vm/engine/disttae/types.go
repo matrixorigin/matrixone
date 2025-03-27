@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"math"
 	"strconv"
 	"sync"
@@ -525,8 +526,12 @@ func (txn *Transaction) PPString() string {
 		stringifySlice(txn.transfer.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
 }
 
-func (txn *Transaction) StartStatement(sql string) {
+func (txn *Transaction) StartStatement(stmt tree.Statement) {
 	if txn.startStatementCalled {
+		var sql string
+		if stmt != nil {
+			sql = stmt.String()
+		}
 		logutil.Fatal("BUG: StartStatement called twice",
 			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
 			zap.String("SQL", sql),
