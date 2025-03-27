@@ -797,6 +797,58 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	}
 	return
 }
+func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
+	if data == nil || tombstone == nil {
+		return
+	}
+
+	type rowInfo struct {
+		row int
+		ts  types.TS
+	}
+
+	// Build maps for data and tombstone batches
+	dataMap := make(map[any][]rowInfo)
+	tombMap := make(map[any][]rowInfo)
+
+	// Process data batch
+	if data != nil {
+		pkVec := data.Vecs[primarySeqnum]
+		tsVec := data.Vecs[len(data.Vecs)-1]
+		for i := 0; i < pkVec.Length(); i++ {
+			pkVal := vector.GetAny(pkVec, i)
+			ts := vector.GetFixedAtNoTypeCheck[types.TS](tsVec, i)
+			dataMap[pkVal] = append(dataMap[pkVal], rowInfo{
+				row: i,
+				ts:  ts,
+			})
+		}
+	}
+
+	// Process tombstone batch
+	if tombstone != nil {
+		pkVec := tombstone.Vecs[0]
+		tsVec := tombstone.Vecs[1]
+		for i := 0; i < pkVec.Length(); i++ {
+			pkVal := vector.GetAny(pkVec, i)
+			ts := vector.GetFixedAtNoTypeCheck[types.TS](tsVec, i)
+			tombMap[pkVal] = append(tombMap[pkVal], rowInfo{
+				row: i,
+				ts:  ts,
+			})
+		}
+	}
+
+	/*
+	帮我写一段代码，对每个pk，从dataMap和tombMap中对所有的rowinfo按ts从小到大排序。
+	如果第一个是delete，最后一个是insert，只保留头和尾，
+	如果第一个是delete，最后一个是delete，只保留最后一个delete,
+	如果第一个是insert，最后一个是insert，保留头和尾,
+	如果第一个
+	*/
+
+	return
+}
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	if time.Since(p.lastPrint) > p.LogThreshold {
 		p.lastPrint = time.Now()
