@@ -12026,3 +12026,33 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	assert.NoError(t, err)
 	defer bat2.Clean(common.DebugAllocator)
 }
+
+func Test_PrepareCompact(t *testing.T) {
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(4, -1)
+	schema.Extra.BlockMaxRows = 5
+	schema.Extra.ObjectMaxBlocks = 256
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 1)
+	tae.CreateRelAndAppend(bat, true)
+
+	txn, rel := tae.GetRelation()
+
+	txn2, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	err = tae.DoAppendWithTxn(bat, txn2, true)
+	assert.NoError(t, err)
+	txn2.SetApplyCommitFn(func(at txnif.AsyncTxn) error {
+		obj := testutil.GetOneBlockMeta(rel)
+		obj.GetObjectData().PrepareCompact()
+		return txn2.GetStore().ApplyCommit()
+	})
+	err = txn2.Commit(ctx)
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit(ctx))
+}
