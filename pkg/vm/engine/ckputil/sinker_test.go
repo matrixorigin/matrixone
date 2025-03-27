@@ -46,7 +46,7 @@ func Test_ClusterKey1(t *testing.T) {
 
 	tuple, _, schemas, err := types.DecodeTuple(buf)
 	require.NoError(t, err)
-	require.Equalf(t, 3, len(schemas), "schemas: %v", schemas)
+	require.Equalf(t, 4, len(schemas), "schemas: %v", schemas)
 	require.Equalf(t, types.T_uint64, schemas[0], "schemas: %v", schemas)
 	require.Equalf(t, types.T_int8, schemas[1], "schemas: %v", schemas)
 	require.Equalf(t, types.T_Objectid, schemas[2], "schemas: %v", schemas)
@@ -78,7 +78,7 @@ func Test_ClusterKey2(t *testing.T) {
 	for _, cluster := range clusters {
 		tuple, _, _, err := types.DecodeTuple(cluster)
 		require.NoError(t, err)
-		require.Equalf(t, 3, len(tuple), "%v", tuple)
+		require.Equalf(t, 4, len(tuple), "%v", tuple)
 		require.Equal(t, uint64(1), tuple[0].(uint64))
 		require.Equal(t, ObjectType_Data, tuple[1].(int8))
 		obj := tuple[2].(types.Objectid)
