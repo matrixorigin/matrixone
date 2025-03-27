@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	cdc2 "github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -160,7 +160,7 @@ func RegisterCdcExecutor(
 		if !ok {
 			return moerr.NewInternalError(ctx, "invalid details type")
 		}
-		cdc := NewCdcTask(
+		cdcTask := NewCdcTask(
 			logger,
 			ieFactory(),
 			details.CreateCdc,
@@ -170,11 +170,11 @@ func RegisterCdcExecutor(
 			cnEngine,
 			cnEngMp,
 		)
-		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
-		if err = attachToTask(ctx, T.GetID(), cdc); err != nil {
+		cdcTask.activeRoutine = cdc.NewCdcActiveRoutine()
+		if err = attachToTask(ctx, T.GetID(), cdcTask); err != nil {
 			return err
 		}
-		return cdc.Start(ctx)
+		return cdcTask.Start(ctx)
 	}
 }
 
@@ -194,16 +194,16 @@ type CdcTask struct {
 	mp         *mpool.MPool
 	packerPool *fileservice.Pool[*types.Packer]
 
-	sinkUri          cdc2.UriInfo
-	tables           cdc2.PatternTuples
+	sinkUri          cdc.UriInfo
+	tables           cdc.PatternTuples
 	exclude          *regexp.Regexp
 	startTs, endTs   types.TS
 	noFull           bool
 	additionalConfig map[string]interface{}
 
-	activeRoutine *cdc2.ActiveRoutine
+	activeRoutine *cdc.ActiveRoutine
 	// watermarkUpdater update the watermark of the items that has been sunk to downstream
-	watermarkUpdater cdc2.IWatermarkUpdater
+	watermarkUpdater cdc.IWatermarkUpdater
 	// runningReaders store the running execute pipelines, map key pattern: db.table
 	runningReaders *sync.Map
 
@@ -250,11 +250,11 @@ func NewCdcTask(
 	return task
 }
 
-func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
-	taskId := cdc.cdcTask.TaskId
-	taskName := cdc.cdcTask.TaskName
-	cnUUID := cdc.cnUUID
-	accountId := uint32(cdc.cdcTask.Accounts[0].GetId())
+func (cdcTask *CdcTask) Start(rootCtx context.Context) (err error) {
+	taskId := cdcTask.cdcTask.TaskId
+	taskName := cdcTask.cdcTask.TaskName
+	cnUUID := cdcTask.cnUUID
+	accountId := uint32(cdcTask.cdcTask.Accounts[0].GetId())
 	logutil.Infof("cdc task %s start on cn %s", taskName, cnUUID)
 
 	defer func() {
@@ -263,10 +263,10 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
-			cdc.activeRoutine.ClosePause()
-			cdc.activeRoutine.CloseCancel()
+			cdcTask.activeRoutine.ClosePause()
+			cdcTask.activeRoutine.CloseCancel()
 
-			if updateErrMsgErr := cdc.updateErrMsg(rootCtx, err.Error()); updateErrMsgErr != nil {
+			if updateErrMsgErr := cdcTask.updateErrMsg(rootCtx, err.Error()); updateErrMsgErr != nil {
 				logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, updateErrMsgErr)
 			}
 		}
@@ -275,117 +275,117 @@ func (cdc *CdcTask) Start(rootCtx context.Context) (err error) {
 	ctx := defines.AttachAccountId(rootCtx, accountId)
 
 	// get cdc task definition
-	if err = cdc.retrieveCdcTask(ctx); err != nil {
+	if err = cdcTask.retrieveCdcTask(ctx); err != nil {
 		return err
 	}
 
 	// reset runningReaders
-	cdc.runningReaders = &sync.Map{}
+	cdcTask.runningReaders = &sync.Map{}
 
 	// start watermarkUpdater
-	cdc.watermarkUpdater = cdc2.NewWatermarkUpdater(accountId, taskId, cdc.ie)
-	go cdc.watermarkUpdater.Run(ctx, cdc.activeRoutine)
+	cdcTask.watermarkUpdater = cdc.NewWatermarkUpdater(accountId, taskId, cdcTask.ie)
+	go cdcTask.watermarkUpdater.Run(ctx, cdcTask.activeRoutine)
 
 	// register to table scanner
-	cdc2.GetTableScanner(cnUUID).Register(taskId, cdc.handleNewTables)
+	cdc.GetTableScanner(cnUUID).Register(taskId, cdcTask.handleNewTables)
 
-	cdc.isRunning = true
+	cdcTask.isRunning = true
 	logutil.Infof("cdc task %s start on cn %s success", taskName, cnUUID)
 	// start success, clear err msg
-	if err = cdc.updateErrMsg(ctx, ""); err != nil {
+	if err = cdcTask.updateErrMsg(ctx, ""); err != nil {
 		logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, err)
 		err = nil
 	}
 
 	// hold
-	cdc.holdCh = make(chan int, 1)
+	cdcTask.holdCh = make(chan int, 1)
 	select {
 	case <-ctx.Done():
 		break
-	case <-cdc.holdCh:
+	case <-cdcTask.holdCh:
 		break
 	}
 	return
 }
 
 // Resume cdc task from last recorded watermark
-func (cdc *CdcTask) Resume() error {
-	logutil.Infof("cdc task %s resume", cdc.cdcTask.TaskName)
+func (cdcTask *CdcTask) Resume() error {
+	logutil.Infof("cdc task %s resume", cdcTask.cdcTask.TaskName)
 	defer func() {
-		logutil.Infof("cdc task %s resume success", cdc.cdcTask.TaskName)
+		logutil.Infof("cdc task %s resume success", cdcTask.cdcTask.TaskName)
 	}()
 
 	go func() {
 		// closed in Pause, need renew
-		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
-		_ = cdc.startFunc(context.Background())
+		cdcTask.activeRoutine = cdc.NewCdcActiveRoutine()
+		_ = cdcTask.startFunc(context.Background())
 	}()
 	return nil
 }
 
 // Restart cdc task from init watermark
-func (cdc *CdcTask) Restart() error {
-	logutil.Infof("cdc task %s restart", cdc.cdcTask.TaskName)
+func (cdcTask *CdcTask) Restart() error {
+	logutil.Infof("cdc task %s restart", cdcTask.cdcTask.TaskName)
 	defer func() {
-		logutil.Infof("cdc task %s restart success", cdc.cdcTask.TaskName)
+		logutil.Infof("cdc task %s restart success", cdcTask.cdcTask.TaskName)
 	}()
 
-	if cdc.isRunning {
-		cdc2.GetTableScanner(cdc.cnUUID).UnRegister(cdc.cdcTask.TaskId)
-		cdc.activeRoutine.CloseCancel()
-		cdc.isRunning = false
+	if cdcTask.isRunning {
+		cdc.GetTableScanner(cdcTask.cnUUID).UnRegister(cdcTask.cdcTask.TaskId)
+		cdcTask.activeRoutine.CloseCancel()
+		cdcTask.isRunning = false
 		// let Start() go
-		cdc.holdCh <- 1
+		cdcTask.holdCh <- 1
 	}
 
 	go func() {
-		cdc.activeRoutine = cdc2.NewCdcActiveRoutine()
-		_ = cdc.startFunc(context.Background())
+		cdcTask.activeRoutine = cdc.NewCdcActiveRoutine()
+		_ = cdcTask.startFunc(context.Background())
 	}()
 	return nil
 }
 
 // Pause cdc task
-func (cdc *CdcTask) Pause() error {
-	logutil.Infof("cdc task %s pause", cdc.cdcTask.TaskName)
+func (cdcTask *CdcTask) Pause() error {
+	logutil.Infof("cdc task %s pause", cdcTask.cdcTask.TaskName)
 	defer func() {
-		logutil.Infof("cdc task %s pause success", cdc.cdcTask.TaskName)
+		logutil.Infof("cdc task %s pause success", cdcTask.cdcTask.TaskName)
 	}()
 
-	if cdc.isRunning {
-		cdc2.GetTableScanner(cdc.cnUUID).UnRegister(cdc.cdcTask.TaskId)
-		cdc.activeRoutine.ClosePause()
-		cdc.isRunning = false
+	if cdcTask.isRunning {
+		cdc.GetTableScanner(cdcTask.cnUUID).UnRegister(cdcTask.cdcTask.TaskId)
+		cdcTask.activeRoutine.ClosePause()
+		cdcTask.isRunning = false
 		// let Start() go
-		cdc.holdCh <- 1
+		cdcTask.holdCh <- 1
 	}
 	return nil
 }
 
 // Cancel cdc task
-func (cdc *CdcTask) Cancel() error {
-	logutil.Infof("cdc task %s cancel", cdc.cdcTask.TaskName)
+func (cdcTask *CdcTask) Cancel() error {
+	logutil.Infof("cdc task %s cancel", cdcTask.cdcTask.TaskName)
 	defer func() {
-		logutil.Infof("cdc task %s cancel success", cdc.cdcTask.TaskName)
+		logutil.Infof("cdc task %s cancel success", cdcTask.cdcTask.TaskName)
 	}()
 
-	if cdc.isRunning {
-		cdc2.GetTableScanner(cdc.cnUUID).UnRegister(cdc.cdcTask.TaskId)
-		cdc.activeRoutine.CloseCancel()
-		cdc.isRunning = false
+	if cdcTask.isRunning {
+		cdc.GetTableScanner(cdcTask.cnUUID).UnRegister(cdcTask.cdcTask.TaskId)
+		cdcTask.activeRoutine.CloseCancel()
+		cdcTask.isRunning = false
 		// let Start() go
-		cdc.holdCh <- 1
+		cdcTask.holdCh <- 1
 	}
 	return nil
 }
 
-func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
-	if len(cdc2.AesKey) > 0 {
+func (cdcTask *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId uint32) (err error) {
+	if len(cdc.AesKey) > 0 {
 		return nil
 	}
 
-	querySql := CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc2.InitKeyId)
-	res := cdc.ie.Query(ctx, querySql, ie.SessionOverrideOptions{})
+	querySql := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc.InitKeyId)
+	res := cdcTask.ie.Query(ctx, querySql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()
 	} else if res.RowCount() < 1 {
@@ -397,13 +397,13 @@ func (cdc *CdcTask) initAesKeyByInternalExecutor(ctx context.Context, accountId 
 		return err
 	}
 
-	cdc2.AesKey, err = cdc2.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdc.cnUUID).SV.KeyEncryptionKey))
+	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPuWrapper(cdcTask.cnUUID).SV.KeyEncryptionKey))
 	return
 }
 
-func (cdc *CdcTask) updateErrMsg(ctx context.Context, errMsg string) (err error) {
-	accId := cdc.cdcTask.Accounts[0].GetId()
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
+func (cdcTask *CdcTask) updateErrMsg(ctx context.Context, errMsg string) (err error) {
+	accId := cdcTask.cdcTask.Accounts[0].GetId()
+	cdcTaskId, _ := uuid.Parse(cdcTask.cdcTask.TaskId)
 	state := CdcRunning
 	if errMsg != "" {
 		state = CdcFailed
@@ -412,73 +412,73 @@ func (cdc *CdcTask) updateErrMsg(ctx context.Context, errMsg string) (err error)
 		errMsg = errMsg[:maxErrMsgLen]
 	}
 
-	sql := CDCSQLBuilder.UpdateTaskStateAndErrMsgSQL(uint64(accId), cdcTaskId.String(), state, errMsg)
-	return cdc.ie.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql, ie.SessionOverrideOptions{})
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgSQL(uint64(accId), cdcTaskId.String(), state, errMsg)
+	return cdcTask.ie.Exec(defines.AttachAccountId(ctx, catalog.System_Account), sql, ie.SessionOverrideOptions{})
 }
 
-func (cdc *CdcTask) handleNewTables(allAccountTbls map[uint32]cdc2.TblMap) {
+func (cdcTask *CdcTask) handleNewTables(allAccountTbls map[uint32]cdc.TblMap) {
 	// lock to avoid create pipelines for the same table
-	cdc.Lock()
-	defer cdc.Unlock()
+	cdcTask.Lock()
+	defer cdcTask.Unlock()
 
-	accountId := uint32(cdc.cdcTask.Accounts[0].GetId())
+	accountId := uint32(cdcTask.cdcTask.Accounts[0].GetId())
 	ctx := defines.AttachAccountId(context.Background(), accountId)
 
-	txnOp, err := cdc2.GetTxnOp(ctx, cdc.cnEngine, cdc.cnTxnClient, "cdc-handleNewTables")
+	txnOp, err := cdc.GetTxnOp(ctx, cdcTask.cnEngine, cdcTask.cnTxnClient, "cdc-handleNewTables")
 	if err != nil {
-		logutil.Errorf("cdc task %s get txn op failed, err: %v", cdc.cdcTask.TaskName, err)
+		logutil.Errorf("cdc task %s get txn op failed, err: %v", cdcTask.cdcTask.TaskName, err)
 		return
 	}
 	defer func() {
-		cdc2.FinishTxnOp(ctx, err, txnOp, cdc.cnEngine)
+		cdc.FinishTxnOp(ctx, err, txnOp, cdcTask.cnEngine)
 	}()
-	if err = cdc.cnEngine.New(ctx, txnOp); err != nil {
-		logutil.Errorf("cdc task %s new engine failed, err: %v", cdc.cdcTask.TaskName, err)
+	if err = cdcTask.cnEngine.New(ctx, txnOp); err != nil {
+		logutil.Errorf("cdc task %s new engine failed, err: %v", cdcTask.cdcTask.TaskName, err)
 		return
 	}
 
 	for key, info := range allAccountTbls[accountId] {
 		// already running
-		if _, ok := cdc.runningReaders.Load(key); ok {
+		if _, ok := cdcTask.runningReaders.Load(key); ok {
 			continue
 		}
 
-		if cdc.exclude != nil && cdc.exclude.MatchString(key) {
+		if cdcTask.exclude != nil && cdcTask.exclude.MatchString(key) {
 			continue
 		}
 
 		newTableInfo := info.Clone()
-		if !cdc.matchAnyPattern(key, newTableInfo) {
+		if !cdcTask.matchAnyPattern(key, newTableInfo) {
 			continue
 		}
 
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
-		if err = cdc.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
-			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", cdc.cdcTask.TaskName, key, err)
+		if err = cdcTask.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
+			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", cdcTask.cdcTask.TaskName, key, err)
 		} else {
-			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", cdc.cdcTask.TaskName, key)
+			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", cdcTask.cdcTask.TaskName, key)
 		}
 	}
 }
 
-func (cdc *CdcTask) matchAnyPattern(key string, info *cdc2.DbTableInfo) bool {
+func (cdcTask *CdcTask) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {
 	match := func(s, p string) bool {
-		if p == cdc2.CDCPitrGranularity_All {
+		if p == cdc.CDCPitrGranularity_All {
 			return true
 		}
 		return s == p
 	}
 
-	db, table := cdc2.SplitDbTblKey(key)
-	for _, pt := range cdc.tables.Pts {
+	db, table := cdc.SplitDbTblKey(key)
+	for _, pt := range cdcTask.tables.Pts {
 		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
 			// complete sink info
 			info.SinkDbName = pt.Sink.Database
-			if info.SinkDbName == cdc2.CDCPitrGranularity_All {
+			if info.SinkDbName == cdc.CDCPitrGranularity_All {
 				info.SinkDbName = db
 			}
 			info.SinkTblName = pt.Sink.Table
-			if info.SinkTblName == cdc2.CDCPitrGranularity_All {
+			if info.SinkTblName == cdc.CDCPitrGranularity_All {
 				info.SinkTblName = table
 			}
 			return true
@@ -488,87 +488,87 @@ func (cdc *CdcTask) matchAnyPattern(key string, info *cdc2.DbTableInfo) bool {
 }
 
 // reader ----> sinker ----> remote db
-func (cdc *CdcTask) addExecPipelineForTable(ctx context.Context, info *cdc2.DbTableInfo, txnOp client.TxnOperator) (err error) {
+func (cdcTask *CdcTask) addExecPipelineForTable(ctx context.Context, info *cdc.DbTableInfo, txnOp client.TxnOperator) (err error) {
 	// step 1. init watermarkUpdater
 	// get watermark from db
-	watermark, err := cdc.watermarkUpdater.GetFromDb(info.SourceDbName, info.SourceTblName)
+	watermark, err := cdcTask.watermarkUpdater.GetFromDb(info.SourceDbName, info.SourceTblName)
 	if moerr.IsMoErrCode(err, moerr.ErrNoWatermarkFound) {
 		// add watermark into db if not exists
-		watermark = cdc.startTs
-		if cdc.noFull {
+		watermark = cdcTask.startTs
+		if cdcTask.noFull {
 			watermark = types.TimestampToTS(txnOp.SnapshotTS())
 		}
-		if err = cdc.watermarkUpdater.InsertIntoDb(info, watermark); err != nil {
+		if err = cdcTask.watermarkUpdater.InsertIntoDb(info, watermark); err != nil {
 			return
 		}
 	} else if err != nil {
 		return
 	}
 	// clear err msg
-	if err = cdc.watermarkUpdater.SaveErrMsg(info.SourceDbName, info.SourceTblName, ""); err != nil {
+	if err = cdcTask.watermarkUpdater.SaveErrMsg(info.SourceDbName, info.SourceTblName, ""); err != nil {
 		return
 	}
 	// add watermark into memory
-	cdc.watermarkUpdater.UpdateMem(info.SourceDbName, info.SourceTblName, watermark)
+	cdcTask.watermarkUpdater.UpdateMem(info.SourceDbName, info.SourceTblName, watermark)
 
-	tableDef, err := cdc2.GetTableDef(ctx, txnOp, cdc.cnEngine, info.SourceTblId)
+	tableDef, err := cdc.GetTableDef(ctx, txnOp, cdcTask.cnEngine, info.SourceTblId)
 	if err != nil {
 		return
 	}
 
 	// step 2. new sinker
-	sinker, err := cdc2.NewSinker(
-		cdc.sinkUri,
+	sinker, err := cdc.NewSinker(
+		cdcTask.sinkUri,
 		info,
-		cdc.watermarkUpdater,
+		cdcTask.watermarkUpdater,
 		tableDef,
-		cdc2.CDCDefaultRetryTimes,
-		cdc2.CDCDefaultRetryDuration,
-		cdc.activeRoutine,
-		uint64(cdc.additionalConfig[cdc2.CDCTaskExtraOptions_MaxSqlLength].(float64)),
-		cdc.additionalConfig[cdc2.CDCTaskExtraOptions_SendSqlTimeout].(string),
+		cdc.CDCDefaultRetryTimes,
+		cdc.CDCDefaultRetryDuration,
+		cdcTask.activeRoutine,
+		uint64(cdcTask.additionalConfig[cdc.CDCTaskExtraOptions_MaxSqlLength].(float64)),
+		cdcTask.additionalConfig[cdc.CDCTaskExtraOptions_SendSqlTimeout].(string),
 	)
 	if err != nil {
 		return err
 	}
-	go sinker.Run(ctx, cdc.activeRoutine)
+	go sinker.Run(ctx, cdcTask.activeRoutine)
 
 	// step 3. new reader
-	reader := cdc2.NewTableReader(
-		cdc.cnTxnClient,
-		cdc.cnEngine,
-		cdc.mp,
-		cdc.packerPool,
+	reader := cdc.NewTableReader(
+		cdcTask.cnTxnClient,
+		cdcTask.cnEngine,
+		cdcTask.mp,
+		cdcTask.packerPool,
 		info,
 		sinker,
-		cdc.watermarkUpdater,
+		cdcTask.watermarkUpdater,
 		tableDef,
-		cdc.additionalConfig[cdc2.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool),
-		cdc.runningReaders,
-		cdc.startTs,
-		cdc.endTs,
-		cdc.noFull,
+		cdcTask.additionalConfig[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool),
+		cdcTask.runningReaders,
+		cdcTask.startTs,
+		cdcTask.endTs,
+		cdcTask.noFull,
 	)
-	go reader.Run(ctx, cdc.activeRoutine)
+	go reader.Run(ctx, cdcTask.activeRoutine)
 
 	return
 }
 
-func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
+func (cdcTask *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
-	accId := cdc.cdcTask.Accounts[0].GetId()
-	cdcTaskId, _ := uuid.Parse(cdc.cdcTask.TaskId)
-	sql := CDCSQLBuilder.GetTaskSQL(accId, cdcTaskId.String())
-	res := cdc.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
+	accId := cdcTask.cdcTask.Accounts[0].GetId()
+	cdcTaskId, _ := uuid.Parse(cdcTask.cdcTask.TaskId)
+	sql := cdc.CDCSQLBuilder.GetTaskSQL(accId, cdcTaskId.String())
+	res := cdcTask.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()
 	}
 
 	if res.RowCount() < 1 {
-		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", accId, cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "none cdc task for %d %s", accId, cdcTask.cdcTask.TaskId)
 	} else if res.RowCount() > 1 {
-		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", accId, cdc.cdcTask.TaskId)
+		return moerr.NewInternalErrorf(ctx, "duplicate cdc task for %d %s", accId, cdcTask.cdcTask.TaskId)
 	}
 
 	//sink_type
@@ -577,14 +577,14 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		return err
 	}
 
-	if sinkTyp != cdc2.CDCSinkType_Console {
+	if sinkTyp != cdc.CDCSinkType_Console {
 		//sink uri
 		jsonSinkUri, err := res.GetString(ctx, 0, 0)
 		if err != nil {
 			return err
 		}
 
-		if err = cdc2.JsonDecode(jsonSinkUri, &cdc.sinkUri); err != nil {
+		if err = cdc.JsonDecode(jsonSinkUri, &cdcTask.sinkUri); err != nil {
 			return err
 		}
 
@@ -595,17 +595,17 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		}
 
 		// TODO replace with creatorAccountId
-		if err = cdc.initAesKeyByInternalExecutor(ctx, catalog.System_Account); err != nil {
+		if err = cdcTask.initAesKeyByInternalExecutor(ctx, catalog.System_Account); err != nil {
 			return err
 		}
 
-		if cdc.sinkUri.Password, err = cdc2.AesCFBDecode(ctx, sinkPwd); err != nil {
+		if cdcTask.sinkUri.Password, err = cdc.AesCFBDecode(ctx, sinkPwd); err != nil {
 			return err
 		}
 	}
 
 	//update sink type after deserialize
-	cdc.sinkUri.SinkTyp = sinkTyp
+	cdcTask.sinkUri.SinkTyp = sinkTyp
 
 	// tables
 	jsonTables, err := res.GetString(ctx, 0, 3)
@@ -613,7 +613,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		return err
 	}
 
-	if err = cdc2.JsonDecode(jsonTables, &cdc.tables); err != nil {
+	if err = cdc.JsonDecode(jsonTables, &cdcTask.tables); err != nil {
 		return err
 	}
 
@@ -623,7 +623,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 		return err
 	}
 	if exclude != "" {
-		if cdc.exclude, err = regexp.Compile(exclude); err != nil {
+		if cdcTask.exclude, err = regexp.Compile(exclude); err != nil {
 			return err
 		}
 	}
@@ -633,7 +633,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if cdc.startTs, err = CDCStrToTS(startTs); err != nil {
+	if cdcTask.startTs, err = CDCStrToTS(startTs); err != nil {
 		return err
 	}
 
@@ -642,7 +642,7 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if cdc.endTs, err = CDCStrToTS(endTs); err != nil {
+	if cdcTask.endTs, err = CDCStrToTS(endTs); err != nil {
 		return err
 	}
 
@@ -651,18 +651,18 @@ func (cdc *CdcTask) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cdc.noFull, _ = strconv.ParseBool(noFull)
+	cdcTask.noFull, _ = strconv.ParseBool(noFull)
 
 	// additionalConfig
 	additionalConfigStr, err := res.GetString(ctx, 0, 8)
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal([]byte(additionalConfigStr), &cdc.additionalConfig)
+	return json.Unmarshal([]byte(additionalConfigStr), &cdcTask.additionalConfig)
 }
 
-var initAesKeyByInternalExecutor = func(ctx context.Context, cdc *CdcTask, accountId uint32) error {
-	return cdc.initAesKeyByInternalExecutor(ctx, accountId)
+var initAesKeyByInternalExecutor = func(ctx context.Context, cdcTask *CdcTask, accountId uint32) error {
+	return cdcTask.initAesKeyByInternalExecutor(ctx, accountId)
 }
 
 func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
@@ -800,7 +800,7 @@ func updateCdcTask(
 	var affectedCdcRow int
 	var cnt int64
 
-	query := CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
+	query := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
 
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
@@ -832,7 +832,7 @@ func updateCdcTask(
 	if targetStatus != task.TaskStatus_CancelRequested {
 		//Update cdc task
 		//updating mo_cdc_task table
-		updateSql := CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName)
+		updateSql := cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName)
 		prepare, err = tx.PrepareContext(ctx, updateSql)
 		if err != nil {
 			return 0, err
@@ -871,7 +871,7 @@ func updateCdcTask(
 	} else {
 		//Cancel cdc task
 		//deleting mo_cdc_task
-		deleteSql := CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
+		deleteSql := cdc.CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
 		cnt, err = ExecuteAndGetRowsAffected(ctx, tx, deleteSql)
 		if err != nil {
 			return 0, err
@@ -894,7 +894,7 @@ func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap
 	var err error
 	//deleting mo_cdc_watermark belongs to cancelled cdc task
 	for tInfo := range taskKeyMap {
-		deleteSql2 := CDCSQLBuilder.DeleteWatermarkSQL(tInfo.AccountId, tInfo.TaskId)
+		deleteSql2 := cdc.CDCSQLBuilder.DeleteWatermarkSQL(tInfo.AccountId, tInfo.TaskId)
 		cnt, err = ExecuteAndGetRowsAffected(ctx, tx, deleteSql2)
 		if err != nil {
 			return 0, err
@@ -913,8 +913,8 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 		state         string
 		errMsg        string
 		ckpStr        string
-		sourceUriInfo cdc2.UriInfo
-		sinkUriInfo   cdc2.UriInfo
+		sourceUriInfo cdc.UriInfo
+		sinkUriInfo   cdc.UriInfo
 	)
 
 	ctx := defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
@@ -929,17 +929,17 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 	}
 
 	// current timestamp
-	txnOp, err := cdc2.GetTxnOp(ctx, pu.StorageEngine, pu.TxnClient, "cdc-handleShowCdc")
+	txnOp, err := cdc.GetTxnOp(ctx, pu.StorageEngine, pu.TxnClient, "cdc-handleShowCdc")
 	if err != nil {
 		return err
 	}
 	defer func() {
-		cdc2.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
+		cdc.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
 	}()
 	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
 
 	// get from task table
-	sql := CDCSQLBuilder.ShowTaskSQL(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
+	sql := cdc.CDCSQLBuilder.ShowTaskSQL(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
 
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
@@ -973,10 +973,10 @@ func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error)
 			}
 
 			// decode uriInfo
-			if err = cdc2.JsonDecode(sourceUri, &sourceUriInfo); err != nil {
+			if err = cdc.JsonDecode(sourceUri, &sourceUriInfo); err != nil {
 				return
 			}
-			if err = cdc2.JsonDecode(sinkUri, &sinkUriInfo); err != nil {
+			if err = cdc.JsonDecode(sinkUri, &sinkUriInfo); err != nil {
 				return
 			}
 
@@ -1022,7 +1022,7 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 
 	s = "{\n"
 
-	sql := CDCSQLBuilder.GetWatermarkSQL(uint64(accountId), taskId)
+	sql := cdc.CDCSQLBuilder.GetWatermarkSQL(uint64(accountId), taskId)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, sql); err != nil {
 		return
