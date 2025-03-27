@@ -109,7 +109,11 @@ const (
 	// Watermark Related SQL
 	CDCInsertWatermarkSqlTemplate = "INSERT INTO `mo_catalog`.`mo_cdc_watermark` VALUES (%d, '%s', '%s', '%s', '%s', '%s')"
 
-	CDCDeleteWatermarkSqlTemplate = "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s'"
+	CDCDeleteWatermarkSqlTemplate   = "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s'"
+	CDCGetTableWatermarkSqlTemplate = "SELECT " +
+		"watermark " +
+		"FROM `mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'"
 
 	CDCGetWatermarkSqlTemplate = "SELECT " +
 		"db_name, " +
@@ -318,6 +322,21 @@ func (b cdcSQLBuilder) GetWatermarkSQL(
 		CDCGetWatermarkSqlTemplate,
 		accountId,
 		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) GetTableWatermarkSQL(
+	accountId uint64,
+	taskId string,
+	dbName string,
+	tableName string,
+) string {
+	return fmt.Sprintf(
+		CDCGetTableWatermarkSqlTemplate,
+		accountId,
+		taskId,
+		dbName,
+		tableName,
 	)
 }
 
