@@ -122,6 +122,29 @@ const (
 		"err_msg " +
 		"FROM `mo_catalog`.`mo_cdc_watermark` " +
 		"WHERE account_id = %d AND task_id = '%s'"
+
+	CDCUpdateWatermarkSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"SET watermark='%s' " +
+		"WHERE account_id = %d " +
+		"AND task_id = '%s' " +
+		"AND db_name = '%s' " +
+		"AND table_name = '%s'"
+
+	CDCDeleteWatermarkByTableSqlTemplate = "DELETE " +
+		"FROM `mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE account_id = %d " +
+		"AND task_id = '%s' " +
+		"AND db_name = '%s' " +
+		"AND table_name = '%s'"
+
+	CDCUpdateWatermarkErrMsgSqlTemplate = "UPDATE " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"SET err_msg='%s' " +
+		"WHERE account_id = %d " +
+		"AND task_id = '%s' " +
+		"AND db_name = '%s' " +
+		"AND table_name = '%s'"
 )
 
 type cdcSQLBuilder struct{}
@@ -348,5 +371,54 @@ func (b cdcSQLBuilder) GetDataKeySQL(
 		CDCGetDataKeySqlTemplate,
 		accountId,
 		keyId,
+	)
+}
+
+func (b cdcSQLBuilder) UpdateWatermarkErrMsgSQL(
+	accountId uint64,
+	taskId string,
+	dbName string,
+	tableName string,
+	errMsg string,
+) string {
+	return fmt.Sprintf(
+		CDCUpdateWatermarkErrMsgSqlTemplate,
+		errMsg,
+		accountId,
+		taskId,
+		dbName,
+		tableName,
+	)
+}
+
+func (b cdcSQLBuilder) DeleteWatermarkByTableSQL(
+	accountId uint64,
+	taskId string,
+	dbName string,
+	tableName string,
+) string {
+	return fmt.Sprintf(
+		CDCDeleteWatermarkByTableSqlTemplate,
+		accountId,
+		taskId,
+		dbName,
+		tableName,
+	)
+}
+
+func (b cdcSQLBuilder) UpdateWatermarkSQL(
+	accountId uint64,
+	taskId string,
+	dbName string,
+	tableName string,
+	watermark string,
+) string {
+	return fmt.Sprintf(
+		CDCUpdateWatermarkSqlTemplate,
+		watermark,
+		accountId,
+		taskId,
+		dbName,
+		tableName,
 	)
 }
