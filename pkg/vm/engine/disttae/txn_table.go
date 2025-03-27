@@ -1012,6 +1012,7 @@ func (tbl *txnTable) collectUnCommittedDataObjs(
 	unCommittedObjects []objectio.ObjectStats,
 	unCommittedObjNames map[objectio.ObjectNameShort]struct{},
 ) {
+	unCommittedObjNames = make(map[objectio.ObjectNameShort]struct{})
 	if tbl.db.op.IsSnapOp() {
 		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
 	}
