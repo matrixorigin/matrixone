@@ -366,10 +366,17 @@ func (sm *SnapshotMeta) updateTableInfo(
 		moTable := (*objects)[tid]
 
 		// dropped object will overwrite the created object, updating the deleteAt
-		moTable[id] = &objectInfo{
-			stats:    stats,
-			createAt: createTS,
-			deleteAt: deleteTS,
+		obj := moTable[id]
+		if obj == nil {
+			moTable[id] = &objectInfo{
+				stats: stats,
+			}
+		}
+		if !createTS.IsEmpty() {
+			moTable[id].createAt = createTS
+		}
+		if !deleteTS.IsEmpty() {
+			moTable[id].deleteAt = deleteTS
 		}
 	}
 	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
