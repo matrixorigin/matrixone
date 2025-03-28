@@ -270,7 +270,7 @@ func (km *ElkanClusterer[T]) initBounds() {
 				if x%ncpu != n {
 					continue
 				}
-				minDist := T(math.MaxFloat32) // hack here max for float64 should be math.MaxFloat64
+				minDist := metric.MaxFloat[T]()
 				closestCenter := 0
 				for c := range km.centroids {
 					dist := km.distFn(km.vectorList[x], km.centroids[c])

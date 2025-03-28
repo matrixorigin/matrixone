@@ -16,12 +16,21 @@ package metric
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/stretchr/testify/require"
 	"gonum.org/v1/gonum/blas/blas32"
 )
+
+func Test_MaxFloat(t *testing.T) {
+
+	max32 := MaxFloat[float32]()
+	require.Equal(t, max32, float32(math.MaxFloat32))
+	max64 := MaxFloat[float64]()
+	require.Equal(t, max64, float64(math.MaxFloat64))
+}
 
 func Test_Blas32(t *testing.T) {
 
