@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	vmetric "github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -34,11 +34,11 @@ const (
 )
 
 type container struct {
-	state  int
-	bat    *batch.Batch // build batch
-	rbat   *batch.Batch
-	inBat  *batch.Batch // probe batch
-	distfn metric.DistanceFunction
+	state      int
+	bat        *batch.Batch // build batch
+	rbat       *batch.Batch
+	inBat      *batch.Batch // probe batch
+	metrictype vmetric.MetricType
 }
 
 type Productl2 struct {

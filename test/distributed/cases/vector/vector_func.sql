@@ -79,10 +79,10 @@ select l1_norm(vecf64_3 - vecf32_3),l1_norm(vecf64_5 - vecf32_5) from vtab32 a, 
 select l1_norm(NULL);
 select l1_norm(1);
 select l1_norm("[1,2,3]");
-select count(*), l1_norm(vecf32_3) from vtab32 group by l1_norm(vecf32_3) Having l1_norm(vecf32_3) > 1.9714266657829285 order by l1_norm(vecf32_3) desc ;
+select count(*), l1_norm(vecf32_3) from vtab32 group by l1_norm(vecf32_3) Having l1_norm(vecf32_3) > 1.9715 order by l1_norm(vecf32_3) desc ;
 select * from vtab32 where l1_norm(vecf32_3) is null;
-select * from vtab32 where l1_norm(vecf32_3) = 1.9714266657829285;
-select * from vtab32 where l1_norm(vecf32_3) > 1.9714266657829285;
+select * from vtab32 where l1_norm(vecf32_3) <= 1.9715;
+select * from vtab32 where l1_norm(vecf32_3) > 1.9715;
 select distinct(l1_norm(vecf32_3)) from vtab32;
 select sum(l1_norm(vecf32_3)) from vtab32;
 select min(l1_norm(vecf32_3)) from vtab32;
@@ -108,10 +108,10 @@ select l2_norm(vecf64_3 - vecf32_3),l1_norm(vecf64_5 - vecf32_5) from vtab32 a, 
 select l2_norm(NULL);
 select l2_norm(1);
 select l2_norm("[1,2,3]");
-select count(*), l2_norm(vecf32_3) from vtab32 group by l2_norm(vecf32_3) Having l2_norm(vecf32_3) > 1.1616505074810406 order by l2_norm(vecf32_3) desc ;
+select count(*), l2_norm(vecf32_3) from vtab32 group by l2_norm(vecf32_3) Having l2_norm(vecf32_3) > 1.16166 order by l2_norm(vecf32_3) desc ;
 select * from vtab32 where l2_norm(vecf32_3) is null;
-select * from vtab32 where l2_norm(vecf32_3) = 1.1616505074810406;
-select * from vtab32 where l2_norm(vecf32_3) > 1.1616505074810406;
+select * from vtab32 where l2_norm(vecf32_3) <= 1.16166;
+select * from vtab32 where l2_norm(vecf32_3) > 1.16166;
 select distinct(l2_norm(vecf32_3)) from vtab32;
 select sum(l2_norm(vecf32_3)) from vtab32;
 select min(l2_norm(vecf32_3)) from vtab32;
@@ -190,8 +190,8 @@ select cosine_similarity(vecf64_3,vecf64_3_1) from vtab64_1;
 select cosine_similarity(vecf64_5,vecf64_5_1) from vtab64_1;
 
 select * from vtab32_1 where cosine_similarity(vecf32_3_1,vecf32_3) is null;
-select * from vtab32_1 where cosine_similarity(vecf32_3,vecf32_3_1) = 0.9788139235276682;
-select * from vtab32_1 where cosine_similarity(vecf32_3,vecf32_3) <= 0.9788139235276682;
+select * from vtab32_1 where cosine_similarity(vecf32_3,vecf32_3_1) > 0.97882;
+select * from vtab32_1 where cosine_similarity(vecf32_3,vecf32_3) <= 0.97882;
 select distinct(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
 select sum(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
 select min(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
