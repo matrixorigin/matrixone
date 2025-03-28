@@ -91,9 +91,7 @@ func MaxFloat[T types.RealNumbers]() T {
 	typ := reflect.TypeFor[T]()
 	switch typ.Kind() {
 	case reflect.Float32:
-		v := math.MaxFloat32
-		val := reflect.ValueOf(v).Convert(typ)
-		return val.Interface().(T)
+		return math.MaxFloat32
 	case reflect.Float64:
 		v := math.MaxFloat64
 		val := reflect.ValueOf(v).Convert(typ)
