@@ -15,6 +15,9 @@
 package metric
 
 import (
+	"math"
+	"reflect"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -82,3 +85,20 @@ var (
 // NOTE: clusterer already ensures that the all the input vectors are of the same length,
 // so we don't need to check for that here again and return error if the lengths are different.
 type DistanceFunction[T types.RealNumbers] func(v1, v2 []T) T
+
+func MaxFloat[T types.RealNumbers]() T {
+
+	typ := reflect.TypeFor[T]()
+	switch typ.Kind() {
+	case reflect.Float32:
+		v := math.MaxFloat32
+		val := reflect.ValueOf(v).Convert(typ)
+		return val.Interface().(T)
+	case reflect.Float64:
+		v := math.MaxFloat64
+		val := reflect.ValueOf(v).Convert(typ)
+		return val.Interface().(T)
+	default:
+		panic("MaxFloat: type not supported")
+	}
+}

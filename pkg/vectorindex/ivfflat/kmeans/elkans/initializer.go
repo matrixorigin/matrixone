@@ -15,7 +15,6 @@
 package elkans
 
 import (
-	"math"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -100,7 +99,7 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 
 	distances := make([]T, numSamples)
 	for j := range distances {
-		distances[j] = T(math.MaxFloat32)
+		distances[j] = metric.MaxFloat[T]()
 	}
 
 	ncpu := runtime.NumCPU()

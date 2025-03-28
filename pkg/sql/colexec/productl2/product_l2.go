@@ -17,7 +17,6 @@ package productl2
 import (
 	"bytes"
 	"errors"
-	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -241,7 +240,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 	for i := 0; i < probeCount; i++ {
 		leastClusterIndex[i] = 0
-		leastDistance[i] = T(math.MaxFloat32)
+		leastDistance[i] = metric.MaxFloat[T]()
 	}
 
 	centroidmat, embedmat := newMat[T](ctr, ap)
