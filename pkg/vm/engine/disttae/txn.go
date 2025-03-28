@@ -1119,7 +1119,99 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 		}
 	}
-	return txn.compactionBlksLocked(ctx)
+
+	if err := txn.compactionBlksLocked(ctx); err != nil {
+		return err
+	}
+
+	inserts := objectio.GetReusableBitmap()
+	deletes := objectio.GetReusableBitmap()
+
+	defer func() {
+		inserts.Release()
+		deletes.Release()
+	}()
+
+	for i, e := range txn.writes {
+		if e.bat == nil || e.bat.IsEmpty() || e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			continue
+		}
+
+		if e.databaseId == catalog.MO_CATALOG_ID {
+			continue
+		}
+
+		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
+			continue
+		}
+
+		if e.typ == INSERT {
+			//inserts.Add(uint64(i))
+		} else if e.typ == DELETE {
+			deletes.Add(uint64(i))
+		}
+	}
+
+	foo := func(idxes []uint64) (err error) {
+		for i := 0; i < len(idxes); i++ {
+			a := &txn.writes[idxes[i]]
+			if a.bat == nil || a.bat.RowCount() == batch.DefaultBatchMaxRow {
+				continue
+			}
+
+			for j := i + 1; j < len(idxes); j++ {
+				b := &txn.writes[idxes[j]]
+				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
+					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
+					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
+						return err
+					}
+
+					b.bat.Clean(txn.proc.GetMPool())
+					b.bat = nil
+				}
+
+				if a.bat.RowCount() == batch.DefaultBatchMaxRow {
+					break
+				}
+			}
+		}
+
+		return nil
+	}
+
+	// this threshold may have a bad effect on the performance
+	if inserts.Count()+deletes.Count() >= 30 {
+		//ins := inserts.ToArray()
+		del := deletes.ToArray()
+
+		// TODO: merge inserts will cause to not found in the TPCC test
+		//if err := foo(ins); err != nil {
+		//	return err
+		//}
+
+		if err := foo(del); err != nil {
+			return err
+		}
+
+		i, j := 0, len(txn.writes)-1
+		for i <= j {
+			if txn.writes[i].bat == nil {
+				txn.writes[i], txn.writes[j] = txn.writes[j], txn.writes[i]
+				j--
+			} else {
+				i++
+			}
+		}
+
+		if i < len(txn.writes) && txn.writes[i].bat == nil {
+			txn.writes = txn.writes[:i]
+		} else {
+			txn.writes = txn.writes[:i+1]
+		}
+	}
+
+	return nil
 }
 
 // CN blocks compaction for txn
