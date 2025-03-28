@@ -20,13 +20,14 @@ import (
 	"strconv"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type PPLevel int8
@@ -94,6 +95,12 @@ type TypePrintOpt interface {
 type WithDoNotPrintBin struct{}
 
 func (w WithDoNotPrintBin) apply(o *opt) { o.doNotPrintBinary = true }
+
+type WithPrintBin struct{}
+
+func (w WithPrintBin) apply(o *opt) {
+	o.doNotPrintBinary = false
+}
 
 type WithSpecialRowid struct{}
 
@@ -273,6 +280,32 @@ func MoVectorToString(v *vector.Vector, printN int, opts ...TypePrintOpt) string
 		return vec2Str(vs, v, opts...)
 	}
 	return fmt.Sprintf("unkown type vec... %v", *v.GetType())
+}
+
+func MoBatchColToString(moBat *batch.Batch, printN int, col int) string {
+	if moBat == nil {
+		return "empty batch"
+	}
+	n := 0
+	buf := new(bytes.Buffer)
+	for i, vec := range moBat.Vecs {
+		if i != col {
+			continue
+		}
+		if vec == nil {
+			fmt.Fprintf(buf, "[col%v] = nil\n", i)
+			continue
+		}
+		if n = vec.Length(); n < printN {
+			printN = n
+		}
+		if len(moBat.Attrs) == 0 {
+			fmt.Fprintf(buf, "[col%v] = %v\n", i, MoVectorToString(vec, printN))
+		} else {
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, printN, WithPrintBin{}))
+		}
+	}
+	return buf.String()
 }
 
 func MoBatchToString(moBat *batch.Batch, printN int) string {
