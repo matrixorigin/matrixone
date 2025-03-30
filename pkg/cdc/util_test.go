@@ -317,7 +317,7 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: []byte("test"), typ: &types.Type{Oid: types.T_blob}, sqlBuff: []byte{}},
-			want:    []byte("'test'"),
+			want:    []byte("x'74657374'"),
 			wantErr: assert.NoError,
 		},
 		{
@@ -327,12 +327,12 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: []byte("test"), typ: &types.Type{Oid: types.T_binary}, sqlBuff: []byte{}},
-			want:    []byte("'test'"),
+			want:    []byte("x'74657374'"),
 			wantErr: assert.NoError,
 		},
 		{
 			args:    args{ctx: context.Background(), data: []byte("test"), typ: &types.Type{Oid: types.T_varbinary}, sqlBuff: []byte{}},
-			want:    []byte("'test'"),
+			want:    []byte("x'74657374'"),
 			wantErr: assert.NoError,
 		},
 		{
