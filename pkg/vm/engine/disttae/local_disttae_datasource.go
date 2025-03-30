@@ -953,7 +953,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 			continue
 		}
 
-		readutil.FastApplyDeletedRows2(bid, &leftRows, deletedRows, writes[idx].bat.Vecs[0])
+		readutil.FastApplyDeletesByRowIdVec(bid, &leftRows, deletedRows, writes[idx].bat.Vecs[0])
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
@@ -1033,7 +1033,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
 	for _, o := range rawRowIdDeletes.offsets[*bid] {
-		leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, uint32(o))
+		leftRows = readutil.FastApplyDeletesByRowOffset(leftRows, deletedRows, uint32(o))
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
@@ -1107,7 +1107,7 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	for delIter.Next() {
 		rowid := delIter.Entry().RowID
 		o := rowid.GetRowOffset()
-		leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, o)
+		leftRows = readutil.FastApplyDeletesByRowOffset(leftRows, deletedRows, o)
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}

@@ -238,7 +238,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 
 	for i := start; i < end; i++ {
 		offset := tomb.rowids[i].GetRowOffset()
-		left = FastApplyDeletedRows(left, deleted, offset)
+		left = FastApplyDeletesByRowOffset(left, deleted, offset)
 	}
 
 	return
