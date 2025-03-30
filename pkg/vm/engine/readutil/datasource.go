@@ -219,7 +219,7 @@ func NewRemoteDataSource(
 //	util functions
 // --------------------------------------------------------------------------------
 
-func FastApplyDeletedRows2(
+func FastApplyDeletesByRowIdVec(
 	checkBid *objectio.Blockid,
 	leftRows *[]int64,
 	deletedMask *objectio.Bitmap,
@@ -266,7 +266,7 @@ func FastApplyDeletedRows2(
 				}
 			}
 
-			if hit {
+			if !hit {
 				(*leftRows)[ptr] = o
 				ptr++
 			}
@@ -285,7 +285,7 @@ func FastApplyDeletedRows2(
 
 // FastApplyDeletedRows will return the rows which applied deletes if the `leftRows` is not empty,
 // or the deletes will only record into the `deleteRows` bitmap.
-func FastApplyDeletedRows(
+func FastApplyDeletesByRowOffset(
 	leftRows []int64,
 	deletedRows *objectio.Bitmap,
 	o uint32,
