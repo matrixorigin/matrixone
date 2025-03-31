@@ -1020,6 +1020,9 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
+			if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+				return
+			}
 			p.totalDuration += time.Since(t0)
 			if data != nil {
 				p.dataLength += data.Vecs[0].Length()
