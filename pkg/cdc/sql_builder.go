@@ -65,7 +65,8 @@ const (
 		`end_ts, ` +
 		`no_full, ` +
 		`additional_config ` +
-		`FROM mo_catalog.mo_cdc_task ` +
+		`FROM ` +
+		`mo_catalog.mo_cdc_task ` +
 		`WHERE ` +
 		`account_id = %d AND ` +
 		`task_id = "%s"`
@@ -77,7 +78,8 @@ const (
 		`sink_uri, ` +
 		`state, ` +
 		`err_msg ` +
-		`FROM mo_catalog.mo_cdc_task ` +
+		`FROM ` +
+		`mo_catalog.mo_cdc_task ` +
 		`WHERE ` +
 		`account_id = %d`
 
@@ -104,48 +106,171 @@ const (
 		"WHERE " +
 		"1=1 AND account_id = %d AND task_id = '%s'"
 
-	CDCGetDataKeySqlTemplate = "SELECT encrypted_key FROM mo_catalog.mo_data_key WHERE account_id = %d and key_id = '%s'"
+	CDCGetDataKeySqlTemplate = "SELECT " +
+		"encrypted_key " +
+		"FROM mo_catalog.mo_data_key " +
+		"WHERE account_id = %d and key_id = '%s'"
 
 	// Watermark Related SQL
-	CDCInsertWatermarkSqlTemplate = "INSERT INTO `mo_catalog`.`mo_cdc_watermark` VALUES (%d, '%s', '%s', '%s', '%s', '%s')"
+	CDCInsertWatermarkSqlTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"VALUES (%d, '%s', '%s', '%s', '%s', '%s')"
 
-	CDCDeleteWatermarkSqlTemplate   = "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = %d AND task_id = '%s'"
+	CDCDeleteWatermarkSqlTemplate = "DELETE FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s'"
+
 	CDCGetTableWatermarkSqlTemplate = "SELECT " +
 		"watermark " +
-		"FROM `mo_catalog`.`mo_cdc_watermark` " +
-		"WHERE account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s'"
+		"FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"db_name = '%s' AND " +
+		"table_name = '%s'"
 
 	CDCGetWatermarkSqlTemplate = "SELECT " +
 		"db_name, " +
 		"table_name, " +
 		"watermark, " +
 		"err_msg " +
-		"FROM `mo_catalog`.`mo_cdc_watermark` " +
-		"WHERE account_id = %d AND task_id = '%s'"
+		"FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s'"
 
 	CDCUpdateWatermarkSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"SET watermark='%s' " +
-		"WHERE account_id = %d " +
-		"AND task_id = '%s' " +
-		"AND db_name = '%s' " +
-		"AND table_name = '%s'"
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"db_name = '%s' AND " +
+		"table_name = '%s'"
 
 	CDCDeleteWatermarkByTableSqlTemplate = "DELETE " +
-		"FROM `mo_catalog`.`mo_cdc_watermark` " +
-		"WHERE account_id = %d " +
-		"AND task_id = '%s' " +
-		"AND db_name = '%s' " +
-		"AND table_name = '%s'"
+		"FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"db_name = '%s' AND " +
+		"table_name = '%s'"
 
 	CDCUpdateWatermarkErrMsgSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"SET err_msg='%s' " +
-		"WHERE account_id = %d " +
-		"AND task_id = '%s' " +
-		"AND db_name = '%s' " +
-		"AND table_name = '%s'"
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"db_name = '%s' AND " +
+		"table_name = '%s'"
 )
+
+const (
+	CDCInsertTaskSqlTemplate_Idx             = 0
+	CDCGetTaskSqlTemplate_Idx                = 1
+	CDCShowTaskSqlTemplate_Idx               = 2
+	CDCGetTaskIdSqlTemplate_Idx              = 3
+	CDCDeleteTaskSqlTemplate_Idx             = 4
+	CDCUpdateTaskStateSQL_Idx                = 5
+	CDCUpdateTaskStateAndErrMsgSQL_Idx       = 6
+	CDCInsertWatermarkSqlTemplate_Idx        = 7
+	CDCGetWatermarkSqlTemplate_Idx           = 8
+	CDCGetTableWatermarkSQL_Idx              = 9
+	CDCUpdateWatermarkSQL_Idx                = 10
+	CDCUpdateWatermarkErrMsgSQL_Idx          = 11
+	CDCDeleteWatermarkSqlTemplate_Idx        = 12
+	CDCDeleteWatermarkByTableSqlTemplate_Idx = 13
+	CDCGetDataKeySQL_Idx                     = 14
+
+	CDCSqlTemplateCount = 15
+)
+
+var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
+	SQL         string
+	OutputAttrs []string
+}{
+	CDCInsertTaskSqlTemplate_Idx: {
+		SQL: CDCInsertTaskSqlTemplate,
+	},
+	CDCGetTaskSqlTemplate_Idx: {
+		SQL: CDCGetTaskSqlTemplate,
+		OutputAttrs: []string{
+			"sink_uri",
+			"sink_type",
+			"sink_password",
+			"tables",
+			"filters",
+			"start_ts",
+			"end_ts",
+			"no_full",
+			"additional_config",
+		},
+	},
+	CDCShowTaskSqlTemplate_Idx: {
+		SQL: CDCShowCdcTaskSqlTemplate,
+		OutputAttrs: []string{
+			"task_id",
+			"task_name",
+			"source_uri",
+			"sink_uri",
+			"state",
+			"err_msg",
+		},
+	},
+	CDCGetTaskIdSqlTemplate_Idx: {
+		SQL:         CDCGetCdcTaskIdSqlTemplate,
+		OutputAttrs: []string{"task_id"},
+	},
+	CDCDeleteTaskSqlTemplate_Idx: {
+		SQL: CDCDeleteTaskSqlTemplate,
+	},
+	CDCUpdateTaskStateSQL_Idx: {
+		SQL: CDCUpdateTaskStateSqlTemplate,
+	},
+	CDCUpdateTaskStateAndErrMsgSQL_Idx: {
+		SQL: CDCUpdateTaskStateAndErrMsgSqlTemplate,
+	},
+	CDCInsertWatermarkSqlTemplate_Idx: {
+		SQL: CDCInsertWatermarkSqlTemplate,
+	},
+	CDCGetWatermarkSqlTemplate_Idx: {
+		SQL: CDCGetWatermarkSqlTemplate,
+		OutputAttrs: []string{
+			"db_name",
+			"table_name",
+			"watermark",
+			"err_msg",
+		},
+	},
+	CDCGetTableWatermarkSQL_Idx: {
+		SQL: CDCGetTableWatermarkSqlTemplate,
+		OutputAttrs: []string{
+			"watermark",
+		},
+	},
+	CDCUpdateWatermarkSQL_Idx: {
+		SQL: CDCUpdateWatermarkSqlTemplate,
+	},
+	CDCUpdateWatermarkErrMsgSQL_Idx: {
+		SQL: CDCUpdateWatermarkErrMsgSqlTemplate,
+	},
+	CDCDeleteWatermarkSqlTemplate_Idx: {
+		SQL: CDCDeleteWatermarkSqlTemplate,
+	},
+	CDCDeleteWatermarkByTableSqlTemplate_Idx: {
+		SQL: CDCDeleteWatermarkByTableSqlTemplate,
+	},
+	CDCGetDataKeySQL_Idx: {
+		SQL:         CDCGetDataKeySqlTemplate,
+		OutputAttrs: []string{"encrypted_key"},
+	},
+}
 
 type cdcSQLBuilder struct{}
 
@@ -180,7 +305,7 @@ func (b cdcSQLBuilder) InsertTaskSQL(
 	additionalConfigStr string,
 ) string {
 	return fmt.Sprintf(
-		CDCInsertTaskSqlTemplate,
+		CDCSQLTemplates[CDCInsertTaskSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
 		taskName,
@@ -215,7 +340,7 @@ func (b cdcSQLBuilder) GetTaskSQL(
 	taskId string,
 ) string {
 	return fmt.Sprintf(
-		CDCGetTaskSqlTemplate,
+		CDCSQLTemplates[CDCGetTaskSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
 	)
@@ -227,7 +352,7 @@ func (b cdcSQLBuilder) ShowTaskSQL(
 	taskName string,
 ) string {
 	sql := fmt.Sprintf(
-		CDCShowCdcTaskSqlTemplate,
+		CDCSQLTemplates[CDCShowTaskSqlTemplate_Idx].SQL,
 		accountId,
 	)
 	if !showAll {
@@ -244,7 +369,7 @@ func (b cdcSQLBuilder) DeleteTaskSQL(
 	taskName string,
 ) string {
 	sql := fmt.Sprintf(
-		CDCDeleteTaskSqlTemplate,
+		CDCSQLTemplates[CDCDeleteTaskSqlTemplate_Idx].SQL,
 		accountId,
 	)
 	if taskName != "" {
@@ -261,7 +386,7 @@ func (b cdcSQLBuilder) UpdateTaskStateSQL(
 	taskName string,
 ) string {
 	sql := fmt.Sprintf(
-		CDCUpdateTaskStateSqlTemplate,
+		CDCSQLTemplates[CDCUpdateTaskStateSQL_Idx].SQL,
 		accountId,
 	)
 	if taskName != "" {
@@ -280,7 +405,7 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgSQL(
 	errMsg string,
 ) string {
 	return fmt.Sprintf(
-		CDCUpdateTaskStateAndErrMsgSqlTemplate,
+		CDCSQLTemplates[CDCUpdateTaskStateAndErrMsgSQL_Idx].SQL,
 		state,
 		errMsg,
 		accountId,
@@ -293,7 +418,7 @@ func (b cdcSQLBuilder) GetTaskIdSQL(
 	taskName string,
 ) string {
 	sql := fmt.Sprintf(
-		CDCGetCdcTaskIdSqlTemplate,
+		CDCSQLTemplates[CDCGetTaskIdSqlTemplate_Idx].SQL,
 		accountId,
 	)
 	if taskName != "" {
@@ -316,7 +441,7 @@ func (b cdcSQLBuilder) InsertWatermarkSQL(
 	watermark string,
 ) string {
 	return fmt.Sprintf(
-		CDCInsertWatermarkSqlTemplate,
+		CDCSQLTemplates[CDCInsertWatermarkSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
 		dbName,
@@ -331,7 +456,7 @@ func (b cdcSQLBuilder) DeleteWatermarkSQL(
 	taskId string,
 ) string {
 	return fmt.Sprintf(
-		CDCDeleteWatermarkSqlTemplate,
+		CDCSQLTemplates[CDCDeleteWatermarkSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
 	)
@@ -342,7 +467,7 @@ func (b cdcSQLBuilder) GetWatermarkSQL(
 	taskId string,
 ) string {
 	return fmt.Sprintf(
-		CDCGetWatermarkSqlTemplate,
+		CDCSQLTemplates[CDCGetWatermarkSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
 	)
@@ -355,7 +480,7 @@ func (b cdcSQLBuilder) GetTableWatermarkSQL(
 	tableName string,
 ) string {
 	return fmt.Sprintf(
-		CDCGetTableWatermarkSqlTemplate,
+		CDCSQLTemplates[CDCGetTableWatermarkSQL_Idx].SQL,
 		accountId,
 		taskId,
 		dbName,
@@ -368,7 +493,7 @@ func (b cdcSQLBuilder) GetDataKeySQL(
 	keyId string,
 ) string {
 	return fmt.Sprintf(
-		CDCGetDataKeySqlTemplate,
+		CDCSQLTemplates[CDCGetDataKeySQL_Idx].SQL,
 		accountId,
 		keyId,
 	)
@@ -382,7 +507,7 @@ func (b cdcSQLBuilder) UpdateWatermarkErrMsgSQL(
 	errMsg string,
 ) string {
 	return fmt.Sprintf(
-		CDCUpdateWatermarkErrMsgSqlTemplate,
+		CDCSQLTemplates[CDCUpdateWatermarkErrMsgSQL_Idx].SQL,
 		errMsg,
 		accountId,
 		taskId,
@@ -398,7 +523,7 @@ func (b cdcSQLBuilder) DeleteWatermarkByTableSQL(
 	tableName string,
 ) string {
 	return fmt.Sprintf(
-		CDCDeleteWatermarkByTableSqlTemplate,
+		CDCSQLTemplates[CDCDeleteWatermarkByTableSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
 		dbName,
@@ -414,7 +539,7 @@ func (b cdcSQLBuilder) UpdateWatermarkSQL(
 	watermark string,
 ) string {
 	return fmt.Sprintf(
-		CDCUpdateWatermarkSqlTemplate,
+		CDCSQLTemplates[CDCUpdateWatermarkSQL_Idx].SQL,
 		watermark,
 		accountId,
 		taskId,
