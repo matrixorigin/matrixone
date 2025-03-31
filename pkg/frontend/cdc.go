@@ -133,51 +133,6 @@ var queryTable = func(
 	return false, nil
 }
 
-func RegisterCdcExecutor(
-	logger *zap.Logger,
-	ts taskservice.TaskService,
-	ieFactory func() ie.InternalExecutor,
-	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
-	cnUUID string,
-	fileService fileservice.FileService,
-	cnTxnClient client.TxnClient,
-	cnEngine engine.Engine,
-	cnEngMp *mpool.MPool,
-) func(ctx context.Context, task task.Task) error {
-	return func(ctx context.Context, T task.Task) error {
-		ctx1, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.CauseRegisterCdc)
-		defer cancel()
-		tasks, err := ts.QueryDaemonTask(ctx1,
-			taskservice.WithTaskIDCond(taskservice.EQ, T.GetID()),
-		)
-		if err != nil {
-			return moerr.AttachCause(ctx1, err)
-		}
-		if len(tasks) != 1 {
-			return moerr.NewInternalErrorf(ctx, "invalid tasks count %d", len(tasks))
-		}
-		details, ok := tasks[0].Details.Details.(*task.Details_CreateCdc)
-		if !ok {
-			return moerr.NewInternalError(ctx, "invalid details type")
-		}
-		cdcTask := NewCdcTask(
-			logger,
-			ieFactory(),
-			details.CreateCdc,
-			cnUUID,
-			fileService,
-			cnTxnClient,
-			cnEngine,
-			cnEngMp,
-		)
-		cdcTask.activeRoutine = cdc.NewCdcActiveRoutine()
-		if err = attachToTask(ctx, T.GetID(), cdcTask); err != nil {
-			return err
-		}
-		return cdcTask.Start(ctx)
-	}
-}
-
 type CdcTask struct {
 	sync.Mutex
 
