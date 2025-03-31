@@ -953,11 +953,11 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		}
 	}
 	defer func() {
-		if data.RowCount() == 0 {
+		if data != nil && data.RowCount() == 0 {
 			data.Clean(p.mp)
 			data = nil
 		}
-		if tombstone.RowCount() == 0 {
+		if tombstone != nil && tombstone.RowCount() == 0 {
 			tombstone.Clean(p.mp)
 			tombstone = nil
 		}
@@ -965,7 +965,9 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 	hint = engine.ChangesHandle_Tail_done
 	t0 := time.Now()
 	if p.quick {
-		data, tombstone, err = p.quickNext(ctx, mp)
+		if data, tombstone, err = p.quickNext(ctx, mp); err != nil {
+			return
+		}
 		p.totalDuration += time.Since(t0)
 		if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
 			return
