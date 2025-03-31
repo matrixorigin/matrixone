@@ -20,10 +20,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,57 +34,6 @@ const (
 	CdcFailed    = "failed"
 	maxErrMsgLen = 256
 )
-
-var showCdcOutputColumns = [8]Column{
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "task_id",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	},
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "task_name",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	},
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "source_uri",
-			columnType: defines.MYSQL_TYPE_TEXT,
-		},
-	},
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "sink_uri",
-			columnType: defines.MYSQL_TYPE_TEXT,
-		},
-	},
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "state",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	},
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "err_msg",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	},
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "checkpoint",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	},
-	&MysqlColumn{
-		ColumnImpl: ColumnImpl{
-			name:       "timestamp",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
-		},
-	},
-}
 
 var queryTable = func(
 	ctx context.Context,
@@ -119,24 +66,12 @@ var queryTable = func(
 	return false, nil
 }
 
-var initAesKeyByInternalExecutor = func(ctx context.Context, cdcTask *CDCTaskExecutor, accountId uint32) error {
-	return cdcTask.initAesKeyByInternalExecutor(ctx, accountId)
-}
-
-func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
-}
-
-func handlePauseCdc(ses *Session, execCtx *ExecCtx, st *tree.PauseCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
-}
-
-func handleResumeCdc(ses *Session, execCtx *ExecCtx, st *tree.ResumeCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
-}
-
-func handleRestartCdc(ses *Session, execCtx *ExecCtx, st *tree.RestartCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
+var initAesKeyByInternalExecutor = func(
+	ctx context.Context,
+	exec *CDCTaskExecutor,
+	accountId uint32,
+) error {
+	return exec.initAesKeyByInternalExecutor(ctx, accountId)
 }
 
 func updateCdc(ctx context.Context, ses *Session, st tree.Statement) (err error) {
@@ -360,102 +295,6 @@ func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap
 		tCount += cnt
 	}
 	return tCount, nil
-}
-
-func handleShowCdc(ses *Session, execCtx *ExecCtx, st *tree.ShowCDC) (err error) {
-	var (
-		taskId        string
-		taskName      string
-		sourceUri     string
-		sinkUri       string
-		state         string
-		errMsg        string
-		ckpStr        string
-		sourceUriInfo cdc.UriInfo
-		sinkUriInfo   cdc.UriInfo
-	)
-
-	ctx := defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
-	pu := getPu(ses.GetService())
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-
-	rs := &MysqlResultSet{}
-	ses.SetMysqlResultSet(rs)
-	for _, column := range showCdcOutputColumns {
-		rs.AddColumn(column)
-	}
-
-	// current timestamp
-	txnOp, err := cdc.GetTxnOp(ctx, pu.StorageEngine, pu.TxnClient, "cdc-handleShowCdc")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		cdc.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
-	}()
-	timestamp := txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
-
-	// get from task table
-	sql := cdc.CDCSQLBuilder.ShowTaskSQL(uint64(ses.GetTenantInfo().GetTenantID()), st.Option.All, string(st.Option.TaskName))
-
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
-
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return
-	}
-
-	for _, result := range erArray {
-		for i := uint64(0); i < result.GetRowCount(); i++ {
-			if taskId, err = result.GetString(ctx, i, 0); err != nil {
-				return
-			}
-			if taskName, err = result.GetString(ctx, i, 1); err != nil {
-				return
-			}
-			if sourceUri, err = result.GetString(ctx, i, 2); err != nil {
-				return
-			}
-			if sinkUri, err = result.GetString(ctx, i, 3); err != nil {
-				return
-			}
-			if state, err = result.GetString(ctx, i, 4); err != nil {
-				return
-			}
-			if errMsg, err = result.GetString(ctx, i, 5); err != nil {
-				return
-			}
-
-			// decode uriInfo
-			if err = cdc.JsonDecode(sourceUri, &sourceUriInfo); err != nil {
-				return
-			}
-			if err = cdc.JsonDecode(sinkUri, &sinkUriInfo); err != nil {
-				return
-			}
-
-			// get watermarks
-			if ckpStr, err = getTaskCkp(ctx, bh, ses.GetTenantInfo().TenantID, taskId); err != nil {
-				return
-			}
-
-			rs.AddRow([]interface{}{
-				taskId,
-				taskName,
-				sourceUriInfo.String(),
-				sinkUriInfo.String(),
-				state,
-				errMsg,
-				ckpStr,
-				timestamp,
-			})
-		}
-	}
-	return
 }
 
 func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId string) (s string, err error) {

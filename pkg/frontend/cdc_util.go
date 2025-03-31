@@ -23,8 +23,68 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
+
+var CDCShowOutputColumns = [8]Column{
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "task_id",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "task_name",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "source_uri",
+			columnType: defines.MYSQL_TYPE_TEXT,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "sink_uri",
+			columnType: defines.MYSQL_TYPE_TEXT,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "state",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "err_msg",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "checkpoint",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+	&MysqlColumn{
+		ColumnImpl: ColumnImpl{
+			name:       "timestamp",
+			columnType: defines.MYSQL_TYPE_VARCHAR,
+		},
+	},
+}
+
+func GetCDCShowOutputResultSet() *MysqlResultSet {
+	var rs MysqlResultSet
+	for _, column := range CDCShowOutputColumns {
+		rs.AddColumn(column)
+	}
+	return &rs
+}
 
 func ExecuteAndGetRowsAffected(
 	ctx context.Context,
