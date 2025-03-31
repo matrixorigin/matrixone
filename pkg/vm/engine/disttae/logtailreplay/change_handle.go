@@ -876,6 +876,12 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 	for _, rowInfos := range rowInfoMap {
 		// Sort by timestamp
 		goSort.Slice(rowInfos, func(i, j int) bool {
+			if rowInfos[i].ts.EQ(&rowInfos[j].ts) {
+				if rowInfos[i].isDelete && !rowInfos[j].isDelete {
+					return true
+				}
+				return false
+			}
 			return rowInfos[i].ts.LT(&rowInfos[j].ts)
 		})
 
