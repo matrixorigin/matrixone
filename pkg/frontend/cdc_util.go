@@ -27,53 +27,80 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
-var CDCShowOutputColumns = [8]Column{
+const (
+	CDCShowOutputColumnsNameTaskID_Idx     = 0
+	CDCShowOutputColumnsNameTaskName_Idx   = 1
+	CDCShowOutputColumnsNameSourceURI_Idx  = 2
+	CDCShowOutputColumnsNameSinkURI_Idx    = 3
+	CDCShowOutputColumnsNameState_Idx      = 4
+	CDCShowOutputColumnsNameErrMsg_Idx     = 5
+	CDCShowOutputColumnsNameCheckpoint_Idx = 6
+	CDCShowOutputColumnsNameTimestamp_Idx  = 7
+
+	CDCShowOutputColumnsCount = 8
+)
+
+var CDCShowOutputColumnsSpec = map[int]struct {
+	name       string
+	columnType defines.MysqlType
+}{
+	CDCShowOutputColumnsNameTaskID_Idx:     {name: "task_id", columnType: defines.MYSQL_TYPE_VARCHAR},
+	CDCShowOutputColumnsNameTaskName_Idx:   {name: "task_name", columnType: defines.MYSQL_TYPE_VARCHAR},
+	CDCShowOutputColumnsNameSourceURI_Idx:  {name: "source_uri", columnType: defines.MYSQL_TYPE_TEXT},
+	CDCShowOutputColumnsNameSinkURI_Idx:    {name: "sink_uri", columnType: defines.MYSQL_TYPE_TEXT},
+	CDCShowOutputColumnsNameState_Idx:      {name: "state", columnType: defines.MYSQL_TYPE_VARCHAR},
+	CDCShowOutputColumnsNameErrMsg_Idx:     {name: "err_msg", columnType: defines.MYSQL_TYPE_VARCHAR},
+	CDCShowOutputColumnsNameCheckpoint_Idx: {name: "checkpoint", columnType: defines.MYSQL_TYPE_VARCHAR},
+	CDCShowOutputColumnsNameTimestamp_Idx:  {name: "timestamp", columnType: defines.MYSQL_TYPE_VARCHAR},
+}
+
+var CDCShowOutputColumns = [CDCShowOutputColumnsCount]Column{
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "task_id",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameTaskID_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameTaskID_Idx].columnType,
 		},
 	},
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "task_name",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameTaskName_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameTaskName_Idx].columnType,
 		},
 	},
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "source_uri",
-			columnType: defines.MYSQL_TYPE_TEXT,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameSourceURI_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameSourceURI_Idx].columnType,
 		},
 	},
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "sink_uri",
-			columnType: defines.MYSQL_TYPE_TEXT,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameSinkURI_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameSinkURI_Idx].columnType,
 		},
 	},
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "state",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameState_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameState_Idx].columnType,
 		},
 	},
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "err_msg",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameErrMsg_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameErrMsg_Idx].columnType,
 		},
 	},
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "checkpoint",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameCheckpoint_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameCheckpoint_Idx].columnType,
 		},
 	},
 	&MysqlColumn{
 		ColumnImpl: ColumnImpl{
-			name:       "timestamp",
-			columnType: defines.MYSQL_TYPE_VARCHAR,
+			name:       CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameTimestamp_Idx].name,
+			columnType: CDCShowOutputColumnsSpec[CDCShowOutputColumnsNameTimestamp_Idx].columnType,
 		},
 	},
 }
