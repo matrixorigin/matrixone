@@ -68,7 +68,7 @@ func handleShowCdc(
 		sinkUri       string
 		state         string
 		errMsg        string
-		ckpStr        string
+		watermarkStr  string
 		sourceUriInfo cdc.UriInfo
 		sinkUriInfo   cdc.UriInfo
 	)
@@ -113,6 +113,8 @@ func handleShowCdc(
 		return
 	}
 
+	var dao CDCDao
+
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
 			if taskId, err = result.GetString(ctx, i, 0); err != nil {
@@ -143,10 +145,14 @@ func handleShowCdc(
 			}
 
 			// get watermarks
-			if ckpStr, err = getTaskCkp(ctx, bh, ses.GetTenantInfo().TenantID, taskId); err != nil {
+			if watermarkStr, err = dao.GetTaskWatermark(
+				ctx,
+				uint64(ses.GetTenantInfo().GetTenantID()),
+				taskId,
+				bh,
+			); err != nil {
 				return
 			}
-
 			rs.AddRow([]interface{}{
 				taskId,
 				taskName,
@@ -154,7 +160,7 @@ func handleShowCdc(
 				sinkUriInfo.String(),
 				state,
 				errMsg,
-				ckpStr,
+				watermarkStr,
 				timestamp,
 			})
 		}

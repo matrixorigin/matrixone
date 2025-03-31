@@ -18,12 +18,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -297,25 +295,18 @@ func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap
 	return tCount, nil
 }
 
-func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId string) (s string, err error) {
+func getTaskCkp(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountId uint32,
+	taskId string,
+) (s string, err error) {
 	var (
-		dbName           string
-		tblName          string
-		watermarkStdTime string
-		errMsg           string
+		dbName       string
+		tblName      string
+		watermarkStr string
+		errMsg       string
 	)
-
-	getWatermarkStdTime := func(result ExecResult, i uint64) (watermarkStr string, err error) {
-		var watermarkTs timestamp.Timestamp
-		if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
-			return
-		}
-		if watermarkTs, err = timestamp.ParseTimestamp(watermarkStr); err != nil {
-			return
-		}
-		watermarkStr = watermarkTs.ToStdTime().In(time.Local).String()
-		return
-	}
 
 	s = "{\n"
 
@@ -338,7 +329,10 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 			if tblName, err = result.GetString(ctx, i, 1); err != nil {
 				return
 			}
-			if watermarkStdTime, err = getWatermarkStdTime(result, i); err != nil {
+			if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
+				return
+			}
+			if watermarkStr, err = TransformStdTimeString(watermarkStr); err != nil {
 				return
 			}
 			if errMsg, err = result.GetString(ctx, i, 3); err != nil {
@@ -346,9 +340,9 @@ func getTaskCkp(ctx context.Context, bh BackgroundExec, accountId uint32, taskId
 			}
 
 			if len(errMsg) == 0 {
-				s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermarkStdTime)
+				s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermarkStr)
 			} else {
-				s += fmt.Sprintf("  \"%s.%s\": %s(Failed, error: %s),\n", dbName, tblName, watermarkStdTime, errMsg)
+				s += fmt.Sprintf("  \"%s.%s\": %s(Failed, error: %s),\n", dbName, tblName, watermarkStr, errMsg)
 			}
 		}
 	}

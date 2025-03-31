@@ -16,7 +16,9 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -107,3 +109,77 @@ func (t *CDCDao) CreateTask(
 
 // 	return
 // }
+
+func (t *CDCDao) GetTaskWatermark(
+	ctx context.Context,
+	accountId uint64,
+	taskId string,
+	executor BackgroundExec,
+) (res string, err error) {
+	var (
+		queryAttrs   = cdc.CDCSQLTemplates[cdc.CDCGetWatermarkSqlTemplate_Idx].OutputAttrs
+		watermarkStr string
+		errMsg       string
+		dbName       string
+		tableName    string
+	)
+
+	sql := cdc.CDCSQLBuilder.GetWatermarkSQL(accountId, taskId)
+	executor.ClearExecResultSet()
+	if err = executor.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	resultSet, err := getResultSet(ctx, executor)
+	if err != nil {
+		return
+	}
+
+	res = "{\n"
+
+	for _, result := range resultSet {
+		// columns: CDCSQLTemplates[CDCGetWatermarkSqlTemplate_Idx].OutputAttrs
+		// 0: db_name
+		// 1: table_name
+		// 2: watermark
+		// 3: err_msg
+		for rowIdx, rowCnt := uint64(0), result.GetRowCount(); rowIdx < rowCnt; rowIdx++ {
+			for colIdx, colName := range queryAttrs {
+				switch colName {
+				case "watermark":
+					if watermarkStr, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+					watermarkStr, err = TransformStdTimeString(watermarkStr)
+					if err != nil {
+						return
+					}
+				case "err_msg":
+					if errMsg, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				case "db_name":
+					if dbName, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				case "table_name":
+					if tableName, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				default:
+					err = moerr.NewInternalErrorf(ctx, "unknown column: %s", colName)
+					return
+				}
+			}
+			if len(errMsg) == 0 {
+				res += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tableName, watermarkStr)
+			} else {
+				res += fmt.Sprintf("  \"%s.%s\": %s(Failed, error: %s),\n", dbName, tableName, watermarkStr, errMsg)
+			}
+		}
+	}
+
+	res += "}"
+
+	return
+}
