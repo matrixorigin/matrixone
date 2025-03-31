@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
@@ -111,6 +112,14 @@ func GetCDCShowOutputResultSet() *MysqlResultSet {
 		rs.AddColumn(column)
 	}
 	return &rs
+}
+
+func TransformStdTimeString(tsStr string) (string, error) {
+	ts, err := timestamp.ParseTimestamp(tsStr)
+	if err != nil {
+		return "", err
+	}
+	return ts.ToStdTime().In(time.Local).String(), nil
 }
 
 func ExecuteAndGetRowsAffected(

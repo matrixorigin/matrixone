@@ -1983,11 +1983,11 @@ func newMrsForGetWatermark(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
-func Test_getTaskCkp(t *testing.T) {
+func Test_GetWatermark(t *testing.T) {
 	type args struct {
 		ctx       context.Context
 		bh        BackgroundExec
-		accountId uint32
+		accountId uint64
 		taskId    string
 	}
 
@@ -2000,6 +2000,8 @@ func Test_getTaskCkp(t *testing.T) {
 	})
 	bh.sql2result[sql] = mrs
 
+	var dao CDCDao
+
 	tests := []struct {
 		name    string
 		args    args
@@ -2011,7 +2013,7 @@ func Test_getTaskCkp(t *testing.T) {
 			args: args{
 				ctx:       context.Background(),
 				bh:        bh,
-				accountId: sysAccountID,
+				accountId: uint64(sysAccountID),
 				taskId:    "taskID-1",
 			},
 			wantS: "{\n  \"db1.tb1\": " + timestamp.Timestamp{}.ToStdTime().In(time.Local).String() + ",\n}",
@@ -2019,8 +2021,20 @@ func Test_getTaskCkp(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, err := getTaskCkp(tt.args.ctx, tt.args.bh, tt.args.accountId, tt.args.taskId)
-			assert.NoErrorf(t, err, "getTaskCkp(%v, %v, %v, %v)", tt.args.ctx, tt.args.bh, tt.args.accountId, tt.args.taskId)
+			res, err := dao.GetTaskWatermark(
+				tt.args.ctx,
+				tt.args.accountId,
+				tt.args.taskId,
+				tt.args.bh,
+			)
+			assert.NoErrorf(
+				t, err,
+				"GetTaskWatermark(%v, %v, %v, %v)",
+				tt.args.ctx,
+				tt.args.bh,
+				tt.args.accountId,
+				tt.args.taskId,
+			)
 			assert.Equal(t, tt.wantS, res)
 		})
 	}
