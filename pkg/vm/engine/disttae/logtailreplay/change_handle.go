@@ -704,6 +704,7 @@ type ChangeHandler struct {
 	quick           bool
 	primarySeqnum   int
 	scheduler       tasks.JobScheduler
+	mp              *mpool.MPool
 
 	readDuration, copyDuration    time.Duration
 	updateDuration, totalDuration time.Duration
@@ -737,6 +738,7 @@ func NewChangesHandler(
 		minTS:         state.start,
 		LogThreshold:  LogThreshold,
 		primarySeqnum: primarySeqnum,
+		mp:            mp,
 		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
@@ -800,6 +802,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 	}
 	return
 }
+
 // filterBatch merges operations on the same primary key (pk) from data and tombstone batches.
 // For each pk, it keeps only the latest operation based on timestamp order.
 //
@@ -949,6 +952,16 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 			)
 		}
 	}
+	defer func() {
+		if data.RowCount() == 0 {
+			data.Clean(p.mp)
+			data = nil
+		}
+		if tombstone.RowCount() == 0 {
+			tombstone.Clean(p.mp)
+			tombstone = nil
+		}
+	}()
 	hint = engine.ChangesHandle_Tail_done
 	t0 := time.Now()
 	if p.quick {
