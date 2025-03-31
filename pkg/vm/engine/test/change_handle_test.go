@@ -120,13 +120,10 @@ func TestChangesHandle1(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
-			t.Log(tombstone.Attrs)
-			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
-			tombstone.Clean(mp)
+			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
-			assert.Equal(t, data.Vecs[0].Length(), 10)
+			assert.Equal(t, data.Vecs[0].Length(), 9)
 			data.Clean(mp)
 		}
 		assert.NoError(t, handle.Close())
@@ -213,11 +210,9 @@ func TestChangesHandle2(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
-			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
-			tombstone.Clean(mp)
+			assert.Nil(t, tombstone)
 			checkInsertBatch(bat, data, t)
-			assert.Equal(t, data.Vecs[0].Length(), 10)
+			assert.Equal(t, data.Vecs[0].Length(), 9)
 			data.Clean(mp)
 		}
 		assert.NoError(t, handle.Close())
@@ -683,13 +678,10 @@ func TestChangesHandle5(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
-			t.Log(tombstone.Attrs)
-			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
-			tombstone.Clean(mp)
+			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
-			assert.Equal(t, data.Vecs[0].Length(), 10)
+			assert.Equal(t, data.Vecs[0].Length(), 9)
 			data.Clean(mp)
 		}
 		assert.NoError(t, handle.Close())
@@ -785,13 +777,10 @@ func TestChangesHandle6(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
-			t.Log(tombstone.Attrs)
-			checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
-			tombstone.Clean(mp)
+			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
 			checkInsertBatch(bat, data, t)
-			assert.Equal(t, data.Vecs[0].Length(), 10)
+			assert.Equal(t, data.Vecs[0].Length(), 9)
 			data.Clean(mp)
 		}
 		assert.NoError(t, handle.Close())
