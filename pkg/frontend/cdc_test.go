@@ -2193,9 +2193,9 @@ func Test_handleShowCdc(t *testing.T) {
 }
 
 func TestCdcTask_Resume(t *testing.T) {
-	cdc := &CdcTask{
+	cdc := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
-		cdcTask: &task.CreateCdcDetails{
+		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		holdCh: make(chan int, 1),
@@ -2209,14 +2209,14 @@ func TestCdcTask_Resume(t *testing.T) {
 }
 
 func TestCdcTask_Restart(t *testing.T) {
-	cdc := &CdcTask{
+	cdc := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: cdc.NewWatermarkUpdater(
 			sysAccountID,
 			"taskID-0",
 			nil,
 		),
-		cdcTask: &task.CreateCdcDetails{
+		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		holdCh: make(chan int, 1),
@@ -2236,9 +2236,9 @@ func TestCdcTask_Pause(t *testing.T) {
 		<-holdCh
 	}()
 
-	cdc := &CdcTask{
+	cdc := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
-		cdcTask: &task.CreateCdcDetails{
+		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		isRunning: true,
@@ -2262,14 +2262,14 @@ func TestCdcTask_Cancel(t *testing.T) {
 	tie := &testIE{
 		db: db,
 	}
-	cdc := &CdcTask{
+	cdc := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),
 		watermarkUpdater: cdc.NewWatermarkUpdater(
 			sysAccountID,
 			"taskID-1",
 			tie,
 		),
-		cdcTask: &task.CreateCdcDetails{
+		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		holdCh:    ch,
@@ -2399,14 +2399,14 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cdc := &CdcTask{
+			cdc := &CDCTaskExecutor{
 				logger:           tt.fields.logger,
 				ie:               tt.fields.ie,
 				cnUUID:           tt.fields.cnUUID,
 				cnTxnClient:      tt.fields.cnTxnClient,
 				cnEngine:         tt.fields.cnEngine,
 				fileService:      tt.fields.fileService,
-				cdcTask:          tt.fields.cdcTask,
+				spec:             tt.fields.cdcTask,
 				mp:               tt.fields.mp,
 				packerPool:       tt.fields.packerPool,
 				sinkUri:          tt.fields.sinkUri,
@@ -2658,7 +2658,7 @@ func (r *mockIeResult) GetString(ctx context.Context, u uint64, u2 uint64) (stri
 
 func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 	mie := &mockIe{}
-	cdcTask := &CdcTask{
+	cdcTask := &CDCTaskExecutor{
 		ie: mie,
 	}
 
@@ -2705,8 +2705,8 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-	cdcTask := &CdcTask{
-		cdcTask: &task.CreateCdcDetails{
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
 			Accounts: []*task.Account{{Id: 0}},
 		},
 		tables: cdc.PatternTuples{
@@ -2819,7 +2819,7 @@ func (m mockSinker) Close() {
 }
 
 func TestCdcTask_addExecPipelineForTable(t *testing.T) {
-	cdcTask := &CdcTask{
+	cdcTask := &CDCTaskExecutor{
 		watermarkUpdater: &mockWatermarkUpdater{},
 		runningReaders:   &sync.Map{},
 		noFull:           true,
