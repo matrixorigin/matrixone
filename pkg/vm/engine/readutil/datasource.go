@@ -219,6 +219,10 @@ func NewRemoteDataSource(
 //	util functions
 // --------------------------------------------------------------------------------
 
+// FastApplyDeletesByRowIdVec apply deleted RowIds on the leftRows or deletedMask if leftRows is nil.
+// Note that this function is stable,
+// means the relative order between elements in the leftRows would not change after applies.
+// Example: [3,2,5,6,1,4,1] ==> after remove the even numbers ==> [3,5,1,1]
 func FastApplyDeletesByRowIdVec(
 	checkBid *objectio.Blockid,
 	leftRows *[]int64,
@@ -233,6 +237,7 @@ func FastApplyDeletesByRowIdVec(
 		lb int
 		ub int
 
+		// is the rowIds sorted?
 		sorted        = deletedRowIdsVec.GetSorted()
 		deletedRowIds = vector.MustFixedColNoTypeCheck[objectio.Rowid](deletedRowIdsVec)
 	)
@@ -242,6 +247,7 @@ func FastApplyDeletesByRowIdVec(
 			cur = types.NewRowid(checkBid, 0)
 		}
 
+		// liner search may have better performance if there exists a few items.
 		useBinarySearch := len(deletedRowIds) >= 5
 
 		for _, o := range *leftRows {
@@ -259,6 +265,7 @@ func FastApplyDeletesByRowIdVec(
 
 				for i := lb; i < ub; i++ {
 					b, offset := deletedRowIds[i].Decode()
+					// if the binary search applied, no need to check the block id again.
 					if (useBinarySearch || b.EQ(checkBid)) && o == int64(offset) {
 						hit = true
 						break
