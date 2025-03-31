@@ -1155,7 +1155,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 
 		if e.typ == INSERT {
-			//inserts.Add(uint64(i))
+			inserts.Add(uint64(i))
 		} else if e.typ == DELETE {
 			deletes.Add(uint64(i))
 		}
@@ -1184,6 +1184,18 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					break
 				}
 			}
+
+			if a.typ == INSERT {
+				// rewrite rowIds.
+				// all the rowIds in the batch share one blkId.
+				txn.genBlock()
+				for x := range a.bat.RowCount() {
+					rowId := txn.genRowId()
+					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](a.bat.Vecs[0], x, rowId); err != nil {
+						return err
+					}
+				}
+			}
 		}
 
 		return nil
@@ -1191,13 +1203,12 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	// this threshold may have a bad effect on the performance
 	if inserts.Count()+deletes.Count() >= 30 {
-		//ins := inserts.ToArray()
+		ins := inserts.ToArray()
 		del := deletes.ToArray()
 
-		// TODO: merge inserts will cause to not found in the TPCC test
-		//if err := foo(ins); err != nil {
-		//	return err
-		//}
+		if err := foo(ins); err != nil {
+			return err
+		}
 
 		if err := foo(del); err != nil {
 			return err
