@@ -17,11 +17,13 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type CDCDao struct {
@@ -31,13 +33,9 @@ type CDCDao struct {
 
 func NewCDCDao(
 	ses *Session,
-) (t CDCDao, err error) {
+) (t CDCDao) {
 	t.ses = ses
 	t.ts = getPu(ses.GetService()).TaskService
-	if t.ts == nil {
-		err = moerr.NewInternalError(context.Background(), "task service not found")
-		return
-	}
 	return
 }
 
@@ -96,19 +94,122 @@ func (t *CDCDao) CreateTask(
 	return
 }
 
-// func (t *CDCDao) ShowTasks(
-// 	ctx context.Context,
-// 	req *CDCShowTaskRequest,
-// ) (err error) {
-// 	var opts CDCShowCDCTaskOptions
-// 	if opts, err = t.BuildShowOpts(ctx, req); err != nil {
-// 		return
-// 	}
+func (t *CDCDao) ShowTasks(
+	ctx context.Context,
+	req *CDCShowTaskRequest,
+) (err error) {
+	var (
+		taskId       string
+		taskName     string
+		sourceUri    string
+		sinkUri      string
+		state        string
+		errMsg       string
+		watermarkStr string
+		executor     = t.ses.GetBackgroundExec(ctx)
+		pu           = getPu(t.ses.GetService())
+	)
+	defer executor.Close()
 
-// 	showSQL := opts.ToSQL()
+	resultSet := GetCDCShowOutputResultSet()
+	t.ses.SetMysqlResultSet(resultSet)
 
-// 	return
-// }
+	var (
+		snapTS        string
+		txnOp         client.TxnOperator
+		execResultSet []ExecResult
+		queryAttrs    = cdc.CDCSQLTemplates[cdc.CDCShowTaskSqlTemplate_Idx].OutputAttrs
+	)
+	if txnOp, err = cdc.GetTxnOp(
+		ctx,
+		pu.StorageEngine,
+		pu.TxnClient,
+		"cdc-handleShowCdc",
+	); err != nil {
+		return
+	}
+	defer func() {
+		cdc.FinishTxnOp(ctx, err, txnOp, pu.StorageEngine)
+	}()
+
+	snapTS = txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
+	sql := cdc.CDCSQLBuilder.ShowTaskSQL(
+		uint64(t.ses.GetTenantInfo().GetTenantID()),
+		req.Option.All,
+		string(req.Option.TaskName),
+	)
+
+	executor.ClearExecResultSet()
+	if err = executor.Exec(ctx, sql); err != nil {
+		return
+	}
+
+	if execResultSet, err = getResultSet(ctx, executor); err != nil {
+		return
+	}
+
+	for _, result := range execResultSet {
+		for rowIdx, rowCnt := uint64(0), result.GetRowCount(); rowIdx < rowCnt; rowIdx++ {
+			for colIdx, colName := range queryAttrs {
+				switch colName {
+				case "task_id":
+					if taskId, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				case "task_name":
+					if taskName, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				case "source_uri":
+					if sourceUri, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				case "sink_uri":
+					if sinkUri, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				case "state":
+					if state, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				case "err_msg":
+					if errMsg, err = result.GetString(ctx, rowIdx, uint64(colIdx)); err != nil {
+						return
+					}
+				}
+			}
+			var uriInfo cdc.UriInfo
+			if err = cdc.JsonDecode(sourceUri, &uriInfo); err != nil {
+				return
+			}
+			if err = cdc.JsonDecode(sinkUri, &uriInfo); err != nil {
+				return
+			}
+
+			if watermarkStr, err = t.GetTaskWatermark(
+				ctx,
+				uint64(t.ses.GetTenantInfo().GetTenantID()),
+				taskId,
+				executor,
+			); err != nil {
+				return
+			}
+
+			resultSet.AddRow([]interface{}{
+				taskId,
+				taskName,
+				sourceUri,
+				sinkUri,
+				state,
+				errMsg,
+				watermarkStr,
+				snapTS,
+			})
+		}
+	}
+
+	return
+}
 
 func (t *CDCDao) GetTaskWatermark(
 	ctx context.Context,
