@@ -838,15 +838,15 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 	if data != nil {
 		pkVec := data.Vecs[primarySeqnum]
 		tsVec := data.Vecs[len(data.Vecs)-1]
+		timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
 		for i := 0; i < pkVec.Length(); i++ {
 			pkVal := vector.GetAny(pkVec, i)
 			if _, ok := pkVal.([]byte); ok {
 				pkVal = string(pkVal.([]byte))
 			}
-			ts := vector.GetFixedAtNoTypeCheck[types.TS](tsVec, i)
 			rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
 				row:      i,
-				ts:       ts,
+				ts:       timestamps[i],
 				isDelete: false,
 			})
 		}
@@ -856,15 +856,15 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 	if tombstone != nil {
 		pkVec := tombstone.Vecs[0]
 		tsVec := tombstone.Vecs[1]
+		timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
 		for i := 0; i < pkVec.Length(); i++ {
 			pkVal := vector.GetAny(pkVec, i)
 			if _, ok := pkVal.([]byte); ok {
 				pkVal = string(pkVal.([]byte))
 			}
-			ts := vector.GetFixedAtNoTypeCheck[types.TS](tsVec, i)
 			rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
 				row:      i,
-				ts:       ts,
+				ts:       timestamps[i],
 				isDelete: true,
 			})
 		}
@@ -888,9 +888,9 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 
 		// Case 1: First is delete
 		if first.isDelete {
-			// Keep only last insert
+			// Keep first delete and last insert
 			if !last.isDelete {
-				for _, ri := range rowInfos[:len(rowInfos)-1] {
+				for _, ri := range rowInfos[1:len(rowInfos)-1] {
 					if ri.isDelete {
 						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
 					} else {
