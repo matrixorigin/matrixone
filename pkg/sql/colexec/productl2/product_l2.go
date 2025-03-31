@@ -272,7 +272,11 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 						leastDistance[j] = 0
 						leastClusterIndex[j] = i
 					} else {
-						dist := distfn(centroidmat[i], embedmat[j])
+						dist, err := distfn(centroidmat[i], embedmat[j])
+						if err != nil {
+							errs = errors.Join(errs, err)
+							return
+						}
 						if dist < leastDistance[j] {
 							leastDistance[j] = dist
 							leastClusterIndex[j] = i

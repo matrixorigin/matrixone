@@ -47,7 +47,8 @@ func Test_Blas32(t *testing.T) {
 	distfn, _, err := ResolveKmeansDistanceFn[float32](Metric_L2Distance, false)
 	require.Nil(t, err)
 
-	v := distfn(v1.Data, v2.Data)
+	v, err := distfn(v1.Data, v2.Data)
+	require.Nil(t, err)
 
 	fmt.Printf("blas32 v = %v\n", v)
 }
@@ -179,7 +180,7 @@ func Test_L2Distance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := L2Distance[float64](tt.args.v1, tt.args.v2); got != tt.want {
+			if got, err := L2Distance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
 			}
 		})
@@ -239,7 +240,7 @@ func Test_L2DistanceSq(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := L2DistanceSq[float64](tt.args.v1, tt.args.v2); got != tt.want {
+			if got, err := L2DistanceSq[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
 				t.Errorf("L2DistanceSq() = %v, want %v", got, tt.want)
 			}
 		})
@@ -328,7 +329,7 @@ func Test_AngularDistance(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
-			if got := SphericalDistance[float64](tt.args.v1, tt.args.v2); !assertx.InEpsilonF64(got, tt.want) {
+			if got, err := SphericalDistance[float64](tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("SphericalDistance() = %v, want %v", got, tt.want)
 			}
 		})

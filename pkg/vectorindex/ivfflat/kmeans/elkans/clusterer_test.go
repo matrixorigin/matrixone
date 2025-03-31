@@ -173,8 +173,10 @@ func Test_Cluster(t *testing.T) {
 				t.Errorf("Cluster() got = %v, want %v", got, tt.want)
 			}
 
-			if !assertx.InEpsilonF64(tt.wantSSE, clusterer.SSE()) {
-				t.Errorf("SSE() got = %v, want %v", clusterer.SSE(), tt.wantSSE)
+			sse, err := clusterer.SSE()
+			require.Nil(t, err)
+			if !assertx.InEpsilonF64(tt.wantSSE, sse) {
+				t.Errorf("SSE() got = %v, want %v", sse, tt.wantSSE)
 			}
 		})
 	}

@@ -121,7 +121,10 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T
 			continue
 		}
 		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
-		dist := distfn(query, vec)
+		dist, err := distfn(query, vec)
+		if err != nil {
+			return false, err
+		}
 
 		heap.Push(&vectorindex.SearchResultAnyKey{Id: pk, Distance: float64(dist)})
 	}
@@ -130,6 +133,7 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
 
+	var errs error
 	if len(idx.Centroids) == 0 {
 		// empty index has id = 1
 		return []int64{1}, nil
@@ -151,13 +155,21 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				if i%nworker != n {
 					continue
 				}
-				dist := distfn(query, c.Vec)
+				dist, err := distfn(query, c.Vec)
+				if err != nil {
+					errs = errors.Join(errs, err)
+					return
+				}
 				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
 			}
 		}()
 	}
 
 	wg.Wait()
+
+	if errs != nil {
+		return nil, errs
+	}
 
 	res := make([]int64, 0, probe)
 	n := heap.Len()
