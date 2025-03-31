@@ -1028,16 +1028,16 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.args.ts.curDTaskId = tt.args.curDTaskId
-			fun := RegisterCdcExecutor(
+			fun := CDCTaskExecutorFactory(
 				tt.args.logger,
-				tt.args.ts,
 				tt.args.ieFactory,
 				tt.args.attachToTask,
 				tt.args.cnUUID,
+				tt.args.ts,
 				tt.args.fileService,
 				tt.args.cnTxnClient,
 				tt.args.cnEngine,
-				tt.args.cnEngMp)
+			)
 			ctx2, cancel := context.WithTimeout(ctx, time.Second*3)
 			defer cancel()
 			err = fun(ctx2, tt.args.dTask)
