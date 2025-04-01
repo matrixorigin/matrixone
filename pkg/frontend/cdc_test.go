@@ -1119,7 +1119,7 @@ func Test_updateCdcTask_cancel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := updateCdcTask(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := collectTasksToUpdate(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1202,7 +1202,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := updateCdcTask(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := collectTasksToUpdate(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1285,7 +1285,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := updateCdcTask(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := collectTasksToUpdate(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}
@@ -1368,7 +1368,7 @@ func Test_updateCdcTask_resume(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := updateCdcTask(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
+			_, err := collectTasksToUpdate(tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 			assert.NoError(t, err, "updateCdcTask(%v, %v, %v, %v, %v, %v)", tt.args.ctx, tt.args.targetStatus, tt.args.taskKeyMap, tt.args.tx, tt.args.accountId, tt.args.taskName)
 		})
 	}

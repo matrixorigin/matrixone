@@ -1055,8 +1055,18 @@ func (m *mysqlTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, c
 	return daemonTaskRowsAffected, nil
 }
 
-func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), condition ...Condition) (int, error) {
-	if taskFrameworkDisabled() {
+func (m *mysqlTaskStorage) UpdateCdcTask(
+	ctx context.Context,
+	targetStatus task.TaskStatus,
+	taskCollector func(
+		context.Context,
+		task.TaskStatus,
+		map[CdcTaskKey]struct{},
+		SqlExecutor,
+	) (int, error),
+	condition ...Condition,
+) (int, error) {
+	if taskFrameworkDisabled() || taskCollector == nil {
 		return 0, nil
 	}
 	var affectedCdcRow, affectedTaskRow int
@@ -1077,11 +1087,17 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 	}()
 
 	taskKeyMap := make(map[CdcTaskKey]struct{}, 0)
-	if callback != nil {
-		affectedCdcRow, err = callback(ctx, targetStatus, taskKeyMap, tx)
-		if err != nil {
-			return 0, err
-		}
+	if affectedCdcRow, err = taskCollector(
+		ctx,
+		targetStatus,
+		taskKeyMap,
+		tx,
+	); err != nil {
+		return 0, err
+	}
+
+	if len(taskKeyMap) == 0 {
+		return 0, nil
 	}
 
 	//step3: collect daemon task that we want to update
