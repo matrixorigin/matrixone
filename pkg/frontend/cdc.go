@@ -170,7 +170,7 @@ func runUpdateCdcTask(
 			taskName,
 		)
 	}
-	_, err = ts.UpdateCdcTask(ctx,
+	_, err = ts.UpdateCDCTask(ctx,
 		targetTaskStatus,
 		taskCollector,
 		conds...,
