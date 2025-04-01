@@ -176,22 +176,23 @@ func TestPolicyGroup(t *testing.T) {
 	g.onObject(newTestObjectEntry(t, 10, true))
 	g.onObject(newTestObjectEntry(t, 20, true))
 	g.onObject(newTestObjectEntry(t, 30, true))
+	g.onObject(newTestObjectEntry(t, 40, true))
 
 	results := g.revise(rc)
 	require.Equal(t, 1, len(results))
 	require.Equal(t, taskHostDN, results[0].kind)
 
-	require.Equal(t, 2, len(results[0].objs))
+	require.Equal(t, 4, len(results[0].objs))
 }
 
-const overlapSizeThreshold = common.DefaultMinOsizeQualifiedMB * common.Const1MBytes
+const overlapSizeThreshold = common.DefaultMinOsizeQualifiedBytes
 
 func TestObjOverlap(t *testing.T) {
 
 	// empty policy
 	policy := newObjOverlapPolicy()
 	rc := new(resourceController)
-	rc.setMemLimit(estimateMemUsagePerRow * 20)
+	rc.setMemLimit(600)
 	objs := policy.revise(rc)
 	for _, obj := range objs {
 		require.Equal(t, 0, len(obj.objs))
@@ -201,12 +202,15 @@ func TestObjOverlap(t *testing.T) {
 
 	// no overlap
 	entry1 := newSortedTestObjectEntry(t, 1, 2, overlapSizeThreshold)
+	entry1.ObjectStats.SetLevel(1)
 	entry2 := newSortedTestObjectEntry(t, 3, 4, overlapSizeThreshold)
+	entry2.ObjectStats.SetLevel(1)
 	require.True(t, policy.onObject(entry1))
 	require.True(t, policy.onObject(entry2))
-	objs = policy.revise(rc)
-	for _, obj := range objs {
-		require.Equal(t, 0, len(obj.objs))
+	tasks := policy.revise(rc)
+	for _, task := range tasks {
+		t.Log(task.note)
+		require.Equal(t, 0, len(task.objs))
 	}
 
 	policy.resetForTable(nil, defaultBasicConfig)
@@ -350,25 +354,6 @@ func Test_timeout(t *testing.T) {
 	require.False(t, p.onObject(ent3))
 }
 
-func TestSegLevel(t *testing.T) {
-	require.Equal(t, 0, segLevel(1))
-	require.Equal(t, 1, segLevel(2))
-	require.Equal(t, 1, segLevel(3))
-	require.Equal(t, 2, segLevel(4))
-	require.Equal(t, 2, segLevel(5))
-	require.Equal(t, 2, segLevel(6))
-	require.Equal(t, 2, segLevel(14))
-	require.Equal(t, 2, segLevel(15))
-	require.Equal(t, 3, segLevel(16))
-	require.Equal(t, 3, segLevel(17))
-	require.Equal(t, 3, segLevel(63))
-	require.Equal(t, 4, segLevel(64))
-	require.Equal(t, 4, segLevel(65))
-	require.Equal(t, 4, segLevel(255))
-	require.Equal(t, 5, segLevel(256))
-	require.Equal(t, 5, segLevel(257))
-}
-
 func TestCheckTombstone(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -422,47 +407,6 @@ func TestCheckTombstone(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestObjectsWithMaximumOverlaps(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 50, math.MaxInt32)
-	o2 := newSortedTestObjectEntry(t, 51, 100, math.MaxInt32)
-	o3 := newSortedTestObjectEntry(t, 49, 52, math.MaxInt32)
-	o4 := newSortedTestObjectEntry(t, 1, 52, math.MaxInt32)
-	o5 := newSortedTestObjectEntry(t, 50, 51, math.MaxInt32)
-	o6 := newSortedTestObjectEntry(t, 55, 60, math.MaxInt32)
-
-	res1 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o1, o2}), 2)
-	require.Equal(t, 0, len(res1))
-
-	res2 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o1, o3}), 2)
-	require.Equal(t, 1, len(res2))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3}, res2[0])
-
-	res3 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o2, o3}), 2)
-	require.Equal(t, 1, len(res3))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o3}, res3[0])
-
-	res4 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o1, o2, o3}), 2)
-	require.Equal(t, 1, len(res4))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3}, res4[0])
-
-	res5 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o1, o2, o3}), 2)
-	require.Equal(t, 1, len(res5))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3}, res5[0])
-
-	res6 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o1, o2, o3, o4}), 2)
-	require.Equal(t, 1, len(res6))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3, o4}, res6[0])
-
-	res7 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o1, o5}), 2)
-	require.Equal(t, 1, len(res7))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o5}, res7[0])
-
-	res8 := objectsWithGivenOverlaps(makeEndPoints([]*catalog.ObjectEntry{o1, o2, o3, o4, o5, o6}), 2)
-	require.Equal(t, 2, len(res8))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o3, o4, o5}, res8[0])
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o2, o6}, res8[1])
 }
 
 func TestLargeMerge(t *testing.T) {
@@ -548,8 +492,6 @@ func TestToolFunctions(t *testing.T) {
 		objs[i] = newTestObjectEntry(t, 1*common.Const1MBytes, false)
 	}
 
-	require.True(t, hasHundredSmallObjs(objs, 2*common.Const1MBytes))
-
 	// test for IsSameSegment
 	segID := objectio.NewSegmentid()
 	objectio.SetObjectStatsObjectName(&objs[0].ObjectStats, objectio.BuildObjectName(segID, 1))
@@ -557,7 +499,4 @@ func TestToolFunctions(t *testing.T) {
 	objectio.SetObjectStatsObjectName(&objs[2].ObjectStats, objectio.BuildObjectName(segID, 3))
 	require.True(t, IsSameSegment(objs[:3]))
 	require.False(t, IsSameSegment(objs[:4]))
-
-	require.False(t, isAllGreater(objs, 2*common.Const1MBytes))
-	require.True(t, isAllGreater(objs, common.Const1MBytes/2))
 }

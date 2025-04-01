@@ -24,11 +24,13 @@ import (
 )
 
 const (
-	DefaultMinOsizeQualifiedMB   = 90    // MB
-	DefaultMaxOsizeObjMB         = 128   // MB
-	DefaultMinCNMergeSize        = 80000 // MB
-	DefaultCNMergeMemControlHint = 8192  // MB
-	DefaultMaxMergeObjN          = 16
+	DefaultMinOsizeQualifiedMB    = 90 // MB
+	DefaultMinOsizeQualifiedBytes = DefaultMinOsizeQualifiedMB * Const1MBytes
+	DefaultMaxOsizeObjMB          = 128 // MB
+	DefaultMaxOsizeObjBytes       = DefaultMaxOsizeObjMB * Const1MBytes
+	DefaultMinCNMergeSize         = 80000 // MB
+	DefaultCNMergeMemControlHint  = 8192  // MB
+	DefaultMaxMergeObjN           = 16
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20
@@ -52,8 +54,8 @@ var (
 
 func init() {
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
-	RuntimeOsizeRowsQualified.Store(DefaultMinOsizeQualifiedMB * Const1MBytes)
-	RuntimeMaxObjOsize.Store(DefaultMaxOsizeObjMB * Const1MBytes)
+	RuntimeOsizeRowsQualified.Store(DefaultMinOsizeQualifiedBytes)
+	RuntimeMaxObjOsize.Store(DefaultMaxOsizeObjBytes)
 	FlushMemCapacity.Store(20 * Const1MBytes)
 }
 

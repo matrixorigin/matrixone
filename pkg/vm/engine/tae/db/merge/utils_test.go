@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,8 +47,7 @@ func TestResourceController(t *testing.T) {
 		newTestObjectEntry(t, 0, false),
 		newTestVarcharObjectEntry(t, "", "", 2),
 	}
-	rc.reserveResources(objs)
-	require.Equal(t, int64(4), rc.reservedMergeRows)
+	rc.reserveResources(int64(mergesort.EstimateMergeSize(IterEntryAsStats(objs))))
 	require.Greater(t, rc.reserved, int64(120))
 }
 

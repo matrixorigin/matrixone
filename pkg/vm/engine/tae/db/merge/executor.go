@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -45,25 +46,37 @@ func newMergeExecutor(rt *dbutils.Runtime, sched *CNMergeScheduler) *executor {
 	}
 }
 
-func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectEntry, kind taskHostKind) {
-	if len(objs) == 0 {
-		return
-	}
-	// check objects are merging by CNs.
-	if e.cnSched.checkOverlapOnCNActive(objs) {
+func (e *executor) executeFor(entry *catalog.TableEntry, task mergeTask) (success bool) {
+	kind := task.kind
+	level := task.level
+	note := task.note
+	doneCB := task.doneCB
+	if len(task.objs) == 0 {
 		return
 	}
 
-	isTombstone := objs[0].IsTombstone
+	// check objects are merging by CNs.
+	// if e.cnSched != nil && e.cnSched.checkOverlapOnCNActive(objs) {
+	// 	return
+	// }
+
+	objs := make([]*catalog.ObjectEntry, 0, len(task.objs))
+
+	for _, obj := range task.objs {
+		objEntry, _ := entry.GetObjectByID(obj.ObjectName().ObjectId(), task.isTombstone)
+		if objEntry != nil {
+			objs = append(objs, objEntry)
+		}
+	}
+
 	for _, o := range objs {
-		if o.IsTombstone != isTombstone {
+		if o.IsTombstone != task.isTombstone {
 			panic("merging tombstone and data objects in one merge")
 		}
 	}
 
 	if kind == taskHostDN {
-		e.scheduleMergeObjects(slices.Clone(objs), entry, isTombstone)
-		return
+		return e.scheduleMergeObjects(slices.Clone(objs), entry, task.isTombstone, level, note, doneCB)
 	}
 
 	// prevent CN OOM
@@ -89,10 +102,10 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 		RoleId:            schema.AcInfo.RoleID,
 		TblId:             entry.ID,
 		DbId:              entry.GetDB().GetID(),
-		TableName:         entry.GetLastestSchema(isTombstone).Name,
+		TableName:         entry.GetLastestSchema(task.isTombstone).Name,
 		DbName:            entry.GetDB().GetName(),
 		ToMergeObjs:       stats,
-		EstimatedMemUsage: uint64(estimateMergeSize(objs)),
+		EstimatedMemUsage: uint64(mergesort.EstimateMergeSize(IterEntryAsStats(objs))),
 	}
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseCreateCNMerge)
 	defer cancel()
@@ -108,16 +121,23 @@ func (e *executor) executeFor(entry *catalog.TableEntry, objs []*catalog.ObjectE
 
 	e.cnSched.addActiveObjects(objs)
 	entry.Stats.SetLastMergeTime()
+	return true
 }
 
-func (e *executor) scheduleMergeObjects(mObjs []*catalog.ObjectEntry, entry *catalog.TableEntry, isTombstone bool) {
+func (e *executor) scheduleMergeObjects(mObjs []*catalog.ObjectEntry, entry *catalog.TableEntry, isTombstone bool, level int8, note string, doneCB *taskObserver) (success bool) {
 	scopes := make([]common.ID, 0, len(mObjs))
 	for _, obj := range mObjs {
 		scopes = append(scopes, *obj.AsCommonID())
 	}
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		txn.GetMemo().IsFlushOrMerge = true
-		return jobs.NewMergeObjectsTask(ctx, txn, mObjs, e.rt, common.DefaultMaxOsizeObjMB*common.Const1MBytes, isTombstone)
+		task, err := jobs.NewMergeObjectsTask(ctx, txn, mObjs, e.rt, common.DefaultMaxOsizeObjBytes, isTombstone)
+		if err != nil {
+			return nil, err
+		}
+		task.SetLevel(level)
+		task.SetTaskSourceNote(note)
+		return task, nil
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
@@ -131,5 +151,9 @@ func (e *executor) scheduleMergeObjects(mObjs []*catalog.ObjectEntry, entry *cat
 		}
 		return
 	}
+	if doneCB != nil {
+		task.AddObserver(doneCB)
+	}
 	entry.Stats.SetLastMergeTime()
+	return true
 }

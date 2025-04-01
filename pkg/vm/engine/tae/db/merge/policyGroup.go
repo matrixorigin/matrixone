@@ -27,12 +27,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type reviseResult struct {
-	objs []*catalog.ObjectEntry
-	kind taskHostKind
-	note string
-}
-
 type policyGroup struct {
 	policies []policy
 
@@ -55,8 +49,8 @@ func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
 	}
 }
 
-func (g *policyGroup) revise(rc *resourceController) []reviseResult {
-	results := make([]reviseResult, 0, len(g.policies))
+func (g *policyGroup) revise(rc *resourceController) []mergeTask {
+	results := make([]mergeTask, 0, len(g.policies))
 	for _, p := range g.policies {
 		pResult := p.revise(rc)
 		for _, r := range pResult {

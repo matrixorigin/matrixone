@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -66,15 +67,15 @@ func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry) bool {
 	return false
 }
 
-func (o *objCompactPolicy) revise(rc *resourceController) []reviseResult {
+func (o *objCompactPolicy) revise(rc *resourceController) []mergeTask {
 	if o.tblEntry == nil {
 		return nil
 	}
-	results := make([]reviseResult, 0, len(o.objects))
+	results := make([]mergeTask, 0, len(o.objects))
 	for _, obj := range o.objects {
-		if rc.resourceAvailable([]*catalog.ObjectEntry{obj}) {
-			rc.reserveResources([]*catalog.ObjectEntry{obj})
-			results = append(results, reviseResult{objs: []*catalog.ObjectEntry{obj}, kind: taskHostDN})
+		if rc.resourceAvailable(int64(mergesort.EstimateMergeSize(IterEntryAsStats([]*catalog.ObjectEntry{obj})))) {
+			rc.reserveResources(int64(mergesort.EstimateMergeSize(IterEntryAsStats([]*catalog.ObjectEntry{obj}))))
+			results = append(results, mergeTask{objs: []*objectio.ObjectStats{obj.GetObjectStats()}, kind: taskHostDN})
 		}
 	}
 	return results
@@ -95,7 +96,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 			continue
 		}
 
-		if tEntry.OriginSize() > common.DefaultMaxOsizeObjMB*common.Const1MBytes {
+		if tEntry.OriginSize() > common.DefaultMaxOsizeObjBytes {
 			meta, err := loadTombstoneMeta(tEntry.GetObjectStats(), o.fs)
 			if err != nil {
 				continue

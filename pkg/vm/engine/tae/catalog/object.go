@@ -348,8 +348,9 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 		}
 	}
 	return fmt.Sprintf(
-		"loaded:%t, oSize:%s, cSzie:%s rows:%d, zm: %s",
+		"loaded:%t, lv: %v oSize:%s, cSzie:%s rows:%d, zm: %s",
 		entry.GetLoaded(),
+		entry.GetLevel(),
 		common.HumanReadableBytes(int(entry.OriginSize())),
 		common.HumanReadableBytes(int(entry.Size())),
 		entry.Rows(),

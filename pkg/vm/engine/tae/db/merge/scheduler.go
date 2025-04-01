@@ -45,9 +45,9 @@ type Scheduler struct {
 
 func NewScheduler(rt *dbutils.Runtime, sched *CNMergeScheduler) *Scheduler {
 	policySlice := []policy{
-		newObjOverlapPolicy(),
+		// newObjOverlapPolicy(),
 		newObjCompactPolicy(rt.Fs),
-		newTombstonePolicy(),
+		// newTombstonePolicy(),
 	}
 	op := &Scheduler{
 		LoopProcessor: new(catalog.LoopProcessor),
@@ -184,7 +184,7 @@ func (s *Scheduler) onPostTable(tableEntry *catalog.TableEntry) (err error) {
 
 	for _, r := range results {
 		if len(r.objs) > 0 {
-			s.executor.executeFor(tableEntry, r.objs, r.kind)
+			s.executor.executeFor(tableEntry, r)
 		}
 	}
 	return

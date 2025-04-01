@@ -287,6 +287,9 @@ func (entry *TableEntry) CreateObject(
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewObjectEntry(entry, txn, *opts.Stats, dataFactory, opts.IsTombstone)
+	if entry.GetCatalog().mergeNotifier != nil && !opts.Stats.GetAppendable() {
+		entry.GetCatalog().mergeNotifier.OnCreateNonAppendObject(entry)
+	}
 	entry.AddEntryLocked(created)
 	return
 }
@@ -372,6 +375,10 @@ func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
 
 func (entry *TableEntry) GetColDefs() []*ColDef {
 	return entry.GetLastestSchemaLocked(false).ColDefs
+}
+
+func (entry *TableEntry) GetNameDesc() string {
+	return fmt.Sprintf("%d-%s", entry.ID, entry.GetLastestSchemaLocked(false).Name)
 }
 
 func (entry *TableEntry) GetFullName() string {
@@ -742,10 +749,17 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 		entry.FreezeAppend()
 	}
 	entry.RLock()
-	schema := entry.GetLatestNodeLocked().BaseNode.Schema
+	lastestNode := entry.GetLatestNodeLocked()
+	schema := lastestNode.BaseNode.Schema
 	entry.RUnlock()
 	// update the shortcut to the lastest schema
 	entry.TableNode.schema.Store(schema)
+
+	// create table commit
+	if lastestNode.DeletedAt.IsEmpty() && entry.GetCatalog().mergeNotifier != nil {
+		entry.GetCatalog().mergeNotifier.OnCreateTableCommit(entry)
+	}
+
 	return
 }
 

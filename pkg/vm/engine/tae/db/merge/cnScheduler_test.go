@@ -101,17 +101,29 @@ func TestExecutorCNMerge(t *testing.T) {
 	txn2, _ := txnMgr.StartTxn(nil)
 	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
 
+	tbl.AddEntryLocked(entry)
+
 	memStorage := taskservice.NewMemTaskStorage()
 	cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
 		return taskservice.NewTaskService(runtime.DefaultRuntime(), memStorage), true
 	})
 	executor := newMergeExecutor(&dbutils.Runtime{}, cnScheduler)
-	executor.executeFor(tbl, []*catalog.ObjectEntry{entry}, taskHostCN)
+	executor.executeFor(tbl, mergeTask{
+		objs:  []*objectio.ObjectStats{entry.GetObjectStats()},
+		kind:  taskHostCN,
+		level: 0,
+		note:  "",
+	})
 	require.NotEmpty(t, cnScheduler.activeObjsString())
 
-	executor.executeFor(tbl, []*catalog.ObjectEntry{entry}, taskHostCN)
 	entry2 := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
-	executor.executeFor(tbl, slices.Repeat([]*catalog.ObjectEntry{entry2}, 31), taskHostCN)
+	tbl.AddEntryLocked(entry2)
+	executor.executeFor(tbl, mergeTask{
+		objs:  slices.Repeat([]*objectio.ObjectStats{entry2.GetObjectStats()}, 31),
+		kind:  taskHostCN,
+		level: 0,
+		note:  "",
+	})
 
 	executor.cnSched.prune(0, 0)
 	executor.cnSched.prune(0, time.Hour)

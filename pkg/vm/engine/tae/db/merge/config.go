@@ -30,8 +30,8 @@ import (
 var (
 	defaultBasicConfig = &BasicPolicyConfig{
 		MergeMaxOneRun:    common.DefaultMaxMergeObjN,
-		MaxOsizeMergedObj: common.DefaultMaxOsizeObjMB * common.Const1MBytes,
-		ObjectMinOsize:    common.DefaultMinOsizeQualifiedMB * common.Const1MBytes,
+		MaxOsizeMergedObj: common.DefaultMaxOsizeObjBytes,
+		ObjectMinOsize:    common.DefaultMinOsizeQualifiedBytes,
 		MinCNMergeSize:    common.DefaultMinCNMergeSize * common.Const1MBytes,
 		TombstoneLifetime: 30 * time.Minute,
 	}

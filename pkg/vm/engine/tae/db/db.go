@@ -105,7 +105,7 @@ type DB struct {
 	BGCheckpointRunner checkpoint.Runner
 	BGFlusher          checkpoint.Flusher
 
-	MergeScheduler *merge.Scheduler
+	MergeScheduler *merge.MergeScheduler
 
 	DiskCleaner *gc2.DiskCleaner
 

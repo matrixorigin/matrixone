@@ -60,6 +60,9 @@ type mergeObjectsTask struct {
 	did, tid          uint64
 	isTombstone       bool
 
+	level int8
+	note  string
+
 	blkCnt     []int
 	nMergedBlk []int
 	schema     *catalog.Schema
@@ -154,6 +157,18 @@ func NewMergeObjectsTask(
 	return
 }
 
+func (task *mergeObjectsTask) SetLevel(level int8) {
+	task.level = level
+}
+
+func (task *mergeObjectsTask) SetTaskSourceNote(note string) {
+	task.note = note
+}
+
+func (task *mergeObjectsTask) TaskSourceNote() string {
+	return task.note
+}
+
 func (task *mergeObjectsTask) GetObjectCnt() int {
 	return len(task.mergedObjs)
 }
@@ -216,6 +231,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}
 	var err error
 	var data *containers.Batch
+
 	releaseF := func() {
 		if data != nil {
 			data.Close()
@@ -308,6 +324,7 @@ func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry.TblId = task.tid
 	commitEntry.TableName = task.schema.Name
 	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
+	commitEntry.Level = int32(task.level)
 	for _, o := range task.mergedObjs {
 		obj := *o.GetObjectStats()
 		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
@@ -461,6 +478,12 @@ func HandleMergeEntryInTxn(
 		// set stats and sorted property
 		objstats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
 		err := objectio.SetObjectStats(objstats, &stats)
+		// another site to SetLevel is in commiting append in table space
+		if entry.Level > 0 || objstats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+			// for layzer > 0, bump up level
+			// for layzer 0, only bump up level when the produced object's origin size > 90MB
+			objstats.SetLevel(int8(entry.Level + 1))
+		}
 		if err != nil {
 			return nil, err
 		}

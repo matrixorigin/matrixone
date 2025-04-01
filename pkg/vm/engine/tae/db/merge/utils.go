@@ -17,6 +17,7 @@ package merge
 import (
 	"cmp"
 	"context"
+	"iter"
 	"math"
 	"os"
 	"slices"
@@ -42,11 +43,10 @@ var StopMerge atomic.Bool
 type taskHostKind int
 
 const (
-	taskHostCN taskHostKind = iota
-	taskHostDN
+	taskHostDN taskHostKind = iota
+	taskHostCN
 
-	constMaxMemCap         = 12 * common.Const1GBytes // max original memory for an object
-	estimateMemUsagePerRow = 30
+	constMaxMemCap = 12 * common.Const1GBytes // max original memory for an object
 )
 
 func score(objs []*catalog.ObjectEntry) float64 {
@@ -168,25 +168,6 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	return objs[:i]
 }
 
-func estimateMergeSize(objs []*catalog.ObjectEntry) int {
-	size := 0
-	for _, o := range objs {
-		blkRow := 8192
-		if r := o.Rows(); r == 0 {
-			continue
-		} else if r < 8192 {
-			blkRow = int(r)
-		}
-		size += blkRow * int(o.OriginSize()/o.Rows()) / 2 * 3 // read one block
-		size += int(o.Rows()) * estimateMemUsagePerRow        // transfer page
-		size += int(o.OriginSize())                           // objectio write buffer
-	}
-	// Go's load factor is 6.5. This means there are average 6.5 key/elem pairs per bucket.
-	// Each bucket holds up to 8 key/elem pairs. So the memory wasted are 1.5 / 8 ~= 0.2.
-	// So we reserve 120% memory per row here.
-	return size / 5 * 6
-}
-
 type resourceController struct {
 	proc *process.Process
 
@@ -194,7 +175,6 @@ type resourceController struct {
 	using    int64
 	reserved int64
 
-	reservedMergeRows int64
 	transferPageLimit int64
 
 	cpuPercent float64
@@ -251,7 +231,6 @@ func (c *resourceController) refresh() {
 	if percents, err := cpu.Percent(0, false); err == nil {
 		c.cpuPercent = percents[0]
 	}
-	c.reservedMergeRows = 0
 	c.reserved = 0
 
 	c.skippedFromOOM = false
@@ -267,35 +246,27 @@ func (c *resourceController) availableMem() int64 {
 }
 
 func (c *resourceController) printStats() {
-	if c.reservedMergeRows == 0 && c.availableMem() > 512*common.Const1MBytes {
+	if c.reserved == 0 && c.availableMem() > 512*common.Const1MBytes {
 		return
 	}
 
 	logutil.Info("MergeExecutorMemoryStats",
 		common.AnyField("merge-limit", common.HumanReadableBytes(int(c.limit))),
 		common.AnyField("process-mem", common.HumanReadableBytes(int(c.using))),
-		common.AnyField("reserving-rows", common.HumanReadableBytes(int(c.reservedMergeRows))),
 		common.AnyField("reserving-mem", common.HumanReadableBytes(int(c.reserved))),
 	)
 }
 
-func (c *resourceController) reserveResources(objs []*catalog.ObjectEntry) {
-	for _, obj := range objs {
-		if obj.Rows() == 0 {
-			continue
-		}
-		c.reservedMergeRows += int64(obj.Rows())
-	}
-	c.reserved += int64(estimateMergeSize(objs))
+func (c *resourceController) reserveResources(estMem int64) {
+	c.reserved += estMem
 }
 
-func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool {
-
+func (c *resourceController) resourceAvailable(estMem int64) bool {
 	mem := c.availableMem()
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	return estimateMergeSize(objs) <= int(2*mem/3)
+	return estMem <= 2*mem/3
 }
 
 func ObjectValid(objectEntry *catalog.ObjectEntry) bool {
@@ -312,6 +283,26 @@ func ObjectValid(objectEntry *catalog.ObjectEntry) bool {
 		return false
 	}
 	return true
+}
+
+func IterEntryAsStats(objs []*catalog.ObjectEntry) iter.Seq[*objectio.ObjectStats] {
+	return func(yield func(*objectio.ObjectStats) bool) {
+		for _, obj := range objs {
+			if !yield(obj.GetObjectStats()) {
+				return
+			}
+		}
+	}
+}
+
+func IterStats(objs []*objectio.ObjectStats) iter.Seq[*objectio.ObjectStats] {
+	return func(yield func(*objectio.ObjectStats) bool) {
+		for _, obj := range objs {
+			if !yield(obj) {
+				return
+			}
+		}
+	}
 }
 
 func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService) {
@@ -336,7 +327,7 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 
 type policy interface {
 	onObject(*catalog.ObjectEntry) bool
-	revise(*resourceController) []reviseResult
+	revise(*resourceController) []mergeTask
 	resetForTable(*catalog.TableEntry, *BasicPolicyConfig)
 }
 

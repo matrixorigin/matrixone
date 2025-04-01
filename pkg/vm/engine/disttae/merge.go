@@ -141,6 +141,10 @@ func newCNMergeTask(
 	}, nil
 }
 
+func (t *cnMergeTask) TaskSourceNote() string {
+	return ""
+}
+
 func (t *cnMergeTask) Name() string {
 	return fmt.Sprintf("[MT-%d]%d-%s", t.taskId, t.host.tableId, t.host.tableName)
 }

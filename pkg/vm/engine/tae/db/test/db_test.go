@@ -10075,7 +10075,7 @@ func TestDeletesInMerge(t *testing.T) {
 	obj := testutil.GetOneBlockMeta(rel)
 	task, _ := jobs.NewMergeObjectsTask(
 		nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime,
-		common.DefaultMaxOsizeObjMB*common.Const1MBytes, false)
+		common.DefaultMaxOsizeObjBytes, false)
 	task.Execute(ctx)
 	{
 		txn, rel := tae.GetRelation()
