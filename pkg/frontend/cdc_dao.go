@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -336,6 +337,108 @@ func (t *CDCDao) GetTaskWatermark(
 	}
 
 	res += "}"
+
+	return
+}
+
+func (t *CDCDao) DeleteManyWatermark(
+	ctx context.Context,
+	keys map[taskservice.CDCTaskKey]struct{},
+) (deletedCnt int64, err error) {
+	var (
+		cnt      int64
+		executor = t.MustGetSQLExecutor(ctx)
+	)
+	for key := range keys {
+		sql := cdc.CDCSQLBuilder.DeleteWatermarkSQL(
+			key.AccountId,
+			key.TaskId,
+		)
+		if cnt, err = ExecuteAndGetRowsAffected(ctx, executor, sql); err != nil {
+			return
+		}
+		deletedCnt += cnt
+	}
+
+	return
+}
+
+// if taskName is empty, delete all tasks belong to accountId
+func (t *CDCDao) DeleteTaskByName(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+) (deletedCnt int64, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+	)
+	sql := cdc.CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
+	deletedCnt, err = ExecuteAndGetRowsAffected(ctx, executor, sql)
+	return
+}
+
+func (t *CDCDao) GetTaskKeys(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+	keys map[taskservice.CDCTaskKey]struct{},
+) (cnt int, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+		rows     *sql.Rows
+	)
+	sql := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
+	if rows, err = executor.QueryContext(ctx, sql); err != nil {
+		return
+	}
+	if rows.Err() != nil {
+		err = rows.Err()
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key taskservice.CDCTaskKey
+		if err = rows.Scan(&key.TaskId); err != nil {
+			return
+		}
+		key.AccountId = accountId
+		keys[key] = struct{}{}
+		cnt++
+	}
+	if cnt == 0 && taskName != "" {
+		err = moerr.NewInternalErrorf(
+			ctx,
+			"no cdc task found, accountId: %d, taskName: %s",
+			accountId,
+			taskName,
+		)
+	}
+	return
+}
+
+// update `state` only
+func (t *CDCDao) PrepareUpdateTask(
+	ctx context.Context,
+	accountId uint64,
+	taskName string,
+	targetState string,
+) (affectedRows int64, err error) {
+	var (
+		executor = t.MustGetSQLExecutor(ctx)
+		prepare  *sql.Stmt
+		result   sql.Result
+	)
+	sql := cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName)
+	if prepare, err = executor.PrepareContext(ctx, sql); err != nil {
+		return
+	}
+	defer prepare.Close()
+
+	if result, err = prepare.ExecContext(ctx, targetState); err != nil {
+		return
+	}
+	affectedRows, err = result.RowsAffected()
 
 	return
 }
