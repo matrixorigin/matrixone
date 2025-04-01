@@ -514,7 +514,7 @@ func (ts *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
 	panic("implement me")
 }
 
-func (ts *testTaskService) AddCdcTask(ctx context.Context,
+func (ts *testTaskService) AddCDCTask(ctx context.Context,
 	metadata task.TaskMetadata,
 	details *task.Details,
 	callback func(context.Context, taskservice.SqlExecutor) (int, error)) (int, error) {
@@ -525,7 +525,7 @@ func (ts *testTaskService) AddCdcTask(ctx context.Context,
 	return callback(ctx, ts.db)
 }
 
-func (ts *testTaskService) UpdateCdcTask(
+func (ts *testTaskService) UpdateCDCTask(
 	ctx context.Context,
 	status task.TaskStatus,
 	callback func(context.Context, task.TaskStatus, map[taskservice.CdcTaskKey]struct{}, taskservice.SqlExecutor) (int, error),

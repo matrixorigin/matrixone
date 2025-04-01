@@ -303,7 +303,7 @@ func TestAddCdcTask(t *testing.T) {
 		return 1, nil
 	}
 
-	affected, err := storage.AddCdcTask(
+	affected, err := storage.AddCDCTask(
 		context.Background(),
 		dt,
 		callback,
@@ -340,7 +340,7 @@ func TestAddCdcTask(t *testing.T) {
 		return 1, nil
 	}
 
-	affected, err = storage.UpdateCdcTask(
+	affected, err = storage.UpdateCDCTask(
 		context.Background(),
 		task.TaskStatus_Canceled,
 		callback2,
@@ -355,7 +355,7 @@ func TestAddCdcTask(t *testing.T) {
 		newDaemonTaskRows(t, dt),
 	)
 
-	_, err = storage.UpdateCdcTask(
+	_, err = storage.UpdateCDCTask(
 		context.Background(),
 		task.TaskStatus_PauseRequested,
 		callback2,

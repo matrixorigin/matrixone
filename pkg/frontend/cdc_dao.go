@@ -88,7 +88,7 @@ func (t *CDCDao) CreateTask(
 		return int(rowsAffected), nil
 	}
 
-	_, err = t.ts.AddCdcTask(
+	_, err = t.ts.AddCDCTask(
 		ctx, opts.BuildTaskMetadata(), details, creatTaskJob,
 	)
 	return

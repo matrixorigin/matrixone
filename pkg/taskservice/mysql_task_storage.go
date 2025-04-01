@@ -1013,7 +1013,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 	return n, nil
 }
 
-func (m *mysqlTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
@@ -1055,7 +1055,7 @@ func (m *mysqlTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, c
 	return daemonTaskRowsAffected, nil
 }
 
-func (m *mysqlTaskStorage) UpdateCdcTask(
+func (m *mysqlTaskStorage) UpdateCDCTask(
 	ctx context.Context,
 	targetStatus task.TaskStatus,
 	taskCollector func(
