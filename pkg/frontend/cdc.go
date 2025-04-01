@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"database/sql"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -293,60 +292,4 @@ func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap
 		tCount += cnt
 	}
 	return tCount, nil
-}
-
-func getTaskCkp(
-	ctx context.Context,
-	bh BackgroundExec,
-	accountId uint32,
-	taskId string,
-) (s string, err error) {
-	var (
-		dbName       string
-		tblName      string
-		watermarkStr string
-		errMsg       string
-	)
-
-	s = "{\n"
-
-	sql := cdc.CDCSQLBuilder.GetWatermarkSQL(uint64(accountId), taskId)
-	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
-		return
-	}
-
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
-		return
-	}
-
-	for _, result := range erArray {
-		for i := uint64(0); i < result.GetRowCount(); i++ {
-			if dbName, err = result.GetString(ctx, i, 0); err != nil {
-				return
-			}
-			if tblName, err = result.GetString(ctx, i, 1); err != nil {
-				return
-			}
-			if watermarkStr, err = result.GetString(ctx, i, 2); err != nil {
-				return
-			}
-			if watermarkStr, err = TransformStdTimeString(watermarkStr); err != nil {
-				return
-			}
-			if errMsg, err = result.GetString(ctx, i, 3); err != nil {
-				return
-			}
-
-			if len(errMsg) == 0 {
-				s += fmt.Sprintf("  \"%s.%s\": %s,\n", dbName, tblName, watermarkStr)
-			} else {
-				s += fmt.Sprintf("  \"%s.%s\": %s(Failed, error: %s),\n", dbName, tblName, watermarkStr, errMsg)
-			}
-		}
-	}
-
-	s += "}"
-	return
 }
