@@ -896,7 +896,7 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 		if first.isDelete {
 			// Keep first delete and last insert
 			if !last.isDelete {
-				for _, ri := range rowInfos[1:len(rowInfos)-1] {
+				for _, ri := range rowInfos[1 : len(rowInfos)-1] {
 					if ri.isDelete {
 						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
 					} else {
@@ -937,6 +937,12 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 		}
 	}
 
+	goSort.Slice(tombstoneRowsToDelete, func(i, j int) bool {
+		return tombstoneRowsToDelete[i] < tombstoneRowsToDelete[j]
+	})
+	goSort.Slice(dataRowsToDelete, func(i, j int) bool {
+		return dataRowsToDelete[i] < dataRowsToDelete[j]
+	})
 	tombstone.Shrink(tombstoneRowsToDelete, true)
 	data.Shrink(dataRowsToDelete, true)
 	return
