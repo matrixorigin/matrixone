@@ -1168,10 +1168,12 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				continue
 			}
 
+			merged := false
 			for j := i + 1; j < len(idxes); j++ {
 				b := &txn.writes[idxes[j]]
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
 					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
+					merged = true
 					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
 						return err
 					}
@@ -1185,7 +1187,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				}
 			}
 
-			if a.typ == INSERT {
+			if merged && a.typ == INSERT {
 				// rewrite rowIds.
 				// all the rowIds in the batch share one blkId.
 				txn.genBlock()
@@ -1224,11 +1226,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 		}
 
-		if i < len(txn.writes) && txn.writes[i].bat == nil {
-			txn.writes = txn.writes[:i]
-		} else {
-			txn.writes = txn.writes[:i+1]
-		}
+		txn.writes = txn.writes[:i]
 	}
 
 	return nil
