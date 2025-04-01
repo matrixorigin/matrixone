@@ -1149,8 +1149,8 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Nil(t, data)
-			assert.NotNil(t, tombstone)
+			assert.NotNil(t, data)
+			assert.Nil(t, tombstone)
 			assert.Equal(t, data.Vecs[0].Length(), 1)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 		}
@@ -1164,8 +1164,8 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err)
-			assert.Nil(t, tombstone)
-			assert.NotNil(t, data)
+			assert.NotNil(t, tombstone)
+			assert.Nil(t, data)
 			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 		}
