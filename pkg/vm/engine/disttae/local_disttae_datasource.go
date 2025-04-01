@@ -953,7 +953,9 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 			continue
 		}
 
-		readutil.FastApplyDeletesByRowIdVec(bid, &leftRows, deletedRows, writes[idx].bat.Vecs[0])
+		sorted := writes[idx].bat.Vecs[0].GetSorted()
+		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
+		readutil.FastApplyDeletesByRowIds(false, bid, &leftRows, deletedRows, rowIds, sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
@@ -1032,12 +1034,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	rawRowIdDeletes.RWMutex.RLock()
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
-	for _, o := range rawRowIdDeletes.offsets[*bid] {
-		leftRows = readutil.FastApplyDeletesByRowOffset(leftRows, deletedRows, uint32(o))
-		if leftRows != nil && len(leftRows) == 0 {
-			break
-		}
-	}
+	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.offsets[*bid])
 
 	return leftRows
 }
@@ -1104,13 +1101,32 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 		return leftRows
 	}
 
+	var (
+		deletedOffsets []int64
+	)
+
+	defer func() {
+		if deletedOffsets != nil {
+			common.DefaultAllocator.PutSels(deletedOffsets)
+		}
+	}()
+
 	for delIter.Next() {
 		rowid := delIter.Entry().RowID
 		o := rowid.GetRowOffset()
-		leftRows = readutil.FastApplyDeletesByRowOffset(leftRows, deletedRows, o)
-		if leftRows != nil && len(leftRows) == 0 {
-			break
+		if deletedOffsets == nil {
+			deletedOffsets = common.DefaultAllocator.GetSels()
 		}
+
+		deletedOffsets = append(deletedOffsets, int64(o))
+		if len(deletedOffsets) >= len(leftRows) {
+			readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deletedOffsets)
+			deletedOffsets = deletedOffsets[:0]
+		}
+	}
+
+	if len(deletedOffsets) > 0 {
+		readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deletedOffsets)
 	}
 
 	delIter.Close()

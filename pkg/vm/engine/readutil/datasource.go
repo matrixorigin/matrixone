@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -219,15 +218,17 @@ func NewRemoteDataSource(
 //	util functions
 // --------------------------------------------------------------------------------
 
-// FastApplyDeletesByRowIdVec apply deleted RowIds on the leftRows or deletedMask if leftRows is nil.
+// FastApplyDeletesByRowIds apply deleted RowIds on the leftRows or deletedMask if leftRows is nil.
 // Note that this function is stable,
 // means the relative order between elements in the leftRows would not change after applies.
 // Example: [3,2,5,6,1,4,1] ==> after remove the even numbers ==> [3,5,1,1]
-func FastApplyDeletesByRowIdVec(
+func FastApplyDeletesByRowIds(
+	debug bool,
 	checkBid *objectio.Blockid,
 	leftRows *[]int64,
-	deletedMask *objectio.Bitmap,
-	deletedRowIdsVec *vector.Vector,
+	deletesMask *objectio.Bitmap,
+	deletedRowIds []objectio.Rowid,
+	deletedRowIdsIsSorted bool,
 ) {
 	var (
 		ptr int
@@ -237,16 +238,12 @@ func FastApplyDeletesByRowIdVec(
 		lb int
 		ub int
 
-		// is the rowIds sorted?
-		sorted        = deletedRowIdsVec.GetSorted()
-		deletedRowIds = vector.MustFixedColNoTypeCheck[objectio.Rowid](deletedRowIdsVec)
-
 		// liner search may have better performance if there exists a few items.
 		useBinarySearch = len(deletedRowIds) >= 5
 	)
 
 	wayA := func() {
-		if sorted {
+		if deletedRowIdsIsSorted {
 			cur = types.NewRowid(checkBid, 0)
 		}
 
@@ -254,7 +251,7 @@ func FastApplyDeletesByRowIdVec(
 			cur.SetRowOffset(uint32(o))
 
 			hit = false
-			if sorted && useBinarySearch {
+			if deletedRowIdsIsSorted && useBinarySearch {
 				_, hit = sort.Find(len(deletedRowIds), func(i int) int { return cur.Compare(&deletedRowIds[i]) })
 			} else {
 				if useBinarySearch {
@@ -291,7 +288,7 @@ func FastApplyDeletesByRowIdVec(
 
 		for i := lb; i < ub; i++ {
 			bid, o := deletedRowIds[i].Decode()
-			idx, found := sort.Find(len(*leftRows), func(i int) int { return int(int64(o) - (*leftRows)[i]) })
+			idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
 
 			// if the binary search applied, no need to check the block id again.
 			if found && (useBinarySearch || bid.EQ(checkBid)) {
@@ -320,33 +317,78 @@ func FastApplyDeletesByRowIdVec(
 			wayA()
 		}
 
-	} else if deletedMask != nil {
+	} else if deletesMask != nil {
 		lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
 		for i := lb; i < ub; i++ {
 			_, o := deletedRowIds[i].Decode()
-			deletedMask.Add(uint64(o))
+			deletesMask.Add(uint64(o))
 		}
 	}
 }
 
-// FastApplyDeletedRows will return the rows which applied deletes if the `leftRows` is not empty,
-// or the deletes will only record into the `deleteRows` bitmap.
-func FastApplyDeletesByRowOffset(
-	leftRows []int64,
-	deletedRows *objectio.Bitmap,
-	o uint32,
-) []int64 {
-	if len(leftRows) != 0 {
-		if x, found := sort.Find(len(leftRows), func(i int) int {
-			return int(int64(o) - leftRows[i])
-		}); found {
-			leftRows = append(leftRows[:x], leftRows[x+1:]...)
+// FastApplyDeletesByRowOffsets apply deleted RowIds on the leftRows or deletedMask if leftRows is nil.
+// Note that this function is stable,
+// means the relative order between elements in the leftRows would not change after applies.
+// Example: [3,2,5,6,1,4,1] ==> after remove the even numbers ==> [3,5,1,1]
+func FastApplyDeletesByRowOffsets(
+	leftRows *[]int64,
+	deletedMask *objectio.Bitmap,
+	offsets []int64,
+) {
+	var (
+		ptr int
+		hit bool
+	)
+
+	wayA := func() {
+		for _, cur := range *leftRows {
+			hit = false
+			for _, o := range offsets {
+				if cur == o {
+					hit = true
+					break
+				}
+			}
+
+			if !hit {
+				(*leftRows)[ptr] = cur
+				ptr++
+			}
 		}
-	} else if deletedRows != nil {
-		deletedRows.Add(uint64(o))
+
+		*leftRows = (*leftRows)[:ptr]
 	}
 
-	return leftRows
+	wayB := func() {
+		for i := 0; i < len(offsets); i++ {
+			idx, found := sort.Find(len(*leftRows), func(x int) int { return int(offsets[i] - (*leftRows)[x]) })
+
+			// if the binary search applied, no need to check the block id again.
+			if found {
+				copy((*leftRows)[idx:], (*leftRows)[idx+1:])
+				*leftRows = (*leftRows)[:len(*leftRows)-1]
+			}
+
+			if len(*leftRows) == 0 {
+				break
+			}
+		}
+	}
+
+	if len(*leftRows) != 0 {
+		// how many items are we going to remove from the leftRows?
+		if len(offsets) <= len(*leftRows)/10 {
+			// expected a few removals to happen
+			wayB()
+		} else {
+			wayA()
+		}
+
+	} else if deletedMask != nil {
+		for i := 0; i < len(offsets); i++ {
+			deletedMask.Add(uint64(offsets[i]))
+		}
+	}
 }
 
 // RemoveIf removes the elements that pred is true.
