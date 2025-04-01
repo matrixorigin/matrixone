@@ -542,7 +542,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		oldIdxPos := int32(len(finalProjList))
 		oldColRef = oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
 		idxExpr := &plan.Expr{
-			Typ: fullProjList[newIdxPos].Typ,
+			Typ: finalProjList[newIdxPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: oldColRef[0],
