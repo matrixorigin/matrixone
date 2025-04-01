@@ -91,7 +91,7 @@ func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *Basi
 	for tIter.Next() {
 		tEntry := tIter.Item()
 
-		if !objectValid(tEntry) {
+		if !ObjectValid(tEntry) {
 			continue
 		}
 

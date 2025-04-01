@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_NewKMeans(t *testing.T) {
@@ -90,7 +90,7 @@ func Test_NewKMeans(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+			_, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType, false, 0) //<-- Not Spherical Kmeans UT
 			if (err != nil) != tt.wantErr {
@@ -157,14 +157,17 @@ func Test_Cluster(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clusterer, _ := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+			clusterer, _ := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType, false, 0)
-			got, err := clusterer.Cluster()
+			_got, err := clusterer.Cluster()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Cluster() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
+			got, ok := _got.([][]float64)
+			require.True(t, ok)
 
 			if !assertx.InEpsilonF64Slices(tt.want, got) {
 				t.Errorf("Cluster() got = %v, want %v", got, tt.want)
@@ -190,7 +193,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 		centroids [][]float64
 	}
 	type wantState struct {
-		vectorMetas []vectorMeta
+		vectorMetas []vectorMeta[float64]
 		assignment  []int
 	}
 	tests := []struct {
@@ -222,7 +225,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 				},
 			},
 			want: wantState{
-				vectorMetas: []vectorMeta{
+				vectorMetas: []vectorMeta[float64]{
 					{
 						lower:     []float64{0, 49.29503017546495},
 						upper:     0,
@@ -255,7 +258,7 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType, false, 0)
 
@@ -264,8 +267,8 @@ func TestElkanClusterer_initBounds(t *testing.T) {
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
-			if ekm, ok := km.(*ElkanClusterer); ok {
-				ekm.centroids, _ = moarray.ToGonumVectors[float64](tt.state.centroids...)
+			if ekm, ok := km.(*ElkanClusterer[float64]); ok {
+				ekm.centroids = tt.state.centroids
 				ekm.initBounds()
 				if !reflect.DeepEqual(ekm.assignments, tt.want.assignment) {
 					t.Errorf("assignments got = %v, want %v", ekm.assignments, tt.want.assignment)
@@ -344,15 +347,15 @@ func TestElkanClusterer_computeCentroidDistances(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType, false, 0)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
-			if ekm, ok := km.(*ElkanClusterer); ok {
-				ekm.centroids, _ = moarray.ToGonumVectors[float64](tt.state.centroids...)
+			if ekm, ok := km.(*ElkanClusterer[float64]); ok {
+				ekm.centroids = tt.state.centroids
 				ekm.computeCentroidDistances()
 
 				// NOTE: here we are not considering the vectors in the vectorList. Hence we don't need to worry about
@@ -428,23 +431,22 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType, false, 0)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
-			if ekm, ok := km.(*ElkanClusterer); ok {
+			if ekm, ok := km.(*ElkanClusterer[float64]); ok {
 				ekm.assignments = tt.state.assignments
 
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of recalculateCentroids() function.
 
 				got := ekm.recalculateCentroids()
-				arrays, _ := moarray.ToMoArrays[float64](got)
-				if !assertx.InEpsilonF64Slices(tt.want.centroids, arrays) {
-					t.Errorf("centroids got = %v, want %v", arrays, tt.want.centroids)
+				if !assertx.InEpsilonF64Slices(tt.want.centroids, got) {
+					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)
 				}
 
 			} else if !ok {
@@ -469,12 +471,12 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 		initType       kmeans.InitType
 	}
 	type internalState struct {
-		vectorMetas  []vectorMeta
+		vectorMetas  []vectorMeta[float64]
 		centroids    [][]float64
 		newCentroids [][]float64
 	}
 	type wantState struct {
-		vectorMetas []vectorMeta
+		vectorMetas []vectorMeta[float64]
 	}
 	tests := []struct {
 		name   string
@@ -499,7 +501,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 				initType:       kmeans.Random,
 			},
 			state: internalState{
-				vectorMetas: []vectorMeta{
+				vectorMetas: []vectorMeta[float64]{
 					{
 						lower:     []float64{0, 49.29503017546495},
 						upper:     0,
@@ -536,7 +538,7 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 				},
 			},
 			want: wantState{
-				vectorMetas: []vectorMeta{
+				vectorMetas: []vectorMeta[float64]{
 					{
 						lower:     []float64{0, 45.17192454984729},
 						upper:     0.9428090415820634,
@@ -568,21 +570,20 @@ func TestElkanClusterer_updateBounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			km, err := NewKMeans(tt.fields.vectorList, tt.fields.clusterCnt,
+			km, err := NewKMeans[float64](tt.fields.vectorList, tt.fields.clusterCnt,
 				tt.fields.maxIterations, tt.fields.deltaThreshold,
 				tt.fields.distType, tt.fields.initType, false, 0)
 
 			if err != nil {
 				t.Errorf("Error while creating KMeans object %v", err)
 			}
-			if ekm, ok := km.(*ElkanClusterer); ok {
+			if ekm, ok := km.(*ElkanClusterer[float64]); ok {
 				ekm.vectorMetas = tt.state.vectorMetas
-				ekm.centroids, _ = moarray.ToGonumVectors[float64](tt.state.centroids...)
+				ekm.centroids = tt.state.centroids
 
 				// NOTE: here km.Normalize() is skipped as we not calling km.Cluster() in this test.
 				// Here we are only testing the working of updateBounds() function.
-				gonumVectors, _ := moarray.ToGonumVectors[float64](tt.state.newCentroids...)
-				ekm.updateBounds(gonumVectors)
+				ekm.updateBounds(tt.state.newCentroids)
 
 				for i := 0; i < len(tt.want.vectorMetas); i++ {
 					if !assertx.InEpsilonF64Slice(tt.want.vectorMetas[i].lower, ekm.vectorMetas[i].lower) {

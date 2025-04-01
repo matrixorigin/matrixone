@@ -701,3 +701,31 @@ func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
 	}
 	return true
 }
+
+// shrinkBatchWithRowids shrinks the batch with rowids
+// the first column of the batch is rowids and all belong to the same block id
+// the rowids are 0-based and consecutive
+// Example:
+// bat:
+//
+//	[blk0-0, blk0-1, blk0-2, blk0-3, blk0-4]
+//	[1, 2, 3, 4, 5]
+//
+// toDeleteOffsets: [1, 3]
+// result:
+//
+//	[blk0-0, blk0-1, blk0-2]
+//	[1, 3, 5]
+func shrinkBatchWithRowids(
+	bat *batch.Batch,
+	toDeleteOffsets []int64,
+) {
+	bat.Shrink(toDeleteOffsets, true)
+	if bat.RowCount() == 0 {
+		return
+	}
+	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])
+	for i := range rowids {
+		rowids[i].SetRowOffset(uint32(i))
+	}
+}

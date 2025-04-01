@@ -24,6 +24,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -363,4 +364,32 @@ func TestConcurrentExecutor_Run(t *testing.T) {
 		return io.EOF
 	})
 	wg.Wait()
+}
+
+func TestShrinkBatchWithRowids(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSchema(
+		false,
+		[]string{"rowid"},
+		[]types.Type{types.T_Rowid.ToType()},
+	)
+	defer bat.Clean(mp)
+
+	var rowid objectio.Rowid
+	for i := 0; i < 10; i++ {
+		rowid.SetRowOffset(uint32(i))
+		err := vector.AppendFixed(bat.Vecs[0], rowid, false, mp)
+		require.NoError(t, err)
+	}
+	bat.SetRowCount(10)
+
+	shrinkBatchWithRowids(bat, []int64{1, 3, 5, 7})
+	require.Equal(t, bat.RowCount(), 6)
+
+	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])
+	offsets := make([]uint32, 0, bat.RowCount())
+	for i := range rowids {
+		offsets = append(offsets, rowids[i].GetRowOffset())
+	}
+	require.Equal(t, offsets, []uint32{0, 1, 2, 3, 4, 5})
 }

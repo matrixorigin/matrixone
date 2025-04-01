@@ -366,10 +366,17 @@ func (sm *SnapshotMeta) updateTableInfo(
 		moTable := (*objects)[tid]
 
 		// dropped object will overwrite the created object, updating the deleteAt
-		moTable[id] = &objectInfo{
-			stats:    stats,
-			createAt: createTS,
-			deleteAt: deleteTS,
+		obj := moTable[id]
+		if obj == nil {
+			moTable[id] = &objectInfo{
+				stats: stats,
+			}
+		}
+		if !createTS.IsEmpty() {
+			moTable[id].createAt = createTS
+		}
+		if !deleteTS.IsEmpty() {
+			moTable[id].deleteAt = deleteTS
 		}
 	}
 	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
@@ -707,18 +714,25 @@ func (sm *SnapshotMeta) Update(
 		ckputil.ObjectType_Tombstone,
 		collector,
 	)
-	for id, info := range sm.pitr.objects {
-		if !info.deleteAt.IsEmpty() {
-			delete(sm.pitr.objects, id)
+
+	trimList := func(
+		objects map[uint64]map[objectio.Segmentid]*objectInfo,
+		objects2 map[objectio.Segmentid]*objectInfo) {
+		for _, objs := range objects {
+			for id, info := range objs {
+				if !info.deleteAt.IsEmpty() {
+					delete(objs, id)
+				}
+			}
 		}
-	}
-	for _, objs := range sm.objects {
-		for id, info := range objs {
+		for id, info := range objects2 {
 			if !info.deleteAt.IsEmpty() {
-				delete(objs, id)
+				delete(objects2, id)
 			}
 		}
 	}
+	trimList(sm.objects, sm.pitr.objects)
+	trimList(sm.tombstones, sm.pitr.tombstones)
 	return
 }
 

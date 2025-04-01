@@ -38,7 +38,7 @@ const (
 	TableObjectsAttr_CreateTS   = "create_ts"
 	TableObjectsAttr_DeleteTS   = "delete_ts"
 
-	// TableObjects should be clustered by `table`+`object_type`+`id`
+	// TableObjects should be clustered by `table`+`object_type`+`id` + `is_deleted`
 	TableObjectsAttr_Cluster = "cluster"
 
 	// TableObjectsAttr_PhysicalAddr = objectio.PhysicalAddr_Attr
