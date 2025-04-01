@@ -1161,7 +1161,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 	}
 
-	foo := func(idxes []uint64) (err error) {
+	foo := func(idxes []int64) (err error) {
 		for i := 0; i < len(idxes); i++ {
 			a := &txn.writes[idxes[i]]
 			if a.bat == nil || a.bat.RowCount() == batch.DefaultBatchMaxRow {
@@ -1205,13 +1205,17 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	// this threshold may have a bad effect on the performance
 	if inserts.Count()+deletes.Count() >= 30 {
-		ins := inserts.ToArray()
-		del := deletes.ToArray()
+		arr := common.DefaultAllocator.GetSels()
+		defer func() {
+			common.DefaultAllocator.PutSels(arr)
+		}()
 
+		ins := inserts.ToI64Array(&arr)
 		if err := foo(ins); err != nil {
 			return err
 		}
 
+		del := deletes.ToI64Array(&arr)
 		if err := foo(del); err != nil {
 			return err
 		}

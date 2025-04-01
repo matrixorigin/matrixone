@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"time"
 
 	"go.uber.org/zap"
@@ -378,7 +379,7 @@ func BlockDataReadBackup(
 		return
 	}
 	defer tombstones.Release()
-	rows := tombstones.ToI64Array()
+	rows := tombstones.ToI64Array(nil)
 	if len(rows) > 0 {
 		logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
 		loaded.Shrink(rows, true)
@@ -479,7 +480,12 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		deletedRows = deleteMask.ToI64Array()
+		arr := common.DefaultAllocator.GetSels()
+		defer func() {
+			common.DefaultAllocator.PutSels(arr)
+		}()
+
+		deletedRows = deleteMask.ToI64Array(&arr)
 	}
 
 	// build rowid column if needed

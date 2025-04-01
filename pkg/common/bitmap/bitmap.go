@@ -376,8 +376,12 @@ func (n *Bitmap) ToArray() []uint64 {
 	return rows
 }
 
-func (n *Bitmap) ToI64Array() []int64 {
+func (n *Bitmap) ToI64Array(out *[]int64) []int64 {
 	var res []int64
+	if out != nil {
+		res = (*out)[:0]
+	}
+
 	if n.EmptyByFlag() {
 		return res
 	}
