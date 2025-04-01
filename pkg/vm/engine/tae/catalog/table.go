@@ -663,7 +663,7 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 		return
 	}
 	if isEmpty {
-		err = entry.GetDB().RemoveEntry(entry)
+		err = entry.GetDB().RemoveEntry(entry, "Rollback")
 		if err != nil {
 			return
 		}

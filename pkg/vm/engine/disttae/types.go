@@ -527,7 +527,7 @@ func (txn *Transaction) PPString() string {
 
 func (txn *Transaction) StartStatement() {
 	if txn.startStatementCalled {
-		logutil.Fatal("BUG: StartStatement called twice")
+		logutil.Fatal("BUG: StartStatement called twice", zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)))
 	}
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false
@@ -535,7 +535,7 @@ func (txn *Transaction) StartStatement() {
 
 func (txn *Transaction) EndStatement() {
 	if !txn.startStatementCalled {
-		logutil.Fatal("BUG: StartStatement not called")
+		logutil.Fatal("BUG: StartStatement not called", zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)))
 	}
 
 	txn.startStatementCalled = false
@@ -547,10 +547,10 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	defer txn.op.ExitIncrStmt()
 	if !commit {
 		if !txn.startStatementCalled {
-			logutil.Fatal("BUG: StartStatement not called")
+			logutil.Fatal("BUG: StartStatement not called", zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)))
 		}
 		if txn.incrStatementCalled {
-			logutil.Fatal("BUG: IncrStatementID called twice")
+			logutil.Fatal("BUG: IncrStatementID called twice", zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)))
 		}
 		txn.incrStatementCalled = true
 	}

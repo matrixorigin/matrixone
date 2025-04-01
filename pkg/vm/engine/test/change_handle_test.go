@@ -238,7 +238,7 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 	if bat == nil {
 		return
 	}
-	length := bat.Vecs[0].Length()
+	length := bat.RowCount()
 	assert.Equal(t, len(bat.Vecs), len(userBatch.Vecs)+1) // user rows + committs
 	for i, vec := range userBatch.Vecs {
 		assert.Equal(t, bat.Vecs[i].GetType().Oid, vec.GetType().Oid)

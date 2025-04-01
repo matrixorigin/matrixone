@@ -261,16 +261,17 @@ func convertColIntoSql(
 	case types.T_float64:
 		value := data.(float64)
 		sqlBuff = appendFloat64(sqlBuff, value, 64)
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		sqlBuff = appendHex(sqlBuff, data.([]byte))
 	case types.T_char,
 		types.T_varchar,
-		types.T_blob,
 		types.T_text,
-		types.T_binary,
-		types.T_varbinary,
 		types.T_datalink:
-		value := data.([]byte)
+		value := string(data.([]byte))
+		value = strings.Replace(value, "\\", "\\\\", -1)
+		value = strings.Replace(value, "'", "\\'", -1)
 		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, value)
+		sqlBuff = appendBytes(sqlBuff, []byte(value))
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
@@ -351,6 +352,13 @@ func convertColIntoSql(
 	}
 
 	return sqlBuff, nil
+}
+
+func appendHex(dst []byte, src []byte) []byte {
+	dst = append(dst, "x'"...)
+	dst = hex.AppendEncode(dst, src)
+	dst = append(dst, '\'')
+	return dst
 }
 
 func appendByte(buf []byte, d byte) []byte {

@@ -94,3 +94,6 @@ drop table if exists t2;
 drop table if exists t3;
 drop table if exists t4;
 drop table if exists t5;
+
+CREATE TABLE t1 (`id` INT PRIMARY KEY,`key` varchar(200) DEFAULT NULL,  `title` text DEFAULT NULL, `sort` varchar(100) DEFAULT NULL,UNIQUE KEY `ks` (`key`,`sort`));
+REPLACE INTO t1 VALUES (1,'key','title','sort');

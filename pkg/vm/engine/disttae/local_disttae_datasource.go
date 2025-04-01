@@ -18,10 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"slices"
 	"sort"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -439,6 +438,10 @@ func checkWorkspaceEntryType(
 	isInsert bool,
 ) bool {
 	if entry.DatabaseId() != tbl.db.databaseId || entry.TableId() != tbl.tableId {
+		return false
+	}
+
+	if entry.bat == nil || entry.bat.IsEmpty() {
 		return false
 	}
 
@@ -938,7 +941,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 			continue
 		}
 
-		delRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
+		delRowIds = vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
 		for _, delRowId := range delRowIds {
 			b, o := delRowId.Decode()
 			if bid.Compare(b) != 0 {

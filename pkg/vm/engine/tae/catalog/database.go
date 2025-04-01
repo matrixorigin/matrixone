@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 type accessInfo struct {
@@ -419,9 +420,12 @@ func (e *DBEntry) RollbackRenameTable(fullname string, tid uint64) {
 	e.removeNameIndexLocked(fullname, tid)
 }
 
-func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
-	logutil.Info("[Catalog]", common.OperationField("remove"),
-		common.OperandField(table.String()))
+func (e *DBEntry) RemoveEntry(table *TableEntry, reason string) (err error) {
+	logutil.Info(
+		"Catalog-Trace-RM-TBL",
+		zap.String("table", table.String()),
+		zap.String("reason", reason),
+	)
 	e.Lock()
 	defer e.Unlock()
 	if n, ok := e.entries[table.ID]; !ok {
