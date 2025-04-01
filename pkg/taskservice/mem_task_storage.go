@@ -378,7 +378,7 @@ func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) b
 	return ok
 }
 
-func (s *memTaskStorage) UpdateCDCTask(ctx context.Context, targetStatus task.TaskStatus, f func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), condition ...Condition) (int, error) {
+func (s *memTaskStorage) UpdateCDCTask(ctx context.Context, targetStatus task.TaskStatus, f func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error), condition ...Condition) (int, error) {
 	return 0, nil
 }
 

@@ -332,8 +332,8 @@ func TestAddCdcTask(t *testing.T) {
 		sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	callback2 := func(ctx context.Context, ts task.TaskStatus, keyMap map[CdcTaskKey]struct{}, se SqlExecutor) (int, error) {
-		keyMap[CdcTaskKey{
+	callback2 := func(ctx context.Context, ts task.TaskStatus, keyMap map[CDCTaskKey]struct{}, se SqlExecutor) (int, error) {
+		keyMap[CDCTaskKey{
 			AccountId: uint64(catalog.System_Account),
 			TaskId:    dt.Metadata.ID,
 		}] = struct{}{}

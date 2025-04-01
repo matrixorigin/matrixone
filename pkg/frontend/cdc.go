@@ -158,7 +158,7 @@ func runUpdateCdcTask(
 	taskCollector := func(
 		ctx context.Context,
 		targetStatus task.TaskStatus,
-		tasks map[taskservice.CdcTaskKey]struct{},
+		tasks map[taskservice.CDCTaskKey]struct{},
 		tx taskservice.SqlExecutor,
 	) (int, error) {
 		return collectTasksToUpdate(
@@ -181,7 +181,7 @@ func runUpdateCdcTask(
 func collectTasksToUpdate(
 	ctx context.Context,
 	targetStatus task.TaskStatus,
-	tasks map[taskservice.CdcTaskKey]struct{},
+	tasks map[taskservice.CDCTaskKey]struct{},
 	tx taskservice.SqlExecutor,
 	accountId uint64,
 	taskName string,
@@ -209,8 +209,8 @@ func collectTasksToUpdate(
 		if err = rows.Scan(&taskId); err != nil {
 			return 0, err
 		}
-		tInfo := taskservice.CdcTaskKey{AccountId: accountId, TaskId: taskId}
-		tasks[tInfo] = struct{}{}
+		key := taskservice.CDCTaskKey{AccountId: accountId, TaskId: taskId}
+		tasks[key] = struct{}{}
 	}
 
 	if taskName != "" && empty {
@@ -278,7 +278,7 @@ func collectTasksToUpdate(
 	return affectedCdcRow, nil
 }
 
-func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap map[taskservice.CdcTaskKey]struct{}) (int64, error) {
+func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap map[taskservice.CDCTaskKey]struct{}) (int64, error) {
 	tCount := int64(0)
 	cnt := int64(0)
 	var err error

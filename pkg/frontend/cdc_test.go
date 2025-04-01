@@ -505,7 +505,7 @@ type testTaskService struct {
 	db         *sql.DB
 	dTask      []task.DaemonTask
 	curDTaskId int
-	taskKeyMap map[taskservice.CdcTaskKey]struct{}
+	taskKeyMap map[taskservice.CDCTaskKey]struct{}
 	sqlExec    taskservice.SqlExecutor
 }
 
@@ -528,7 +528,7 @@ func (ts *testTaskService) AddCDCTask(ctx context.Context,
 func (ts *testTaskService) UpdateCDCTask(
 	ctx context.Context,
 	status task.TaskStatus,
-	callback func(context.Context, task.TaskStatus, map[taskservice.CdcTaskKey]struct{}, taskservice.SqlExecutor) (int, error),
+	callback func(context.Context, task.TaskStatus, map[taskservice.CDCTaskKey]struct{}, taskservice.SqlExecutor) (int, error),
 	condition ...taskservice.Condition) (int, error) {
 	ts.data = append(ts.data, testTaskData{
 		status: status,
@@ -1059,7 +1059,7 @@ func Test_updateCdcTask_cancel(t *testing.T) {
 	type args struct {
 		ctx          context.Context
 		targetStatus task.TaskStatus
-		taskKeyMap   map[taskservice.CdcTaskKey]struct{}
+		taskKeyMap   map[taskservice.CDCTaskKey]struct{}
 		tx           taskservice.SqlExecutor
 		accountId    uint64
 		taskName     string
@@ -1110,7 +1110,7 @@ func Test_updateCdcTask_cancel(t *testing.T) {
 			args: args{
 				ctx:          context.Background(),
 				targetStatus: task.TaskStatus_CancelRequested,
-				taskKeyMap:   map[taskservice.CdcTaskKey]struct{}{},
+				taskKeyMap:   map[taskservice.CDCTaskKey]struct{}{},
 				tx:           tx,
 				accountId:    sysAccountID,
 				taskName:     "task1",
@@ -1129,7 +1129,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 	type args struct {
 		ctx          context.Context
 		targetStatus task.TaskStatus
-		taskKeyMap   map[taskservice.CdcTaskKey]struct{}
+		taskKeyMap   map[taskservice.CDCTaskKey]struct{}
 		tx           taskservice.SqlExecutor
 		accountId    uint64
 		taskName     string
@@ -1193,7 +1193,7 @@ func Test_updateCdcTask_pause(t *testing.T) {
 			args: args{
 				ctx:          context.Background(),
 				targetStatus: task.TaskStatus_PauseRequested,
-				taskKeyMap:   map[taskservice.CdcTaskKey]struct{}{},
+				taskKeyMap:   map[taskservice.CDCTaskKey]struct{}{},
 				tx:           tx,
 				accountId:    sysAccountID,
 				taskName:     "task1",
@@ -1212,7 +1212,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	type args struct {
 		ctx          context.Context
 		targetStatus task.TaskStatus
-		taskKeyMap   map[taskservice.CdcTaskKey]struct{}
+		taskKeyMap   map[taskservice.CDCTaskKey]struct{}
 		tx           taskservice.SqlExecutor
 		accountId    uint64
 		taskName     string
@@ -1276,7 +1276,7 @@ func Test_updateCdcTask_restart(t *testing.T) {
 			args: args{
 				ctx:          context.Background(),
 				targetStatus: task.TaskStatus_RestartRequested,
-				taskKeyMap:   map[taskservice.CdcTaskKey]struct{}{},
+				taskKeyMap:   map[taskservice.CDCTaskKey]struct{}{},
 				tx:           tx,
 				accountId:    sysAccountID,
 				taskName:     "task1",
@@ -1295,7 +1295,7 @@ func Test_updateCdcTask_resume(t *testing.T) {
 	type args struct {
 		ctx          context.Context
 		targetStatus task.TaskStatus
-		taskKeyMap   map[taskservice.CdcTaskKey]struct{}
+		taskKeyMap   map[taskservice.CDCTaskKey]struct{}
 		tx           taskservice.SqlExecutor
 		accountId    uint64
 		taskName     string
@@ -1359,7 +1359,7 @@ func Test_updateCdcTask_resume(t *testing.T) {
 			args: args{
 				ctx:          context.Background(),
 				targetStatus: task.TaskStatus_ResumeRequested,
-				taskKeyMap:   map[taskservice.CdcTaskKey]struct{}{},
+				taskKeyMap:   map[taskservice.CDCTaskKey]struct{}{},
 				tx:           tx,
 				accountId:    sysAccountID,
 				taskName:     "task1",
@@ -1429,8 +1429,8 @@ func Test_updateCdc_cancel(t *testing.T) {
 
 	pu := config.ParameterUnit{}
 
-	taskKeyMap := make(map[taskservice.CdcTaskKey]struct{})
-	taskKeyMap[taskservice.CdcTaskKey{
+	taskKeyMap := make(map[taskservice.CDCTaskKey]struct{})
+	taskKeyMap[taskservice.CDCTaskKey{
 		AccountId: sysAccountID,
 		TaskId:    "taskID-1",
 	}] = struct{}{}
@@ -1516,8 +1516,8 @@ func Test_updateCdc_cancel_all(t *testing.T) {
 
 	pu := config.ParameterUnit{}
 
-	taskKeyMap := make(map[taskservice.CdcTaskKey]struct{})
-	taskKeyMap[taskservice.CdcTaskKey{
+	taskKeyMap := make(map[taskservice.CDCTaskKey]struct{})
+	taskKeyMap[taskservice.CDCTaskKey{
 		AccountId: sysAccountID,
 		TaskId:    "taskID-1",
 	}] = struct{}{}
@@ -1620,8 +1620,8 @@ func Test_updateCdc_pause(t *testing.T) {
 
 	pu := config.ParameterUnit{}
 
-	taskKeyMap := make(map[taskservice.CdcTaskKey]struct{})
-	taskKeyMap[taskservice.CdcTaskKey{
+	taskKeyMap := make(map[taskservice.CDCTaskKey]struct{})
+	taskKeyMap[taskservice.CDCTaskKey{
 		AccountId: sysAccountID,
 		TaskId:    "taskID-1",
 	}] = struct{}{}
@@ -1713,8 +1713,8 @@ func Test_updateCdc_pause_all(t *testing.T) {
 
 	pu := config.ParameterUnit{}
 
-	taskKeyMap := make(map[taskservice.CdcTaskKey]struct{})
-	taskKeyMap[taskservice.CdcTaskKey{
+	taskKeyMap := make(map[taskservice.CDCTaskKey]struct{})
+	taskKeyMap[taskservice.CDCTaskKey{
 		AccountId: sysAccountID,
 		TaskId:    "taskID-1",
 	}] = struct{}{}
@@ -1815,8 +1815,8 @@ func Test_updateCdc_restart(t *testing.T) {
 
 	pu := config.ParameterUnit{}
 
-	taskKeyMap := make(map[taskservice.CdcTaskKey]struct{})
-	taskKeyMap[taskservice.CdcTaskKey{
+	taskKeyMap := make(map[taskservice.CDCTaskKey]struct{})
+	taskKeyMap[taskservice.CDCTaskKey{
 		AccountId: sysAccountID,
 		TaskId:    "taskID-1",
 	}] = struct{}{}
@@ -1913,8 +1913,8 @@ func Test_updateCdc_resume(t *testing.T) {
 
 	pu := config.ParameterUnit{}
 
-	taskKeyMap := make(map[taskservice.CdcTaskKey]struct{})
-	taskKeyMap[taskservice.CdcTaskKey{
+	taskKeyMap := make(map[taskservice.CDCTaskKey]struct{})
+	taskKeyMap[taskservice.CDCTaskKey{
 		AccountId: sysAccountID,
 		TaskId:    "taskID-1",
 	}] = struct{}{}

@@ -241,7 +241,7 @@ func (s *taskService) UpdateCDCTask(
 	taskCollector func(
 		context.Context,
 		task.TaskStatus,
-		map[CdcTaskKey]struct{},
+		map[CDCTaskKey]struct{},
 		SqlExecutor,
 	) (int, error),
 	conds ...Condition,
