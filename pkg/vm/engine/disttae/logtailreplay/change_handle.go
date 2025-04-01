@@ -1003,7 +1003,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		switch typ {
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
-			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow {
+			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
 				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
 					return
 				}
@@ -1020,7 +1020,7 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 			}
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
-			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow {
+			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
 				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
 					return
 				}
