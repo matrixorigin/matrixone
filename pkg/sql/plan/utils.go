@@ -1977,10 +1977,14 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
 	case *plan.Expr_Fold:
 		out.WriteString(fmt.Sprintf("%sExpr_Fold(id=%d)", prefix, t.Fold.Id))
+	case *plan.Expr_List:
+		out.WriteString(fmt.Sprintf("%sExpr_List(len=%d)", prefix, len(t.List.List)))
+		for _, arg := range t.List.List {
+			doFormatExpr(arg, out, depth+1)
+		}
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
-	out.WriteString(fmt.Sprintf("%sExpr_Selectivity(%v)", prefix, expr.Selectivity))
 }
 
 // databaseIsValid checks whether the database exists or not.
