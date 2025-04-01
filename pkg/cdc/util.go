@@ -261,12 +261,11 @@ func convertColIntoSql(
 	case types.T_float64:
 		value := data.(float64)
 		sqlBuff = appendFloat64(sqlBuff, value, 64)
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		sqlBuff = appendHex(sqlBuff, data.([]byte))
 	case types.T_char,
 		types.T_varchar,
-		types.T_blob,
 		types.T_text,
-		types.T_binary,
-		types.T_varbinary,
 		types.T_datalink:
 		value := string(data.([]byte))
 		value = strings.Replace(value, "\\", "\\\\", -1)
@@ -353,6 +352,13 @@ func convertColIntoSql(
 	}
 
 	return sqlBuff, nil
+}
+
+func appendHex(dst []byte, src []byte) []byte {
+	dst = append(dst, "x'"...)
+	dst = hex.AppendEncode(dst, src)
+	dst = append(dst, '\'')
+	return dst
 }
 
 func appendByte(buf []byte, d byte) []byte {
