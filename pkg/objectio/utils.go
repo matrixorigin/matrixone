@@ -1064,3 +1064,87 @@ func MockOneObj_MulBlks_Rowids(
 	}
 	return
 }
+
+func ForeachBlkInObjStatsList(
+	next bool,
+	dataMeta ObjectDataMeta,
+	onBlock func(blk BlockInfo, blkMeta BlockObject) bool,
+	objects ...ObjectStats,
+) {
+	stop := false
+	objCnt := len(objects)
+
+	for idx := 0; idx < objCnt && !stop; idx++ {
+		iter := NewStatsBlkIter(&objects[idx], dataMeta)
+		pos := uint32(0)
+		for iter.Next() {
+			blk := iter.Entry()
+			var meta BlockObject
+			if !dataMeta.IsEmpty() {
+				meta = dataMeta.GetBlockMeta(pos)
+			}
+			pos++
+			if !onBlock(blk, meta) {
+				stop = true
+				break
+			}
+		}
+
+		if stop && next {
+			stop = false
+		}
+	}
+}
+
+type StatsBlkIter struct {
+	name       ObjectName
+	extent     Extent
+	blkCnt     uint16
+	totalRows  uint32
+	cur        int
+	accRows    uint32
+	curBlkRows uint32
+	meta       ObjectDataMeta
+}
+
+func NewStatsBlkIter(stats *ObjectStats, meta ObjectDataMeta) *StatsBlkIter {
+	return &StatsBlkIter{
+		name:       stats.ObjectName(),
+		blkCnt:     uint16(stats.BlkCnt()),
+		extent:     stats.Extent(),
+		cur:        -1,
+		accRows:    0,
+		totalRows:  stats.Rows(),
+		curBlkRows: BlockMaxRows,
+		meta:       meta,
+	}
+}
+
+func (i *StatsBlkIter) Next() bool {
+	if i.cur >= 0 {
+		i.accRows += i.curBlkRows
+	}
+	i.cur++
+	return i.cur < int(i.blkCnt)
+}
+
+func (i *StatsBlkIter) Entry() BlockInfo {
+	if i.cur == -1 {
+		i.cur = 0
+	}
+
+	// assume that all blks have BlockMaxRows, except the last one
+	if i.meta.IsEmpty() {
+		if i.cur == int(i.blkCnt-1) {
+			i.curBlkRows = i.totalRows - i.accRows
+		}
+	} else {
+		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
+	}
+
+	var blk BlockInfo
+	BuildLocationTo(i.name, i.extent, i.curBlkRows, uint16(i.cur), blk.MetaLoc[:])
+	BuildObjectBlockidTo(i.name, uint16(i.cur), blk.BlockID[:])
+
+	return blk
+}

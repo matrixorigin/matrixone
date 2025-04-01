@@ -144,6 +144,19 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 
 	switch fs {
 	case "set", "enum":
+		if len(node.EnumValues) > 0 {
+			ctx.WriteByte('(')
+			for i, enum := range node.EnumValues {
+				ctx.WriteByte('"')
+				ctx.WriteString(enum)
+				ctx.WriteByte('"')
+				if i < len(node.EnumValues)-1 {
+					ctx.WriteByte(',')
+				}
+
+			}
+			ctx.WriteByte(')')
+		}
 	case "char":
 		if node.DisplayWith >= 0 {
 			ctx.WriteByte('(')
