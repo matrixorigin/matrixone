@@ -113,7 +113,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
-		writer, err := colexec.NewS3TombstoneWriter()
+		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type)
 		require.NoError(t, err)
 
 		bat := readutil.NewCNTombstoneBatch(
@@ -130,14 +130,16 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 
-		writer.StashBatch(proc, bat)
-
-		_, ss, err := writer.SortAndSync(proc.Ctx, proc)
+		err = writer.Write(ctx, proc.Mp(), bat)
 		require.NoError(t, err)
-		require.False(t, ss.IsZero())
+
+		ss, err := writer.Sync(proc.Ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+		require.False(t, ss[0].IsZero())
 
 		//stats = append(stats, ss)
-		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss)
+		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss[0])
 	}
 
 	deletedMask := objectio.GetReusableBitmap()
