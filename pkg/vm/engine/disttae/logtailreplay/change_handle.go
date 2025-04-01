@@ -894,9 +894,9 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 
 		// Case 1: First is delete
 		if first.isDelete {
-			// Keep first delete and last insert
+			// Keep only last insert
 			if !last.isDelete {
-				for _, ri := range rowInfos[1 : len(rowInfos)-1] {
+				for _, ri := range rowInfos[0 : len(rowInfos)-1] {
 					if ri.isDelete {
 						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
 					} else {
