@@ -23,8 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,13 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -552,7 +551,13 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	return nil
 }
 
-func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, size *uint64, pkCount *int) error {
+func (txn *Transaction) dumpInsertBatchLocked(
+	ctx context.Context,
+	offset int,
+	size *uint64,
+	pkCount *int,
+) error {
+
 	tbSize := make(map[uint64]int)
 	tbCount := make(map[uint64]int)
 	skipTable := make(map[uint64]bool)
@@ -639,10 +644,16 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 
 	txn.writes = writes[:lastWriteIndex]
 
-	var s3Writer *colexec.S3Writer
+	var (
+		stats    []objectio.ObjectStats
+		s3Writer *colexec.CNS3Writer
+		fileName string
+		bat      *batch.Batch
+	)
+
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Free(txn.proc.GetMPool())
+			s3Writer.Close(txn.proc.GetMPool())
 		}
 	}()
 
@@ -654,74 +665,49 @@ func (txn *Transaction) dumpInsertBatchLocked(ctx context.Context, offset int, s
 		}
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
+		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), txn.proc.GetFileService(), tableDef, false)
 
-		// TODO(ghs): simple fix, will refactor later
-		// split batches to multiple objects if batches size exceed the threshold
-		idx := 0
-		threshold := objectio.ObjectSizeLimit * 6 / 10
-
-		for idx < len(mp[tbKey]) {
-			stashSize := 0
-			if s3Writer != nil {
-				s3Writer.Free(txn.proc.GetMPool())
-			}
-
-			s3Writer, err = colexec.NewS3Writer(tableDef, 0)
-			if err != nil {
-				return err
-			}
-
-			for ; stashSize < threshold && idx < len(mp[tbKey]); idx++ {
-				stashSize += mp[tbKey][idx].Size()
-				s3Writer.StashBatch(txn.proc, mp[tbKey][idx])
-			}
-
-			if stashSize == 0 {
-				break
-			}
-
-			blockInfos, stats, err := s3Writer.SortAndSync(ctx, txn.proc)
-			if err != nil {
-				return err
-			}
-			err = s3Writer.FillBlockInfoBat(blockInfos, stats, txn.proc.GetMPool())
-			if err != nil {
-				return err
-			}
-			blockInfo := s3Writer.GetBlockInfoBat()
-
-			lenVecs := len(blockInfo.Attrs)
-			// only remain the metaLoc col and object stats
-			for i := 0; i < lenVecs-2; i++ {
-				blockInfo.Vecs[i].Free(txn.proc.GetMPool())
-			}
-			blockInfo.Vecs = blockInfo.Vecs[lenVecs-2:]
-			blockInfo.Attrs = blockInfo.Attrs[lenVecs-2:]
-			blockInfo.SetRowCount(blockInfo.Vecs[0].Length())
-
-			var table *txnTable
-			if v, ok := tbl.(*txnTableDelegate); ok {
-				table = v.origin
-			} else {
-				table = tbl.(*txnTable)
-			}
-			fileName := objectio.DecodeBlockInfo(blockInfo.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
-			err = table.getTxn().WriteFileLocked(
-				INSERT,
-				table.accountId,
-				table.db.databaseId,
-				table.tableId,
-				table.db.databaseName,
-				table.tableName,
-				fileName,
-				blockInfo,
-				table.getTxn().tnStores[0],
-			)
-			if err != nil {
+		for _, bat = range mp[tbKey] {
+			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), bat); err != nil {
 				return err
 			}
 		}
+
+		if stats, err = s3Writer.Sync(txn.proc.Ctx, txn.proc.Mp()); err != nil {
+			return err
+		}
+
+		fileName = stats[0].ObjectLocation().String()
+		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.GetMPool()); err != nil {
+			return err
+		}
+
+		var table *txnTable
+		if v, ok := tbl.(*txnTableDelegate); ok {
+			table = v.origin
+		} else {
+			table = tbl.(*txnTable)
+		}
+
+		if err = table.getTxn().WriteFileLocked(
+			INSERT,
+			table.accountId,
+			table.db.databaseId,
+			table.tableId,
+			table.db.databaseName,
+			table.tableName,
+			fileName,
+			bat,
+			table.getTxn().tnStores[0],
+		); err != nil {
+			return err
+		}
+
+		s3Writer.Close(txn.proc.GetMPool())
+
+		s3Writer = nil
 	}
+
 	return nil
 }
 
@@ -773,6 +759,21 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 
 	txn.writes = writes[:lastWriteIndex]
 
+	var (
+		pkCol    *plan.ColDef
+		s3Writer *colexec.CNS3Writer
+
+		stats    []objectio.ObjectStats
+		fileName string
+		bat      *batch.Batch
+	)
+
+	defer func() {
+		if s3Writer != nil {
+			s3Writer.Close(txn.proc.GetMPool())
+		}
+	}()
+
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
@@ -780,27 +781,25 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			return err
 		}
 
-		s3Writer, err := colexec.NewS3TombstoneWriter()
-		if err != nil {
-			return err
-		}
-		defer s3Writer.Free(txn.proc.GetMPool())
+		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
+		s3Writer = colexec.NewCNS3TombstoneWriter(
+			txn.proc.GetMPool(), txn.proc.GetFileService(), plan2.ExprType2Type(&pkCol.Typ))
+
 		for i := 0; i < len(mp[tbKey]); i++ {
-			s3Writer.StashBatch(txn.proc, mp[tbKey][i])
+			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), mp[tbKey][i]); err != nil {
+				return err
+			}
 		}
-		_, stats, err := s3Writer.SortAndSync(ctx, txn.proc)
-		if err != nil {
-			return err
-		}
-		bat := batch.NewWithSize(1)
-		bat.Attrs = []string{catalog2.ObjectAttr_ObjectStats}
-		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		if err = vector.AppendBytes(
-			bat.GetVector(0), stats.Marshal(), false, txn.proc.GetMPool()); err != nil {
+
+		if stats, err = s3Writer.Sync(txn.proc.Ctx, txn.proc.Mp()); err != nil {
 			return err
 		}
 
-		bat.SetRowCount(bat.Vecs[0].Length())
+		fileName = stats[0].ObjectLocation().String()
+
+		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.GetMPool()); err != nil {
+			return err
+		}
 
 		var table *txnTable
 		if v, ok := tbl.(*txnTableDelegate); ok {
@@ -808,8 +807,14 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 		} else {
 			table = tbl.(*txnTable)
 		}
-		fileName := stats.ObjectLocation().String()
-		err = table.getTxn().WriteFileLocked(
+
+		//TODO: why dup here
+		bat2, err := bat.Dup(txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+
+		if err = table.getTxn().WriteFileLocked(
 			DELETE,
 			table.accountId,
 			table.db.databaseId,
@@ -817,13 +822,17 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 			table.db.databaseName,
 			table.tableName,
 			fileName,
-			bat,
+			bat2,
 			table.getTxn().tnStores[0],
-		)
-		if err != nil {
+		); err != nil {
+			return err
+		}
+
+		if err = s3Writer.Close(txn.proc.GetMPool()); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -1119,7 +1128,99 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 		}
 	}
-	return txn.compactionBlksLocked(ctx)
+
+	if err := txn.compactionBlksLocked(ctx); err != nil {
+		return err
+	}
+
+	inserts := objectio.GetReusableBitmap()
+	deletes := objectio.GetReusableBitmap()
+
+	defer func() {
+		inserts.Release()
+		deletes.Release()
+	}()
+
+	for i, e := range txn.writes {
+		if e.bat == nil || e.bat.IsEmpty() || e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			continue
+		}
+
+		if e.databaseId == catalog.MO_CATALOG_ID {
+			continue
+		}
+
+		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
+			continue
+		}
+
+		if e.typ == INSERT {
+			//inserts.Add(uint64(i))
+		} else if e.typ == DELETE {
+			deletes.Add(uint64(i))
+		}
+	}
+
+	foo := func(idxes []uint64) (err error) {
+		for i := 0; i < len(idxes); i++ {
+			a := &txn.writes[idxes[i]]
+			if a.bat == nil || a.bat.RowCount() == batch.DefaultBatchMaxRow {
+				continue
+			}
+
+			for j := i + 1; j < len(idxes); j++ {
+				b := &txn.writes[idxes[j]]
+				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
+					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
+					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
+						return err
+					}
+
+					b.bat.Clean(txn.proc.GetMPool())
+					b.bat = nil
+				}
+
+				if a.bat.RowCount() == batch.DefaultBatchMaxRow {
+					break
+				}
+			}
+		}
+
+		return nil
+	}
+
+	// this threshold may have a bad effect on the performance
+	if inserts.Count()+deletes.Count() >= 30 {
+		//ins := inserts.ToArray()
+		del := deletes.ToArray()
+
+		// TODO: merge inserts will cause to not found in the TPCC test
+		//if err := foo(ins); err != nil {
+		//	return err
+		//}
+
+		if err := foo(del); err != nil {
+			return err
+		}
+
+		i, j := 0, len(txn.writes)-1
+		for i <= j {
+			if txn.writes[i].bat == nil {
+				txn.writes[i], txn.writes[j] = txn.writes[j], txn.writes[i]
+				j--
+			} else {
+				i++
+			}
+		}
+
+		if i < len(txn.writes) && txn.writes[i].bat == nil {
+			txn.writes = txn.writes[:i]
+		} else {
+			txn.writes = txn.writes[:i+1]
+		}
+	}
+
+	return nil
 }
 
 // CN blocks compaction for txn
@@ -1163,48 +1264,30 @@ func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 			delegate := rel.(*txnTableDelegate)
 			tbl = delegate.origin
 		}
-		createdBlks, stats, err := tbl.compaction(ctx, blks)
+
+		bat, fileName, err := tbl.compaction(ctx, txn.proc.Mp(), txn.proc.GetFileService(), blks)
+		// 1,2,3,4
 		if err != nil {
 			return err
 		}
-		if len(createdBlks) > 0 {
-			bat := batch.NewWithSize(2)
-			bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-			bat.SetVector(1, vector.NewVec(types.T_binary.ToType()))
-			for _, blkInfo := range createdBlks {
-				vector.AppendBytes(
-					bat.GetVector(0),
-					objectio.EncodeBlockInfo(&blkInfo),
-					false,
-					tbl.getTxn().proc.GetMPool())
-			}
 
-			// append the object stats to bat
-			if err = vector.AppendBytes(bat.Vecs[1], stats.Marshal(),
-				false, tbl.getTxn().proc.GetMPool()); err != nil {
-				return err
-			}
+		defer func() {
+			bat.Clean(tbl.getTxn().proc.GetMPool())
+		}()
 
-			bat.SetRowCount(len(createdBlks))
-			defer func() {
-				bat.Clean(tbl.getTxn().proc.GetMPool())
-			}()
-
-			err := txn.WriteFileLocked(
-				INSERT,
-				tbl.accountId,
-				tbl.db.databaseId,
-				tbl.tableId,
-				tbl.db.databaseName,
-				tbl.tableName,
-				createdBlks[0].MetaLocation().Name().String(),
-				bat,
-				tbl.getTxn().tnStores[0],
-			)
-			if err != nil {
-				return err
-			}
+		err = txn.WriteFileLocked(
+			INSERT,
+			tbl.accountId,
+			tbl.db.databaseId,
+			tbl.tableId,
+			tbl.db.databaseName,
+			tbl.tableName,
+			fileName,
+			bat,
+			tbl.getTxn().tnStores[0],
+		)
+		if err != nil {
+			return err
 		}
 	}
 
