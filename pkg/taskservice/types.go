@@ -558,10 +558,25 @@ type TaskService interface {
 	GetStorage() TaskStorage
 
 	// AddCdcTask Update cdc task in one transaction
-	AddCdcTask(context.Context, task.TaskMetadata, *task.Details, func(context.Context, SqlExecutor) (int, error)) (int, error)
+	AddCdcTask(
+		context.Context,
+		task.TaskMetadata,
+		*task.Details,
+		func(context.Context, SqlExecutor) (int, error),
+	) (int, error)
 
 	// UpdateCdcTask Update cdc task in one transaction
-	UpdateCdcTask(context.Context, task.TaskStatus, func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), ...Condition) (int, error)
+	UpdateCdcTask(
+		context.Context,
+		task.TaskStatus,
+		func(
+			context.Context,
+			task.TaskStatus,
+			map[CdcTaskKey]struct{},
+			SqlExecutor,
+		) (int, error),
+		...Condition,
+	) (int, error)
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exists to

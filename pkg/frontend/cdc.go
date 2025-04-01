@@ -155,16 +155,16 @@ func runUpdateCdcTask(
 	if ts == nil {
 		return nil
 	}
-	updateCdcTaskFunc := func(
+	taskCollector := func(
 		ctx context.Context,
 		targetStatus task.TaskStatus,
-		taskKeyMap map[taskservice.CdcTaskKey]struct{},
+		tasks map[taskservice.CdcTaskKey]struct{},
 		tx taskservice.SqlExecutor,
 	) (int, error) {
-		return updateCdcTask(
+		return collectTasksToUpdate(
 			ctx,
 			targetStatus,
-			taskKeyMap,
+			tasks,
 			tx,
 			accountId,
 			taskName,
@@ -172,16 +172,16 @@ func runUpdateCdcTask(
 	}
 	_, err = ts.UpdateCdcTask(ctx,
 		targetTaskStatus,
-		updateCdcTaskFunc,
+		taskCollector,
 		conds...,
 	)
 	return err
 }
 
-func updateCdcTask(
+func collectTasksToUpdate(
 	ctx context.Context,
 	targetStatus task.TaskStatus,
-	taskKeyMap map[taskservice.CdcTaskKey]struct{},
+	tasks map[taskservice.CdcTaskKey]struct{},
 	tx taskservice.SqlExecutor,
 	accountId uint64,
 	taskName string,
@@ -210,7 +210,7 @@ func updateCdcTask(
 			return 0, err
 		}
 		tInfo := taskservice.CdcTaskKey{AccountId: accountId, TaskId: taskId}
-		taskKeyMap[tInfo] = struct{}{}
+		tasks[tInfo] = struct{}{}
 	}
 
 	if taskName != "" && empty {
@@ -252,7 +252,7 @@ func updateCdcTask(
 
 		if targetStatus == task.TaskStatus_RestartRequested {
 			//delete mo_cdc_watermark
-			cnt, err = deleteWatermark(ctx, tx, taskKeyMap)
+			cnt, err = deleteWatermark(ctx, tx, tasks)
 			if err != nil {
 				return 0, err
 			}
@@ -269,7 +269,7 @@ func updateCdcTask(
 		affectedCdcRow += int(cnt)
 
 		//delete mo_cdc_watermark
-		cnt, err = deleteWatermark(ctx, tx, taskKeyMap)
+		cnt, err = deleteWatermark(ctx, tx, tasks)
 		if err != nil {
 			return 0, err
 		}
