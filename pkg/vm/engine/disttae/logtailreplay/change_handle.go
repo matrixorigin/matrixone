@@ -834,39 +834,35 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 	rowInfoMap := make(map[any][]rowInfo)
 
 	// Process data batch
-	if data != nil {
-		pkVec := data.Vecs[primarySeqnum]
-		tsVec := data.Vecs[len(data.Vecs)-1]
-		timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
-		for i := 0; i < pkVec.Length(); i++ {
-			pkVal := vector.GetAny(pkVec, i)
-			if _, ok := pkVal.([]byte); ok {
-				pkVal = string(pkVal.([]byte))
-			}
-			rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
-				row:      i,
-				ts:       timestamps[i],
-				isDelete: false,
-			})
+	pkVec := data.Vecs[primarySeqnum]
+	tsVec := data.Vecs[len(data.Vecs)-1]
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
+	for i := 0; i < pkVec.Length(); i++ {
+		pkVal := vector.GetAny(pkVec, i)
+		if _, ok := pkVal.([]byte); ok {
+			pkVal = string(pkVal.([]byte))
 		}
+		rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
+			row:      i,
+			ts:       timestamps[i],
+			isDelete: false,
+		})
 	}
 
 	// Process tombstone batch
-	if tombstone != nil {
-		pkVec := tombstone.Vecs[0]
-		tsVec := tombstone.Vecs[1]
-		timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
-		for i := 0; i < pkVec.Length(); i++ {
-			pkVal := vector.GetAny(pkVec, i)
-			if _, ok := pkVal.([]byte); ok {
-				pkVal = string(pkVal.([]byte))
-			}
-			rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
-				row:      i,
-				ts:       timestamps[i],
-				isDelete: true,
-			})
+	pkVec = tombstone.Vecs[0]
+	tsVec = tombstone.Vecs[1]
+	timestamps = vector.MustFixedColWithTypeCheck[types.TS](tsVec)
+	for i := 0; i < pkVec.Length(); i++ {
+		pkVal := vector.GetAny(pkVec, i)
+		if _, ok := pkVal.([]byte); ok {
+			pkVal = string(pkVal.([]byte))
 		}
+		rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
+			row:      i,
+			ts:       timestamps[i],
+			isDelete: true,
+		})
 	}
 
 	dataRowsToDelete := make([]int64, 0)

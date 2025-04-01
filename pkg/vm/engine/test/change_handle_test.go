@@ -1099,9 +1099,8 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 	ts2 := taeHandler.GetDB().TxnMgr.Now()
 	deleteFn()
 	appendFn()
-	deleteFn()
 	ts3 := taeHandler.GetDB().TxnMgr.Now()
-	appendFn()
+	deleteFn()
 	ts4 := taeHandler.GetDB().TxnMgr.Now()
 
 	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
@@ -1132,12 +1131,13 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			assert.NoError(t, err)
-			assert.Nil(t, data)
-			assert.Nil(t, tombstone)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			if data == nil && tombstone == nil {
 				break
 			}
+			assert.NotNil(t, data)
+			assert.Equal(t, data.Vecs[0].Length(), 1)
+			assert.Nil(t, tombstone)
 		}
 		assert.NoError(t, handle.Close())
 
@@ -1151,7 +1151,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Nil(t, data)
 			assert.NotNil(t, tombstone)
-			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
+			assert.Equal(t, data.Vecs[0].Length(), 1)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 		}
 		assert.NoError(t, handle.Close())
@@ -1166,7 +1166,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Nil(t, tombstone)
 			assert.NotNil(t, data)
-			assert.Equal(t, data.Vecs[0].Length(), 1)
+			assert.Equal(t, tombstone.Vecs[0].Length(), 1)
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 		}
 		assert.NoError(t, handle.Close())
