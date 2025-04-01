@@ -250,7 +250,7 @@ func (ts *testTS) AddCDCTask(ctx context.Context, metadata task.TaskMetadata, de
 	panic("implement me")
 }
 
-func (ts *testTS) UpdateCDCTask(ctx context.Context, status task.TaskStatus, f func(context.Context, task.TaskStatus, map[taskservice.CdcTaskKey]struct{}, taskservice.SqlExecutor) (int, error), condition ...taskservice.Condition) (int, error) {
+func (ts *testTS) UpdateCDCTask(ctx context.Context, status task.TaskStatus, f func(context.Context, task.TaskStatus, map[taskservice.CDCTaskKey]struct{}, taskservice.SqlExecutor) (int, error), condition ...taskservice.Condition) (int, error) {
 	//TODO implement me
 	panic("implement me")
 }

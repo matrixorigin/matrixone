@@ -1061,7 +1061,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 	taskCollector func(
 		context.Context,
 		task.TaskStatus,
-		map[CdcTaskKey]struct{},
+		map[CDCTaskKey]struct{},
 		SqlExecutor,
 	) (int, error),
 	condition ...Condition,
@@ -1086,7 +1086,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		}
 	}()
 
-	taskKeyMap := make(map[CdcTaskKey]struct{}, 0)
+	taskKeyMap := make(map[CDCTaskKey]struct{}, 0)
 	if affectedCdcRow, err = taskCollector(
 		ctx,
 		targetStatus,
@@ -1115,7 +1115,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 			return 0, err
 		}
 		//skip task we do not need
-		tInfo := CdcTaskKey{
+		tInfo := CDCTaskKey{
 			AccountId: uint64(dTask.Details.AccountID), //from account  that creates cdc
 			TaskId:    details.CreateCdc.TaskId,
 		}

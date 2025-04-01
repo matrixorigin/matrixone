@@ -572,7 +572,7 @@ type TaskService interface {
 		func(
 			context.Context,
 			task.TaskStatus,
-			map[CdcTaskKey]struct{},
+			map[CDCTaskKey]struct{},
 			SqlExecutor,
 		) (int, error),
 		...Condition,
@@ -650,7 +650,7 @@ type TaskStorage interface {
 		func(
 			context.Context,
 			task.TaskStatus,
-			map[CdcTaskKey]struct{},
+			map[CDCTaskKey]struct{},
 			SqlExecutor,
 		) (int, error),
 		...Condition,
@@ -730,7 +730,7 @@ func (cnlabels *CnLabels) String() string {
 	return sb.String()
 }
 
-type CdcTaskKey struct {
+type CDCTaskKey struct {
 	AccountId uint64
 	TaskId    string
 }
