@@ -234,12 +234,8 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := ioutil.FindStartEndOfBlockFromSortedRowids(tomb.rowids, bid)
-
-	for i := start; i < end; i++ {
-		offset := tomb.rowids[i].GetRowOffset()
-		left = FastApplyDeletesByRowOffset(left, deleted, offset)
-	}
+	// is the tomb.rowIds sorted?
+	FastApplyDeletesByRowIds(false, bid, &left, deleted, tomb.rowids, false)
 
 	return
 }
