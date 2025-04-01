@@ -1986,21 +1986,20 @@ func newMrsForGetWatermark(rows [][]interface{}) *MysqlResultSet {
 func Test_GetWatermark(t *testing.T) {
 	type args struct {
 		ctx       context.Context
-		bh        BackgroundExec
+		dao       CDCDao
 		accountId uint64
 		taskId    string
 	}
 
 	bh := &backgroundExecTest{}
 	bh.init()
+	dao := NewCDCDao(nil, WithBGExecutor(bh))
 
 	sql := cdc.CDCSQLBuilder.GetWatermarkSQL(sysAccountID, "taskID-1")
 	mrs := newMrsForGetWatermark([][]interface{}{
 		{"db1", "tb1", "0-0", ""},
 	})
 	bh.sql2result[sql] = mrs
-
-	var dao CDCDao
 
 	tests := []struct {
 		name    string
@@ -2012,7 +2011,7 @@ func Test_GetWatermark(t *testing.T) {
 			name: "t1",
 			args: args{
 				ctx:       context.Background(),
-				bh:        bh,
+				dao:       dao,
 				accountId: uint64(sysAccountID),
 				taskId:    "taskID-1",
 			},
@@ -2025,13 +2024,11 @@ func Test_GetWatermark(t *testing.T) {
 				tt.args.ctx,
 				tt.args.accountId,
 				tt.args.taskId,
-				tt.args.bh,
 			)
 			assert.NoErrorf(
 				t, err,
-				"GetTaskWatermark(%v, %v, %v, %v)",
+				"GetTaskWatermark(%v, %v, %v)",
 				tt.args.ctx,
-				tt.args.bh,
 				tt.args.accountId,
 				tt.args.taskId,
 			)

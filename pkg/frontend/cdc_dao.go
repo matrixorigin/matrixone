@@ -26,19 +26,75 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
+const (
+	ExecutorType_BGExecutor  = 1
+	ExecutorType_SQLExecutor = 2
+)
+
+type CDCDaoOption func(*CDCDao)
+
+func WithBGExecutor(bgExecutor BackgroundExec) CDCDaoOption {
+	return func(t *CDCDao) {
+		t.bgExecutor = bgExecutor
+	}
+}
+
+func WithSQLExecutor(sqlExecutor taskservice.SqlExecutor) CDCDaoOption {
+	return func(t *CDCDao) {
+		t.sqlExecutor = sqlExecutor
+	}
+}
+
+func WithTaskService(ts taskservice.TaskService) CDCDaoOption {
+	return func(t *CDCDao) {
+		t.ts = ts
+	}
+}
+
 type CDCDao struct {
-	ses *Session
-	ts  taskservice.TaskService
+	ses         *Session
+	ts          taskservice.TaskService
+	bgExecutor  BackgroundExec
+	sqlExecutor taskservice.SqlExecutor
 }
 
 func NewCDCDao(
 	ses *Session,
+	opts ...CDCDaoOption,
 ) (t CDCDao) {
 	t.ses = ses
-	t.ts = getPu(ses.GetService()).TaskService
+	for _, opt := range opts {
+		opt(&t)
+	}
 	return
 }
 
+func (t *CDCDao) MustGetTaskService() taskservice.TaskService {
+	if t.ts == nil && t.ses != nil {
+		t.ts = getPu(t.ses.GetService()).TaskService
+	}
+	if t.ts == nil {
+		panic("taskService is nil")
+	}
+	return t.ts
+}
+
+func (t *CDCDao) MustGetBGExecutor(ctx context.Context) BackgroundExec {
+	if t.bgExecutor == nil && t.ses != nil {
+		t.bgExecutor = t.ses.GetBackgroundExec(ctx)
+	}
+	if t.bgExecutor == nil {
+		panic("bgExecutor is nil")
+	}
+	return t.bgExecutor
+}
+
+func (t *CDCDao) MustGetSQLExecutor(ctx context.Context) taskservice.SqlExecutor {
+	if t.sqlExecutor == nil {
+		panic("sqlExecutor is nil")
+	}
+	return t.sqlExecutor
+}
 func (t *CDCDao) BuildCreateOpts(
 	ctx context.Context, req *CDCCreateTaskRequest,
 ) (opts CDCCreateTaskOptions, err error) {
@@ -88,7 +144,7 @@ func (t *CDCDao) CreateTask(
 		return int(rowsAffected), nil
 	}
 
-	_, err = t.ts.AddCDCTask(
+	_, err = t.MustGetTaskService().AddCDCTask(
 		ctx, opts.BuildTaskMetadata(), details, creatTaskJob,
 	)
 	return
@@ -106,7 +162,7 @@ func (t *CDCDao) ShowTasks(
 		state        string
 		errMsg       string
 		watermarkStr string
-		executor     = t.ses.GetBackgroundExec(ctx)
+		executor     = t.MustGetBGExecutor(ctx)
 		pu           = getPu(t.ses.GetService())
 	)
 	defer executor.Close()
@@ -190,7 +246,6 @@ func (t *CDCDao) ShowTasks(
 				ctx,
 				uint64(t.ses.GetTenantInfo().GetTenantID()),
 				taskId,
-				executor,
 			); err != nil {
 				return
 			}
@@ -215,9 +270,9 @@ func (t *CDCDao) GetTaskWatermark(
 	ctx context.Context,
 	accountId uint64,
 	taskId string,
-	executor BackgroundExec,
 ) (res string, err error) {
 	var (
+		executor     = t.MustGetBGExecutor(ctx)
 		queryAttrs   = cdc.CDCSQLTemplates[cdc.CDCGetWatermarkSqlTemplate_Idx].OutputAttrs
 		watermarkStr string
 		errMsg       string
