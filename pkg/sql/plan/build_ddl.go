@@ -923,7 +923,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: fmtCtx.String(),
+				Value: ctx.GetRootSql(),
 			},
 		}
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
