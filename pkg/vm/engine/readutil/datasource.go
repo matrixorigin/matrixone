@@ -240,15 +240,15 @@ func FastApplyDeletesByRowIdVec(
 		// is the rowIds sorted?
 		sorted        = deletedRowIdsVec.GetSorted()
 		deletedRowIds = vector.MustFixedColNoTypeCheck[objectio.Rowid](deletedRowIdsVec)
+
+		// liner search may have better performance if there exists a few items.
+		useBinarySearch = len(deletedRowIds) >= 5
 	)
 
-	if len(*leftRows) != 0 {
+	wayA := func() {
 		if sorted {
 			cur = types.NewRowid(checkBid, 0)
 		}
-
-		// liner search may have better performance if there exists a few items.
-		useBinarySearch := len(deletedRowIds) >= 5
 
 		for _, o := range *leftRows {
 			cur.SetRowOffset(uint32(o))
@@ -280,6 +280,45 @@ func FastApplyDeletesByRowIdVec(
 		}
 
 		*leftRows = (*leftRows)[:ptr]
+	}
+
+	wayB := func() {
+		if useBinarySearch {
+			lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
+		} else {
+			lb, ub = 0, len(deletedRowIds)
+		}
+
+		for i := lb; i < ub; i++ {
+			bid, o := deletedRowIds[i].Decode()
+			idx, found := sort.Find(len(*leftRows), func(i int) int { return int(int64(o) - (*leftRows)[i]) })
+
+			// if the binary search applied, no need to check the block id again.
+			if found && (useBinarySearch || bid.EQ(checkBid)) {
+				copy((*leftRows)[idx:], (*leftRows)[idx+1:])
+				*leftRows = (*leftRows)[:len(*leftRows)-1]
+			}
+
+			if len(*leftRows) == 0 {
+				break
+			}
+		}
+	}
+
+	// special cases:
+	// 		wayA ==> leftRows.len = 1 and deletedRowIds.len = 1
+	// 		wayB ==> leftRows.len = 8192 and deletedRowIds.len = 1
+	// 		wayA ==> leftRows.len = 1 and deletedRowIds.len = 8192
+	// 		wayA ==> leftRows.len = 8192 and deletedRowIds.len = 8192
+
+	if len(*leftRows) != 0 {
+		// how many items are we going to remove from the leftRows?
+		if len(deletedRowIds) <= len(*leftRows)/10 {
+			// expected a few removals to happen
+			wayB()
+		} else {
+			wayA()
+		}
 
 	} else if deletedMask != nil {
 		lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
