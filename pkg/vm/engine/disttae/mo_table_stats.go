@@ -3103,7 +3103,7 @@ func applyTombstones(
 		attrs := objectio.GetTombstoneAttrs(hidden)
 		persistedDeletes := containers.NewVectors(len(attrs))
 
-		ForeachBlkInObjStatsList(true, nil,
+		objectio.ForeachBlkInObjStatsList(true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 
 				if _, release, err = ioutil.ReadDeletes(
