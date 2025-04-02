@@ -152,12 +152,17 @@ func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
 		}
 		tmpVec.InplaceSortAndCompact()
 		rvec = tmpVec
-		defer tmpVec.Free(mp)
 	}
+	defer func() {
+		if tmpVec != nil {
+			tmpVec.Free(mp)
+		}
+	}()
 
 	rcol, rarea := vector.MustVarlenaRawData(rvec)
 	for i := 0; i < rvec.Length(); i++ {
-		rval := rcol[i].GetByteSlice(rarea)
+		var rval []byte
+		rval = append(rval, rcol[i].GetByteSlice(rarea)...)
 		tmpVal := op.vals[vlen-1]
 		if vlen == 0 || !bytes.HasPrefix(rval, tmpVal) {
 			op.vals[vlen] = rval
