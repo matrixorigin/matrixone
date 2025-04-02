@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -192,6 +193,7 @@ func Test_Sinker1(t *testing.T) {
 		mockDataBatch(
 			t, bat, 100, 0, packer, accountId, getDBID, getTBLID, mp,
 		)
+		t.Log(common.MoVectorToString(bat.Vecs[TableObjectsAttr_Cluster_Idx], 10, common.WithIsComposite{}))
 		require.NoError(t, sinker.Write(ctx, bat))
 		rows += 100
 	}
