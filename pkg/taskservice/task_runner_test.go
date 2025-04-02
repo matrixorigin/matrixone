@@ -280,7 +280,7 @@ func TestRemoveRunningTaskNotExists(t *testing.T) {
 		_, completed := r.runningTasks.completedTasks[999]
 		assert.True(t, completed, "non-existent task should be added to completedTasks")
 	}, WithRunnerParallelism(1),
-		WithRunnerFetchInterval(time.Millisecond))
+		WithRunnerFetchInterval(time.Hour))
 }
 
 func runTaskRunnerTest(t *testing.T,
