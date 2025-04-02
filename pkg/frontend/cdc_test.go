@@ -2667,9 +2667,9 @@ func (r *mockIeResult) GetString(ctx context.Context, u uint64, u2 uint64) (stri
 	return "", nil
 }
 
-func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
+func TestTaskExecutor_initAesKeyByInternalExecutor(t *testing.T) {
 	mie := &mockIe{}
-	cdcTask := &CDCTaskExecutor{
+	taskExecutor := &CDCTaskExecutor{
 		ie: mie,
 	}
 
@@ -2687,17 +2687,17 @@ func TestCdcTask_initAesKeyByInternalExecutor(t *testing.T) {
 	})
 	defer getGlobalPuStub.Reset()
 
-	err := initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	err := taskExecutor.initAesKeyByInternalExecutor(context.Background(), 0)
 	assert.NoError(t, err)
 	cdc.AesKey = ""
 
-	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	err = taskExecutor.initAesKeyByInternalExecutor(context.Background(), 0)
 	assert.Error(t, err)
 
-	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	err = taskExecutor.initAesKeyByInternalExecutor(context.Background(), 0)
 	assert.Error(t, err)
 
-	err = initAesKeyByInternalExecutor(context.Background(), cdcTask, 0)
+	err = taskExecutor.initAesKeyByInternalExecutor(context.Background(), 0)
 	assert.Error(t, err)
 }
 
