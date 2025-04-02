@@ -2527,9 +2527,17 @@ func Test_initAesKey(t *testing.T) {
 
 	{
 		e := moerr.NewInternalErrorNoCtx("error")
-		queryTableStub := gostub.Stub(&queryTable, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
-			return true, e
-		})
+		queryTableStub := gostub.Stub(
+			&ForeachQueriedRow,
+			func(
+				context.Context,
+				taskservice.SqlExecutor,
+				string,
+				func(context.Context, *sql.Rows) (bool, error),
+			) (int64, error) {
+				return 0, e
+			},
+		)
 		defer queryTableStub.Reset()
 
 		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
@@ -2537,9 +2545,16 @@ func Test_initAesKey(t *testing.T) {
 	}
 
 	{
-		queryTableStub := gostub.Stub(&queryTable, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
-			return false, nil
-		})
+		queryTableStub := gostub.Stub(
+			&ForeachQueriedRow,
+			func(
+				context.Context,
+				taskservice.SqlExecutor,
+				string,
+				func(ctx context.Context, rows *sql.Rows) (bool, error),
+			) (int64, error) {
+				return 0, nil
+			})
 		defer queryTableStub.Reset()
 
 		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
@@ -2547,23 +2562,36 @@ func Test_initAesKey(t *testing.T) {
 	}
 
 	{
-		queryTableStub := gostub.Stub(&queryTable, func(context.Context, taskservice.SqlExecutor, string, func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
-			return true, nil
-		})
+		queryTableStub := gostub.Stub(
+			&ForeachQueriedRow,
+			func(
+				context.Context,
+				taskservice.SqlExecutor,
+				string,
+				func(ctx context.Context, rows *sql.Rows) (bool, error),
+			) (int64, error) {
+				return 1, nil
+			})
 		defer queryTableStub.Reset()
 
-		decryptStub := gostub.Stub(&cdc.AesCFBDecodeWithKey, func(context.Context, string, []byte) (string, error) {
-			return "aesKey", nil
-		})
+		decryptStub := gostub.Stub(
+			&cdc.AesCFBDecodeWithKey,
+			func(context.Context, string, []byte) (string, error) {
+				return "aesKey", nil
+			},
+		)
 		defer decryptStub.Reset()
 
-		getGlobalPuStub := gostub.Stub(&getGlobalPuWrapper, func(string) *config.ParameterUnit {
-			return &config.ParameterUnit{
-				SV: &config.FrontendParameters{
-					KeyEncryptionKey: "kek",
-				},
-			}
-		})
+		getGlobalPuStub := gostub.Stub(
+			&getGlobalPuWrapper,
+			func(string) *config.ParameterUnit {
+				return &config.ParameterUnit{
+					SV: &config.FrontendParameters{
+						KeyEncryptionKey: "kek",
+					},
+				}
+			},
+		)
 		defer getGlobalPuStub.Reset()
 
 		err := initAesKeyBySqlExecutor(context.Background(), nil, 0, "")
