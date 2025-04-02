@@ -3979,7 +3979,7 @@ func postProcessCdc(
 	//drop or pause cdc
 	switch targetAccountStatus {
 	case "drop":
-		return runUpdateCdcTask(
+		return doUpdateCDCTask(
 			ctx,
 			task.TaskStatus_CancelRequested,
 			targetAccountID,
@@ -3989,7 +3989,7 @@ func postProcessCdc(
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
 	case tree.AccountStatusSuspend.String(), tree.AccountStatusRestricted.String():
-		return runUpdateCdcTask(
+		return doUpdateCDCTask(
 			ctx,
 			task.TaskStatus_PauseRequested,
 			targetAccountID,
@@ -3999,7 +3999,7 @@ func postProcessCdc(
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
 	case tree.AccountStatusOpen.String():
-		return runUpdateCdcTask(
+		return doUpdateCDCTask(
 			ctx,
 			task.TaskStatus_ResumeRequested,
 			targetAccountID,
