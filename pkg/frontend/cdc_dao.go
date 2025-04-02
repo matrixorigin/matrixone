@@ -382,7 +382,7 @@ func (t *CDCDao) GetTaskKeys(
 	accountId uint64,
 	taskName string,
 	keys map[taskservice.CDCTaskKey]struct{},
-) (cnt int, err error) {
+) (cnt int64, err error) {
 	var (
 		executor = t.MustGetSQLExecutor(ctx)
 		rows     *sql.Rows
