@@ -228,7 +228,7 @@ func FastApplyDeletesByRowIds(
 	leftRows *[]int64,
 	deletesMask *objectio.Bitmap,
 	deletedRowIds []objectio.Rowid,
-	deletedRowIdsIsSorted bool,
+	IsDeletedRowIdsSorted bool,
 ) {
 	var (
 		ptr int
@@ -238,32 +238,38 @@ func FastApplyDeletesByRowIds(
 		lb int
 		ub int
 
+		first = true
 		// liner search may have better performance if there exists a few items.
-		useBinarySearch = len(deletedRowIds) >= 5
+		locateBlkInterval = len(deletedRowIds) >= 5
 	)
 
 	wayA := func() {
-		if deletedRowIdsIsSorted {
+		goFastPath := IsDeletedRowIdsSorted && locateBlkInterval
+
+		if goFastPath {
 			cur = types.NewRowid(checkBid, 0)
 		}
 
 		for _, o := range *leftRows {
-			cur.SetRowOffset(uint32(o))
-
 			hit = false
-			if deletedRowIdsIsSorted && useBinarySearch {
+
+			if goFastPath {
+				cur.SetRowOffset(uint32(o))
 				_, hit = sort.Find(len(deletedRowIds), func(i int) int { return cur.Compare(&deletedRowIds[i]) })
 			} else {
-				if useBinarySearch {
-					lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
-				} else {
-					lb, ub = 0, len(deletedRowIds)
+				if first {
+					first = false
+					if locateBlkInterval {
+						lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
+					} else {
+						lb, ub = 0, len(deletedRowIds)
+					}
 				}
 
 				for i := lb; i < ub; i++ {
 					b, offset := deletedRowIds[i].Decode()
-					// if the binary search applied, no need to check the block id again.
-					if (useBinarySearch || b.EQ(checkBid)) && o == int64(offset) {
+					// if the blk interval located, no need to check the block id again.
+					if (locateBlkInterval || b.EQ(checkBid)) && o == int64(offset) {
 						hit = true
 						break
 					}
@@ -280,7 +286,7 @@ func FastApplyDeletesByRowIds(
 	}
 
 	wayB := func() {
-		if useBinarySearch {
+		if locateBlkInterval {
 			lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
 		} else {
 			lb, ub = 0, len(deletedRowIds)
@@ -291,7 +297,7 @@ func FastApplyDeletesByRowIds(
 			idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
 
 			// if the binary search applied, no need to check the block id again.
-			if found && (useBinarySearch || bid.EQ(checkBid)) {
+			if found && (locateBlkInterval || bid.EQ(checkBid)) {
 				copy((*leftRows)[idx:], (*leftRows)[idx+1:])
 				*leftRows = (*leftRows)[:len(*leftRows)-1]
 			}
