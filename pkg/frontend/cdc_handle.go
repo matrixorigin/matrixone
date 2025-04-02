@@ -16,9 +16,7 @@ package frontend
 
 import (
 	"context"
-	"database/sql"
 
-	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -203,99 +201,72 @@ func doUpdateCDCTask(
 func onPreUpdateCDCTasks(
 	ctx context.Context,
 	targetTaskStatus task.TaskStatus,
-	tasks map[taskservice.CDCTaskKey]struct{},
+	keys map[taskservice.CDCTaskKey]struct{},
 	tx taskservice.SqlExecutor,
 	accountId uint64,
 	taskName string,
-) (int, error) {
-	var taskId string
-	var affectedCdcRow int
-	var cnt int64
-
-	query := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
-
-	rows, err := tx.QueryContext(ctx, query)
-	if err != nil {
-		return 0, err
+) (affectedCdcRow int, err error) {
+	var (
+		cnt int64
+		dao = NewCDCDao(nil, WithSQLExecutor(tx))
+	)
+	if cnt, err = dao.GetTaskKeys(
+		ctx,
+		accountId,
+		taskName,
+		keys,
+	); err != nil {
+		return
 	}
-	if rows.Err() != nil {
-		return 0, rows.Err()
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
+	affectedCdcRow = int(cnt)
 
-	empty := true
-	for rows.Next() {
-		empty = false
-		if err = rows.Scan(&taskId); err != nil {
-			return 0, err
-		}
-		key := taskservice.CDCTaskKey{AccountId: accountId, TaskId: taskId}
-		tasks[key] = struct{}{}
-	}
-
-	if taskName != "" && empty {
-		return 0, moerr.NewInternalErrorf(ctx, "no cdc task found, task name: %s", taskName)
-	}
-
-	var prepare *sql.Stmt
-	//step2: update or cancel cdc task
-	if targetTaskStatus != task.TaskStatus_CancelRequested {
-		//Update cdc task
-		//updating mo_cdc_task table
-		updateSql := cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName)
-		prepare, err = tx.PrepareContext(ctx, updateSql)
-		if err != nil {
-			return 0, err
-		}
-		defer func() {
-			_ = prepare.Close()
-		}()
-
-		if prepare != nil {
-			var targetCDCStatus string
-			if targetTaskStatus == task.TaskStatus_PauseRequested {
-				targetCDCStatus = CdcPaused
-			} else {
-				targetCDCStatus = CdcRunning
-			}
-			//execute update cdc status in mo_cdc_task
-			res, err := prepare.ExecContext(ctx, targetCDCStatus)
-			if err != nil {
-				return 0, err
-			}
-			affected, err := res.RowsAffected()
-			if err != nil {
-				return 0, err
-			}
-			affectedCdcRow += int(affected)
-		}
-
-		if targetTaskStatus == task.TaskStatus_RestartRequested {
-			//delete mo_cdc_watermark
-			cnt, err = deleteWatermark(ctx, tx, tasks)
-			if err != nil {
-				return 0, err
-			}
-			affectedCdcRow += int(cnt)
-		}
-	} else {
-		//Cancel cdc task
+	//Cancel cdc task
+	if targetTaskStatus == task.TaskStatus_CancelRequested {
 		//deleting mo_cdc_task
-		deleteSql := cdc.CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
-		cnt, err = ExecuteAndGetRowsAffected(ctx, tx, deleteSql)
-		if err != nil {
-			return 0, err
+		if cnt, err = dao.DeleteTaskByName(
+			ctx, accountId, taskName,
+		); err != nil {
+			return
 		}
 		affectedCdcRow += int(cnt)
 
 		//delete mo_cdc_watermark
-		cnt, err = deleteWatermark(ctx, tx, tasks)
-		if err != nil {
-			return 0, err
+		if cnt, err = dao.DeleteManyWatermark(
+			ctx, keys,
+		); err != nil {
+			return
+		}
+		affectedCdcRow += int(cnt)
+		return
+	}
+
+	//step2: update or cancel cdc task
+	var targetCDCStatus string
+	if targetTaskStatus == task.TaskStatus_PauseRequested {
+		targetCDCStatus = CdcPaused
+	} else {
+		targetCDCStatus = CdcRunning
+	}
+
+	if cnt, err = dao.PrepareUpdateTask(
+		ctx,
+		accountId,
+		taskName,
+		targetCDCStatus,
+	); err != nil {
+		return
+	}
+
+	affectedCdcRow += int(cnt)
+
+	// restart cdc task
+	if targetTaskStatus == task.TaskStatus_RestartRequested {
+		if cnt, err = dao.DeleteManyWatermark(
+			ctx, keys,
+		); err != nil {
+			return
 		}
 		affectedCdcRow += int(cnt)
 	}
-	return affectedCdcRow, nil
+	return
 }
