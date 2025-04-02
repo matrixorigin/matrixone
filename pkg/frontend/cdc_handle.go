@@ -16,8 +16,13 @@ package frontend
 
 import (
 	"context"
+	"database/sql"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 type CDCCreateTaskRequest = tree.CreateCDC
@@ -37,19 +42,19 @@ func handleCreateCdc(ses *Session, execCtx *ExecCtx, create *tree.CreateCDC) err
 }
 
 func handleDropCdc(ses *Session, execCtx *ExecCtx, st *tree.DropCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
+	return handleUpdateCDCTaskRequest(execCtx.reqCtx, ses, st)
 }
 
 func handlePauseCdc(ses *Session, execCtx *ExecCtx, st *tree.PauseCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
+	return handleUpdateCDCTaskRequest(execCtx.reqCtx, ses, st)
 }
 
 func handleResumeCdc(ses *Session, execCtx *ExecCtx, st *tree.ResumeCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
+	return handleUpdateCDCTaskRequest(execCtx.reqCtx, ses, st)
 }
 
 func handleRestartCdc(ses *Session, execCtx *ExecCtx, st *tree.RestartCDC) error {
-	return updateCdc(execCtx.reqCtx, ses, st)
+	return handleUpdateCDCTaskRequest(execCtx.reqCtx, ses, st)
 }
 
 func handleShowCdc(
@@ -72,16 +77,225 @@ func handleCreateCDCTaskRequest(
 	return
 }
 
-// func handleShowCDCTaskRequest(
-// 	ctx context.Context,
-// 	ses *Session,
-// 	req *CDCShowTaskRequest,
-// ) (err error) {
-// 	dao, err := NewCDCDao(ses)
-// 	if err != nil {
-// 		return
-// 	}
+func handleUpdateCDCTaskRequest(
+	ctx context.Context,
+	ses *Session,
+	req tree.Statement,
+) (err error) {
+	var (
+		targetTaskStatus task.TaskStatus
+		// task name may be empty
+		taskName  string
+		accountId = ses.GetTenantInfo().GetTenantID()
+		conds     = make([]taskservice.Condition, 0)
+	)
 
-// 	err = dao.ShowTasks(ctx, req)
-// 	return
-// }
+	switch updateReq := req.(type) {
+	case *tree.DropCDC:
+		if updateReq.Option == nil {
+			return moerr.NewInternalError(ctx, "invalid drop cdc option")
+		}
+		targetTaskStatus = task.TaskStatus_CancelRequested
+		conds = append(
+			conds,
+			taskservice.WithAccountID(taskservice.EQ, accountId),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+		if !updateReq.Option.All {
+			taskName = updateReq.Option.TaskName.String()
+			conds = append(
+				conds,
+				taskservice.WithTaskName(taskservice.EQ, taskName),
+			)
+		}
+	case *tree.PauseCDC:
+		if updateReq.Option == nil {
+			return moerr.NewInternalError(ctx, "invalid pause cdc option")
+		}
+		targetTaskStatus = task.TaskStatus_PauseRequested
+		conds = append(
+			conds,
+			taskservice.WithAccountID(taskservice.EQ, accountId),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+		)
+		if !updateReq.Option.All {
+			taskName = updateReq.Option.TaskName.String()
+			conds = append(
+				conds,
+				taskservice.WithTaskName(taskservice.EQ, taskName),
+			)
+		}
+	case *tree.ResumeCDC:
+		targetTaskStatus = task.TaskStatus_ResumeRequested
+		taskName = updateReq.TaskName.String()
+		if len(taskName) == 0 {
+			return moerr.NewInternalError(ctx, "invalid resume cdc task name")
+		}
+		conds = append(
+			conds,
+			taskservice.WithAccountID(taskservice.EQ, accountId),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+			taskservice.WithTaskName(taskservice.EQ, taskName),
+		)
+	case *tree.RestartCDC:
+		targetTaskStatus = task.TaskStatus_RestartRequested
+		taskName = updateReq.TaskName.String()
+		if len(taskName) == 0 {
+			return moerr.NewInternalError(ctx, "invalid restart cdc task name")
+		}
+		conds = append(
+			conds,
+			taskservice.WithAccountID(taskservice.EQ, accountId),
+			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+			taskservice.WithTaskName(taskservice.EQ, taskName),
+		)
+	default:
+		return moerr.NewInternalErrorf(
+			ctx,
+			"invalid cdc task request: %s",
+			req.String(),
+		)
+	}
+	return doUpdateCDCTask(
+		ctx,
+		targetTaskStatus,
+		uint64(accountId),
+		taskName,
+		ses.GetService(),
+		conds...,
+	)
+}
+
+func doUpdateCDCTask(
+	ctx context.Context,
+	targetTaskStatus task.TaskStatus,
+	accountId uint64,
+	taskName string,
+	service string,
+	conds ...taskservice.Condition,
+) (err error) {
+	ts := getPu(service).TaskService
+	if ts == nil {
+		return nil
+	}
+	_, err = ts.UpdateCDCTask(ctx,
+		targetTaskStatus,
+		func(
+			ctx context.Context,
+			targetStatus task.TaskStatus,
+			keys map[taskservice.CDCTaskKey]struct{},
+			tx taskservice.SqlExecutor,
+		) (int, error) {
+			return onPreUpdateCDCTasks(
+				ctx,
+				targetStatus,
+				keys,
+				tx,
+				accountId,
+				taskName,
+			)
+		},
+		conds...,
+	)
+	return
+}
+
+func onPreUpdateCDCTasks(
+	ctx context.Context,
+	targetTaskStatus task.TaskStatus,
+	tasks map[taskservice.CDCTaskKey]struct{},
+	tx taskservice.SqlExecutor,
+	accountId uint64,
+	taskName string,
+) (int, error) {
+	var taskId string
+	var affectedCdcRow int
+	var cnt int64
+
+	query := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
+
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	if rows.Err() != nil {
+		return 0, rows.Err()
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	empty := true
+	for rows.Next() {
+		empty = false
+		if err = rows.Scan(&taskId); err != nil {
+			return 0, err
+		}
+		key := taskservice.CDCTaskKey{AccountId: accountId, TaskId: taskId}
+		tasks[key] = struct{}{}
+	}
+
+	if taskName != "" && empty {
+		return 0, moerr.NewInternalErrorf(ctx, "no cdc task found, task name: %s", taskName)
+	}
+
+	var prepare *sql.Stmt
+	//step2: update or cancel cdc task
+	if targetTaskStatus != task.TaskStatus_CancelRequested {
+		//Update cdc task
+		//updating mo_cdc_task table
+		updateSql := cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName)
+		prepare, err = tx.PrepareContext(ctx, updateSql)
+		if err != nil {
+			return 0, err
+		}
+		defer func() {
+			_ = prepare.Close()
+		}()
+
+		if prepare != nil {
+			var targetCDCStatus string
+			if targetTaskStatus == task.TaskStatus_PauseRequested {
+				targetCDCStatus = CdcPaused
+			} else {
+				targetCDCStatus = CdcRunning
+			}
+			//execute update cdc status in mo_cdc_task
+			res, err := prepare.ExecContext(ctx, targetCDCStatus)
+			if err != nil {
+				return 0, err
+			}
+			affected, err := res.RowsAffected()
+			if err != nil {
+				return 0, err
+			}
+			affectedCdcRow += int(affected)
+		}
+
+		if targetTaskStatus == task.TaskStatus_RestartRequested {
+			//delete mo_cdc_watermark
+			cnt, err = deleteWatermark(ctx, tx, tasks)
+			if err != nil {
+				return 0, err
+			}
+			affectedCdcRow += int(cnt)
+		}
+	} else {
+		//Cancel cdc task
+		//deleting mo_cdc_task
+		deleteSql := cdc.CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)
+		cnt, err = ExecuteAndGetRowsAffected(ctx, tx, deleteSql)
+		if err != nil {
+			return 0, err
+		}
+		affectedCdcRow += int(cnt)
+
+		//delete mo_cdc_watermark
+		cnt, err = deleteWatermark(ctx, tx, tasks)
+		if err != nil {
+			return 0, err
+		}
+		affectedCdcRow += int(cnt)
+	}
+	return affectedCdcRow, nil
+}
