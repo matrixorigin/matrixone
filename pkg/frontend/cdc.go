@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
@@ -66,20 +65,4 @@ var initAesKeyByInternalExecutor = func(
 	accountId uint32,
 ) error {
 	return exec.initAesKeyByInternalExecutor(ctx, accountId)
-}
-
-func deleteWatermark(ctx context.Context, tx taskservice.SqlExecutor, taskKeyMap map[taskservice.CDCTaskKey]struct{}) (int64, error) {
-	tCount := int64(0)
-	cnt := int64(0)
-	var err error
-	//deleting mo_cdc_watermark belongs to cancelled cdc task
-	for tInfo := range taskKeyMap {
-		deleteSql2 := cdc.CDCSQLBuilder.DeleteWatermarkSQL(tInfo.AccountId, tInfo.TaskId)
-		cnt, err = ExecuteAndGetRowsAffected(ctx, tx, deleteSql2)
-		if err != nil {
-			return 0, err
-		}
-		tCount += cnt
-	}
-	return tCount, nil
 }
