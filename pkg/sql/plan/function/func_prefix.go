@@ -163,8 +163,7 @@ func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
 	for i := 0; i < rvec.Length(); i++ {
 		var rval []byte
 		rval = append(rval, rcol[i].GetByteSlice(rarea)...)
-		tmpVal := op.vals[vlen-1]
-		if vlen == 0 || !bytes.HasPrefix(rval, tmpVal) {
+		if vlen == 0 || !bytes.HasPrefix(rval, op.vals[vlen-1]) {
 			op.vals[vlen] = rval
 			vlen++
 		}
