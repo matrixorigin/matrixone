@@ -58,11 +58,3 @@ var queryTable = func(
 	}
 	return false, nil
 }
-
-var initAesKeyByInternalExecutor = func(
-	ctx context.Context,
-	exec *CDCTaskExecutor,
-	accountId uint32,
-) error {
-	return exec.initAesKeyByInternalExecutor(ctx, accountId)
-}
