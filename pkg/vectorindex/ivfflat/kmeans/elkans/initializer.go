@@ -15,7 +15,6 @@
 package elkans
 
 import (
-	"errors"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -109,8 +108,8 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 		ncpu = numSamples
 	}
 
+	errs := make(chan error, ncpu)
 	for nextCentroidIdx := 1; nextCentroidIdx < k; nextCentroidIdx++ {
-		var errs error
 
 		// 2. for each data point, compute the min distance to the existing centers
 		var totalDistToExistingCenters T
@@ -134,7 +133,7 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 					// but instead we are using the distance to the last center that was chosen.
 					distance, err := kpp.distFn(vectors[vecIdx], centroids[nextCentroidIdx-1])
 					if err != nil {
-						errs = errors.Join(errs, err)
+						errs <- err
 						return
 					}
 
@@ -151,8 +150,8 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 
 		wg.Wait()
 
-		if errs != nil {
-			return nil, errs
+		if len(errs) > 0 {
+			return nil, <-errs
 		}
 
 		// 3. choose the next random center, using a weighted probability distribution

@@ -15,7 +15,6 @@
 package elkans
 
 import (
-	"errors"
 	"math"
 	"math/rand"
 	"runtime"
@@ -257,7 +256,6 @@ func validateArgs[T types.RealNumbers](vectorList [][]T, clusterCnt,
 
 // initBounds initializes the lower bounds, upper bound and assignment for each vector.
 func (km *ElkanClusterer[T]) initBounds() error {
-	var errs error
 	// step 0.2
 	// Set the lower bound l(x, c)=0 for each point x and center c.
 	// Assign each x to its closest initial center c(x)=min{ d(x, c) }, using Lemma 1 to avoid
@@ -269,6 +267,7 @@ func (km *ElkanClusterer[T]) initBounds() error {
 		ncpu = len(km.vectorList)
 	}
 
+	errs := make(chan error, ncpu)
 	var wg sync.WaitGroup
 
 	for n := 0; n < ncpu; n++ {
@@ -284,7 +283,7 @@ func (km *ElkanClusterer[T]) initBounds() error {
 				for c := range km.centroids {
 					dist, err := km.distFn(km.vectorList[x], km.centroids[c])
 					if err != nil {
-						errs = errors.Join(errs, err)
+						errs <- err
 						return
 					}
 
@@ -302,13 +301,15 @@ func (km *ElkanClusterer[T]) initBounds() error {
 	}
 
 	wg.Wait()
-	return errs
+	if len(errs) > 0 {
+		return <-errs
+	}
+	return nil
 }
 
 // computeCentroidDistances computes the centroid distances and the min centroid distances.
 // NOTE: here we are save 0.5 of centroid distance to avoid 0.5 multiplication in step 3(iii) and 3.b.
 func (km *ElkanClusterer[T]) computeCentroidDistances() error {
-	var errs error
 
 	// step 1.a
 	// For all centers c and c', compute 0.5 x d(c, c').
@@ -317,6 +318,7 @@ func (km *ElkanClusterer[T]) computeCentroidDistances() error {
 	if km.clusterCnt < ncpu {
 		ncpu = km.clusterCnt
 	}
+	errs := make(chan error, ncpu)
 
 	for n := 0; n < ncpu; n++ {
 		wg.Add(1)
@@ -329,7 +331,7 @@ func (km *ElkanClusterer[T]) computeCentroidDistances() error {
 				for j := i + 1; j < km.clusterCnt; j++ {
 					dist, err := km.distFn(km.centroids[i], km.centroids[j])
 					if err != nil {
-						errs = errors.Join(errs, err)
+						errs <- err
 						return
 					}
 					dist *= 0.5
@@ -342,8 +344,8 @@ func (km *ElkanClusterer[T]) computeCentroidDistances() error {
 	}
 	wg.Wait()
 
-	if errs != nil {
-		return errs
+	if len(errs) > 0 {
+		return <-errs
 	}
 
 	// step 1.b
@@ -365,12 +367,12 @@ func (km *ElkanClusterer[T]) computeCentroidDistances() error {
 // assignData assigns each vector to the nearest centroid.
 // This is the place where most of the "distance computation skipping" happens.
 func (km *ElkanClusterer[T]) assignData() (int, error) {
-	var err, errs error
 	var changes atomic.Int64
 	ncpu := km.nworker
 	if len(km.vectorList) < ncpu {
 		ncpu = len(km.vectorList)
 	}
+	errs := make(chan error, ncpu)
 
 	var wg sync.WaitGroup
 	for n := 0; n < ncpu; n++ {
@@ -404,11 +406,12 @@ func (km *ElkanClusterer[T]) assignData() (int, error) {
 						// If r(x) then compute d(x, c(x)) and assign r(x)= false.
 						var dxcx T
 						if km.vectorMetas[currVector].recompute {
+							var err error
 							km.vectorMetas[currVector].recompute = false
 
 							dxcx, err = km.distFn(km.vectorList[currVector], km.centroids[km.assignments[currVector]])
 							if err != nil {
-								errs = errors.Join(errs, err)
+								errs <- err
 								return
 							}
 							km.vectorMetas[currVector].upper = dxcx
@@ -435,7 +438,7 @@ func (km *ElkanClusterer[T]) assignData() (int, error) {
 
 							dxc, err := km.distFn(km.vectorList[currVector], km.centroids[c]) // d(x,c) in the paper
 							if err != nil {
-								errs = errors.Join(errs, err)
+								errs <- err
 								return
 							}
 							km.vectorMetas[currVector].lower[c] = dxc
@@ -452,7 +455,12 @@ func (km *ElkanClusterer[T]) assignData() (int, error) {
 	}
 
 	wg.Wait()
-	return int(changes.Load()), errs
+
+	if len(errs) > 0 {
+		return 0, <-errs
+	}
+
+	return int(changes.Load()), nil
 }
 
 // recalculateCentroids calculates the new mean centroids based on the new assignments.

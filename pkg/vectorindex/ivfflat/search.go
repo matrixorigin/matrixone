@@ -15,7 +15,6 @@
 package ivfflat
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -133,7 +132,6 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, nthread int64) ([]int64, error) {
 
-	var errs error
 	if len(idx.Centroids) == 0 {
 		// empty index has id = 1
 		return []int64{1}, nil
@@ -144,6 +142,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 	if ncentroids < nworker {
 		nworker = ncentroids
 	}
+	errs := make(chan error, nworker)
 
 	heap := vectorindex.NewSearchResultSafeHeap(ncentroids)
 	var wg sync.WaitGroup
@@ -157,7 +156,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				}
 				dist, err := distfn(query, c.Vec)
 				if err != nil {
-					errs = errors.Join(errs, err)
+					errs <- err
 					return
 				}
 				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
@@ -167,8 +166,8 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 
 	wg.Wait()
 
-	if errs != nil {
-		return nil, errs
+	if len(errs) > 0 {
+		return nil, <-errs
 	}
 
 	res := make([]int64, 0, probe)
@@ -191,6 +190,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
+	errs := make(chan error, nthread)
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
@@ -234,7 +234,6 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	heap := vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
 	var wg sync.WaitGroup
-	var errs error
 
 	for n := int64(0); n < nthread; n++ {
 
@@ -248,7 +247,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 			for !sql_closed {
 				sql_closed, err = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
 				if err != nil {
-					errs = errors.Join(errs, err)
+					errs <- err
 					return
 				}
 			}
@@ -257,8 +256,8 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	wg.Wait()
 
-	if errs != nil {
-		return nil, nil, errs
+	if len(errs) > 0 {
+		return nil, nil, <-errs
 	}
 
 	resid := make([]any, 0, rt.Limit)
