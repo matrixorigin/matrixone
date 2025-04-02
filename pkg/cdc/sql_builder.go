@@ -19,6 +19,14 @@ import (
 	"time"
 )
 
+const (
+	CDCWatermarkErrMsgMaxLen = 256
+
+	CDCState_Running = "running"
+	CDCState_Paused  = "paused"
+	CDCState_Failed  = "failed"
+)
+
 var CDCSQLBuilder = cdcSQLBuilder{}
 
 const (

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -243,9 +244,9 @@ func onPreUpdateCDCTasks(
 	//step2: update or cancel cdc task
 	var targetCDCStatus string
 	if targetTaskStatus == task.TaskStatus_PauseRequested {
-		targetCDCStatus = CdcPaused
+		targetCDCStatus = cdc.CDCState_Paused
 	} else {
-		targetCDCStatus = CdcRunning
+		targetCDCStatus = cdc.CDCState_Running
 	}
 
 	if cnt, err = dao.PrepareUpdateTask(

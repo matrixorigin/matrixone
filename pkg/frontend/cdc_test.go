@@ -2119,7 +2119,7 @@ func Test_handleShowCdc(t *testing.T) {
 
 	sql := cdc.CDCSQLBuilder.ShowTaskSQL(sysAccountID, true, "")
 	mrs := newMrsForGetTask([][]interface{}{
-		{"taskID-1", "task1", sourceUri, sinkUri, CdcRunning, ""},
+		{"taskID-1", "task1", sourceUri, sinkUri, cdc.CDCState_Running, ""},
 	})
 	bh.sql2result[sql] = mrs
 

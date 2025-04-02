@@ -326,12 +326,12 @@ func (exec *CDCTaskExecutor) initAesKeyByInternalExecutor(ctx context.Context, a
 
 func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (err error) {
 	accId := exec.spec.Accounts[0].GetId()
-	state := CdcRunning
+	state := cdc.CDCState_Running
 	if errMsg != "" {
-		state = CdcFailed
+		state = cdc.CDCState_Failed
 	}
-	if len(errMsg) > maxErrMsgLen {
-		errMsg = errMsg[:maxErrMsgLen]
+	if len(errMsg) > cdc.CDCWatermarkErrMsgMaxLen {
+		errMsg = errMsg[:cdc.CDCWatermarkErrMsgMaxLen]
 	}
 
 	sql := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgSQL(

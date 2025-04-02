@@ -315,7 +315,7 @@ func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 		opts.EndTs,
 		opts.ConfigFile,
 		time.Now().UTC(),
-		CdcRunning,
+		cdc.CDCState_Running,
 		0,
 		opts.NoFull,
 		"",

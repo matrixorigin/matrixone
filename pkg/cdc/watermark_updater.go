@@ -32,7 +32,6 @@ import (
 
 const (
 	watermarkUpdateInterval = time.Second
-	maxErrMsgLen            = 256
 )
 
 var _ IWatermarkUpdater = new(WatermarkUpdater)
@@ -135,8 +134,8 @@ func (u *WatermarkUpdater) DeleteFromDb(dbName, tblName string) error {
 }
 
 func (u *WatermarkUpdater) SaveErrMsg(dbName, tblName string, errMsg string) error {
-	if len(errMsg) > maxErrMsgLen {
-		errMsg = errMsg[:maxErrMsgLen]
+	if len(errMsg) > CDCWatermarkErrMsgMaxLen {
+		errMsg = errMsg[:CDCWatermarkErrMsgMaxLen]
 	}
 	sql := CDCSQLBuilder.UpdateWatermarkErrMsgSQL(
 		uint64(u.accountId), u.taskId.String(), dbName, tblName, errMsg,
