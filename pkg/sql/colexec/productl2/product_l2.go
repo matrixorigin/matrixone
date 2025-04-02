@@ -16,7 +16,6 @@ package productl2
 
 import (
 	"bytes"
-	"errors"
 	"runtime"
 	"strings"
 	"sync"
@@ -249,7 +248,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: failed to get distance function")
 	}
 
-	var errs error
+	errs := make(chan error, ncpu)
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
 
@@ -274,7 +273,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 					} else {
 						dist, err := distfn(centroidmat[i], embedmat[j])
 						if err != nil {
-							errs = errors.Join(errs, err)
+							errs <- err
 							return
 						}
 						if dist < leastDistance[j] {
@@ -303,7 +302,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 				}()
 
 				if err != nil {
-					errs = errors.Join(errs, err)
+					errs <- err
 					return
 				}
 			}
@@ -312,8 +311,8 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 	wg.Wait()
 
-	if errs != nil {
-		return errs
+	if len(errs) > 0 {
+		return <-errs
 	}
 
 	// ctr.rbat.AddRowCount(count * count2)
