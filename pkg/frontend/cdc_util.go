@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -262,28 +263,48 @@ var (
 	getGlobalPuWrapper = getPu
 )
 
-var initAesKeyBySqlExecutor = func(ctx context.Context, executor taskservice.SqlExecutor, accountId uint32, service string) (err error) {
+var initAesKeyBySqlExecutor = func(
+	ctx context.Context,
+	executor taskservice.SqlExecutor,
+	accountId uint32,
+	service string,
+) (err error) {
 	if len(cdc.AesKey) > 0 {
 		return nil
 	}
 
-	var encryptedKey string
-	var ret bool
+	var (
+		encryptedKey string
+		cnt          int64
+	)
 	querySql := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc.InitKeyId)
 
-	ret, err = queryTable(ctx, executor, querySql, func(ctx context.Context, rows *sql.Rows) (bool, error) {
-		if err = rows.Scan(&encryptedKey); err != nil {
-			return false, err
-		}
-		return true, nil
-	})
-	if err != nil {
+	if cnt, err = ForeachQueriedRow(
+		ctx,
+		executor,
+		querySql,
+		func(ctx context.Context, rows *sql.Rows) (bool, error) {
+			if cnt > 0 {
+				return false, nil
+			}
+			if err2 := rows.Scan(&encryptedKey); err2 != nil {
+				return false, err2
+			}
+			cnt++
+			return true, nil
+		},
+	); err != nil {
 		return
-	} else if !ret {
+	} else if cnt == 0 {
 		return moerr.NewInternalError(ctx, "no data key")
 	}
 
-	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(ctx, encryptedKey, []byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey))
+	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(
+		ctx,
+		encryptedKey,
+		[]byte(getGlobalPuWrapper(service).SV.KeyEncryptionKey),
+	)
+	logutil.Infof("DEBUG-1: %v:%v", encryptedKey, err)
 	return
 }
 
@@ -293,7 +314,9 @@ func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
 	}
 
 	if tz != nil {
-		if ts, err = time.ParseInLocation(time.DateTime, tsStr, tz); err == nil {
+		if ts, err = time.ParseInLocation(
+			time.DateTime, tsStr, tz,
+		); err == nil {
 			return
 		}
 	}
@@ -367,8 +390,14 @@ func CDCParsePitrGranularity(
 
 	if level == cdc.CDCPitrGranularity_Account {
 		pts.Append(&cdc.PatternTuple{
-			Source: cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All},
-			Sink:   cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All},
+			Source: cdc.PatternTable{
+				Database: cdc.CDCPitrGranularity_All,
+				Table:    cdc.CDCPitrGranularity_All,
+			},
+			Sink: cdc.PatternTable{
+				Database: cdc.CDCPitrGranularity_All,
+				Table:    cdc.CDCPitrGranularity_All,
+			},
 		})
 		return
 	}
@@ -378,7 +407,9 @@ func CDCParsePitrGranularity(
 	tablePairs := strings.Split(strings.TrimSpace(tables), ",")
 	dup := make(map[string]struct{})
 	for _, pair := range tablePairs {
-		if pt, err = CDCParseGranularityTuple(ctx, level, pair, dup); err != nil {
+		if pt, err = CDCParseGranularityTuple(
+			ctx, level, pair, dup,
+		); err != nil {
 			return
 		}
 		pts.Append(pt)
@@ -402,26 +433,34 @@ func CDCParseGranularityTuple(
 ) (pt *cdc.PatternTuple, err error) {
 	splitRes := strings.Split(strings.TrimSpace(pattern), ":")
 	if len(splitRes) > 2 {
-		err = moerr.NewInternalErrorf(ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern)
+		err = moerr.NewInternalErrorf(
+			ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern,
+		)
 		return
 	}
 
 	pt = &cdc.PatternTuple{OriginString: pattern}
 
 	// handle source part
-	if pt.Source.Database, pt.Source.Table, err = CDCParseTableInfo(ctx, splitRes[0], level); err != nil {
+	if pt.Source.Database, pt.Source.Table, err = CDCParseTableInfo(
+		ctx, splitRes[0], level,
+	); err != nil {
 		return
 	}
 	key := cdc.GenDbTblKey(pt.Source.Database, pt.Source.Table)
 	if _, ok := dup[key]; ok {
-		err = moerr.NewInternalErrorf(ctx, "one db/table: %s can't be used as multi sources in a cdc task", key)
+		err = moerr.NewInternalErrorf(
+			ctx, "one db/table: %s can't be used as multi sources in a cdc task", key,
+		)
 		return
 	}
 	dup[key] = struct{}{}
 
 	// handle sink part
 	if len(splitRes) > 1 {
-		if pt.Sink.Database, pt.Sink.Table, err = CDCParseTableInfo(ctx, splitRes[1], level); err != nil {
+		if pt.Sink.Database, pt.Sink.Table, err = CDCParseTableInfo(
+			ctx, splitRes[1], level,
+		); err != nil {
 			return
 		}
 	} else {

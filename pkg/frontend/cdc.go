@@ -14,47 +14,9 @@
 
 package frontend
 
-import (
-	"context"
-	"database/sql"
-
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
-)
-
 const (
 	CdcRunning   = "running"
 	CdcPaused    = "paused"
 	CdcFailed    = "failed"
 	maxErrMsgLen = 256
 )
-
-var queryTable = func(
-	ctx context.Context,
-	tx taskservice.SqlExecutor,
-	query string,
-	callback func(ctx context.Context, rows *sql.Rows) (bool, error)) (bool, error) {
-	var rows *sql.Rows
-	var err error
-	rows, err = tx.QueryContext(ctx, query)
-	if err != nil {
-		return false, err
-	}
-	if rows.Err() != nil {
-		return false, rows.Err()
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var ret bool
-	for rows.Next() {
-		ret, err = callback(ctx, rows)
-		if err != nil {
-			return false, err
-		}
-		if ret {
-			return true, nil
-		}
-	}
-	return false, nil
-}
