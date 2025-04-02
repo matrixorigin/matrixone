@@ -268,8 +268,7 @@ func FastApplyDeletesByRowIds(
 
 				for i := lb; i < ub; i++ {
 					b, offset := deletedRowIds[i].Decode()
-					// if the blk interval located, no need to check the block id again.
-					if (locateBlkInterval || b.EQ(checkBid)) && o == int64(offset) {
+					if o == int64(offset) && b.EQ(checkBid) {
 						hit = true
 						break
 					}
@@ -296,8 +295,7 @@ func FastApplyDeletesByRowIds(
 			bid, o := deletedRowIds[i].Decode()
 			idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
 
-			// if the binary search applied, no need to check the block id again.
-			if found && (locateBlkInterval || bid.EQ(checkBid)) {
+			if found && bid.EQ(checkBid) {
 				copy((*leftRows)[idx:], (*leftRows)[idx+1:])
 				*leftRows = (*leftRows)[:len(*leftRows)-1]
 			}
