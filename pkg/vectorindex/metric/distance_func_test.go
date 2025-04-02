@@ -127,6 +127,20 @@ func Test_ResolveFun(t *testing.T) {
 
 }
 
+func Test_ZeroVector(t *testing.T) {
+
+	v1 := []float64{0, 0, 0}
+	v2 := []float64{0, 0, 0}
+	_, err := CosineDistance[float64](v1, v2)
+	require.NotNil(t, err)
+
+	v1f32 := []float32{0, 0, 0}
+	v2f32 := []float32{0, 0, 0}
+	_, err = CosineDistance[float32](v1f32, v2f32)
+	require.NotNil(t, err)
+
+}
+
 func Test_L2Distance(t *testing.T) {
 	type args struct {
 		v1 []float64
@@ -182,6 +196,186 @@ func Test_L2Distance(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got, err := L2Distance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_L1Distance(t *testing.T) {
+	type args struct {
+		v1 []float64
+		v2 []float64
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				v1: []float64{1, 2, 3, 4},
+				v2: []float64{1, 2, 4, 5},
+			},
+			want: 2,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				v1: []float64{10, 20, 30, 40},
+				v2: []float64{10.5, 21.5, 31.5, 43.5},
+			},
+			want: 7,
+		},
+		{
+			name: "Test 3.a",
+			args: args{
+				v1: []float64{1, 1},
+				v2: []float64{4, 1},
+			},
+			want: 3,
+		},
+		{
+			name: "Test 3.b",
+			args: args{
+				v1: []float64{4, 1},
+				v2: []float64{1, 4},
+			},
+			want: 6,
+		},
+		{
+			name: "Test 3.c",
+			args: args{
+				v1: []float64{1, 4},
+				v2: []float64{1, 1},
+			},
+			want: 3,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := L1Distance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+				t.Errorf("L1Distance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_CosineDistance(t *testing.T) {
+	type args struct {
+		v1 []float64
+		v2 []float64
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				v1: []float64{1, 2, 3, 4},
+				v2: []float64{1, 2, 4, 5},
+			},
+			want: 0.003993481192393733,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				v1: []float64{10, 20, 30, 40},
+				v2: []float64{10.5, 21.5, 31.5, 43.5},
+			},
+			want: 0.0001253573895874105,
+		},
+		{
+			name: "Test 3.a",
+			args: args{
+				v1: []float64{1, 1},
+				v2: []float64{4, 1},
+			},
+			want: 0.1425070742874559,
+		},
+		{
+			name: "Test 3.b",
+			args: args{
+				v1: []float64{4, 1},
+				v2: []float64{1, 4},
+			},
+			want: 0.5294117647058824,
+		},
+		{
+			name: "Test 3.c",
+			args: args{
+				v1: []float64{1, 4},
+				v2: []float64{1, 1},
+			},
+			want: 0.1425070742874559,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := CosineDistance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+				t.Errorf("CosineDistance() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_InnerProduct(t *testing.T) {
+	type args struct {
+		v1 []float64
+		v2 []float64
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "Test 1",
+			args: args{
+				v1: []float64{1, 2, 3, 4},
+				v2: []float64{1, 2, 4, 5},
+			},
+			want: -37,
+		},
+		{
+			name: "Test 2",
+			args: args{
+				v1: []float64{10, 20, 30, 40},
+				v2: []float64{10.5, 21.5, 31.5, 43.5},
+			},
+			want: -3220,
+		},
+		{
+			name: "Test 3.a",
+			args: args{
+				v1: []float64{1, 1},
+				v2: []float64{4, 1},
+			},
+			want: -5,
+		},
+		{
+			name: "Test 3.b",
+			args: args{
+				v1: []float64{4, 1},
+				v2: []float64{1, 4},
+			},
+			want: -8,
+		},
+		{
+			name: "Test 3.c",
+			args: args{
+				v1: []float64{1, 4},
+				v2: []float64{1, 1},
+			},
+			want: -5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := InnerProduct[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+				t.Errorf("InnerProduct() = %v, want %v", got, tt.want)
 			}
 		})
 	}
