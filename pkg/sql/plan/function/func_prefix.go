@@ -158,7 +158,8 @@ func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
 	rcol, rarea := vector.MustVarlenaRawData(rvec)
 	for i := 0; i < rvec.Length(); i++ {
 		rval := rcol[i].GetByteSlice(rarea)
-		if vlen == 0 || !bytes.HasPrefix(rval, op.vals[vlen-1]) {
+		tmpVal := op.vals[vlen-1]
+		if vlen == 0 || !bytes.HasPrefix(rval, tmpVal) {
 			op.vals[vlen] = rval
 			vlen++
 		}
