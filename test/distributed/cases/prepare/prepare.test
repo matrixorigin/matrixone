@@ -528,6 +528,16 @@ execute st_prepare_2;
 
 drop table test_prepare_1;
 drop table test_prepare_2;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int primary key, b int);
+insert into t1 values (1,1),(2,2),(3,3);
+create table t2(a int, t1_a int, primary key(a, t1_a));
+insert into t2 values (10,1),(20,2);
+prepare s1 from select t2.* from t2 join t1 on t2.t1_a = t1.a where t2.a in (?,?);
+set @a=20;
+set @b=10;
+execute s1 using @a, @b;
 drop database db1;
 
 create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
@@ -546,7 +556,6 @@ drop role prepare_role1;
 -- @session
 
 drop account prepare_account_01;
-
 
 
 
