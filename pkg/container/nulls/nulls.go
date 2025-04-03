@@ -433,7 +433,7 @@ func (nsp *Nulls) ToI64Array() []int64 {
 	if nsp == nil || nsp.np.EmptyByFlag() {
 		return []int64{}
 	}
-	return nsp.np.ToI64Array()
+	return nsp.np.ToI64Array(nil)
 }
 
 func (nsp *Nulls) GetCardinality() int {
