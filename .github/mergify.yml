@@ -122,3 +122,12 @@ pull_request_rules:
       label:
         add:
           - kind/api-change
+priority_rules:
+  - name: priority for queue `main`
+    conditions:
+      - queue-name=main
+    priority: 2500
+  - name: priority for queue `release-2.0`
+    conditions:
+      - queue-name=release-2.0
+    priority: 2250
