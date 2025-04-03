@@ -77,28 +77,31 @@ func NewCNS3DataWriter(
 
 	var (
 		sequms       []uint16
-		sortKeyIdx   int
+		sortKeyIdx   = -1
 		isPrimaryKey bool
 
 		attrs     []string
 		attrTypes []types.Type
 	)
 
-	pkColIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-	pkCol := tableDef.Cols[pkColIdx]
-
-	if catalog.IsFakePkName(pkCol.Name) {
-		if tableDef.ClusterBy != nil {
-			pkColIdx = tableDef.Name2ColIndex[tableDef.ClusterBy.Name]
-		} else {
-			pkColIdx = -1
+	for idx, colDef := range tableDef.Cols {
+		if colDef.Name == tableDef.Pkey.PkeyColName && !catalog.IsFakePkName(colDef.Name) {
+			sortKeyIdx = idx
+			isPrimaryKey = true
+			break
 		}
-		isPrimaryKey = false
-	} else {
-		isPrimaryKey = true
 	}
 
-	sortKeyIdx = int(pkColIdx)
+	if sortKeyIdx == -1 && tableDef.ClusterBy != nil {
+		// the rowId column has been excluded from the TableDef of the target table for the insert statements(insert,load).
+		// link: pkg/sql/plan/build_constraint_util.go --> func setTableExprToDmlTableInfo,
+		// and the sortKeyIdx position can be directly obtained by using a name that matches the sorting key.
+		for idx, colDef := range tableDef.Cols {
+			if colDef.Name == tableDef.ClusterBy.Name {
+				sortKeyIdx = idx
+			}
+		}
+	}
 
 	for i, colDef := range tableDef.Cols {
 		if colDef.Name != catalog.Row_ID {
