@@ -16,8 +16,6 @@ package productl2
 
 import (
 	"bytes"
-	"errors"
-	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -241,7 +239,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 	for i := 0; i < probeCount; i++ {
 		leastClusterIndex[i] = 0
-		leastDistance[i] = T(math.MaxFloat32)
+		leastDistance[i] = metric.MaxFloat[T]()
 	}
 
 	centroidmat, embedmat := newMat[T](ctr, ap)
@@ -250,7 +248,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 		return moerr.NewInternalError(proc.Ctx, "ProductL2: failed to get distance function")
 	}
 
-	var errs error
+	errs := make(chan error, ncpu)
 	var mutex sync.Mutex
 	var wg sync.WaitGroup
 
@@ -273,7 +271,11 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 						leastDistance[j] = 0
 						leastClusterIndex[j] = i
 					} else {
-						dist := distfn(centroidmat[i], embedmat[j])
+						dist, err := distfn(centroidmat[i], embedmat[j])
+						if err != nil {
+							errs <- err
+							return
+						}
 						if dist < leastDistance[j] {
 							leastDistance[j] = dist
 							leastClusterIndex[j] = i
@@ -300,7 +302,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 				}()
 
 				if err != nil {
-					errs = errors.Join(errs, err)
+					errs <- err
 					return
 				}
 			}
@@ -309,8 +311,8 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 
 	wg.Wait()
 
-	if errs != nil {
-		return errs
+	if len(errs) > 0 {
+		return <-errs
 	}
 
 	// ctr.rbat.AddRowCount(count * count2)
