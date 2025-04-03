@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"math"
 	"sort"
 	"sync"
@@ -1217,6 +1218,15 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			txn.writes = txn.writes[:i]
 		} else {
 			txn.writes = txn.writes[:i+1]
+		}
+
+		for i = range txn.writes {
+			if txn.writes[i].typ == DELETE {
+				if err := mergeutil.SortColumnsByIndex(
+					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
