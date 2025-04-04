@@ -51,6 +51,7 @@ type Cache[K comparable, V any] struct {
 	queue1    Queue[*_CacheItem[K, V]]
 	used2     int64
 	queue2    Queue[*_CacheItem[K, V]]
+	ghost     *ghost[K]
 
 	capacityCut atomic.Int64
 }
@@ -101,6 +102,7 @@ func New[K comparable, V any](
 		itemQueue:    make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
 		queue1:       *NewQueue[*_CacheItem[K, V]](),
 		queue2:       *NewQueue[*_CacheItem[K, V]](),
+		ghost:        newGhost[K](int(10000)),
 		keyShardFunc: keyShardFunc,
 		postSet:      postSet,
 		postGet:      postGet,
@@ -159,15 +161,28 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 	}
 
 	// enqueue
-	c.queue1.enqueue(item)
-	c.used1 += item.size
+	if c.ghost.contains(item.key) {
+		c.ghost.remove(item.key)
+		c.queue2.enqueue(item)
+		c.used2 += item.size
+	} else {
+		c.queue1.enqueue(item)
+		c.used1 += item.size
+	}
 
 	// help enqueue
 	for {
 		select {
 		case item := <-c.itemQueue:
-			c.queue1.enqueue(item)
-			c.used1 += item.size
+			if c.ghost.contains(item.key) {
+				c.ghost.remove(item.key)
+				c.queue2.enqueue(item)
+				c.used2 += item.size
+
+			} else {
+				c.queue1.enqueue(item)
+				c.used1 += item.size
+			}
 		default:
 			return
 		}
@@ -281,6 +296,7 @@ func (c *Cache[K, V]) evict1(ctx context.Context) {
 			// evict
 			c.deleteItem(ctx, item)
 			c.used1 -= item.size
+			c.ghost.add(item.key)
 			return
 		}
 	}
