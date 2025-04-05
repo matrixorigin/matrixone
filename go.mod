@@ -7,8 +7,6 @@ require (
 	github.com/BurntSushi/toml v1.3.2
 	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/FastFilter/xorfilter v0.1.4
-	github.com/K-Phoen/grabana v0.21.19
-	github.com/K-Phoen/sdk v0.12.3
 	github.com/KimMachineGun/automemlimit v0.6.0
 	github.com/RoaringBitmap/roaring v1.2.3
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.34
@@ -111,8 +109,6 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gorilla/websocket v1.5.1 // indirect
-	github.com/gosimple/slug v1.13.1 // indirect
-	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-uuid v1.0.1 // indirect
 	github.com/itchyny/timefmt-go v0.1.6 // indirect
