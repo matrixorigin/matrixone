@@ -1,10 +1,10 @@
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -844,15 +844,6 @@ func unescape(
 	}
 	return input
 }
-
-// Copyright 2009 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
-// Package bytes implements functions for the manipulation of byte slices.
-// It is analogous to the facilities of the strings package.
-
-// this part is copy from `bytes/bytes.go`
 
 // byteSet is a 32-byte value, where each bit represents the presence of a
 // given byte value in the set.
