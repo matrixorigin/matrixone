@@ -999,8 +999,8 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	assert.NoError(t, err)
 	defer mpool.DeleteMPool(mp)
 
-	gostub.Stub(&cdc.GetTableScanner, func(cnUUID string) *cdc.TableScanner {
-		return &cdc.TableScanner{
+	gostub.Stub(&cdc.GetTableDetector, func(cnUUID string) *cdc.TableDetector {
+		return &cdc.TableDetector{
 			Mutex:     sync.Mutex{},
 			Mp:        make(map[uint32]cdc.TblMap),
 			Callbacks: map[string]func(map[uint32]cdc.TblMap){"id": func(mp map[uint32]cdc.TblMap) {}},

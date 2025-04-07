@@ -141,7 +141,7 @@ func TestNewWatermarkUpdater(t *testing.T) {
 	require.NoError(t, err)
 
 	type args struct {
-		accountId uint32
+		accountId uint64
 		taskId    string
 		ie        ie.InternalExecutor
 	}
@@ -159,7 +159,7 @@ func TestNewWatermarkUpdater(t *testing.T) {
 			},
 			want: &WatermarkUpdater{
 				accountId:    1,
-				taskId:       taskId,
+				taskId:       taskId.String(),
 				ie:           nil,
 				watermarkMap: &sync.Map{},
 			},
@@ -167,15 +167,20 @@ func TestNewWatermarkUpdater(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, NewWatermarkUpdater(tt.args.accountId, tt.args.taskId, tt.args.ie), "NewWatermarkUpdater(%v, %v, %v)", tt.args.accountId, tt.args.taskId, tt.args.ie)
+			assert.Equalf(t, tt.want, NewWatermarkUpdater(
+				tt.args.accountId,
+				tt.args.taskId,
+				tt.args.ie,
+			), "NewWatermarkUpdater(%v, %v, %v)", tt.args.accountId, tt.args.taskId, tt.args.ie)
 		})
 	}
 }
 
 func TestWatermarkUpdater_MemOps(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           nil,
 		watermarkMap: &sync.Map{},
 	}
@@ -191,9 +196,10 @@ func TestWatermarkUpdater_MemOps(t *testing.T) {
 }
 
 func TestWatermarkUpdater_DbOps(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}
@@ -240,9 +246,10 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 }
 
 func TestWatermarkUpdater_Run(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}
@@ -254,9 +261,10 @@ func TestWatermarkUpdater_Run(t *testing.T) {
 }
 
 func TestWatermarkUpdater_flushAll(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}

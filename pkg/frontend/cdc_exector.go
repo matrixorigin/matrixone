@@ -203,11 +203,13 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	exec.runningReaders = &sync.Map{}
 
 	// start watermarkUpdater
-	exec.watermarkUpdater = cdc.NewWatermarkUpdater(accountId, taskId, exec.ie)
+	exec.watermarkUpdater = cdc.NewWatermarkUpdater(
+		uint64(accountId), taskId, exec.ie,
+	)
 	go exec.watermarkUpdater.Run(ctx, exec.activeRoutine)
 
 	// register to table scanner
-	cdc.GetTableScanner(cnUUID).Register(taskId, exec.handleNewTables)
+	cdc.GetTableDetector(cnUUID).Register(taskId, exec.handleNewTables)
 
 	exec.isRunning = true
 	logutil.Infof("cdc task %s start on cn %s success", taskName, cnUUID)
@@ -251,7 +253,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 	}()
 
 	if exec.isRunning {
-		cdc.GetTableScanner(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
 		exec.isRunning = false
 		// let Start() go
@@ -273,7 +275,7 @@ func (exec *CDCTaskExecutor) Pause() error {
 	}()
 
 	if exec.isRunning {
-		cdc.GetTableScanner(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.ClosePause()
 		exec.isRunning = false
 		// let Start() go
@@ -290,7 +292,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	}()
 
 	if exec.isRunning {
-		cdc.GetTableScanner(exec.cnUUID).UnRegister(exec.spec.TaskId)
+		cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 		exec.activeRoutine.CloseCancel()
 		exec.isRunning = false
 		// let Start() go

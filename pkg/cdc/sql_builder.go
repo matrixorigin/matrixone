@@ -17,6 +17,8 @@ package cdc
 import (
 	"fmt"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 const (
@@ -177,6 +179,18 @@ const (
 		"task_id = '%s' AND " +
 		"db_name = '%s' AND " +
 		"table_name = '%s'"
+
+	CDCCollectTableInfoSqlTemplate = "SELECT " +
+		" rel_id, " +
+		" relname, " +
+		" reldatabase_id, " +
+		" reldatabase, " +
+		" rel_createsql, " +
+		" account_id " +
+		"FROM `mo_catalog`.`mo_tables` " +
+		"WHERE " +
+		" relkind = '%s' " +
+		" AND reldatabase NOT IN (%s)"
 )
 
 const (
@@ -195,8 +209,9 @@ const (
 	CDCDeleteWatermarkSqlTemplate_Idx        = 12
 	CDCDeleteWatermarkByTableSqlTemplate_Idx = 13
 	CDCGetDataKeySQL_Idx                     = 14
+	CDCCollectTableInfoSqlTemplate_Idx       = 15
 
-	CDCSqlTemplateCount = 15
+	CDCSqlTemplateCount = 16
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -277,6 +292,21 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	CDCGetDataKeySQL_Idx: {
 		SQL:         CDCGetDataKeySqlTemplate,
 		OutputAttrs: []string{"encrypted_key"},
+	},
+	CDCCollectTableInfoSqlTemplate_Idx: {
+		SQL: fmt.Sprintf(
+			CDCCollectTableInfoSqlTemplate,
+			catalog.SystemOrdinaryRel,
+			AddSingleQuotesJoin(catalog.SystemDatabases),
+		),
+		OutputAttrs: []string{
+			"rel_id",
+			"relname",
+			"reldatabase_id",
+			"reldatabase",
+			"rel_createsql",
+			"account_id",
+		},
 	},
 }
 
@@ -554,4 +584,11 @@ func (b cdcSQLBuilder) UpdateWatermarkSQL(
 		dbName,
 		tableName,
 	)
+}
+
+// ------------------------------------------------------------------------------------------------
+// Table Info SQL
+// ------------------------------------------------------------------------------------------------
+func (b cdcSQLBuilder) CollectTableInfoSQL() string {
+	return CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL
 }
