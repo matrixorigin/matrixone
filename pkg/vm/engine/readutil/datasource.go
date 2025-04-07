@@ -218,12 +218,13 @@ func NewRemoteDataSource(
 //	util functions
 // --------------------------------------------------------------------------------
 
+var cnt1, cnt2 int
+
 // FastApplyDeletesByRowIds apply deleted RowIds on the leftRows or deletedMask if leftRows is nil.
 // Note that this function is stable,
 // means the relative order between elements in the leftRows would not change after applies.
 // Example: [3,2,5,6,1,4,1] ==> after remove the even numbers ==> [3,5,1,1]
 func FastApplyDeletesByRowIds(
-	debug bool,
 	checkBid *objectio.Blockid,
 	leftRows *[]int64,
 	deletesMask *objectio.Bitmap,
@@ -234,17 +235,11 @@ func FastApplyDeletesByRowIds(
 		ptr int
 		hit bool
 		cur types.Rowid
-
-		lb int
-		ub int
-
-		first = true
-		// liner search may have better performance if there exists a few items.
-		locateBlkInterval = len(deletedRowIds) >= 5
 	)
 
 	wayA := func() {
-		goFastPath := IsDeletedRowIdsSorted && locateBlkInterval
+		// linear search may have a better performance than binary search if there has a few items
+		goFastPath := IsDeletedRowIdsSorted && len(deletedRowIds) > 5
 
 		if goFastPath {
 			cur = types.NewRowid(checkBid, 0)
@@ -257,16 +252,7 @@ func FastApplyDeletesByRowIds(
 				cur.SetRowOffset(uint32(o))
 				_, hit = sort.Find(len(deletedRowIds), func(i int) int { return cur.Compare(&deletedRowIds[i]) })
 			} else {
-				if first {
-					first = false
-					if locateBlkInterval {
-						lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
-					} else {
-						lb, ub = 0, len(deletedRowIds)
-					}
-				}
-
-				for i := lb; i < ub; i++ {
+				for i := 0; i < len(deletedRowIds); i++ {
 					b, offset := deletedRowIds[i].Decode()
 					if o == int64(offset) && b.EQ(checkBid) {
 						hit = true
@@ -285,13 +271,7 @@ func FastApplyDeletesByRowIds(
 	}
 
 	wayB := func() {
-		if locateBlkInterval {
-			lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
-		} else {
-			lb, ub = 0, len(deletedRowIds)
-		}
-
-		for i := lb; i < ub; i++ {
+		for i := 0; i < len(deletedRowIds); i++ {
 			bid, o := deletedRowIds[i].Decode()
 			idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
 
@@ -322,10 +302,11 @@ func FastApplyDeletesByRowIds(
 		}
 
 	} else if deletesMask != nil {
-		lb, ub = ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
-		for i := lb; i < ub; i++ {
-			_, o := deletedRowIds[i].Decode()
-			deletesMask.Add(uint64(o))
+		for i := 0; i < len(deletedRowIds); i++ {
+			bid, o := deletedRowIds[i].Decode()
+			if bid.EQ(checkBid) {
+				deletesMask.Add(uint64(o))
+			}
 		}
 	}
 }

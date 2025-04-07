@@ -955,7 +955,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 
 		sorted := writes[idx].bat.Vecs[0].GetSorted()
 		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-		readutil.FastApplyDeletesByRowIds(false, bid, &leftRows, deletedRows, rowIds, sorted)
+		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, rowIds, sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break

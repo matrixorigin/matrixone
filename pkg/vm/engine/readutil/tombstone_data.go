@@ -235,7 +235,7 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 	}
 
 	// is the tomb.rowIds sorted?
-	FastApplyDeletesByRowIds(false, bid, &left, deleted, tomb.rowids, false)
+	FastApplyDeletesByRowIds(bid, &left, deleted, tomb.rowids, false)
 
 	return
 }
