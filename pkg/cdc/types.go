@@ -111,9 +111,9 @@ func NewTaskId() TaskId {
 	return uuid.Must(uuid.NewV7())
 }
 
-func StringToTaskId(s string) (TaskId, error) {
-	return uuid.Parse(s)
-}
+// func StringToTaskId(s string) (TaskId, error) {
+// 	return uuid.Parse(s)
+// }
 
 type Reader interface {
 	Run(ctx context.Context, ar *ActiveRoutine)

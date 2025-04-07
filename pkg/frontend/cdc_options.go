@@ -35,18 +35,6 @@ type CDCUserInfo struct {
 	AccountName string
 }
 
-type CDCShowCDCTaskOptions struct {
-	AccountId uint64
-	ShowAll   bool
-	TaskName  string
-}
-
-func (opts *CDCShowCDCTaskOptions) ToSQL() string {
-	return cdc.CDCSQLBuilder.ShowTaskSQL(
-		opts.AccountId, opts.ShowAll, opts.TaskName,
-	)
-}
-
 type CDCCreateTaskOptions struct {
 	TaskName     string
 	TaskId       string
