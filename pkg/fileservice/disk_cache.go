@@ -176,7 +176,9 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 			// try remove if empty. for cleaning old structure
 			if path != d.path {
 				// os.Remove will not delete non-empty directory
-				_ = os.Remove(path)
+				if err := os.Remove(path); err != nil {
+					logutil.Warn("delete file error", zap.Error(err))
+				}
 			}
 			return nil
 
@@ -190,12 +192,16 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 					info, err := entry.Info()
 					if err == nil && time.Since(info.ModTime()) > time.Hour*8 {
 						// old temp file
-						_ = os.Remove(path)
+						if err := os.Remove(path); err != nil {
+							logutil.Warn("delete file error", zap.Error(err))
+						}
 						numDeleted++
 					}
 				} else {
 					// unknown file
-					_ = os.Remove(path)
+					if err := os.Remove(path); err != nil {
+						logutil.Warn("delete file error", zap.Error(err))
+					}
 					numDeleted++
 				}
 				return nil
@@ -515,7 +521,9 @@ func (d *DiskCache) writeFile(
 	defer func() {
 		if err != nil {
 			_ = f.Close()
-			_ = os.Remove(f.Name())
+			if err := os.Remove(f.Name()); err != nil {
+				logutil.Warn("delete file error", zap.Error(err))
+			}
 		}
 	}()
 
