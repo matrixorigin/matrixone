@@ -32,7 +32,7 @@ func TestGetTableScanner(t *testing.T) {
 	gostub.Stub(&getSqlExecutor, func(cnUUID string) executor.SQLExecutor {
 		return &mock_executor.MockSQLExecutor{}
 	})
-	assert.NotNil(t, GetTableScanner("cnUUID"))
+	assert.NotNil(t, GetTableDetector("cnUUID"))
 }
 
 func TestTableScanner(t *testing.T) {
@@ -55,19 +55,19 @@ func TestTableScanner(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Return(res, nil).AnyTimes()
 
-	scanner = &TableScanner{
+	detector = &TableDetector{
 		Mutex:     sync.Mutex{},
 		Mp:        make(map[uint32]TblMap),
 		Callbacks: make(map[string]func(map[uint32]TblMap)),
 		exec:      mockSqlExecutor,
 	}
 
-	scanner.Register("id", func(mp map[uint32]TblMap) {})
-	assert.Equal(t, 1, len(scanner.Callbacks))
+	detector.Register("id", func(mp map[uint32]TblMap) {})
+	assert.Equal(t, 1, len(detector.Callbacks))
 
 	// one round of scanTable
 	time.Sleep(11 * time.Second)
 
-	scanner.UnRegister("id")
-	assert.Equal(t, 0, len(scanner.Callbacks))
+	detector.UnRegister("id")
+	assert.Equal(t, 0, len(detector.Callbacks))
 }

@@ -20,8 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,21 +35,25 @@ const (
 var _ IWatermarkUpdater = new(WatermarkUpdater)
 
 type WatermarkUpdater struct {
-	accountId uint32
-	taskId    uuid.UUID
+	accountId uint64
+	taskId    string
 	// sql executor
 	ie ie.InternalExecutor
 	// watermarkMap saves the watermark of each table
 	watermarkMap *sync.Map
 }
 
-func NewWatermarkUpdater(accountId uint32, taskId string, ie ie.InternalExecutor) *WatermarkUpdater {
+func NewWatermarkUpdater(
+	accountId uint64,
+	taskId string,
+	ie ie.InternalExecutor,
+) *WatermarkUpdater {
 	u := &WatermarkUpdater{
 		accountId:    accountId,
+		taskId:       taskId,
 		ie:           ie,
 		watermarkMap: &sync.Map{},
 	}
-	u.taskId, _ = uuid.Parse(taskId)
 	return u
 }
 
@@ -76,10 +78,13 @@ func (u *WatermarkUpdater) Run(ctx context.Context, ar *ActiveRoutine) {
 	}
 }
 
-func (u *WatermarkUpdater) InsertIntoDb(dbTableInfo *DbTableInfo, watermark types.TS) error {
+func (u *WatermarkUpdater) InsertIntoDb(
+	dbTableInfo *DbTableInfo,
+	watermark types.TS,
+) error {
 	sql := CDCSQLBuilder.InsertWatermarkSQL(
-		uint64(u.accountId),
-		u.taskId.String(),
+		u.accountId,
+		u.taskId,
 		dbTableInfo.SourceDbName,
 		dbTableInfo.SourceTblName,
 		watermark.ToString(),
@@ -97,7 +102,10 @@ func (u *WatermarkUpdater) GetFromMem(dbName, tblName string) types.TS {
 
 func (u *WatermarkUpdater) GetFromDb(dbName, tblName string) (watermark types.TS, err error) {
 	sql := CDCSQLBuilder.GetTableWatermarkSQL(
-		uint64(u.accountId), u.taskId.String(), dbName, tblName,
+		u.accountId,
+		u.taskId,
+		dbName,
+		tblName,
 	)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	res := u.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
@@ -138,7 +146,11 @@ func (u *WatermarkUpdater) SaveErrMsg(dbName, tblName string, errMsg string) err
 		errMsg = errMsg[:CDCWatermarkErrMsgMaxLen]
 	}
 	sql := CDCSQLBuilder.UpdateWatermarkErrMsgSQL(
-		uint64(u.accountId), u.taskId.String(), dbName, tblName, errMsg,
+		u.accountId,
+		u.taskId,
+		dbName,
+		tblName,
+		errMsg,
 	)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
@@ -157,7 +169,13 @@ func (u *WatermarkUpdater) flushAll() {
 
 func (u *WatermarkUpdater) flush(key string, watermark types.TS) error {
 	dbName, tblName := SplitDbTblKey(key)
-	sql := fmt.Sprintf(CDCUpdateWatermarkSqlTemplate, watermark.ToString(), u.accountId, u.taskId, dbName, tblName)
+	sql := CDCSQLBuilder.UpdateWatermarkSQL(
+		u.accountId,
+		u.taskId,
+		dbName,
+		tblName,
+		watermark.ToString(),
+	)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	return u.ie.Exec(ctx, sql, ie.SessionOverrideOptions{})
 }
