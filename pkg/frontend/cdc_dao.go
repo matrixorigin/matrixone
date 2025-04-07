@@ -46,12 +46,6 @@ func WithSQLExecutor(sqlExecutor taskservice.SqlExecutor) CDCDaoOption {
 	}
 }
 
-func WithTaskService(ts taskservice.TaskService) CDCDaoOption {
-	return func(t *CDCDao) {
-		t.ts = ts
-	}
-}
-
 type CDCDao struct {
 	ses         *Session
 	ts          taskservice.TaskService
@@ -100,15 +94,6 @@ func (t *CDCDao) BuildCreateOpts(
 	ctx context.Context, req *CDCCreateTaskRequest,
 ) (opts CDCCreateTaskOptions, err error) {
 	err = opts.ValidateAndFill(ctx, t.ses, req)
-	return
-}
-
-func (t *CDCDao) BuildShowOpts(
-	ctx context.Context, req *CDCShowTaskRequest,
-) (opts CDCShowCDCTaskOptions, err error) {
-	opts.AccountId = uint64(t.ses.GetTenantInfo().GetTenantID())
-	opts.ShowAll = req.Option.All
-	opts.TaskName = string(req.Option.TaskName)
 	return
 }
 
