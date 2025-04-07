@@ -52,9 +52,7 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 var _ fscache.DataCache = new(DataCache)
 
 func (d *DataCache) Available() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	ret := d.fifo.capacity() - d.fifo.used1 - d.fifo.used2
+	ret := d.fifo.capacity() - d.fifo.used()
 	if ret < 0 {
 		ret = 0
 	}
@@ -109,7 +107,5 @@ func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.D
 }
 
 func (d *DataCache) Used() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	return d.fifo.used1 + d.fifo.used2
+	return d.fifo.used()
 }

@@ -20,11 +20,11 @@ type Queue[T any] struct {
 	head     *queuePart[T]
 	tail     *queuePart[T]
 	partPool sync.Pool
+	size     int
 }
 
 type queuePart[T any] struct {
 	values []T
-	begin  int
 	next   *queuePart[T]
 }
 
@@ -47,13 +47,11 @@ func NewQueue[T any]() *Queue[T] {
 }
 
 func (p *Queue[T]) empty() bool {
-	return p.head == p.tail &&
-		p.head.begin == len(p.head.values)
+	return p.head == p.tail && len(p.head.values) == 0
 }
 
 func (p *queuePart[T]) reset() {
 	p.values = p.values[:0]
-	p.begin = 0
 	p.next = nil
 }
 
@@ -66,6 +64,7 @@ func (p *Queue[T]) enqueue(v T) {
 		p.head = newPart
 	}
 	p.head.values = append(p.head.values, v)
+	p.size++
 }
 
 func (p *Queue[T]) dequeue() (ret T, ok bool) {
@@ -73,7 +72,7 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 		return
 	}
 
-	if p.tail.begin >= len(p.tail.values) {
+	if len(p.tail.values) == 0 {
 		// shrink
 		if p.tail.next == nil {
 			panic("impossible")
@@ -83,10 +82,12 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 		p.partPool.Put(part)
 	}
 
-	ret = p.tail.values[p.tail.begin]
-	var zero T
-	p.tail.values[p.tail.begin] = zero
-	p.tail.begin++
+	ret, p.tail.values = p.tail.values[0], p.tail.values[1:]
+	p.size--
 	ok = true
 	return
+}
+
+func (p *Queue[T]) Len() int {
+	return p.size
 }
