@@ -140,6 +140,9 @@ func Test_HandleTenantUpgrade2(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 	executor2 := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		if !strings.Contains(strings.ToLower(sql), "table_test") {
+			return executor.Result{}, nil
+		}
 		return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
 	}, txnOperator)
 

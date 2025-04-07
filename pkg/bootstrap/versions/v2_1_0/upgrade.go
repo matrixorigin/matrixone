@@ -70,18 +70,18 @@ func (v *versionHandle) HandleTenantUpgrade(
 			return err
 		}
 
-		err = upgradeForBM25(uint32(tenantID), txn)
-		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute for BM25 error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade for BM25", upgEntry.String()))
-			return err
-		}
-
 		duration := time.Since(start)
 		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.Int32("tenantId", tenantID),
 			zap.String("toVersion", v.Metadata().Version))
+	}
+
+	err := upgradeForBM25(uint32(tenantID), txn)
+	if err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute for BM25 error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version))
+		return err
 	}
 
 	return nil
