@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func UnmarshalTombstoneData(data []byte) (engine.Tombstoner, error) {

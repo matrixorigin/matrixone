@@ -218,8 +218,6 @@ func NewRemoteDataSource(
 //	util functions
 // --------------------------------------------------------------------------------
 
-var cnt1, cnt2 int
-
 // FastApplyDeletesByRowIds apply deleted RowIds on the leftRows or deletedMask if leftRows is nil.
 // Note that this function is stable,
 // means the relative order between elements in the leftRows would not change after applies.
