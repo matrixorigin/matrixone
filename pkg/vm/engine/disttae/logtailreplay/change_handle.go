@@ -792,13 +792,37 @@ func (p *ChangeHandler) decideNextHandle() int {
 	return NextChangeHandle_Data
 }
 func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, err error) {
-	err = p.dataHandle.QuickNext(ctx, &data, mp)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
-		return
-	}
-	err = p.tombstoneHandle.QuickNext(ctx, &tombstone, mp)
-	if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
-		err = nil
+	for {
+		dataEnd := false
+		tombstoneEnd := false
+		err = p.dataHandle.QuickNext(ctx, &data, mp)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			dataEnd = true
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+		err = p.tombstoneHandle.QuickNext(ctx, &tombstone, mp)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			tombstoneEnd = true
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+		if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+			return
+		}
+		if tombstoneEnd && dataEnd {
+			break
+		}
+		if dataEnd && tombstone.RowCount() > p.coarseMaxRow {
+			break
+		}
+		if tombstoneEnd && data.RowCount() > p.coarseMaxRow {
+			break
+		}
 	}
 	return
 }
@@ -982,9 +1006,6 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 			return
 		}
 		p.totalDuration += time.Since(t0)
-		if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
-			return
-		}
 		if data != nil {
 			p.dataLength += data.Vecs[0].Length()
 		}
