@@ -49,39 +49,39 @@ type Cache[K comparable, V any] struct {
 	usedMain  atomic.Int64
 	main      Queue[*_CacheItem[K, V]]
 	ghost     *ghost[K]
-
-	capacityCut atomic.Int64
 }
 
 type _CacheItem[K comparable, V any] struct {
 	key   K
 	value V
 	size  int64
-	count atomic.Int32
+	freq  int32
 }
 
 func (c *_CacheItem[K, V]) inc() {
-	for {
-		cur := c.count.Load()
-		if cur >= 3 {
-			return
-		}
-		if c.count.CompareAndSwap(cur, cur+1) {
-			return
-		}
+	if c.freq < 3 {
+		c.freq += 1
 	}
 }
 
 func (c *_CacheItem[K, V]) dec() {
-	for {
-		cur := c.count.Load()
-		if cur <= 0 {
-			return
-		}
-		if c.count.CompareAndSwap(cur, cur-1) {
-			return
-		}
+	if c.freq > 0 {
+		c.freq -= 1
 	}
+}
+
+// assume cache size is 256K
+// if cache capacity is smaller than 4G, ghost size is 100%.  Otherwise, 50%
+func estimateGhostSize(capacity int64) int {
+	estimate := int(capacity / int64(128000))
+	if capacity > 8000000000 { // 4G
+		// only 50%
+		estimate /= 2
+	}
+	if estimate < 256*1024 {
+		estimate = 256 * 1024
+	}
+	return estimate
 }
 
 func New[K comparable, V any](
@@ -91,6 +91,8 @@ func New[K comparable, V any](
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64),
 ) *Cache[K, V] {
+
+	ghostsize := estimateGhostSize(capacity())
 	ret := &Cache[K, V]{
 		capacity: capacity,
 		capacity1: func() int64 {
@@ -98,7 +100,7 @@ func New[K comparable, V any](
 		},
 		small:        *NewQueue[*_CacheItem[K, V]](),
 		main:         *NewQueue[*_CacheItem[K, V]](),
-		ghost:        newGhost[K](int(10000)),
+		ghost:        newGhost[K](ghostsize),
 		keyShardFunc: keyShardFunc,
 		postSet:      postSet,
 		postGet:      postGet,
@@ -135,24 +137,38 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	if item := c.set(ctx, key, value, size); item != nil {
-		c.queueLock.Lock()
-		defer c.queueLock.Unlock()
-		// enqueue
-		if c.ghost.contains(item.key) {
-			c.ghost.remove(item.key)
-			c.main.enqueue(item)
-			c.usedMain.Add(item.size)
-		} else {
-			c.small.enqueue(item)
-			c.usedSmall.Add(item.size)
-		}
-
-		// evict
-		c.evictAll(ctx, nil, 0)
+		c.enqueue(ctx, item)
 	}
 }
 
+func (c *Cache[K, V]) enqueue(ctx context.Context, item *_CacheItem[K, V]) {
+
+	c.queueLock.Lock()
+	defer c.queueLock.Unlock()
+
+	// enqueue
+	if c.ghost.contains(item.key) {
+		c.ghost.remove(item.key)
+		c.main.enqueue(item)
+		c.usedMain.Add(item.size)
+	} else {
+		c.small.enqueue(item)
+		c.usedSmall.Add(item.size)
+	}
+
+	// evict
+	c.evictAll(ctx, nil, 0)
+}
+
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
+	var item *_CacheItem[K, V]
+	if item, ok = c.get(ctx, key); ok {
+		return item.value, true
+	}
+	return
+}
+
+func (c *Cache[K, V]) get(ctx context.Context, key K) (value *_CacheItem[K, V], ok bool) {
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
@@ -166,7 +182,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 		c.postGet(ctx, item.key, item.value, item.size)
 	}
 	item.inc()
-	return item.value, true
+	return item, true
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
@@ -185,25 +201,8 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
-	if done == nil {
-		// can be async
-		if c.queueLock.TryLock() {
-			defer c.queueLock.Unlock()
-		} else {
-			if capacityCut > 0 {
-				// let the holder do more evict
-				c.capacityCut.Add(capacityCut)
-			}
-			return
-		}
-
-	} else {
-		if cap(done) < 1 {
-			panic("should be buffered chan")
-		}
-		c.queueLock.Lock()
-		defer c.queueLock.Unlock()
-	}
+	c.queueLock.Lock()
+	defer c.queueLock.Unlock()
 
 	target := c.evictAll(ctx, done, capacityCut)
 	if done != nil {
@@ -225,15 +224,14 @@ func (c *Cache[K, V]) used() int64 {
 func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
 	var target int64
 	for {
-		globalCapacityCut := c.capacityCut.Swap(0)
-		target = c.capacity() - capacityCut - globalCapacityCut
+		target = c.capacity() - capacityCut
 		if target < 0 {
 			target = 0
 		}
 		if c.used() <= target {
 			break
 		}
-		target1 := c.capacity1() - capacityCut - globalCapacityCut
+		target1 := c.capacity1() - capacityCut
 		if target1 < 0 {
 			target1 = 0
 		}
@@ -255,7 +253,7 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			// queue empty
 			return
 		}
-		if item.count.Load() > 1 {
+		if item.freq > 1 {
 			// put main
 			c.main.enqueue(item)
 			c.usedSmall.Add(-item.size)
@@ -288,7 +286,7 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			// empty queue
 			break
 		}
-		if item.count.Load() > 0 {
+		if item.freq > 0 {
 			// re-enqueue
 			item.dec()
 			c.main.enqueue(item)

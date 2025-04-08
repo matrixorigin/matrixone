@@ -45,6 +45,7 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 	hasher := new(maphash.Hash)
 	hasher.SetSeed(seed)
 	hasher.Write(util.UnsafeToBytes(&key.Offset))
+	hasher.Write(util.UnsafeToBytes(&key.Sz))
 	hasher.WriteString(key.Path)
 	return hasher.Sum64()
 }
