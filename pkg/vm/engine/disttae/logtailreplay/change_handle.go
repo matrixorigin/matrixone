@@ -180,8 +180,10 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 			(*bat).Vecs = append((*bat).Vecs, newVec)
 		}
 	} else {
-		for i, vec := range (*bat).Vecs {
-			appendFromEntry(r.batches.Vecs[i], vec, r.rowOffsetCursor, mp)
+		for offset := start; offset < end; offset++ {
+			for i, vec := range (*bat).Vecs {
+				appendFromEntry(r.batches.Vecs[i], vec, offset, mp)
+			}
 		}
 	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())
