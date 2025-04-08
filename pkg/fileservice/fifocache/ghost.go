@@ -60,9 +60,11 @@ func (b *ghost[K]) contains(key K) bool {
 	return ok
 }
 
+/*
 func (b *ghost[K]) clear() {
 	b.ll.Init()
 	for k := range b.items {
 		delete(b.items, k)
 	}
 }
+*/
