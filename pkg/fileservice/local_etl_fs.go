@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // LocalETLFS is a FileService implementation backed by local file system and suitable for ETL operations
@@ -136,6 +138,15 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			if err := os.Remove(f.Name()); err != nil {
+				logutil.Warn("delete file error", zap.Error(err))
+			}
+		}
+	}()
+
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
