@@ -39,14 +39,14 @@ const (
 )
 
 type CNS3Writer struct {
-	_sinker       *ioutil.Sinker
-	_written      []objectio.ObjectStats
-	_blockInfoBat *batch.Batch
+	sinker       *ioutil.Sinker
+	written      []objectio.ObjectStats
+	blockInfoBat *batch.Batch
 
-	_hold                   []*batch.Batch
-	_holdFlushUntilSyncCall bool
+	hold                   []*batch.Batch
+	holdFlushUntilSyncCall bool
 
-	_isTombstone bool
+	isTombstone bool
 }
 
 func NewCNS3TombstoneWriter(
@@ -56,13 +56,13 @@ func NewCNS3TombstoneWriter(
 
 	writer := &CNS3Writer{}
 
-	writer._sinker = ioutil.NewTombstoneSinker(
+	writer.sinker = ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
 		pkType, mp, fs,
 		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
 		ioutil.WithTailSizeCap(0))
 
-	writer._isTombstone = true
+	writer.isTombstone = true
 	writer.ResetBlockInfoBat()
 
 	return writer
@@ -129,14 +129,14 @@ func NewCNS3DataWriter(
 ) *CNS3Writer {
 
 	writer := &CNS3Writer{
-		_holdFlushUntilSyncCall: holdFlushUntilSyncCall,
+		holdFlushUntilSyncCall: holdFlushUntilSyncCall,
 	}
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
 	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
 
-	writer._sinker = ioutil.NewSinker(
+	writer.sinker = ioutil.NewSinker(
 		sortKeyIdx, attrs, attrTypes,
 		factor, mp, fs,
 		ioutil.WithTailSizeCap(0),
@@ -148,67 +148,67 @@ func NewCNS3DataWriter(
 }
 
 func (w *CNS3Writer) Write(ctx context.Context, mp *mpool.MPool, bat *batch.Batch) error {
-	if w._holdFlushUntilSyncCall {
+	if w.holdFlushUntilSyncCall {
 		copied, err := bat.Dup(mp)
 		if err != nil {
 			return err
 		}
-		w._hold = append(w._hold, copied)
+		w.hold = append(w.hold, copied)
 	} else {
-		return w._sinker.Write(ctx, bat)
+		return w.sinker.Write(ctx, bat)
 	}
 	return nil
 }
 
 func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.ObjectStats, error) {
 	defer func() {
-		if len(w._hold) > 0 {
-			for _, bat := range w._hold {
+		if len(w.hold) > 0 {
+			for _, bat := range w.hold {
 				bat.Clean(mp)
 			}
-			w._hold = w._hold[:0]
+			w.hold = w.hold[:0]
 		}
 	}()
 
-	if len(w._hold) != 0 {
-		for _, bat := range w._hold {
-			if err := w._sinker.Write(ctx, bat); err != nil {
+	if len(w.hold) != 0 {
+		for _, bat := range w.hold {
+			if err := w.sinker.Write(ctx, bat); err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	if err := w._sinker.Sync(ctx); err != nil {
+	if err := w.sinker.Sync(ctx); err != nil {
 		return nil, err
 	}
 
-	w._written, _ = w._sinker.GetResult()
+	w.written, _ = w.sinker.GetResult()
 
-	return w._written, nil
+	return w.written, nil
 }
 
 func (w *CNS3Writer) Close(mp *mpool.MPool) error {
-	if w._sinker != nil {
-		if err := w._sinker.Close(); err != nil {
+	if w.sinker != nil {
+		if err := w.sinker.Close(); err != nil {
 			return err
 		}
-		w._sinker = nil
+		w.sinker = nil
 	}
 
-	if len(w._hold) != 0 {
-		for _, bat := range w._hold {
+	if len(w.hold) != 0 {
+		for _, bat := range w.hold {
 			bat.Clean(mp)
 		}
-		w._hold = nil
-		w._holdFlushUntilSyncCall = false
+		w.hold = nil
+		w.holdFlushUntilSyncCall = false
 	}
 
-	if w._blockInfoBat != nil {
-		w._blockInfoBat.Clean(mp)
-		w._blockInfoBat = nil
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.Clean(mp)
+		w.blockInfoBat = nil
 	}
 
-	w._written = nil
+	w.written = nil
 
 	return nil
 }
@@ -219,37 +219,37 @@ func (w *CNS3Writer) FillBlockInfoBat(
 
 	var err error
 
-	if !w._isTombstone {
+	if !w.isTombstone {
 		objectio.ForeachBlkInObjStatsList(
 			true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				if err = vector.AppendBytes(
-					w._blockInfoBat.Vecs[0],
+					w.blockInfoBat.Vecs[0],
 					objectio.EncodeBlockInfo(&blk), false, mp); err != nil {
 					return false
 				}
 
 				return true
 
-			}, w._written...)
+			}, w.written...)
 
-		for i := range w._written {
-			if err = vector.AppendBytes(w._blockInfoBat.Vecs[1],
-				w._written[i].Marshal(), false, mp); err != nil {
+		for i := range w.written {
+			if err = vector.AppendBytes(w.blockInfoBat.Vecs[1],
+				w.written[i].Marshal(), false, mp); err != nil {
 				return nil, err
 			}
 		}
 	} else {
-		for i := range w._written {
-			if err = vector.AppendBytes(w._blockInfoBat.Vecs[0],
-				w._written[i].Marshal(), false, mp); err != nil {
+		for i := range w.written {
+			if err = vector.AppendBytes(w.blockInfoBat.Vecs[0],
+				w.written[i].Marshal(), false, mp); err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	w._blockInfoBat.SetRowCount(w._blockInfoBat.Vecs[0].Length())
-	return w._blockInfoBat, nil
+	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
+	return w.blockInfoBat, nil
 }
 
 func AllocCNS3ResultBat(
@@ -287,11 +287,11 @@ func AllocCNS3ResultBat(
 
 func (w *CNS3Writer) ResetBlockInfoBat() {
 
-	if w._blockInfoBat != nil {
-		w._blockInfoBat.CleanOnlyData()
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.CleanOnlyData()
 	}
 
-	w._blockInfoBat = AllocCNS3ResultBat(w._isTombstone, false)
+	w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone, false)
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
@@ -347,15 +347,15 @@ func (w *CNS3Writer) OutputRawData(
 	result *batch.Batch,
 ) error {
 	defer func() {
-		if len(w._hold) > 0 {
-			for _, bat := range w._hold {
+		if len(w.hold) > 0 {
+			for _, bat := range w.hold {
 				bat.Clean(proc.Mp())
 			}
-			w._hold = w._hold[:0]
+			w.hold = w.hold[:0]
 		}
 	}()
 
-	for _, bat := range w._hold {
+	for _, bat := range w.hold {
 		if err := vector.AppendFixed(
 			result.Vecs[0], int16(-1), false, proc.Mp()); err != nil {
 			return err
@@ -372,8 +372,6 @@ func (w *CNS3Writer) OutputRawData(
 	}
 
 	result.SetRowCount(result.Vecs[0].Length())
-
-	w._hold = nil
 
 	return nil
 }
