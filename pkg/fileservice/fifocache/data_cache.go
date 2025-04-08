@@ -53,7 +53,7 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 var _ fscache.DataCache = new(DataCache)
 
 func (d *DataCache) Available() int64 {
-	ret := d.fifo.capacity() - d.fifo.used()
+	ret := d.fifo.capacity() - d.fifo.Used()
 	if ret < 0 {
 		ret = 0
 	}
@@ -66,19 +66,16 @@ func (d *DataCache) Capacity() int64 {
 
 func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 	for _, path := range paths {
-		for i := 0; i < len(d.fifo.shards); i++ {
-			d.deletePath(ctx, i, path)
-		}
+		d.deletePath(ctx, path)
 	}
 }
 
-func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string) {
-	shard := &d.fifo.shards[shardIndex]
-	shard.Lock()
-	defer shard.Unlock()
-	for key, item := range shard.values {
+func (d *DataCache) deletePath(ctx context.Context, path string) {
+	d.fifo.mutex.Lock()
+	defer d.fifo.mutex.Unlock()
+	for key, item := range d.fifo.htab {
 		if key.Path == path {
-			delete(shard.values, key)
+			delete(d.fifo.htab, key)
 			if d.fifo.postEvict != nil {
 				d.fifo.postEvict(ctx, item.key, item.value, item.size)
 			}
@@ -108,5 +105,5 @@ func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.D
 }
 
 func (d *DataCache) Used() int64 {
-	return d.fifo.used()
+	return d.fifo.Used()
 }

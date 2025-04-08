@@ -17,14 +17,9 @@ package fifocache
 import (
 	"context"
 	"sync"
-	"sync/atomic"
-
-	"golang.org/x/sys/cpu"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
-
-const numShards = 256
 
 // Cache implements an in-memory cache with FIFO-based eviction
 // it's mostly like the S3-fifo, only without the ghost queue part
@@ -37,16 +32,12 @@ type Cache[K comparable, V any] struct {
 	postGet   func(ctx context.Context, key K, value V, size int64)
 	postEvict func(ctx context.Context, key K, value V, size int64)
 
-	shards [numShards]struct {
-		sync.Mutex
-		values map[K]*_CacheItem[K, V]
-		_      cpu.CacheLinePad
-	}
+	htab  map[K]*_CacheItem[K, V]
+	mutex sync.Mutex
 
-	queueLock sync.Mutex
-	usedSmall atomic.Int64
+	usedSmall int64
 	small     Queue[*_CacheItem[K, V]]
-	usedMain  atomic.Int64
+	usedMain  int64
 	main      Queue[*_CacheItem[K, V]]
 	ghost     *ghost[K]
 }
@@ -70,16 +61,16 @@ func (c *_CacheItem[K, V]) dec() {
 	}
 }
 
-// assume cache size is 256K
+// assume cache size is 128K
 // if cache capacity is smaller than 4G, ghost size is 100%.  Otherwise, 50%
 func estimateGhostSize(capacity int64) int {
 	estimate := int(capacity / int64(128000))
-	if capacity > 8000000000 { // 4G
+	if capacity > 8000000000 { // 8G
 		// only 50%
 		estimate /= 2
 	}
-	if estimate < 256*1024 {
-		estimate = 256 * 1024
+	if estimate < 12800 {
+		estimate = 12800
 	}
 	return estimate
 }
@@ -105,18 +96,13 @@ func New[K comparable, V any](
 		postSet:      postSet,
 		postGet:      postGet,
 		postEvict:    postEvict,
-	}
-	for i := range ret.shards {
-		ret.shards[i].values = make(map[K]*_CacheItem[K, V], 1024)
+		htab:         make(map[K]*_CacheItem[K, V]),
 	}
 	return ret
 }
 
 func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_CacheItem[K, V] {
-	shard := &c.shards[c.keyShardFunc(key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-	_, ok := shard.values[key]
+	_, ok := c.htab[key]
 	if ok {
 		// existed
 		return nil
@@ -127,7 +113,7 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 		value: value,
 		size:  size,
 	}
-	shard.values[key] = item
+	c.htab[key] = item
 	if c.postSet != nil {
 		c.postSet(ctx, key, value, size)
 	}
@@ -136,35 +122,34 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 }
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	if item := c.set(ctx, key, value, size); item != nil {
+		// enqueue
 		c.enqueue(ctx, item)
+		// evict
+		c.evictAll(ctx, nil, 0)
 	}
 }
 
 func (c *Cache[K, V]) enqueue(ctx context.Context, item *_CacheItem[K, V]) {
 
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
-
 	// enqueue
 	if c.ghost.contains(item.key) {
 		c.ghost.remove(item.key)
 		c.main.enqueue(item)
-		c.usedMain.Add(item.size)
+		c.usedMain += item.size
 	} else {
 		c.small.enqueue(item)
-		c.usedSmall.Add(item.size)
+		c.usedSmall += item.size
 	}
-
-	// evict
-	c.evictAll(ctx, nil, 0)
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	var item *_CacheItem[K, V]
 	if item, ok = c.get(ctx, key); ok {
-		c.queueLock.Lock()
-		defer c.queueLock.Unlock()
 		item.inc()
 		return item.value, true
 	}
@@ -172,12 +157,8 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 }
 
 func (c *Cache[K, V]) get(ctx context.Context, key K) (value *_CacheItem[K, V], ok bool) {
-	shard := &c.shards[c.keyShardFunc(key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-
 	var item *_CacheItem[K, V]
-	item, ok = shard.values[key]
+	item, ok = c.htab[key]
 	if !ok {
 		return
 	}
@@ -188,14 +169,13 @@ func (c *Cache[K, V]) get(ctx context.Context, key K) (value *_CacheItem[K, V], 
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
-	shard := &c.shards[c.keyShardFunc(key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-	item, ok := shard.values[key]
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	item, ok := c.htab[key]
 	if !ok {
 		return
 	}
-	delete(shard.values, key)
+	delete(c.htab, key)
 	if c.postEvict != nil {
 		c.postEvict(ctx, item.key, item.value, item.size)
 	}
@@ -203,14 +183,13 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
-	c.queueLock.Lock()
-	defer c.queueLock.Unlock()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
 	target := c.evictAll(ctx, done, capacityCut)
 	if done != nil {
 		done <- target
 	}
-
 }
 
 // ForceEvict evicts n bytes despite capacity
@@ -219,8 +198,14 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 	c.Evict(ctx, nil, capacityCut)
 }
 
+func (c *Cache[K, V]) Used() int64 {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.used()
+}
+
 func (c *Cache[K, V]) used() int64 {
-	return c.usedSmall.Load() + c.usedMain.Load()
+	return c.usedSmall + c.usedMain
 }
 
 func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
@@ -237,7 +222,7 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 		if target1 < 0 {
 			target1 = 0
 		}
-		if c.usedSmall.Load() > target1 {
+		if c.usedSmall > target1 {
 			c.evictSmall(ctx)
 		} else {
 			c.evictMain(ctx)
@@ -258,12 +243,12 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 		if item.freq > 1 {
 			// put main
 			c.main.enqueue(item)
-			c.usedSmall.Add(-item.size)
-			c.usedMain.Add(item.size)
+			c.usedSmall -= item.size
+			c.usedMain += item.size
 		} else {
 			// evict
 			c.deleteItem(ctx, item)
-			c.usedSmall.Add(-item.size)
+			c.usedSmall -= item.size
 			c.ghost.add(item.key)
 			return
 		}
@@ -271,10 +256,7 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 }
 
 func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
-	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-	delete(shard.values, item.key)
+	delete(c.htab, item.key)
 	if c.postEvict != nil {
 		c.postEvict(ctx, item.key, item.value, item.size)
 	}
@@ -295,7 +277,7 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 		} else {
 			// evict
 			c.deleteItem(ctx, item)
-			c.usedMain.Add(-item.size)
+			c.usedMain -= item.size
 			return
 		}
 	}
