@@ -859,10 +859,10 @@ func Test_mysqlSinker_sinkTail(t *testing.T) {
 		},
 		ar:           NewCdcActiveRoutine(),
 		sqlBuf:       make([]byte, 1024),
-		sqlBufSendCh: make(chan []byte,1024),
+		sqlBufSendCh: make(chan []byte, 1024),
 	}
-	sinker.sqlBufs[0] = make([]byte, sqlBufReserved, sqlBufReserved)
-	sinker.sqlBufs[1] = make([]byte, sqlBufReserved, sqlBufReserved)
+	sinker.sqlBufs[0] = make([]byte, sqlBufReserved)
+	sinker.sqlBufs[1] = make([]byte, sqlBufReserved)
 
 	insertAtomicBat := NewAtomicBatch(testutil.TestUtilMp)
 	insertBat := batch.New([]string{"a", "ts"})
