@@ -28,7 +28,7 @@ import (
 var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
-			Version:           "2.0.3",
+			Version:           "2.0.2",
 			MinUpgradeVersion: "2.0.2",
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
