@@ -75,6 +75,8 @@ type mergeObjectsTask struct {
 
 	segmentID *objectio.Segmentid
 	num       uint16
+
+	arena *objectio.WriteArena
 }
 
 func NewMergeObjectsTask(
@@ -154,6 +156,10 @@ func NewMergeObjectsTask(
 		task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+
+	if task.GetTotalSize() > 300*common.Const1MBytes {
+		task.arena = objectio.NewArena(300 * common.Const1MBytes)
+	}
 	return
 }
 
@@ -221,7 +227,7 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 func (task *mergeObjectsTask) HostHintName() string { return "TN" }
 
 func (task *mergeObjectsTask) LoadNextBatch(
-	ctx context.Context, objIdx uint32,
+	ctx context.Context, objIdx uint32, reuseBatch *batch.Batch,
 ) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
@@ -231,15 +237,35 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}
 	var err error
 	var data *containers.Batch
+	var retBatch *batch.Batch
+	var releaseF func()
 
-	releaseF := func() {
-		if data != nil {
-			data.Close()
+	if reuseBatch != nil {
+		if reuseBatch.RowCount() != 0 {
+			panic("reuseBatch is not empty")
+		}
+		data = containers.ToTNBatch(reuseBatch, common.MergeAllocator)
+	}
+
+	if task.nMergedBlk[objIdx] == task.blkCnt[objIdx]-1 {
+		releaseF = func() {
+			if data != nil {
+				data.Close()
+			}
+		}
+	} else {
+		releaseF = func() {
+			if retBatch != nil {
+				retBatch.CleanOnlyData()
+			}
 		}
 	}
+
 	defer func() {
 		if err != nil {
-			releaseF()
+			if data != nil {
+				data.Close()
+			}
 		}
 	}()
 
@@ -287,17 +313,17 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}
 	task.nMergedBlk[objIdx]++
 
-	bat := batch.New(task.attrs)
+	retBatch = batch.New(task.attrs)
 	for i, idx := range task.idxs {
 		if idx == objectio.SEQNUM_COMMITTS {
 			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-			bat.Vecs[id] = data.Vecs[i].GetDownstreamVector()
+			retBatch.Vecs[id] = data.Vecs[i].GetDownstreamVector()
 		} else {
-			bat.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
+			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
-	bat.SetRowCount(data.Length())
-	return bat, data.Deletes, releaseF, nil
+	retBatch.SetRowCount(data.Length())
+	return retBatch, data.Deletes, releaseF, nil
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
@@ -354,7 +380,9 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 	} else if task.schema.HasSortKey() {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
-
+	if task.arena != nil {
+		task.arena.Reset()
+	}
 	writer := ioutil.ConstructWriterWithSegmentID(
 		task.segmentID,
 		task.num,
@@ -364,6 +392,7 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		sortkeyIsPK,
 		task.isTombstone,
 		task.rt.Fs,
+		task.arena,
 	)
 	task.num++
 	return writer
