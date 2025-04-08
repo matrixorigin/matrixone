@@ -1012,6 +1012,35 @@ func testFileService(
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
+	t.Run("error in write", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fs := newFS(fsName)
+		defer fs.Close(ctx)
+
+		err := fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					ReaderForWrite: errReader{},
+					Size:           -1,
+				},
+			},
+		})
+
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("got %v", err)
+		}
+	})
+
+}
+
+type errReader struct{}
+
+var _ io.Reader = errReader{}
+
+func (e errReader) Read(p []byte) (n int, err error) {
+	return 0, io.ErrShortWrite
 }
 
 func randomCut(data []byte, parts int) [][]byte {
