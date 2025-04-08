@@ -78,6 +78,12 @@ func (v *versionHandle) HandleTenantUpgrade(
 			zap.String("toVersion", v.Metadata().Version))
 	}
 
+	err := upgradeForBM25(uint32(tenantID), txn)
+	if err != nil {
+		getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute for BM25 error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version))
+		return err
+	}
+
 	return nil
 }
 
