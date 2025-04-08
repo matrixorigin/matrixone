@@ -136,11 +136,11 @@ func upgradeForBM25(accountId uint32, txn executor.TxnExecutor) error {
 			if checkErr != nil {
 				return checkErr
 			}
-			defer checkRes.Close()
 			if len(checkRes.Batches) == 0 {
 				continue
 			}
 			rowCount := vector.GetFixedAtNoTypeCheck[uint64](checkRes.Batches[0].Vecs[0], 0)
+			checkRes.Close()
 			if rowCount > 0 {
 				continue
 			}
