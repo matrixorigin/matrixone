@@ -136,7 +136,6 @@ func upgradeForBM25(accountId uint32, txn executor.TxnExecutor) error {
 			if checkErr != nil {
 				return checkErr
 			}
-			defer checkRes.Close()
 			if len(checkRes.Batches) == 0 {
 				continue
 			}
@@ -144,6 +143,7 @@ func upgradeForBM25(accountId uint32, txn executor.TxnExecutor) error {
 			if rowCount > 0 {
 				continue
 			}
+			checkRes.Close()
 
 			insertSQL := fmt.Sprintf("insert into `%s`.`%s` select doc_id, count(*), '%s' from `%s`.`%s` group by doc_id", dbName, idxTable, fulltext.DOC_LEN_WORD, dbName, idxTable)
 			insertRes, insertErr := txn.Exec(insertSQL, executor.StatementOption{}.WithAccountID(accountId))
