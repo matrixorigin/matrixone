@@ -68,12 +68,9 @@ func NewCNS3TombstoneWriter(
 	return writer
 }
 
-func NewCNS3DataWriter(
-	mp *mpool.MPool,
-	fs fileservice.FileService,
+func GetSequmsAttrsSortKeyIdxFromTableDef(
 	tableDef *plan.TableDef,
-	holdFlushUntilSyncCall bool,
-) *CNS3Writer {
+) ([]uint16, []types.Type, []string, int, bool) {
 
 	var (
 		sequms       []uint16
@@ -92,6 +89,9 @@ func NewCNS3DataWriter(
 		}
 	}
 
+	// create table t1(a int primary key) cluster by a ==> not support
+	// the `primary key` and `cluster by` cannot both exist.
+	// the condition of sortIdx == -1 may be unnecessary.
 	if sortKeyIdx == -1 && tableDef.ClusterBy != nil {
 		// the rowId column has been excluded from the TableDef of the target table for the insert statements(insert,load).
 		// link: pkg/sql/plan/build_constraint_util.go --> func setTableExprToDmlTableInfo,
@@ -118,9 +118,21 @@ func NewCNS3DataWriter(
 	}
 	logutil.Debugf("s3 table set from NewS3Writer %q seqnums: %+v", tableDef.Name, sequms)
 
+	return sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey
+}
+
+func NewCNS3DataWriter(
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	tableDef *plan.TableDef,
+	holdFlushUntilSyncCall bool,
+) *CNS3Writer {
+
 	writer := &CNS3Writer{
 		_holdFlushUntilSyncCall: holdFlushUntilSyncCall,
 	}
+
+	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
 	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
 
