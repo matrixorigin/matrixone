@@ -163,6 +163,9 @@ func (c *Cache[K, V]) enqueue(ctx context.Context, item *_CacheItem[K, V]) {
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	var item *_CacheItem[K, V]
 	if item, ok = c.get(ctx, key); ok {
+		c.queueLock.Lock()
+		defer c.queueLock.Unlock()
+		item.inc()
 		return item.value, true
 	}
 	return
@@ -181,7 +184,6 @@ func (c *Cache[K, V]) get(ctx context.Context, key K) (value *_CacheItem[K, V], 
 	if c.postGet != nil {
 		c.postGet(ctx, item.key, item.value, item.size)
 	}
-	item.inc()
 	return item, true
 }
 
