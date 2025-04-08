@@ -153,6 +153,28 @@ func Test_HandleTenantUpgrade2(t *testing.T) {
 	assert.Nil(t, err)
 }
 
+func Test_HandleTenantUpgrade3(t *testing.T) {
+	tenantUpgEntries = []versions.UpgradeEntry{}
+
+	v := &versionHandle{
+		metadata: versions.Version{
+			Version: "v2.0.3",
+		},
+	}
+	sid := ""
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+	executor2 := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
+	}, txnOperator)
+
+	err := v.HandleTenantUpgrade(context.Background(),
+		0,
+		executor2,
+	)
+	assert.Error(t, err)
+}
+
 func Test_UpgEntry(t *testing.T) {
 	checkSql := `att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns`
 
