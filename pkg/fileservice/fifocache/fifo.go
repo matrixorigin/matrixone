@@ -49,12 +49,14 @@ type _CacheItem[K comparable, V any] struct {
 	freq  int32
 }
 
+// not thread safe. Internal use only
 func (c *_CacheItem[K, V]) inc() {
 	if c.freq < 3 {
 		c.freq += 1
 	}
 }
 
+// not thread safe. Internal use only
 func (c *_CacheItem[K, V]) dec() {
 	if c.freq > 0 {
 		c.freq -= 1
@@ -101,6 +103,7 @@ func New[K comparable, V any](
 	return ret
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_CacheItem[K, V] {
 	_, ok := c.htab[key]
 	if ok {
@@ -132,6 +135,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	}
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) enqueue(ctx context.Context, item *_CacheItem[K, V]) {
 
 	// enqueue
@@ -156,6 +160,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	return
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) get(ctx context.Context, key K) (value *_CacheItem[K, V], ok bool) {
 	var item *_CacheItem[K, V]
 	item, ok = c.htab[key]
@@ -204,10 +209,12 @@ func (c *Cache[K, V]) Used() int64 {
 	return c.used()
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) used() int64 {
 	return c.usedSmall + c.usedMain
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
 	var target int64
 	for {
@@ -232,6 +239,7 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 	return target
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 	// queue 1
 	for {
@@ -255,6 +263,7 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 	}
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
 	delete(c.htab, item.key)
 	if c.postEvict != nil {
@@ -262,6 +271,7 @@ func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
 	}
 }
 
+// not thread safe. Internal use only
 func (c *Cache[K, V]) evictMain(ctx context.Context) {
 	// queue 2
 	for {
