@@ -150,7 +150,7 @@ func upgradeForBM25(accountId uint32, txn executor.TxnExecutor) error {
 			if insertErr != nil {
 				return insertErr
 			}
-			defer insertRes.Close()
+			insertRes.Close()
 
 			getLogger(txn.Txn().TxnOptions().CN).Info("insert doclen for BM25",
 				zap.String("db", dbName),
