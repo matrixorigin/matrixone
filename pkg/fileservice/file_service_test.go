@@ -1025,6 +1025,10 @@ func testFileService(
 					ReaderForWrite: errReader{},
 					Size:           -1,
 				},
+				{
+					ReaderForWrite: errReader{},
+					Size:           -1,
+				},
 			},
 		})
 
