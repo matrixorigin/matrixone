@@ -572,6 +572,18 @@ func TestDiskCacheClearFiles(t *testing.T) {
 	)
 	assert.Nil(t, err)
 
+	// write empty dir
+	err = os.Mkdir(
+		filepath.Join(dir, "empty-dir-1"),
+		0755,
+	)
+	assert.Nil(t, err)
+	err = os.Mkdir(
+		filepath.Join(dir, "empty-dir-2"),
+		0755,
+	)
+	assert.Nil(t, err)
+
 	// write garbage file
 	err = os.WriteFile(
 		filepath.Join(dir, "foo"),
@@ -589,7 +601,7 @@ func TestDiskCacheClearFiles(t *testing.T) {
 
 	files, err = filepath.Glob(filepath.Join(dir, "*"))
 	assert.Nil(t, err)
-	if len(files) != numFiles-2 {
+	if len(files) != numFiles-4 {
 		t.Fatalf("got %v", files)
 	}
 
