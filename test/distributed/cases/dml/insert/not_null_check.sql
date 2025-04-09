@@ -51,4 +51,10 @@ insert into t1 values ('a','b','c');
 update t1 set c ='ccc';
 delete from t1 where b='b';
 select count(*) from t1;
+
+drop table if exists t1;
+create table t1(a uuid, b varchar(255), created_at datetime not null default current_timestamp) cluster by (created_at);
+insert into t1(a, b) values (uuid(), 'test');
+insert into t1(a, b) values ('a', 'test');
+select count(*) from t1;
 drop database if exists test;
