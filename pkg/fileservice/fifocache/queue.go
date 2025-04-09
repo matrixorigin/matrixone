@@ -26,6 +26,7 @@ type Queue[T any] struct {
 
 type queuePart[T any] struct {
 	values []T
+	begin  int
 	next   *queuePart[T]
 }
 
@@ -49,11 +50,12 @@ func NewQueue[T any]() *Queue[T] {
 
 // empty is an internal helper, assumes lock is held
 func (p *Queue[T]) empty() bool {
-	return p.head == p.tail && len(p.head.values) == 0
+	return p.head == p.tail && len(p.head.values) == p.head.begin
 }
 
 func (p *queuePart[T]) reset() {
 	p.values = p.values[:0]
+	p.begin = 0
 	p.next = nil
 }
 
@@ -80,7 +82,7 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 		return
 	}
 
-	if len(p.tail.values) == 0 {
+	if p.tail.begin >= len(p.tail.values) {
 		// shrink
 		if p.tail.next == nil {
 			// This should ideally not happen if empty() check passes,
@@ -93,12 +95,10 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 		p.partPool.Put(part) // Return the old part to the pool
 	}
 
-	// Check again if the new tail part is also empty (unlikely but possible)
-	if len(p.tail.values) == 0 {
-		return
-	}
-
-	ret, p.tail.values = p.tail.values[0], p.tail.values[1:]
+	ret = p.tail.values[p.tail.begin]
+	var zero T
+	p.tail.values[p.tail.begin] = zero
+	p.tail.begin++
 	p.size--
 	ok = true
 	return
