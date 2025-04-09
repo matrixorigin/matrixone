@@ -282,7 +282,16 @@ func CreateRelationAndAppend2(
 	require.NoError(t, err)
 	require.Nil(t, txn.Commit(context.Background()))
 }
-
+func AllCheckpointsFinished(e *db.DB) bool {
+	if e.Wal.GetPenddingCnt() != 0 {
+		return false
+	}
+	ckp := e.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+	if ckp == nil {
+		return true
+	}
+	return ckp.IsFinished()
+}
 func CreateRelationAndAppend(
 	t *testing.T,
 	tenantID uint32,
