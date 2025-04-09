@@ -83,6 +83,55 @@ func (c *_CacheItem[K, V]) postFunc(ctx context.Context, fn func(ctx context.Con
 	fn(ctx, c.key, c.value, c.size)
 }
 
+func (c *_CacheItem[K, V]) IncAndPost(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.freq < 3 {
+		c.freq += 1
+	}
+
+	if fn == nil {
+		return
+	}
+	fn(ctx, c.key, c.value, c.size)
+}
+
+func (c *_CacheItem[K, V]) evictMainAndGoMain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.freq > 0 {
+		// decrement
+		if c.freq > 0 {
+			c.freq -= 1
+		}
+		return true
+	} else {
+		// post
+		if fn == nil {
+			return false
+		}
+		fn(ctx, c.key, c.value, c.size)
+		return false
+	}
+}
+
+func (c *_CacheItem[K, V]) evictSmallAndGoMain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.freq > 1 {
+		return true
+	} else {
+		// post
+		if fn == nil {
+			return false
+		}
+		fn(ctx, c.key, c.value, c.size)
+		return false
+	}
+}
+
 // assume cache size is 128K
 // if cache capacity is smaller than 4G, ghost size is 100%.  Otherwise, 50%
 func estimateGhostSize(capacity int64) int {
@@ -91,8 +140,8 @@ func estimateGhostSize(capacity int64) int {
 		// only 50%
 		estimate /= 2
 	}
-	if estimate < 12800 {
-		estimate = 12800
+	if estimate < 100000 {
+		estimate = 100000
 	}
 	return estimate
 }
@@ -122,7 +171,7 @@ func New[K comparable, V any](
 	return ret
 }
 
-func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_CacheItem[K, V] {
+func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	item := &_CacheItem[K, V]{
 		key:   key,
 		value: value,
@@ -132,26 +181,11 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 	ok := c.htab.Set(key, item)
 	if !ok {
 		// existed
-		return nil
+		return
 	}
 
-	return item
-}
-
-func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
-	if item := c.set(ctx, key, value, size); item != nil {
-
-		// post set
-		item.postFunc(ctx, c.postSet)
-
-		// enqueue
-		c.enqueue(ctx, item)
-		// evict
-		c.evictAll(ctx, nil, 0)
-	}
-}
-
-func (c *Cache[K, V]) enqueue(ctx context.Context, item *_CacheItem[K, V]) {
+	// post set
+	item.postFunc(ctx, c.postSet)
 
 	// enqueue
 	if c.ghost.contains(item.key) {
@@ -162,29 +196,29 @@ func (c *Cache[K, V]) enqueue(ctx context.Context, item *_CacheItem[K, V]) {
 		c.small.enqueue(item)
 		c.usedSmall.Add(item.size)
 	}
+
+	// evict
+	c.evictAll(ctx, nil, 0)
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	var item *_CacheItem[K, V]
-	if item, ok = c.get(ctx, key); ok {
 
+	item, ok = c.htab.Get(key)
+	if !ok {
+		return
+	}
+
+	item.IncAndPost(ctx, c.postGet)
+
+	/*
 		// postGet
 		item.postFunc(ctx, c.postGet)
 
 		// increment
 		item.inc()
-		return item.value, true
-	}
-	return
-}
-
-func (c *Cache[K, V]) get(ctx context.Context, key K) (value *_CacheItem[K, V], ok bool) {
-	var item *_CacheItem[K, V]
-	item, ok = c.htab.Get(key)
-	if !ok {
-		return
-	}
-	return item, true
+	*/
+	return item.value, true
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
@@ -222,36 +256,40 @@ func (c *Cache[K, V]) used() int64 {
 
 func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
 	var target int64
-	for {
-		target = c.capacity() - capacityCut
-		if target < 0 {
-			target = 0
-		}
-		if c.used() <= target {
-			break
-		}
-		target1 := c.capacity1() - capacityCut
-		if target1 < 0 {
-			target1 = 0
-		}
-		if c.usedSmall.Load() > target1 {
+	target = c.capacity() - capacityCut
+	if target < 0 {
+		target = 0
+	}
+	target1 := c.capacity1() - capacityCut
+	if target1 < 0 {
+		target1 = 0
+	}
+
+	usedsmall := c.usedSmall.Load()
+	usedmain := c.usedMain.Load()
+
+	for usedsmall+usedmain > target {
+		if usedsmall > target1 {
 			c.evictSmall(ctx)
 		} else {
 			c.evictMain(ctx)
 		}
+		usedsmall = c.usedSmall.Load()
+		usedmain = c.usedMain.Load()
 	}
 
 	return target
 }
 
 func (c *Cache[K, V]) evictSmall(ctx context.Context) {
-	// queue 1
-	for {
+	// small fifo
+	for c.usedSmall.Load() > 0 {
 		item, ok := c.small.dequeue()
 		if !ok {
 			// queue empty
 			return
 		}
+
 		if item.getFreq() > 1 {
 			// put main
 			c.main.enqueue(item)
@@ -259,38 +297,70 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			c.usedMain.Add(item.size)
 		} else {
 			// evict
-			c.deleteItem(ctx, item)
+			c.htab.Remove(item.key)
+			// post evict
+			item.postFunc(ctx, c.postEvict)
+
 			c.usedSmall.Add(-item.size)
 			c.ghost.add(item.key)
 			return
 		}
+
+		/*
+			if item.evictSmallAndGoMain(ctx, c.postEvict) {
+				// put main
+				c.main.enqueue(item)
+				c.usedSmall.Add(-item.size)
+				c.usedMain.Add(item.size)
+			} else {
+				// evict
+				c.htab.Remove(item.key)
+				// post evict
+				//item.postFunc(ctx, c.postEvict)
+
+				c.usedSmall.Add(-item.size)
+				c.ghost.add(item.key)
+				return
+			}
+		*/
 	}
 }
 
-func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
-	c.htab.Remove(item.key)
-
-	// post evict
-	item.postFunc(ctx, c.postEvict)
-}
-
 func (c *Cache[K, V]) evictMain(ctx context.Context) {
-	// queue 2
-	for {
+	// main fifo
+	for c.usedMain.Load() > 0 {
 		item, ok := c.main.dequeue()
 		if !ok {
 			// empty queue
 			break
 		}
+
 		if item.getFreq() > 0 {
 			// re-enqueue
 			item.dec()
 			c.main.enqueue(item)
 		} else {
 			// evict
-			c.deleteItem(ctx, item)
+			c.htab.Remove(item.key)
+			// post evict
+			item.postFunc(ctx, c.postEvict)
 			c.usedMain.Add(-item.size)
 			return
 		}
+
+		/*
+			if item.evictMainAndGoMain(ctx, c.postEvict) {
+				// re-enqueue
+				//item.dec()
+				c.main.enqueue(item)
+			} else {
+				// evict
+				c.htab.Remove(item.key)
+				// post evict
+				//item.postFunc(ctx, c.postEvict)
+				c.usedMain.Add(-item.size)
+				return
+			}
+		*/
 	}
 }
