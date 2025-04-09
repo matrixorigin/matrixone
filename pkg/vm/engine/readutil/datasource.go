@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 	"slices"
 	"sort"
 )
@@ -236,20 +237,67 @@ func FastApplyDeletesByRowIds(
 	)
 
 	wayA := func() {
-		// linear search may have a better performance than binary search if there has a few items
-		goFastPath := IsDeletedRowIdsSorted && len(deletedRowIds) > 5
+		slices.SortFunc(deletedRowIds, func(a, b objectio.Rowid) int {
+			return a.Compare(&b)
+		})
+		IsDeletedRowIdsSorted = true
 
-		if goFastPath {
+		n := float64(len(deletedRowIds))
+		m := float64(len(*leftRows))
+
+		if IsDeletedRowIdsSorted && m > n/(math.Log2(n)-1) {
+			updateOffset := func(idx int) {
+				if idx < int(m) {
+					cur.SetRowOffset(uint32(idx))
+				}
+			}
+
+			i, j := 0, 0
+			cur = types.NewRowid(checkBid, uint32((*leftRows)[0]))
+
+			for i < int(m) && j < int(n) {
+				if cur.GT(&deletedRowIds[j]) {
+					j++
+					continue
+				}
+
+				if cur.LT(&deletedRowIds[j]) {
+					(*leftRows)[ptr] = (*leftRows)[i]
+					i++
+					ptr++
+					updateOffset(i)
+					continue
+				}
+
+				// equal
+				i++
+				j++
+
+				updateOffset(i)
+			}
+
+			for i < len(*leftRows) {
+				(*leftRows)[ptr] = (*leftRows)[i]
+				i++
+				ptr++
+			}
+
+		} else if IsDeletedRowIdsSorted {
 			cur = types.NewRowid(checkBid, 0)
-		}
 
-		for _, o := range *leftRows {
-			hit = false
-
-			if goFastPath {
+			for _, o := range *leftRows {
 				cur.SetRowOffset(uint32(o))
 				_, hit = sort.Find(len(deletedRowIds), func(i int) int { return cur.Compare(&deletedRowIds[i]) })
-			} else {
+
+				if !hit {
+					(*leftRows)[ptr] = o
+					ptr++
+				}
+			}
+		} else {
+			for _, o := range *leftRows {
+				hit = false
+
 				for i := 0; i < len(deletedRowIds); i++ {
 					b, offset := deletedRowIds[i].Decode()
 					if o == int64(offset) && b.EQ(checkBid) {
@@ -257,11 +305,11 @@ func FastApplyDeletesByRowIds(
 						break
 					}
 				}
-			}
 
-			if !hit {
-				(*leftRows)[ptr] = o
-				ptr++
+				if !hit {
+					(*leftRows)[ptr] = o
+					ptr++
+				}
 			}
 		}
 
@@ -285,14 +333,14 @@ func FastApplyDeletesByRowIds(
 	}
 
 	// special cases:
-	// 		wayA ==> leftRows.len = 1 and deletedRowIds.len = 1
+	// 		wayB ==> leftRows.len = 1 and deletedRowIds.len = 1
 	// 		wayB ==> leftRows.len = 8192 and deletedRowIds.len = 1
 	// 		wayA ==> leftRows.len = 1 and deletedRowIds.len = 8192
 	// 		wayA ==> leftRows.len = 8192 and deletedRowIds.len = 8192
 
 	if len(*leftRows) != 0 {
 		// how many items are we going to remove from the leftRows?
-		if len(deletedRowIds) <= len(*leftRows)/10 {
+		if len(deletedRowIds) <= 64 {
 			// expected a few removals to happen
 			wayB()
 		} else {
