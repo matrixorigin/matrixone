@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"sync"
 	"time"
 
@@ -43,6 +44,7 @@ type localLockTable struct {
 	events    *waiterEvents
 	txnHolder activeTxnHolder
 	logger    *log.MOLogger
+	stopper   *stopper.Stopper
 
 	mu struct {
 		sync.RWMutex
@@ -73,10 +75,43 @@ func newLocalLockTable(
 		events:    events,
 		txnHolder: txnHolder,
 		logger:    logger,
+		stopper: stopper.NewStopper("lock-table-localLockTable",
+			stopper.WithLogger(logger.RawLogger())),
 	}
 	l.mu.store = newBtreeBasedStorage()
 	l.mu.tableCommittedAt, _ = clock.Now()
+	if err := l.stopper.RunTask(l.Traverse); err != nil {
+		panic(err)
+	}
 	return l
+}
+
+func (l *localLockTable) Traverse(ctx context.Context) {
+	defer l.logger.InfoAction("log lock count and waiter count task")()
+
+	t := time.Minute * 2
+	timer := time.NewTimer(t)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			l.mu.Lock()
+			lockCount, waiterQueueCount := 0, 0
+			l.mu.store.Iter(func(key []byte, lock Lock) bool {
+				lockCount++
+				waiterQueueCount += lock.waiters.size()
+				return true
+			})
+			l.logger.Error("count of lock and waiter",
+				zap.Int("lock-count", lockCount),
+				zap.Int("waiter-count", waiterQueueCount))
+			l.mu.Unlock()
+			timer.Reset(t)
+		}
+	}
 }
 
 func (l *localLockTable) lock(
@@ -369,6 +404,7 @@ func (l *localLockTable) close() {
 		return true
 	})
 	l.mu.store.Clear()
+	l.stopper.Stop()
 	logLockTableClosed(l.logger, l.bind, false)
 }
 
