@@ -14,57 +14,75 @@
 
 package fifocache
 
-import "container/list"
+import (
+	"container/list"
+	"sync"
+)
 
-// ghost represents the `ghost` structure in the S3FIFO algorithm.
-// At the time of writing, this implementation is not carefully designed.
-// There can be a better way to implement `ghost`.
+// ghost implements a thread-safe ghost queue for S3-FIFO
 type ghost[K comparable] struct {
-	size  int
-	ll    *list.List
-	items map[K]*list.Element
+	mu       sync.RWMutex // Use RWMutex for better read performance
+	capacity int
+	keys     map[K]*list.Element
+	queue    *list.List
 }
 
-func newGhost[K comparable](size int) *ghost[K] {
+func newGhost[K comparable](capacity int) *ghost[K] {
 	return &ghost[K]{
-		size:  size,
-		ll:    list.New(),
-		items: make(map[K]*list.Element),
+		capacity: capacity,
+		keys:     make(map[K]*list.Element),
+		queue:    list.New(),
 	}
 }
 
-func (b *ghost[K]) add(key K) {
-	if _, ok := b.items[key]; ok {
+func (g *ghost[K]) add(key K) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if _, ok := g.keys[key]; ok {
+		// Key already exists, maybe move it to back if needed by specific ghost logic
+		// For simple ghost queue, we might just ignore or update frequency if tracked
 		return
 	}
 
-	for b.ll.Len() >= b.size {
-		e := b.ll.Back()
-		delete(b.items, e.Value.(K))
-		b.ll.Remove(e)
+	// Evict if capacity is reached
+	if g.queue.Len() >= g.capacity {
+		elem := g.queue.Front()
+		if elem != nil {
+			evictedKey := g.queue.Remove(elem).(K)
+			delete(g.keys, evictedKey)
+		}
 	}
 
-	e := b.ll.PushFront(key)
-	b.items[key] = e
+	// Add new key
+	elem := g.queue.PushBack(key)
+	g.keys[key] = elem
 }
 
-func (b *ghost[K]) remove(key K) {
-	if e, ok := b.items[key]; ok {
-		b.ll.Remove(e)
-		delete(b.items, key)
+func (g *ghost[K]) remove(key K) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if elem, ok := g.keys[key]; ok {
+		g.queue.Remove(elem)
+		delete(g.keys, key)
 	}
 }
 
-func (b *ghost[K]) contains(key K) bool {
-	_, ok := b.items[key]
+func (g *ghost[K]) contains(key K) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+
+	_, ok := g.keys[key]
 	return ok
 }
 
-/*
-func (b *ghost[K]) clear() {
-	b.ll.Init()
-	for k := range b.items {
-		delete(b.items, k)
+func (g *ghost[K]) clear() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.queue.Init()
+	for k := range g.keys {
+		delete(g.keys, k)
 	}
 }
-*/

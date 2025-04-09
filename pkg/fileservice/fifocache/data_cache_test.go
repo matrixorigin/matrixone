@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-const numShards = 256
-
 func BenchmarkEnsureNBytesAndSet(b *testing.B) {
 	ctx := context.Background()
 	cache := NewDataCache(

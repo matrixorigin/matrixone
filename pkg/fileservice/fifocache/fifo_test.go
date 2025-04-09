@@ -76,8 +76,8 @@ func TestCacheEvict2(t *testing.T) {
 	v, ok = cache.Get(ctx, 4)
 	assert.True(t, ok)
 	assert.Equal(t, 4, v)
-	assert.Equal(t, int64(1), cache.usedSmall)
-	assert.Equal(t, int64(1), cache.usedMain)
+	assert.Equal(t, int64(1), cache.usedSmall.Load())
+	assert.Equal(t, int64(1), cache.usedMain.Load())
 }
 
 func TestCacheEvict3(t *testing.T) {
@@ -109,8 +109,8 @@ func TestCacheEvict3(t *testing.T) {
 		cache.Set(ctx, 10000+i, true, 1)
 		assert.True(t, cache.Used() <= 1024)
 	}
-	assert.Equal(t, int64(102), cache.usedSmall)
-	assert.Equal(t, int64(922), cache.usedMain)
+	assert.Equal(t, int64(102), cache.usedSmall.Load())
+	assert.Equal(t, int64(922), cache.usedMain.Load())
 	assert.Equal(t, 1024, nEvict)
 	assert.Equal(t, 2048, nSet)
 	assert.Equal(t, 2048, nGet)

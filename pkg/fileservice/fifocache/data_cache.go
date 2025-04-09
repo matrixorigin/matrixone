@@ -66,20 +66,16 @@ func (d *DataCache) Capacity() int64 {
 
 func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 	for _, path := range paths {
-		d.deletePath(ctx, path)
-	}
-}
 
-func (d *DataCache) deletePath(ctx context.Context, path string) {
-	d.fifo.mutex.Lock()
-	defer d.fifo.mutex.Unlock()
-	for key, item := range d.fifo.htab {
-		if key.Path == path {
-			delete(d.fifo.htab, key)
-			if d.fifo.postEvict != nil {
-				d.fifo.postEvict(ctx, item.key, item.value, item.size)
+		key := fscache.CacheKey{Path: path}
+		d.fifo.htab.CompareAndDelete(key, func(key1, key2 fscache.CacheKey) bool {
+			if key1.Path == key2.Path {
+				return true
 			}
-		}
+			return false
+		}, func(value *_CacheItem[fscache.CacheKey, fscache.Data]) {
+			value.postFunc(ctx, d.fifo.postEvict)
+		})
 	}
 }
 
