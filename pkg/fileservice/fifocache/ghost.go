@@ -77,6 +77,7 @@ func (g *ghost[K]) contains(key K) bool {
 	return ok
 }
 
+/*
 func (g *ghost[K]) clear() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -86,3 +87,4 @@ func (g *ghost[K]) clear() {
 		delete(g.keys, k)
 	}
 }
+*/

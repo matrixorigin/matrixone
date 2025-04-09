@@ -46,7 +46,7 @@ func TestCacheEvict(t *testing.T) {
 	for i := 0; i < 64; i++ {
 		cache.Set(ctx, i, i, 1)
 		if cache.used() > cache.capacity() {
-			t.Fatalf("capacity %v, usedSmall %v usedMain %v", cache.capacity(), cache.usedSmall, cache.usedMain)
+			t.Fatalf("capacity %v, usedSmall %v usedMain %v", cache.capacity(), cache.usedSmall.Load(), cache.usedMain.Load())
 		}
 	}
 }

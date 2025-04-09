@@ -110,6 +110,7 @@ func (p *Queue[T]) Len() int {
 	return p.size
 }
 
+/*
 // remove is added for completeness, making it thread-safe as well.
 // Note: This is O(N) where N is the number of elements. Use with caution in performance-critical paths.
 func (p *Queue[T]) remove(item T) bool {
@@ -176,3 +177,4 @@ func (p *Queue[T]) remove(item T) bool {
 
 	return false // Item not found
 }
+*/

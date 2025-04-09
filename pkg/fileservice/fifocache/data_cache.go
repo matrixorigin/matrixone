@@ -69,10 +69,7 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 
 		key := fscache.CacheKey{Path: path}
 		d.fifo.htab.CompareAndDelete(key, func(key1, key2 fscache.CacheKey) bool {
-			if key1.Path == key2.Path {
-				return true
-			}
-			return false
+			return key1.Path == key2.Path
 		}, func(value *_CacheItem[fscache.CacheKey, fscache.Data]) {
 			value.postFunc(ctx, d.fifo.postEvict)
 		})
