@@ -557,7 +557,10 @@ func (s *runnerStore) MaxFinishedGlobalCheckpointLocked() *CheckpointEntry {
 	return it.Item()
 }
 
-func (s *runnerStore) GetPenddingIncrementalCount() int {
+// GetIncrementalCountAfterGlobal returns the number of incremental checkpoints that are not covered by the latest global checkpoint.
+// It counts from the most recent incremental checkpoint backwards until it finds one that is covered by the global checkpoint.
+// Only finished incremental checkpoints are counted.
+func (s *runnerStore) GetIncrementalCountAfterGlobal() int {
 	entries := s.GetAllIncrementalCheckpoints()
 	global := s.MaxGlobalCheckpoint()
 
