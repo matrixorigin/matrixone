@@ -24,7 +24,7 @@ const numShards = 256
 
 type ShardMap[K comparable, V any] struct {
 	shards [numShards]struct {
-		sync.Mutex
+		sync.RWMutex
 		values map[K]V
 		_      cpu.CacheLinePad
 	}
@@ -58,8 +58,8 @@ func (m *ShardMap[K, V]) Set(key K, value V) bool {
 func (m *ShardMap[K, V]) Get(key K) (V, bool) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	v, ok := s.values[key]
 	return v, ok
 }
