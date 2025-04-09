@@ -235,7 +235,7 @@ func newSnapshotManager(cfg *Config) *snapshotManager {
 }
 
 func (sm *snapshotManager) exportPath(shardID uint64, replicaID uint64) string {
-	parts := make([]string, 3)
+	parts := make([]string, 0, 3)
 	dir := sm.cfg.SnapshotExportDir
 	shardPart := fmt.Sprintf("shard-%d", shardID)
 	replicaPart := fmt.Sprintf("replica-%d", replicaID)
@@ -244,7 +244,7 @@ func (sm *snapshotManager) exportPath(shardID uint64, replicaID uint64) string {
 }
 
 func (sm *snapshotManager) snapshotPath(nodeID nodeID, index snapshotIndex) string {
-	parts := make([]string, 2)
+	parts := make([]string, 0, 2)
 	snapshotPart := fmt.Sprintf(snapshotPathPattern, index)
 	parts = append(parts, sm.exportPath(nodeID.shardID, nodeID.replicaID), snapshotPart)
 	return filepath.Join(parts...)
@@ -283,7 +283,7 @@ func (sm *snapshotManager) Init(shardID uint64, replicaID uint64) error {
 	if err != nil {
 		return err
 	}
-	indexes := make([]int, len(names))
+	indexes := make([]int, 0, len(names))
 	for _, name := range names {
 		index, err := sm.parse(name)
 		if err != nil {
