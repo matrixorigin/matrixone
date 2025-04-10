@@ -49,6 +49,7 @@ type _CacheItem[K comparable, V any] struct {
 	freq  int8
 }
 
+/*
 func (c *_CacheItem[K, V]) inc() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -57,6 +58,7 @@ func (c *_CacheItem[K, V]) inc() {
 		c.freq += 1
 	}
 }
+*/
 
 func (c *_CacheItem[K, V]) dec() {
 	c.mu.Lock()
