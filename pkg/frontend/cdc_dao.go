@@ -370,26 +370,25 @@ func (t *CDCDao) GetTaskKeys(
 ) (cnt int64, err error) {
 	var (
 		executor = t.MustGetSQLExecutor(ctx)
-		rows     *sql.Rows
 	)
-	sql := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
-	if rows, err = executor.QueryContext(ctx, sql); err != nil {
+	if cnt, err = ForeachQueriedRow(
+		ctx,
+		executor,
+		cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName),
+		func(ctx context.Context, rows *sql.Rows) (bool, error) {
+			var (
+				key  taskservice.CDCTaskKey
+				err2 error
+			)
+			if err2 = rows.Scan(&key.TaskId); err2 != nil {
+				return false, err2
+			}
+			key.AccountId = accountId
+			keys[key] = struct{}{}
+			return true, nil
+		},
+	); err != nil {
 		return
-	}
-	if rows.Err() != nil {
-		err = rows.Err()
-		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var key taskservice.CDCTaskKey
-		if err = rows.Scan(&key.TaskId); err != nil {
-			return
-		}
-		key.AccountId = accountId
-		keys[key] = struct{}{}
-		cnt++
 	}
 	if cnt == 0 && taskName != "" {
 		err = moerr.NewInternalErrorf(
