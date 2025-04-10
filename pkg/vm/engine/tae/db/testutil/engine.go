@@ -278,6 +278,17 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	return err
 }
 
+func (e *TestEngine) AllCheckpointsFinished() bool {
+	if e.Wal.GetPenddingCnt() != 0 {
+		return false
+	}
+	ckp := e.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+	if ckp == nil {
+		return true
+	}
+	return ckp.IsFinished()
+}
+
 func (e *TestEngine) Truncate() {
 	txn, db := e.GetTestDB()
 	_, err := db.TruncateByName(e.schema.Name)

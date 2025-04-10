@@ -140,6 +140,9 @@ func Test_HandleTenantUpgrade2(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
 	executor2 := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		if !strings.Contains(strings.ToLower(sql), "table_test") {
+			return executor.Result{}, nil
+		}
 		return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
 	}, txnOperator)
 
@@ -148,6 +151,28 @@ func Test_HandleTenantUpgrade2(t *testing.T) {
 		executor2,
 	)
 	assert.Nil(t, err)
+}
+
+func Test_HandleTenantUpgrade3(t *testing.T) {
+	tenantUpgEntries = []versions.UpgradeEntry{}
+
+	v := &versionHandle{
+		metadata: versions.Version{
+			Version: "v2.0.3",
+		},
+	}
+	sid := ""
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+	executor2 := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInvalidInputNoCtx("return error")
+	}, txnOperator)
+
+	err := v.HandleTenantUpgrade(context.Background(),
+		0,
+		executor2,
+	)
+	assert.Error(t, err)
 }
 
 func Test_UpgEntry(t *testing.T) {

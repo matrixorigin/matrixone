@@ -1666,8 +1666,8 @@ func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) 
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     function.SerialFunctionEncodeID,
-					ObjName: function.SerialFunctionName,
+					Obj:     function.SerialFullFunctionEncodeID,
+					ObjName: function.SerialFullFunctionName,
 				},
 				Args: args,
 			},

@@ -897,7 +897,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(tae)
 	})
 	testutil.PrintCheckpointStats(t, tae)
 	assert.Equal(t, tae.Wal.GetLSNWatermark(), tae.Wal.GetCheckpointed())

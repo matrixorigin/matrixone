@@ -548,6 +548,7 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
+	s.tryFlushSqlBuf()
 }
 
 func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
@@ -605,6 +606,26 @@ func (s *mysqlSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRow
 		return
 	}
 
+	return
+}
+
+func (s *mysqlSinker) tryFlushSqlBuf() (err error) {
+	if s.isNonEmptyInsertStmt() {
+		s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
+		s.preSqlBufLen = len(s.sqlBuf)
+	}
+	if s.isNonEmptyDeleteStmt() {
+		s.sqlBuf = appendBytes(s.sqlBuf, s.deleteSuffix)
+		s.preSqlBufLen = len(s.sqlBuf)
+	}
+	// send it to downstream
+	s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
+	s.curBufIdx ^= 1
+	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+
+	s.preSqlBufLen = sqlBufReserved
+	s.sqlBuf = s.sqlBuf[:s.preSqlBufLen]
+	s.preRowType = NoOp
 	return
 }
 
