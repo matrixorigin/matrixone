@@ -200,6 +200,18 @@ func TestCacheMoveGhost(t *testing.T) {
 		assert.Equal(t, cache.ghost.contains(int64(i)), true)
 
 	}
+	assert.Equal(t, cache.usedMain.Load(), int64(20))
+	assert.Equal(t, cache.usedSmall.Load(), int64(10))
+
+	//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
+	for i := 200; i < 210; i++ {
+		cache.Set(ctx, int64(i), int64(i), 1)
+		assert.Equal(t, cache.ghost.contains(int64(i)), false)
+	}
+
+	assert.Equal(t, cache.usedMain.Load(), int64(30))
+	assert.Equal(t, cache.usedSmall.Load(), int64(9))
+	//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
 	//assert.Equal(t, int64(10), cache.usedMain.Load())
 	//assert.Equal(t, int64(10), cache.usedSmall.Load())
 
