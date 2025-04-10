@@ -226,12 +226,12 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 	if targetSmall <= 0 {
 		targetSmall = 1
 	}
-	targetMain := target - targetSmall
+	//targetMain := target - targetSmall
 
 	usedsmall := c.usedSmall.Load()
 	usedmain := c.usedMain.Load()
 
-	for usedmain >= targetMain || usedsmall >= targetSmall {
+	for usedmain+usedsmall >= target {
 		if usedsmall >= targetSmall {
 			c.evictSmall(ctx)
 		} else {
