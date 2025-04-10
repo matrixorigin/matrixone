@@ -1142,7 +1142,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	}()
 
 	for i, e := range txn.writes {
-		if e.bat == nil || e.bat.IsEmpty() || e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+		if e.bat == nil || e.bat.IsEmpty() ||
+			e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc || // inserts object
+			e.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats { // deletes object
 			continue
 		}
 
