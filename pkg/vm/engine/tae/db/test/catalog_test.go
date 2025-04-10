@@ -192,7 +192,14 @@ func TestCheckpointCatalog2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		if tae.Wal.GetPenddingCnt() != 0 {
+			return false
+		}
+		ckp := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+		if ckp == nil {
+			return true
+		}
+		return ckp.IsFinished()
 	})
 	assert.Equal(t, tae.BGCheckpointRunner.MaxLSN(), tae.Runtime.Scheduler.GetCheckpointedLSN())
 }

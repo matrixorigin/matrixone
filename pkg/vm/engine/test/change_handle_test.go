@@ -441,10 +441,10 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Nil(t, tombstone)
 			checkInsertBatch(bat, data, t)
-			assert.Equal(t, data.Vecs[0].Length(), 8192)
+			assert.Equal(t, data.Vecs[0].Length(), 16384)
 			data.Clean(mp)
 		}
-		assert.Equal(t, batchCount, 10)
+		assert.Equal(t, batchCount, 5)
 		assert.NoError(t, handle.Close())
 	}
 }
