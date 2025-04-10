@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -1007,4 +1008,40 @@ func Test_mysqlSinker_Reset(t *testing.T) {
 	s.curBufIdx = 0
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	s.Reset()
+}
+
+func Test_Error(t *testing.T) {
+
+	tsInsertPrefix := "/* tsInsertPrefix */REPLACE INTO `db`.`table` VALUES "
+	tsDeletePrefix := "/* tsDeletePrefix */DELETE FROM `db`.`table` WHERE a IN ("
+
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	sink := &mysqlSink{
+		user:          "root",
+		password:      "123456",
+		ip:            "127.0.0.1",
+		port:          3306,
+		retryTimes:    DefaultRetryTimes,
+		retryDuration: DefaultRetryDuration,
+		conn:          db,
+	}
+	defer sink.Close()
+
+	ar := NewCdcActiveRoutine()
+	s := &mysqlSinker{
+		mysql:          sink,
+		tsInsertPrefix: []byte(tsInsertPrefix),
+		tsDeletePrefix: []byte(tsDeletePrefix),
+		preRowType:     NoOp,
+		ar:             ar,
+		sqlBufSendCh:   make(chan []byte),
+	}
+	defer s.Close()
+	s.SetError(errors.ErrUnsupported)
+	assert.Equal(t, "internal error: convert go error to mo error unsupported operation", s.Error().Error())
+	s.SetError(moerr.NewFileNotFound(context.Background(), "test error"))
+	assert.True(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
 }
