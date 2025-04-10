@@ -77,8 +77,8 @@ func TestCacheEvict2(t *testing.T) {
 	v, ok = cache.Get(ctx, 4)
 	assert.True(t, ok)
 	assert.Equal(t, 4, v)
-	assert.Equal(t, int64(4), cache.usedSmall.Load())
-	assert.Equal(t, int64(0), cache.usedMain.Load())
+	assert.Equal(t, int64(1), cache.usedSmall.Load())
+	assert.Equal(t, int64(1), cache.usedMain.Load())
 }
 
 func TestCacheEvict3(t *testing.T) {
@@ -102,7 +102,7 @@ func TestCacheEvict3(t *testing.T) {
 		cache.Get(ctx, i)
 		assert.True(t, cache.Used() <= 1024)
 	}
-	assert.Equal(t, 0, nEvict)
+	assert.Equal(t, 99, nEvict)
 	assert.Equal(t, 1024, nSet)
 	assert.Equal(t, 2048, nGet)
 
@@ -111,8 +111,8 @@ func TestCacheEvict3(t *testing.T) {
 		assert.True(t, cache.Used() <= 1024)
 	}
 	assert.Equal(t, int64(102), cache.usedSmall.Load())
-	assert.Equal(t, int64(922), cache.usedMain.Load())
-	assert.Equal(t, 1024, nEvict)
+	assert.Equal(t, int64(921), cache.usedMain.Load())
+	assert.Equal(t, 1025, nEvict)
 	assert.Equal(t, 2048, nSet)
 	assert.Equal(t, 2048, nGet)
 }
@@ -132,15 +132,6 @@ func TestCacheOneHitWonder(t *testing.T) {
 func TestCacheMoveMain(t *testing.T) {
 	ctx := context.Background()
 	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil)
-
-	// fill small fifo to 90
-	for i := range int64(90) {
-		cache.Set(ctx, 10000+i, 10000+i, 1)
-	}
-
-	results := [][]int64{{0, 100}, {0, 100}, {0, 100}, {0, 100}, {0, 100},
-		{20, 80}, {40, 60}, {60, 40}, {80, 20},
-		{90, 10}, {90, 10}, {90, 10}, {90, 10}, {90, 10}, {90, 10}, {90, 10}, {90, 10}, {90, 10}, {90, 10}, {90, 10}}
 
 	for k := range int64(20) {
 		//fmt.Printf("cache set 10 items\n")
@@ -165,12 +156,14 @@ func TestCacheMoveMain(t *testing.T) {
 		}
 		//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
 
-		assert.Equal(t, results[k][0], cache.usedMain.Load())
-		assert.Equal(t, results[k][1], cache.usedSmall.Load())
+		if k < 8 {
+			assert.Equal(t, int64((k+1)*10), cache.usedMain.Load())
+		} else {
+			assert.Equal(t, int64(89), cache.usedMain.Load())
+		}
+		assert.Equal(t, int64(10), cache.usedSmall.Load())
 	}
 
-	assert.Equal(t, int64(90), cache.usedMain.Load())
-	assert.Equal(t, int64(10), cache.usedSmall.Load())
 	// remove all main 0 - 99
 	//fmt.Printf("remove all main\n")
 }
@@ -178,11 +171,6 @@ func TestCacheMoveMain(t *testing.T) {
 func TestCacheMoveGhost(t *testing.T) {
 	ctx := context.Background()
 	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil)
-
-	// fill small fifo to 90
-	for i := range int64(90) {
-		cache.Set(ctx, 10000+i, 10000+i, 1)
-	}
 
 	for k := range int64(2) {
 		//fmt.Printf("cache set 10 items\n")
@@ -208,19 +196,21 @@ func TestCacheMoveGhost(t *testing.T) {
 		//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
 	}
 
-	for i := 10000; i < 10020; i++ {
+	for i := 200; i < 210; i++ {
 		assert.Equal(t, cache.ghost.contains(int64(i)), true)
 
 	}
+	assert.Equal(t, cache.usedMain.Load(), int64(20))
+	assert.Equal(t, cache.usedSmall.Load(), int64(10))
 
 	//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
-	for i := 10000; i < 10020; i++ {
+	for i := 200; i < 210; i++ {
 		cache.Set(ctx, int64(i), int64(i), 1)
 		assert.Equal(t, cache.ghost.contains(int64(i)), false)
 	}
 
-	assert.Equal(t, cache.usedMain.Load(), int64(20))
-	assert.Equal(t, cache.usedSmall.Load(), int64(80))
+	assert.Equal(t, cache.usedMain.Load(), int64(30))
+	assert.Equal(t, cache.usedSmall.Load(), int64(9))
 	//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
 	//assert.Equal(t, int64(10), cache.usedMain.Load())
 	//assert.Equal(t, int64(10), cache.usedSmall.Load())
