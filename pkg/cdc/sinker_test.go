@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -1027,6 +1028,7 @@ func Test_Error(t *testing.T) {
 		retryDuration: DefaultRetryDuration,
 		conn:          db,
 	}
+	defer sink.Close()
 
 	ar := NewCdcActiveRoutine()
 	s := &mysqlSinker{
@@ -1037,7 +1039,9 @@ func Test_Error(t *testing.T) {
 		ar:             ar,
 		sqlBufSendCh:   make(chan []byte),
 	}
-	err = fmt.Errorf("sdfsdfsddsf")
-	s.SetError(err)
-	fmt.Printf("Error is %v", s.Error())
+	defer s.Close()
+	s.SetError(errors.ErrUnsupported)
+	assert.Equal(t, "internal error: convert go error to mo error unsupported operation", s.Error().Error())
+	s.SetError(moerr.NewFileNotFound(context.Background(), "test error"))
+	assert.True(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
 }
