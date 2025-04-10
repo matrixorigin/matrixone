@@ -22,8 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-// Cache implements an in-memory cache with FIFO-based eviction
-// it's mostly like the S3-fifo, only without the ghost queue part
+// Cache implements an in-memory cache with S3-FIFO-based eviction
 type Cache[K comparable, V any] struct {
 	capacity fscache.CapacityFunc
 	capSmall fscache.CapacityFunc
@@ -75,6 +74,7 @@ func (c *_CacheItem[K, V]) getFreq() int8 {
 	return c.freq
 }
 
+// thread safe to run post function such as postGet, postSet and postEvict
 func (c *_CacheItem[K, V]) postFunc(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
 	if fn == nil {
 		return
@@ -85,6 +85,7 @@ func (c *_CacheItem[K, V]) postFunc(ctx context.Context, fn func(ctx context.Con
 	fn(ctx, c.key, c.value, c.size)
 }
 
+// IncAndPost merge inc() and postFunc() into one to save one mutex Lock operation
 func (c *_CacheItem[K, V]) IncAndPost(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
