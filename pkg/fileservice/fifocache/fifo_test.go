@@ -45,7 +45,7 @@ func TestCacheEvict(t *testing.T) {
 	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
 	for i := 0; i < 64; i++ {
 		cache.Set(ctx, i, i, 1)
-		if cache.used() > cache.capacity() {
+		if cache.Used() > cache.capacity() {
 			t.Fatalf("capacity %v, usedSmall %v usedMain %v", cache.capacity(), cache.usedSmall.Load(), cache.usedMain.Load())
 		}
 	}

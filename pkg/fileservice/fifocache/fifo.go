@@ -25,8 +25,8 @@ import (
 // Cache implements an in-memory cache with FIFO-based eviction
 // it's mostly like the S3-fifo, only without the ghost queue part
 type Cache[K comparable, V any] struct {
-	capacity  fscache.CapacityFunc
-	capacity1 fscache.CapacityFunc
+	capacity fscache.CapacityFunc
+	capSmall fscache.CapacityFunc
 
 	postSet   func(ctx context.Context, key K, value V, size int64)
 	postGet   func(ctx context.Context, key K, value V, size int64)
@@ -123,7 +123,7 @@ func New[K comparable, V any](
 	ghostsize := estimateGhostSize(capacity())
 	ret := &Cache[K, V]{
 		capacity: capacity,
-		capacity1: func() int64 {
+		capSmall: func() int64 {
 			return capacity() / 10
 		},
 		small:     *NewQueue[*_CacheItem[K, V]](),
@@ -202,15 +202,11 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 
 // ForceEvict evicts n bytes despite capacity
 func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
-	capacityCut := c.capacity() - c.used() + n
+	capacityCut := c.capacity() - c.Used() + n
 	c.Evict(ctx, nil, capacityCut)
 }
 
 func (c *Cache[K, V]) Used() int64 {
-	return c.used()
-}
-
-func (c *Cache[K, V]) used() int64 {
 	return c.usedSmall.Load() + c.usedMain.Load()
 }
 
@@ -220,16 +216,16 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 	if target < 0 {
 		target = 0
 	}
-	target1 := c.capacity1() - capacityCut
-	if target1 < 0 {
-		target1 = 0
+	targetSmall := c.capSmall() - capacityCut
+	if targetSmall < 0 {
+		targetSmall = 0
 	}
 
 	usedsmall := c.usedSmall.Load()
 	usedmain := c.usedMain.Load()
 
 	for usedsmall+usedmain > target {
-		if usedsmall > target1 {
+		if usedsmall > targetSmall {
 			c.evictSmall(ctx)
 		} else {
 			c.evictMain(ctx)
