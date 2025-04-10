@@ -237,15 +237,10 @@ func FastApplyDeletesByRowIds(
 	)
 
 	wayA := func() {
-		slices.SortFunc(deletedRowIds, func(a, b objectio.Rowid) int {
-			return a.Compare(&b)
-		})
-		IsDeletedRowIdsSorted = true
-
 		n := float64(len(deletedRowIds))
 		m := float64(len(*leftRows))
 
-		if IsDeletedRowIdsSorted && m > n/(math.Log2(n)-1) {
+		if m > n/(math.Log2(n)-1) {
 			updateOffset := func(idx int) {
 				if idx < int(m) {
 					cur.SetRowOffset(uint32(idx))
@@ -282,7 +277,7 @@ func FastApplyDeletesByRowIds(
 				ptr++
 			}
 
-		} else if IsDeletedRowIdsSorted {
+		} else {
 			cur = types.NewRowid(checkBid, 0)
 
 			for _, o := range *leftRows {
@@ -292,6 +287,27 @@ func FastApplyDeletesByRowIds(
 				if !hit {
 					(*leftRows)[ptr] = o
 					ptr++
+				}
+			}
+		}
+
+		*leftRows = (*leftRows)[:ptr]
+	}
+
+	wayB := func() {
+		// unsorted and expected a few items to removal
+		if len(deletedRowIds) <= 32 {
+			for i := 0; i < len(deletedRowIds); i++ {
+				bid, o := deletedRowIds[i].Decode()
+				idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
+
+				if found && bid.EQ(checkBid) {
+					copy((*leftRows)[idx:], (*leftRows)[idx+1:])
+					*leftRows = (*leftRows)[:len(*leftRows)-1]
+				}
+
+				if len(*leftRows) == 0 {
+					break
 				}
 			}
 		} else {
@@ -311,42 +327,17 @@ func FastApplyDeletesByRowIds(
 					ptr++
 				}
 			}
-		}
 
-		*leftRows = (*leftRows)[:ptr]
-	}
-
-	wayB := func() {
-		for i := 0; i < len(deletedRowIds); i++ {
-			bid, o := deletedRowIds[i].Decode()
-			idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
-
-			if found && bid.EQ(checkBid) {
-				copy((*leftRows)[idx:], (*leftRows)[idx+1:])
-				*leftRows = (*leftRows)[:len(*leftRows)-1]
-			}
-
-			if len(*leftRows) == 0 {
-				break
-			}
+			*leftRows = (*leftRows)[:ptr]
 		}
 	}
-
-	// special cases:
-	// 		wayB ==> leftRows.len = 1 and deletedRowIds.len = 1
-	// 		wayB ==> leftRows.len = 8192 and deletedRowIds.len = 1
-	// 		wayA ==> leftRows.len = 1 and deletedRowIds.len = 8192
-	// 		wayA ==> leftRows.len = 8192 and deletedRowIds.len = 8192
 
 	if len(*leftRows) != 0 {
-		// how many items are we going to remove from the leftRows?
-		if len(deletedRowIds) <= 64 {
-			// expected a few removals to happen
-			wayB()
-		} else {
+		if IsDeletedRowIdsSorted {
 			wayA()
+		} else {
+			wayB()
 		}
-
 	} else if deletesMask != nil {
 		for i := 0; i < len(deletedRowIds); i++ {
 			bid, o := deletedRowIds[i].Decode()
