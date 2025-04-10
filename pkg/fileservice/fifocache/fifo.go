@@ -219,12 +219,12 @@ func (c *Cache[K, V]) Used() int64 {
 func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
 	var target int64
 	target = c.capacity() - capacityCut
-	if target < 0 {
-		target = 0
+	if target <= 0 {
+		target = 1
 	}
 	targetSmall := c.capSmall() - capacityCut
-	if targetSmall < 0 {
-		targetSmall = 0
+	if targetSmall <= 0 {
+		targetSmall = 1
 	}
 	targetMain := target - targetSmall
 
