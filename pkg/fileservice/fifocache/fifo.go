@@ -125,7 +125,11 @@ func New[K comparable, V any](
 	ret := &Cache[K, V]{
 		capacity: capacity,
 		capSmall: func() int64 {
-			return capacity() / 10
+			cs := capacity() / 10
+			if cs == 0 {
+				cs = 1
+			}
+			return cs
 		},
 		small:     *NewQueue[*_CacheItem[K, V]](),
 		main:      *NewQueue[*_CacheItem[K, V]](),
@@ -154,6 +158,9 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	// post set
 	item.postFunc(ctx, c.postSet)
 
+	// evict
+	c.evictAll(ctx, nil, 0)
+
 	// enqueue
 	if c.ghost.contains(item.key) {
 		c.ghost.remove(item.key)
@@ -164,8 +171,6 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		c.usedSmall.Add(item.size)
 	}
 
-	// evict
-	c.evictAll(ctx, nil, 0)
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
@@ -221,12 +226,13 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 	if targetSmall < 0 {
 		targetSmall = 0
 	}
+	targetMain := target - targetSmall
 
 	usedsmall := c.usedSmall.Load()
 	usedmain := c.usedMain.Load()
 
-	for usedsmall+usedmain > target {
-		if usedsmall > targetSmall {
+	for usedmain >= targetMain || usedsmall >= targetSmall {
+		if usedsmall >= targetSmall {
 			c.evictSmall(ctx)
 		} else {
 			c.evictMain(ctx)

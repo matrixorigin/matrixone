@@ -16,6 +16,7 @@ package fifocache
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -53,7 +54,7 @@ func TestCacheEvict(t *testing.T) {
 
 func TestCacheEvict2(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(2), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(20), ShardInt[int], nil, nil, nil)
 	cache.Set(ctx, 1, 1, 1)
 	cache.Set(ctx, 2, 2, 1)
 
@@ -101,7 +102,7 @@ func TestCacheEvict3(t *testing.T) {
 		cache.Get(ctx, i)
 		assert.True(t, cache.Used() <= 1024)
 	}
-	assert.Equal(t, 0, nEvict)
+	assert.Equal(t, 99, nEvict)
 	assert.Equal(t, 1024, nSet)
 	assert.Equal(t, 2048, nGet)
 
@@ -110,8 +111,98 @@ func TestCacheEvict3(t *testing.T) {
 		assert.True(t, cache.Used() <= 1024)
 	}
 	assert.Equal(t, int64(102), cache.usedSmall.Load())
-	assert.Equal(t, int64(922), cache.usedMain.Load())
-	assert.Equal(t, 1024, nEvict)
+	assert.Equal(t, int64(921), cache.usedMain.Load())
+	assert.Equal(t, 1025, nEvict)
 	assert.Equal(t, 2048, nSet)
 	assert.Equal(t, 2048, nGet)
+}
+
+func TestCacheOneHitWonder(t *testing.T) {
+	ctx := context.Background()
+	cache := New[int64, int64](fscache.ConstCapacity(1000), ShardInt[int64], nil, nil, nil)
+
+	capsmall := int64(1000)
+	for i := range capsmall {
+		cache.Set(ctx, i, i, 1)
+	}
+	assert.Equal(t, int64(0), cache.usedMain.Load())
+	fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
+}
+
+func TestCacheMoveMain(t *testing.T) {
+	ctx := context.Background()
+	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil)
+
+	for k := range int64(20) {
+		//fmt.Printf("cache set 10 items\n")
+		capsmall := int64(10)
+		for i := range capsmall {
+			cache.Set(ctx, k*10+i, k*10+i, 1)
+		}
+
+		//fmt.Printf("increment freq 2\n")
+		// increment the freq
+		for j := range 2 {
+			for i := range capsmall {
+				_, ok := cache.Get(ctx, k*10+i)
+				assert.Equal(t, ok, true)
+			}
+			_ = j
+		}
+		//fmt.Printf("Add %d to %d and Try move to main\n", (k+1)*200, (k+1)*200+capsmall)
+		// move to main
+		for i := range capsmall {
+			cache.Set(ctx, (k+1)*200+i, (k+1)*200+i, 1)
+		}
+		//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
+
+		if k < 8 {
+			assert.Equal(t, int64((k+1)*10), cache.usedMain.Load())
+		} else {
+			assert.Equal(t, int64(89), cache.usedMain.Load())
+		}
+		assert.Equal(t, int64(10), cache.usedSmall.Load())
+	}
+
+	// remove all main 0 - 99
+	//fmt.Printf("remove all main\n")
+}
+
+func TestCacheMoveGhost(t *testing.T) {
+	ctx := context.Background()
+	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil)
+
+	for k := range int64(2) {
+		//fmt.Printf("cache set 10 items\n")
+		capsmall := int64(10)
+		for i := range capsmall {
+			cache.Set(ctx, k*10+i, k*10+i, 1)
+		}
+
+		//fmt.Printf("increment freq 2\n")
+		// increment the freq
+		for j := range 2 {
+			for i := range capsmall {
+				_, ok := cache.Get(ctx, k*10+i)
+				assert.Equal(t, ok, true)
+			}
+			_ = j
+		}
+		//fmt.Printf("Add %d to %d and Try move to main\n", (k+1)*200, (k+1)*200+capsmall)
+		// move to main
+		for i := range capsmall {
+			cache.Set(ctx, (k+1)*200+i, (k+1)*200+i, 1)
+		}
+		//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
+	}
+
+	for i := 200; i < 210; i++ {
+		assert.Equal(t, cache.ghost.contains(int64(i)), true)
+
+	}
+	//assert.Equal(t, int64(10), cache.usedMain.Load())
+	//assert.Equal(t, int64(10), cache.usedSmall.Load())
+
+	// remove all main 0 - 99
+	//fmt.Printf("remove all main\n")
 }
