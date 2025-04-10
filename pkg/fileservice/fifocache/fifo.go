@@ -96,42 +96,6 @@ func (c *_CacheItem[K, V]) IncAndPost(ctx context.Context, fn func(ctx context.C
 	fn(ctx, c.key, c.value, c.size)
 }
 
-func (c *_CacheItem[K, V]) evictMainAndGoMain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.freq > 0 {
-		// decrement
-		if c.freq > 0 {
-			c.freq -= 1
-		}
-		return true
-	} else {
-		// post
-		if fn == nil {
-			return false
-		}
-		fn(ctx, c.key, c.value, c.size)
-		return false
-	}
-}
-
-func (c *_CacheItem[K, V]) evictSmallAndGoMain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.freq > 1 {
-		return true
-	} else {
-		// post
-		if fn == nil {
-			return false
-		}
-		fn(ctx, c.key, c.value, c.size)
-		return false
-	}
-}
-
 // assume cache size is 128K
 // if cache capacity is smaller than 4G, ghost size is 100%.  Otherwise, 50%
 func estimateGhostSize(capacity int64) int {
@@ -140,8 +104,8 @@ func estimateGhostSize(capacity int64) int {
 		// only 50%
 		estimate /= 2
 	}
-	if estimate < 100000 {
-		estimate = 100000
+	if estimate < 10000 {
+		estimate = 10000
 	}
 	return estimate
 }
@@ -209,15 +173,9 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 		return
 	}
 
+	// increment and postGet
 	item.IncAndPost(ctx, c.postGet)
 
-	/*
-		// postGet
-		item.postFunc(ctx, c.postGet)
-
-		// increment
-		item.inc()
-	*/
 	return item.value, true
 }
 
@@ -305,24 +263,6 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			c.ghost.add(item.key)
 			return
 		}
-
-		/*
-			if item.evictSmallAndGoMain(ctx, c.postEvict) {
-				// put main
-				c.main.enqueue(item)
-				c.usedSmall.Add(-item.size)
-				c.usedMain.Add(item.size)
-			} else {
-				// evict
-				c.htab.Remove(item.key)
-				// post evict
-				//item.postFunc(ctx, c.postEvict)
-
-				c.usedSmall.Add(-item.size)
-				c.ghost.add(item.key)
-				return
-			}
-		*/
 	}
 }
 
@@ -347,20 +287,5 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			c.usedMain.Add(-item.size)
 			return
 		}
-
-		/*
-			if item.evictMainAndGoMain(ctx, c.postEvict) {
-				// re-enqueue
-				//item.dec()
-				c.main.enqueue(item)
-			} else {
-				// evict
-				c.htab.Remove(item.key)
-				// post evict
-				//item.postFunc(ctx, c.postEvict)
-				c.usedMain.Add(-item.size)
-				return
-			}
-		*/
 	}
 }
