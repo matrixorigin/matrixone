@@ -339,7 +339,6 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 		if killConnection {
 			ses.Debugf(ctx, "kill connection %d", id)
 			rt.killConnection(killMyself)
-			rm.accountRoutine.deleteRoutine(int64(rt.ses.GetTenantInfo().GetTenantID()), rt)
 		} else {
 			ses.Debugf(ctx, "kill query %s on the connection %d", statementId, id)
 			rt.killQuery(killMyself, statementId)
