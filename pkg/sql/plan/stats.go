@@ -712,7 +712,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 				ret = 0.5
 			}
 		case "prefix_between":
-			ret = 0.1
+			ret = 0.001
 		case "isnull", "is_null":
 			ret = getNullSelectivity(exprImpl.F.Args[0], builder, true)
 		case "isnotnull", "is_not_null":

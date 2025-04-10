@@ -58,7 +58,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			continue
 		}
 
-		if fn.Func.ObjName == "=" {
+		funcName := fn.Func.ObjName
+		if funcName == "=" {
 			if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			}
@@ -69,7 +70,14 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 
 			col2filter[col.ColPos] = i
-		} else if fn.Func.ObjName == "in" {
+		} else if funcName == "between" {
+			col := fn.Args[0].GetCol()
+			if col == nil || !isRuntimeConstExpr(fn.Args[1]) || !isRuntimeConstExpr(fn.Args[2]) {
+				continue
+			}
+
+			col2filter[col.ColPos] = i
+		} else if funcName == "in" {
 			if fn.Args[0].GetCol() == nil {
 				continue
 			}
@@ -80,7 +88,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 
 			col2filter[col.ColPos] = i
-		} else if fn.Func.ObjName == "or" {
+		} else if funcName == "or" {
 			var orArgs []*plan.Expr
 			flattenLogicalExpressions(expr, "or", &orArgs)
 
@@ -208,7 +216,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 
 		filterIdx = append(filterIdx, idx)
-		if filters[idx].GetF().Func.ObjName == "in" {
+		funcName := filters[idx].GetF().Func.ObjName
+		if funcName == "in" || funcName == "between" {
 			break
 		}
 	}
@@ -234,7 +243,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	lastFilter := filters[filterIdx[len(filterIdx)-1]]
-	if lastFilter.GetF().Func.ObjName == "in" {
+	lastFuncName := lastFilter.GetF().Func.ObjName
+	if lastFuncName == "in" {
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
 			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
@@ -263,6 +273,30 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 					},
 				},
 			},
+		})
+	} else if lastFuncName == "between" {
+		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
+		for i := 0; i < len(filterIdx)-1; i++ {
+			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+		}
+
+		tmpSerialArgs := DeepCopyExprList(serialArgs)
+		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[1])
+		leftArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+
+		tmpSerialArgs = serialArgs
+		tmpSerialArgs = append(tmpSerialArgs, lastFilter.GetF().Args[2])
+		rightArg, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", tmpSerialArgs)
+
+		funcName := "between"
+		if len(filterIdx) < numParts {
+			funcName = "prefix_between"
+		}
+
+		compositePKFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
+			pkExpr,
+			leftArg,
+			rightArg,
 		})
 	} else {
 		serialArgs := make([]*plan.Expr, len(filterIdx))
