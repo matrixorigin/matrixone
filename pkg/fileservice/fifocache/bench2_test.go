@@ -13,7 +13,7 @@ import (
 
 const g_cache_size = 51200000 // 512M
 const g_item_size = 128000    // 128K
-const g_io_read_time = 50 * time.Microsecond
+const g_io_read_time = 20 * time.Microsecond
 
 func cache_read(ctx context.Context, cache *Cache[int64, int64], key int64) {
 
@@ -38,7 +38,7 @@ func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64],
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for n := 0; n < 100; n++ {
+			for n := 0; n < 50; n++ {
 
 				if n%ncpu != i {
 					continue
