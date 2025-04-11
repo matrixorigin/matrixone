@@ -1142,7 +1142,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	}()
 
 	for i, e := range txn.writes {
-		if e.bat == nil || e.bat.IsEmpty() || e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+		if e.bat == nil || e.bat.IsEmpty() ||
+			e.bat.Attrs[0] == catalog.BlockMeta_MetaLoc || // inserts object
+			e.bat.Attrs[0] == catalog.ObjectMeta_ObjectStats { // deletes object
 			continue
 		}
 
@@ -1155,23 +1157,25 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 
 		if e.typ == INSERT {
-			//inserts.Add(uint64(i))
+			inserts.Add(uint64(i))
 		} else if e.typ == DELETE {
 			deletes.Add(uint64(i))
 		}
 	}
 
-	foo := func(idxes []uint64) (err error) {
+	foo := func(idxes []int64) (err error) {
 		for i := 0; i < len(idxes); i++ {
 			a := &txn.writes[idxes[i]]
 			if a.bat == nil || a.bat.RowCount() == batch.DefaultBatchMaxRow {
 				continue
 			}
 
+			merged := false
 			for j := i + 1; j < len(idxes); j++ {
 				b := &txn.writes[idxes[j]]
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
 					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
+					merged = true
 					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
 						return err
 					}
@@ -1184,6 +1188,18 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					break
 				}
 			}
+
+			if merged && a.typ == INSERT {
+				// rewrite rowIds.
+				// all the rowIds in the batch share one blkId.
+				txn.genBlock()
+				for x := range a.bat.RowCount() {
+					rowId := txn.genRowId()
+					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](a.bat.Vecs[0], x, rowId); err != nil {
+						return err
+					}
+				}
+			}
 		}
 
 		return nil
@@ -1191,14 +1207,17 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	// this threshold may have a bad effect on the performance
 	if inserts.Count()+deletes.Count() >= 30 {
-		//ins := inserts.ToArray()
-		del := deletes.ToArray()
+		arr := common.DefaultAllocator.GetSels()
+		defer func() {
+			common.DefaultAllocator.PutSels(arr)
+		}()
 
-		// TODO: merge inserts will cause to not found in the TPCC test
-		//if err := foo(ins); err != nil {
-		//	return err
-		//}
+		ins := inserts.ToI64Array(&arr)
+		if err := foo(ins); err != nil {
+			return err
+		}
 
+		del := deletes.ToI64Array(&arr)
 		if err := foo(del); err != nil {
 			return err
 		}
@@ -1213,11 +1232,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 		}
 
-		if i < len(txn.writes) && txn.writes[i].bat == nil {
-			txn.writes = txn.writes[:i]
-		} else {
-			txn.writes = txn.writes[:i+1]
-		}
+		txn.writes = txn.writes[:i]
 	}
 
 	return nil
