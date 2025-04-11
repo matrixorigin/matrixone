@@ -259,6 +259,15 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			if err := os.Remove(f.Name()); err != nil {
+				logutil.Warn("delete file error", zap.Error(err))
+			}
+		}
+	}()
+
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
