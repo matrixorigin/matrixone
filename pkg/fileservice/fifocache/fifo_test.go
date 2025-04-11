@@ -16,7 +16,6 @@ package fifocache
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -126,7 +125,7 @@ func TestCacheOneHitWonder(t *testing.T) {
 		cache.Set(ctx, i, i, 1)
 	}
 	assert.Equal(t, int64(0), cache.usedMain.Load())
-	fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
+	//fmt.Printf("cache main %d, small %d\n", cache.usedMain.Load(), cache.usedSmall.Load())
 }
 
 func TestCacheMoveMain(t *testing.T) {

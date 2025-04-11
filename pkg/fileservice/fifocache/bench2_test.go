@@ -1,0 +1,128 @@
+package fifocache
+
+import (
+	"context"
+	"math/rand/v2"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+)
+
+const g_cache_size = 51200000 // 512M
+const g_item_size = 128000    // 128K
+const g_io_read_time = 50 * time.Microsecond
+
+func cache_read(ctx context.Context, cache *Cache[int64, int64], key int64) {
+
+	_, ok := cache.Get(ctx, key)
+	if !ok {
+		// cache miss and sleep penalty as IO read
+		time.Sleep(g_io_read_time)
+		cache.Set(ctx, key, int64(0), g_item_size)
+	}
+}
+
+func get_rand(start int64, end int64, r *rand.Rand) int64 {
+	return start + r.Int64N(end-start)
+}
+
+func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64], startkey int64, endkey int64, r *rand.Rand) {
+
+	ncpu := runtime.NumCPU()
+	var wg sync.WaitGroup
+
+	for i := 0; i < ncpu; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 100; n++ {
+
+				if n%ncpu != i {
+					continue
+				}
+
+				//fmt.Printf("start = %d, end = %d\n", startkey, endkey)
+				for range endkey - startkey {
+
+					key := get_rand(startkey, endkey, r)
+					cache_read(ctx, cache, key)
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+func BenchmarkSimCacheRead1x(b *testing.B) {
+	ctx := context.Background()
+	cache_size := g_cache_size
+	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
+	start := int64(0)
+	end := int64(g_cache_size) / int64(g_item_size)
+	r := rand.New(rand.NewPCG(1, 2))
+
+	b.ResetTimer()
+	dataset_read(b, ctx, cache, start, end, r)
+}
+
+func BenchmarkSimCacheRead1xShift(b *testing.B) {
+	data_shift(b, 1)
+}
+
+func BenchmarkSimCacheRead2x(b *testing.B) {
+	ctx := context.Background()
+	cache_size := g_cache_size
+	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
+	start := int64(0)
+	end := int64(g_cache_size) / int64(g_item_size) * 2
+	r := rand.New(rand.NewPCG(1, 2))
+
+	b.ResetTimer()
+	dataset_read(b, ctx, cache, start, end, r)
+}
+
+func BenchmarkSimCacheRead2xShift(b *testing.B) {
+	data_shift(b, 1)
+}
+
+func BenchmarkSimCacheRead4x(b *testing.B) {
+	ctx := context.Background()
+	cache_size := g_cache_size
+	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
+	start := int64(0)
+	end := int64(g_cache_size) / int64(g_item_size) * 4
+	r := rand.New(rand.NewPCG(1, 2))
+
+	b.ResetTimer()
+	dataset_read(b, ctx, cache, start, end, r)
+}
+
+func data_shift(b *testing.B, time int64) {
+	ctx := context.Background()
+	cache_size := g_cache_size
+	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
+	r := rand.New(rand.NewPCG(1, 2))
+
+	offset := int64(0)
+	start := int64(0)
+	end := int64(g_cache_size) / int64(g_item_size) * time
+	d1 := []int64{start, end}
+	offset += end
+	d2 := []int64{offset + start, offset + end}
+	offset += end
+	d3 := []int64{offset + start, offset + end}
+
+	b.ResetTimer()
+
+	dataset_read(b, ctx, cache, d1[0], d1[1], r)
+	dataset_read(b, ctx, cache, d2[0], d2[1], r)
+	dataset_read(b, ctx, cache, d3[0], d3[1], r)
+}
+
+func BenchmarkSimCacheRead4xShift(b *testing.B) {
+	data_shift(b, 4)
+}
