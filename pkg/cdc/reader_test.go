@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -192,9 +191,10 @@ func Test_tableReader_Run(t *testing.T) {
 	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
 	defer stub8.Reset()
 
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}
@@ -282,13 +282,14 @@ func Test_tableReader_readTable(t *testing.T) {
 		},
 	)
 
+	taskId := NewTaskId()
 	reader := &tableReader{
 		packerPool:     pool,
 		runningReaders: &sync.Map{},
 		sinker:         NewConsoleSinker(nil, nil),
 		wMarkUpdater: &WatermarkUpdater{
 			accountId:    1,
-			taskId:       uuid.New(),
+			taskId:       taskId.String(),
 			ie:           newWmMockSQLExecutor(),
 			watermarkMap: &sync.Map{},
 		},
@@ -342,9 +343,10 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 	put := pool.Get(&packer)
 	defer put.Put()
 
+	taskId := NewTaskId()
 	watermarkUpdater := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}
