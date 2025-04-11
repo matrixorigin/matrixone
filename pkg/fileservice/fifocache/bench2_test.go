@@ -57,50 +57,6 @@ func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64],
 	wg.Wait()
 }
 
-func BenchmarkSimCacheRead1x(b *testing.B) {
-	ctx := context.Background()
-	cache_size := g_cache_size
-	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
-	start := int64(0)
-	end := int64(g_cache_size) / int64(g_item_size)
-	r := rand.New(rand.NewPCG(1, 2))
-
-	b.ResetTimer()
-	dataset_read(b, ctx, cache, start, end, r)
-}
-
-func BenchmarkSimCacheRead1xShift(b *testing.B) {
-	data_shift(b, 1)
-}
-
-func BenchmarkSimCacheRead2x(b *testing.B) {
-	ctx := context.Background()
-	cache_size := g_cache_size
-	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
-	start := int64(0)
-	end := int64(g_cache_size) / int64(g_item_size) * 2
-	r := rand.New(rand.NewPCG(1, 2))
-
-	b.ResetTimer()
-	dataset_read(b, ctx, cache, start, end, r)
-}
-
-func BenchmarkSimCacheRead2xShift(b *testing.B) {
-	data_shift(b, 1)
-}
-
-func BenchmarkSimCacheRead4x(b *testing.B) {
-	ctx := context.Background()
-	cache_size := g_cache_size
-	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
-	start := int64(0)
-	end := int64(g_cache_size) / int64(g_item_size) * 4
-	r := rand.New(rand.NewPCG(1, 2))
-
-	b.ResetTimer()
-	dataset_read(b, ctx, cache, start, end, r)
-}
-
 func data_shift(b *testing.B, time int64) {
 	ctx := context.Background()
 	cache_size := g_cache_size
@@ -121,6 +77,38 @@ func data_shift(b *testing.B, time int64) {
 	dataset_read(b, ctx, cache, d1[0], d1[1], r)
 	dataset_read(b, ctx, cache, d2[0], d2[1], r)
 	dataset_read(b, ctx, cache, d3[0], d3[1], r)
+}
+
+func data_readNx(b *testing.B, time int64) {
+	ctx := context.Background()
+	cache_size := g_cache_size
+	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
+	start := int64(0)
+	end := int64(g_cache_size) / int64(g_item_size) * time
+	r := rand.New(rand.NewPCG(1, 2))
+
+	b.ResetTimer()
+	dataset_read(b, ctx, cache, start, end, r)
+}
+
+func BenchmarkSimCacheRead1x(b *testing.B) {
+	data_readNx(b, 1)
+}
+
+func BenchmarkSimCacheRead1xShift(b *testing.B) {
+	data_shift(b, 1)
+}
+
+func BenchmarkSimCacheRead2x(b *testing.B) {
+	data_readNx(b, 2)
+}
+
+func BenchmarkSimCacheRead2xShift(b *testing.B) {
+	data_shift(b, 2)
+}
+
+func BenchmarkSimCacheRead4x(b *testing.B) {
+	data_readNx(b, 4)
 }
 
 func BenchmarkSimCacheRead4xShift(b *testing.B) {
