@@ -2964,3 +2964,134 @@ func Test_parseTimestamp(t *testing.T) {
 	_, err = CDCStrToTime("2006-01-02T15:04:05-07:00", nil)
 	assert.NoError(t, err)
 }
+
+func TestCDCParseGranularityTuple(t *testing.T) {
+	tests := []struct {
+		name    string
+		level   string
+		pattern string
+		dup     map[string]struct{}
+		want    *cdc.PatternTuple
+		wantErr bool
+	}{
+		{
+			name:    "db level - single db",
+			level:   cdc.CDCPitrGranularity_DB,
+			pattern: "db1",
+			dup:     make(map[string]struct{}),
+			want: &cdc.PatternTuple{
+				OriginString: "db1",
+				Source: cdc.PatternTable{
+					Database: "db1",
+					Table:    cdc.CDCPitrGranularity_All,
+				},
+				Sink: cdc.PatternTable{
+					Database: "db1",
+					Table:    cdc.CDCPitrGranularity_All,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "db level - source and sink",
+			level:   cdc.CDCPitrGranularity_DB,
+			pattern: "db1:db2",
+			dup:     make(map[string]struct{}),
+			want: &cdc.PatternTuple{
+				OriginString: "db1:db2",
+				Source: cdc.PatternTable{
+					Database: "db1",
+					Table:    cdc.CDCPitrGranularity_All,
+				},
+				Sink: cdc.PatternTable{
+					Database: "db2",
+					Table:    cdc.CDCPitrGranularity_All,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "table level - single table",
+			level:   cdc.CDCPitrGranularity_Table,
+			pattern: "db1.t1",
+			dup:     make(map[string]struct{}),
+			want: &cdc.PatternTuple{
+				OriginString: "db1.t1",
+				Source: cdc.PatternTable{
+					Database: "db1",
+					Table:    "t1",
+				},
+				Sink: cdc.PatternTable{
+					Database: "db1",
+					Table:    "t1",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "table level - source and sink",
+			level:   cdc.CDCPitrGranularity_Table,
+			pattern: "db1.t1:db2.t2",
+			dup:     make(map[string]struct{}),
+			want: &cdc.PatternTuple{
+				OriginString: "db1.t1:db2.t2",
+				Source: cdc.PatternTable{
+					Database: "db1",
+					Table:    "t1",
+				},
+				Sink: cdc.PatternTable{
+					Database: "db2",
+					Table:    "t2",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "invalid pattern - multiple colons",
+			level:   cdc.CDCPitrGranularity_DB,
+			pattern: "db1:db2:db3",
+			dup:     make(map[string]struct{}),
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "no duplicate source",
+			level:   cdc.CDCPitrGranularity_DB,
+			pattern: "db1",
+			dup:     map[string]struct{}{"db1": {}},
+			want: &cdc.PatternTuple{
+				OriginString: "db1",
+				Source: cdc.PatternTable{
+					Database: "db1",
+					Table:    cdc.CDCPitrGranularity_All,
+				},
+				Sink: cdc.PatternTable{
+					Database: "db1",
+					Table:    cdc.CDCPitrGranularity_All,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "duplicate source",
+			level:   cdc.CDCPitrGranularity_DB,
+			pattern: "db1",
+			dup:     map[string]struct{}{"db1.*": {}},
+			want:    nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := CDCParseGranularityTuple(context.Background(), tt.level, tt.pattern, tt.dup)
+			t.Logf("got: %v, err: %v", got, err)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
