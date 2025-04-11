@@ -38,7 +38,7 @@ func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64],
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for n := 0; n < 50; n++ {
+			for n := 0; n < b.N; n++ {
 
 				if n%ncpu != i {
 					continue
