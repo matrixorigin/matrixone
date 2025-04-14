@@ -63,3 +63,35 @@ func TestObjectList(t *testing.T) {
 	t.Log(ll.getNodes(entry1.ID(), true))
 	t.Log(ll.getNodes(entry1.ID(), false))
 }
+
+func TestGetSoftdeleteObjects(t *testing.T) {
+	db := MockDBEntryWithAccInfo(0, 0)
+	tbl := MockTableEntryWithDB(db, 1)
+
+	// Test empty table
+	objs := tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(2, 0))
+	require.Equal(t, 0, len(objs))
+
+	// Add some objects
+	obj1 := MockObjEntryWithTbl(tbl, 10, false)
+	obj1.DeletedAt = types.BuildTS(2, 0)
+	tbl.dataObjects.Set(obj1)
+
+	obj2 := MockObjEntryWithTbl(tbl, 20, false)
+	obj2.DeletedAt = types.BuildTS(3, 0)
+	tbl.dataObjects.Set(obj2)
+
+	// Test getting objects between ts1 and ts2
+	objs = tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(2, 0))
+	require.Equal(t, 1, len(objs))
+	require.Equal(t, obj1.ID(), objs[0].ID())
+
+	// Test getting objects between ts2 and ts3
+	objs = tbl.GetSoftdeleteObjects(types.BuildTS(2, 1), types.BuildTS(3, 0))
+	require.Equal(t, 1, len(objs))
+	require.Equal(t, obj2.ID(), objs[0].ID())
+
+	// Test getting all objects
+	objs = tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(3, 0))
+	require.Equal(t, 2, len(objs))
+}
