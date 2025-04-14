@@ -157,10 +157,10 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	//Stats only stats the committed data of the table.
-	//if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
-	//	strings.ToUpper(tbl.relKind) == "V" {
-	//	return nil, nil
-	//}
+	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
+		strings.ToUpper(tbl.relKind) == "V" {
+		return nil, nil
+	}
 	//return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 	//	AccId:      tbl.accountId,
 	//	DatabaseID: tbl.db.databaseId,

@@ -387,6 +387,9 @@ func (c *PushClient) toSubscribeTable(
 	dbName string,
 ) (ps *logtailreplay.PartitionState, err error) {
 
+	defer func () {
+		c.eng.globalStats.notifyLogtailUpdate(tableID, ps != nil)
+	}()
 	var skip bool
 	if skip, ps = c.skipSubIfSubscribed(ctx, tableID, dbID); skip {
 		return ps, nil
