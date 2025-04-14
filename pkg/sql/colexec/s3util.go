@@ -166,7 +166,7 @@ func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.Obje
 			for _, bat := range w.hold {
 				bat.Clean(mp)
 			}
-			w.hold = w.hold[:0]
+			w.hold = nil
 		}
 	}()
 
@@ -351,7 +351,7 @@ func (w *CNS3Writer) OutputRawData(
 			for _, bat := range w.hold {
 				bat.Clean(proc.Mp())
 			}
-			w.hold = w.hold[:0]
+			w.hold = nil
 		}
 	}()
 
