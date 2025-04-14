@@ -777,8 +777,12 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 
 	//  When removing the PartitionState, you need to remove the tid in globalStats,
 	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	//e.globalStats.RemoveTid(tblId)
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+}
+
+func (e *Engine) safeToUnsubscribe(tid uint64) bool {
+	return e.globalStats.safeToUnsubscribe(tid)
 }
 
 func (e *Engine) PushClient() *PushClient {

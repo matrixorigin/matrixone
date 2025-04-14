@@ -356,6 +356,8 @@ func (e *Engine) init(ctx context.Context) error {
 	}
 
 	e.catalog.Store(newcache)
+	// clear all tables in global stats.
+	e.globalStats.clearTables()
 	return nil
 }
 

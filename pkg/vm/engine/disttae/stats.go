@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -44,7 +46,42 @@ var (
 	// MinUpdateInterval is the minimal interval to update stats info as it
 	// is necessary to update stats every time.
 	MinUpdateInterval = time.Second * 15
+
+	initCheckInterval = time.Millisecond * 10
+	maxCheckInterval  = time.Second * 5
+	checkTimeout      = time.Minute
 )
+
+// waitKeeper is used to mark the table has finished waited,
+// only after which, the table can be unsubscribed.
+type waitKeeper struct {
+	sync.Mutex
+	records map[uint64]struct{}
+}
+
+func newWaitKeeper() *waitKeeper {
+	return &waitKeeper{
+		records: make(map[uint64]struct{}),
+	}
+}
+
+func (w *waitKeeper) reset() {
+	w.Lock()
+	defer w.Unlock()
+	w.records = make(map[uint64]struct{})
+}
+
+func (w *waitKeeper) add(tid uint64) {
+	w.Lock()
+	defer w.Unlock()
+	w.records[tid] = struct{}{}
+}
+
+func (w *waitKeeper) del(tid uint64) {
+	w.Lock()
+	defer w.Unlock()
+	delete(w.records, tid)
+}
 
 type updateStatsRequest struct {
 	// statsInfo is the field which is to update.
@@ -77,6 +114,27 @@ func newUpdateStatsRequest(
 		ts:              ts,
 		approxObjectNum: approxObjectNum,
 	}
+}
+
+type updateItem struct {
+	tableID uint64
+	updated bool
+}
+
+type logtailUpdate struct {
+	c  chan *updateItem
+	mu struct {
+		sync.Mutex
+		updated map[uint64]bool
+	}
+}
+
+func newLogtailUpdate() *logtailUpdate {
+	u := &logtailUpdate{
+		c: make(chan *updateItem, 1000),
+	}
+	u.mu.updated = make(map[uint64]bool)
+	return u
 }
 
 type GlobalStatsConfig struct {
@@ -136,6 +194,8 @@ type GlobalStats struct {
 		updating map[pb.StatsInfoKey]*updateRecord
 	}
 
+	logtailUpdate *logtailUpdate
+
 	// tableLogtailCounter is the counter of the logtail entry of stats info key.
 	tableLogtailCounter map[pb.StatsInfoKey]int64
 
@@ -152,6 +212,10 @@ type GlobalStats struct {
 		statsInfoMap map[pb.StatsInfoKey]*pb.StatsInfo
 	}
 
+	// waitKeeper is used to make sure the table is safe to unsubscribe.
+	// Only when the table is finished waited, it can be unsubscribed safely.
+	waitKeeper *waitKeeper
+
 	// updateWorkerFactor is the times of CPU number of this node
 	// to start update worker. Default is 8.
 	updateWorkerFactor int
@@ -166,6 +230,8 @@ type GlobalStats struct {
 	statsUpdater func(context.Context, *logtailreplay.PartitionState, pb.StatsInfoKey, *pb.StatsInfo) bool
 	// for test only currently.
 	approxObjectNumUpdater func() int64
+	// pool is for logtail update item.
+	pool sync.Pool
 }
 
 func NewGlobalStats(
@@ -176,9 +242,16 @@ func NewGlobalStats(
 		engine:              e,
 		tailC:               make(chan *logtail.TableLogtail, 10000),
 		updateC:             make(chan pb.StatsInfoKeyWithContext, 3000),
+		logtailUpdate:       newLogtailUpdate(),
 		tableLogtailCounter: make(map[pb.StatsInfoKey]int64),
 		KeyRouter:           keyRouter,
 		queueWatcher:        newQueueWatcher(),
+		waitKeeper:          newWaitKeeper(),
+		pool: sync.Pool{
+			New: func() interface{} {
+				return &updateItem{}
+			},
+		},
 	}
 	s.updatingMu.updating = make(map[pb.StatsInfoKey]*updateRecord)
 	s.mu.statsInfoMap = make(map[pb.StatsInfoKey]*pb.StatsInfo)
@@ -308,6 +381,35 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	return info
 }
 
+func (gs *GlobalStats) RemoveTid(tid uint64) {
+	gs.waitKeeper.del(tid)
+
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	delete(gs.logtailUpdate.mu.updated, tid)
+}
+
+// clearTables clears the tables in the map if there are any tables in it.
+func (gs *GlobalStats) clearTables() {
+	// clear all the waiters in the keeper.
+	gs.waitKeeper.reset()
+
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	if len(gs.logtailUpdate.mu.updated) > 0 {
+		gs.logtailUpdate.mu.updated = make(map[uint64]bool)
+	}
+}
+
+func (gs *GlobalStats) safeToUnsubscribe(tid uint64) bool {
+	gs.waitKeeper.Lock()
+	defer gs.waitKeeper.Unlock()
+	if _, ok := gs.waitKeeper.records[tid]; ok {
+		return true
+	}
+	return false
+}
+
 func (gs *GlobalStats) enqueue(tail *logtail.TableLogtail) {
 	select {
 	case gs.tailC <- tail:
@@ -410,6 +512,104 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 	}
 }
 
+func (gs *GlobalStats) notifyLogtailUpdate(tid uint64, updated bool) {
+	gs.logtailUpdate.mu.Lock()
+	defer gs.logtailUpdate.mu.Unlock()
+	_, ok := gs.logtailUpdate.mu.updated[tid]
+	if ok {
+		return
+	}
+	gs.logtailUpdate.mu.updated[tid] = updated
+
+	item := gs.pool.Get().(*updateItem)
+	item.tableID = tid
+	item.updated = updated
+	select {
+	case gs.logtailUpdate.c <- item:
+	default:
+	}
+}
+
+// waitLogtailUpdated returns if the table's logtail is updated.
+// if wait timeout, return timeout error.
+func (gs *GlobalStats) waitLogtailUpdated(tid uint64) (bool, error) {
+	defer gs.waitKeeper.add(tid)
+
+	// If the tid is less than reserved, return immediately.
+	if tid < catalog.MO_RESERVED_MAX{
+		return true, nil
+	}
+
+	// checkUpdated is a function used to check if the table's
+	// first logtail has been received. Return true means that
+	// the first logtail has already been received by the CN server.
+	checkUpdated := func() (bool, bool) {
+		gs.logtailUpdate.mu.Lock()
+		defer gs.logtailUpdate.mu.Unlock()
+		updated, ok := gs.logtailUpdate.mu.updated[tid]
+		return updated, ok
+	}
+
+	// just return if the logtail of the table already received.
+	updated, ok := checkUpdated()
+	if ok {
+		return updated, nil
+	}
+
+	// There are three ways to break out of the select:
+	//   1. context done
+	//   2. interval checking, whose init interval is 10ms and max interval is 5s
+	//   3. logtail update notify, to check if it is the required table.
+	checkInterval := initCheckInterval
+	timer := time.NewTimer(checkInterval)
+	defer timer.Stop()
+	timeout := time.NewTimer(checkTimeout)
+	defer timeout.Stop()
+
+	var timeoutCount int
+	const maxTimeoutCount = 3
+
+	for {
+		updated, ok = checkUpdated()
+		if ok {
+			return updated, nil
+		}
+		if timeoutCount > maxTimeoutCount {
+			return false, moerr.NewInternalErrorNoCtx("wait logtail update timeout")
+		}
+		select {
+		case <-gs.ctx.Done():
+			return false, gs.ctx.Err()
+
+		case <-timeout.C:
+			logutil.Warnf("wait logtail updated timeout, table ID: %d", tid)
+			timeout.Reset(checkTimeout)
+			timeoutCount++
+
+		case <-timer.C:
+			updated, ok = checkUpdated()
+			if ok {
+				return updated, nil
+			}
+			// Increase the check interval to reduce the CPU usage.
+			// The max interval is 5s, means we check the logtail of
+			// the table every 5s at last.
+			checkInterval = checkInterval * 2
+			if checkInterval > maxCheckInterval {
+				checkInterval = maxCheckInterval
+			}
+			timer.Reset(checkInterval)
+
+		case item := <-gs.logtailUpdate.c:
+			if item.tableID == tid {
+				gs.pool.Put(item)
+				return item.updated, nil
+			}
+			gs.pool.Put(item)
+		}
+	}
+}
+
 // shouldUpdate returns true only the stats of the key should be updated.
 func (gs *GlobalStats) shouldUpdate(key pb.StatsInfoKey) bool {
 	gs.updatingMu.Lock()
@@ -501,21 +701,35 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	// Get the latest partition state of the table.
 	//Notice that for snapshot read, subscribing the table maybe failed since the invalid table id,
 	//We should handle this case in next PR if needed.
-	ps, err := gs.engine.pClient.toSubscribeTable(
-		wrapKey.Ctx,
-		wrapKey.Key.TableID,
-		wrapKey.Key.TableName,
-		wrapKey.Key.DatabaseID,
-		wrapKey.Key.DbName)
+	//ps, err := gs.engine.pClient.toSubscribeTable(
+	//	wrapKey.Ctx,
+	//	wrapKey.Key.TableID,
+	//	wrapKey.Key.TableName,
+	//	wrapKey.Key.DatabaseID,
+	//	wrapKey.Key.DbName)
+	//if err != nil {
+	//	logutil.Warnf(
+	//		"updateTableStats:failed to subsrcribe table[%d-%s], error:%s",
+	//		wrapKey.Key.TableID,
+	//		wrapKey.Key.TableName,
+	//		err)
+	//	broadcastWithoutUpdate()
+	//	return
+	//}
+// wait until the table's logtail has been updated.
+	logtailUpdated, err := gs.waitLogtailUpdated(wrapKey.Key.TableID)
 	if err != nil {
-		logutil.Warnf(
-			"updateTableStats:failed to subsrcribe table[%d-%s], error:%s",
-			wrapKey.Key.TableID,
-			wrapKey.Key.TableName,
-			err)
+		logutil.Errorf("wait logtail updated error: %s, table ID: %d", err, wrapKey.Key.TableID)
 		broadcastWithoutUpdate()
 		return
 	}
+	if !logtailUpdated {
+		logutil.Warnf("logtail not updated, table ID: %d", wrapKey.Key.TableID)
+		broadcastWithoutUpdate()
+		return
+	}
+	ps := gs.engine.GetOrCreateLatestPart(wrapKey.Key.DatabaseID, wrapKey.Key.TableID).Snapshot()
+
 	stats := plan2.NewStatsInfo()
 
 	newCtx := perfcounter.AttachS3RequestKey(wrapKey.Ctx, crs)

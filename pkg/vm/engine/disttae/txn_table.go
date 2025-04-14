@@ -157,17 +157,65 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	//Stats only stats the committed data of the table.
-	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
-		strings.ToUpper(tbl.relKind) == "V" {
+	//if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
+	//	strings.ToUpper(tbl.relKind) == "V" {
+	//	return nil, nil
+	//}
+	//return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+	//	AccId:      tbl.accountId,
+	//	DatabaseID: tbl.db.databaseId,
+	//	TableID:    tbl.tableId,
+	//	TableName:  tbl.tableName,
+	//	DbName:     tbl.db.databaseName,
+	//}, sync), nil
+
+	_, err := tbl.getPartitionState(ctx)
+	if err!= nil {
+		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
+		return nil, err
+	}
+	if !tbl.db.op.IsSnapOp() {
+		return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+			AccId:      tbl.accountId,
+			DatabaseID: tbl.db.databaseId,
+			TableID:    tbl.tableId,
+			TableName:  tbl.tableName,
+			DbName:     tbl.db.databaseName,
+		}, sync), nil
+	}
+	info, err := tbl.stats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
+	partitionState, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	e := tbl.db.getEng()
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
+	if approxObjectNum == 0 {
+		// There are no objects flushed yet.
 		return nil, nil
 	}
-	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
-		AccId:      tbl.accountId,
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-		TableName:  tbl.tableName,
-		DbName:     tbl.db.databaseName,
-	}, sync), nil
+
+	stats := plan2.NewStatsInfo()
+	req := newUpdateStatsRequest(
+		tbl.tableDef,
+		partitionState,
+		e.fs,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+		approxObjectNum,
+		stats,
+	)
+	if err := UpdateStats(ctx, req, nil); err != nil {
+		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
+		return nil, err
+	}
+	return stats, nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
