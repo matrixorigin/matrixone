@@ -117,25 +117,26 @@ func (txn *Transaction) WriteBatch(
 			panic("rowid should not be generated in Insert WriteBatch")
 		}
 		txn.genBlock()
-		len := bat.RowCount()
 		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
+		for i, cnt := 0, bat.RowCount(); i < cnt; i++ {
+			if err := vector.AppendFixed(
+				genRowidVec,
+				txn.genRowId(),
+				false,
+				txn.proc.Mp(),
+			); err != nil {
 				return nil, err
 			}
 		}
-		bat.Vecs = append([]*vector.Vector{genRowidVec}, bat.Vecs...)
-		bat.Attrs = append([]string{objectio.PhysicalAddr_Attr}, bat.Attrs...)
-		if tableId != catalog.MO_DATABASE_ID &&
-			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
+		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+
+		if !catalog.IsSystemTable(tableId) {
 			txn.approximateInMemInsertSize += uint64(bat.Size())
 			txn.approximateInMemInsertCnt += bat.RowCount()
 		}
 	}
 
-	if typ == DELETE && tableId != catalog.MO_DATABASE_ID &&
-		tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
+	if typ == DELETE && !catalog.IsSystemTable(tableId) {
 		txn.approximateInMemDeleteCnt += bat.RowCount()
 	}
 
