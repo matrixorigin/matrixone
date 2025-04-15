@@ -129,6 +129,7 @@ cgo:
 .PHONY: thirdparties
 thirdparties:
 	@(cd thirdparties; ${MAKE})
+	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
 
 # build mo-service binary
 .PHONY: build
@@ -254,6 +255,7 @@ clean:
 	rm -rf /tmp/$(MUSL_TAR)
 	$(MAKE) -C cgo clean
 	$(MAKE) -C thirdparties clean
+	rm -rf $(ROOT_DIR)/lib
 
 ###############################################################################
 # static checks
