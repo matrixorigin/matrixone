@@ -32,7 +32,7 @@ func Benchmark_L2Distance(b *testing.B) {
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			_ = L2Distance[float64](v1[i], v2[i])
+			_, _ = L2Distance[float64](v1[i], v2[i])
 		}
 	})
 
@@ -53,7 +53,7 @@ func Benchmark_L2Distance(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			res := make([]float64, dim)
 			_ = NormalizeL2[float64](v2[i], res)
-			_ = L2Distance[float64](v1[i], res)
+			_, _ = L2Distance[float64](v1[i], res)
 		}
 	})
 
