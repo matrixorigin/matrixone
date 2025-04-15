@@ -220,20 +220,19 @@ func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
 }
 
 func (c *PushClient) GetState() State {
-	// Need to lock all segments to get information for all tables
-	for i := 0; i < c.subscribed.segments; i++ {
-		c.subscribed.segmentLock[i].Lock()
-	}
-	defer func() {
-		for i := 0; i < c.subscribed.segments; i++ {
-			c.subscribed.segmentLock[i].Unlock()
-		}
-	}()
+	// Need to collect data from all shards
+	subTables := make(map[uint64]SubTableStatus)
 
-	subTables := make(map[uint64]SubTableStatus, len(c.subscribed.m))
-	for k, v := range c.subscribed.m {
-		subTables[k] = v
+	// Lock each shard one at a time to collect data
+	for i := 0; i < c.subscribed.segments; i++ {
+		shard := &c.subscribed.shards[i]
+		shard.RLock()
+		for k, v := range shard.tables {
+			subTables[k] = v
+		}
+		shard.RUnlock()
 	}
+
 	return State{
 		LatestTS:  c.receivedLogTailTime.getTimestamp(),
 		SubTables: subTables,
@@ -242,7 +241,11 @@ func (c *PushClient) GetState() State {
 
 // Only used for ut
 func (c *PushClient) SetSubscribeState(dbId, tblId uint64, state SubscribeState) {
-	c.subscribed.m[tblId] = SubTableStatus{
+	shard := c.subscribed.getShard(tblId)
+	shard.Lock()
+	defer shard.Unlock()
+
+	shard.tables[tblId] = SubTableStatus{
 		DBID:       dbId,
 		SubState:   state,
 		LatestTime: time.Now(),
@@ -254,14 +257,12 @@ func (c *PushClient) IsSubscriberReady() bool {
 }
 
 func (c *PushClient) IsSubscribed(tblId uint64) bool {
-	lock := c.subscribed.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := c.subscribed.getShard(tblId)
+	shard.RLock()
+	defer shard.RUnlock()
 
-	if _, ok := c.subscribed.m[tblId]; ok {
-		return true
-	}
-	return false
+	_, ok := shard.tables[tblId]
+	return ok
 }
 
 type connector struct {
@@ -300,14 +301,13 @@ func (c *PushClient) init(
 	timestampWaiter client.TimestampWaiter,
 	e *Engine,
 ) error {
-
 	c.serviceID = e.GetService()
 	c.timestampWaiter = timestampWaiter
 	if c.subscriber == nil {
 		c.subscriber = newLogTailSubscriber()
 	}
 
-	// lock all.
+	// Lock all.
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
 	c.receivedLogTailTime.e = e
@@ -315,26 +315,20 @@ func (c *PushClient) init(
 	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
 
-	// Initialize sharded locks
+	// Initialize sharded maps
 	if c.subscribed.segments == 0 {
-		c.subscribed.segments = 32 // Use 32 segments, can be adjusted based on actual needs
-		c.subscribed.segmentLock = make([]sync.Mutex, c.subscribed.segments)
-	}
-
-	// Need to lock all segments
-	for i := 0; i < c.subscribed.segments; i++ {
-		c.subscribed.segmentLock[i].Lock()
-	}
-
-	defer func() {
-		// Unlock all segments
+		c.subscribed.init(32) // Use 32 segments by default
+	} else {
+		// If segments are already initialized, just clear the maps
 		for i := 0; i < c.subscribed.segments; i++ {
-			c.subscribed.segmentLock[i].Unlock()
+			shard := &c.subscribed.shards[i]
+			shard.Lock()
+			clear(shard.tables)
+			shard.Unlock()
 		}
-	}()
+	}
 
 	c.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
-	c.subscribed.m = make(map[uint64]SubTableStatus)
 
 	if !c.initialized {
 		c.connector = newConnector(c, e)
@@ -964,19 +958,19 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
 	}
 
-	lock := c.subscribed.getSegmentLock(tbID)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := c.subscribed.getShard(tbID)
+	shard.Lock()
+	defer shard.Unlock()
 
 	k := tbID
-	status, ok := c.subscribed.m[k]
+	status, ok := shard.tables[k]
 	if !ok || status.SubState != Subscribed {
 		logutil.Infof("%s table %d-%d is not subscribed yet", logTag, dbID, tbID)
 		return nil
 	}
 
 	dbID = status.DBID
-	c.subscribed.m[k] = SubTableStatus{
+	shard.tables[k] = SubTableStatus{
 		DBID:       dbID,
 		SubState:   Unsubscribing,
 		LatestTime: status.LatestTime,
@@ -992,47 +986,63 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 
 func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	shouldClean := time.Now().Add(-unsubscribeTimer)
-
-	// Need to access all tables, lock all segments
-	for i := 0; i < c.subscribed.segments; i++ {
-		c.subscribed.segmentLock[i].Lock()
-	}
-	defer func() {
-		for i := 0; i < c.subscribed.segments; i++ {
-			c.subscribed.segmentLock[i].Unlock()
-		}
-	}()
-
 	var err error
-	for k, v := range c.subscribed.m {
-		if ifShouldNotDistribute(v.DBID, k) {
-			// never unsubscribe the mo_databases, mo_tables, mo_columns.
-			continue
+
+	// Process each shard individually to reduce lock contention
+	for i := 0; i < c.subscribed.segments; i++ {
+		shard := &c.subscribed.shards[i]
+		shard.Lock()
+
+		// Create a list of tables to unsubscribe within this shard
+		var tablesToUnsubscribe []struct {
+			tableID uint64
+			dbID    uint64
 		}
-		if !v.LatestTime.After(shouldClean) {
-			if v.SubState != Subscribed {
+
+		for k, v := range shard.tables {
+			if ifShouldNotDistribute(v.DBID, k) {
+				// never unsubscribe the mo_databases, mo_tables, mo_columns.
 				continue
 			}
-			c.subscribed.m[k] = SubTableStatus{
-				SubState:   Unsubscribing,
-				LatestTime: v.LatestTime,
+			if !v.LatestTime.After(shouldClean) && v.SubState == Subscribed {
+				tablesToUnsubscribe = append(tablesToUnsubscribe, struct {
+					tableID uint64
+					dbID    uint64
+				}{tableID: k, dbID: v.DBID})
+
+				// Mark as unsubscribing
+				shard.tables[k] = SubTableStatus{
+					DBID:       v.DBID,
+					SubState:   Unsubscribing,
+					LatestTime: v.LatestTime,
+				}
 			}
+		}
+
+		// Process unsubscribe requests outside the lock
+		for _, table := range tablesToUnsubscribe {
 			if err = c.subscriber.sendUnSubscribe(
 				ctx,
-				api.TableID{DbId: v.DBID, TbId: k}); err == nil {
+				api.TableID{DbId: table.dbID, TbId: table.tableID}); err == nil {
 				logutil.Infof("%s send unsubscribe tbl[db: %d, tbl: %d] request succeed",
 					logTag,
-					v.DBID,
-					k)
-				continue
+					table.dbID,
+					table.tableID)
+			} else {
+				logutil.Errorf("%s send unsubsribe tbl[dbId: %d, tblId: %d] request failed, err : %s",
+					logTag,
+					table.dbID,
+					table.tableID,
+					err.Error())
+				break
 			}
-			logutil.Errorf("%s send unsubsribe tbl[dbId: %d, tblId: %d] request failed, err : %s",
-				logTag,
-				v.DBID,
-				k,
-				err.Error())
+		}
+
+		if err != nil {
+			shard.Unlock()
 			break
 		}
+		shard.Unlock()
 	}
 }
 
@@ -1100,17 +1110,32 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 type subscribedTable struct {
 	eng *Engine
 
-	// Use sharded locks instead of a single mutex to reduce contention
-	segments    int
-	segmentLock []sync.Mutex
-
-	// value is table's latest use time.
-	m map[uint64]SubTableStatus
+	// Use sharded hash map with separate locks for better concurrency
+	segments int
+	shards   []tableShard
 }
 
-// getSegmentLock returns the corresponding lock based on table ID hash
-func (s *subscribedTable) getSegmentLock(tableID uint64) *sync.Mutex {
-	return &s.segmentLock[int(tableID)%s.segments]
+// tableShard represents a single shard of the sharded map
+type tableShard struct {
+	sync.RWMutex
+	tables map[uint64]SubTableStatus // map from tableID to its subscription status
+}
+
+// init initializes the sharded map structure
+func (s *subscribedTable) init(numShards int) {
+	if numShards <= 0 {
+		numShards = 32 // Default to 32 shards
+	}
+	s.segments = numShards
+	s.shards = make([]tableShard, numShards)
+	for i := 0; i < numShards; i++ {
+		s.shards[i].tables = make(map[uint64]SubTableStatus)
+	}
+}
+
+// getShard returns the appropriate shard for a table ID
+func (s *subscribedTable) getShard(tableID uint64) *tableShard {
+	return &s.shards[int(tableID)%s.segments]
 }
 
 type SubTableStatus struct {
@@ -1120,38 +1145,42 @@ type SubTableStatus struct {
 }
 
 func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionState, bool, SubscribeState) {
-	s := &c.subscribed
-	lock := s.getSegmentLock(tId)
-	lock.Lock()
-	defer lock.Unlock()
-
-	v, exist := s.m[tId]
+	shard := c.subscribed.getShard(tId)
+	shard.Lock()
+	defer shard.Unlock()
+	v, exist := shard.tables[tId]
 	if exist && v.SubState == Subscribed {
-		//update latest time
-		s.m[tId] = SubTableStatus{
+
+		// Update the last access time
+		shard.tables[tId] = SubTableStatus{
 			DBID:       dbId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
+
 		return c.eng.GetOrCreateLatestPart(dbId, tId).Snapshot(), true, Subscribed
 	}
+
 	if !exist {
 		return nil, false, Unsubscribed
 	}
-	return nil, false, v.SubState
+
+	state := v.SubState
+	return nil, false, state
 }
 
 func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
-	lock := c.subscribed.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := c.subscribed.getShard(tblId)
+	shard.Lock()
+	defer shard.Unlock()
 
-	_, ok := c.subscribed.m[tblId]
+	_, ok := shard.tables[tblId]
 	if !ok {
 		if !c.subscriber.ready() {
 			if err := func() error {
-				lock.Unlock()
-				defer lock.Lock()
+				// Need to release lock while waiting for subscriber readiness
+				shard.Unlock()
+				defer shard.Lock()
 				if err := c.subscriber.waitReady(ctx); err != nil {
 					return err
 				}
@@ -1160,39 +1189,60 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 				return InvalidSubState, err
 			}
 		}
-		v, exist := c.subscribed.m[tblId]
+
+		// Check again after reacquiring the lock
+		v, exist := shard.tables[tblId]
 		if exist && v.SubState == Subscribed {
-			return Subscribed, nil
+			state := v.SubState
+			shard.Unlock()
+			return state, nil
 		}
-		c.subscribed.m[tblId] = SubTableStatus{
+
+		shard.tables[tblId] = SubTableStatus{
 			DBID:     dbId,
 			SubState: Subscribing,
 		}
 
+		// Must release lock before making RPC call
+		shard.Unlock()
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-			//restore the table status.
-			delete(c.subscribed.m, tblId)
+			// Clean up on failure
+			shard.Lock()
+			delete(shard.tables, tblId)
+			shard.Unlock()
 			return Unsubscribed, err
 		}
+
+		// Reacquire lock to read current state
+		shard.Lock()
+		state := shard.tables[tblId].SubState
+		shard.Unlock()
+		return state, nil
 	}
-	return c.subscribed.m[tblId].SubState, nil
+
+	state := shard.tables[tblId].SubState
+	shard.Unlock()
+	return state, nil
 }
 
 func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
-	lock := s.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
-
-	v, exist := s.m[tblId]
+	shard := s.getShard(tblId)
+	shard.RLock()
+	v, exist := shard.tables[tblId]
 	if exist && v.SubState == Subscribed {
-		//update latest time
-		s.m[tblId] = SubTableStatus{
+		shard.RUnlock()
+
+		// Update the last access time
+		shard.Lock()
+		shard.tables[tblId] = SubTableStatus{
 			DBID:       dbId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
+		shard.Unlock()
 		return true
 	}
+	shard.RUnlock()
 	return false
 }
 
@@ -1204,41 +1254,55 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	dbID uint64,
 	dbName string,
 ) (SubscribeState, error) {
-	lock := c.subscribed.getSegmentLock(tableID)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := c.subscribed.getShard(tableID)
+	shard.Lock()
 
-	v, exist := c.subscribed.m[tableID]
+	v, exist := shard.tables[tableID]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
+		shard.Unlock()
 		_, err := c.eng.LazyLoadLatestCkp(ctx, tableID, tableName, dbID, dbName)
 		if err != nil {
 			return InvalidSubState, err
 		}
-		//update latest time
-		c.subscribed.m[tableID] = SubTableStatus{
+
+		// Update state after successful checkpoint loading
+		shard.Lock()
+		shard.tables[tableID] = SubTableStatus{
 			DBID:       dbID,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
+		shard.Unlock()
 		return Subscribed, nil
 	}
-	//if unsubscribed, need to subscribe table.
+
+	// If table is not subscribed, attempt to subscribe
 	if !exist {
 		if !c.subscriber.ready() {
+			shard.Unlock()
 			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
-		c.subscribed.m[tableID] = SubTableStatus{
+
+		shard.tables[tableID] = SubTableStatus{
 			DBID:     dbID,
 			SubState: Subscribing,
 		}
+
+		// Must release lock before making RPC call
+		shard.Unlock()
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbID, TbId: tableID}); err != nil {
-			//restore the table status.
-			delete(c.subscribed.m, tableID)
+			// Clean up on failure
+			shard.Lock()
+			delete(shard.tables, tableID)
+			shard.Unlock()
 			return Unsubscribed, err
 		}
 		return Subscribing, nil
 	}
-	return v.SubState, nil
+
+	state := v.SubState
+	shard.Unlock()
+	return state, nil
 }
 
 func (c *PushClient) waitUntilSubscribingChanged(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
@@ -1289,29 +1353,38 @@ func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tb
 }
 
 func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
-	lock := c.subscribed.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := c.subscribed.getShard(tblId)
+	shard.Lock()
 
-	v, exist := c.subscribed.m[tblId]
+	v, exist := shard.tables[tblId]
 	if exist {
 		if v.SubState == Subscribing {
+			shard.Unlock()
 			return false, v.SubState, nil
 		}
-		return true, v.SubState, nil
+		state := v.SubState
+		shard.Unlock()
+		return true, state, nil
 	}
-	//table is unsubscribed
+
+	// Table is unsubscribed
 	if !c.subscriber.ready() {
-		// let wait the subscriber ready.
-		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		shard.Unlock()
+		return false, Unsubscribed, nil
 	}
-	c.subscribed.m[tblId] = SubTableStatus{
+
+	shard.tables[tblId] = SubTableStatus{
 		DBID:     dbId,
 		SubState: Subscribing,
 	}
+
+	// Must release lock before making RPC call
+	shard.Unlock()
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		//restore the table status.
-		delete(c.subscribed.m, tblId)
+		// Clean up on failure
+		shard.Lock()
+		delete(shard.tables, tblId)
+		shard.Unlock()
 		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
@@ -1319,46 +1392,50 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 
 // isUnsubscribed check if the table is unsubscribed, if yes, set the table status to subscribing and do subscribe.
 func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
-	lock := c.subscribed.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := c.subscribed.getShard(tblId)
+	shard.Lock()
 
-	v, exist := c.subscribed.m[tblId]
+	v, exist := shard.tables[tblId]
 	if exist {
 		if v.SubState == Unsubscribing {
+			shard.Unlock()
 			return false, v.SubState, nil
 		} else {
-			return true, v.SubState, nil
+			state := v.SubState
+			shard.Unlock()
+			return true, state, nil
 		}
 	}
-	//table is unsubscribed
+
+	// Table is unsubscribed
 	if !c.subscriber.ready() {
-		return false, Unsubscribed, nil //moerr.NewInternalError(ctx, "log tail subscriber is not ready")
+		shard.Unlock()
+		return false, Unsubscribed, nil
 	}
-	c.subscribed.m[tblId] = SubTableStatus{
+
+	shard.tables[tblId] = SubTableStatus{
 		DBID:     dbId,
 		SubState: Subscribing,
 	}
+
+	// Must release lock before making RPC call
+	shard.Unlock()
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
-		//restore the table status.
-		delete(c.subscribed.m, tblId)
+		// Clean up on failure
+		shard.Lock()
+		delete(shard.tables, tblId)
+		shard.Unlock()
 		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
 }
 
-func (c *PushClient) Disconnect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.subscriber.logTailClient.Close()
-}
-
 func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
-	lock := s.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := s.getShard(tblId)
+	shard.Lock()
+	defer shard.Unlock()
 
-	s.m[tblId] = SubTableStatus{
+	shard.tables[tblId] = SubTableStatus{
 		DBID:       dbId,
 		SubState:   SubRspTableNotExist,
 		LatestTime: time.Now(),
@@ -1368,19 +1445,19 @@ func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) clearTable(dbId, tblId uint64) {
-	lock := s.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := s.getShard(tblId)
+	shard.Lock()
+	defer shard.Unlock()
 
-	delete(s.m, tblId)
+	delete(shard.tables, tblId)
 }
 
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
-	lock := s.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := s.getShard(tblId)
+	shard.Lock()
+	defer shard.Unlock()
 
-	s.m[tblId] = SubTableStatus{
+	shard.tables[tblId] = SubTableStatus{
 		DBID:       dbId,
 		SubState:   Subscribed,
 		LatestTime: time.Now(),
@@ -1389,11 +1466,11 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
-	lock := s.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := s.getShard(tblId)
+	shard.Lock()
+	defer shard.Unlock()
 
-	s.m[tblId] = SubTableStatus{
+	shard.tables[tblId] = SubTableStatus{
 		DBID:       dbId,
 		SubState:   SubRspReceived,
 		LatestTime: time.Now(),
@@ -1408,12 +1485,12 @@ func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
-	lock := s.getSegmentLock(tblId)
-	lock.Lock()
-	defer lock.Unlock()
+	shard := s.getShard(tblId)
+	shard.Lock()
+	defer shard.Unlock()
 
 	s.eng.cleanMemoryTableWithTable(dbId, tblId)
-	delete(s.m, tblId)
+	delete(shard.tables, tblId)
 	logutil.Infof("%s unsubscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
 }
 
@@ -2248,4 +2325,10 @@ func consumeCkpsAndLogTail(
 		}
 	}()
 	return consumeLogTail(ctx, primarySeqnum, engine, state, lt, isSub)
+}
+
+func (c *PushClient) Disconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.subscriber.logTailClient.Close()
 }

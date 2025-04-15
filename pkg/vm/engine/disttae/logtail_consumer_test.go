@@ -240,7 +240,7 @@ func TestPushClient_LatestLogtailAppliedTime(t *testing.T) {
 
 func TestPushClient_GetState(t *testing.T) {
 	var c PushClient
-	c.subscribed.m = make(map[uint64]SubTableStatus)
+	c.subscribed.init(32) // Initialize with 32 shards
 	tw := client.NewTimestampWaiter(runtime.GetLogger(""))
 	c.receivedLogTailTime.initLogTailTimestamp(tw)
 	ts := timestamp.Timestamp{
@@ -265,15 +265,13 @@ func TestPushClient_GetState(t *testing.T) {
 func TestSubscribedTable(t *testing.T) {
 	var subscribeRecord subscribedTable
 
-	subscribeRecord.m = make(map[uint64]SubTableStatus)
+	subscribeRecord.init(32) // Initialize with 32 shards
 	subscribeRecord.eng = &Engine{
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{},
 	}
-	subscribeRecord.segments = 32
-	subscribeRecord.segmentLock = make([]sync.Mutex, 32)
 
-	assert.Equal(t, 0, len(subscribeRecord.m))
+	assert.Equal(t, 0, len(subscribeRecord.shards[0].tables))
 
 	tbls := []struct {
 		db uint64
@@ -289,12 +287,26 @@ func TestSubscribedTable(t *testing.T) {
 		subscribeRecord.setTableSubscribed(tbl.db, tbl.tb)
 		_ = subscribeRecord.eng.GetOrCreateLatestPart(tbl.db, tbl.tb)
 	}
-	assert.Equal(t, 4, len(subscribeRecord.m))
+
+	// Count the total number of subscribed tables across all shards
+	totalTables := 0
+	for i := 0; i < subscribeRecord.segments; i++ {
+		totalTables += len(subscribeRecord.shards[i].tables)
+	}
+	assert.Equal(t, 4, totalTables)
+
 	assert.Equal(t, true, subscribeRecord.isSubscribed(tbls[0].db, tbls[0].tb))
+
 	for _, tbl := range tbls {
 		subscribeRecord.setTableUnsubscribe(tbl.db, tbl.tb)
 	}
-	assert.Equal(t, 0, len(subscribeRecord.m))
+
+	// Count again after unsubscribing
+	totalTables = 0
+	for i := 0; i < subscribeRecord.segments; i++ {
+		totalTables += len(subscribeRecord.shards[i].tables)
+	}
+	assert.Equal(t, 0, totalTables)
 }
 
 func TestBlockInfoSlice(t *testing.T) {
@@ -515,9 +527,7 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		c.subscriber = &logTailSubscriber{}
 		c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
 		c.subscriber.setReady()
-		c.subscribed.m = make(map[uint64]SubTableStatus)
-		c.subscribed.segments = 32
-		c.subscribed.segmentLock = make([]sync.Mutex, 32)
+		c.subscribed.init(32) // Initialize with 32 shards
 	}
 
 	t.Run("unsubscribe - should not unsub", func(t *testing.T) {
@@ -525,12 +535,18 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		defer cancel()
 		var c PushClient
 		initFn(ctx, &c)
-		c.subscribed.m[2] = SubTableStatus{
+		shard := c.subscribed.getShard(2)
+		shard.Lock()
+		shard.tables[2] = SubTableStatus{
 			DBID: catalog.MO_CATALOG_ID,
 		}
+		shard.Unlock()
+
 		c.doGCUnusedTable(ctx)
-		assert.Equal(t, 1, len(c.subscribed.m))
-		_, ok := c.subscribed.m[2]
+
+		shard.Lock()
+		_, ok := shard.tables[2]
+		shard.Unlock()
 		assert.True(t, ok)
 	})
 
@@ -539,12 +555,19 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		defer cancel()
 		var c PushClient
 		initFn(ctx, &c)
-		c.subscribed.m[200] = SubTableStatus{
+		var tid uint64 = 200
+		shard := c.subscribed.getShard(tid)
+		shard.Lock()
+		shard.tables[tid] = SubTableStatus{
 			DBID: 1000,
 		}
+		shard.Unlock()
+
 		c.doGCUnusedTable(ctx)
-		assert.Equal(t, 1, len(c.subscribed.m))
-		_, ok := c.subscribed.m[200]
+
+		shard.Lock()
+		_, ok := shard.tables[tid]
+		shard.Unlock()
 		assert.True(t, ok)
 	})
 
@@ -554,25 +577,38 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		var c PushClient
 		initFn(ctx, &c)
 		var tid uint64 = 200
-		c.subscribed.m[tid] = SubTableStatus{
+		shard := c.subscribed.getShard(tid)
+		shard.Lock()
+		shard.tables[tid] = SubTableStatus{
 			DBID:       1000,
 			SubState:   Subscribed,
 			LatestTime: time.Now().Add(-time.Hour * 2),
 		}
+		shard.Unlock()
+
 		ch := make(chan struct{})
 		c.subscriber.sendUnSubscribe = func(ctx context.Context, id api.TableID) error {
 			go func() {
-				lock := c.subscribed.getSegmentLock(id.TbId)
-				lock.Lock()
-				defer lock.Unlock()
-				delete(c.subscribed.m, id.TbId)
+				shard := c.subscribed.getShard(id.TbId)
+				shard.Lock()
+				delete(shard.tables, id.TbId)
+				shard.Unlock()
 				ch <- struct{}{}
 			}()
 			return nil
 		}
 		c.doGCUnusedTable(ctx)
 		<-ch
-		assert.Equal(t, 0, len(c.subscribed.m))
+
+		// Verify table was removed
+		totalTables := 0
+		for i := 0; i < c.subscribed.segments; i++ {
+			shard := &c.subscribed.shards[i]
+			shard.Lock()
+			totalTables += len(shard.tables)
+			shard.Unlock()
+		}
+		assert.Equal(t, 0, totalTables)
 	})
 
 	t.Run("unsubscribe - fail", func(t *testing.T) {
@@ -581,11 +617,15 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		var c PushClient
 		initFn(ctx, &c)
 		var tid uint64 = 200
-		c.subscribed.m[tid] = SubTableStatus{
+		shard := c.subscribed.getShard(tid)
+		shard.Lock()
+		shard.tables[tid] = SubTableStatus{
 			DBID:       1000,
 			SubState:   Subscribed,
 			LatestTime: time.Now().Add(-time.Hour * 2),
 		}
+		shard.Unlock()
+
 		ch := make(chan struct{})
 		c.subscriber.sendUnSubscribe = func(ctx context.Context, id api.TableID) error {
 			go func() {
@@ -595,8 +635,11 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		}
 		c.doGCUnusedTable(ctx)
 		<-ch
-		assert.Equal(t, 1, len(c.subscribed.m))
-		_, ok := c.subscribed.m[tid]
+
+		// Verify table still exists
+		shard.Lock()
+		_, ok := shard.tables[tid]
+		shard.Unlock()
 		assert.True(t, ok)
 	})
 }
@@ -722,12 +765,8 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 		serviceID:       sid,
 		timestampWaiter: tw,
 		subscriber:      &logTailSubscriber{},
-		subscribed: subscribedTable{
-			m:           make(map[uint64]SubTableStatus),
-			segments:    32,
-			segmentLock: make([]sync.Mutex, 32),
-		},
 	}
+	c.subscribed.init(32) // Initialize with 32 shards
 	c.receivedLogTailTime.initLogTailTimestamp(tw)
 
 	// Test Case 1.1: Table is subscribed with SubRspReceived state, LazyLoadLatestCkp succeeds
