@@ -434,6 +434,9 @@ func (s *mysqlSinker) Error() error {
 		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
 			return moerr.ConvertGoError(context.Background(), *errPtr)
 		} else {
+			if moErr == nil {
+				return nil
+			}
 			return moErr
 		}
 	}
