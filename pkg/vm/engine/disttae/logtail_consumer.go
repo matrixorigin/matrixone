@@ -1194,7 +1194,6 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 		v, exist := shard.tables[tblId]
 		if exist && v.SubState == Subscribed {
 			state := v.SubState
-			shard.Unlock()
 			return state, nil
 		}
 
@@ -1203,46 +1202,34 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 			SubState: Subscribing,
 		}
 
-		// Must release lock before making RPC call
-		shard.Unlock()
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 			// Clean up on failure
-			shard.Lock()
 			delete(shard.tables, tblId)
-			shard.Unlock()
 			return Unsubscribed, err
 		}
 
-		// Reacquire lock to read current state
-		shard.Lock()
 		state := shard.tables[tblId].SubState
-		shard.Unlock()
 		return state, nil
 	}
 
 	state := shard.tables[tblId].SubState
-	shard.Unlock()
 	return state, nil
 }
 
 func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 	shard := s.getShard(tblId)
-	shard.RLock()
+	shard.Lock()
+	defer shard.Unlock()
 	v, exist := shard.tables[tblId]
 	if exist && v.SubState == Subscribed {
-		shard.RUnlock()
-
 		// Update the last access time
-		shard.Lock()
 		shard.tables[tblId] = SubTableStatus{
 			DBID:       dbId,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
-		shard.Unlock()
 		return true
 	}
-	shard.RUnlock()
 	return false
 }
 
@@ -1256,30 +1243,27 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 ) (SubscribeState, error) {
 	shard := c.subscribed.getShard(tableID)
 	shard.Lock()
+	defer shard.Unlock()
 
 	v, exist := shard.tables[tableID]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
-		shard.Unlock()
 		_, err := c.eng.LazyLoadLatestCkp(ctx, tableID, tableName, dbID, dbName)
 		if err != nil {
 			return InvalidSubState, err
 		}
 
 		// Update state after successful checkpoint loading
-		shard.Lock()
 		shard.tables[tableID] = SubTableStatus{
 			DBID:       dbID,
 			SubState:   Subscribed,
 			LatestTime: time.Now(),
 		}
-		shard.Unlock()
 		return Subscribed, nil
 	}
 
 	// If table is not subscribed, attempt to subscribe
 	if !exist {
 		if !c.subscriber.ready() {
-			shard.Unlock()
 			return Unsubscribed, moerr.NewInternalError(ctx, "log tail subscriber is not ready")
 		}
 
@@ -1289,19 +1273,15 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 		}
 
 		// Must release lock before making RPC call
-		shard.Unlock()
 		if err := c.subscribeTable(ctx, api.TableID{DbId: dbID, TbId: tableID}); err != nil {
 			// Clean up on failure
-			shard.Lock()
 			delete(shard.tables, tableID)
-			shard.Unlock()
 			return Unsubscribed, err
 		}
 		return Subscribing, nil
 	}
 
 	state := v.SubState
-	shard.Unlock()
 	return state, nil
 }
 
@@ -1355,21 +1335,19 @@ func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tb
 func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
 	shard := c.subscribed.getShard(tblId)
 	shard.Lock()
+	defer shard.Unlock()
 
 	v, exist := shard.tables[tblId]
 	if exist {
 		if v.SubState == Subscribing {
-			shard.Unlock()
 			return false, v.SubState, nil
 		}
 		state := v.SubState
-		shard.Unlock()
 		return true, state, nil
 	}
 
 	// Table is unsubscribed
 	if !c.subscriber.ready() {
-		shard.Unlock()
 		return false, Unsubscribed, nil
 	}
 
@@ -1378,13 +1356,9 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 		SubState: Subscribing,
 	}
 
-	// Must release lock before making RPC call
-	shard.Unlock()
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 		// Clean up on failure
-		shard.Lock()
 		delete(shard.tables, tblId)
-		shard.Unlock()
 		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
@@ -1394,22 +1368,20 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
 	shard := c.subscribed.getShard(tblId)
 	shard.Lock()
+	defer shard.Unlock()
 
 	v, exist := shard.tables[tblId]
 	if exist {
 		if v.SubState == Unsubscribing {
-			shard.Unlock()
 			return false, v.SubState, nil
 		} else {
 			state := v.SubState
-			shard.Unlock()
 			return true, state, nil
 		}
 	}
 
 	// Table is unsubscribed
 	if !c.subscriber.ready() {
-		shard.Unlock()
 		return false, Unsubscribed, nil
 	}
 
@@ -1418,13 +1390,9 @@ func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64)
 		SubState: Subscribing,
 	}
 
-	// Must release lock before making RPC call
-	shard.Unlock()
 	if err := c.subscribeTable(ctx, api.TableID{DbId: dbId, TbId: tblId}); err != nil {
 		// Clean up on failure
-		shard.Lock()
 		delete(shard.tables, tblId)
-		shard.Unlock()
 		return true, Unsubscribed, err
 	}
 	return true, Subscribing, nil
