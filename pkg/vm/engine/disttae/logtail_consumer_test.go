@@ -270,6 +270,9 @@ func TestSubscribedTable(t *testing.T) {
 		partitions:  make(map[[2]uint64]*logtailreplay.Partition),
 		globalStats: &GlobalStats{},
 	}
+	subscribeRecord.segments = 32
+	subscribeRecord.segmentLock = make([]sync.Mutex, 32)
+
 	assert.Equal(t, 0, len(subscribeRecord.m))
 
 	tbls := []struct {
@@ -513,6 +516,8 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		c.subscriber.mu.cond = sync.NewCond(&c.subscriber.mu)
 		c.subscriber.setReady()
 		c.subscribed.m = make(map[uint64]SubTableStatus)
+		c.subscribed.segments = 32
+		c.subscribed.segmentLock = make([]sync.Mutex, 32)
 	}
 
 	t.Run("unsubscribe - should not unsub", func(t *testing.T) {
@@ -557,8 +562,9 @@ func TestPushClient_DoGCUnusedTable(t *testing.T) {
 		ch := make(chan struct{})
 		c.subscriber.sendUnSubscribe = func(ctx context.Context, id api.TableID) error {
 			go func() {
-				c.subscribed.mutex.Lock()
-				defer c.subscribed.mutex.Unlock()
+				lock := c.subscribed.getSegmentLock(id.TbId)
+				lock.Lock()
+				defer lock.Unlock()
 				delete(c.subscribed.m, id.TbId)
 				ch <- struct{}{}
 			}()
@@ -716,7 +722,11 @@ func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 		serviceID:       sid,
 		timestampWaiter: tw,
 		subscriber:      &logTailSubscriber{},
-		subscribed:      subscribedTable{m: make(map[uint64]SubTableStatus)},
+		subscribed: subscribedTable{
+			m:           make(map[uint64]SubTableStatus),
+			segments:    32,
+			segmentLock: make([]sync.Mutex, 32),
+		},
 	}
 	c.receivedLogTailTime.initLogTailTimestamp(tw)
 

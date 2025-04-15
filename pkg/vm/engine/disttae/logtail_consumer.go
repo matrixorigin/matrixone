@@ -220,8 +220,16 @@ func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
 }
 
 func (c *PushClient) GetState() State {
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
+	// 需要获取所有表信息，因此需要锁住所有分段
+	for i := 0; i < c.subscribed.segments; i++ {
+		c.subscribed.segmentLock[i].Lock()
+	}
+	defer func() {
+		for i := 0; i < c.subscribed.segments; i++ {
+			c.subscribed.segmentLock[i].Unlock()
+		}
+	}()
+
 	subTables := make(map[uint64]SubTableStatus, len(c.subscribed.m))
 	for k, v := range c.subscribed.m {
 		subTables[k] = v
@@ -246,8 +254,10 @@ func (c *PushClient) IsSubscriberReady() bool {
 }
 
 func (c *PushClient) IsSubscribed(tblId uint64) bool {
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
+	lock := c.subscribed.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if _, ok := c.subscribed.m[tblId]; ok {
 		return true
 	}
@@ -304,9 +314,23 @@ func (c *PushClient) init(
 	c.receivedLogTailTime.ready.Store(false)
 	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
-	c.subscribed.mutex.Lock()
+
+	// 初始化分段锁
+	if c.subscribed.segments == 0 {
+		c.subscribed.segments = 32 // 使用32个分段，可以根据实际情况调整
+		c.subscribed.segmentLock = make([]sync.Mutex, c.subscribed.segments)
+	}
+
+	// 需要锁住所有分段
+	for i := 0; i < c.subscribed.segments; i++ {
+		c.subscribed.segmentLock[i].Lock()
+	}
+
 	defer func() {
-		c.subscribed.mutex.Unlock()
+		// 解锁所有分段
+		for i := 0; i < c.subscribed.segments; i++ {
+			c.subscribed.segmentLock[i].Unlock()
+		}
 	}()
 
 	c.receivedLogTailTime.initLogTailTimestamp(timestampWaiter)
@@ -939,8 +963,11 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 	if ifShouldNotDistribute(dbID, tbID) {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
 	}
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
+
+	lock := c.subscribed.getSegmentLock(tbID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	k := tbID
 	status, ok := c.subscribed.m[k]
 	if !ok || status.SubState != Subscribed {
@@ -966,9 +993,16 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	shouldClean := time.Now().Add(-unsubscribeTimer)
 
-	// lock the subscribed map.
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
+	// 需要访问所有表，锁住所有分段
+	for i := 0; i < c.subscribed.segments; i++ {
+		c.subscribed.segmentLock[i].Lock()
+	}
+	defer func() {
+		for i := 0; i < c.subscribed.segments; i++ {
+			c.subscribed.segmentLock[i].Unlock()
+		}
+	}()
+
 	var err error
 	for k, v := range c.subscribed.m {
 		if ifShouldNotDistribute(v.DBID, k) {
@@ -1064,11 +1098,19 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 // subscribedTable used to record table subscribed status.
 // only if m[table T] = true, T has been subscribed.
 type subscribedTable struct {
-	eng   *Engine
-	mutex sync.Mutex
+	eng *Engine
+
+	// 使用分段锁代替单一互斥锁
+	segments    int
+	segmentLock []sync.Mutex
 
 	// value is table's latest use time.
 	m map[uint64]SubTableStatus
+}
+
+// getSegmentLock 根据表ID获取对应的分段锁
+func (s *subscribedTable) getSegmentLock(tableID uint64) *sync.Mutex {
+	return &s.segmentLock[int(tableID)%s.segments]
 }
 
 type SubTableStatus struct {
@@ -1079,8 +1121,9 @@ type SubTableStatus struct {
 
 func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionState, bool, SubscribeState) {
 	s := &c.subscribed
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	lock := s.getSegmentLock(tId)
+	lock.Lock()
+	defer lock.Unlock()
 
 	v, exist := s.m[tId]
 	if exist && v.SubState == Subscribed {
@@ -1099,14 +1142,16 @@ func (c *PushClient) isSubscribed(dbId, tId uint64) (*logtailreplay.PartitionSta
 }
 
 func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
+	lock := c.subscribed.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	_, ok := c.subscribed.m[tblId]
 	if !ok {
 		if !c.subscriber.ready() {
 			if err := func() error {
-				c.subscribed.mutex.Unlock()
-				defer c.subscribed.mutex.Lock()
+				lock.Unlock()
+				defer lock.Lock()
 				if err := c.subscriber.waitReady(ctx); err != nil {
 					return err
 				}
@@ -1131,12 +1176,13 @@ func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64
 		}
 	}
 	return c.subscribed.m[tblId].SubState, nil
-
 }
 
 func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	lock := s.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	v, exist := s.m[tblId]
 	if exist && v.SubState == Subscribed {
 		//update latest time
@@ -1158,9 +1204,10 @@ func (c *PushClient) loadAndConsumeLatestCkp(
 	dbID uint64,
 	dbName string,
 ) (SubscribeState, error) {
+	lock := c.subscribed.getSegmentLock(tableID)
+	lock.Lock()
+	defer lock.Unlock()
 
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
 	v, exist := c.subscribed.m[tableID]
 	if exist && (v.SubState == SubRspReceived || v.SubState == Subscribed) {
 		_, err := c.eng.LazyLoadLatestCkp(ctx, tableID, tableName, dbID, dbName)
@@ -1242,8 +1289,10 @@ func (c *PushClient) waitUntilUnsubscribingChanged(ctx context.Context, dbId, tb
 }
 
 func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
+	lock := c.subscribed.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	v, exist := c.subscribed.m[tblId]
 	if exist {
 		if v.SubState == Subscribing {
@@ -1270,8 +1319,10 @@ func (c *PushClient) isNotSubscribing(ctx context.Context, dbId, tblId uint64) (
 
 // isUnsubscribed check if the table is unsubscribed, if yes, set the table status to subscribing and do subscribe.
 func (c *PushClient) isNotUnsubscribing(ctx context.Context, dbId, tblId uint64) (bool, SubscribeState, error) {
-	c.subscribed.mutex.Lock()
-	defer c.subscribed.mutex.Unlock()
+	lock := c.subscribed.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	v, exist := c.subscribed.m[tblId]
 	if exist {
 		if v.SubState == Unsubscribing {
@@ -1303,8 +1354,10 @@ func (c *PushClient) Disconnect() error {
 }
 
 func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	lock := s.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	s.m[tblId] = SubTableStatus{
 		DBID:       dbId,
 		SubState:   SubRspTableNotExist,
@@ -1315,14 +1368,18 @@ func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) clearTable(dbId, tblId uint64) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	lock := s.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	delete(s.m, tblId)
 }
 
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	lock := s.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	s.m[tblId] = SubTableStatus{
 		DBID:       dbId,
 		SubState:   Subscribed,
@@ -1332,8 +1389,10 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	lock := s.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	s.m[tblId] = SubTableStatus{
 		DBID:       dbId,
 		SubState:   SubRspReceived,
@@ -1349,8 +1408,10 @@ func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	lock := s.getSegmentLock(tblId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	s.eng.cleanMemoryTableWithTable(dbId, tblId)
 	delete(s.m, tblId)
 	logutil.Infof("%s unsubscribe tbl[db: %d, tbl: %d] succeed", logTag, dbId, tblId)
