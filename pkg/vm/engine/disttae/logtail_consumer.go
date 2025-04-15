@@ -220,7 +220,7 @@ func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
 }
 
 func (c *PushClient) GetState() State {
-	// 需要获取所有表信息，因此需要锁住所有分段
+	// Need to lock all segments to get information for all tables
 	for i := 0; i < c.subscribed.segments; i++ {
 		c.subscribed.segmentLock[i].Lock()
 	}
@@ -315,19 +315,19 @@ func (c *PushClient) init(
 	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
 
-	// 初始化分段锁
+	// Initialize sharded locks
 	if c.subscribed.segments == 0 {
-		c.subscribed.segments = 32 // 使用32个分段，可以根据实际情况调整
+		c.subscribed.segments = 32 // Use 32 segments, can be adjusted based on actual needs
 		c.subscribed.segmentLock = make([]sync.Mutex, c.subscribed.segments)
 	}
 
-	// 需要锁住所有分段
+	// Need to lock all segments
 	for i := 0; i < c.subscribed.segments; i++ {
 		c.subscribed.segmentLock[i].Lock()
 	}
 
 	defer func() {
-		// 解锁所有分段
+		// Unlock all segments
 		for i := 0; i < c.subscribed.segments; i++ {
 			c.subscribed.segmentLock[i].Unlock()
 		}
@@ -993,7 +993,7 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) er
 func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	shouldClean := time.Now().Add(-unsubscribeTimer)
 
-	// 需要访问所有表，锁住所有分段
+	// Need to access all tables, lock all segments
 	for i := 0; i < c.subscribed.segments; i++ {
 		c.subscribed.segmentLock[i].Lock()
 	}
@@ -1100,7 +1100,7 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 type subscribedTable struct {
 	eng *Engine
 
-	// 使用分段锁代替单一互斥锁
+	// Use sharded locks instead of a single mutex to reduce contention
 	segments    int
 	segmentLock []sync.Mutex
 
@@ -1108,7 +1108,7 @@ type subscribedTable struct {
 	m map[uint64]SubTableStatus
 }
 
-// getSegmentLock 根据表ID获取对应的分段锁
+// getSegmentLock returns the corresponding lock based on table ID hash
 func (s *subscribedTable) getSegmentLock(tableID uint64) *sync.Mutex {
 	return &s.segmentLock[int(tableID)%s.segments]
 }
