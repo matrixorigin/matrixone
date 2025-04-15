@@ -113,6 +113,10 @@ CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
 GOLDFLAGS=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
 TAGS :=
 
+ifeq ("$(UNAME_S)","darwin")
+GOLDFLAGS:=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,@executable_path/lib' -X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'"
+endif
+
 ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
 endif
@@ -124,6 +128,7 @@ cgo:
 .PHONY: thirdparties
 thirdparties:
 	@(cd thirdparties; ${MAKE})
+	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
 
 # build mo-service binary
 .PHONY: build
@@ -249,6 +254,7 @@ clean:
 	rm -rf /tmp/$(MUSL_TAR)
 	$(MAKE) -C cgo clean
 	$(MAKE) -C thirdparties clean
+	rm -rf $(ROOT_DIR)/lib
 
 ###############################################################################
 # static checks
