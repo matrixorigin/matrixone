@@ -1044,4 +1044,12 @@ func Test_Error(t *testing.T) {
 	assert.Equal(t, "internal error: convert go error to mo error unsupported operation", s.Error().Error())
 	s.SetError(moerr.NewFileNotFound(context.Background(), "test error"))
 	assert.True(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
+
+	var merr *moerr.Error
+	s.SetError(merr)
+
+	assert.False(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
+
+	s.SetError(nil)
+	assert.Nil(t, s.Error())
 }
