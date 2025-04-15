@@ -551,6 +551,14 @@ func testFileService(
 		assert.Equal(t, entries[7].IsDir, false)
 		assert.Equal(t, entries[7].Name, "7")
 
+		// early break
+		for _, err := range fs.List(ctx, JoinPath(fs.Name(), "/qux/quux/")) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+
 		for _, entry := range entries {
 			err := fs.Delete(ctx, path.Join("qux/quux", entry.Name))
 			assert.Nil(t, err)
@@ -1012,6 +1020,14 @@ func testFileService(
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
+}
+
+type errReader struct{}
+
+var _ io.Reader = errReader{}
+
+func (e errReader) Read(p []byte) (n int, err error) {
+	return 0, io.ErrShortWrite
 }
 
 func randomCut(data []byte, parts int) [][]byte {

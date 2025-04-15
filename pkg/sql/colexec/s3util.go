@@ -162,12 +162,10 @@ func (w *CNS3Writer) Write(ctx context.Context, mp *mpool.MPool, bat *batch.Batc
 
 func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.ObjectStats, error) {
 	defer func() {
-		if len(w.hold) > 0 {
-			for _, bat := range w.hold {
-				bat.Clean(mp)
-			}
-			w.hold = w.hold[:0]
+		for _, bat := range w.hold {
+			bat.Clean(mp)
 		}
+		w.hold = nil
 	}()
 
 	if len(w.hold) != 0 {
@@ -351,7 +349,7 @@ func (w *CNS3Writer) OutputRawData(
 			for _, bat := range w.hold {
 				bat.Clean(proc.Mp())
 			}
-			w.hold = w.hold[:0]
+			w.hold = nil
 		}
 	}()
 

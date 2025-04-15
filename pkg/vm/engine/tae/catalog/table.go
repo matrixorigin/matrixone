@@ -159,7 +159,7 @@ func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (ob
 	defer iter2.Release()
 	for ok := iter2.Last(); ok; ok = iter2.Prev() {
 		obj := iter2.Item()
-		if obj.IsCommitted() && (obj.CreatedAt.LT(&dedupedTS) || obj.DeleteBefore(dedupedTS)) {
+		if obj.IsCommitted() && obj.CreatedAt.LT(&dedupedTS) && obj.DeleteBefore(dedupedTS) {
 			// In committed zone, all the objects are sorted by max(CreatedAt, DeletedAt), so we can break here
 			break
 		}

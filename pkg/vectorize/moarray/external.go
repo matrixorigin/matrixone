@@ -172,7 +172,8 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	return float64(metric.L2Distance[T](v1, v2)), nil
+	ret, err := metric.L2Distance[T](v1, v2)
+	return float64(ret), err
 }
 
 // L2DistanceSq returns the squared L2 distance between two vectors.
@@ -182,7 +183,8 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	return float64(metric.L2DistanceSq[T](v1, v2)), nil
+	ret, err := metric.L2DistanceSq[T](v1, v2)
+	return float64(ret), err
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {

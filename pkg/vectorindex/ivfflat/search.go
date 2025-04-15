@@ -15,7 +15,6 @@
 package ivfflat
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -121,7 +120,10 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T
 			continue
 		}
 		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
-		dist := distfn(query, vec)
+		dist, err := distfn(query, vec)
+		if err != nil {
+			return false, err
+		}
 
 		heap.Push(&vectorindex.SearchResultAnyKey{Id: pk, Distance: float64(dist)})
 	}
@@ -140,6 +142,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 	if ncentroids < nworker {
 		nworker = ncentroids
 	}
+	errs := make(chan error, nworker)
 
 	heap := vectorindex.NewSearchResultSafeHeap(ncentroids)
 	var wg sync.WaitGroup
@@ -151,13 +154,21 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				if i%nworker != n {
 					continue
 				}
-				dist := distfn(query, c.Vec)
+				dist, err := distfn(query, c.Vec)
+				if err != nil {
+					errs <- err
+					return
+				}
 				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
 			}
 		}()
 	}
 
 	wg.Wait()
+
+	if len(errs) > 0 {
+		return nil, <-errs
+	}
 
 	res := make([]int64, 0, probe)
 	n := heap.Len()
@@ -179,6 +190,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
+	errs := make(chan error, nthread)
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
@@ -222,7 +234,6 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	heap := vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
 	var wg sync.WaitGroup
-	var errs error
 
 	for n := int64(0); n < nthread; n++ {
 
@@ -236,7 +247,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 			for !sql_closed {
 				sql_closed, err = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
 				if err != nil {
-					errs = errors.Join(errs, err)
+					errs <- err
 					return
 				}
 			}
@@ -245,8 +256,8 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	wg.Wait()
 
-	if errs != nil {
-		return nil, nil, errs
+	if len(errs) > 0 {
+		return nil, nil, <-errs
 	}
 
 	resid := make([]any, 0, rt.Limit)

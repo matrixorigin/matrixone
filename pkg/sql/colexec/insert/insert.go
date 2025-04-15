@@ -57,7 +57,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 		// If the target is not partition table, you only need to operate the main table
 		s3Writer := colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, insert.InsertCtx.TableDef, true)
+			proc.Mp(), fs, insert.InsertCtx.TableDef, insert.isMemoryTable())
 
 		insert.ctr.s3Writer = s3Writer
 

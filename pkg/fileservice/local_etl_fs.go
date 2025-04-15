@@ -136,6 +136,13 @@ func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+		}
+	}()
+
 	var buf []byte
 	put := ioBufferPool.Get(&buf)
 	defer put.Put()
@@ -446,7 +453,7 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEnt
 				IsDir: isDir,
 				Size:  info.Size(),
 			}, nil) {
-				break
+				return
 			}
 		}
 
