@@ -502,13 +502,13 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 
 			timer.Reset(wait)
 		case <-txnTimer.C:
-			s.checkRemoteTxnTimeout(ctx)
+			s.checkTxnTimeout(ctx)
 			txnTimer.Reset(timeout)
 		}
 	}
 }
 
-func (s *service) checkRemoteTxnTimeout(ctx context.Context) {
+func (s *service) checkTxnTimeout(ctx context.Context) {
 	if s.isStatus(pb.Status_ServiceLockEnable) {
 		return
 	}
@@ -517,6 +517,11 @@ func (s *service) checkRemoteTxnTimeout(ctx context.Context) {
 		txn := s.activeTxnHolder.getActiveTxn(t, false, "")
 		createOn := txn.remoteService
 		if len(createOn) == 0 {
+			if !s.isValidLocalTxn(t) {
+				s.logger.Warn("found timeout txn",
+					bytesArrayField("txn", [][]byte{t}))
+				_ = s.Unlock(ctx, t, timestamp.Timestamp{})
+			}
 			continue
 		}
 
@@ -527,6 +532,42 @@ func (s *service) checkRemoteTxnTimeout(ctx context.Context) {
 			_ = s.Unlock(ctx, t, timestamp.Timestamp{})
 		}
 	}
+}
+
+func (s *service) isValidLocalTxn(t []byte) bool {
+	if s.cfg.TxnIterFunc == nil {
+		return true
+	}
+	valid := false
+	s.cfg.TxnIterFunc(func(txnID []byte) bool {
+		if bytes.Equal(t, txnID) {
+			valid = true
+			return false
+		}
+		return true
+	})
+	if valid {
+		return valid
+	}
+
+	cannotCommit := []pb.OrphanTxn{
+		{
+			Service: s.serviceID,
+			Txn:     [][]byte{t},
+		},
+	}
+
+	h, ok := s.activeTxnHolder.(*mapBasedTxnHolder)
+	if !ok {
+		return true
+	}
+	committing, err := h.notify(cannotCommit)
+	if err != nil {
+		// any error, we cannot make txn as a invalid txn
+		return true
+	}
+	// the target txn is committing, valid
+	return len(committing) != 0
 }
 
 func getLockTableBind(
