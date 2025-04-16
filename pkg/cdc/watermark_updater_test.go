@@ -243,6 +243,9 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 	}
 	err = u.InsertIntoDb(info3, t1)
 	assert.NoError(t, err)
+
+	err = u.SaveErrMsg("db1", "t1", "test")
+	assert.NoError(t, err)
 }
 
 func TestWatermarkUpdater_Run(t *testing.T) {
