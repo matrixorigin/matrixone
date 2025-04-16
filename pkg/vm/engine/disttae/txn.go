@@ -1115,6 +1115,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		for _, e := range txn.writes {
 			if sels, ok := txn.batchSelectList[e.bat]; ok {
 				txn.approximateInMemInsertCnt -= len(sels)
+				sort.Slice(sels, func(i, j int) bool {
+					return sels[i] < (sels[j])
+				})
 				shrinkBatchWithRowids(e.bat, sels)
 				delete(txn.batchSelectList, e.bat)
 			}
