@@ -2301,6 +2301,34 @@ func TestCheckTxnTimeout(t *testing.T) {
 	)
 }
 
+func TestIssue5176(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				return
+			}
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			l.activeTxnHolder.getActiveTxn([]byte("txn1"), true, "")
+
+			l.setStatus(pb.Status_ServiceLockWaiting)
+
+			l.checkTxnTimeout(ctx)
+			require.True(t, l.activeTxnHolder.empty())
+		},
+		nil,
+	)
+}
+
 func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
