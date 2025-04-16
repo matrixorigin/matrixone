@@ -3095,3 +3095,16 @@ func TestCDCParseGranularityTuple(t *testing.T) {
 		})
 	}
 }
+
+func TestCDCCreateTaskOptions_handleLevel(t *testing.T) {
+	opts := &CDCCreateTaskOptions{}
+	err := opts.handleLevel(context.Background(), nil, nil, "db")
+	assert.Error(t, err)
+
+	req := &CDCCreateTaskRequest{
+		Tables: "db1.t1:db2.t2,db1.t1:db4.t4",
+	}
+	level := cdc.CDCPitrGranularity_Table
+	err = opts.handleLevel(context.Background(), nil, req, level)
+	assert.Error(t, err)
+}
