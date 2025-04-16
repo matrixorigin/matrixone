@@ -117,25 +117,26 @@ func (txn *Transaction) WriteBatch(
 			panic("rowid should not be generated in Insert WriteBatch")
 		}
 		txn.genBlock()
-		len := bat.RowCount()
 		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
+		for i, cnt := 0, bat.RowCount(); i < cnt; i++ {
+			if err := vector.AppendFixed(
+				genRowidVec,
+				txn.genRowId(),
+				false,
+				txn.proc.Mp(),
+			); err != nil {
 				return nil, err
 			}
 		}
-		bat.Vecs = append([]*vector.Vector{genRowidVec}, bat.Vecs...)
-		bat.Attrs = append([]string{objectio.PhysicalAddr_Attr}, bat.Attrs...)
-		if tableId != catalog.MO_DATABASE_ID &&
-			tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
+		bat.InsertVector(0, objectio.PhysicalAddr_Attr, genRowidVec)
+
+		if !catalog.IsSystemTable(tableId) {
 			txn.approximateInMemInsertSize += uint64(bat.Size())
 			txn.approximateInMemInsertCnt += bat.RowCount()
 		}
 	}
 
-	if typ == DELETE && tableId != catalog.MO_DATABASE_ID &&
-		tableId != catalog.MO_TABLES_ID && tableId != catalog.MO_COLUMNS_ID {
+	if typ == DELETE && !catalog.IsSystemTable(tableId) {
 		txn.approximateInMemDeleteCnt += bat.RowCount()
 	}
 
@@ -957,8 +958,10 @@ func (txn *Transaction) WriteFile(
 		databaseName, tableName, fileName, bat, tnStore)
 }
 
-func (txn *Transaction) deleteBatch(bat *batch.Batch,
-	databaseId, tableId uint64) *batch.Batch {
+func (txn *Transaction) deleteBatch(
+	bat *batch.Batch,
+	databaseId, tableId uint64,
+) *batch.Batch {
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
@@ -980,12 +983,14 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 
 	trace.GetService(txn.proc.GetService()).TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
 
-	mp := make(map[types.Rowid]uint8)
-	deleteBlkId := make(map[types.Blockid]bool)
-	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
-	min1 := uint32(math.MaxUint32)
-	max1 := uint32(0)
-	cnRowIdOffsets := make([]int64, 0, len(rowids))
+	var (
+		mp             = make(map[types.Rowid]uint8)
+		deleteBlkId    = make(map[types.Blockid]bool)
+		rowids         = vector.MustFixedColWithTypeCheck[types.Rowid](bat.GetVector(0))
+		min1           = uint32(math.MaxUint32)
+		max1           = uint32(0)
+		cnRowIdOffsets = make([]int64, 0, len(rowids))
+	)
 	for i, rowid := range rowids {
 		// process cn block deletes
 		uid := rowid.BorrowSegmentID()
@@ -1049,31 +1054,35 @@ func (txn *Transaction) deleteTableWrites(
 		if entry.bat == nil || entry.bat.RowCount() == 0 {
 			continue
 		}
-		if entry.typ == ALTER || entry.typ == DELETE ||
+
+		// skip ALTER, DELETE, BlockMeta
+		if entry.typ == ALTER ||
+			entry.typ == DELETE ||
 			entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
 			continue
 		}
+
 		sels = sels[:0]
 		if entry.tableId == tableId && entry.databaseId == databaseId {
-			vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-			if len(vs) == 0 {
+			rowids := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
+			if len(rowids) == 0 {
 				continue
 			}
 			// skip 2 above
-			if !vs[0].BorrowSegmentID().Eq(txn.segId) {
+			if !rowids[0].BorrowSegmentID().Eq(txn.segId) {
 				continue
 			}
 			// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
 			// so if e.bat is not to be deleted,skip it.
-			if !deleteBlkId[vs[0].CloneBlockID()] {
+			if !deleteBlkId[rowids[0].CloneBlockID()] {
 				continue
 			}
-			min2 := vs[0].GetRowOffset()
-			max2 := vs[len(vs)-1].GetRowOffset()
+			min2 := rowids[0].GetRowOffset()
+			max2 := rowids[len(rowids)-1].GetRowOffset()
 			if min > max2 || max < min2 {
 				continue
 			}
-			for k, v := range vs {
+			for k, v := range rowids {
 				if _, ok := mp[v]; ok {
 					// if the v will be deleted, then add its index into the sels.
 					sels = append(sels, int64(k))
