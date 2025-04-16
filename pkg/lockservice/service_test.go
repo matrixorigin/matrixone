@@ -2309,9 +2309,7 @@ func TestIssue5176(t *testing.T) {
 		time.Second*1,
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
-			l.cfg.TxnIterFunc = func(f func([]byte) bool) {
-				return
-			}
+			l.cfg.TxnIterFunc = func(f func([]byte) bool) {}
 
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
