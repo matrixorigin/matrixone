@@ -2230,7 +2230,7 @@ func TestReLockSuccWithReStartCN(t *testing.T) {
 	)
 }
 
-func TestCheckRemoteTxnTimeout(t *testing.T) {
+func TestCheckTxnTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
 		zapcore.DebugLevel,
@@ -2294,7 +2294,7 @@ func TestCheckRemoteTxnTimeout(t *testing.T) {
 				}
 			}
 
-			l2.checkRemoteTxnTimeout(ctx)
+			l2.checkTxnTimeout(ctx)
 			require.True(t, l2.activeTxnHolder.empty())
 		},
 		nil,
