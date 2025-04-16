@@ -144,4 +144,13 @@ Project
               Filter Cond: (cast(statement_info.request_at AS TIMESTAMP) > date_sub(now(), 10, 2))
               Block Filter Cond: (cast(statement_info.request_at AS TIMESTAMP) > date_sub(now(), 10, 2))
               Recv Message: [tag 1 , type MsgTopValue]
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int primary key, b int);
+insert into t1 select result, result from generate_series(1000) g;
+create table t2(a int primary key, b DECIMAL(10,2), c int);
+insert into t2 select result, 8888888.99, result%1000 from generate_series(900000) g;
+select sum(t2.b) from t2 left join t1 on t2.c=t1.a where t1.b < 990;
+sum(t2.b)
+7912000089999.00
 drop database if exists d1;
