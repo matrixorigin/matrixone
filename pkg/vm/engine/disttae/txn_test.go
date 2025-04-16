@@ -16,12 +16,12 @@ package disttae
 
 import (
 	"bytes"
-	"sync"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
+	"sync"
+	"testing"
 )
 
 func Test_GetUncommittedS3Tombstone(t *testing.T) {
@@ -61,4 +61,51 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 		require.True(t, found)
 		return true
 	})
+}
+
+func Test_genRowId(t *testing.T) {
+	txn := &Transaction{}
+	txn.rowIdGenerator.oid = types.NewObjectid()
+	txn.rowIdGenerator.bid = types.NewBlockidWithObjectID(&txn.rowIdGenerator.oid, 0)
+
+	var (
+		rowId    types.Rowid
+		genRowId func() objectio.Rowid
+	)
+
+	for i := 0; i < 100; i++ {
+		genRowId = txn.getGenRowIdFunc()
+
+		rowId = genRowId()
+		require.Equal(t, uint32(0), rowId.GetRowOffset())
+		require.Equal(t, uint16(i), rowId.BorrowBlockID().Sequence())
+		require.Equal(t, txn.rowIdGenerator.oid, *rowId.BorrowObjectID())
+	}
+
+	genRowId = txn.getGenRowIdFunc()
+
+	mm := make(map[types.Rowid]struct{})
+	maxOffset := uint32(0)
+	for range options.DefaultBlockMaxRows * 100 {
+		rowId = genRowId()
+		maxOffset = max(maxOffset, rowId.GetRowOffset())
+
+		_, ok := mm[rowId]
+		require.False(t, ok)
+		mm[rowId] = struct{}{}
+	}
+
+	require.Equal(t, uint32(options.DefaultBlockMaxRows-1), maxOffset)
+}
+
+func Benchmark_genRowId(b *testing.B) {
+	txn := &Transaction{}
+	txn.rowIdGenerator.oid = types.NewObjectid()
+	txn.rowIdGenerator.bid = types.NewBlockidWithObjectID(&txn.rowIdGenerator.oid, 0)
+
+	genRowId := txn.getGenRowIdFunc()
+
+	for i := 0; i < b.N; i++ {
+		genRowId()
+	}
 }

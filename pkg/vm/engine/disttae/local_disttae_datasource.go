@@ -564,7 +564,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 
 		retainedRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](entry.bat.Vecs[0])
 		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
-		// Refer to genBlock and genRowid method.
+		// Refer to disttae.getGenRowIdFunc method.
 
 		// apply pk filter on workspace entries
 		if enableFilter {

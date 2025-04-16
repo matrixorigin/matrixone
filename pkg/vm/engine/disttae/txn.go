@@ -116,12 +116,13 @@ func (txn *Transaction) WriteBatch(
 		if bat.Vecs[0].GetType().Oid == types.T_Rowid {
 			panic("rowid should not be generated in Insert WriteBatch")
 		}
-		txn.genBlock()
+
+		genRowId := txn.getGenRowIdFunc()
 		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
 		for i, cnt := 0, bat.RowCount(); i < cnt; i++ {
 			if err := vector.AppendFixed(
 				genRowidVec,
-				txn.genRowId(),
+				genRowId(),
 				false,
 				txn.proc.Mp(),
 			); err != nil {
@@ -1103,18 +1104,28 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 	return id, moerr.AttachCause(ctx, err)
 }
 
-func (txn *Transaction) genBlock() {
-	txn.rowId[4]++
-	txn.rowId[5] = INIT_ROWID_OFFSET
-}
+// one call to generate a batch of rowIds.
+// in these rowIds, every objectio.BlockMaxRows rowIds share one blockId
+// and the offsets always start from 0.
+func (txn *Transaction) getGenRowIdFunc() func() objectio.Rowid {
 
-func (txn *Transaction) genRowId() types.Rowid {
-	if txn.rowId[5] != INIT_ROWID_OFFSET {
-		txn.rowId[5]++
-	} else {
-		txn.rowId[5] = 0
+	var (
+		offset uint32
+		cur    objectio.Blockid
+		oid    = txn.rowIdGenerator.oid
+	)
+
+	return func() objectio.Rowid {
+		if offset%objectio.BlockMaxRows == 0 {
+			cur = txn.rowIdGenerator.bid
+			offset = 0
+			txn.rowIdGenerator.bid = types.NewBlockidWithObjectID(&oid, cur.Sequence()+1)
+		}
+
+		rowId := types.NewRowid(&cur, uint32(offset))
+		offset++
+		return rowId
 	}
-	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
 }
 
 func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
@@ -1202,11 +1213,11 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			}
 
 			if merged && a.typ == INSERT {
+				genRowId := txn.getGenRowIdFunc()
 				// rewrite rowIds.
 				// all the rowIds in the batch share one blkId.
-				txn.genBlock()
 				for x := range a.bat.RowCount() {
-					rowId := txn.genRowId()
+					rowId := genRowId()
 					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](a.bat.Vecs[0], x, rowId); err != nil {
 						return err
 					}

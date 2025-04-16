@@ -311,8 +311,11 @@ type Transaction struct {
 
 	idGen IDGenerator
 
-	// interim incremental rowid
-	rowId [6]uint32
+	rowIdGenerator struct {
+		oid types.Objectid
+		bid types.Blockid
+	}
+
 	segId types.Uuid
 	// use to cache opened snapshot tables by current txn.
 	tableCache *sync.Map
@@ -429,8 +432,8 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 }
 
 func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
-	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(id)
+	oid := objectio.NewObjectid()
+	sid := types.Segmentid(oid[:types.SegmentidSize])
 	txn := &Transaction{
 		proc:         proc,
 		engine:       eng,
@@ -440,15 +443,7 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		databaseOps:  newDbOps(),
 		tableOps:     newTableOps(),
 		tablesInVain: make(map[uint64]int),
-		rowId: [6]uint32{
-			types.DecodeUint32(bytes[0:4]),
-			types.DecodeUint32(bytes[4:8]),
-			types.DecodeUint32(bytes[8:12]),
-			types.DecodeUint32(bytes[12:16]),
-			0,
-			0,
-		},
-		segId: *id,
+		segId:        sid,
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
@@ -461,11 +456,12 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
 	}
 
-	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
+	txn.rowIdGenerator.oid = oid
+	txn.rowIdGenerator.bid = types.NewBlockidWithObjectID(&oid, 0)
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
-	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	colexec.Get().PutCnSegment(&sid, colexec.TxnWorkSpaceIdType)
 	return txn
 }
 
