@@ -14,7 +14,9 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 // some restrictions for agg pushdown to make it easier to acheive
 // will remove some restrictions in the future
@@ -96,6 +98,23 @@ func filterTag(expr *Expr, tag int32) *Expr {
 func applyAggPushdown(agg, join, leftChild *plan.Node, builder *QueryBuilder) {
 	leftChildTag := leftChild.BindingTags[0]
 	newAggList := DeepCopyExprList(agg.AggList)
+
+	for i, aggExpr := range agg.AggList {
+		if funExpr, ok := aggExpr.Expr.(*plan.Expr_F); ok {
+			if len(funExpr.F.Args) == 1 && funExpr.F.Args[0].Typ.Id != aggExpr.Typ.Id {
+				//rebind if needed:
+				// case:  select sum(decimal_64_col) from t1 left join t2 on t1.col = t2.col where t2.col > 10;
+				// if result of sum(decimal_64_col) is decimal128, we need to rebind the input of origin agg expr to decimal128
+				funExpr.F.Args[0].Typ = aggExpr.Typ
+				var err error
+				agg.AggList[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), funExpr.F.Func.ObjName, funExpr.F.Args)
+				if err != nil {
+					panic("rebind agg expr failed") //should not happen
+				}
+			}
+		}
+	}
+
 	//newGroupBy := DeepCopyExprList(agg.GroupBy)
 	newGroupBy := []*plan.Expr{DeepCopyExpr(filterTag(join.OnList[0], leftChildTag))}
 
