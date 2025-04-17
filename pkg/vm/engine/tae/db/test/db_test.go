@@ -7403,6 +7403,8 @@ func TestPitrMeta(t *testing.T) {
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
+	cfg, err := db.BGCheckpointRunner.DisableCheckpoint(ctx)
+	assert.NoError(t, err)
 	db.DiskCleaner.GetCleaner().EnableGC()
 	assert.True(t, testutil.AllCheckpointsFinished(db))
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
@@ -7457,6 +7459,7 @@ func TestPitrMeta(t *testing.T) {
 	assert.True(t, end.GE(&minEnd))
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
+	db.BGCheckpointRunner.EnableCheckpoint(cfg)
 	txn, _ = db.StartTxn(nil)
 	database, _ = txn.GetDatabase("db")
 	rel5, err := testutil.CreateRelation2(ctx, txn, database, pitrSchema)
