@@ -534,10 +534,21 @@ func (e *Engine) getOrCreateSnapPartBy(
 func (e *Engine) GetOrCreateLatestPart(
 	databaseId,
 	tableId uint64) *logtailreplay.Partition {
+	e.RLock()
+	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
+	if ok {
+		e.RUnlock()
+		return partition
+	}
+	e.RUnlock()
+
+	// Need to create a new partition, use write lock
 	e.Lock()
 	defer e.Unlock()
-	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
-	if !ok { // create a new table
+	// Double check to prevent another goroutine from creating the partition while acquiring the write lock
+	partition, ok = e.partitions[[2]uint64{databaseId, tableId}]
+	if !ok {
+		// Create a new table
 		partition = logtailreplay.NewPartition(e.service, tableId)
 		e.partitions[[2]uint64{databaseId, tableId}] = partition
 	}
