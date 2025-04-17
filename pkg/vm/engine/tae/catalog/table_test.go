@@ -17,6 +17,7 @@ package catalog
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -94,4 +95,49 @@ func TestGetSoftdeleteObjects(t *testing.T) {
 	// Test getting all objects
 	objs = tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(3, 0))
 	require.Equal(t, 2, len(objs))
+}
+
+func TestGetSoftdeleteObjects2(t *testing.T) {
+	db := MockDBEntryWithAccInfo(0, 0)
+	tbl := MockTableEntryWithDB(db, 1)
+
+	addActiveObject := func(create int64) *ObjectEntry {
+		object := MockObjEntryWithTbl(tbl, 10, false)
+		object.CreatedAt = types.BuildTS(create, 0)
+		object.ObjectState = ObjectState_Create_ApplyCommit
+		object.CreateNode = txnbase.TxnMVCCNode{
+			Start:   types.BuildTS(create-1, 0),
+			Prepare: types.BuildTS(create, 0),
+			End:     types.BuildTS(create, 0),
+		}
+		tbl.dataObjects.modify(nil, object, nil)
+		return object
+	}
+
+	addSoftDeleteObject := func(create, delete int64) *ObjectEntry {
+		createEntry := addActiveObject(create)
+		dropEntry := createEntry.Clone()
+		dropEntry.DeletedAt = types.BuildTS(delete, 0)
+		dropEntry.ObjectState = ObjectState_Delete_ApplyCommit
+		dropEntry.CreateNode = txnbase.TxnMVCCNode{
+			Start:   types.BuildTS(delete-1, 0),
+			Prepare: types.BuildTS(delete, 0),
+			End:     types.BuildTS(delete, 0),
+		}
+		tbl.dataObjects.modify(nil, dropEntry, nil)
+		return dropEntry
+	}
+
+	addActiveObject(1)
+	objs := tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(2, 0))
+	assert.Equal(t, 0, len(objs))
+	addSoftDeleteObject(1, 2)
+	objs = tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(2, 0))
+	assert.Equal(t, 1, len(objs))
+	addSoftDeleteObject(1, 3)
+	objs = tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(3, 0))
+	assert.Equal(t, 2, len(objs))
+	addActiveObject(4)
+	objs = tbl.GetSoftdeleteObjects(types.BuildTS(2, 0), types.BuildTS(5, 0))
+	assert.Equal(t, 2, len(objs))
 }
