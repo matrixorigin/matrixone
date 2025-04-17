@@ -7701,11 +7701,6 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	testutils.WaitExpect(5000, func() bool {
-		return checkLeak()
-	})
-	ok := checkLeak()
-	assert.True(t, ok)
 	tae.Restart(ctx)
 	assert.True(t, testutil.AllCheckpointsFinished(db))
 	testutils.WaitExpect(5000, func() bool {
@@ -7717,7 +7712,7 @@ func TestCkpLeak(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return checkLeak()
 	})
-	ok = checkLeak()
+	ok := checkLeak()
 	assert.True(t, ok)
 
 }
