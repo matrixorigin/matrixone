@@ -164,27 +164,6 @@ func TestPolicyTombstone(t *testing.T) {
 	require.Equal(t, taskHostDN, result[0].kind)
 }
 
-func TestPolicyGroup(t *testing.T) {
-	common.IsStandaloneBoost.Store(true)
-	g := newPolicyGroup(newTombstonePolicy())
-	g.resetForTable(catalog.MockStaloneTableEntry(0, &catalog.Schema{Extra: &api.SchemaExtra{MaxObjOnerun: 2, BlockMaxRows: options.DefaultBlockMaxRows}}))
-	rc := new(resourceController)
-
-	g.onObject(newTestObjectEntry(t, 10, false))
-	g.onObject(newTestObjectEntry(t, 20, false))
-	g.onObject(newTestObjectEntry(t, 30, false))
-	g.onObject(newTestObjectEntry(t, 10, true))
-	g.onObject(newTestObjectEntry(t, 20, true))
-	g.onObject(newTestObjectEntry(t, 30, true))
-	g.onObject(newTestObjectEntry(t, 40, true))
-
-	results := g.revise(rc)
-	require.Equal(t, 1, len(results))
-	require.Equal(t, taskHostDN, results[0].kind)
-
-	require.Equal(t, 4, len(results[0].objs))
-}
-
 const overlapSizeThreshold = common.DefaultMinOsizeQualifiedBytes
 
 func TestObjOverlap(t *testing.T) {

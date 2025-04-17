@@ -16,20 +16,30 @@ package merge
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
+	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"go.uber.org/zap"
 )
 
+// region: overlap policy
 var _ policy = (*objOverlapPolicy)(nil)
 
 var levels = [6]int{
@@ -424,3 +434,270 @@ func newTombstonePolicy() policy {
 }
 
 // endregion
+
+// region: compact policy
+var _ policy = (*objCompactPolicy)(nil)
+
+type objCompactPolicy struct {
+	tblEntry *catalog.TableEntry
+	fs       fileservice.FileService
+
+	objects []*catalog.ObjectEntry
+
+	tombstoneMetas []objectio.ObjectDataMeta
+
+	config *BasicPolicyConfig
+}
+
+func newObjCompactPolicy(fs fileservice.FileService) *objCompactPolicy {
+	return &objCompactPolicy{fs: fs}
+}
+
+func (o *objCompactPolicy) onObject(entry *catalog.ObjectEntry) bool {
+	if o.tblEntry == nil {
+		return false
+	}
+	if entry.IsTombstone {
+		return false
+	}
+	if entry.OriginSize() < o.config.ObjectMinOsize {
+		return false
+	}
+	if len(o.tombstoneMetas) == 0 {
+		return false
+	}
+
+	for _, meta := range o.tombstoneMetas {
+		if !checkTombstoneMeta(meta, entry.ID()) {
+			continue
+		}
+		o.objects = append(o.objects, entry)
+	}
+	return false
+}
+
+func (o *objCompactPolicy) revise(rc *resourceController) []mergeTask {
+	if o.tblEntry == nil {
+		return nil
+	}
+	results := make([]mergeTask, 0, len(o.objects))
+	for _, obj := range o.objects {
+		if rc.resourceAvailable(int64(mergesort.EstimateMergeSize(IterEntryAsStats([]*catalog.ObjectEntry{obj})))) {
+			rc.reserveResources(int64(mergesort.EstimateMergeSize(IterEntryAsStats([]*catalog.ObjectEntry{obj}))))
+			results = append(results, mergeTask{objs: []*objectio.ObjectStats{obj.GetObjectStats()}, kind: taskHostDN})
+		}
+	}
+	return results
+}
+
+func (o *objCompactPolicy) resetForTable(entry *catalog.TableEntry, config *BasicPolicyConfig) {
+	o.tblEntry = entry
+	o.tombstoneMetas = o.tombstoneMetas[:0]
+	o.objects = o.objects[:0]
+	o.config = config
+
+	tIter := entry.MakeTombstoneVisibleObjectIt(txnbase.MockTxnReaderWithNow())
+	defer tIter.Release()
+	for tIter.Next() {
+		tEntry := tIter.Item()
+
+		if !ObjectValid(tEntry) {
+			continue
+		}
+
+		if tEntry.OriginSize() > common.DefaultMaxOsizeObjBytes {
+			meta, err := loadTombstoneMeta(tEntry.GetObjectStats(), o.fs)
+			if err != nil {
+				continue
+			}
+			o.tombstoneMetas = append(o.tombstoneMetas, meta)
+		}
+	}
+}
+
+func loadTombstoneMeta(tombstoneObject *objectio.ObjectStats, fs fileservice.FileService) (objectio.ObjectDataMeta, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	location := tombstoneObject.ObjectLocation()
+	objMeta, err := objectio.FastLoadObjectMeta(
+		ctx, &location, false, fs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return objMeta.MustDataMeta(), nil
+}
+
+func checkTombstoneMeta(tombstoneMeta objectio.ObjectDataMeta, objectId *objectio.ObjectId) bool {
+	prefixPattern := objectId[:]
+	blkCnt := int(tombstoneMeta.BlockCount())
+
+	startIdx := sort.Search(blkCnt, func(i int) bool {
+		return tombstoneMeta.GetBlockMeta(uint32(i)).MustGetColumn(0).ZoneMap().AnyGEByValue(prefixPattern)
+	})
+
+	for pos := startIdx; pos < blkCnt; pos++ {
+		blkMeta := tombstoneMeta.GetBlockMeta(uint32(pos))
+		columnZonemap := blkMeta.MustGetColumn(0).ZoneMap()
+		// block id is the prefixPattern of the rowid and zonemap is min-max of rowid
+		// !PrefixEq means there is no rowid of this block in this zonemap, so skip
+		if columnZonemap.RowidPrefixEq(prefixPattern) {
+			return true
+		}
+		if columnZonemap.RowidPrefixGT(prefixPattern) {
+			// all zone maps are sorted by the rowid
+			// if the block id is less than the prefixPattern of the min rowid, skip the rest blocks
+			break
+		}
+	}
+	return false
+}
+
+// region: policy group
+type policyGroup struct {
+	policies []policy
+
+	config         *BasicPolicyConfig
+	configProvider *customConfigProvider
+}
+
+func newPolicyGroup(policies ...policy) *policyGroup {
+	return &policyGroup{
+		policies:       policies,
+		configProvider: newCustomConfigProvider(),
+	}
+}
+
+func (g *policyGroup) onObject(obj *catalog.ObjectEntry) {
+	for _, p := range g.policies {
+		if p.onObject(obj) { // ???
+			return
+		}
+	}
+}
+
+func (g *policyGroup) revise(rc *resourceController) []mergeTask {
+	results := make([]mergeTask, 0, len(g.policies))
+	for _, p := range g.policies {
+		pResult := p.revise(rc)
+		for _, r := range pResult {
+			if len(r.objs) > 0 {
+				results = append(results, r)
+			}
+		}
+	}
+	return results
+}
+
+func (g *policyGroup) resetForTable(entry *catalog.TableEntry) {
+	g.config = g.configProvider.getConfig(entry)
+	for _, p := range g.policies {
+		p.resetForTable(entry, g.config)
+	}
+}
+
+func (g *policyGroup) setConfig(tbl *catalog.TableEntry, txn txnif.AsyncTxn, cfg *BasicPolicyConfig) (err error) {
+	if tbl == nil || txn == nil {
+		return
+	}
+	schema := tbl.GetLastestSchema(false)
+	ctx := context.Background()
+	defer func() {
+		if err != nil {
+			logutil.Error(
+				"Policy-SetConfig-Error",
+				zap.Error(err),
+				zap.Uint64("table-id", tbl.ID),
+				zap.String("table-name", schema.Name),
+			)
+			txn.Rollback(ctx)
+		} else {
+			err = txn.Commit(ctx)
+			logger := logutil.Info
+			if err != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"Policy-SetConfig-Commit",
+				zap.Error(err),
+				zap.String("commit-ts", txn.GetCommitTS().ToString()),
+				zap.Uint64("table-id", tbl.ID),
+				zap.String("table-name", schema.Name),
+			)
+			g.configProvider.invalidCache(tbl)
+		}
+	}()
+
+	moCatalog, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	if err != nil {
+		return
+	}
+
+	moTables, err := moCatalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
+	if err != nil {
+		return
+	}
+
+	moColumns, err := moCatalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
+	if err != nil {
+		return
+	}
+
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	packer.Reset()
+	packer.EncodeUint32(schema.AcInfo.TenantID)
+	packer.EncodeStringType([]byte(tbl.GetDB().GetName()))
+	packer.EncodeStringType([]byte(schema.Name))
+	pk := packer.Bytes()
+	cloned := schema.Clone()
+	cloned.Extra.MaxOsizeMergedObj = cfg.MaxOsizeMergedObj
+	cloned.Extra.MinOsizeQuailifed = cfg.ObjectMinOsize
+	cloned.Extra.MaxObjOnerun = uint32(cfg.MergeMaxOneRun)
+	cloned.Extra.MinCnMergeSize = cfg.MinCNMergeSize
+	cloned.Extra.Hints = cfg.MergeHints
+	err = moTables.UpdateByFilter(ctx, handle.NewEQFilter(pk), uint16(pkgcatalog.MO_TABLES_EXTRA_INFO_IDX), cloned.MustGetExtraBytes(), false)
+	if err != nil {
+		return
+	}
+
+	for _, col := range schema.ColDefs {
+		packer.Reset()
+		packer.EncodeUint32(schema.AcInfo.TenantID)
+		packer.EncodeStringType([]byte(tbl.GetDB().GetName()))
+		packer.EncodeStringType([]byte(schema.Name))
+		packer.EncodeStringType([]byte(col.Name))
+		pk := packer.Bytes()
+		err = moColumns.UpdateByFilter(ctx, handle.NewEQFilter(pk), uint16(pkgcatalog.MO_COLUMNS_ATT_CPKEY_IDX), pk, false)
+		if err != nil {
+			return
+		}
+	}
+
+	db, err := txn.GetDatabaseByID(tbl.GetDB().ID)
+	if err != nil {
+		return
+	}
+	tblHandle, err := db.GetRelationByID(tbl.ID)
+	if err != nil {
+		return
+	}
+	return tblHandle.AlterTable(
+		ctx,
+		newUpdatePolicyReq(cfg),
+	)
+}
+
+func (g *policyGroup) getConfig(tbl *catalog.TableEntry) *BasicPolicyConfig {
+	r := g.configProvider.getConfig(tbl)
+	if r == nil {
+		r = &BasicPolicyConfig{
+			ObjectMinOsize:    common.RuntimeOsizeRowsQualified.Load(),
+			MaxOsizeMergedObj: common.RuntimeMaxObjOsize.Load(),
+			MergeMaxOneRun:    int(common.RuntimeMaxMergeObjN.Load()),
+			MinCNMergeSize:    common.RuntimeMinCNMergeSize.Load(),
+		}
+	}
+	return r
+}

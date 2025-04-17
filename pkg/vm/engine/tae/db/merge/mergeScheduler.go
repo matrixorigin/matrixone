@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"bytes"
 	"container/heap"
 	"context"
 	"fmt"
@@ -26,11 +27,15 @@ type mergeTask struct {
 	isTombstone bool
 	level       int8
 	note        string
+	oSize       int
 	doneCB      *taskObserver
 }
 
 func (r *mergeTask) String() string {
-	return fmt.Sprintf("mergeTask{isTombstone: %v, level: %d, note: %s, objs: %v}", r.isTombstone, r.level, r.note, len(r.objs))
+	return fmt.Sprintf(
+		"mergeTask{isTombstone: %v, level: %d, note: %s, objs: %v, oSize: %s}",
+		r.isTombstone, r.level, r.note, len(r.objs), common.HumanReadableBytes(r.oSize),
+	)
 }
 
 type MergeScheduler struct {
@@ -48,6 +53,7 @@ type MergeScheduler struct {
 	stopped   atomic.Bool
 
 	msgChan chan *MMsg
+	ioChan  chan MMsgVacuumCheck
 
 	pad *launchPad
 
@@ -57,7 +63,11 @@ type MergeScheduler struct {
 	executor *executor
 }
 
-func NewMergeScheduler(rt *dbutils.Runtime, cata *catalog.Catalog, cnSched *CNMergeScheduler) *MergeScheduler {
+func NewMergeScheduler(
+	rt *dbutils.Runtime,
+	cata *catalog.Catalog,
+	cnSched *CNMergeScheduler,
+) *MergeScheduler {
 	sched := &MergeScheduler{
 		rt:       rt,
 		catalog:  cata,
@@ -69,12 +79,13 @@ func NewMergeScheduler(rt *dbutils.Runtime, cata *catalog.Catalog, cnSched *CNMe
 
 		stopCh:   make(chan struct{}),
 		stopRecv: make(chan struct{}, 1),
-		stopped:  atomic.Bool{},
 		msgChan:  make(chan *MMsg, 4096),
+		ioChan:   make(chan MMsgVacuumCheck, 1024),
 
 		pad: newLaunchPad(),
 	}
 
+	sched.stopped.Store(true)
 	cata.SetMergeNotifier(sched)
 	// init priority queue
 	p := new(catalog.LoopProcessor)
@@ -101,8 +112,8 @@ func (a *MergeScheduler) Stop() {
 func (a *MergeScheduler) Start() {
 	if a.stopped.CompareAndSwap(true, false) {
 		a.heartbeat.Reset(time.Second * 10)
-		go a.handleLoop()
-		// go a.IoWorkerLoop()
+		go a.handleMainLoop()
+		go a.handleIOLoop()
 	}
 }
 
@@ -194,9 +205,8 @@ type MMsgKind int
 const (
 	MMsgKindSwitch MMsgKind = iota
 	MMsgKindQuery
-	MMsgKindVacuum
-	MMsgKindOverlap
 	MMsgKindTableChange
+	MMsgKindTrigger
 )
 
 type MMsgSwitch struct {
@@ -211,9 +221,11 @@ type QueryAnswer struct {
 
 	// table status
 	AutoMergeOn     bool
-	NextCheckDue    time.Time
+	NextCheckDue    time.Duration
 	MergedCnt       int
 	PendingMergeCnt int
+	BigDataAcc      int
+	Triggers        string
 }
 
 type MMsgQuery struct {
@@ -228,7 +240,126 @@ type MMsgTableChange struct {
 	DoneTask  bool
 }
 
+type MMsgVacuumCheck struct {
+	Table *catalog.TableEntry
+	opts  *VacuumOpts
+}
+
+var DefaultTrigger = &MMsgTaskTrigger{
+	l0:      DefaultLayerZeroOpts,
+	startlv: 1,
+	endlv:   6,
+	ln:      DefaultOverlapOpts,
+	tomb:    DefaultTombstoneOpts,
+	vacuum:  DefaultVacuumOpts,
+}
+
 type MMsgTaskTrigger struct {
+	expire time.Time
+	byUser bool
+
+	table *catalog.TableEntry
+
+	// l0
+	l0 *LayerZeroOpts
+
+	// ln
+	startlv int
+	endlv   int
+	ln      *OverlapOpts
+
+	// tombstone
+	tomb *TombstoneOpts
+
+	// vacuum
+	vacuum *VacuumOpts
+
+	// assigned tasks
+	assigns []mergeTask
+}
+
+func (b *MMsgTaskTrigger) String() string {
+	var buf bytes.Buffer
+	if b.l0 != nil {
+		buf.WriteString(b.l0.String())
+	}
+	if b.ln != nil {
+		if buf.Len() > 0 {
+			buf.WriteString(" ")
+		}
+		buf.WriteString(b.ln.String())
+		buf.WriteString(fmt.Sprintf("(%d->%d)", b.startlv, b.endlv))
+	}
+	if b.tomb != nil {
+		if buf.Len() > 0 {
+			buf.WriteString(" ")
+		}
+		buf.WriteString(b.tomb.String())
+	}
+	if b.vacuum != nil {
+		if buf.Len() > 0 {
+			buf.WriteString(" ")
+		}
+		buf.WriteString(b.vacuum.String())
+	}
+	if len(b.assigns) > 0 {
+		if buf.Len() > 0 {
+			buf.WriteString(" ")
+		}
+		buf.WriteString(fmt.Sprintf("assigns: %v", len(b.assigns)))
+	}
+	return buf.String()
+}
+
+func (b *MMsgTaskTrigger) WithByUser(byUser bool) *MMsgTaskTrigger {
+	b.byUser = byUser
+	return b
+}
+
+func (b *MMsgTaskTrigger) WithExpire(expire time.Time) *MMsgTaskTrigger {
+	b.expire = expire
+	return b
+}
+
+func NewMMsgTaskTrigger(table *catalog.TableEntry) *MMsgTaskTrigger {
+	return &MMsgTaskTrigger{table: table, startlv: -1, endlv: -1}
+}
+
+func (b *MMsgTaskTrigger) WithL0(opts *LayerZeroOpts) *MMsgTaskTrigger {
+	b.l0 = opts
+	return b
+}
+
+func (b *MMsgTaskTrigger) WithLn(
+	startlv int,
+	endlv int,
+	opts *OverlapOpts,
+) *MMsgTaskTrigger {
+	if startlv < 1 {
+		startlv = 1
+	}
+	if endlv > 7 {
+		endlv = 7
+	}
+	b.ln = opts
+	b.startlv = startlv
+	b.endlv = endlv
+	return b
+}
+
+func (b *MMsgTaskTrigger) WithTombstone(opts *TombstoneOpts) *MMsgTaskTrigger {
+	b.tomb = opts
+	return b
+}
+
+func (b *MMsgTaskTrigger) WithVacuumCheck(opts *VacuumOpts) *MMsgTaskTrigger {
+	b.vacuum = opts
+	return b
+}
+
+func (b *MMsgTaskTrigger) WithAssignedTasks(tasks []mergeTask) *MMsgTaskTrigger {
+	b.assigns = tasks
+	return b
 }
 
 type MMsg struct {
@@ -291,6 +422,14 @@ func (a *MergeScheduler) ResumeTable(table *catalog.TableEntry) {
 	}
 }
 
+func (a *MergeScheduler) SendTrigger(trigger *MMsgTaskTrigger) error {
+	a.msgChan <- &MMsg{
+		Kind:  MMsgKindTrigger,
+		Value: trigger,
+	}
+	return nil
+}
+
 // region: priority queue
 type todoPQ []*todoItem
 
@@ -332,13 +471,14 @@ func (pq *todoPQ) Update(item *todoItem, ready time.Time) {
 
 type todoSupporter struct {
 	mergingTaskCnt   int
+	bigTaskCnt       int
 	objectOperations int
 	totalMergeCnt    int
 	paused           bool
 	nextDue          time.Duration
 	todo             *todoItem
 	observer         *taskObserver
-	actions          []func()
+	triggers         []*MMsgTaskTrigger
 }
 
 func (m *todoSupporter) AddMergingTaskCnt(cnt int) {
@@ -348,7 +488,10 @@ func (m *todoSupporter) AddMergingTaskCnt(cnt int) {
 func (m *todoSupporter) DoneTask() {
 	m.mergingTaskCnt--
 	if m.mergingTaskCnt < 0 {
-		logutil.Error("MergeExecutorEvent", zap.String("event", "mergingTaskCnt < 0"), zap.String("table", m.todo.table.GetNameDesc()))
+		logutil.Error("MergeExecutorEvent",
+			zap.String("event", "mergingTaskCnt < 0"),
+			zap.String("table", m.todo.table.GetNameDesc()),
+		)
 		m.mergingTaskCnt = 0
 	}
 }
@@ -361,7 +504,49 @@ func (m *todoSupporter) NextAfter() time.Time {
 	return time.Now().Add(m.nextDue)
 }
 
-func (a *MergeScheduler) handleLoop() {
+func (a *MergeScheduler) handleIOLoop() {
+	for {
+		select {
+		case <-a.stopCh:
+			return
+		case msg := <-a.ioChan:
+
+			stats, err := CalculateVacuumStats(context.Background(), msg.Table, msg.opts)
+			if err != nil {
+				logutil.Warn("MergeExecutorEvent",
+					zap.String("warn", "calculate vacuum stats"),
+					zap.String("table", msg.Table.GetNameDesc()),
+					zap.Error(err),
+				)
+				continue
+			}
+			logutil.Info("MergeExecutorEvent",
+				zap.String("event", "vacuum check"),
+				zap.String("table", msg.Table.GetNameDesc()),
+				zap.Float64("tombstoneVacuum", stats.DelVacuumPercent),
+				zap.Float64("dataVacuum", stats.DataVacuumPercent),
+				zap.Duration("maxAge", stats.MaxCreateAgo),
+			)
+			compactTasks := GatherCompactTasks(context.Background(), stats, a.rc)
+			if len(compactTasks) > 0 {
+				a.SendTrigger(
+					NewMMsgTaskTrigger(msg.Table).
+						WithAssignedTasks(compactTasks),
+				)
+			}
+
+			if stats.DelVacuumPercent > 0.5 {
+				oneshotOpts := DefaultTombstoneOpts.Clone().WithOneShot(true)
+				a.SendTrigger(
+					NewMMsgTaskTrigger(msg.Table).
+						WithTombstone(oneshotOpts),
+				)
+			}
+		}
+	}
+}
+
+func (a *MergeScheduler) handleMainLoop() {
 	var nextReadyAtTimer = time.NewTimer(time.Hour * 24)
 	never := make(<-chan time.Time)
 
@@ -374,16 +559,27 @@ func (a *MergeScheduler) handleLoop() {
 			// handle tasks in the priority queue
 			for a.pq.Len() > 0 {
 				if len(a.msgChan) > 50 {
-					break // handle msg first, because it can change the priority queue
+					logutil.Info("MergeExecutorEvent",
+						zap.String("event", "handle msg first"),
+						zap.Int("msgLen", len(a.msgChan)),
+					)
+					// handle msg first, because it can change the priority queue
+					break
 				}
 				if a.rc.availableMem() < 500*common.Const1MBytes {
-					break // let's pause for a while to avoid OOM
+					logutil.Info("MergeExecutorEvent",
+						zap.String("event", "pause due to OOM alert"),
+						zap.Int64("availableMem", a.rc.availableMem()),
+					)
+					// let's pause for a while to avoid OOM
+					break
 				}
 				todo := a.pq.Peek()
 				if todo.readyAt.After(now) {
 					break
 				}
-				// DO NOT pop the task from the priority queue, because the task may be updated
+				// DO NOT pop the task from the priority queue,
+				// because the task may be updated
 				a.doSched(todo)
 			}
 
@@ -409,6 +605,7 @@ func (a *MergeScheduler) handleLoop() {
 		case <-nextReadyAt:
 			// continue the loop
 		case <-a.heartbeat.C:
+			a.rc.printStats()
 			a.rc.refresh()
 			// continue the loop
 		case msg := <-a.msgChan:
@@ -434,6 +631,8 @@ func (a *MergeScheduler) dispatchMsg(msg *MMsg) {
 		a.handleSwitch(msg.Value.(MMsgSwitch))
 	case MMsgKindQuery:
 		a.handleQuery(msg.Value.(MMsgQuery))
+	case MMsgKindTrigger:
+		a.handleTaskTrigger(msg.Value.(*MMsgTaskTrigger))
 	case MMsgKindTableChange:
 		tableChange := msg.Value.(MMsgTableChange)
 		if tableChange.Create {
@@ -444,6 +643,25 @@ func (a *MergeScheduler) dispatchMsg(msg *MMsg) {
 			a.handleMergeDone(tableChange.Table)
 		}
 	}
+}
+
+func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
+	if msg.vacuum != nil {
+		a.ioChan <- MMsgVacuumCheck{
+			Table: msg.table,
+			opts:  msg.vacuum,
+		}
+	}
+
+	supp := a.supps[msg.table.ID]
+	if supp == nil {
+		// TODO(aptend): Add table to the priority queue?
+		return
+	}
+
+	supp.triggers = append(supp.triggers, msg)
+	// exec the task immediately
+	a.pq.Update(supp.todo, time.Now())
 }
 
 func (a *MergeScheduler) handleSwitch(msg MMsgSwitch) {
@@ -461,11 +679,17 @@ func (a *MergeScheduler) handleSwitch(msg MMsgSwitch) {
 			return
 		}
 		if msg.On && supp.paused {
-			logutil.Info("MergeExecutorEvent", zap.String("event", "resume table"), zap.String("table", msg.Table.GetNameDesc()))
+			logutil.Info("MergeExecutorEvent",
+				zap.String("event", "resume table"),
+				zap.String("table", msg.Table.GetNameDesc()),
+			)
 			supp.paused = false
 			a.pq.Update(supp.todo, time.Now().Add(time.Second*1))
 		} else if !msg.On && !supp.paused {
-			logutil.Info("MergeExecutorEvent", zap.String("event", "pause table"), zap.String("table", msg.Table.GetNameDesc()))
+			logutil.Info("MergeExecutorEvent",
+				zap.String("event", "pause table"),
+				zap.String("table", msg.Table.GetNameDesc()),
+			)
 			supp.paused = true
 			a.pq.Update(supp.todo, time.Now().Add(time.Hour*24))
 		}
@@ -482,9 +706,13 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 		supp := a.supps[msg.Table.ID]
 		if supp != nil {
 			answer.AutoMergeOn = !supp.paused
-			answer.NextCheckDue = supp.todo.readyAt
+			answer.NextCheckDue = supp.todo.readyAt.Sub(time.Now())
 			answer.MergedCnt = supp.totalMergeCnt
 			answer.PendingMergeCnt = supp.mergingTaskCnt
+			answer.BigDataAcc = supp.bigTaskCnt
+			if len(supp.triggers) > 0 {
+				answer.Triggers = fmt.Sprintf("%v", supp.triggers)
+			}
 		}
 	}
 	msg.Answer <- answer
@@ -508,10 +736,11 @@ func (a *MergeScheduler) handleObjectOps(table *catalog.TableEntry) {
 		supp.objectOperations++
 		if supp.objectOperations > 5 {
 			supp.objectOperations = 0
-			dur := a.rt.Options.CheckpointCfg.ScanInterval
+			base := a.rt.Options.CheckpointCfg.ScanInterval
 			// bring the table to the top of the priority queue
-			if nextEvent := time.Now().Add(dur); supp.nextDue > dur || supp.todo.readyAt.After(nextEvent) {
-				supp.nextDue = dur
+			nextEvent := time.Now().Add(base)
+			if supp.nextDue > base || supp.todo.readyAt.After(nextEvent) {
+				supp.nextDue = base
 				a.pq.Update(supp.todo, nextEvent)
 			}
 		}
@@ -536,12 +765,6 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 
 	supp := a.supps[todo.table.ID]
 
-	// this table is paused, postpone the task
-	if supp.paused {
-		a.pq.Update(todo, time.Now().Add(time.Hour*24))
-		return
-	}
-
 	// this table is merging, postpone the task
 	if supp.mergingTaskCnt > 0 {
 		dur := a.rt.Options.CheckpointCfg.ScanInterval
@@ -549,28 +772,60 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 		return
 	}
 
+	trigger := DefaultTrigger
+	trigger.table = todo.table
+
+	// mannual actions take higher priority than auto merge
+	if len(supp.triggers) > 0 {
+		trigger = supp.triggers[len(supp.triggers)-1]
+	}
+
+	// this table is paused, postpone tasks if it triggered by inner codes
+	if supp.paused && !trigger.byUser {
+		a.pq.Update(todo, time.Now().Add(time.Hour*24))
+		return
+	}
+
+	// remove expired triggers
+	if len(supp.triggers) > 0 {
+		if trigger.expire.Before(time.Now()) {
+			supp.triggers = supp.triggers[:len(supp.triggers)-1]
+		}
+	}
+
 	// Gather tasks
-	tasks := a.pad.GatherTasks(todo.table, a.rc, DefaultLayerZeroOpts, DefaultOverlapOpts, DefaultVacuumOpts, DefaultTombstoneOpts)
+	tasks := a.pad.gatherByTrigger(context.Background(), trigger, a.rc)
 
 	// Schedule tasks
-
 	for _, task := range tasks {
 		task.doneCB = supp.observer
 		if a.executor.executeFor(todo.table, task) {
 			supp.totalMergeCnt++
 			supp.mergingTaskCnt++
+			if !task.isTombstone && task.oSize > 200*common.Const1MBytes {
+				supp.bigTaskCnt++
+			}
 		}
 	}
 
-	// This table has no task to do, lower the priority of it
+	// Postprocess tasks: issue new vacuum task or adjust the next due time
+	if supp.bigTaskCnt > 3 {
+		a.ioChan <- MMsgVacuumCheck{
+			Table: todo.table,
+			opts:  DefaultVacuumOpts,
+		}
+		supp.bigTaskCnt = 0
+	}
+
 	if len(tasks) == 0 {
-		supp.nextDue = supp.nextDue * 2
+		// This table has no task to do, lower the priority of it
+		if !trigger.byUser {
+			supp.nextDue = supp.nextDue * 2
+		}
 	} else {
-		// reset the next due time
 		supp.nextDue = a.rt.Options.CheckpointCfg.ScanInterval
 	}
 	a.pq.Update(todo, time.Now().Add(supp.nextDue))
-	logutil.Info("yyyy", zap.String("event", "schedule check done"), zap.String("table", todo.table.GetNameDesc()), zap.Duration("nextDue", supp.nextDue), zap.Int("tasks", len(tasks)))
 }
 
 type launchPad struct {
@@ -579,7 +834,8 @@ type launchPad struct {
 	smallTombstone []*objectio.ObjectStats
 	bigTombstone   []*objectio.ObjectStats
 
-	table *catalog.TableEntry
+	table         *catalog.TableEntry
+	lastMergeTime time.Duration
 
 	revisedResults []mergeTask
 }
@@ -609,8 +865,132 @@ func (p *launchPad) Reset() {
 	p.table = nil
 }
 
+func (p *launchPad) AddDataObjectStats(stat *objectio.ObjectStats) {
+	lv := stat.GetLevel()
+	p.leveledObjects[lv] = append(p.leveledObjects[lv], stat)
+}
+
+func (p *launchPad) AddTombstoneObjectStats(stat *objectio.ObjectStats) {
+	p.tombstoneStats = append(p.tombstoneStats, stat)
+}
+
+func (p *launchPad) InitWithTable(trigger *MMsgTaskTrigger) {
+	p.table = trigger.table
+	lastMergeTime := p.table.Stats.GetLastMergeTime()
+	p.lastMergeTime = time.Since(lastMergeTime)
+	readTxn := txnbase.MockTxnReaderWithNow()
+	if trigger.l0 != nil || trigger.ln != nil {
+		dataIt := p.table.MakeDataVisibleObjectIt(readTxn)
+		for dataIt.Next() {
+			item := dataIt.Item()
+			if !ObjectValid(item) {
+				continue
+			}
+			stat := item.GetObjectStats()
+			p.leveledObjects[stat.GetLevel()] = append(p.leveledObjects[stat.GetLevel()], stat)
+		}
+	}
+	if trigger.tomb != nil {
+		tombstoneIt := p.table.MakeTombstoneVisibleObjectIt(readTxn)
+		for tombstoneIt.Next() {
+			item := tombstoneIt.Item()
+			if !ObjectValid(item) {
+				continue
+			}
+			stat := item.GetObjectStats()
+			p.tombstoneStats = append(p.tombstoneStats, stat)
+		}
+	}
+}
+
+func (p *launchPad) gatherTombstoneTasks(ctx context.Context,
+	tombstoneOpts *TombstoneOpts,
+	rc *resourceController,
+) {
+	tasks := GatherTombstoneTasks(ctx, IterStats(p.tombstoneStats), tombstoneOpts)
+	p.revisedResults = append(p.revisedResults, tasks...)
+}
+
+func (p *launchPad) gatherLnTasks(ctx context.Context,
+	lnOpts *OverlapOpts,
+	startlv int,
+	endlv int,
+	rc *resourceController,
+) {
+	if startlv < 1 {
+		startlv = 1
+	}
+	if endlv > 6 {
+		endlv = 6
+	}
+	for i := startlv; i <= endlv; i++ {
+		if len(p.leveledObjects[i]) <= 2 {
+			continue
+		}
+		overlapTasks, err := GatherOverlapMergeTasks(ctx, p.leveledObjects[i], lnOpts, int8(i))
+		if err != nil {
+			logutil.Warn("MergeExecutorEvent",
+				zap.String("warn", "GatherOverlapMergeTasks failed"),
+				zap.String("table", p.table.GetNameDesc()),
+				zap.Error(err),
+			)
+		} else {
+			p.revisedResults = append(p.revisedResults,
+				controlTaskMemInPlace(overlapTasks, rc, 2)...)
+		}
+	}
+}
+
+func (p *launchPad) gatherL0Tasks(ctx context.Context,
+	l0Opts *LayerZeroOpts,
+	rc *resourceController,
+) {
+	l0Tasks, err := GatherLayerZeroMergeTasks(ctx, p.leveledObjects[0], p.lastMergeTime, l0Opts)
+	if err != nil {
+		logutil.Warn("MergeExecutorEvent",
+			zap.String("warn", "GatherLayerZeroMergeTasks failed"),
+			zap.String("table", p.table.GetNameDesc()),
+			zap.Error(err),
+		)
+	} else {
+		p.revisedResults = append(p.revisedResults,
+			controlTaskMemInPlace(l0Tasks, rc, 2)...)
+	}
+}
+
+func (p *launchPad) gatherByTrigger(ctx context.Context,
+	trigger *MMsgTaskTrigger,
+	rc *resourceController,
+) []mergeTask {
+	p.Reset()
+	p.InitWithTable(trigger)
+	if trigger.l0 != nil {
+		p.gatherL0Tasks(ctx, trigger.l0, rc)
+	}
+	if trigger.ln != nil {
+		p.gatherLnTasks(ctx, trigger.ln, trigger.startlv, trigger.endlv, rc)
+	}
+	if trigger.tomb != nil {
+		p.gatherTombstoneTasks(ctx, trigger.tomb, rc)
+	}
+	if trigger.assigns != nil {
+		p.revisedResults = append(p.revisedResults,
+			controlTaskMemInPlace(trigger.assigns, rc, 1)...)
+	}
+	return p.revisedResults
+}
+
+func sumOsize(objs []*objectio.ObjectStats) int {
+	sum := 0
+	for _, obj := range objs {
+		sum += int(obj.OriginSize())
+	}
+	return sum
+}
+
 func controlTaskMemInPlace(tasks []mergeTask, rc *resourceController, deleteLessThan int) []mergeTask {
-	for _, task := range tasks {
+	for i := range tasks {
+		task := &tasks[i]
 		original := len(task.objs)
 		estSize := mergesort.EstimateMergeSize(IterStats(task.objs))
 		for ; !rc.resourceAvailable(int64(estSize)) && len(task.objs) > 1; estSize = mergesort.EstimateMergeSize(IterStats(task.objs)) {
@@ -619,87 +999,11 @@ func controlTaskMemInPlace(tasks []mergeTask, rc *resourceController, deleteLess
 		if original-len(task.objs) > 0 {
 			task.note = task.note + fmt.Sprintf("(reduce %d)", original-len(task.objs))
 		}
+		rc.reserveResources(int64(estSize))
+		task.oSize = sumOsize(task.objs)
 	}
 	slices.DeleteFunc(tasks, func(task mergeTask) bool {
 		return len(task.objs) < deleteLessThan
 	})
 	return tasks
-}
-
-func (p *launchPad) AddDataObjectStats(stat *objectio.ObjectStats) {
-	p.leveledObjects[stat.GetLevel()] = append(p.leveledObjects[stat.GetLevel()], stat)
-}
-
-func (p *launchPad) AddTombstoneObjectStats(stat *objectio.ObjectStats) {
-	p.tombstoneStats = append(p.tombstoneStats, stat)
-}
-
-func (p *launchPad) InitWithTable(table *catalog.TableEntry) {
-	p.table = table
-	readTxn := txnbase.MockTxnReaderWithNow()
-	dataIt := table.MakeDataVisibleObjectIt(readTxn)
-	for dataIt.Next() {
-		if !ObjectValid(dataIt.Item()) {
-			continue
-		}
-		stat := dataIt.Item().GetObjectStats()
-		p.leveledObjects[stat.GetLevel()] = append(p.leveledObjects[stat.GetLevel()], stat)
-	}
-	tombstoneIt := table.MakeTombstoneVisibleObjectIt(readTxn)
-	for tombstoneIt.Next() {
-		if !ObjectValid(tombstoneIt.Item()) {
-			continue
-		}
-		stat := tombstoneIt.Item().GetObjectStats()
-		p.tombstoneStats = append(p.tombstoneStats, stat)
-	}
-}
-
-func (p *launchPad) GatherTombstoneTasks(tombstoneOpts *TombstoneOpts, rc *resourceController) {
-	tasks := GatherTombstoneTasks(context.Background(), IterStats(p.tombstoneStats), tombstoneOpts)
-	p.revisedResults = append(p.revisedResults, tasks...)
-}
-
-func (p *launchPad) GatherDataTasks(l0Opts *LayerZeroOpts, lnOpts *OverlapOpts, rc *resourceController) {
-	// if rc.cpuPercent > 80 {
-	// 	return
-	// }
-	ctx := context.Background()
-
-	lastMergeTime := p.table.Stats.GetLastMergeTime()
-	mergeAgo := time.Since(lastMergeTime)
-
-	layerZeroTasks, err := GatherLayerZeroMergeTasks(ctx, p.leveledObjects[0], mergeAgo, l0Opts)
-	if err != nil {
-		logutil.Warn("MergeExecutorEvent", zap.String("event", "GatherLayerZeroMergeTasks failed"), zap.String("table", p.table.GetNameDesc()), zap.Error(err))
-	} else {
-		p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(layerZeroTasks, rc, 2)...)
-	}
-
-	for i := 1; i < 7; i++ {
-		if len(p.leveledObjects[i]) <= 2 {
-			continue
-		}
-		overlapTasks, err := GatherOverlapMergeTasks(ctx, p.leveledObjects[i], lnOpts, int8(i))
-		if err != nil {
-			logutil.Warn("MergeExecutorEvent", zap.String("event", "GatherOverlapMergeTasks failed"), zap.String("table", p.table.GetNameDesc()), zap.Error(err))
-		} else {
-			p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(overlapTasks, rc, 2)...)
-		}
-	}
-}
-
-func (p *launchPad) GatherTasks(
-	table *catalog.TableEntry,
-	rc *resourceController,
-	l0Opts *LayerZeroOpts,
-	lnOpts *OverlapOpts,
-	vacuumOpts *VacuumOpts,
-	tombstoneOpts *TombstoneOpts,
-) []mergeTask {
-	p.Reset()
-	p.InitWithTable(table)
-	p.GatherTombstoneTasks(tombstoneOpts, rc)
-	p.GatherDataTasks(l0Opts, lnOpts, rc)
-	return p.revisedResults
 }

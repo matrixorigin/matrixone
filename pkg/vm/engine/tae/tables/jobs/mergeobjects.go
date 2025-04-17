@@ -511,7 +511,11 @@ func HandleMergeEntryInTxn(
 		if entry.Level > 0 || objstats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
 			// for layzer > 0, bump up level
 			// for layzer 0, only bump up level when the produced object's origin size > 90MB
-			objstats.SetLevel(int8(entry.Level + 1))
+			if entry.Level < 7 {
+				objstats.SetLevel(int8(entry.Level + 1))
+			} else {
+				objstats.SetLevel(7)
+			}
 		}
 		if err != nil {
 			return nil, err

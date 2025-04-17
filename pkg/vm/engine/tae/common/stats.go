@@ -72,11 +72,20 @@ type TableCompactStat struct {
 	lastMergeTime time.Time
 }
 
+func NewTableCompactStatWithRandomMergeTime() TableCompactStat {
+	return TableCompactStat{
+		lastMergeTime: time.Now().Add(-30 * time.Minute * time.Duration(rand.Intn(9)+1) / 10),
+	}
+}
+
 func (s *TableCompactStat) Init(maxFlushInterval time.Duration) {
 	s.Lock()
 	defer s.Unlock()
 	if s.flushDeadline.IsZero() {
 		s.resetDeadlineLocked(maxFlushInterval)
+	}
+	if s.lastMergeTime.IsZero() {
+		s.lastMergeTime = time.Now().Add(-30 * time.Minute * time.Duration(rand.Intn(9)+1) / 10)
 	}
 }
 

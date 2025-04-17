@@ -42,6 +42,9 @@ func (c *mergeArg) PrepareCommand() *cobra.Command {
 
 	mergeShowArg := &mergeShowArg{}
 	cmd.AddCommand(mergeShowArg.PrepareCommand())
+
+	mergeTriggerArg := &mergeTriggerArg{}
+	cmd.AddCommand(mergeTriggerArg.PrepareCommand())
 	return cmd
 }
 
@@ -131,23 +134,31 @@ func (arg *mergeSwitchArg) FromCommand(cmd *cobra.Command) (err error) {
 // region: merge show
 
 type mergeShowArg struct {
-	ctx          *inspectContext
-	tbl          *catalog.TableEntry
-	vacuumDetail bool
+	ctx *inspectContext
+	tbl *catalog.TableEntry
+
+	lnFitPolyDegree int
+
+	vacuumDetail       bool
+	vacuumCheckBigOnly bool
 }
 
 func (arg *mergeShowArg) Run() error {
 	out := bytes.Buffer{}
 	answer := arg.ctx.db.MergeScheduler.Query(arg.tbl)
-	out.WriteString(fmt.Sprintf("auto merge for all: %v, msg queue len: %d", answer.GlobalAutoMergeOn, answer.MsgQueueLen))
+	out.WriteString(fmt.Sprintf("auto merge for all: %v, msg queue len: %d\n", answer.GlobalAutoMergeOn, answer.MsgQueueLen))
 	if arg.tbl != nil {
 		id, name := arg.tbl.GetID(), arg.tbl.GetLastestSchema(false).Name
 		out.WriteString(fmt.Sprintf("\ntable info: %d-%s", id, name))
 		out.WriteString(fmt.Sprintf("\n\tauto merge: %v", answer.AutoMergeOn))
 		out.WriteString(fmt.Sprintf("\n\ttotal tasks: %d", answer.MergedCnt))
-		out.WriteString(fmt.Sprintf("\n\tnext check due: %v", answer.NextCheckDue))
+		out.WriteString(fmt.Sprintf("\n\tlast merge time: %s ago", time.Since(arg.tbl.Stats.GetLastMergeTime()).Round(time.Minute)))
+		out.WriteString(fmt.Sprintf("\n\tnext check due: %v", answer.NextCheckDue.Round(time.Second)))
 		out.WriteString(fmt.Sprintf("\n\tmerge tasks in queue: %d", answer.PendingMergeCnt))
-
+		out.WriteString(fmt.Sprintf("\n\tbig data accum: %v", answer.BigDataAcc))
+		if len(answer.Triggers) > 0 {
+			out.WriteString(fmt.Sprintf("\n\ttriggers: %s", answer.Triggers))
+		}
 		// check object distribution
 		// collect all object stats
 		it := arg.tbl.MakeDataVisibleObjectIt(txnbase.MockTxnReaderWithNow())
@@ -160,10 +171,12 @@ func (arg *mergeShowArg) Run() error {
 			statsList = append(statsList, obj.GetObjectStats())
 		}
 
+		out.WriteString("\n")
 		OutputLayerZeroStats(&out, arg.tbl, statsList, merge.DefaultLayerZeroOpts)
-		OutputOverlapStats(&out, statsList, merge.DefaultOverlapOpts.Clone().WithFurtherStat(true))
-		OutputVacuumStats(&out, arg.tbl, merge.NewVacuumOpts().WithEnableDetail(arg.vacuumDetail))
-		// calc tombstone stats
+		out.WriteString("\n")
+		OutputOverlapStats(&out, statsList, merge.DefaultOverlapOpts.Clone().WithFurtherStat(true).WithFitPolynomialDegree(arg.lnFitPolyDegree))
+		out.WriteString("\n")
+		OutputVacuumStats(&out, arg.tbl, merge.NewVacuumOpts().WithEnableDetail(arg.vacuumDetail).WithCheckBigOnly(arg.vacuumCheckBigOnly))
 	}
 	arg.ctx.resp.Payload = out.Bytes()
 	return nil
@@ -213,6 +226,8 @@ func (arg *mergeShowArg) PrepareCommand() *cobra.Command {
 		Run:   RunFactory(arg),
 	}
 	cmd.Flags().BoolVar(&arg.vacuumDetail, "vacuum-detail", false, "show vacuum detail(IO involved)")
+	cmd.Flags().BoolVar(&arg.vacuumCheckBigOnly, "vacuum-big-only", false, "check big only")
+	cmd.Flags().IntVar(&arg.lnFitPolyDegree, "layer-poly-degree", 0, "fit polynomial degree for layers")
 	return cmd
 }
 
@@ -228,6 +243,114 @@ func (arg *mergeShowArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 // endregion: merge show
+
+// region: trigger
+
+type mergeTriggerArg struct {
+	ctx *inspectContext
+	tbl *catalog.TableEntry
+
+	kind string
+
+	vacuumStart    int
+	vacuumEnd      int
+	vacuumDuration time.Duration
+
+	lnStartlv               int
+	lnEndlv                 int
+	minPointDepthPerCluster int
+
+	l0Oneshot bool
+
+	tombstoneOneShot bool
+}
+
+func (arg *mergeTriggerArg) String() string {
+	switch arg.kind {
+	case "none":
+		return fmt.Sprintf("trigger merge for table %s", arg.tbl.GetNameDesc())
+	case "l0":
+		return fmt.Sprintf("trigger l0 merge for table %s, oneshot: %v", arg.tbl.GetNameDesc(), arg.l0Oneshot)
+	case "ln":
+		return fmt.Sprintf("trigger ln merge for table %s, startlv: %d, endlv: %d, minPointDepthPerCluster: %d",
+			arg.tbl.GetNameDesc(), arg.lnStartlv, arg.lnEndlv, arg.minPointDepthPerCluster)
+	case "tombstone":
+		return fmt.Sprintf("trigger tombstone merge for table %s, oneshot: %v", arg.tbl.GetNameDesc(), arg.tombstoneOneShot)
+	case "vacuum":
+		return fmt.Sprintf("trigger vacuum for table %s, start: %d, end: %d, duration: %s",
+			arg.tbl.GetNameDesc(), arg.vacuumStart, arg.vacuumEnd, arg.vacuumDuration)
+	}
+	return ""
+}
+
+func (arg *mergeTriggerArg) PrepareCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "trigger",
+		Short: "trigger merge",
+		Run:   RunFactory(arg),
+	}
+
+	cmd.Flags().StringVar(&arg.kind, "kind", "none", "trigger kind(none, l0, ln, tombstone, vacuum)")
+	cmd.Flags().IntVar(&arg.vacuumStart, "vacuum-start", merge.DefaultVacuumOpts.StartScore, "vacuum start")
+	cmd.Flags().IntVar(&arg.vacuumEnd, "vacuum-end", merge.DefaultVacuumOpts.EndScore, "vacuum end")
+	cmd.Flags().DurationVar(&arg.vacuumDuration, "vacuum-duration", merge.DefaultVacuumOpts.Duration, "vacuum duration")
+
+	cmd.Flags().IntVar(&arg.lnStartlv, "ln-start", 1, "layer start")
+	cmd.Flags().IntVar(&arg.lnEndlv, "ln-end", 7, "layer end")
+	cmd.Flags().IntVar(&arg.minPointDepthPerCluster, "ln-min-point-depth", merge.DefaultOverlapOpts.MinPointDepthPerCluster, "min point depth per cluster")
+
+	cmd.Flags().BoolVar(&arg.l0Oneshot, "l0-oneshot", false, "merge all l0 objects")
+
+	cmd.Flags().BoolVar(&arg.tombstoneOneShot, "tombstone-oneshot", false, "merge all tombstone objects")
+
+	return cmd
+}
+
+func (arg *mergeTriggerArg) FromCommand(cmd *cobra.Command) (err error) {
+	arg.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+
+	address, err := cmd.Flags().GetString("target")
+	if err != nil {
+		return err
+	}
+	arg.tbl, err = parseTableTarget(address, arg.ctx.acinfo, arg.ctx.db)
+
+	return err
+}
+
+func (arg *mergeTriggerArg) Run() error {
+	switch arg.kind {
+	case "none":
+		return nil
+	case "l0":
+		trigger := merge.NewMMsgTaskTrigger(arg.tbl).WithByUser(true)
+		opts := merge.NewLayerZeroOpts()
+		if arg.l0Oneshot {
+			opts.WithToleranceDegressionCurve(1, 1, 0, [4]float64{0, 0, 1, 1})
+		}
+		trigger.WithL0(opts)
+		return arg.ctx.db.MergeScheduler.SendTrigger(trigger)
+	case "ln":
+		trigger := merge.NewMMsgTaskTrigger(arg.tbl).WithByUser(true)
+		opts := merge.NewOverlapOptions().WithMinPointDepthPerCluster(arg.minPointDepthPerCluster)
+		trigger.WithLn(arg.lnStartlv, arg.lnEndlv, opts)
+		return arg.ctx.db.MergeScheduler.SendTrigger(trigger)
+	case "tombstone":
+		trigger := merge.NewMMsgTaskTrigger(arg.tbl).WithByUser(true)
+		opts := merge.NewTombstoneOpts().WithOneShot(arg.tombstoneOneShot)
+		trigger.WithTombstone(opts)
+		return arg.ctx.db.MergeScheduler.SendTrigger(trigger)
+	case "vacuum":
+		trigger := merge.NewMMsgTaskTrigger(arg.tbl).WithByUser(true)
+		opts := merge.NewVacuumOpts().WithStartScore(arg.vacuumStart).WithEndScore(arg.vacuumEnd).WithDuration(arg.vacuumDuration)
+		trigger.WithVacuumCheck(opts)
+		return arg.ctx.db.MergeScheduler.SendTrigger(trigger)
+	default:
+		return moerr.NewInvalidInputNoCtxf("invalid kind: %s", arg.kind)
+	}
+}
+
+// endregion: trigger
 
 // region: merge wasm
 

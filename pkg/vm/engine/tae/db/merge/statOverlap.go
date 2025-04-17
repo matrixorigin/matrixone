@@ -204,11 +204,21 @@ type OverlapOpts struct {
 	FitPolynomialDegree     int // 0 means no polynomial fitting, max is 5
 }
 
-func NewOverlapOptions() *OverlapOpts {
+func (o *OverlapOpts) String() string {
+	return fmt.Sprintf("OverlapOpts{MinPD: %d, Degree: %d, NoStat: %t}",
+		o.MinPointDepthPerCluster, o.FitPolynomialDegree, o.NoFurtherStat)
+}
+
+func (o *OverlapOpts) Clone() *OverlapOpts {
 	return &OverlapOpts{
-		MinPointDepthPerCluster: DefaultOverlapOpts.MinPointDepthPerCluster,
-		FitPolynomialDegree:     DefaultOverlapOpts.FitPolynomialDegree,
+		MinPointDepthPerCluster: o.MinPointDepthPerCluster,
+		FitPolynomialDegree:     o.FitPolynomialDegree,
+		NoFurtherStat:           o.NoFurtherStat,
 	}
+}
+
+func NewOverlapOptions() *OverlapOpts {
+	return DefaultOverlapOpts.Clone()
 }
 
 func (o *OverlapOpts) WithMinPointDepthPerCluster(minPointDepthPerCluster int) *OverlapOpts {
@@ -224,14 +234,6 @@ func (o *OverlapOpts) WithFitPolynomialDegree(fitPolynomialDegree int) *OverlapO
 func (o *OverlapOpts) WithFurtherStat(furtherStat bool) *OverlapOpts {
 	o.NoFurtherStat = !furtherStat
 	return o
-}
-
-func (o *OverlapOpts) Clone() *OverlapOpts {
-	return &OverlapOpts{
-		MinPointDepthPerCluster: o.MinPointDepthPerCluster,
-		FitPolynomialDegree:     o.FitPolynomialDegree,
-		NoFurtherStat:           o.NoFurtherStat,
-	}
 }
 
 // CalculateOverlapStats calculates average overlap depth and average overlap count

@@ -246,11 +246,8 @@ func (c *resourceController) availableMem() int64 {
 }
 
 func (c *resourceController) printStats() {
-	if c.reserved == 0 && c.availableMem() > 512*common.Const1MBytes {
-		return
-	}
-
-	logutil.Info("MergeExecutorMemoryStats",
+	logutil.Info("MergeExecutorEvent",
+		common.AnyField("event", "memory stats"),
 		common.AnyField("merge-limit", common.HumanReadableBytes(int(c.limit))),
 		common.AnyField("process-mem", common.HumanReadableBytes(int(c.using))),
 		common.AnyField("reserving-mem", common.HumanReadableBytes(int(c.reserved))),

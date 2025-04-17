@@ -214,7 +214,7 @@ func TestIsConstantObj(t *testing.T) {
 
 func TestCalculateOverlapMetrics(t *testing.T) {
 	// Path to the zout file
-	zoutFilePath := "/root/matrixone/zmtest/old-statement.out"
+	zoutFilePath := "/root/matrixone/zmtest/dev-statement.out"
 
 	reader, closer, err := makeFileReader(zoutFilePath)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestCalculateOverlapMetrics(t *testing.T) {
 		}
 		t.Logf("level %d: %v", i, len(objects))
 		// Calculate overlap metrics
-		opts := NewOverlapOptions().WithFitPolynomialDegree(4)
+		opts := NewOverlapOptions().WithFitPolynomialDegree(4).WithFurtherStat(true)
 		overlapStats, err := CalculateOverlapStats(context.Background(), objects, opts)
 		require.NoError(t, err)
 

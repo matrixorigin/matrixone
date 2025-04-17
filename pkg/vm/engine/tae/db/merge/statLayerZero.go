@@ -97,21 +97,33 @@ type LayerZeroOpts struct {
 	CPoints    [4]float64
 }
 
-func NewLayerZeroOpts() *LayerZeroOpts {
+func (o *LayerZeroOpts) String() string {
+	return fmt.Sprintf("LayerZeroOpts{LS: %s, US: %s, LR: %d, UR: %d, S: %d, E: %d, D: %v, C: %v}",
+		common.HumanReadableBytes(int(o.LowerSelectSize)), common.HumanReadableBytes(int(o.UpperSelectSize)),
+		o.LowerSelectRows, o.UpperSelectRows,
+		o.Start, o.End, o.Duration, o.CPoints)
+}
+
+func (o *LayerZeroOpts) Clone() *LayerZeroOpts {
 	return &LayerZeroOpts{
-		UpperSelectSize: common.DefaultMinOsizeQualifiedBytes,
-		UpperSelectRows: math.MaxUint32,
-		Start:           DefaultLayerZeroOpts.Start,
-		End:             DefaultLayerZeroOpts.End,
-		Duration:        DefaultLayerZeroOpts.Duration,
-		CPoints:         DefaultLayerZeroOpts.CPoints,
+		LowerSelectSize: o.LowerSelectSize,
+		UpperSelectSize: o.UpperSelectSize,
+		LowerSelectRows: o.LowerSelectRows,
+		UpperSelectRows: o.UpperSelectRows,
+		Start:           o.Start,
+		End:             o.End,
+		Duration:        o.Duration,
+		CPoints:         o.CPoints,
 	}
+}
+
+func NewLayerZeroOpts() *LayerZeroOpts {
+	return DefaultLayerZeroOpts.Clone()
 }
 
 func (o *LayerZeroOpts) CalcTolerance(lastMergeTimeAgo time.Duration) int {
 	if lastMergeTimeAgo > TenYears {
 		// avoid busy merge when the system is just started
-		// TODO(aptend): update lastMergeTime when starting the db
 		lastMergeTimeAgo = o.Duration * time.Duration(rand.Intn(9)+1) / 10
 	}
 	// If no merge has happened yet or duration is zero, return the start tolerance

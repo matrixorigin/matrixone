@@ -121,6 +121,7 @@ func NewReplayTableEntry() *TableEntry {
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 		TableNode:        &TableNode{},
+		Stats:            common.NewTableCompactStatWithRandomMergeTime(),
 	}
 	return e
 }
