@@ -55,8 +55,8 @@ Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
         ->  Table Scan on d1.t1
-              Filter Cond: t1.c1 BETWEEN 1 AND 5
-              Block Filter Cond: t1.c1 BETWEEN 1 AND 5
+              Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)
+              Block Filter Cond: prefix_between(t1.__mo_cbkey_002c1002c2)
 select count(*) from t1 where c1 between 1 and 5;
 count(*)
 50
@@ -99,8 +99,8 @@ Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
         ->  Table Scan on d1.t1
-              Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), t1.c2 BETWEEN 1 AND 5
-              Block Filter Cond: prefix_eq(t1.__mo_cbkey_002c1002c2), t1.c2 BETWEEN 1 AND 5
+              Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'
+              Block Filter Cond: t1.__mo_cbkey_002c1002c2 BETWEEN '::' AND '::'
 select count(*) from t1 where c1=4 and c2 between 1 and 5;
 count(*)
 10
@@ -143,8 +143,8 @@ Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
         ->  Table Scan on d1.t2
-              Filter Cond: t2.c1 BETWEEN 1 AND 5
-              Block Filter Cond: t2.c1 BETWEEN 1 AND 5
+              Filter Cond: prefix_between(t2.__mo_cpkey_col)
+              Block Filter Cond: prefix_between(t2.__mo_cpkey_col)
 select count(*) from t2 where c1 between 1 and 5;
 count(*)
 50000
@@ -187,8 +187,8 @@ Project
   ->  Aggregate
         Aggregate Functions: starcount(1)
         ->  Table Scan on d1.t2
-              Filter Cond: prefix_eq(t2.__mo_cpkey_col), t2.c2 BETWEEN 1 AND 5
-              Block Filter Cond: prefix_eq(t2.__mo_cpkey_col), t2.c2 BETWEEN 1 AND 5
+              Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'
+              Block Filter Cond: t2.__mo_cpkey_col BETWEEN '::' AND '::'
 select count(*) from t2 where c1=4 and c2 between 1 and 5;
 count(*)
 1
