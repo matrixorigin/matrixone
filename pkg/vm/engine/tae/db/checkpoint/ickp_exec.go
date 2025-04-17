@@ -237,13 +237,13 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	if err != nil {
 		return
 	}
-	fields = data.ExportStats("")
 	defer data.Close()
 	var location objectio.Location
 	location, files, err = data.Sync(
 		executor.ctx,
 		executor.runner.rt.Fs,
 	)
+	fields = data.ExportStats("")
 	if err != nil {
 		return
 	}
