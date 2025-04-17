@@ -122,11 +122,10 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	}
 	defer data.Close()
 
-	fields = data.ExportStats("")
-
 	location, files, err := data.Sync(
 		job.executor.ctx, runner.rt.Fs,
 	)
+	fields = data.ExportStats("")
 	if err != nil {
 		runner.store.RemoveGCKPIntent()
 		errPhase = "flush"
