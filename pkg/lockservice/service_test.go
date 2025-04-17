@@ -2230,7 +2230,7 @@ func TestReLockSuccWithReStartCN(t *testing.T) {
 	)
 }
 
-func TestCheckRemoteTxnTimeout(t *testing.T) {
+func TestCheckTxnTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
 		zapcore.DebugLevel,
@@ -2294,8 +2294,62 @@ func TestCheckRemoteTxnTimeout(t *testing.T) {
 				}
 			}
 
-			l2.checkRemoteTxnTimeout(ctx)
+			l2.checkTxnTimeout(ctx)
 			require.True(t, l2.activeTxnHolder.empty())
+		},
+		nil,
+	)
+}
+
+func TestIssue5176(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l.cfg.TxnIterFunc = func(f func([]byte) bool) {}
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			l.activeTxnHolder.getActiveTxn([]byte("txn1"), true, "")
+
+			l.setStatus(pb.Status_ServiceLockWaiting)
+
+			l.checkTxnTimeout(ctx)
+			require.True(t, l.activeTxnHolder.empty())
+		},
+		nil,
+	)
+}
+
+func TestIssue5176_2(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f([]byte("txn1"))
+			}
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			l.activeTxnHolder.getActiveTxn([]byte("txn1"), true, "")
+
+			l.setStatus(pb.Status_ServiceLockWaiting)
+
+			l.checkTxnTimeout(ctx)
+			require.False(t, l.activeTxnHolder.empty())
 		},
 		nil,
 	)
