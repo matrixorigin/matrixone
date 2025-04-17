@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,7 +44,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -57,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -1597,48 +1596,45 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 // |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
 // |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | TN Blcok
 // |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
-func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
-	_, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
-	typ, err := strconv.ParseInt(typ_str, 10, 64)
-	if err != nil {
-		return err
-	}
-	switch typ {
-	case deletion.FlushDeltaLoc:
-		tbl.getTxn().hasS3Op.Store(true)
-		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
-		fileName := stats.ObjectLocation().String()
-		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
-		if err != nil {
-			return err
-		}
-
-		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
-			return err
-		}
-
-		for i := range bat.Vecs[0].Length() {
-			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
-			tbl.getTxn().StashFlushedTombstones(ss)
-		}
-
-	case deletion.CNBlockOffset:
-	case deletion.RawBatchOffset:
-	case deletion.RawRowIdBatch:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-		if bat.RowCount() == 0 {
-			return nil
-		}
-		if err = tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat); err != nil {
-			return err
-		}
-	default:
-		tbl.getTxn().hasS3Op.Store(true)
-		panic(moerr.NewInternalErrorNoCtxf("Unsupport type for table delete %d", typ))
-	}
-	return nil
-}
+//func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
+//	_, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
+//	typ, err := strconv.ParseInt(typ_str, 10, 64)
+//	if err != nil {
+//		return err
+//	}
+//	switch typ {
+//	case deletion.FlushDeltaLoc:
+//		tbl.getTxn().hasS3Op.Store(true)
+//		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
+//		fileName := stats.ObjectLocation().String()
+//		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+//		if err != nil {
+//			return err
+//		}
+//
+//		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+//			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
+//			return err
+//		}
+//
+//		for i := range bat.Vecs[0].Length() {
+//			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+//			tbl.getTxn().StashFlushedTombstones(ss)
+//		}
+//
+//		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+//		if bat.RowCount() == 0 {
+//			return nil
+//		}
+//		if err = tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat); err != nil {
+//			return err
+//		}
+//	default:
+//		tbl.getTxn().hasS3Op.Store(true)
+//		panic(moerr.NewInternalErrorNoCtxf("Unsupport type for table delete %d", typ))
+//	}
+//	return nil
+//}
 
 func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	if tbl.seqnums != nil && tbl.typs != nil {
@@ -1736,20 +1732,45 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 }
 
 func (tbl *txnTable) Delete(
-	ctx context.Context, bat *batch.Batch, name string,
+	ctx context.Context, bat *batch.Batch, _ string,
 ) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
-	//for S3 delete
-	if !objectio.IsPhysicalAddr(name) {
-		return tbl.EnhanceDelete(bat, name)
-	}
-	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-	if bat.RowCount() == 0 {
+
+	switch bat.Attrs[0] {
+	case catalog.Row_ID:
+		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if bat.RowCount() == 0 {
+			return nil
+		}
+		return tbl.writeTnPartition(ctx, bat)
+
+	case catalog.ObjectMeta_ObjectStats:
+		tbl.getTxn().hasS3Op.Store(true)
+		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
+		fileName := stats.ObjectLocation().String()
+		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+		if err != nil {
+			return err
+		}
+
+		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
+			return err
+		}
+
+		for i := range bat.Vecs[0].Length() {
+			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			tbl.getTxn().StashFlushedTombstones(ss)
+		}
+
 		return nil
+
+	default:
+		panic(moerr.NewInternalErrorNoCtxf(
+			"Unsupport type for table delete %s", common.MoBatchToString(bat, 100)))
 	}
-	return tbl.writeTnPartition(ctx, bat)
 }
 
 func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {

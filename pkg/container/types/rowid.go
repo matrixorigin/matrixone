@@ -198,12 +198,28 @@ func (r *Rowid) SetRowOffset(offset uint32) {
 	copy(r[BlockidSize:], EncodeUint32(&offset))
 }
 
+func (r *Rowid) SetBlkOffset(offset uint16) {
+	copy(r[ObjectidSize:], EncodeUint16(&offset))
+}
+
+func (r *Rowid) SetObjOffset(offset uint16) {
+	copy(r[SegmentidSize:], EncodeUint16(&offset))
+}
+
+func (r *Rowid) SetSegment(seg Segmentid) {
+	copy(r[:SegmentidSize], seg[:])
+}
+
 func (r *Rowid) GetRowOffset() uint32 {
 	return DecodeUint32(r[BlockidSize:])
 }
 
 func (r *Rowid) GetBlockOffset() uint16 {
 	return DecodeUint16(r[ObjectBytesSize:BlockidSize])
+}
+
+func (r *Rowid) GetObjectOffset() uint16 {
+	return DecodeUint16(r[SegmentidSize:ObjectBytesSize])
 }
 
 func (r *Rowid) GetObjectString() string {

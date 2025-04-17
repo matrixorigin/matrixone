@@ -70,7 +70,7 @@ type deleteBlockInfo struct {
 func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
 	data := &deleteBlockData{
 		bitmap: nulls.NewWithSize(int(options.DefaultBlockMaxRows)),
-		typ:    deletion.RawRowIdBatch,
+		typ:    deletion.DeletionOnCommitted,
 		bat:    newDeleteBatch(inputBatch, pkIdx),
 	}
 	return data
@@ -218,14 +218,20 @@ func (writer *s3WriterDelegate) prepareDeleteBatchs(
 				if err != nil {
 					return nil, err
 				}
-				strSegid := string(segid[:])
-				if writer.segmentMap[strSegid] == colexec.TxnWorkSpaceIdType {
-					blockMap[blkid].typ = deletion.RawBatchOffset
-				} else if writer.segmentMap[strSegid] == colexec.CnBlockIdType {
-					blockMap[blkid].typ = deletion.CNBlockOffset
+
+				//strSegid := string(segid[:])
+				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, segid) {
+					blockMap[blkid].typ = deletion.DeletionOnTxnUnCommit
 				} else {
-					blockMap[blkid].typ = deletion.RawRowIdBatch
+					blockMap[blkid].typ = deletion.DeletionOnCommitted
 				}
+				//if writer.segmentMap[strSegid] == colexec.TxnWorkSpaceIdType {
+				//	blockMap[blkid].typ = deletion.RawBatchOffset
+				//} else if writer.segmentMap[strSegid] == colexec.CnBlockIdType {
+				//	blockMap[blkid].typ = deletion.CNBlockOffset
+				//} else {
+				//	blockMap[blkid].typ = deletion.RawRowIdBatch
+				//}
 			}
 
 			block := blockMap[blkid]
@@ -247,7 +253,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatchs(
 	blkids := make([]types.Blockid, 0, len(blockMap))
 	for blkid, data := range blockMap {
 		//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
-		if data.typ != deletion.RawRowIdBatch {
+		if data.typ == deletion.DeletionOnTxnUnCommit {
 			continue
 		}
 		blkids = append(blkids, blkid)

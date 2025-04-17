@@ -16,6 +16,12 @@ package disttae
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"math/rand"
 	"sync"
 	"testing"
 
@@ -60,5 +66,57 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 
 		require.True(t, found)
 		return true
+	})
+}
+
+func Test_BatchAllocNewRowIds(t *testing.T) {
+	proc := testutil.NewProc()
+	txn := Transaction{
+		proc: proc,
+	}
+
+	txn.currentRowId.SetRowOffset(0)
+	txn.currentRowId.SetBlkOffset(0)
+	txn.currentRowId.SetObjOffset(1)
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
+	t.Run("A", func(t *testing.T) {
+		for i := 0; i < 10; i++ {
+			ll := rand.Intn(100) + 1
+			vec, err := txn.batchAllocNewRowIds(ll)
+			require.NoError(t, err)
+			require.Equal(t, ll, vec.Length())
+
+			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
+			require.Equal(t, int(0), int(rowIds[0].GetRowOffset()))
+			require.Equal(t, int(ll-1), int(rowIds[len(rowIds)-1].GetRowOffset()))
+
+			vec.Free(common.DefaultAllocator)
+		}
+	})
+
+	t.Run("B", func(t *testing.T) {
+		ll := options.DefaultBlockMaxRows*11 + 1
+		mm1 := make(map[types.Blockid]struct{})
+		mm2 := make(map[types.Objectid]struct{})
+
+		vec, err := txn.batchAllocNewRowIds(ll)
+		require.NoError(t, err)
+		require.Equal(t, ll, vec.Length())
+
+		rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
+		for i := range rowIds {
+			if i%options.DefaultBlockMaxRows == 0 {
+				require.Equal(t, 0, int(rowIds[i].GetRowOffset()))
+			}
+
+			mm1[*rowIds[i].BorrowBlockID()] = struct{}{}
+			mm2[*rowIds[i].BorrowObjectID()] = struct{}{}
+		}
+
+		require.Equal(t, 12, len(mm1))
+		require.Equal(t, 1, len(mm2))
+
+		vec.Free(common.DefaultAllocator)
 	})
 }

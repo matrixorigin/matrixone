@@ -18,8 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/panjf2000/ants/v2"
 	"math"
 	"runtime"
 	"sort"
@@ -47,6 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
@@ -120,15 +120,25 @@ func (txn *Transaction) WriteBatch(
 		if bat.Vecs[0].GetType().Oid == types.T_Rowid {
 			panic("rowid should not be generated in Insert WriteBatch")
 		}
-		txn.genBlock()
-		len := bat.RowCount()
+
+		ll := bat.RowCount()
+		rowIdVec, err := txn.batchAllocNewRowIds(ll)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			rowIdVec.Free(txn.proc.Mp())
+		}()
+
+		rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVec)
 		genRowidVec = vector.NewVec(types.T_Rowid.ToType())
-		for i := 0; i < len; i++ {
-			if err := vector.AppendFixed(genRowidVec, txn.genRowId(), false,
-				txn.proc.Mp()); err != nil {
+		for i := 0; i < ll; i++ {
+			if err := vector.AppendFixed(genRowidVec,
+				rowIds[i], false, txn.proc.Mp()); err != nil {
 				return nil, err
 			}
 		}
+
 		bat.Vecs = append([]*vector.Vector{genRowidVec}, bat.Vecs...)
 		bat.Attrs = append([]string{objectio.PhysicalAddr_Attr}, bat.Attrs...)
 		if tableId != catalog.MO_DATABASE_ID &&
@@ -934,9 +944,9 @@ func (txn *Transaction) WriteFileLocked(
 		blkInfosVec := bat.Vecs[0]
 		for idx := 0; idx < blkInfosVec.Length(); idx++ {
 			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
-			vector.AppendBytes(bat2.Vecs[0], []byte(blkInfo.MetaLocation().String()),
-				false, txn.proc.Mp())
-			colexec.Get().PutCnSegment(blkInfo.BlockID.Segment(), colexec.CnBlockIdType)
+			vector.AppendBytes(bat2.Vecs[0], []byte(blkInfo.MetaLocation().String()), false, txn.proc.Mp())
+
+			colexec.RecordTxnUnCommitSegment(*blkInfo.BlockID.Segment())
 		}
 
 		// append obj stats, may multiple
@@ -1019,17 +1029,17 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	max1 := uint32(0)
 	cnRowIdOffsets := make([]int64, 0, len(rowids))
 	for i, rowid := range rowids {
-		// process cn block deletes
-		uid := rowid.BorrowSegmentID()
+
 		blkid := rowid.CloneBlockID()
 		deleteBlkId[blkid] = true
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
-		if colexec.Get() != nil && colexec.Get().GetCnSegmentType(uid) == colexec.CnBlockIdType {
+
+		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, *rowid.BorrowSegmentID()) {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
-			continue
 		}
+
 		if rowOffset < (min1) {
 			min1 = rowOffset
 		}
@@ -1091,10 +1101,7 @@ func (txn *Transaction) deleteTableWrites(
 			if len(vs) == 0 {
 				continue
 			}
-			// skip 2 above
-			if !vs[0].BorrowSegmentID().Eq(txn.segId) {
-				continue
-			}
+
 			// Now, e.bat is uncommitted raw data batch which belongs to only one block allocated by CN.
 			// so if e.bat is not to be deleted,skip it.
 			if !deleteBlkId[vs[0].CloneBlockID()] {
@@ -1126,18 +1133,57 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 	return id, moerr.AttachCause(ctx, err)
 }
 
-func (txn *Transaction) genBlock() {
-	txn.rowId[4]++
-	txn.rowId[5] = INIT_ROWID_OFFSET
-}
+// one call to generate a batch of rowIds.
+// in these rowIds, every objectio.BlockMaxRows rowIds share one blockId
+// and the blk and row offsets always start from 0.
+func (txn *Transaction) batchAllocNewRowIds(count int) (*vector.Vector, error) {
 
-func (txn *Transaction) genRowId() types.Rowid {
-	if txn.rowId[5] != INIT_ROWID_OFFSET {
-		txn.rowId[5]++
-	} else {
-		txn.rowId[5] = 0
+	newBlk := func() bool {
+		blkOffset := txn.currentRowId.GetBlockOffset()
+		if blkOffset == math.MaxUint16 {
+			objOffset := txn.currentRowId.GetObjectOffset()
+			txn.currentRowId.SetObjOffset(objOffset + 1)
+			blkOffset = 0
+		} else {
+			blkOffset += 1
+		}
+
+		txn.currentRowId.SetBlkOffset(blkOffset)
+		txn.currentRowId.SetRowOffset(0)
+
+		return true
 	}
-	return types.DecodeFixed[types.Rowid](types.EncodeSlice(txn.rowId[:]))
+
+	var (
+		ptr = 0
+		ret *vector.Vector
+	)
+
+	for ptr < count {
+		newBlk()
+
+		ll := options.DefaultBlockMaxRows
+		if ptr+ll > count {
+			ll = count - ptr
+		}
+
+		if vec, err := objectio.ConstructRowidColumn(txn.currentRowId.BorrowBlockID(),
+			0, uint32(ll), txn.proc.Mp()); err != nil {
+			return nil, err
+		} else if ret == nil {
+			ret = vec
+		} else {
+			if err = ret.UnionBatch(vec, 0, vec.Length(), nil, txn.proc.Mp()); err != nil {
+				vec.Free(txn.proc.Mp())
+				return nil, err
+			}
+			vec.Free(txn.proc.Mp())
+		}
+
+		ptr += ll
+	}
+
+	return ret, nil
 }
 
 func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
@@ -1227,13 +1273,20 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			if merged && a.typ == INSERT {
 				// rewrite rowIds.
 				// all the rowIds in the batch share one blkId.
-				txn.genBlock()
+				rowIdVector, err := txn.batchAllocNewRowIds(a.bat.RowCount())
+				if err != nil {
+					return err
+				}
+
+				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVector)
 				for x := range a.bat.RowCount() {
-					rowId := txn.genRowId()
-					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](a.bat.Vecs[0], x, rowId); err != nil {
+					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](a.bat.Vecs[0], x, rowIds[x]); err != nil {
+						rowIdVector.Free(txn.proc.GetMPool())
 						return err
 					}
 				}
+
+				rowIdVector.Free(txn.proc.GetMPool())
 			}
 		}
 
@@ -1754,7 +1807,7 @@ func (txn *Transaction) delTransaction() {
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
-	segmentnames = append(segmentnames, txn.segId)
+	segmentnames = append(segmentnames, colexec.TxnWorkspaceSegment)
 	for blkId := range txn.cnBlkId_Pos {
 		// blkId:
 		// |------|----------|----------|
