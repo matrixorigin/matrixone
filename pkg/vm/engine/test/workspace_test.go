@@ -105,6 +105,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
+				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
 				bat2.SetRowCount(len(waitedDeletes))
@@ -192,6 +193,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
+	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	{
 		reader, err := testutil.GetRelationReader(
@@ -234,6 +236,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	{
 		require.NoError(t, err)
 		bat2, err := tombstoneBat.Window(0, 5)
+		bat2.Attrs = tombstoneBat.Attrs
 		require.NoError(t, err)
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, true, true))
 		require.NoError(t, txn.Commit(ctx))
@@ -822,6 +825,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				tombstoneBat = batch.NewWithSize(1)
+				tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
 				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
 				tombstoneBat.SetRowCount(len(waitedDeletes))
@@ -929,6 +933,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
+	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	{
 		reader, err := testutil.GetRelationReader(
@@ -1479,6 +1484,7 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 				entryCnt++
 
 				bat2 = batch.NewWithSize(1)
+				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 
 				locstr := string(entry.Bat().GetVector(0).GetBytesAt(0))

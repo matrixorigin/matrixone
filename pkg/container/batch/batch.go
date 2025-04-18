@@ -362,6 +362,19 @@ func (bat *Batch) SetAttributes(attrs []string) {
 	bat.Attrs = attrs
 }
 
+func (bat *Batch) InsertVector(
+	pos int32,
+	attr string,
+	vec *vector.Vector,
+) {
+	bat.Vecs = append(bat.Vecs, nil)
+	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
+	bat.Vecs[pos] = vec
+	bat.Attrs = append(bat.Attrs, "")
+	copy(bat.Attrs[pos+1:], bat.Attrs[pos:])
+	bat.Attrs[pos] = attr
+}
+
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 	bat.Vecs[pos] = vec
 	if vec != nil {
