@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -385,6 +386,9 @@ func (d *dirtyCollector) tryCompactTree(
 	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
 		if dirtyTable.Compact() {
+			if _, injected := objectio.PrintFlushEntryInjected(); injected {
+				logutil.Infof("tryCompactTree: remove table%v", id)
+			}
 			tree.Shrink(id)
 			continue
 		}
@@ -423,6 +427,9 @@ func (d *dirtyCollector) tryCompactTree(
 			}
 			// keep only non-dropped aobjects
 			if !(obj.IsAppendable() && !obj.HasDropCommitted()) {
+				if _, injected := objectio.PrintFlushEntryInjected(); injected {
+					logutil.Infof("tryCompactTree: remove object%v", id.String())
+				}
 				dirtyTable.Shrink(id, isTombstone)
 				return nil
 			}
