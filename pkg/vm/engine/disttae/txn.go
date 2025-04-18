@@ -18,7 +18,9 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
 	"math"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -1244,6 +1246,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 // CN blocks compaction for txn
 func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
+	if txn.deletedBlocks == nil {
+		return nil
+	}
+
 	// object --> blk id --> deletion
 	objBlkDeletion := make(map[objectio.ObjectId]map[objectio.Blockid][]int64)
 	objTables := make(map[objectio.ObjectId]tableKey)
@@ -1281,6 +1287,12 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 	waiter := sync.WaitGroup{}
 	locker := sync.Mutex{}
+	defer func() {
+		waiter.Wait()
+		if txn.compactWorker != nil {
+			txn.compactWorker.Release()
+		}
+	}()
 
 	compactFunc := func(stats objectio.ObjectStats, tnStore DNStore) {
 		defer func() {
@@ -1384,6 +1396,9 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				bat.Clean(txn.proc.Mp())
 
 			} else {
+				if txn.compactWorker == nil {
+					txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
+				}
 				waiter.Add(1)
 				txn.compactWorker.Submit(func() {
 					compactFunc(stats, entry.tnStore)
@@ -1393,11 +1408,11 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			offset += int(stats.BlkCnt())
 		}
 
+		locker.Lock()
 		txn.writes[i].bat.Clean(txn.proc.GetMPool())
 		txn.writes[i].bat = nil
+		locker.Unlock()
 	}
-
-	waiter.Wait()
 
 	return nil
 }
@@ -1698,6 +1713,10 @@ func (txn *Transaction) delTransaction() {
 	txn.transfer.timestamps = nil
 	txn.transfer.lastTransferred = types.TS{}
 	txn.transfer.pendingTransfer = false
+
+	if txn.compactWorker != nil {
+		txn.compactWorker.Release()
+	}
 
 	if txn.extraWriteWorkspaceThreshold > 0 {
 		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)

@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -461,8 +460,6 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
 		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
 	}
-
-	txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
