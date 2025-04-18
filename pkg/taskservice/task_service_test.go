@@ -545,7 +545,7 @@ func TestAddCdcTask1(t *testing.T) {
 		},
 	}
 
-	cnt, err := s.AddCdcTask(
+	cnt, err := s.AddCDCTask(
 		ctx,
 		newTestTaskMetadata("t1"),
 		details,
@@ -554,7 +554,7 @@ func TestAddCdcTask1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, cnt, 0)
 
-	cnt, err = s.UpdateCdcTask(context.Background(), task.TaskStatus_Canceled, nil)
+	cnt, err = s.UpdateCDCTask(context.Background(), task.TaskStatus_Canceled, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, cnt, 0)
 
