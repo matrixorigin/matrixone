@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -81,7 +80,7 @@ func TestMergeDelete(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id0"}, nil),
 			testutil.MakeTextVector([]string{string(bytes)}, nil),
-			testutil.MakeInt8Vector([]int8{deletion.RawBatchOffset}, nil),
+			testutil.MakeInt8Vector([]int8{0}, nil),
 			testutil.MakeInt32Vector([]int32{0}, nil),
 			vcu32,
 		},
@@ -150,7 +149,7 @@ func TestMergeDelete(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeTextVector([]string{"mock_block_id1", "mock_block_id2", "mock_block_id3"}, nil),
 			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil),
-			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushDeltaLoc}, nil),
+			testutil.MakeInt8Vector([]int8{0, 1, 2}, nil),
 			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil),
 			vcu32_2,
 		},

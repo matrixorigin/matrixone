@@ -219,19 +219,11 @@ func (writer *s3WriterDelegate) prepareDeleteBatchs(
 					return nil, err
 				}
 
-				//strSegid := string(segid[:])
 				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, segid) {
 					blockMap[blkid].typ = deletion.DeletionOnTxnUnCommit
 				} else {
 					blockMap[blkid].typ = deletion.DeletionOnCommitted
 				}
-				//if writer.segmentMap[strSegid] == colexec.TxnWorkSpaceIdType {
-				//	blockMap[blkid].typ = deletion.RawBatchOffset
-				//} else if writer.segmentMap[strSegid] == colexec.CnBlockIdType {
-				//	blockMap[blkid].typ = deletion.CNBlockOffset
-				//} else {
-				//	blockMap[blkid].typ = deletion.RawRowIdBatch
-				//}
 			}
 
 			block := blockMap[blkid]

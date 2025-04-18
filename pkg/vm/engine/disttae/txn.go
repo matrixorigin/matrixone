@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math"
 	"sort"
 	"sync"
@@ -44,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
 
@@ -1116,7 +1116,8 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 
 // one call to generate a batch of rowIds.
 // in these rowIds, every objectio.BlockMaxRows rowIds share one blockId
-// and the blk and row offsets always start from 0.
+// and the row offsets always start from 0.
+// the users need to free the returned vector by themselves.
 func (txn *Transaction) batchAllocNewRowIds(count int) (*vector.Vector, error) {
 
 	newBlk := func() bool {
