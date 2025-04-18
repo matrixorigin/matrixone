@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -353,9 +354,9 @@ type Transaction struct {
 		lastTransferred types.TS
 		timestamps      []timestamp.Timestamp
 		pendingTransfer bool
-
-		//workerPool *ants.Pool
 	}
+
+	compactWorker *ants.Pool
 
 	//the start time of first statement in a txn.
 	start time.Time
@@ -461,7 +462,7 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
 	}
 
-	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
+	txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
 
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
