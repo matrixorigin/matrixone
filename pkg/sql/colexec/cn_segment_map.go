@@ -44,21 +44,14 @@ func IsDeletionOnTxnUnCommit(
 ) bool {
 
 	if segmentMap != nil {
-		if segmentMap[string(segId[:])] != TxnWorkspaceUnCommitType {
-			return false
-		}
-		return true
+		return segmentMap[string(segId[:])] == TxnWorkspaceUnCommitType
 	} else {
 		ss := Get()
 		if ss == nil {
 			return false
 		}
 
-		if ss.GetCnSegmentType(&segId) != TxnWorkspaceUnCommitType {
-			return false
-		}
-
-		return true
+		return ss.GetCnSegmentType(&segId) == TxnWorkspaceUnCommitType
 	}
 }
 
