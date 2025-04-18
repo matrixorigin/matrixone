@@ -1280,6 +1280,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		})
 
 	waiter := sync.WaitGroup{}
+	locker := sync.Mutex{}
 
 	compactFunc := func(stats objectio.ObjectStats, tnStore DNStore) {
 		defer func() {
@@ -1319,6 +1320,8 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			panicWhenFailed(err, "rewrite object by deletion failed")
 		}
 
+		locker.Lock()
+		defer locker.Unlock()
 		if err = txn.WriteFileLocked(
 			INSERT,
 			tbl.accountId,
