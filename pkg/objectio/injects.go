@@ -367,7 +367,9 @@ func InjectCheckpointSave(msg string) (rmFault func() (bool, error), err error) 
 		return
 	}
 	rmFault = func() (ok bool, err error) {
-		return fault.RemoveFaultPoint(context.Background(), FJ_CheckpointSave)
+		return fault.RemoveFaultPoint(
+			context.Background(), FJ_CheckpointSave
+		)
 	}
 	return
 }
