@@ -335,14 +335,6 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 			deletion.ctr.blockId_type[blkid] = DeletionOnCommitted
 		}
 
-		//if deletion.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
-		//	deletion.ctr.blockId_type[blkid] = RawBatchOffset
-		//} else if deletion.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
-		//	deletion.ctr.blockId_type[blkid] = CNBlockOffset
-		//} else {
-		//	deletion.ctr.blockId_type[blkid] = RawRowIdBatch
-		//}
-
 		if _, ok := deletion.ctr.partitionId_blockId_rowIdBatch[pIdx]; !ok {
 			blockIdRowIdBatchMap := make(map[types.Blockid]*batch.Batch)
 			var tmpBat *batch.Batch

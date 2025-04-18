@@ -62,6 +62,9 @@ func IsDeletionOnTxnUnCommit(
 	}
 }
 
+// IsDeletionOnTxnUnCommitPersisted check if the segId
+// is an UnCommit and flushed segment in the workspace.
+// if the input map is nil, this check will be done by the colexec.Get.
 func IsDeletionOnTxnUnCommitPersisted(
 	segmentMap map[string]int32,
 	segId types.Segmentid,
@@ -72,6 +75,9 @@ func IsDeletionOnTxnUnCommitPersisted(
 	return false
 }
 
+// IsDeletionOnTxnUnCommitInMem check if the segId
+// is an UnCommit inmem segment in the workspace.
+// if the input map is nil, this check will be done by the colexec.Get.
 func IsDeletionOnTxnUnCommitInMem(
 	segmentMap map[string]int32,
 	segId types.Segmentid,
