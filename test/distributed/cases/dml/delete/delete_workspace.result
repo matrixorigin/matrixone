@@ -1,0 +1,29 @@
+drop database if exists test;
+create database test;
+use test;
+create table t(a int, b int, c varchar);
+begin;
+insert into t select *,*,"abcdefghijklmnopqrst" from generate_series(1, 8192000)g;
+delete from t where a mod 999 = 0 limit 1000;
+select count(*) + 1000 from t;
+count(*) + 1000
+8192000
+rollback;
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/log/workspace',':::','echo',40,'test.t');
+add_fault_point(fj/log/workspace, :::, echo, 40, test.t)
+true
+begin;
+insert into t select *,*,"abcdefghijklmnopqrst" from generate_series(1, 8192000)g;
+delete from t where a mod 999 = 0 limit 1000;
+select count(*) + 1000 from t;
+count(*) + 1000
+8192000
+rollback;
+select disable_fault_injection();
+disable_fault_injection()
+true
+drop table if exists t;
+drop database if exists test;
