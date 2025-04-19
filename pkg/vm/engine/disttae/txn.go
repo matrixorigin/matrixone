@@ -1287,14 +1287,8 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 	waiter := sync.WaitGroup{}
 	locker := sync.Mutex{}
-	defer func() {
-		waiter.Wait()
-		if txn.compactWorker != nil {
-			txn.compactWorker.Release()
-		}
-	}()
 
-	compactFunc := func(stats objectio.ObjectStats, tnStore DNStore) {
+	compactFunc := func(stats objectio.ObjectStats) {
 		defer func() {
 			waiter.Done()
 		}()
@@ -1343,7 +1337,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			tbl.tableName,
 			fileName,
 			bat,
-			tnStore,
+			txn.tnStores[0],
 		); err != nil {
 			bat.Clean(txn.proc.Mp())
 			panicWhenFailed(err, "write txn file failed")
@@ -1351,6 +1345,8 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 		bat.Clean(txn.proc.Mp())
 	}
+
+	dirtyObject := make([]objectio.ObjectStats, 0, 1)
 
 	ll := len(txn.writes)
 	for i, entry := range txn.writes[:ll] {
@@ -1364,7 +1360,10 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		}
 
 		if _, ok := affectedBats[entry.bat]; !ok {
-			continue
+			if injected, _ := objectio.LogWorkspaceInjected(
+				entry.databaseName, entry.tableName); !injected {
+				continue
+			}
 		}
 
 		offset := 0
@@ -1375,8 +1374,13 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
 				// clean object, no deletion on it
 				bat := colexec.AllocCNS3ResultBat(false, false)
-				if err := bat.UnionWindow(entry.bat, offset, int(stats.BlkCnt()), txn.proc.Mp()); err != nil {
+				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
+					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
 					return err
+				}
+				if err := vector.AppendBytes(
+					bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()); err != nil {
+					return nil
 				}
 
 				if err := txn.WriteFileLocked(
@@ -1396,23 +1400,32 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 				bat.Clean(txn.proc.Mp())
 
 			} else {
-				if txn.compactWorker == nil {
-					txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
-				}
-				waiter.Add(1)
-				txn.compactWorker.Submit(func() {
-					compactFunc(stats, entry.tnStore)
-				})
+				dirtyObject = append(dirtyObject, stats)
 			}
 
 			offset += int(stats.BlkCnt())
 		}
 
-		locker.Lock()
 		txn.writes[i].bat.Clean(txn.proc.GetMPool())
 		txn.writes[i].bat = nil
-		locker.Unlock()
 	}
+
+	if txn.compactWorker == nil {
+		txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
+		defer func() {
+			txn.compactWorker.Release()
+			txn.compactWorker = nil
+		}()
+	}
+
+	for _, stats := range dirtyObject {
+		waiter.Add(1)
+		txn.compactWorker.Submit(func() {
+			compactFunc(stats)
+		})
+	}
+
+	waiter.Wait()
 
 	return nil
 }
