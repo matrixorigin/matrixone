@@ -1594,36 +1594,87 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
-// TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) compaction(ctx context.Context,
-	compactedBlks map[objectio.ObjectLocation][]int64,
-) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
+func (tbl *txnTable) rewriteObjectByDeletion(
+	ctx context.Context,
+	obj objectio.ObjectStats,
+	deletes map[objectio.Blockid][]int64,
+) (*batch.Batch, string, error) {
+
+	proc := tbl.proc.Load()
+
 	s3writer, err := colexec.NewS3Writer(tbl.tableDef, 0)
 	if err != nil {
-		return nil, objectio.ObjectStats{}, err
+		return nil, "", err
 	}
-	tbl.ensureSeqnumsAndTypesExpectRowid()
 
-	for blkmetaloc, deletes := range compactedBlks {
-		//blk.MetaLocation()
-		bat, e := blockio.BlockCompactionRead(
-			tbl.getTxn().proc.Ctx,
-			blkmetaloc[:],
-			deletes,
-			tbl.seqnums,
-			tbl.typs,
-			tbl.getTxn().engine.fs,
-			tbl.getTxn().proc.GetMPool())
-		if e != nil {
-			return nil, objectio.ObjectStats{}, e
-		}
-		if bat.RowCount() == 0 {
-			continue
-		}
-		s3writer.StashBatch(tbl.getTxn().proc, bat)
-		bat.Clean(tbl.getTxn().proc.GetMPool())
+	defer func() { s3writer.Free(proc.Mp()) }()
+
+	var (
+		bat      *batch.Batch
+		stats    objectio.ObjectStats
+		fileName string
+	)
+
+	ForeachBlkInObjStatsList(true, nil,
+		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+
+			del := deletes[blk.BlockID]
+			if bat, err = blockio.BlockCompactionRead(
+				tbl.getTxn().proc.Ctx,
+				blk.MetaLoc[:],
+				del,
+				tbl.seqnums,
+				tbl.typs,
+				tbl.getTxn().engine.fs,
+				tbl.getTxn().proc.GetMPool()); err != nil {
+
+				return false
+			}
+
+			if bat.RowCount() == 0 {
+				return true
+			}
+
+			s3writer.StashBatch(tbl.getTxn().proc, bat)
+
+			bat.Clean(tbl.getTxn().proc.GetMPool())
+
+			return true
+
+		}, obj)
+
+	if err != nil {
+		return nil, fileName, err
 	}
-	return s3writer.SortAndSync(ctx, tbl.getTxn().proc)
+
+	blockInfos, stats, err := s3writer.SortAndSync(ctx, proc)
+	if err != nil {
+		return nil, fileName, err
+	}
+
+	fileName = stats.ObjectLocation().String()
+
+	bat = batch.NewWithSize(2)
+	bat.Attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+	bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+	bat.SetVector(1, vector.NewVec(types.T_binary.ToType()))
+	for _, blkInfo := range blockInfos {
+		vector.AppendBytes(
+			bat.GetVector(0),
+			objectio.EncodeBlockInfo(&blkInfo),
+			false,
+			tbl.getTxn().proc.GetMPool())
+	}
+
+	// append the object stats to bat
+	if err = vector.AppendBytes(bat.Vecs[1], stats.Marshal(),
+		false, tbl.getTxn().proc.GetMPool()); err != nil {
+		return nil, fileName, err
+	}
+
+	bat.SetRowCount(bat.Vecs[0].Length())
+
+	return bat, fileName, err
 }
 
 func (tbl *txnTable) Delete(
