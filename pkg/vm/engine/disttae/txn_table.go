@@ -1622,20 +1622,18 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	tbl.typs = typs
 }
 
-// TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) compaction(
+func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-	compactedBlks map[objectio.ObjectLocation][]int64,
+	obj objectio.ObjectStats,
+	deletes map[objectio.Blockid][]int64,
 ) (*batch.Batch, string, error) {
 
-	s3Writer := colexec.NewCNS3DataWriter(mp, fs, tbl.tableDef, false)
-	tbl.ensureSeqnumsAndTypesExpectRowid()
+	proc := tbl.proc.Load()
 
-	defer func() {
-		s3Writer.Close(mp)
-	}()
+	s3Writer := colexec.NewCNS3DataWriter(
+		proc.Mp(), proc.GetFileService(), tbl.tableDef, false)
+
+	defer func() { s3Writer.Close(proc.Mp()) }()
 
 	var (
 		err      error
@@ -1644,35 +1642,45 @@ func (tbl *txnTable) compaction(
 		fileName string
 	)
 
-	for blkmetaloc, deletes := range compactedBlks {
-		//blk.MetaLocation()
-		if bat, err = blockio.BlockCompactionRead(
-			tbl.getTxn().proc.Ctx,
-			blkmetaloc[:],
-			deletes,
-			tbl.seqnums,
-			tbl.typs,
-			tbl.getTxn().engine.fs,
-			tbl.getTxn().proc.GetMPool()); err != nil {
-			return nil, fileName, err
-		}
+	objectio.ForeachBlkInObjStatsList(true, nil,
+		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 
-		if bat.RowCount() == 0 {
-			continue
-		}
+			del := deletes[blk.BlockID]
+			if bat, err = blockio.BlockCompactionRead(
+				tbl.getTxn().proc.Ctx,
+				blk.MetaLoc[:],
+				del,
+				tbl.seqnums,
+				tbl.typs,
+				tbl.getTxn().engine.fs,
+				tbl.getTxn().proc.GetMPool()); err != nil {
 
-		if err = s3Writer.Write(ctx, mp, bat); err != nil {
-			return nil, fileName, err
-		}
+				return false
+			}
 
-		bat.Clean(tbl.getTxn().proc.GetMPool())
-	}
+			if bat.RowCount() == 0 {
+				return true
+			}
 
-	if stats, err = s3Writer.Sync(ctx, mp); err != nil {
+			if err = s3Writer.Write(ctx, proc.Mp(), bat); err != nil {
+				return false
+			}
+
+			bat.Clean(tbl.getTxn().proc.GetMPool())
+
+			return true
+
+		}, obj)
+
+	if err != nil {
 		return nil, fileName, err
 	}
 
-	if bat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
+	if stats, err = s3Writer.Sync(ctx, proc.Mp()); err != nil {
+		return nil, fileName, err
+	}
+
+	if bat, err = s3Writer.FillBlockInfoBat(proc.Mp()); err != nil {
 		return nil, fileName, err
 	}
 
@@ -1680,7 +1688,7 @@ func (tbl *txnTable) compaction(
 		fileName = stats[0].ObjectLocation().String()
 	}
 
-	ret, err := bat.Dup(mp)
+	ret, err := bat.Dup(proc.Mp())
 
 	return ret, fileName, err
 }
