@@ -23,7 +23,7 @@ import (
 	"gonum.org/v1/gonum/blas/blas64"
 )
 
-func L2Distance[T types.RealNumbers](v1, v2 []T) T {
+func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := any(v1).([]float32)
@@ -38,7 +38,7 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) T {
 		for i := range _v1 {
 			diff.Data[i] = _v1[i] - _v2[i]
 		}
-		return T(blas32.Nrm2(diff))
+		return T(blas32.Nrm2(diff)), nil
 
 	case []float64:
 		_v1 := any(v1).([]float64)
@@ -53,24 +53,24 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) T {
 		for i := range _v1 {
 			diff.Data[i] = _v1[i] - _v2[i]
 		}
-		return T(blas64.Nrm2(diff))
+		return T(blas64.Nrm2(diff)), nil
 	default:
-		panic("L2Distance type not supported")
+		return 0, moerr.NewInternalErrorNoCtx("L2Distance type not supported")
 	}
 
 }
 
-func L2DistanceSq[T types.RealNumbers](v1, v2 []T) T {
+func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
 	var sumOfSquares T
 	for i := range v1 {
 		diff := v1[i] - v2[i]
 		sumOfSquares += diff * diff
 	}
-	return sumOfSquares
+	return sumOfSquares, nil
 
 }
 
-func L1Distance[T types.RealNumbers](v1, v2 []T) T {
+func L1Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := any(v1).([]float32)
@@ -86,7 +86,7 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) T {
 			diff.Data[i] = _v1[i] - _v2[i]
 		}
 
-		return T(blas32.Asum(diff))
+		return T(blas32.Asum(diff)), nil
 
 	case []float64:
 		_v1 := any(v1).([]float64)
@@ -101,45 +101,55 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) T {
 		for i := range _v1 {
 			diff.Data[i] = _v1[i] - _v2[i]
 		}
-		return T(blas64.Asum(diff))
+		return T(blas64.Asum(diff)), nil
 	default:
-		panic("L1Distance type not supported")
+		return 0, moerr.NewInternalErrorNoCtx("L1Distance type not supported")
 	}
 }
 
-func InnerProduct[T types.RealNumbers](v1, v2 []T) T {
+func InnerProduct[T types.RealNumbers](v1, v2 []T) (T, error) {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
 		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
 
-		return T(-blas32.Dot(_v1, _v2))
+		return T(-blas32.Dot(_v1, _v2)), nil
 
 	case []float64:
 		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
 		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		return T(-blas64.Dot(_v1, _v2))
+		return T(-blas64.Dot(_v1, _v2)), nil
 	default:
-		panic("InnerProduct type not supported")
+		return 0, moerr.NewInternalErrorNoCtx("InnerProduct type not supported")
 	}
 }
 
-func CosineDistance[T types.RealNumbers](v1, v2 []T) T {
+func CosineDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	switch any(v1).(type) {
 	case []float32:
 		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
 		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
 
-		score := blas32.Dot(_v1, _v2) / (blas32.Nrm2(_v1) * blas32.Nrm2(_v2))
-		return T(1 - score)
+		mag1 := blas32.Nrm2(_v1)
+		mag2 := blas32.Nrm2(_v2)
+		if mag1 == 0 || mag2 == 0 {
+			return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine similarity with zero vector")
+		}
+		score := blas32.Dot(_v1, _v2) / (mag1 * mag2)
+		return T(1 - score), nil
 
 	case []float64:
 		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
 		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
-		score := blas64.Dot(_v1, _v2) / (blas64.Nrm2(_v1) * blas64.Nrm2(_v2))
-		return T(1 - score)
+		mag1 := blas64.Nrm2(_v1)
+		mag2 := blas64.Nrm2(_v2)
+		if mag1 == 0 || mag2 == 0 {
+			return 0, moerr.NewInternalErrorNoCtx("cannot compute cosine similarity with zero vector")
+		}
+		score := blas64.Dot(_v1, _v2) / (mag1 * mag2)
+		return T(1 - score), nil
 	default:
-		panic("CosineDistance type not supported")
+		return 0, moerr.NewInternalErrorNoCtx("CosineDistance type not supported")
 	}
 
 }
@@ -149,7 +159,7 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) T {
 // angular distance between the two points, scaled by pi.
 // Refs:
 // https://en.wikipedia.org/wiki/Great-circle_distance#Vector_version
-func SphericalDistance[T types.RealNumbers](v1, v2 []T) T {
+func SphericalDistance[T types.RealNumbers](v1, v2 []T) (T, error) {
 	// Compute the dot product of the two vectors.
 	// The dot product of two vectors is a measure of their similarity,
 	// and it can be used to calculate the angle between them.
@@ -166,7 +176,7 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) T {
 		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
 		dp = blas64.Dot(_v1, _v2)
 	default:
-		panic("SphericalDistance type not supported")
+		return 0, moerr.NewInternalErrorNoCtx("SphericalDistance type not supported")
 	}
 
 	// Prevent NaN with acos with loss of precision.
@@ -179,7 +189,7 @@ func SphericalDistance[T types.RealNumbers](v1, v2 []T) T {
 	theta := math.Acos(dp)
 
 	//To scale the result to the range [0, 1], we divide by Pi.
-	return T(theta / math.Pi)
+	return T(theta / math.Pi), nil
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
