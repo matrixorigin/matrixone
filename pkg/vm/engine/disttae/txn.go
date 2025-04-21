@@ -180,6 +180,15 @@ func (txn *Transaction) WriteBatch(
 		}
 	}
 
+	if typ == DELETE && bat != nil {
+		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
+			return nil, err
+		}
+
+		bat.Vecs[0].SetSorted(true)
+		bat.Vecs[1].SetSorted(true)
+	}
+
 	e := Entry{
 		typ:          typ,
 		accountId:    accountId,
