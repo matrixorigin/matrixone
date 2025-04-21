@@ -2712,15 +2712,22 @@ type user struct {
 }
 
 func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
-	var (
-		sql           string
-		vr            *verifiedRole
-		erArray       []ExecResult
-		encryption    string
-		needValid     bool
-		userName      string
-		isAlterUnlock bool
+	type lockOrUnlockUser int
+	const (
+		lockUser lockOrUnlockUser = iota
+		unlockUser
+		noneLockOrUnlockUser
 	)
+
+	var (
+		sql        string
+		vr         *verifiedRole
+		erArray    []ExecResult
+		encryption string
+		needValid  bool
+		userName   string
+	)
+	doLockOrUnlock := noneLockOrUnlockUser
 
 	account := ses.GetTenantInfo()
 	currentUser := account.GetUser()
@@ -2740,7 +2747,9 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 
 	if au.MiscOpt != nil {
 		if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountUnlock); ok {
-			isAlterUnlock = true
+			doLockOrUnlock = unlockUser
+		} else if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
+			doLockOrUnlock = lockUser
 		} else {
 			return moerr.NewInternalError(ctx, "not support password or lock operation")
 		}
@@ -2808,7 +2817,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		return err
 	}
 
-	if !isAlterUnlock {
+	if doLockOrUnlock == noneLockOrUnlockUser {
 		password := user.IdentStr
 		// check password
 		if len(password) == 0 {
@@ -2857,8 +2866,13 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			}
 		}
 	} else {
-		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+		if doLockOrUnlock == lockUser {
+			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusLock, userName)
+		} else {
 			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+		}
+
+		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
@@ -2867,7 +2881,6 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			if currentUser != userName {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
-			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
