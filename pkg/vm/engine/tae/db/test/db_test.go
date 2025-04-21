@@ -229,7 +229,7 @@ func TestAppend2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithQuickScanCKPAndLongGCOpts(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
 
@@ -273,12 +273,12 @@ func TestAppend2(t *testing.T) {
 
 	now := time.Now()
 	testutils.WaitExpect(20000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return db.AllCheckpointsFinished()
 	})
 	t.Log(time.Since(now))
 	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, db.AllCheckpointsFinished())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	wg.Add(1)
 	testutil.AppendFailClosure(t, bats[0], schema.Name, db.DB, &wg)()
@@ -306,23 +306,23 @@ func TestTruncate1(t *testing.T) {
 
 	now := time.Now()
 	testutils.WaitExpect(20000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return db.AllCheckpointsFinished()
 	})
 	t.Log(time.Since(now))
 	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, db.AllCheckpointsFinished())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 	db.DoAppend(bat)
 
 	now = time.Now()
 	testutils.WaitExpect(20000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return db.AllCheckpointsFinished()
 	})
 	t.Log(time.Since(now))
 	t.Logf("Checkpointed: %d", db.Runtime.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", db.Runtime.Scheduler.GetPenddingLSNCnt())
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, db.AllCheckpointsFinished())
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 
 	testutils.WaitExpect(20000, func() bool {
@@ -349,7 +349,14 @@ func TestAppend3(t *testing.T) {
 	testutil.AppendClosure(t, bat, schema.Name, tae, &wg)()
 	wg.Wait()
 	testutils.WaitExpect(2000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		if tae.Wal.GetPenddingCnt() != 0 {
+			return false
+		}
+		ckp := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+		if ckp == nil {
+			return true
+		}
+		return ckp.IsFinished()
 	})
 	// t.Log(tae.Catalog.SimplePPString(common.PPL3))
 	wg.Add(1)
@@ -4745,7 +4752,7 @@ func TestReadCheckpoint(t *testing.T) {
 	tae.CreateRelAndAppend(bat, true)
 	now := time.Now()
 	testutils.WaitExpect(10000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	t.Log(time.Since(now))
 	t.Logf("Checkpointed: %d", tae.Runtime.Scheduler.GetCheckpointedLSN())
@@ -4760,17 +4767,17 @@ func TestReadCheckpoint(t *testing.T) {
 
 	now = time.Now()
 	testutils.WaitExpect(10000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	t.Log(time.Since(now))
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, tae.AllCheckpointsFinished())
 
 	now = time.Now()
 	testutils.WaitExpect(10000, func() bool {
-		return tae.BGCheckpointRunner.GetPenddingIncrementalCount() == 0
+		return tae.BGCheckpointRunner.GetIncrementalCountAfterGlobal() == 0
 	})
 	t.Log(time.Since(now))
-	assert.Equal(t, 0, tae.BGCheckpointRunner.GetPenddingIncrementalCount())
+	assert.Equal(t, 0, tae.BGCheckpointRunner.GetIncrementalCountAfterGlobal())
 
 	gcTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	err := tae.BGCheckpointRunner.GCByTS(context.Background(), gcTS)
@@ -5826,7 +5833,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			tae.CreateRelAndAppend(bat, true)
 			now := time.Now()
 			testutils.WaitExpect(10000, func() bool {
-				return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+				return tae.AllCheckpointsFinished()
 			})
 			t.Log(time.Since(now))
 			t.Logf("Checkpointed: %d", tae.Runtime.Scheduler.GetCheckpointedLSN())
@@ -5904,7 +5911,7 @@ func TestGCDropDB(t *testing.T) {
 			assert.Equal(t, txn.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetDeleteAtLocked())
 			now := time.Now()
 			testutils.WaitExpect(10000, func() bool {
-				return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+				return tae.AllCheckpointsFinished()
 			})
 			t.Log(time.Since(now))
 			err = manager.GC(context.Background())
@@ -5995,7 +6002,7 @@ func TestGCDropTable(t *testing.T) {
 
 			now := time.Now()
 			testutils.WaitExpect(10000, func() bool {
-				return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+				return tae.AllCheckpointsFinished()
 			})
 			assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 			assert.Equal(t, txn.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetDeleteAtLocked())
@@ -6669,7 +6676,14 @@ func TestAppendAndGC(t *testing.T) {
 	}
 	wg.Wait()
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		if tae.Wal.GetPenddingCnt() != 0 {
+			return false
+		}
+		ckp := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+		if ckp == nil {
+			return true
+		}
+		return ckp.IsFinished()
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
@@ -6733,7 +6747,7 @@ func TestAppendAndGC2(t *testing.T) {
 	}
 	wg.Wait()
 	testutils.WaitExpect(5000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
@@ -6871,9 +6885,9 @@ func TestSnapshotGC(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
-	require.True(t, db.Runtime.Scheduler.GetPenddingLSNCnt() == 0)
+	require.True(t, testutil.AllCheckpointsFinished(db))
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	db.DiskCleaner.GetCleaner().DisableGC()
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
@@ -6940,9 +6954,9 @@ func TestSnapshotGC(t *testing.T) {
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, testutil.AllCheckpointsFinished(db))
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
@@ -7085,7 +7099,7 @@ func TestSnapshotMeta(t *testing.T) {
 		snapshots = append(snapshots, snapshot)
 	}
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
@@ -7130,7 +7144,7 @@ func TestSnapshotMeta(t *testing.T) {
 		assert.Nil(t, txn1.Commit(context.Background()))
 	}
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
@@ -7138,7 +7152,7 @@ func TestSnapshotMeta(t *testing.T) {
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, testutil.AllCheckpointsFinished(db))
 	testutils.WaitExpect(3000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 			return false
@@ -7333,7 +7347,7 @@ func TestPitrMeta(t *testing.T) {
 	}
 	wg.Wait()
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
@@ -7359,7 +7373,7 @@ func TestPitrMeta(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
@@ -7384,7 +7398,7 @@ func TestPitrMeta(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
@@ -7392,7 +7406,7 @@ func TestPitrMeta(t *testing.T) {
 	cfg, err := db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
 	db.DiskCleaner.GetCleaner().EnableGC()
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, testutil.AllCheckpointsFinished(db))
 	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutils.WaitExpect(3000, func() bool {
@@ -7453,7 +7467,7 @@ func TestPitrMeta(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 	appendPitr("db", rel5.ID())
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
 	assert.Nil(t, err)
@@ -7584,16 +7598,16 @@ func TestMergeGC(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
 		return
 	}
 	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, testutil.AllCheckpointsFinished(db))
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	testutils.WaitExpect(5000, func() bool {
 		stage := db.BGCheckpointRunner.GetLowWaterMark()
@@ -7662,7 +7676,7 @@ func TestCkpLeak(t *testing.T) {
 	}
 	wg.Wait()
 	testutils.WaitExpect(10000, func() bool {
-		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(db)
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
@@ -7690,13 +7704,8 @@ func TestCkpLeak(t *testing.T) {
 	if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
 		return
 	}
-	testutils.WaitExpect(5000, func() bool {
-		return checkLeak()
-	})
-	ok := checkLeak()
-	assert.True(t, ok)
 	tae.Restart(ctx)
-	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	assert.True(t, testutil.AllCheckpointsFinished(db))
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
@@ -7706,7 +7715,7 @@ func TestCkpLeak(t *testing.T) {
 	testutils.WaitExpect(5000, func() bool {
 		return checkLeak()
 	})
-	ok = checkLeak()
+	ok := checkLeak()
 	assert.True(t, ok)
 
 }
@@ -7728,6 +7737,12 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 40)
 
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
+
 	tae.CreateRelAndAppend2(bat, true)
 	_, firstRel := tae.GetRelation()
 
@@ -7735,19 +7750,19 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	testutil.DropRelation2(ctx, txn, db, schema.Name)
 	require.NoError(t, txn.Commit(context.Background()))
 
-	txn, err := tae.StartTxn(nil)
+	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
 	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	testutils.WaitExpect(2000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
 	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 0)
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
@@ -7758,13 +7773,13 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	assert.NoError(t, err)
 	// testutils.WaitExpect(5000, func() bool {
-	// 	return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+	// 	return tae.AllCheckpointsFinished()
 	// })
 	tae.AllFlushExpected(currTs, 4000)
 	err = tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Duration(1))
 	assert.NoError(t, err)
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
@@ -9474,7 +9489,7 @@ func TestSnapshotCheckpoint(t *testing.T) {
 			snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 			db.ForceCheckpoint(ctx, snapshot)
 			tae.ForceCheckpoint()
-			assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+			assert.True(t, testutil.AllCheckpointsFinished(db))
 			var wg2 sync.WaitGroup
 			for i := len(bats) / 2; i < len(bats); i++ {
 				wg2.Add(2)
@@ -9771,7 +9786,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutils.WaitExpect(10000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 	testutils.WaitExpect(
@@ -9796,7 +9811,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutils.WaitExpect(10000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
@@ -9815,7 +9830,7 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutils.WaitExpect(10000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 

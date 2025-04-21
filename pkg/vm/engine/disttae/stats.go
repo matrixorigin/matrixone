@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"go.uber.org/zap"
 )
 
 var (
@@ -188,11 +189,21 @@ func NewGlobalStats(
 	if s.statsUpdater == nil {
 		s.statsUpdater = s.doUpdate
 	}
-	s.concurrentExecutor = newConcurrentExecutor(runtime.GOMAXPROCS(0) * s.updateWorkerFactor * 4)
+	parallism := runtime.GOMAXPROCS(0)
+	if s.updateWorkerFactor > 0 {
+		parallism = parallism * s.updateWorkerFactor
+	}
+	s.concurrentExecutor = newConcurrentExecutor(parallism)
 	s.concurrentExecutor.Run(ctx)
 	go s.consumeWorker(ctx)
-	go s.updateWorker(ctx)
+	go s.updateWorker(ctx, parallism)
 	go s.queueWatcher.run(ctx)
+	logutil.Info(
+		"GlobalStats-Started",
+		zap.Int("exector-num", parallism),
+		zap.Int("worker-num", parallism),
+		zap.Int("worker-factor", s.updateWorkerFactor),
+	)
 	return s
 }
 
@@ -317,8 +328,8 @@ func (gs *GlobalStats) consumeWorker(ctx context.Context) {
 	}
 }
 
-func (gs *GlobalStats) updateWorker(ctx context.Context) {
-	for i := 0; i < runtime.GOMAXPROCS(0)*gs.updateWorkerFactor; i++ {
+func (gs *GlobalStats) updateWorker(ctx context.Context, num int) {
+	for i := 0; i < num; i++ {
 		go func() {
 			for {
 				select {
