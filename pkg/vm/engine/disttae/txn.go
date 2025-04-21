@@ -180,13 +180,18 @@ func (txn *Transaction) WriteBatch(
 		}
 	}
 
-	if typ == DELETE && bat != nil {
+	if typ == DELETE && bat != nil && bat.RowCount() > 1 {
+		if bat.RowCount() > 1000 {
+			fmt.Println(">= 1000", databaseName, tableName, bat.RowCount())
+		}
+		// attr: row_id, pk
 		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
 			return nil, err
 		}
 
 		bat.Vecs[0].SetSorted(true)
 		bat.Vecs[1].SetSorted(true)
+
 	}
 
 	e := Entry{
@@ -1250,11 +1255,14 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		txn.writes = txn.writes[:i]
 
 		for i = range txn.writes {
-			if txn.writes[i].typ == DELETE {
+			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
 				if err := mergeutil.SortColumnsByIndex(
 					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
 					return err
 				}
+
+				txn.writes[i].bat.Vecs[0].SetSorted(true)
+				txn.writes[i].bat.Vecs[1].SetSorted(true)
 			}
 		}
 	}

@@ -955,6 +955,12 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 
 		sorted := writes[idx].bat.Vecs[0].GetSorted()
 		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
+
+		if ls.table.tableName == "bmsql_stock" && ls.table.db.databaseName == "tpcc_bak" &&
+			!sorted && len(rowIds) > 1 {
+			fmt.Println("applyWorkspaceEntry", ls.table.tableName, sorted, len(rowIds))
+		}
+
 		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, rowIds, sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
