@@ -1213,6 +1213,8 @@ const (
 
 	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
 
+	updateStatusLockOfUserWithoutAttemptFormat = `update mo_catalog.mo_user set status = "%s", lock_time = utc_timestamp() + %d where user_name = "%s";`
+
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
@@ -1700,6 +1702,10 @@ func getSqlForUpdateLockTimeOfUser(user string) string {
 
 func getSqlForUpdateStatusLockOfUser(status, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
+}
+
+func getSqlForUpdateStatusLockOfUserWithoutAttempt(status string, delay int, user string) string {
+	return fmt.Sprintf(updateStatusLockOfUserWithoutAttemptFormat, status, delay, user)
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
@@ -2867,7 +2873,8 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	} else {
 		if doLockOrUnlock == lockUser {
-			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusLock, userName)
+			delay := 90 * types.SecsPerDay //lock for 90 days
+			sql = getSqlForUpdateStatusLockOfUserWithoutAttempt(userStatusLock, delay, userName)
 		} else {
 			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
 		}
