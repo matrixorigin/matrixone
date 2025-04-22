@@ -180,7 +180,9 @@ func (txn *Transaction) WriteBatch(
 		}
 	}
 
-	if typ == DELETE && bat != nil && bat.RowCount() > 1 && !bat.Vecs[0].GetSorted() {
+	if typ == DELETE && !catalog.IsSystemTable(tableId) &&
+		bat != nil && bat.RowCount() > 1 && !bat.Vecs[0].GetSorted() {
+
 		// attr: row_id, pk
 		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
 			return nil, err
