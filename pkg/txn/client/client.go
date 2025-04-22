@@ -692,37 +692,41 @@ func (client *txnClient) markAllActiveTxnAborted() {
 func (client *txnClient) handleMarkActiveTxnAborted(
 	ctx context.Context,
 ) {
-	select {
-	case <-ctx.Done():
-		return
-	case from := <-client.abortC:
-		fn := func() {
-			client.mu.Lock()
-			client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
-			ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-			for _, op := range client.mu.activeTxns {
-				if op.reset.createAt.Before(from) {
-					ops = append(ops, op)
+	defer client.logger.InfoAction("mark active txn aborted task")()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case from := <-client.abortC:
+			fn := func() {
+				client.mu.Lock()
+				client.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+				ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
+				for _, op := range client.mu.activeTxns {
+					if op.reset.createAt.Before(from) {
+						ops = append(ops, op)
+					}
 				}
+				client.mu.Unlock()
+
+				for _, op := range ops {
+					op.addFlag(AbortedFlag)
+				}
+
+				client.mu.Lock()
+				close(client.mu.waitMarkAllActiveAbortedC)
+				client.mu.waitMarkAllActiveAbortedC = nil
+				client.mu.Unlock()
 			}
-			client.mu.Unlock()
+			fn()
 
-			for _, op := range ops {
-				op.addFlag(AbortedFlag)
+			if err := client.lockService.(lockservice.ResumeLockService).Resume(); err != nil {
+				client.logger.Error(
+					"resume lock service failed",
+					zap.Error(err),
+				)
 			}
-
-			client.mu.Lock()
-			close(client.mu.waitMarkAllActiveAbortedC)
-			client.mu.waitMarkAllActiveAbortedC = nil
-			client.mu.Unlock()
-		}
-		fn()
-
-		if err := client.lockService.(lockservice.ResumeLockService).Resume(); err != nil {
-			client.logger.Error(
-				"resume lock service failed",
-				zap.Error(err),
-			)
 		}
 	}
 }

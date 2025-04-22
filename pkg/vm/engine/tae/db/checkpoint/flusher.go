@@ -404,6 +404,9 @@ func (flusher *flushImpl) scheduleFlush(
 	entry *logtail.DirtyTreeEntry,
 	force bool,
 ) {
+	if _, injected := objectio.PrintFlushEntryInjected(); injected {
+		logutil.Infof("scheduleFlush: %v", entry.String())
+	}
 	if entry.IsEmpty() {
 		return
 	}
