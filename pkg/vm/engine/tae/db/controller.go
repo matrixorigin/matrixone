@@ -688,7 +688,11 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		replayCtl = nil
 	}
 
-	db.MergeScheduler = merge.NewMergeScheduler(db.Runtime, db.Catalog, merge.NewTaskServiceGetter(db.Opts.TaskServiceGetter))
+	db.MergeScheduler = merge.NewMergeScheduler(
+		db.Runtime.Options.CheckpointCfg.ScanInterval,
+		db.Catalog,
+		merge.NewTNMergeExecutor(db.Runtime),
+	)
 	db.MergeScheduler.Start()
 	rollbackSteps.Add("stop merge scheduler", func() error {
 		db.MergeScheduler.Stop()

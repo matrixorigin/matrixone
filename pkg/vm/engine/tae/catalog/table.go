@@ -289,7 +289,7 @@ func (entry *TableEntry) CreateObject(
 	defer entry.Unlock()
 	created = NewObjectEntry(entry, txn, *opts.Stats, dataFactory, opts.IsTombstone)
 	if entry.GetCatalog().mergeNotifier != nil && !opts.Stats.GetAppendable() {
-		entry.GetCatalog().mergeNotifier.OnCreateNonAppendObject(entry)
+		entry.GetCatalog().mergeNotifier.OnCreateNonAppendObject(ToMergeTable(entry))
 	}
 	entry.AddEntryLocked(created)
 	return
@@ -758,7 +758,7 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 
 	// create table commit
 	if lastestNode.DeletedAt.IsEmpty() && entry.GetCatalog().mergeNotifier != nil {
-		entry.GetCatalog().mergeNotifier.OnCreateTableCommit(entry)
+		entry.GetCatalog().mergeNotifier.OnCreateTableCommit(ToMergeTable(entry))
 	}
 
 	return

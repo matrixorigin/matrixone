@@ -18,7 +18,6 @@ import (
 	"context"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
@@ -52,7 +52,7 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 	schema := tbl.GetLastestSchema(false)
 
 	txn2, _ := txnMgr.StartTxn(nil)
-	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
+	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, common.DefaultMinOsizeQualifiedBytes)
 	stat := *entry.GetObjectStats()
 	cnScheduler.addActiveObjects([]*catalog.ObjectEntry{entry})
 	require.NotEmpty(t, cnScheduler.activeObjsString())
@@ -99,24 +99,23 @@ func TestExecutorCNMerge(t *testing.T) {
 	require.NoError(t, txn1.Commit(context.Background()))
 
 	txn2, _ := txnMgr.StartTxn(nil)
-	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
+	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, common.DefaultMinOsizeQualifiedBytes)
 
 	tbl.AddEntryLocked(entry)
 
-	memStorage := taskservice.NewMemTaskStorage()
-	cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
-		return taskservice.NewTaskService(runtime.DefaultRuntime(), memStorage), true
-	})
-	executor := newMergeExecutor(&dbutils.Runtime{}, cnScheduler)
+	// memStorage := taskservice.NewMemTaskStorage()
+	// cnScheduler := NewTaskServiceGetter(func() (taskservice.TaskService, bool) {
+	// 	return taskservice.NewTaskService(runtime.DefaultRuntime(), memStorage), true
+	// })
+	executor := NewTNMergeExecutor(&dbutils.Runtime{})
 	executor.executeFor(tbl, mergeTask{
 		objs:  []*objectio.ObjectStats{entry.GetObjectStats()},
 		kind:  taskHostCN,
 		level: 0,
 		note:  "",
 	})
-	require.NotEmpty(t, cnScheduler.activeObjsString())
 
-	entry2 := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, overlapSizeThreshold)
+	entry2 := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, common.DefaultMinOsizeQualifiedBytes)
 	tbl.AddEntryLocked(entry2)
 	executor.executeFor(tbl, mergeTask{
 		objs:  slices.Repeat([]*objectio.ObjectStats{entry2.GetObjectStats()}, 31),
@@ -124,7 +123,4 @@ func TestExecutorCNMerge(t *testing.T) {
 		level: 0,
 		note:  "",
 	})
-
-	executor.cnSched.prune(0, 0)
-	executor.cnSched.prune(0, time.Hour)
 }

@@ -15,35 +15,45 @@
 package merge
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"slices"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
 )
+
+type MergeTaskExecutor interface {
+	ExecuteFor(target catalog.MergeTable, task mergeTask) (success bool)
+}
 
 // executor consider resources to decide to merge or not.
 type executor struct {
-	rt      *dbutils.Runtime
-	cnSched *CNMergeScheduler
+	rt *dbutils.Runtime
+	// cnSched *CNMergeScheduler
+}
+
+func NewTNMergeExecutor(rt *dbutils.Runtime) *executor {
+	return &executor{
+		rt: rt,
+	}
 }
 
 func newMergeExecutor(rt *dbutils.Runtime, sched *CNMergeScheduler) *executor {
 	return &executor{
-		rt:      rt,
-		cnSched: sched,
+		rt: rt,
+		// cnSched: sched,
 	}
+}
+
+func (e *executor) ExecuteFor(target catalog.MergeTable, task mergeTask) (success bool) {
+	entry := target.(catalog.TNMergeTable).TableEntry
+	return e.executeFor(entry, task)
 }
 
 func (e *executor) executeFor(entry *catalog.TableEntry, task mergeTask) (success bool) {
@@ -75,63 +85,84 @@ func (e *executor) executeFor(entry *catalog.TableEntry, task mergeTask) (succes
 		}
 	}
 
-	if kind == taskHostDN {
-		return e.scheduleMergeObjects(slices.Clone(objs), entry, task.isTombstone, level, note, doneCB)
-	}
-
-	// prevent CN OOM
-	if len(objs) > 30 {
-		objs = objs[:30]
-	}
-
-	stats := make([][]byte, 0, len(objs))
-	cids := make([]common.ID, 0, len(objs))
-	for _, obj := range objs {
-		stat := *obj.GetObjectStats()
-		stats = append(stats, stat[:])
-		cids = append(cids, *obj.AsCommonID())
-	}
-	// check objects are merging by TN.
-	if e.rt.Scheduler != nil && e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
-		return
-	}
-	schema := entry.GetLastestSchema(false)
-	cntask := &api.MergeTaskEntry{
-		AccountId:         schema.AcInfo.TenantID,
-		UserId:            schema.AcInfo.UserID,
-		RoleId:            schema.AcInfo.RoleID,
-		TblId:             entry.ID,
-		DbId:              entry.GetDB().GetID(),
-		TableName:         entry.GetLastestSchema(task.isTombstone).Name,
-		DbName:            entry.GetDB().GetName(),
-		ToMergeObjs:       stats,
-		EstimatedMemUsage: uint64(mergesort.EstimateMergeSize(IterEntryAsStats(objs))),
-	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseCreateCNMerge)
-	defer cancel()
-	err := e.cnSched.sendMergeTask(ctx, cntask)
-	if err != nil {
-		logutil.Info("MergeExecutorError",
-			common.OperationField("send-cn-task"),
-			common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
-			common.AnyField("error", err),
+	if kind != taskHostDN {
+		logutil.Error("MergeExecutorError",
+			zap.String("error", "not supported task host"),
+			zap.String("task", task.String()),
+			zap.String("table", entry.GetNameDesc()),
 		)
 		return
 	}
 
-	e.cnSched.addActiveObjects(objs)
-	entry.Stats.SetLastMergeTime()
-	return true
+	return e.scheduleMergeObjects(slices.Clone(objs), entry, task.isTombstone, level, note, doneCB)
+
+	// prevent CN OOM
+	// if len(objs) > 30 {
+	// 	objs = objs[:30]
+	// }
+
+	// stats := make([][]byte, 0, len(objs))
+	// cids := make([]common.ID, 0, len(objs))
+	// for _, obj := range objs {
+	// 	stat := *obj.GetObjectStats()
+	// 	stats = append(stats, stat[:])
+	// 	cids = append(cids, *obj.AsCommonID())
+	// }
+	// // check objects are merging by TN.
+	// if e.rt.Scheduler != nil && e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
+	// 	return
+	// }
+	// schema := entry.GetLastestSchema(false)
+	// cntask := &api.MergeTaskEntry{
+	// 	AccountId:         schema.AcInfo.TenantID,
+	// 	UserId:            schema.AcInfo.UserID,
+	// 	RoleId:            schema.AcInfo.RoleID,
+	// 	TblId:             entry.ID,
+	// 	DbId:              entry.GetDB().GetID(),
+	// 	TableName:         entry.GetLastestSchema(task.isTombstone).Name,
+	// 	DbName:            entry.GetDB().GetName(),
+	// 	ToMergeObjs:       stats,
+	// 	EstimatedMemUsage: uint64(mergesort.EstimateMergeSize(IterEntryAsStats(objs))),
+	// }
+	// ctx, cancel := context.WithTimeoutCause(
+	// 	context.Background(), 10*time.Second, moerr.CauseCreateCNMerge)
+	// defer cancel()
+	// err := e.cnSched.sendMergeTask(ctx, cntask)
+	// if err != nil {
+	// 	logutil.Info("MergeExecutorError",
+	// 		common.OperationField("send-cn-task"),
+	// 		common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
+	// 		common.AnyField("error", err),
+	// 	)
+	// 	return
+	// }
+
+	// e.cnSched.addActiveObjects(objs)
+	// entry.Stats.SetLastMergeTime()
+	// return true
 }
 
-func (e *executor) scheduleMergeObjects(mObjs []*catalog.ObjectEntry, entry *catalog.TableEntry, isTombstone bool, level int8, note string, doneCB *taskObserver) (success bool) {
+func (e *executor) scheduleMergeObjects(
+	mObjs []*catalog.ObjectEntry,
+	entry *catalog.TableEntry,
+	isTombstone bool,
+	level int8,
+	note string,
+	doneCB *taskObserver,
+) (success bool) {
 	scopes := make([]common.ID, 0, len(mObjs))
 	for _, obj := range mObjs {
 		scopes = append(scopes, *obj.AsCommonID())
 	}
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		txn.GetMemo().IsFlushOrMerge = true
-		task, err := jobs.NewMergeObjectsTask(ctx, txn, mObjs, e.rt, common.DefaultMaxOsizeObjBytes, isTombstone)
+		task, err := jobs.NewMergeObjectsTask(ctx,
+			txn,
+			mObjs,
+			e.rt,
+			common.DefaultMaxOsizeObjBytes,
+			isTombstone,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +170,12 @@ func (e *executor) scheduleMergeObjects(mObjs []*catalog.ObjectEntry, entry *cat
 		task.SetTaskSourceNote(note)
 		return task, nil
 	}
-	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
+	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(
+		nil,
+		tasks.DataCompactionTask,
+		scopes,
+		factory,
+	)
 	if err != nil {
 		if !errors.Is(err, tasks.ErrScheduleScopeConflict) {
 			logutil.Info(

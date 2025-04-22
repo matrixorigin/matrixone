@@ -33,17 +33,17 @@ var (
 		LowerSelectRows: 0,
 		UpperSelectRows: math.MaxUint32,
 		// time:	1	2	3	4	5	6	7	8	9	10	11	12	13	14	15	16	17	18	19	20
-		// val :	32	32	32	32	32	32	32	32	32	32	32	31	31	31	30	30	29	28	27	26
+		// val :	32	32	32	32	32	32	32	32	32	32	32	31	31	31	30	30	29	29	28	27
 		//
 		// time:	21	22	23	24	25	26	27	28	29	30	31	32	33	34	35	36	37	38	39	40
-		// val :	24	22	18	15	13	12	10	9	9	8	7	7	6	6	6	5	5	5	4	4
+		// val :	26	25	23	21	18	16	14	12	10	9	8	8	7	6	6	5	5	4	4	4
 		//
 		// time:	41	42	43	44	45	46	47	48	49	50	51	52	53	54	55	56	57	58	59	60
-		// val :	4	4	4	3	3	3	3	3	3	3	3	3	3	3	3	3	3	3	3	2
+		// val :	3	3	3	3	3	2	2	2	2	2	2	2	2	2	2	2	2	2	2	1
 		Start:    32,
-		End:      2,
+		End:      1,
 		Duration: 1 * time.Hour,
-		CPoints:  [4]float64{0.70, 0.0, 0.75, 1.0},
+		CPoints:  [4]float64{0.70, 0.0, 0.1, 1.0},
 	}
 )
 
@@ -98,10 +98,10 @@ type LayerZeroOpts struct {
 }
 
 func (o *LayerZeroOpts) String() string {
-	return fmt.Sprintf("LayerZeroOpts{LS: %s, US: %s, LR: %d, UR: %d, S: %d, E: %d, D: %v, C: %v}",
-		common.HumanReadableBytes(int(o.LowerSelectSize)), common.HumanReadableBytes(int(o.UpperSelectSize)),
-		o.LowerSelectRows, o.UpperSelectRows,
-		o.Start, o.End, o.Duration, o.CPoints)
+	return fmt.Sprintf(
+		"LayerZeroOpts{S: %d, E: %d, D: %v, C: %v}",
+		o.Start, o.End, o.Duration, o.CPoints,
+	)
 }
 
 func (o *LayerZeroOpts) Clone() *LayerZeroOpts {
@@ -137,14 +137,16 @@ func (o *LayerZeroOpts) CalcTolerance(lastMergeTimeAgo time.Duration) int {
 	// Calculate the linear progression between start and end based on elapsed time
 	x := float64(lastMergeTimeAgo) / float64(o.Duration)
 
-	t := findTForX(x, 0.0, o.CPoints[0], o.CPoints[1], 1.0)
+	t := findTForX(x, 0.0, o.CPoints[0], o.CPoints[2], 1.0)
 	ratio := cubicBezier(t, 0.0, o.CPoints[1], o.CPoints[3], 1.0)
 
 	tolerance := o.Start - int(float64(o.Start-o.End)*ratio)
 	return tolerance
 }
 
-func (o *LayerZeroOpts) WithToleranceDegressionCurve(start, end int, duration time.Duration, cpoints [4]float64) *LayerZeroOpts {
+func (o *LayerZeroOpts) WithToleranceDegressionCurve(
+	start, end int, duration time.Duration, cpoints [4]float64,
+) *LayerZeroOpts {
 	o.Start = start
 	o.End = end
 	o.Duration = duration
@@ -176,17 +178,25 @@ type LayerZeroStats struct {
 	Count     int
 	AvgSize   int
 	AvgRows   int
-	HistoSize [8]int // <1MB, 1MB-2MB, 2MB-4MB, 4MB-8MB, 8MB-16MB, 16MB-32MB, 32MB-64MB, 64MB-128MB
+	HistoSize [8]int // <1MB, 1-2MB, 2-4MB, 4-8MB, 8-16MB, 16-32MB, 32-64MB, 64-128MB
 	Tolerance int
 
 	isValid func(stat *objectio.ObjectStats) bool
 }
 
 func (s *LayerZeroStats) String() string {
-	return fmt.Sprintf("Count: %d, AvgSize: %v, AvgRows: %d, OSizeDist: %v, Tolerance: %d", s.Count, common.HumanReadableBytes(s.AvgSize), s.AvgRows, s.HistoSize, s.Tolerance)
+	return fmt.Sprintf(
+		"Count: %d, AvgSize: %v, AvgRows: %d, OSizeDist: %v, Tolerance: %d",
+		s.Count,
+		common.HumanReadableBytes(s.AvgSize),
+		s.AvgRows,
+		s.HistoSize,
+		s.Tolerance,
+	)
 }
 
-// Upgrading notes: for object > 128MB in previous version, it will be ignored by new policy, unless, force apply zmpolicy to zero layer objects.
+// Upgrading notes: for object created before Date X,
+// we don't pick it for zero layer merge.
 
 // policy
 // 1. if all zero layzer objects sum up to more than 128MB
@@ -200,7 +210,10 @@ func IsValidLayerZeroSmallObj(obj *objectio.ObjectStats, opts *LayerZeroOpts) bo
 	osize := obj.OriginSize()
 	rows := obj.Rows()
 
-	return osize >= opts.LowerSelectSize && osize <= opts.UpperSelectSize && rows >= opts.LowerSelectRows && rows <= opts.UpperSelectRows
+	return osize >= opts.LowerSelectSize &&
+		osize <= opts.UpperSelectSize &&
+		rows >= opts.LowerSelectRows &&
+		rows <= opts.UpperSelectRows
 }
 
 // sizeLevel determines the size level of an object based on its size in bytes
@@ -216,7 +229,11 @@ func sizeLevel(sizeInBytes uint32, maxLevel int) int {
 	return lv
 }
 
-func CalculateLayerZeroStats(ctx context.Context, statsList []*objectio.ObjectStats, lastMergeTimeAgo time.Duration, opts *LayerZeroOpts) *LayerZeroStats {
+func CalculateLayerZeroStats(ctx context.Context,
+	statsList []*objectio.ObjectStats,
+	lastMergeTimeAgo time.Duration,
+	opts *LayerZeroOpts,
+) *LayerZeroStats {
 	stats := &LayerZeroStats{
 		isValid: func(stat *objectio.ObjectStats) bool {
 			return IsValidLayerZeroSmallObj(stat, opts)
@@ -240,28 +257,26 @@ func CalculateLayerZeroStats(ctx context.Context, statsList []*objectio.ObjectSt
 	return stats
 }
 
-type task struct {
-	objs  []*objectio.ObjectStats
-	note  string
-	level int8
-}
-
-func (t *task) String() string {
-	return fmt.Sprintf("objs: %d, note: %s, level: %d", len(t.objs), t.note, t.level)
-}
-
-func GatherLayerZeroMergeTasks(ctx context.Context, objList []*objectio.ObjectStats, lastMergeTimeAgo time.Duration, opts *LayerZeroOpts) ([]mergeTask, error) {
+func GatherLayerZeroMergeTasks(ctx context.Context,
+	objList []*objectio.ObjectStats,
+	lastMergeTimeAgo time.Duration,
+	opts *LayerZeroOpts,
+) []mergeTask {
 	stats := CalculateLayerZeroStats(ctx, objList, lastMergeTimeAgo, opts)
 	if stats.Count == 0 {
-		return nil, nil
+		return nil
 	}
 
-	if stats.Tolerance < stats.Count || stats.AvgSize*stats.Count > common.DefaultMaxOsizeObjBytes {
+	if stats.Tolerance < stats.Count ||
+		stats.AvgSize*stats.Count > common.DefaultMaxOsizeObjBytes {
 		var note string
 		if stats.Tolerance < stats.Count {
 			note = fmt.Sprintf(NoteByTolerance, stats.Tolerance)
 		} else {
-			note = fmt.Sprintf(NoteBySize, common.HumanReadableBytes(stats.AvgSize*stats.Count))
+			note = fmt.Sprintf(
+				NoteBySize,
+				common.HumanReadableBytes(stats.AvgSize*stats.Count),
+			)
 		}
 		objs := make([]*objectio.ObjectStats, 0, stats.Count)
 		for _, obj := range objList {
@@ -269,10 +284,8 @@ func GatherLayerZeroMergeTasks(ctx context.Context, objList []*objectio.ObjectSt
 				objs = append(objs, obj)
 			}
 		}
-		return []mergeTask{{objs: objs, note: note, kind: taskHostDN}}, nil
+		return []mergeTask{{objs: objs, note: note, kind: taskHostDN}}
 	}
 
-	// TODO: add random merge at some level
-	// note: random merge at some level? Could this postpone the tolerance?
-	return nil, nil
+	return nil
 }

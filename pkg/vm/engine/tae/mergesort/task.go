@@ -312,7 +312,7 @@ func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
 		}
 		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2 // read one block, x 2 factor
 		estSize += int(obj.Rows()) * 30                             // transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
-		totalSize += int(obj.OriginSize())
+		totalSize += int(obj.OriginSize()) / 2
 	}
 	estSize += totalSize / 3 * 2 // leave some margin for gc
 	return estSize

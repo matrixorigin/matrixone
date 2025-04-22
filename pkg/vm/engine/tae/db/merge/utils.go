@@ -175,15 +175,7 @@ type resourceController struct {
 	using    int64
 	reserved int64
 
-	transferPageLimit int64
-
 	cpuPercent float64
-
-	skippedFromOOM bool
-	count          int
-	prevCount      int
-
-	tableStart time.Time
 }
 
 func (c *resourceController) setMemLimit(total uint64) {
@@ -196,22 +188,21 @@ func (c *resourceController) setMemLimit(total uint64) {
 		panic("failed to get system total memory")
 	}
 
-	if c.limit > 200*common.Const1GBytes {
-		c.transferPageLimit = c.limit / 25 * 2 // 8%
-	} else if c.limit > 100*common.Const1GBytes {
-		c.transferPageLimit = c.limit / 25 * 3 // 12%
-	} else if c.limit > 40*common.Const1GBytes {
-		c.transferPageLimit = c.limit / 25 * 4 // 16%
-	} else {
-		c.transferPageLimit = math.MaxInt64 // no limit
-	}
+	// if c.limit > 200*common.Const1GBytes {
+	// 	c.transferPageLimit = c.limit / 25 * 2 // 8%
+	// } else if c.limit > 100*common.Const1GBytes {
+	// 	c.transferPageLimit = c.limit / 25 * 3 // 12%
+	// } else if c.limit > 40*common.Const1GBytes {
+	// 	c.transferPageLimit = c.limit / 25 * 4 // 16%
+	// } else {
+	// 	c.transferPageLimit = math.MaxInt64 // no limit
+	// }
 
 	logutil.Info(
 		"MergeExecutorMemoryInfo",
 		common.AnyField("container-limit", common.HumanReadableBytes(int(cgroup))),
 		common.AnyField("host-memory", common.HumanReadableBytes(int(total))),
 		common.AnyField("merge-limit", common.HumanReadableBytes(int(c.limit))),
-		common.AnyField("transfer-page-limit", common.HumanReadableBytes(int(c.transferPageLimit))),
 		common.AnyField("error", err),
 	)
 }
@@ -231,10 +222,6 @@ func (c *resourceController) refresh() {
 	if percents, err := cpu.Percent(0, false); err == nil {
 		c.cpuPercent = percents[0]
 	}
-	c.reserved = 0
-
-	c.skippedFromOOM = false
-	c.count = 0
 }
 
 func (c *resourceController) availableMem() int64 {
@@ -245,7 +232,7 @@ func (c *resourceController) availableMem() int64 {
 	return avail
 }
 
-func (c *resourceController) printStats() {
+func (c *resourceController) printMemUsage() {
 	logutil.Info("MergeExecutorEvent",
 		common.AnyField("event", "memory stats"),
 		common.AnyField("merge-limit", common.HumanReadableBytes(int(c.limit))),
@@ -258,28 +245,19 @@ func (c *resourceController) reserveResources(estMem int64) {
 	c.reserved += estMem
 }
 
+func (c *resourceController) releaseResources(estMem int64) {
+	c.reserved -= estMem
+	if c.reserved < 0 {
+		c.reserved = 0
+	}
+}
+
 func (c *resourceController) resourceAvailable(estMem int64) bool {
 	mem := c.availableMem()
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
 	return estMem <= 2*mem/3
-}
-
-func ObjectValid(objectEntry *catalog.ObjectEntry) bool {
-	if objectEntry.IsAppendable() {
-		return false
-	}
-	if !objectEntry.IsActive() {
-		return false
-	}
-	if !objectEntry.IsCommitted() {
-		return false
-	}
-	if objectEntry.IsCreatingOrAborted() {
-		return false
-	}
-	return true
 }
 
 func IterEntryAsStats(objs []*catalog.ObjectEntry) iter.Seq[*objectio.ObjectStats] {
@@ -319,26 +297,5 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 			s := objectio.ObjectStats(obj)
 			_ = fs.Delete(ctx, s.ObjectName().String())
 		}
-	}
-}
-
-type policy interface {
-	onObject(*catalog.ObjectEntry) bool
-	revise(*resourceController) []mergeTask
-	resetForTable(*catalog.TableEntry, *BasicPolicyConfig)
-}
-
-func newUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
-	return &api.AlterTableReq{
-		Kind: api.AlterKind_UpdatePolicy,
-		Operation: &api.AlterTableReq_UpdatePolicy{
-			UpdatePolicy: &api.AlterTablePolicy{
-				MinOsizeQuailifed: c.ObjectMinOsize,
-				MaxObjOnerun:      uint32(c.MergeMaxOneRun),
-				MaxOsizeMergedObj: c.MaxOsizeMergedObj,
-				MinCnMergeSize:    c.MinCNMergeSize,
-				Hints:             c.MergeHints,
-			},
-		},
 	}
 }

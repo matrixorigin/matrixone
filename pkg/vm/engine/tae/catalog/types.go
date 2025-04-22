@@ -21,19 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type MergeNotifierOnCatalog interface {
-	// OnCreateTableCommit is called when a table is created and committed.
-	// The table is not visible to users until it is committed.
-	OnCreateTableCommit(table *TableEntry)
-	// OnCreateNonAppendObject is called when a non-appendable object is created, committed is not required
-	// CreateNonAppendObject is just used for trigger merge task, it is not a big deal if the object is rollbacked
-	OnCreateNonAppendObject(table *TableEntry)
-}
-
-func (c *Catalog) SetMergeNotifier(notifier MergeNotifierOnCatalog) {
-	c.mergeNotifier = notifier
-}
-
 type EntryState int8
 
 const (

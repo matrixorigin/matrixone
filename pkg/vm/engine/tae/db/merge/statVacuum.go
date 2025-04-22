@@ -27,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 var (
@@ -38,9 +36,10 @@ var (
 
 		HollowTopK: 10,
 
-		StartScore: 60,
+		// 60 -> 10
+		StartScore: 50,
 		EndScore:   10,
-		Duration:   1 * time.Hour,
+		Duration:   30 * time.Minute,
 	}
 
 	DefaultTombstoneOpts = &TombstoneOpts{
@@ -51,6 +50,8 @@ var (
 		L2Count: 2,
 	}
 )
+
+// region: Tombstone
 
 type TombstoneOpts struct {
 	OneShot bool
@@ -100,6 +101,68 @@ func (o *TombstoneOpts) WithOneShot(oneShot bool) *TombstoneOpts {
 	return o
 }
 
+func GatherTombstoneTasks(ctx context.Context,
+	tombstoneStats iter.Seq[*objectio.ObjectStats],
+	opts *TombstoneOpts,
+	lastMergeAgo time.Duration,
+) (ret []mergeTask) {
+	if opts.OneShot || lastMergeAgo > 1*time.Hour {
+		targets := slices.Collect(tombstoneStats)
+		minCount := 0
+		if !opts.OneShot {
+			// avoid merge one tombstone object every hour
+			minCount = 1
+		}
+		if len(targets) > minCount {
+			ret = append(ret, mergeTask{
+				objs:        targets,
+				note:        "oneshot vacuum",
+				kind:        taskHostDN,
+				isTombstone: true,
+			})
+		}
+		return
+	}
+	small := make([]*objectio.ObjectStats, 0, opts.L1Count)
+	big := make([]*objectio.ObjectStats, 0, opts.L2Count)
+	for stat := range tombstoneStats {
+		if stat.OriginSize() < opts.L1Size {
+			small = append(small, stat)
+		} else if stat.OriginSize() < opts.L2Size {
+			big = append(big, stat)
+		}
+	}
+
+	if len(small) >= opts.L1Count {
+		ret = append(ret, mergeTask{
+			objs:        small,
+			note:        "l1 small tombstone",
+			kind:        taskHostDN,
+			isTombstone: true,
+		})
+	}
+
+	if len(big) >= opts.L2Count {
+		ret = append(ret, mergeTask{
+			objs:        big,
+			note:        "l2 big tombstone",
+			kind:        taskHostDN,
+			isTombstone: true,
+		})
+	}
+	return
+}
+
+// endregion: Tombstone
+
+// region: Vacuum
+
+type vacuumTestInject struct {
+	err                 error
+	compactTask         []mergeTask
+	tombstoneVacPercent float64
+}
+
 type VacuumOpts struct {
 	EnableDetail bool
 	CheckBigOnly bool
@@ -108,6 +171,8 @@ type VacuumOpts struct {
 	StartScore int
 	EndScore   int
 	Duration   time.Duration
+
+	testInject *vacuumTestInject
 }
 
 func (o *VacuumOpts) String() string {
@@ -165,7 +230,7 @@ func (o *VacuumOpts) CalcScore(maxCreateAgo time.Duration) int {
 	if maxCreateAgo > o.Duration {
 		return o.EndScore
 	}
-	return o.StartScore + (o.StartScore-o.EndScore)*int(maxCreateAgo)/int(o.Duration)
+	return o.StartScore - (o.StartScore-o.EndScore)*int(maxCreateAgo)/int(o.Duration)
 }
 
 type ObjectStatsItem interface {
@@ -191,25 +256,172 @@ type VacuumStats struct {
 }
 
 func (s *VacuumStats) String() string {
-	ret := fmt.Sprintf("TotalSize: %s, TotalRows: %d, HistoSize: %v, HistoCreateAt: %v",
-		common.HumanReadableBytes(int(s.TotalSize)), s.TotalRows, s.HistoSize, s.HistoCreateAt)
-	if s.DataVacuumPercent > 0 {
-		ret += fmt.Sprintf(
-			"\n\t HistoVacuumScore: %v, DataVacuumPercent: %.2f%%, "+
-				"DelVacuumPercent: %.2f%%, DataVacuumScoreToCompact: %d",
-			s.HistoVacuumScore, s.DataVacuumPercent*100,
-			s.DelVacuumPercent*100, s.DataVacuumScoreToCompact)
-		for i, l := 0, s.TopHollow.Len(); i < l; i++ {
-			item := heap.Pop(&s.TopHollow).(mItem)
-			ret += fmt.Sprintf("\n\t TopHollow[%d]: %s, %s, %v, %d", i,
-				item.obj.ObjectShortName().ShortString(),
-				common.HumanReadableBytes(int(item.obj.OriginSize())),
-				item.obj.GetLevel(),
-				item.vacuumScore,
-			)
+	ret := fmt.Sprintf(
+		"TotalSize: %s, TotalRows: %d, HistoSize: %v, HistoCreateAt: %v",
+		common.HumanReadableBytes(int(s.TotalSize)),
+		s.TotalRows,
+		s.HistoSize,
+		s.HistoCreateAt,
+	)
+	ret += fmt.Sprintf(
+		"\n\t HistoVacuumScore: %v, DataVacuumPercent: %.2f%%, "+
+			"DelVacuumPercent: %.2f%%, DataVacuumScoreToCompact: %d",
+		s.HistoVacuumScore, s.DataVacuumPercent*100,
+		s.DelVacuumPercent*100, s.DataVacuumScoreToCompact)
+	for i, l := 0, s.TopHollow.Len(); i < l; i++ {
+		item := heap.Pop(&s.TopHollow).(mItem)
+		ret += fmt.Sprintf("\n\t TopHollow[%d]: %s, %s, %v, %d", i,
+			item.obj.ObjectShortName().ShortString(),
+			common.HumanReadableBytes(int(item.obj.OriginSize())),
+			item.obj.GetLevel(),
+			item.vacuumScore,
+		)
+	}
+	return ret
+}
+
+func GatherCompactTasks(
+	ctx context.Context,
+	stats *VacuumStats,
+) (ret []mergeTask) {
+	for i, l := 0, stats.TopHollow.Len(); i < l; i++ {
+		item := heap.Pop(&stats.TopHollow).(mItem)
+		if item.vacuumScore >= stats.DataVacuumScoreToCompact {
+			lv := item.obj.GetLevel()
+			if lv > 1 {
+				// make it down -1 level after compact
+				lv -= 2
+			} else {
+				// merge it from scratch
+				lv = 0
+			}
+			note := fmt.Sprintf("compact task %v/%v",
+				item.vacuumScore, stats.DataVacuumScoreToCompact)
+			// do not check the resource, leave it to mainLoop
+			ret = append(ret, mergeTask{
+				objs:        []*objectio.ObjectStats{item.obj},
+				kind:        taskHostDN,
+				isTombstone: false,
+				level:       int8(lv),
+				note:        note,
+			})
 		}
 	}
 	return ret
+}
+
+func CalculateVacuumStats(ctx context.Context,
+	tbl catalog.MergeTable,
+	opts *VacuumOpts,
+) (*VacuumStats, error) {
+	if opts.testInject != nil {
+		if opts.testInject.err != nil {
+			return nil, opts.testInject.err
+		}
+		ret := &VacuumStats{}
+		ret.DelVacuumPercent = opts.testInject.tombstoneVacPercent
+		for _, task := range opts.testInject.compactTask {
+			for _, obj := range task.objs {
+				heap.Push(&ret.TopHollow, mItem{vacuumScore: 100, obj: obj})
+			}
+		}
+		return ret, nil
+	}
+
+	var (
+		// For VacuumPercent
+		bufferBatch        any
+		bufferBatchCleanup func()
+		objDelCounter      map[types.Objectid]int
+		each               = func(rowid types.Rowid, _ bool, _ int) error {
+			objDelCounter[*rowid.BorrowObjectID()]++
+			return nil
+		}
+
+		ret = &VacuumStats{}
+	)
+
+	// collect stats
+	for item := range tbl.IterTombstoneItem() {
+		stat := item.GetObjectStats()
+		oSize := stat.OriginSize()
+		if opts.CheckBigOnly && oSize < common.DefaultMaxOsizeObjBytes {
+			continue
+		}
+
+		ret.TotalSize += uint64(oSize)
+		ret.TotalRows += uint64(stat.Rows())
+		ret.HistoSize[sizeLevel(oSize, len(ret.HistoSize)-1)]++
+		createAgo := time.Since(item.GetCreatedAt().ToTimestamp().ToStdTime())
+		ret.HistoCreateAt[timeLevelSince(createAgo)]++
+		if createAgo > ret.MaxCreateAgo {
+			ret.MaxCreateAgo = createAgo
+		}
+
+		if !opts.EnableDetail {
+			continue
+		}
+
+		// IO read
+		if bufferBatch == nil {
+			bufferBatch, bufferBatchCleanup = item.MakeBufferBatch()
+			defer bufferBatchCleanup()
+			objDelCounter = make(map[types.Objectid]int)
+		}
+		if err := item.ForeachRowid(ctx, bufferBatch, each); err != nil {
+			return nil, err
+		}
+	}
+
+	ret.DataVacuumScoreToCompact = opts.CalcScore(ret.MaxCreateAgo)
+
+	// detail is enabled, calculate more stats
+	if len(objDelCounter) > 0 {
+		var topHollow itemSet
+		var topk = opts.HollowTopK
+		totalDataRows := uint64(0)
+		hittedDelRows := uint64(0)
+		for item := range tbl.IterDataItem() {
+			stat := item.GetObjectStats()
+			totalDataRows += uint64(stat.Rows())
+			del := objDelCounter[*stat.ObjectName().ObjectId()]
+			if del == 0 {
+				// no delete on this object, skip
+				continue
+			}
+			hittedDelRows += uint64(del)
+			delPercent := del * 100 / int(stat.Rows())
+			score := objectVacuumScore(stat, delPercent)
+			ret.HistoVacuumScore[scoreLevel(score)]++
+			if topk > 0 {
+				heap.Push(&topHollow, mItem{vacuumScore: score, obj: stat})
+				if topHollow.Len() > topk {
+					heap.Pop(&topHollow)
+				}
+			}
+		}
+		if totalDataRows > 0 {
+			ret.DataVacuumPercent = float64(hittedDelRows) / float64(totalDataRows)
+		}
+		if ret.TotalRows > 0 {
+			ret.DelVacuumPercent = float64(ret.TotalRows-hittedDelRows) / float64(ret.TotalRows)
+		}
+		ret.TopHollow = topHollow
+	}
+
+	return ret, nil
+}
+
+// endregion: Vacuum
+
+// region: utils
+
+func objectVacuumScore(stat *objectio.ObjectStats, delPercent int) int {
+	sizeRatio := float64(stat.OriginSize()) / float64(common.DefaultMaxOsizeObjBytes)
+	lvRatio := float64(stat.GetLevel()+1) / float64(8)
+	final := (sizeRatio + lvRatio) / 2.0 // each 50% weight
+	score := float64(delPercent) * final
+	return int(math.Round(score))
 }
 
 func timeLevelSince(ago time.Duration) int {
@@ -229,223 +441,9 @@ func scoreLevel(score int) int {
 	return min(score/20, 4)
 }
 
-func GatherTombstoneTasks(ctx context.Context,
-	tombstoneStats iter.Seq[*objectio.ObjectStats],
-	opts *TombstoneOpts,
-) (ret []mergeTask) {
-	if opts.OneShot {
-		targets := slices.Collect(tombstoneStats)
-		if len(targets) > 0 {
-			ret = append(ret, mergeTask{
-				objs:        targets,
-				note:        "one shot vacuum",
-				kind:        taskHostDN,
-				isTombstone: true,
-			})
-		}
-		return
-	}
-	small := make([]*objectio.ObjectStats, 0, opts.L1Count)
-	big := make([]*objectio.ObjectStats, 0, opts.L2Count)
-	for stat := range tombstoneStats {
-		if stat.OriginSize() < opts.L1Size {
-			small = append(small, stat)
-		} else if stat.OriginSize() < opts.L2Size {
-			big = append(big, stat)
-		}
-	}
-
-	if len(small) >= opts.L1Count {
-		ret = append(ret, mergeTask{
-			objs:        small,
-			note:        "l1 small tombstone",
-			kind:        taskHostDN,
-			isTombstone: true,
-		})
-	}
-
-	if len(big) >= opts.L2Count {
-		ret = append(ret, mergeTask{
-			objs:        big,
-			note:        "l2 big tombstone",
-			kind:        taskHostDN,
-			isTombstone: true,
-		})
-	}
-	return
-}
-
-func GatherCompactTasks(ctx context.Context,
-	stats *VacuumStats,
-	rc *resourceController,
-) (ret []mergeTask) {
-	for i, l := 0, stats.TopHollow.Len(); i < l; i++ {
-		item := heap.Pop(&stats.TopHollow).(mItem)
-		if item.vacuumScore >= stats.DataVacuumScoreToCompact {
-			lv := item.obj.GetLevel()
-			if lv > 1 {
-				// make it down -1 level after compact
-				lv -= 2
-			} else {
-				// merge it from scratch
-				lv = 0
-			}
-			note := fmt.Sprintf("compact task %v/%v",
-				item.vacuumScore, stats.DataVacuumScoreToCompact)
-			// do not check the resource, leave it to mainLoop
-			ret = append(ret, mergeTask{
-				objs:        []*objectio.ObjectStats{item.obj.GetObjectStats()},
-				kind:        taskHostDN,
-				isTombstone: false,
-				level:       int8(lv),
-				note:        note,
-				oSize:       int(item.obj.OriginSize()),
-			})
-		}
-	}
-	return ret
-}
-
-func CalculateVacuumStats(ctx context.Context,
-	tbl *catalog.TableEntry,
-	opts *VacuumOpts,
-) (*VacuumStats, error) {
-
-	var (
-		// For VacuumPercent
-		bufferBatch   *containers.Batch
-		objDelCounter map[types.Objectid]int
-		// metas         []objectio.ObjectDataMeta
-
-		ret = &VacuumStats{}
-	)
-
-	reader := txnbase.MockTxnReaderWithNow()
-	tombstoneIt := tbl.MakeTombstoneVisibleObjectIt(reader)
-	defer tombstoneIt.Release()
-
-	// collect stats
-	for tombstoneIt.Next() {
-		item := tombstoneIt.Item()
-		if !ObjectValid(item) {
-			continue
-		}
-
-		if opts.CheckBigOnly && item.GetObjectStats().OriginSize() < common.DefaultMaxOsizeObjBytes {
-			continue
-		}
-
-		stat := item.GetObjectStats()
-		ret.TotalSize += uint64(stat.OriginSize())
-		ret.TotalRows += uint64(stat.Rows())
-		ret.HistoSize[sizeLevel(stat.OriginSize(), len(ret.HistoSize)-1)]++
-		createAgo := time.Since(item.GetCreatedAt().ToTimestamp().ToStdTime())
-		ret.HistoCreateAt[timeLevelSince(createAgo)]++
-		if createAgo > ret.MaxCreateAgo {
-			ret.MaxCreateAgo = createAgo
-		}
-
-		if !opts.EnableDetail {
-			continue
-		}
-
-		// IO read
-		obj := item.GetObjectData()
-		each := func(v types.Rowid, _ bool, _ int) error {
-			objDelCounter[*v.BorrowObjectID()]++
-			return nil
-		}
-		for blk := range item.BlockCnt() {
-			if bufferBatch == nil {
-				bufferBatch = containers.BuildBatchWithPool(
-					[]string{objectio.TombstoneAttr_Rowid_Attr},
-					[]types.Type{types.T_Rowid.ToType()},
-					8192,
-					obj.GetRuntime().VectorPool.Transient,
-				)
-				objDelCounter = make(map[types.Objectid]int)
-				defer bufferBatch.Close()
-			}
-			if err := obj.Scan(
-				ctx,
-				&bufferBatch,
-				reader,
-				item.GetSchema(),
-				uint16(blk),
-				[]int{0}, // only the rowid column
-				common.MergeAllocator,
-			); err != nil {
-				return nil, err
-			}
-			err := containers.ForeachVector(bufferBatch.Vecs[0], each, nil)
-			if err != nil {
-				return nil, err
-			}
-
-			bufferBatch.Reset()
-		}
-	}
-
-	ret.DataVacuumScoreToCompact = opts.CalcScore(ret.MaxCreateAgo)
-
-	// detail is enabled, calculate more stats
-	if len(objDelCounter) > 0 {
-		var topHollow itemSet
-		var topk = opts.HollowTopK
-		dataIt := tbl.MakeDataVisibleObjectIt(reader)
-		defer dataIt.Release()
-		totalDataRows := uint64(0)
-		hittedDelRows := uint64(0)
-		for dataIt.Next() {
-			item := dataIt.Item()
-			if !ObjectValid(item) {
-				continue
-			}
-			if opts.CheckBigOnly && item.OriginSize() < common.DefaultMaxOsizeObjBytes {
-				continue
-			}
-			totalDataRows += uint64(item.Rows())
-			del := objDelCounter[*item.ID()]
-			if del == 0 {
-				// no delete on this object, skip
-				continue
-			}
-			hittedDelRows += uint64(del)
-			delPercent := del * 100 / int(item.Rows())
-			score := objectVacuumScore(item, delPercent)
-			ret.HistoVacuumScore[scoreLevel(score)]++
-			if topk > 0 {
-				heap.Push(&topHollow, mItem{vacuumScore: score, obj: item})
-				if topHollow.Len() > topk {
-					heap.Pop(&topHollow)
-				}
-			}
-		}
-		if totalDataRows > 0 {
-			ret.DataVacuumPercent = float64(hittedDelRows) / float64(totalDataRows)
-		}
-		if ret.TotalRows > 0 {
-			ret.DelVacuumPercent = float64(ret.TotalRows-hittedDelRows) / float64(ret.TotalRows)
-		}
-		ret.TopHollow = topHollow
-	}
-
-	return ret, nil
-}
-
-// region: utils
-
-func objectVacuumScore(obj *catalog.ObjectEntry, delPercent int) int {
-	sizeRatio := float64(obj.OriginSize()) / float64(common.DefaultMaxOsizeObjBytes)
-	lvRatio := 0.5 * float64(obj.GetLevel()+1) / float64(8)
-	final := (sizeRatio + lvRatio) / 2.0 // each 50% weight
-	score := float64(delPercent) * final
-	return int(math.Round(score))
-}
-
 type mItem struct {
 	vacuumScore int
-	obj         *catalog.ObjectEntry
+	obj         *objectio.ObjectStats
 }
 
 type itemSet []mItem
@@ -479,4 +477,4 @@ func (is *itemSet) Clear() {
 	*is = old[:0]
 }
 
-// endregion
+// endregion: utils

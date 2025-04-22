@@ -35,6 +35,11 @@ var (
 	}
 )
 
+const (
+	MAX_LV_COUNT = 8
+	MAX_LV       = MAX_LV_COUNT - 1
+)
+
 // |---------|
 // |---------|
 //	|---------------| --- object A
@@ -68,10 +73,6 @@ func (p *pointEvent) String() string {
 type clusterInfo struct {
 	idx        int
 	pointDepth int
-}
-
-func (c *clusterInfo) String() string {
-	return fmt.Sprintf("(idx: %d, pd: %d)", c.idx, c.pointDepth)
 }
 
 type OverlapStats struct {
@@ -254,6 +255,7 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 
 	openingObjs := make(map[int]objOverlapRecord)
 	determinedObject := make([]objOverlapRecord, 0, events.Len()/2)
+	openAndCloseInSamePoint := make([]int, 0)
 
 	idx := -1
 	maxpd := 0
@@ -267,12 +269,34 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 		// remove the closing objects from openingObjs first, avoiding the impact of point stack on point depth
 		//   point stack: a value point is responsible for multiple objects' opening and closing.
 		for _, idx := range event.close {
-			record := openingObjs[idx]
-			determinedObject = append(determinedObject, record)
-			delete(openingObjs, idx)
+			record, exists := openingObjs[idx]
+			if exists {
+				determinedObject = append(determinedObject, record)
+				delete(openingObjs, idx)
+			} else {
+				openAndCloseInSamePoint = append(openAndCloseInSamePoint, idx)
+			}
 		}
 
-		// for the current value point, the pointDepth is the number of objects that are unclosed plus the number of new opening objects
+		// if this point event does not open any objects,
+		// it won't upate any existing information
+		// and the openAndCloseInSamePoint MUST be empty, no need to check
+		if len(event.open) == 0 {
+			continue
+		}
+
+		// if there are no opening objects, we can determine a cluster
+		if len(openingObjs) == 0 {
+			if maxpd >= opts.MinPointDepthPerCluster {
+				ret.Clusters = append(ret.Clusters,
+					clusterInfo{idx: maxidx, pointDepth: maxpd},
+				)
+			}
+			maxpd = 0
+		}
+
+		// for the current value point, the pointDepth is the number of objects
+		// that are unclosed plus the number of new opening objects
 		pointDepth := len(event.open) + len(openingObjs)
 
 		// update the max point depth and index
@@ -281,24 +305,12 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 			maxidx = idx
 		}
 
-		// if there are no opening objects, we can determine a cluster
-		if len(openingObjs) == 0 {
-			if maxpd > opts.MinPointDepthPerCluster {
-				ret.Clusters = append(ret.Clusters, clusterInfo{idx: maxidx, pointDepth: maxpd})
-			}
-			maxpd = 0
-		}
-
-		if len(event.open) == 0 {
-			// if this point event does not open any objects, it won't upate any existing information, let's just continue
-			continue
-		}
-
-		// update the depth and overlap for the opening objects
 		for key, record := range openingObjs {
 			newRecord := objOverlapRecord{
-				overlap: record.overlap + len(event.open), // new objects are added to the overlap
-				depth:   max(record.depth, pointDepth),    // the depth is the max value considering all points contained in the object
+				// new objects are added to the overlap
+				overlap: record.overlap + len(event.open),
+				// the depth is the max value considering all points contained in the object
+				depth: max(record.depth, pointDepth),
 			}
 			openingObjs[key] = newRecord
 		}
@@ -306,8 +318,28 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 		// add new objects to openingObjs
 		for _, idx := range event.open {
 			// overlap = pointDepth - 1, self is not included
-			openingObjs[idx] = objOverlapRecord{overlap: pointDepth - 1, depth: pointDepth}
+			openingObjs[idx] = objOverlapRecord{
+				overlap: pointDepth - 1,
+				depth:   pointDepth,
+			}
 		}
+
+		// handle special case: open and close in the same point
+		for _, idx := range openAndCloseInSamePoint {
+			record := openingObjs[idx]
+			determinedObject = append(determinedObject, record)
+			delete(openingObjs, idx)
+		}
+		if len(openAndCloseInSamePoint) > 0 {
+			openAndCloseInSamePoint = openAndCloseInSamePoint[:0]
+		}
+	}
+
+	// handle the last cluster
+	if maxpd > opts.MinPointDepthPerCluster {
+		ret.Clusters = append(ret.Clusters,
+			clusterInfo{idx: maxidx, pointDepth: maxpd},
+		)
 	}
 
 	if len(openingObjs) > 0 {
@@ -351,8 +383,7 @@ func GatherOverlapMergeTasks(ctx context.Context, statsList []*objectio.ObjectSt
 	}
 	opts := overlapOpts
 	if !opts.NoFurtherStat {
-		opts = overlapOpts.Clone()
-		opts.NoFurtherStat = true
+		opts = overlapOpts.Clone().WithFurtherStat(false)
 	}
 	overlapStats, err := CalculateOverlapStats(ctx, statsList, opts)
 	if err != nil {
@@ -367,20 +398,29 @@ func GatherOverlapMergeTasks(ctx context.Context, statsList []*objectio.ObjectSt
 	groupidx := 0
 	group := len(overlapStats.Clusters)
 	targetedStats := make([]mergeTask, 0, group)
+	closeAndOpenInSamePoint := make([]int, 0)
 	for iter.Next() {
 		idx++
 		event := iter.Item()
 		for _, idx := range event.close {
-			delete(openingObjs, idx)
+			if _, ok := openingObjs[idx]; ok {
+				delete(openingObjs, idx)
+			} else {
+				closeAndOpenInSamePoint = append(closeAndOpenInSamePoint, idx)
+			}
 		}
-		pd := len(event.open) + len(openingObjs)
-		if groupidx < group && pd == overlapStats.Clusters[groupidx].pointDepth && idx == overlapStats.Clusters[groupidx].idx {
+		for _, idx := range event.open {
+			openingObjs[idx] = statsList[idx]
+		}
+
+		pd := len(openingObjs)
+
+		if groupidx < group &&
+			pd == overlapStats.Clusters[groupidx].pointDepth &&
+			idx == overlapStats.Clusters[groupidx].idx {
 			stats := make([]*objectio.ObjectStats, 0, pd)
 			for k := range openingObjs {
 				stats = append(stats, statsList[k])
-			}
-			for _, idx := range event.open {
-				stats = append(stats, statsList[idx])
 			}
 			targetedStats = append(targetedStats, mergeTask{
 				objs:        stats,
@@ -391,8 +431,12 @@ func GatherOverlapMergeTasks(ctx context.Context, statsList []*objectio.ObjectSt
 			})
 			groupidx++
 		}
-		for _, idx := range event.open {
-			openingObjs[idx] = statsList[idx]
+
+		for _, idx := range closeAndOpenInSamePoint {
+			delete(openingObjs, idx)
+		}
+		if len(closeAndOpenInSamePoint) > 0 {
+			closeAndOpenInSamePoint = closeAndOpenInSamePoint[:0]
 		}
 	}
 	return targetedStats, nil
