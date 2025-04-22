@@ -1348,12 +1348,11 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 	}
 
-	// needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if needCheckLock {
-	// get user status, login_attempts, lock_time
+	needCheckLock, err = whetherNeedCheckLoginAttempts(tenantCtx, ses)
+	if err != nil {
+		return nil, err
+	}
+
 	userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
 	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
 	if err != nil {
@@ -1373,13 +1372,14 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	// }
 
-	/*
-		if user lock status is locked
-		check if the lock_time is not expired
-	*/
-	if userStatus == userStatusLock {
+	if userStatus == userStatusLockForever {
+		return nil, moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock")
+	} else if userStatus == userStatusLock {
+		/*
+			if user lock status is locked
+			check if the lock_time is not expired
+		*/
 		if lockTimeExpired, err = checkLockTimeExpired(tenantCtx, ses, lockTime); err != nil {
 			return nil, err
 		}

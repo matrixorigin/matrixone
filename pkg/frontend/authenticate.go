@@ -532,8 +532,9 @@ const (
 	//	accountAdminRoleComment = "account admin role"
 
 	//user
-	userStatusLock   = "lock"
-	userStatusUnlock = "unlock"
+	userStatusLock        = "lock"
+	userStatusUnlock      = "unlock"
+	userStatusLockForever = "forbid" // only varchar(8) for status. so use "forbid" not "lock forever"
 
 	defaultPasswordEnv = "DEFAULT_PASSWORD"
 
@@ -1213,7 +1214,7 @@ const (
 
 	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
 
-	updateStatusLockOfUserWithoutAttemptFormat = `update mo_catalog.mo_user set status = "%s", lock_time = utc_timestamp() + %d where user_name = "%s";`
+	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
@@ -1704,8 +1705,8 @@ func getSqlForUpdateStatusLockOfUser(status, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
 }
 
-func getSqlForUpdateStatusLockOfUserWithoutAttempt(status string, delay int, user string) string {
-	return fmt.Sprintf(updateStatusLockOfUserWithoutAttemptFormat, status, delay, user)
+func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
+	return fmt.Sprintf(updateStatusLockOfUserForeverFormat, status, user)
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
@@ -2755,9 +2756,13 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountUnlock); ok {
 			doLockOrUnlock = unlockUser
 		} else if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
+			if user.IdentStr != "" {
+				return moerr.NewInternalError(ctx, "not support identified with lock operation, use `alter user xx lock` instead")
+			}
 			doLockOrUnlock = lockUser
 		} else {
-			return moerr.NewInternalError(ctx, "not support password or lock operation")
+			msg := fmt.Sprintf("not support operation: %s", tree.String(au.MiscOpt, dialect.MYSQL))
+			return moerr.NewInternalError(ctx, msg)
 		}
 	}
 
@@ -2873,8 +2878,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	} else {
 		if doLockOrUnlock == lockUser {
-			delay := 90 * types.SecsPerDay //lock for 90 days
-			sql = getSqlForUpdateStatusLockOfUserWithoutAttempt(userStatusLock, delay, userName)
+			sql = getSqlForUpdateStatusLockOfUserForever(userStatusLockForever, userName)
 		} else {
 			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
 		}
