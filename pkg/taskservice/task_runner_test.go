@@ -211,6 +211,7 @@ func TestCancelRunningTask(t *testing.T) {
 
 func TestDoHeartbeatInvalidTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		r.runningTasks.Lock()
 		ctx, cancel := context.WithCancelCause(context.TODO())
 		r.runningTasks.m = make(map[uint64]runningTask)
 		r.runningTasks.m[1] = runningTask{
@@ -218,12 +219,12 @@ func TestDoHeartbeatInvalidTask(t *testing.T) {
 			ctx:    ctx,
 			cancel: cancel,
 		}
-
+		r.runningTasks.Unlock()
 		r.doHeartbeat(context.Background())
 
 		r.runningTasks.RLock()
-		defer r.runningTasks.RUnlock()
 		assert.Equal(t, 1, len(r.runningTasks.m))
+		r.runningTasks.RUnlock()
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond),
 		WithRunnerHeartbeatInterval(time.Millisecond))
