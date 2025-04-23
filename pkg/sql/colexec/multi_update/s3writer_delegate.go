@@ -375,9 +375,8 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		s3Writer *colexec.CNS3Writer
 	)
 
-	fs, err = fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
-	if err != nil {
-		return err
+	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
+		return
 	}
 
 	if isDelete {

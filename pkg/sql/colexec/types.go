@@ -16,6 +16,10 @@ package colexec
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -115,3 +119,13 @@ type CnSegmentMap struct {
 const (
 	DefaultBatchSize = 8192
 )
+
+func GetSharedFSFromProc(proc *process.Process) (fs fileservice.FileService, err error) {
+	fs, err = fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	if err != nil {
+		logutil.Error("get shared fs from proc failed", zap.Error(err))
+		return nil, err
+	}
+
+	return fs, nil
+}
