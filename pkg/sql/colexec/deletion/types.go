@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -228,7 +226,7 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch,
 
 func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (uint32, error) {
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	fs, err := colexec.GetSharedFSFromProc(proc)
 	if err != nil {
 		return 0, err
 	}

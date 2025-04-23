@@ -27,13 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -89,13 +89,16 @@ func transferTombstoneObjects(
 	start, end types.TS,
 ) (err error) {
 
-	fs, err := fileservice.Get[fileservice.FileService](txn.proc.GetFileService(), defines.SharedFileServiceName)
-	if err != nil {
-		return err
+	var (
+		fs   fileservice.FileService
+		logs []zap.Field
+		flow *TransferFlow
+	)
+
+	if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
+		return
 	}
 
-	var logs []zap.Field
-	var flow *TransferFlow
 	return txn.forEachTableHasDeletesLocked(
 		true,
 		func(tbl *txnTable) error {
@@ -202,10 +205,6 @@ func transferTombstones(
 
 	if len(objectList) >= 10 {
 		proc := table.proc.Load()
-		if fs, err = fileservice.Get[fileservice.FileService](
-			proc.GetFileService(), defines.SharedFileServiceName); err != nil {
-			return err
-		}
 		for _, obj := range objectList {
 			ioutil.Prefetch(proc.GetService(), fs, obj.ObjectLocation())
 		}

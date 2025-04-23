@@ -15,6 +15,7 @@ package colexec
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -514,5 +515,27 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		_, err = s3writer.Sync(ctx, proc.Mp())
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrTooLargeObjectSize)
+	}
+}
+
+func TestGetSharedFSFromProc(t *testing.T) {
+	{
+		proc := testutil.NewProc()
+		fs, err := GetSharedFSFromProc(proc)
+		require.NoError(t, err)
+		require.NotNil(t, fs)
+		require.NotEmpty(t, fs.Name())
+	}
+
+	{
+		proc := &process.Process{
+			Base: &process.BaseProcess{
+				FileService: nil,
+			},
+		}
+
+		fs, err := GetSharedFSFromProc(proc)
+		require.NotNil(t, err)
+		require.Nil(t, fs)
 	}
 }

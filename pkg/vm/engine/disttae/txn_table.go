@@ -1630,8 +1630,12 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 	proc := tbl.proc.Load()
 
-	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
-	if err != nil {
+	var (
+		err error
+		fs  fileservice.FileService
+	)
+
+	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
 		return nil, "", err
 	}
 
