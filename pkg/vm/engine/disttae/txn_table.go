@@ -1630,13 +1630,16 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 	proc := tbl.proc.Load()
 
-	s3Writer := colexec.NewCNS3DataWriter(
-		proc.Mp(), proc.GetFileService(), tbl.tableDef, false)
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	if err != nil {
+		return nil, "", err
+	}
+
+	s3Writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, tbl.tableDef, false)
 
 	defer func() { s3Writer.Close(proc.Mp()) }()
 
 	var (
-		err      error
 		bat      *batch.Batch
 		stats    []objectio.ObjectStats
 		fileName string

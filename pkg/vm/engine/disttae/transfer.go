@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -88,6 +89,11 @@ func transferTombstoneObjects(
 	start, end types.TS,
 ) (err error) {
 
+	fs, err := fileservice.Get[fileservice.FileService](txn.proc.GetFileService(), defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+
 	var logs []zap.Field
 	var flow *TransferFlow
 	return txn.forEachTableHasDeletesLocked(
@@ -95,8 +101,7 @@ func transferTombstoneObjects(
 		func(tbl *txnTable) error {
 			now := time.Now()
 			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
-				ctx, start, end,
-				tbl, txn, txn.proc.Mp(), txn.proc.GetFileService()); err != nil {
+				ctx, start, end, tbl, txn, txn.proc.Mp(), fs); err != nil {
 				return err
 			} else if flow == nil {
 				logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ", logs...)
@@ -197,8 +202,12 @@ func transferTombstones(
 
 	if len(objectList) >= 10 {
 		proc := table.proc.Load()
+		if fs, err = fileservice.Get[fileservice.FileService](
+			proc.GetFileService(), defines.SharedFileServiceName); err != nil {
+			return err
+		}
 		for _, obj := range objectList {
-			ioutil.Prefetch(proc.GetService(), proc.GetFileService(), obj.ObjectLocation())
+			ioutil.Prefetch(proc.GetService(), fs, obj.ObjectLocation())
 		}
 	}
 

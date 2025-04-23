@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -225,6 +227,12 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch,
 }
 
 func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (uint32, error) {
+
+	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+	if err != nil {
+		return 0, err
+	}
+
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
 		blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
@@ -256,7 +264,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			if s3writer == nil {
 				pkType := *bat.Vecs[1].GetType()
-				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), pkType)
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType)
 			}
 
 			if err = s3writer.Write(proc.Ctx, proc.Mp(), bat); err != nil {

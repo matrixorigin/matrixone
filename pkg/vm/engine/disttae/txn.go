@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/panjf2000/ants/v2"
 	"math"
 	"runtime"
@@ -659,6 +660,11 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 	}()
 
+	fs, err := fileservice.Get[fileservice.FileService](txn.proc.GetFileService(), defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
@@ -667,7 +673,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
-		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), txn.proc.GetFileService(), tableDef, false)
+		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), fs, tableDef, false)
 
 		for _, bat = range mp[tbKey] {
 			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), bat); err != nil {
@@ -776,6 +782,11 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 		}
 	}()
 
+	fs, err := fileservice.Get[fileservice.FileService](txn.proc.GetFileService(), defines.SharedFileServiceName)
+	if err != nil {
+		return err
+	}
+
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
@@ -785,7 +796,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			txn.proc.GetMPool(), txn.proc.GetFileService(), plan2.ExprType2Type(&pkCol.Typ))
+			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ))
 
 		for i := 0; i < len(mp[tbKey]); i++ {
 			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), mp[tbKey][i]); err != nil {
