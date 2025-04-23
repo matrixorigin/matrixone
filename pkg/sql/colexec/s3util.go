@@ -15,7 +15,10 @@
 package colexec
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -47,6 +51,17 @@ type CNS3Writer struct {
 	holdFlushUntilSyncCall bool
 
 	isTombstone bool
+}
+
+func (w *CNS3Writer) String() string {
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(fmt.Sprintf("Sinker: %s\n", w.sinker.String()))
+	buf.WriteString(fmt.Sprintf(
+		"Others: {written=%d, isTombstone=%v, holdFlushUntilSyncCall=%v, hold=%v, blockInfoBat=%v}",
+		len(w.written), w.isTombstone, w.holdFlushUntilSyncCall, len(w.hold),
+		common.MoBatchToString(w.blockInfoBat, w.blockInfoBat.RowCount())))
+
+	return buf.String()
 }
 
 func NewCNS3TombstoneWriter(
