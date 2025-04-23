@@ -4760,7 +4760,6 @@ func TestReadCheckpoint(t *testing.T) {
 	rmFn, err := objectio.InjectPrintFlushEntry("")
 	assert.NoError(t, err)
 	defer rmFn()
-	
 
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.Extra.BlockMaxRows = 10
@@ -6631,7 +6630,7 @@ func TestGlobalCheckpoint1(t *testing.T) {
 	rmFn, err := objectio.InjectPrintFlushEntry("")
 	assert.NoError(t, err)
 	defer rmFn()
-	
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -6673,7 +6672,6 @@ func TestAppendAndGC(t *testing.T) {
 	rmFn, err := objectio.InjectPrintFlushEntry("")
 	assert.NoError(t, err)
 	defer rmFn()
-	
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
@@ -6751,7 +6749,6 @@ func TestAppendAndGC2(t *testing.T) {
 	rmFn, err := objectio.InjectPrintFlushEntry("")
 	assert.NoError(t, err)
 	defer rmFn()
-	
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
@@ -6858,6 +6855,12 @@ func TestSnapshotGC(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
 
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.Extra.BlockMaxRows = 2
@@ -7102,6 +7105,12 @@ func TestSnapshotMeta(t *testing.T) {
 	defer tae.Close()
 	db := tae.DB
 
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
+
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.Extra.BlockMaxRows = 2
 	snapshotSchema.Extra.ObjectMaxBlocks = 1
@@ -7273,6 +7282,13 @@ func TestPitrMeta(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err2 := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err2)
+	defer rmFn()
+
 	pitrSchema := catalog.NewEmptySchema("mo_pitr")
 
 	constraintDef := &engine.ConstraintDef{
@@ -7535,6 +7551,12 @@ func TestMergeGC(t *testing.T) {
 	defer tae.Close()
 	db := tae.DB
 
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
+
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.Extra.BlockMaxRows = 2
 	snapshotSchema.Extra.ObjectMaxBlocks = 1
@@ -7681,6 +7703,12 @@ func TestCkpLeak(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
 
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
@@ -8776,7 +8804,6 @@ func TestDedupSnapshot1(t *testing.T) {
 	rmFn, err := objectio.InjectPrintFlushEntry("")
 	assert.NoError(t, err)
 	defer rmFn()
-	
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
@@ -9832,7 +9859,6 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	rmFn, err := objectio.InjectPrintFlushEntry("")
 	assert.NoError(t, err)
 	defer rmFn()
-	
 
 	txn, err := tae.StartTxn(nil)
 	assert.NoError(t, err)
