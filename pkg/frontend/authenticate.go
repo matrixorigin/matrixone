@@ -2757,11 +2757,13 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			doLockOrUnlock = unlockUser
 		} else if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
 			if user.IdentStr != "" {
-				return moerr.NewInternalError(ctx, "not support identified with lock operation, use `alter user xx lock` instead")
+				msg := "not support identified with lock operation, use `alter user xx lock` instead"
+				return moerr.NewInternalError(ctx, msg)
 			}
 			doLockOrUnlock = lockUser
 		} else {
-			msg := fmt.Sprintf("not support operation: %s", tree.String(au.MiscOpt, dialect.MYSQL))
+			miscOptStr := tree.String(au.MiscOpt, dialect.MYSQL)
+			msg := fmt.Sprintf("not support operation: %s", miscOptStr)
 			return moerr.NewInternalError(ctx, msg)
 		}
 	}
