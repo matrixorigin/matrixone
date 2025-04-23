@@ -4,6 +4,7 @@ set global connection_control_max_connection_delay = 300000000;
 drop user if exists user1;
 create user user1 identified by '123456';
 select login_attempts from mo_catalog.mo_user where user_name = 'user1';
+alter user user1 lock;
 alter user user1 unlock;
 -- @session:id=1&user=sys:user1&password=123456
 alter user user1 unlock;
