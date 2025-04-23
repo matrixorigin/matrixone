@@ -294,6 +294,12 @@ func TestTruncate1(t *testing.T) {
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
 
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
+
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 10
