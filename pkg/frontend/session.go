@@ -1354,21 +1354,24 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
+	statusColIdx := uint64(0)
+	loginAttemptsColIdx := uint64(1)
+	lockTimeColIdx := uint64(2)
 	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
 	if err != nil {
 		return nil, err
 	}
-	userStatus, err = userRsset[0].GetString(tenantCtx, 0, 0)
+	userStatus, err = userRsset[0].GetString(tenantCtx, 0, statusColIdx)
 	if err != nil {
 		return nil, err
 	}
 
-	loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, 1)
+	loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, loginAttemptsColIdx)
 	if err != nil {
 		return nil, err
 	}
 
-	lockTime, err = userRsset[0].GetString(tenantCtx, 0, 2)
+	lockTime, err = userRsset[0].GetString(tenantCtx, 0, lockTimeColIdx)
 	if err != nil {
 		return nil, err
 	}
