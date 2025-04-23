@@ -153,9 +153,31 @@ func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
 	for idx := range exprs {
 		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
-			if len(fExpr.Fold.Data) == 0 {
+			if fExpr.Fold.Data == nil {
+				// cases:
+				//   1. array/array.sql
+				//   2. array/array_index_1.sql
+				//   3. array/array_index.sql
+				//   4. dml/select/select.test
 				return nil, false
 			}
+
+			if len(fExpr.Fold.Data) == 0 {
+				// create table t (a varchar primary key);
+				// explain analyze select * from t where a = ''; (empty string)
+				//
+				// other cases:
+				// 	1. ddl/alter_table_AddDrop_column.sql
+				//  2. cases/ddl/lowercase.test
+				//  3. ddl/drop_if_exists.sql
+				//  4. ddl/create_table_as_select.sql
+				//  5. dml/delete/delete_multiple_table.sql
+
+				vals[idx] = nil
+				continue
+				//return nil, false
+			}
+
 			if !fExpr.Fold.IsConst {
 				return nil, false
 			}
