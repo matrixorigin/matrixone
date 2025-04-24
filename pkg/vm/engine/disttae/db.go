@@ -30,8 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -356,6 +358,9 @@ func (e *Engine) init(ctx context.Context) error {
 	}
 
 	e.catalog.Store(newcache)
+	// clear all tables in global stats.
+	e.globalStats.clearTables()
+
 	return nil
 }
 
@@ -407,8 +412,7 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 	return result.Data.([]any)[0], nil
 }
 
-// getOrCreateSnapPartBy is used to get or create a snapshot partition state by the given timestamp.
-func (e *Engine) getOrCreateSnapPartBy(
+func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
@@ -445,13 +449,37 @@ func (e *Engine) getOrCreateSnapPartBy(
 	}
 
 	if !ckpsCanServe() {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"No available checkpoints for snapshot read at:%s, table:%s, tid:%v, txn:%s",
-			ts.ToString(),
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString())
+		//check whether the latest partition is available for reuse.
+		if ps, err := tbl.tryToSubscribe(ctx); err == nil {
+			if ps != nil && ps.CanServe(ts) {
+				logutil.Infof("getOrCreateSnapPart:reuse latest partition state:%p, tbl:%p, table name:%s, tid:%v, txn:%s",
+					ps,
+					tbl,
+					tbl.tableName,
+					tbl.tableId,
+					tbl.db.op.Txn().DebugString())
+				return ps, nil
+			}
+			var start, end types.TS
+			if ps != nil {
+				start, end = ps.GetDuration()
+			}
+			logutil.Infof("getOrCreateSnapPart, "+
+				"latest partition state:%p, duration:[%s_%s] can't serve snapshot read at ts :%s, tbl:%p, table:%s, relKind:%s, tid:%v, txn:%s",
+				ps,
+				start.ToString(),
+				end.ToString(),
+				ts.ToString(),
+				tbl,
+				tbl.tableName,
+				tbl.relKind,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString())
+		}
 	}
+
+	//subscribe failed : 1. network timeout,
+	//2. table id is too old ,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
 
 	//check whether the snapshot partitions are available for reuse.
 	e.mu.Lock()
@@ -528,6 +556,65 @@ func (e *Engine) getOrCreateSnapPartBy(
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
 		return snap.Snapshot(), nil
 	}
+
+	start, end := snap.Snapshot().GetDuration()
+	//if has no checkpoints or ts > snap.end, use latest partition.
+	if snap.Snapshot().IsEmpty() || ts.GT(&end) {
+		logutil.Infof("getOrCreateSnapPart:Start to resue latest ps for snapshot read at:%s, "+
+			"table name:%s, tbl:%p, tid:%v, txn:%s, snapIsEmpty:%v, end:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString(),
+			snap.Snapshot().IsEmpty(),
+			end.ToString(),
+		)
+		ps, err := tbl.tryToSubscribe(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ps != nil && ps.CanServe(ts) {
+			logutil.Infof("getOrCreateSnapPart: resue latest partiton state:%p, "+
+				"tbl:%p, table name:%s, tid:%v, txn:%s,ckpIsEmpty:%v, ckp-end:%s",
+				ps,
+				tbl,
+				tbl.tableName,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString(),
+				snap.Snapshot().IsEmpty(),
+				end.ToString())
+			return ps, nil
+		}
+		var start, end types.TS
+		if ps != nil {
+			start, end = ps.GetDuration()
+		}
+		logutil.Infof("getOrCreateSnapPart: "+
+			"latest partition state:%p, duration[%s_%s] can't serve for snapshot read at:%s, tbl:%p, table name:%s, tid:%v, txn:%s",
+			ps,
+			start.ToString(),
+			end.ToString(),
+			ts.ToString(),
+			tbl,
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
+		return nil, moerr.NewInternalErrorNoCtxf("Latest partition state can't serve for snapshot read at:%s, "+
+			"table:%s, tid:%v, txn:%s",
+			ts.ToString(),
+			tbl.tableName,
+			tbl.tableId,
+			tbl.db.op.Txn().DebugString())
+	}
+	if ts.LT(&start) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
+				"snapshot op:%s, start:%s, end:%s",
+			tbl.db.op.Txn().DebugString(),
+			start.ToTimestamp().DebugString(),
+			end.ToTimestamp().DebugString())
+	}
 	panic("impossible path")
 }
 
@@ -546,12 +633,19 @@ func (e *Engine) GetOrCreateLatestPart(
 
 func (e *Engine) LazyLoadLatestCkp(
 	ctx context.Context,
-	tableID uint64,
-	tableName string,
-	dbID uint64,
-	dbName string) (*logtailreplay.Partition, error) {
+	tblHandler engine.Relation) (*logtailreplay.Partition, error) {
 
-	part := e.GetOrCreateLatestPart(dbID, tableID)
+	var (
+		ok  bool
+		tbl *txnTable
+	)
+
+	if tbl, ok = tblHandler.(*txnTable); !ok {
+		delegate := tblHandler.(*txnTableDelegate)
+		tbl = delegate.origin
+	}
+
+	part := e.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
@@ -560,10 +654,10 @@ func (e *Engine) LazyLoadLatestCkp(
 				ctx,
 				e.service,
 				checkpoint,
-				tableID,
-				tableName,
-				dbID,
-				dbName,
+				tbl.tableId,
+				tbl.tableName,
+				tbl.db.databaseId,
+				tbl.db.databaseName,
 				state.HandleObjectEntry,
 				e.mp,
 				e.fs)
@@ -577,4 +671,11 @@ func (e *Engine) LazyLoadLatestCkp(
 	}
 
 	return part, nil
+}
+
+func (e *Engine) UpdateOfPush(
+	ctx context.Context,
+	databaseId,
+	tableId uint64, ts timestamp.Timestamp) error {
+	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
 }
