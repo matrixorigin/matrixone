@@ -1102,7 +1102,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 	deleteFn()
 	ts4 := taeHandler.GetDB().TxnMgr.Now()
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
@@ -1243,7 +1243,7 @@ func TestChangeHandleFilterBatch2(t *testing.T) {
 	deleteFn()
 	end := taeHandler.GetDB().TxnMgr.Now()
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
 	require.Nil(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	mp := common.DebugAllocator
