@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -178,6 +179,18 @@ func (txn *Transaction) WriteBatch(
 				zap.String("data", dataStr),
 			)
 		}
+	}
+
+	if typ == DELETE && !catalog.IsSystemTable(tableId) &&
+		bat != nil && bat.RowCount() > 1 && !bat.Vecs[0].GetSorted() {
+
+		// attr: row_id, pk
+		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
+			return nil, err
+		}
+
+		bat.Vecs[0].SetSorted(true)
+		bat.Vecs[1].SetSorted(true)
 	}
 
 	e := Entry{
@@ -1255,6 +1268,18 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 
 		txn.writes = txn.writes[:i]
+
+		for i = range txn.writes {
+			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
+				if err := mergeutil.SortColumnsByIndex(
+					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
+					return err
+				}
+
+				txn.writes[i].bat.Vecs[0].SetSorted(true)
+				txn.writes[i].bat.Vecs[1].SetSorted(true)
+			}
+		}
 	}
 
 	return nil
@@ -1337,7 +1362,10 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			tbl = delegate.origin
 		}
 
+		locker.Lock()
 		tbl.ensureSeqnumsAndTypesExpectRowid()
+		locker.Unlock()
+
 		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
 		if err != nil {
 			panicWhenFailed(err, "rewrite object by deletion failed")
