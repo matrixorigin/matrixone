@@ -24,6 +24,7 @@ type Delete struct {
 	OrderBy        OrderBy
 	Limit          *Limit
 	With           *With
+	IsCdc          bool
 }
 
 func (node *Delete) Format(ctx *FmtCtx) {
@@ -31,7 +32,11 @@ func (node *Delete) Format(ctx *FmtCtx) {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
 	}
-	ctx.WriteString("delete from ")
+	ctx.WriteString("delete ")
+	if node.IsCdc {
+		ctx.WriteString("cdc ")
+	}
+	ctx.WriteString("from ")
 
 	prefix := ""
 	for _, a := range node.Tables {

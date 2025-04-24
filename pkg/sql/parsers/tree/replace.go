@@ -31,10 +31,15 @@ type Replace struct {
 	PartitionNames IdentifierList
 	Columns        IdentifierList
 	Rows           *Select
+	IsCdc          bool
 }
 
 func (node *Replace) Format(ctx *FmtCtx) {
-	ctx.WriteString("replace into ")
+	ctx.WriteString("replace ")
+	if node.IsCdc {
+		ctx.WriteString("cdc ")
+	}
+	ctx.WriteString("into ")
 	node.Table.Format(ctx)
 
 	if node.PartitionNames != nil {

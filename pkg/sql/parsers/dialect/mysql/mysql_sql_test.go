@@ -3221,6 +3221,18 @@ var (
 			input:  "select t.a from sa.t centroidx ('Vector_ip_ops') join u",
 			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
 		},
+		{
+			input:  "insert cdc into t values (0, 1)",
+			output: "insert cdc into t values (0, 1)",
+		},
+		{
+			input:  "replace cdc into t values (0, 1)",
+			output: "replace cdc into t values (0, 1)",
+		},
+		{
+			input:  "delete cdc from t where a in (0, 1)",
+			output: "delete cdc from t where a in (0, 1)",
+		},
 	}
 )
 
