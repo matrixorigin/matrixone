@@ -431,7 +431,12 @@ func (s *mysqlSinker) SendDummy() {
 
 func (s *mysqlSinker) Error() error {
 	if errPtr := s.err.Load().(*error); *errPtr != nil {
-		if moErr := (*errPtr).(*moerr.Error); moErr != nil {
+		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
+			return moerr.ConvertGoError(context.Background(), *errPtr)
+		} else {
+			if moErr == nil {
+				return nil
+			}
 			return moErr
 		}
 	}

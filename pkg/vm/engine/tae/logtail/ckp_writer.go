@@ -226,6 +226,8 @@ func collectObjectBatch(
 type CheckpointData_V2 struct {
 	batch     *batch.Batch
 	sinker    *ioutil.Sinker
+	rows      int
+	size      int
 	allocator *mpool.MPool
 }
 
@@ -264,6 +266,10 @@ func (data *CheckpointData_V2) WriteTo(
 		return
 	}
 	files, inMems := data.sinker.GetResult()
+	for _, file := range files {
+		data.rows += int(file.Rows())
+		data.size += int(file.Size())
+	}
 	if len(inMems) != 0 {
 		panic("logic error")
 	}
@@ -301,15 +307,8 @@ func (data *CheckpointData_V2) Close() {
 }
 func (data *CheckpointData_V2) ExportStats(prefix string) []zap.Field {
 	fields := make([]zap.Field, 0)
-	size := data.batch.Allocated()
-	rows := data.batch.RowCount()
-	persisted, _ := data.sinker.GetResult()
-	for _, obj := range persisted {
-		size += int(obj.Size())
-		rows += int(obj.Rows())
-	}
-	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), size))
-	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), rows))
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), data.size))
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), data.rows))
 	return fields
 }
 
