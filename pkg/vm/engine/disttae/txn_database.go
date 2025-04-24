@@ -285,7 +285,8 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			})),
 			zap.String("txn", db.op.Txn().DebugString()),
 			zap.Uint64("did", db.databaseId),
-			zap.Uint64("tid", rel.GetTableID(ctx)))
+			zap.Uint64("tid", rel.GetTableID(ctx)),
+			zap.String("workspace", db.getTxn().PPString()))
 		panic(fmt.Sprintf("delete table %v-%v failed %v, %v", rel.GetTableID(ctx), rel.GetTableName(), len(rowids), len(colPKs)))
 	}
 

@@ -3221,6 +3221,9 @@ var (
 			input:  "select t.a from sa.t centroidx ('Vector_ip_ops') join u",
 			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
 		},
+		{
+			input: "alter user u1 lock",
+		},
 	}
 )
 

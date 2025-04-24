@@ -3927,6 +3927,17 @@ alter_user_stmt:
         commentOrAttribute := $6
         $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
     }
+|   ALTER USER exists_opt user_name LOCK user_comment_or_attribute_opt
+    {
+        ifExists := $3
+        var Username = $4.Username
+        var Hostname = $4.Hostname
+        user := tree.NewUser(Username,Hostname,nil)
+        users := []*tree.User{user}
+        miscOpt := tree.NewUserMiscOptionAccountLock()
+        commentOrAttribute := $6
+        $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
+    }
 
 
 default_role_opt:

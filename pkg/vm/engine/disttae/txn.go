@@ -18,7 +18,10 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/panjf2000/ants/v2"
 	"math"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -32,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -175,6 +179,18 @@ func (txn *Transaction) WriteBatch(
 				zap.String("data", dataStr),
 			)
 		}
+	}
+
+	if typ == DELETE && !catalog.IsSystemTable(tableId) &&
+		bat != nil && bat.RowCount() > 1 && !bat.Vecs[0].GetSorted() {
+
+		// attr: row_id, pk
+		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
+			return nil, err
+		}
+
+		bat.Vecs[0].SetSorted(true)
+		bat.Vecs[1].SetSorted(true)
 	}
 
 	e := Entry{
@@ -504,7 +520,16 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	}
 	txn.hasS3Op.Store(true)
 
-	if err := txn.dumpInsertBatchLocked(ctx, offset, &size, &pkCount); err != nil {
+	var (
+		err error
+		fs  fileservice.FileService
+	)
+
+	if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
+		return err
+	}
+
+	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &size, &pkCount); err != nil {
 		return err
 	}
 	// release the extra quota
@@ -522,7 +547,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
-			if err := txn.dumpDeleteBatchLocked(ctx, offset, &size); err != nil {
+			if err := txn.dumpDeleteBatchLocked(ctx, fs, offset, &size); err != nil {
 				return err
 			}
 			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
@@ -553,6 +578,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 func (txn *Transaction) dumpInsertBatchLocked(
 	ctx context.Context,
+	fs fileservice.FileService,
 	offset int,
 	size *uint64,
 	pkCount *int,
@@ -665,7 +691,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
-		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), txn.proc.GetFileService(), tableDef, false)
+		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), fs, tableDef, false)
 
 		for _, bat = range mp[tbKey] {
 			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), bat); err != nil {
@@ -711,7 +737,13 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	return nil
 }
 
-func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, size *uint64) error {
+func (txn *Transaction) dumpDeleteBatchLocked(
+	ctx context.Context,
+	fs fileservice.FileService,
+	offset int,
+	size *uint64,
+) error {
+
 	deleteCnt := 0
 	lastWriteIndex := offset
 	writes := txn.writes
@@ -783,7 +815,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			txn.proc.GetMPool(), txn.proc.GetFileService(), plan2.ExprType2Type(&pkCol.Typ))
+			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ))
 
 		for i := 0; i < len(mp[tbKey]); i++ {
 			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), mp[tbKey][i]); err != nil {
@@ -1132,7 +1164,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 	}
 
-	if err := txn.compactionBlksLocked(ctx); err != nil {
+	if err := txn.compactDeletionOnObjsLocked(ctx); err != nil {
 		return err
 	}
 
@@ -1236,64 +1268,112 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 
 		txn.writes = txn.writes[:i]
+
+		for i = range txn.writes {
+			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
+				if err := mergeutil.SortColumnsByIndex(
+					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
+					return err
+				}
+
+				txn.writes[i].bat.Vecs[0].SetSorted(true)
+				txn.writes[i].bat.Vecs[1].SetSorted(true)
+			}
+		}
 	}
 
 	return nil
 }
 
 // CN blocks compaction for txn
-func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
-	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
-	compactedEntries := make(map[*batch.Batch][]int64)
+func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
+
+	if txn.deletedBlocks == nil {
+		return nil
+	}
+
+	// object --> blk id --> deletion
+	objBlkDeletion := make(map[objectio.ObjectId]map[objectio.Blockid][]int64)
+	objTables := make(map[objectio.ObjectId]tableKey)
+
+	affectedBats := make(map[*batch.Batch]struct{})
+
 	defer func() {
-		//txn.deletedBlocks = nil
 		txn.deletedBlocks.clean()
 	}()
+
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
 			pos := txn.cnBlkId_Pos[*blkId]
-			if v, ok := compactedBlks[tableKey{
-				accountId: pos.accountId,
-				dbName:    pos.dbName,
-				name:      pos.tbName,
-			}]; ok {
-				v[pos.blkInfo.MetaLoc] = offsets
-			} else {
-				compactedBlks[tableKey{
+
+			affectedBats[pos.bat] = struct{}{}
+
+			blkDel := objBlkDeletion[*blkId.Object()]
+			if blkDel == nil {
+				objBlkDeletion[*blkId.Object()] = make(map[objectio.Blockid][]int64)
+				blkDel = objBlkDeletion[*blkId.Object()]
+			}
+
+			blkDel[*blkId] = offsets
+
+			if _, ok := objTables[*blkId.Object()]; !ok {
+				objTables[*blkId.Object()] = tableKey{
 					accountId: pos.accountId,
 					dbName:    pos.dbName,
 					name:      pos.tbName,
-				}] =
-					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
+				}
 			}
-			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
-			//delete(txn.cnBlkId_Pos, *blkId)
+
 			return true
 		})
 
-	for tbKey, blks := range compactedBlks {
+	waiter := sync.WaitGroup{}
+	locker := sync.Mutex{}
+
+	compactFunc := func(stats objectio.ObjectStats) {
+		defer func() {
+			waiter.Done()
+		}()
+
+		// need to rewrite the whole object
+		objId := stats.ObjectName().ObjectId()
+
+		tbKey := objTables[*objId]
+
+		panicWhenFailed := func(err error, hint string) {
+			logutil.Panic(hint,
+				zap.Error(err),
+				zap.String("txn", txn.op.Txn().DebugString()),
+				zap.Uint32("account id", tbKey.accountId),
+				zap.String("db name", tbKey.dbName),
+				zap.String("tbl name", tbKey.name),
+				zap.String("obj", stats.String()),
+			)
+		}
+
 		rel, err := txn.getTable(tbKey.accountId, tbKey.dbName, tbKey.name)
 		if err != nil {
-			return err
+			panicWhenFailed(err, "get table failed")
 		}
-		//TODO::do parallel compaction for table
+
 		tbl, ok := rel.(*txnTable)
 		if !ok {
 			delegate := rel.(*txnTableDelegate)
 			tbl = delegate.origin
 		}
 
-		bat, fileName, err := tbl.compaction(ctx, txn.proc.Mp(), txn.proc.GetFileService(), blks)
-		// 1,2,3,4
+		locker.Lock()
+		tbl.ensureSeqnumsAndTypesExpectRowid()
+		locker.Unlock()
+
+		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
 		if err != nil {
-			return err
+			panicWhenFailed(err, "rewrite object by deletion failed")
 		}
 
-		defer func() {
-			bat.Clean(tbl.getTxn().proc.GetMPool())
-		}()
-
-		err = txn.WriteFileLocked(
+		locker.Lock()
+		defer locker.Unlock()
+		if err = txn.WriteFileLocked(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -1302,15 +1382,19 @@ func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 			tbl.tableName,
 			fileName,
 			bat,
-			tbl.getTxn().tnStores[0],
-		)
-		if err != nil {
-			return err
+			txn.tnStores[0],
+		); err != nil {
+			bat.Clean(txn.proc.Mp())
+			panicWhenFailed(err, "write txn file failed")
 		}
+
+		bat.Clean(txn.proc.Mp())
 	}
 
-	//compaction for txn.writes
-	for i, entry := range txn.writes {
+	dirtyObject := make([]objectio.ObjectStats, 0, 1)
+
+	ll := len(txn.writes)
+	for i, entry := range txn.writes[:ll] {
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
@@ -1319,12 +1403,75 @@ func (txn *Transaction) compactionBlksLocked(ctx context.Context) error {
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
 		}
-		entry.bat.Shrink(compactedEntries[entry.bat], true)
-		if entry.bat.RowCount() == 0 {
-			txn.writes[i].bat.Clean(txn.proc.GetMPool())
-			txn.writes[i].bat = nil
+
+		if _, ok := affectedBats[entry.bat]; !ok {
+			if injected, _ := objectio.LogWorkspaceInjected(
+				entry.databaseName, entry.tableName); !injected {
+				continue
+			}
 		}
+
+		offset := 0
+		col, area := vector.MustVarlenaRawData(entry.bat.Vecs[1])
+		for j := range len(col) {
+			stats := objectio.ObjectStats(col[j].GetByteSlice(area))
+
+			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
+				// clean object, no deletion on it
+				bat := colexec.AllocCNS3ResultBat(false, false)
+				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
+					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
+					return err
+				}
+				if err := vector.AppendBytes(
+					bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()); err != nil {
+					return nil
+				}
+
+				if err := txn.WriteFileLocked(
+					INSERT,
+					entry.accountId,
+					entry.databaseId,
+					entry.tableId,
+					entry.databaseName,
+					entry.tableName,
+					stats.ObjectName().String(),
+					bat,
+					entry.tnStore,
+				); err != nil {
+					bat.Clean(txn.proc.Mp())
+					return err
+				}
+				bat.Clean(txn.proc.Mp())
+
+			} else {
+				dirtyObject = append(dirtyObject, stats)
+			}
+
+			offset += int(stats.BlkCnt())
+		}
+
+		txn.writes[i].bat.Clean(txn.proc.GetMPool())
+		txn.writes[i].bat = nil
 	}
+
+	if txn.compactWorker == nil {
+		txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
+		defer func() {
+			txn.compactWorker.Release()
+			txn.compactWorker = nil
+		}()
+	}
+
+	for _, stats := range dirtyObject {
+		waiter.Add(1)
+		txn.compactWorker.Submit(func() {
+			compactFunc(stats)
+		})
+	}
+
+	waiter.Wait()
+
 	return nil
 }
 
@@ -1624,6 +1771,10 @@ func (txn *Transaction) delTransaction() {
 	txn.transfer.timestamps = nil
 	txn.transfer.lastTransferred = types.TS{}
 	txn.transfer.pendingTransfer = false
+
+	if txn.compactWorker != nil {
+		txn.compactWorker.Release()
+	}
 
 	if txn.extraWriteWorkspaceThreshold > 0 {
 		remaining := txn.engine.ReleaseQuota(txn.extraWriteWorkspaceThreshold)
