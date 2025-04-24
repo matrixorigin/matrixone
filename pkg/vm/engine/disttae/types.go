@@ -367,6 +367,8 @@ type Transaction struct {
 	syncCommittedTSCount uint64
 	pkCount              int
 
+	compactWorker *ants.Pool
+
 	adjustCount int
 
 	haveDDL atomic.Bool
