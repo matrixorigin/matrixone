@@ -15,6 +15,7 @@
 package ioutil
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -343,6 +344,20 @@ type Sinker struct {
 
 	mp *mpool.MPool
 	fs fileservice.FileService
+}
+
+func (sinker *Sinker) String() string {
+	buf := bytes.Buffer{}
+	buf.WriteString(fmt.Sprintf(
+		"schema:{attrs=%v, types=%v, sortIdx=%d}; ",
+		sinker.schema.attrs, sinker.schema.attrTypes, sinker.schema.sortKeyIdx))
+
+	buf.WriteString(fmt.Sprintf(
+		"config:{allMergeSorted=%v, dedupAll=%v, bufferSizeCap=%d, tailSizeCap=%d}; ",
+		sinker.config.allMergeSorted, sinker.config.dedupAll,
+		sinker.config.bufferSizeCap, sinker.config.tailSizeCap))
+
+	return buf.String()
 }
 
 func (sinker *Sinker) fillDefaults() {

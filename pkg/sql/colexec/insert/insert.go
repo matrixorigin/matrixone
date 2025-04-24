@@ -21,8 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -50,7 +48,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 	insert.ctr.state = vm.Build
 	if insert.ToWriteS3 {
-		fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
+		fs, err := colexec.GetSharedFSFromProc(proc)
 		if err != nil {
 			return err
 		}
