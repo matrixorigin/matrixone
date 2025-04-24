@@ -1298,7 +1298,10 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			tbl = delegate.origin
 		}
 
+		locker.Lock()
 		tbl.ensureSeqnumsAndTypesExpectRowid()
+		locker.Unlock()
+
 		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
 		if err != nil {
 			panicWhenFailed(err, "rewrite object by deletion failed")
