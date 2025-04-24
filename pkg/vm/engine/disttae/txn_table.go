@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1653,6 +1654,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 
 			del := deletes[blk.BlockID]
+			slices.Sort(del)
 			if bat, err = blockio.BlockCompactionRead(
 				tbl.getTxn().proc.Ctx,
 				blk.MetaLoc[:],
