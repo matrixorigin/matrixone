@@ -475,6 +475,18 @@ func (e *Engine) getOrCreateSnapPart(
 				tbl.relKind,
 				tbl.tableId,
 				tbl.db.op.Txn().DebugString())
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"latest partition state:%p, duration:[%s_%s] can't serve snapshot read at ts :%s, tbl:%p, table:%s, relKind:%s, tid:%v, txn:%s",
+				ps,
+				start.ToString(),
+				end.ToString(),
+				ts.ToString(),
+				tbl,
+				tbl.tableName,
+				tbl.relKind,
+				tbl.tableId,
+				tbl.db.op.Txn().DebugString())
 		}
 	}
 
@@ -555,65 +567,6 @@ func (e *Engine) getOrCreateSnapPart(
 	if snap.Snapshot().CanServe(ts) {
 		tblSnaps.snaps = append(tblSnaps.snaps, snap)
 		return snap.Snapshot(), nil
-	}
-
-	start, end := snap.Snapshot().GetDuration()
-	//if has no checkpoints or ts > snap.end, use latest partition.
-	if snap.Snapshot().IsEmpty() || ts.GT(&end) {
-		logutil.Infof("getOrCreateSnapPart:Start to resue latest ps for snapshot read at:%s, "+
-			"table name:%s, tbl:%p, tid:%v, txn:%s, snapIsEmpty:%v, end:%s",
-			ts.ToString(),
-			tbl.tableName,
-			tbl,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString(),
-			snap.Snapshot().IsEmpty(),
-			end.ToString(),
-		)
-		ps, err := tbl.tryToSubscribe(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if ps != nil && ps.CanServe(ts) {
-			logutil.Infof("getOrCreateSnapPart: resue latest partiton state:%p, "+
-				"tbl:%p, table name:%s, tid:%v, txn:%s,ckpIsEmpty:%v, ckp-end:%s",
-				ps,
-				tbl,
-				tbl.tableName,
-				tbl.tableId,
-				tbl.db.op.Txn().DebugString(),
-				snap.Snapshot().IsEmpty(),
-				end.ToString())
-			return ps, nil
-		}
-		var start, end types.TS
-		if ps != nil {
-			start, end = ps.GetDuration()
-		}
-		logutil.Infof("getOrCreateSnapPart: "+
-			"latest partition state:%p, duration[%s_%s] can't serve for snapshot read at:%s, tbl:%p, table name:%s, tid:%v, txn:%s",
-			ps,
-			start.ToString(),
-			end.ToString(),
-			ts.ToString(),
-			tbl,
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString())
-		return nil, moerr.NewInternalErrorNoCtxf("Latest partition state can't serve for snapshot read at:%s, "+
-			"table:%s, tid:%v, txn:%s",
-			ts.ToString(),
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString())
-	}
-	if ts.LT(&start) {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"No valid checkpoints for snapshot read,maybe snapshot is too old, "+
-				"snapshot op:%s, start:%s, end:%s",
-			tbl.db.op.Txn().DebugString(),
-			start.ToTimestamp().DebugString(),
-			end.ToTimestamp().DebugString())
 	}
 	panic("impossible path")
 }
