@@ -248,10 +248,10 @@ func (reader *tableReader) readTableWithTxn(
 			deleteAtmBatch.Close()
 		}
 
-		curTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
-		// if curTs != toTs, means this procedure end abnormally, need to rollback
+		current := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
+		// if current != toTs, means this procedure end abnormally, need to rollback
 		// e.g. encounter errors, or interrupted by user (pause/cancel)
-		if !curTs.Equal(&toTs) {
+		if !current.Equal(&toTs) {
 			logutil.Errorf("cdc tableReader(%v).readTableWithTxn end abnormally", reader.info)
 			if hasBegin {
 				// clear previous error
