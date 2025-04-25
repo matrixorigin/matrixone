@@ -532,8 +532,9 @@ const (
 	//	accountAdminRoleComment = "account admin role"
 
 	//user
-	userStatusLock   = "lock"
-	userStatusUnlock = "unlock"
+	userStatusLock        = "lock"
+	userStatusUnlock      = "unlock"
+	userStatusLockForever = "forbid" // only varchar(8) for status. so use "forbid" not "lock forever"
 
 	defaultPasswordEnv = "DEFAULT_PASSWORD"
 
@@ -1213,6 +1214,8 @@ const (
 
 	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
 
+	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
+
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
@@ -1700,6 +1703,10 @@ func getSqlForUpdateLockTimeOfUser(user string) string {
 
 func getSqlForUpdateStatusLockOfUser(status, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
+}
+
+func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
+	return fmt.Sprintf(updateStatusLockOfUserForeverFormat, status, user)
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
@@ -2712,15 +2719,22 @@ type user struct {
 }
 
 func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
-	var (
-		sql           string
-		vr            *verifiedRole
-		erArray       []ExecResult
-		encryption    string
-		needValid     bool
-		userName      string
-		isAlterUnlock bool
+	type lockOrUnlockUser int
+	const (
+		lockUser lockOrUnlockUser = iota
+		unlockUser
+		noneLockOrUnlockUser
 	)
+
+	var (
+		sql        string
+		vr         *verifiedRole
+		erArray    []ExecResult
+		encryption string
+		needValid  bool
+		userName   string
+	)
+	doLockOrUnlock := noneLockOrUnlockUser
 
 	account := ses.GetTenantInfo()
 	currentUser := account.GetUser()
@@ -2740,9 +2754,17 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 
 	if au.MiscOpt != nil {
 		if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountUnlock); ok {
-			isAlterUnlock = true
+			doLockOrUnlock = unlockUser
+		} else if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
+			if user.IdentStr != "" {
+				msg := "not support identified with lock operation, use `alter user xx lock` instead"
+				return moerr.NewInternalError(ctx, msg)
+			}
+			doLockOrUnlock = lockUser
 		} else {
-			return moerr.NewInternalError(ctx, "not support password or lock operation")
+			miscOptStr := tree.String(au.MiscOpt, dialect.MYSQL)
+			msg := fmt.Sprintf("not support operation: %s", miscOptStr)
+			return moerr.NewInternalError(ctx, msg)
 		}
 	}
 
@@ -2808,7 +2830,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		return err
 	}
 
-	if !isAlterUnlock {
+	if doLockOrUnlock == noneLockOrUnlockUser {
 		password := user.IdentStr
 		// check password
 		if len(password) == 0 {
@@ -2857,8 +2879,13 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			}
 		}
 	} else {
-		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+		if doLockOrUnlock == lockUser {
+			sql = getSqlForUpdateStatusLockOfUserForever(userStatusLockForever, userName)
+		} else {
 			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+		}
+
+		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
@@ -2867,7 +2894,6 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			if currentUser != userName {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
-			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err

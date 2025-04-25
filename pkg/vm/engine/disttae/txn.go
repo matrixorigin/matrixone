@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/panjf2000/ants/v2"
 	"math"
 	"runtime"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -177,6 +179,18 @@ func (txn *Transaction) WriteBatch(
 				zap.String("data", dataStr),
 			)
 		}
+	}
+
+	if typ == DELETE && !catalog.IsSystemTable(tableId) &&
+		bat != nil && bat.RowCount() > 1 && !bat.Vecs[0].GetSorted() {
+
+		// attr: row_id, pk
+		if err = mergeutil.SortColumnsByIndex(bat.Vecs, 0, txn.proc.Mp()); err != nil {
+			return nil, err
+		}
+
+		bat.Vecs[0].SetSorted(true)
+		bat.Vecs[1].SetSorted(true)
 	}
 
 	e := Entry{
@@ -506,7 +520,16 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	}
 	txn.hasS3Op.Store(true)
 
-	if err := txn.dumpInsertBatchLocked(ctx, offset, &size, &pkCount); err != nil {
+	var (
+		err error
+		fs  fileservice.FileService
+	)
+
+	if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
+		return err
+	}
+
+	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &size, &pkCount); err != nil {
 		return err
 	}
 	// release the extra quota
@@ -524,7 +547,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 	if dumpAll {
 		if txn.approximateInMemDeleteCnt >= txn.engine.config.insertEntryMaxCount {
-			if err := txn.dumpDeleteBatchLocked(ctx, offset, &size); err != nil {
+			if err := txn.dumpDeleteBatchLocked(ctx, fs, offset, &size); err != nil {
 				return err
 			}
 			//After flushing inserts/deletes in memory into S3, the entries in txn.writes will be unordered,
@@ -555,6 +578,7 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 
 func (txn *Transaction) dumpInsertBatchLocked(
 	ctx context.Context,
+	fs fileservice.FileService,
 	offset int,
 	size *uint64,
 	pkCount *int,
@@ -667,7 +691,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
-		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), txn.proc.GetFileService(), tableDef, false)
+		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), fs, tableDef, false)
 
 		for _, bat = range mp[tbKey] {
 			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), bat); err != nil {
@@ -713,7 +737,13 @@ func (txn *Transaction) dumpInsertBatchLocked(
 	return nil
 }
 
-func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, size *uint64) error {
+func (txn *Transaction) dumpDeleteBatchLocked(
+	ctx context.Context,
+	fs fileservice.FileService,
+	offset int,
+	size *uint64,
+) error {
+
 	deleteCnt := 0
 	lastWriteIndex := offset
 	writes := txn.writes
@@ -785,7 +815,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(ctx context.Context, offset int, s
 
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			txn.proc.GetMPool(), txn.proc.GetFileService(), plan2.ExprType2Type(&pkCol.Typ))
+			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ))
 
 		for i := 0; i < len(mp[tbKey]); i++ {
 			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), mp[tbKey][i]); err != nil {
@@ -1238,6 +1268,18 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 		}
 
 		txn.writes = txn.writes[:i]
+
+		for i = range txn.writes {
+			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
+				if err := mergeutil.SortColumnsByIndex(
+					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
+					return err
+				}
+
+				txn.writes[i].bat.Vecs[0].SetSorted(true)
+				txn.writes[i].bat.Vecs[1].SetSorted(true)
+			}
+		}
 	}
 
 	return nil
@@ -1320,7 +1362,10 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			tbl = delegate.origin
 		}
 
+		locker.Lock()
 		tbl.ensureSeqnumsAndTypesExpectRowid()
+		locker.Unlock()
+
 		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
 		if err != nil {
 			panicWhenFailed(err, "rewrite object by deletion failed")

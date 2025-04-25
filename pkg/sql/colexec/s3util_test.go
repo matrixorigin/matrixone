@@ -15,6 +15,8 @@ package colexec
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -447,6 +449,8 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		s, err := s3writer.Sync(ctx, proc.Mp())
 		require.NoError(t, err)
 		require.Nil(t, s)
+
+		fmt.Println(s3writer.String())
 	}
 
 	// test no SHARED service err
@@ -460,6 +464,8 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		_, err = s3writer.Sync(ctx, proc.Mp())
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrNoService)
+
+		fmt.Println(s3writer.String())
 	}
 
 	// test normal flush
@@ -477,6 +483,8 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		_, err = s3writer.Sync(ctx, proc.Mp())
 		require.NoError(t, err)
+
+		fmt.Println(s3writer.String())
 	}
 
 	// test data size larger than object size limit
@@ -514,5 +522,29 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		_, err = s3writer.Sync(ctx, proc.Mp())
 		require.Equal(t, err.(*moerr.Error).ErrorCode(), moerr.ErrTooLargeObjectSize)
+
+		fmt.Println(s3writer.String())
+	}
+}
+
+func TestGetSharedFSFromProc(t *testing.T) {
+	{
+		proc := testutil.NewProc()
+		fs, err := GetSharedFSFromProc(proc)
+		require.NoError(t, err)
+		require.NotNil(t, fs)
+		require.NotEmpty(t, fs.Name())
+	}
+
+	{
+		proc := &process.Process{
+			Base: &process.BaseProcess{
+				FileService: nil,
+			},
+		}
+
+		fs, err := GetSharedFSFromProc(proc)
+		require.NotNil(t, err)
+		require.Nil(t, fs)
 	}
 }
