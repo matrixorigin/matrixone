@@ -324,35 +324,35 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 		logutil.Infof("cdc mysqlSinker(%v).Run: end", s.dbTblInfo)
 	}()
 
-	for sqlBuf := range s.sqlBufSendCh {
+	for sqlBuffer := range s.sqlBufSendCh {
 		// have error, skip
 		if s.Error() != nil {
 			continue
 		}
 
-		if bytes.Equal(sqlBuf, dummy) {
+		if bytes.Equal(sqlBuffer, dummy) {
 			// dummy sql, do nothing
-		} else if bytes.Equal(sqlBuf, begin) {
+		} else if bytes.Equal(sqlBuffer, begin) {
 			if err := s.mysql.SendBegin(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
 				// record error
 				s.SetError(err)
 			}
-		} else if bytes.Equal(sqlBuf, commit) {
+		} else if bytes.Equal(sqlBuffer, commit) {
 			if err := s.mysql.SendCommit(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
 				// record error
 				s.SetError(err)
 			}
-		} else if bytes.Equal(sqlBuf, rollback) {
+		} else if bytes.Equal(sqlBuffer, rollback) {
 			if err := s.mysql.SendRollback(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
 				// record error
 				s.SetError(err)
 			}
 		} else {
-			if err := s.mysql.Send(ctx, ar, sqlBuf, true); err != nil {
-				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+			if err := s.mysql.Send(ctx, ar, sqlBuffer, true); err != nil {
+				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuffer[sqlBufReserved:])
 				// record error
 				s.SetError(err)
 			}
