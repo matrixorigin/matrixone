@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 const (
@@ -54,6 +55,11 @@ type HnswCdcEntry[T types.RealNumbers] struct {
 }
 
 type HnswCdcParam struct {
+	DbName   string                `json:"db"`
+	Table    string                `json:"table"`
+	MetaTbl  string                `json:"meta"`
+	IndexTbl string                `json:"index"`
+	Params   vectorindex.HnswParam `json:"params"`
 }
 
 func NewHnswCdc[T types.RealNumbers]() *HnswCdc[T] {
@@ -190,11 +196,40 @@ var NewHnswSyncSinker = func(
 		return nil, moerr.NewInternalErrorNoCtx("hnsw index table primary key is not int64")
 
 	}
-	if tableDef.Cols[veccol].Typ.Id != int32(types.T_array_float32) && tableDef.Cols[veccol].Typ.Id != int32(types.T_array_float64) {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table part is not []float32 or []float64")
 
+	// get param and index table name
+	paramstr := indexdef.IndexAlgoParams
+	var meta, storage string
+	for _, idx := range hnswindexes {
+		if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Metadata {
+			meta = idx.IndexTableName
+		}
+		if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Storage {
+			storage = idx.IndexTableName
+		}
 	}
 
+	if len(meta) == 0 || len(storage) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table either meta or storage hidden index table not exist")
+	}
+
+	var hnswparam vectorindex.HnswParam
+	if len(paramstr) > 0 {
+		err := json.Unmarshal([]byte(paramstr), &hnswparam)
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtx("hnsw sync sinker. failed to convert hnsw param json")
+		}
+	}
+
+	param := HnswCdcParam{
+		MetaTbl:  meta,
+		IndexTbl: storage,
+		DbName:   dbTblInfo.SinkDbName,
+		Table:    dbTblInfo.SinkTblName,
+		Params:   hnswparam,
+	}
+
+	// create sinker
 	var maxAllowedPacket uint64
 	_ = sink.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
 	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
@@ -211,6 +246,7 @@ var NewHnswSyncSinker = func(
 			pkcol:            pkcol,
 			veccol:           veccol,
 			err:              atomic.Value{},
+			param:            param,
 		}
 		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 		return s, nil
