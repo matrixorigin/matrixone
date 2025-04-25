@@ -65,6 +65,10 @@ var NewSinker = func(
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
+	if sinkUri.SinkTyp == HnswSyncSink {
+		return NewHnswSyncSinker(sinkUri, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
+	}
+
 	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)
 	if err != nil {
 		return nil, err

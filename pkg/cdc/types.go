@@ -44,6 +44,7 @@ const (
 	MysqlSink       = "mysql"
 	MatrixoneSink   = "matrixone"
 	ConsoleSink     = "console"
+	HnswSyncSink    = "hnswsync"
 	SourceUriPrefix = "mysql://"
 	SinkUriPrefix   = "mysql://"
 	ConsolePrefix   = "console://" //only used in testing stage

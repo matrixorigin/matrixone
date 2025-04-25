@@ -1,0 +1,444 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cdc
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+)
+
+const (
+	CDC_INSERT = "I"
+	CDC_UPSERT = "U"
+	CDC_DELETE = "D"
+)
+
+var _ Sinker = &hnswSyncSinker[float32]{}
+
+type HnswCdc[T types.RealNumbers] struct {
+	Start string            `json:"start"`
+	End   string            `json:"end"`
+	Data  []HnswCdcEntry[T] `json:"cdc"`
+}
+
+type HnswCdcEntry[T types.RealNumbers] struct {
+	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
+	PKey int64  `json:"pk"`
+	Vec  []T    `json:"v,omitempty"`
+}
+
+type HnswCdcParam struct {
+}
+
+func NewHnswCdc[T types.RealNumbers]() *HnswCdc[T] {
+	return &HnswCdc[T]{
+		Data: make([]HnswCdcEntry[T], 0, 100),
+	}
+}
+
+func (h *HnswCdc[T]) Reset() {
+	h.Data = h.Data[:0]
+}
+
+func (h *HnswCdc[T]) Empty() bool {
+	return len(h.Data) == 0
+}
+
+func (h *HnswCdc[T]) Full() bool {
+	return len(h.Data) >= cap(h.Data)
+}
+
+func (h *HnswCdc[T]) Insert(key int64, v []T) {
+	e := HnswCdcEntry[T]{
+		Type: CDC_INSERT,
+		PKey: key,
+		Vec:  v,
+	}
+
+	h.Data = append(h.Data, e)
+}
+
+func (h *HnswCdc[T]) Upsert(key int64, v []T) {
+	e := HnswCdcEntry[T]{
+		Type: CDC_UPSERT,
+		PKey: key,
+		Vec:  v,
+	}
+
+	h.Data = append(h.Data, e)
+}
+
+func (h *HnswCdc[T]) Delete(key int64) {
+	e := HnswCdcEntry[T]{
+		Type: CDC_DELETE,
+		PKey: key,
+	}
+
+	h.Data = append(h.Data, e)
+}
+
+func (h *HnswCdc[T]) ToJson() (string, error) {
+
+	b, err := json.Marshal(h)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+type hnswSyncSinker[T types.RealNumbers] struct {
+	mysql            Sink
+	dbTblInfo        *DbTableInfo
+	watermarkUpdater IWatermarkUpdater
+	ar               *ActiveRoutine
+	tableDef         *plan.TableDef
+	cdc              *HnswCdc[T]
+	param            HnswCdcParam
+	err              atomic.Value
+
+	sqlBufSendCh chan []byte
+	// only contains user defined column types, no mo meta cols
+	upsertTypes []*types.Type
+	// only contains pk columns
+	deleteTypes []*types.Type
+	pkColNames  []string
+}
+
+var NewHnswSyncSinker = func(
+	sinkUri UriInfo,
+	dbTblInfo *DbTableInfo,
+	watermarkUpdater IWatermarkUpdater,
+	tableDef *plan.TableDef,
+	retryTimes int,
+	retryDuration time.Duration,
+	ar *ActiveRoutine,
+	maxSqlLength uint64,
+	sendSqlTimeout string,
+) (Sinker, error) {
+
+	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	padding := strings.Repeat(" ", sqlBufReserved)
+	// use db
+	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: check the tabledef and indexdef
+
+	s := &hnswSyncSinker[float32]{
+		mysql:            sink,
+		dbTblInfo:        dbTblInfo,
+		watermarkUpdater: watermarkUpdater,
+		ar:               ar,
+		tableDef:         tableDef,
+		cdc:              NewHnswCdc[float32](),
+	}
+
+	var maxAllowedPacket uint64
+	_ = sink.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
+	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
+	logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+
+	s.sqlBufSendCh = make(chan []byte)
+
+	// TODO: check indexdef and we only need pk and vector index part
+
+	// types
+	for _, col := range tableDef.Cols {
+		// skip internal columns
+		if _, ok := catalog.InternalColumns[col.Name]; ok {
+			continue
+		}
+
+		s.upsertTypes = append(s.upsertTypes, &types.Type{
+			Oid:   types.T(col.Typ.Id),
+			Width: col.Typ.Width,
+			Scale: col.Typ.Scale,
+		})
+	}
+	for _, name := range tableDef.Pkey.Names {
+		s.pkColNames = append(s.pkColNames, name)
+		col := tableDef.Cols[tableDef.Name2ColIndex[name]]
+		s.deleteTypes = append(s.deleteTypes, &types.Type{
+			Oid:   types.T(col.Typ.Id),
+			Width: col.Typ.Width,
+			Scale: col.Typ.Scale,
+		})
+	}
+
+	// err
+	s.err = atomic.Value{}
+
+	return s, nil
+}
+
+func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
+	logutil.Infof("cdc hnswSyncSinker(%v).Run: start", s.dbTblInfo)
+	defer func() {
+		logutil.Infof("cdc hnswSyncSinker(%v).Run: end", s.dbTblInfo)
+	}()
+
+	for sqlBuf := range s.sqlBufSendCh {
+		// have error, skip
+		if s.err.Load() != nil {
+			continue
+		}
+
+		if bytes.Equal(sqlBuf, dummy) {
+			// dummy sql, do nothing
+		} else if bytes.Equal(sqlBuf, begin) {
+			if err := s.mysql.SendBegin(ctx); err != nil {
+				logutil.Errorf("cdc hnswSyncSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
+				// record error
+				s.err.Store(err)
+			}
+		} else if bytes.Equal(sqlBuf, commit) {
+			if err := s.mysql.SendCommit(ctx); err != nil {
+				logutil.Errorf("cdc hnswSyncSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
+				// record error
+				s.err.Store(err)
+			}
+		} else if bytes.Equal(sqlBuf, rollback) {
+			if err := s.mysql.SendRollback(ctx); err != nil {
+				logutil.Errorf("cdc hnswSyncSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
+				// record error
+				s.err.Store(err)
+			}
+		} else {
+			if err := s.mysql.Send(ctx, ar, sqlBuf, true); err != nil {
+				logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+				// record error
+				s.err.Store(err)
+			}
+		}
+	}
+}
+
+func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
+	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
+	if data.toTs.LE(&watermark) {
+		logutil.Errorf("cdc hnswSyncSinker(%v): unexpected watermark: %s, current watermark: %s",
+			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
+		return
+	}
+	s.cdc.Start = data.fromTs.ToString()
+	s.cdc.End = data.toTs.ToString()
+
+	if data.noMoreData {
+		// complete sql statement
+		err := s.sendSql()
+		if err != nil {
+			s.err.Store(err)
+		}
+		return
+	}
+
+	start := time.Now()
+	defer func() {
+		v2.CdcSinkDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	if data.outputTyp == OutputTypeSnapshot {
+		s.sinkSnapshot(ctx, data.checkpointBat)
+	} else if data.outputTyp == OutputTypeTail {
+		s.sinkTail(ctx, data.insertAtmBatch, data.deleteAtmBatch)
+	} else {
+		s.err.Store(moerr.NewInternalError(ctx, fmt.Sprintf("cdc hnswSyncSinker unexpected output type: %v", data.outputTyp)))
+	}
+}
+
+func (s *hnswSyncSinker[T]) SendBegin() {
+	s.sqlBufSendCh <- begin
+}
+
+func (s *hnswSyncSinker[T]) SendCommit() {
+	s.sqlBufSendCh <- commit
+}
+
+func (s *hnswSyncSinker[T]) SendRollback() {
+	s.sqlBufSendCh <- rollback
+}
+
+func (s *hnswSyncSinker[T]) SendDummy() {
+	s.sqlBufSendCh <- dummy
+}
+
+func (s *hnswSyncSinker[T]) Error() error {
+	if val := s.err.Load(); val == nil {
+		return nil
+	} else {
+		return val.(error)
+	}
+}
+
+func (s *hnswSyncSinker[T]) Reset() {
+	s.cdc.Reset()
+	s.err = atomic.Value{}
+}
+
+func (s *hnswSyncSinker[T]) Close() {
+	// stop Run goroutine
+	close(s.sqlBufSendCh)
+	s.mysql.Close()
+}
+
+func (s *hnswSyncSinker[T]) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
+	for i := 0; i < batchRowCount(bat); i++ {
+
+		// get pk and vector
+		pk := int64(0)
+		v := []T(nil)
+
+		s.cdc.Upsert(pk, v)
+
+		// check full
+		if s.cdc.Full() {
+			// send sql
+			err := s.sendSql()
+			if err != nil {
+				s.err.Store(err)
+				return
+			}
+		}
+	}
+}
+
+// upsertBatch and deleteBatch is sorted by ts
+// for the same ts, delete first, then upsert
+func (s *hnswSyncSinker[T]) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) {
+	var err error
+
+	upsertIter := upsertBatch.GetRowIterator().(*atomicBatchRowIter)
+	deleteIter := deleteBatch.GetRowIterator().(*atomicBatchRowIter)
+	defer func() {
+		upsertIter.Close()
+		deleteIter.Close()
+	}()
+
+	// output sql until one iterator reach the end
+	upsertIterHasNext, deleteIterHasNext := upsertIter.Next(), deleteIter.Next()
+	for upsertIterHasNext && deleteIterHasNext {
+		upsertItem, deleteItem := upsertIter.Item(), deleteIter.Item()
+		// compare ts, ignore pk
+		if upsertItem.Ts.LT(&deleteItem.Ts) {
+			if err = s.sinkUpsert(ctx, upsertIter); err != nil {
+				s.err.Store(err)
+				return
+			}
+			// get next item
+			upsertIterHasNext = upsertIter.Next()
+		} else {
+			if err = s.sinkDelete(ctx, deleteIter); err != nil {
+				s.err.Store(err)
+				return
+			}
+			// get next item
+			deleteIterHasNext = deleteIter.Next()
+		}
+	}
+
+	// output the rest of upsert iterator
+	for upsertIterHasNext {
+		if err = s.sinkUpsert(ctx, upsertIter); err != nil {
+			s.err.Store(err)
+			return
+		}
+		// get next item
+		upsertIterHasNext = upsertIter.Next()
+	}
+
+	// output the rest of delete iterator
+	for deleteIterHasNext {
+		if err = s.sinkDelete(ctx, deleteIter); err != nil {
+			s.err.Store(err)
+			return
+		}
+		// get next item
+		deleteIterHasNext = deleteIter.Next()
+	}
+	s.flushCdc()
+}
+
+func (s *hnswSyncSinker[T]) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
+
+	// get row from the batch
+	pk := int64(0)
+	v := []T(nil)
+	s.cdc.Upsert(pk, v)
+
+	if s.cdc.Full() {
+		// send SQL
+		return s.sendSql()
+	}
+
+	return nil
+}
+
+func (s *hnswSyncSinker[T]) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
+
+	// get row from the batch
+	pk := int64(0)
+	s.cdc.Delete(pk)
+	if s.cdc.Full() {
+		return s.sendSql()
+	}
+
+	return nil
+}
+
+func (s *hnswSyncSinker[T]) flushCdc() (err error) {
+	return s.sendSql()
+}
+
+func (s *hnswSyncSinker[T]) sendSql() error {
+	if s.cdc.Empty() {
+		return nil
+	}
+
+	// generate sql from cdc
+	js, err := s.cdc.ToJson()
+	if err != nil {
+		return err
+	}
+	// pad extra space at the front and send SQL
+	padding := strings.Repeat(" ", sqlBufReserved)
+	sql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', '%s');", padding, "db", "table", js)
+
+	s.sqlBufSendCh <- []byte(sql)
+
+	// reset
+	s.cdc.Reset()
+
+	return nil
+}
