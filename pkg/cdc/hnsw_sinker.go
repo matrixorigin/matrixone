@@ -14,6 +14,9 @@
 
 package cdc
 
+// to retrieve the index table from mo_catalog
+// select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_tables where relname = "tbl" and reldatabase = "db");
+
 import (
 	"bytes"
 	"context"
@@ -246,7 +249,6 @@ var NewHnswSyncSinker = func(
 			pkcol:            pkcol,
 			veccol:           veccol,
 			err:              atomic.Value{},
-			param:            param,
 		}
 		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 		return s, nil
@@ -263,6 +265,7 @@ var NewHnswSyncSinker = func(
 			pkcol:            pkcol,
 			veccol:           veccol,
 			err:              atomic.Value{},
+			param:            param,
 		}
 		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 		return s, nil
