@@ -102,7 +102,9 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			writer.segmentMap = colexec.Get().GetCnSegmentMap()
+			if svc := colexec.Get(); svc != nil {
+				writer.segmentMap = svc.GetCnSegmentMap()
+			}
 			update.ctr.s3Writer = writer
 		}
 
@@ -112,7 +114,9 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		writer.segmentMap = colexec.Get().GetCnSegmentMap()
+		if svc := colexec.Get(); svc != nil {
+			writer.segmentMap = svc.GetCnSegmentMap()
+		}
 		update.MultiUpdateCtx = writer.updateCtxs
 
 		err = writer.free(proc)
