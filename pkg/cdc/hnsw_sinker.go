@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -127,6 +128,8 @@ type hnswSyncSinker[T types.RealNumbers] struct {
 	// only contains pk columns
 	deleteTypes []*types.Type
 	pkColNames  []string
+	pkcol       int
+	veccol      int
 }
 
 var NewHnswSyncSinker = func(
@@ -314,11 +317,12 @@ func (s *hnswSyncSinker[T]) Close() {
 }
 
 func (s *hnswSyncSinker[T]) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
+	pkvec := bat.Vecs[s.pkcol]
+	vecvec := bat.Vecs[s.veccol]
 	for i := 0; i < batchRowCount(bat); i++ {
-
-		// get pk and vector
-		pk := int64(0)
-		v := []T(nil)
+		pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, i)
+		v := vector.GetArrayAt[T](vecvec, i)
+		// TODO: check null
 
 		s.cdc.Upsert(pk, v)
 
@@ -393,8 +397,17 @@ func (s *hnswSyncSinker[T]) sinkTail(ctx context.Context, upsertBatch, deleteBat
 func (s *hnswSyncSinker[T]) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	pk := int64(0)
-	v := []T(nil)
+	row := upsertIter.Item()
+	bat := row.Src
+	if err != nil {
+		return err
+	}
+
+	pkvec := bat.Vecs[s.pkcol]
+	vecvec := bat.Vecs[s.veccol]
+	pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, row.Offset)
+	v := vector.GetArrayAt[T](vecvec, row.Offset)
+
 	s.cdc.Upsert(pk, v)
 
 	if s.cdc.Full() {
@@ -408,7 +421,14 @@ func (s *hnswSyncSinker[T]) sinkUpsert(ctx context.Context, upsertIter *atomicBa
 func (s *hnswSyncSinker[T]) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	pk := int64(0)
+	row := deleteIter.Item()
+	bat := row.Src
+	if err != nil {
+		return err
+	}
+	pkvec := bat.Vecs[s.pkcol]
+	pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, row.Offset)
+
 	s.cdc.Delete(pk)
 	if s.cdc.Full() {
 		return s.sendSql()
