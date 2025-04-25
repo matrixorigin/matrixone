@@ -156,18 +156,31 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
+	var stats *pb.StatsInfo
+	defer func() {
+		if tbl.tableName == "t_epv_log_part_usage" {
+			statsStr := ""
+			if stats != nil {
+				//statsStr = stats.String()
+				statsStr = fmt.Sprintf("[%d, %d]", stats.AccurateObjectNumber, stats.BlockNumber)
+			}
+			logutil.Infof("xxxx txnTable.Stats, tbl:%s, stats:%p, statsStr:%s", tbl.tableName, stats, statsStr)
+		}
+	}()
+
 	//Stats only stats the committed data of the table.
 	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
 	}
-	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+	stats = tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
 		AccId:      tbl.accountId,
 		DatabaseID: tbl.db.databaseId,
 		TableID:    tbl.tableId,
 		TableName:  tbl.tableName,
 		DbName:     tbl.db.databaseName,
-	}, sync), nil
+	}, sync)
+	return stats, nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
