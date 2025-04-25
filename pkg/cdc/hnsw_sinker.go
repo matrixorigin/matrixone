@@ -128,8 +128,8 @@ type hnswSyncSinker[T types.RealNumbers] struct {
 	// only contains pk columns
 	deleteTypes []*types.Type
 	pkColNames  []string
-	pkcol       int
-	veccol      int
+	pkcol       int32
+	veccol      int32
 }
 
 var NewHnswSyncSinker = func(
@@ -158,52 +158,83 @@ var NewHnswSyncSinker = func(
 	}
 
 	// TODO: check the tabledef and indexdef
+	if len(tableDef.Pkey.Names) != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
+	}
 
-	s := &hnswSyncSinker[float32]{
-		mysql:            sink,
-		dbTblInfo:        dbTblInfo,
-		watermarkUpdater: watermarkUpdater,
-		ar:               ar,
-		tableDef:         tableDef,
-		cdc:              NewHnswCdc[float32](),
+	pkColName := tableDef.Pkey.PkeyColName
+
+	hnswindexes := make([]*plan.IndexDef, 0, 2)
+
+	for _, idx := range tableDef.Indexes {
+		if idx.TableExist && catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+			hnswindexes = append(hnswindexes, idx)
+		}
+
+	}
+
+	if len(hnswindexes) != 2 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table without index definition")
+	}
+
+	indexdef := hnswindexes[0]
+
+	if len(indexdef.Parts) != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
+	}
+
+	pkcol := tableDef.Name2ColIndex[pkColName]
+	veccol := tableDef.Name2ColIndex[indexdef.Parts[0]]
+
+	if tableDef.Cols[pkcol].Typ.Id != int32(types.T_int64) {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table primary key is not int64")
+
+	}
+	if tableDef.Cols[veccol].Typ.Id != int32(types.T_array_float32) && tableDef.Cols[veccol].Typ.Id != int32(types.T_array_float64) {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table part is not []float32 or []float64")
+
 	}
 
 	var maxAllowedPacket uint64
 	_ = sink.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
 	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
-	logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 
-	s.sqlBufSendCh = make(chan []byte)
-
-	// TODO: check indexdef and we only need pk and vector index part
-
-	// types
-	for _, col := range tableDef.Cols {
-		// skip internal columns
-		if _, ok := catalog.InternalColumns[col.Name]; ok {
-			continue
+	if tableDef.Cols[veccol].Typ.Id == int32(types.T_array_float32) {
+		s := &hnswSyncSinker[float32]{
+			mysql:            sink,
+			dbTblInfo:        dbTblInfo,
+			watermarkUpdater: watermarkUpdater,
+			ar:               ar,
+			tableDef:         tableDef,
+			cdc:              NewHnswCdc[float32](),
+			sqlBufSendCh:     make(chan []byte),
+			pkcol:            pkcol,
+			veccol:           veccol,
+			err:              atomic.Value{},
 		}
+		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+		return s, nil
 
-		s.upsertTypes = append(s.upsertTypes, &types.Type{
-			Oid:   types.T(col.Typ.Id),
-			Width: col.Typ.Width,
-			Scale: col.Typ.Scale,
-		})
+	} else if tableDef.Cols[veccol].Typ.Id == int32(types.T_array_float64) {
+		s := &hnswSyncSinker[float64]{
+			mysql:            sink,
+			dbTblInfo:        dbTblInfo,
+			watermarkUpdater: watermarkUpdater,
+			ar:               ar,
+			tableDef:         tableDef,
+			cdc:              NewHnswCdc[float64](),
+			sqlBufSendCh:     make(chan []byte),
+			pkcol:            pkcol,
+			veccol:           veccol,
+			err:              atomic.Value{},
+		}
+		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+		return s, nil
+
+	} else {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table part is not []float32 or []float64")
 	}
-	for _, name := range tableDef.Pkey.Names {
-		s.pkColNames = append(s.pkColNames, name)
-		col := tableDef.Cols[tableDef.Name2ColIndex[name]]
-		s.deleteTypes = append(s.deleteTypes, &types.Type{
-			Oid:   types.T(col.Typ.Id),
-			Width: col.Typ.Width,
-			Scale: col.Typ.Scale,
-		})
-	}
 
-	// err
-	s.err = atomic.Value{}
-
-	return s, nil
 }
 
 func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
