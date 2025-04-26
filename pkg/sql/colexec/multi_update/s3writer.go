@@ -578,8 +578,8 @@ func (writer *s3Writer) flushTailAndWriteToOutput(proc *process.Process, analyze
 	for i, blocks := range writer.deleteBlockMap {
 		if len(blocks) == 1 {
 			// normal table
-			for blockID, blockData := range blocks[0] {
-				name := fmt.Sprintf("%s|%d", blockID, blockData.typ)
+			for _, blockData := range blocks[0] {
+				name := objectio.PhysicalAddr_Attr
 				err = writer.addBatchToOutput(mp, actionDelete, i, 0, uint64(blockData.bat.RowCount()), name, blockData.bat)
 			}
 		} else {
