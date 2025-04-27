@@ -220,7 +220,7 @@ func (s *taskService) QueryDaemonTask(ctx context.Context, conds ...Condition) (
 	return s.store.QueryDaemonTask(ctx, conds...)
 }
 
-func (s *taskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+func (s *taskService) AddCDCTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
 	now := time.Now()
 
 	dt := task.DaemonTask{
@@ -232,11 +232,21 @@ func (s *taskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata
 		UpdateAt:   now,
 	}
 
-	return s.store.AddCdcTask(ctx, dt, callback)
+	return s.store.AddCDCTask(ctx, dt, callback)
 }
 
-func (s *taskService) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), conds ...Condition) (int, error) {
-	return s.store.UpdateCdcTask(ctx, targetStatus, callback, conds...)
+func (s *taskService) UpdateCDCTask(
+	ctx context.Context,
+	targetStatus task.TaskStatus,
+	taskCollector func(
+		context.Context,
+		task.TaskStatus,
+		map[CDCTaskKey]struct{},
+		SqlExecutor,
+	) (int, error),
+	conds ...Condition,
+) (int, error) {
+	return s.store.UpdateCDCTask(ctx, targetStatus, taskCollector, conds...)
 }
 
 func (s *taskService) Close() error {
