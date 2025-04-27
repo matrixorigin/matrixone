@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -381,6 +382,7 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 	s.sqlBufs[1] = make([]byte, sqlBufReserved, len(tsDeletePrefix)+8+sqlBufReserved)
 	s.curBufIdx = 0
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -530,6 +532,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	ar := NewCdcActiveRoutine()
 
 	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, CDCDefaultTaskExtra_MaxSQLLen, false)
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -663,6 +666,7 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	s.preSqlBufLen = 128
 	s.sqlBufSendCh = make(chan []byte)
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -923,10 +927,6 @@ func Test_mysqlSinker_Close(t *testing.T) {
 func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectBegin()
-	mock.ExpectCommit()
-	mock.ExpectBegin()
-	mock.ExpectRollback()
 
 	ar := NewCdcActiveRoutine()
 	s := &mysqlSinker{
@@ -938,6 +938,7 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		ar:           ar,
 		sqlBufSendCh: make(chan []byte),
 	}
+	s.ClearError()
 	go s.Run(context.Background(), ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -945,15 +946,46 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		s.Close()
 	}()
 
+	mock.ExpectBegin()
+	mock.ExpectCommit()
 	s.SendBegin()
 	assert.NoError(t, err)
 	s.SendCommit()
 	assert.NoError(t, err)
+	s.SendDummy()
 
+	mock.ExpectBegin()
+	mock.ExpectRollback()
 	s.SendBegin()
 	assert.NoError(t, err)
 	s.SendRollback()
 	assert.NoError(t, err)
+	s.SendDummy()
+
+	// begin error
+	mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin error"))
+	s.SendBegin()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
+
+	// commit error
+	mock.ExpectBegin()
+	mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit error"))
+	s.SendBegin()
+	s.SendCommit()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
+
+	// rollback error
+	mock.ExpectBegin()
+	mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback error"))
+	s.SendBegin()
+	s.SendRollback()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
 }
 
 func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
@@ -961,4 +993,66 @@ func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
 	s.SendBegin()
 	s.SendCommit()
 	s.SendRollback()
+}
+
+func Test_mysqlSinker_ClearError(t *testing.T) {
+	s := &mysqlSinker{}
+	s.SetError(moerr.NewInternalErrorNoCtx("test err"))
+	assert.Error(t, s.Error())
+
+	s.ClearError()
+	assert.Nil(t, s.Error())
+}
+
+func Test_mysqlSinker_Reset(t *testing.T) {
+	s := &mysqlSinker{}
+	s.sqlBufs[0] = make([]byte, sqlBufReserved, 1024)
+	s.sqlBufs[1] = make([]byte, sqlBufReserved, 1024)
+	s.curBufIdx = 0
+	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+	s.Reset()
+}
+
+func Test_Error(t *testing.T) {
+
+	tsInsertPrefix := "/* tsInsertPrefix */REPLACE INTO `db`.`table` VALUES "
+	tsDeletePrefix := "/* tsDeletePrefix */DELETE FROM `db`.`table` WHERE a IN ("
+
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	sink := &mysqlSink{
+		user:          "root",
+		password:      "123456",
+		ip:            "127.0.0.1",
+		port:          3306,
+		retryTimes:    3,
+		retryDuration: 3 * time.Second,
+		conn:          db,
+	}
+	defer sink.Close()
+
+	ar := NewCdcActiveRoutine()
+	s := &mysqlSinker{
+		mysql:          sink,
+		tsInsertPrefix: []byte(tsInsertPrefix),
+		tsDeletePrefix: []byte(tsDeletePrefix),
+		preRowType:     NoOp,
+		ar:             ar,
+		sqlBufSendCh:   make(chan []byte),
+	}
+	defer s.Close()
+	s.SetError(errors.ErrUnsupported)
+	assert.Equal(t, "internal error: convert go error to mo error unsupported operation", s.Error().Error())
+	s.SetError(moerr.NewFileNotFound(context.Background(), "test error"))
+	assert.True(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
+
+	var merr *moerr.Error
+	s.SetError(merr)
+
+	assert.False(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
+
+	s.SetError(nil)
+	assert.Nil(t, s.Error())
 }
