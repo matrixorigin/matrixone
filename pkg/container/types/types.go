@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -256,6 +257,10 @@ type Rowid [RowidSize]byte
 
 // Segmentid
 type Segmentid = Uuid
+
+func (seg *Segmentid) EQ(oth *Segmentid) bool {
+	return bytes.Equal(seg[:], oth[:])
+}
 
 // Objectid
 type Objectid [ObjectidSize]byte

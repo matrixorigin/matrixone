@@ -219,7 +219,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatchs(
 					return nil, err
 				}
 
-				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, segid) {
+				if colexec.IsDeletionOnTxnUnCommit(writer.segmentMap, &segid) {
 					blockMap[blkid].typ = deletion.DeletionOnTxnUnCommit
 				} else {
 					blockMap[blkid].typ = deletion.DeletionOnCommitted

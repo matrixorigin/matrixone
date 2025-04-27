@@ -329,7 +329,7 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 
 		deletion.ctr.deleted_length += 1
 
-		if colexec.IsDeletionOnTxnUnCommit(deletion.SegmentMap, segid) {
+		if colexec.IsDeletionOnTxnUnCommit(deletion.SegmentMap, &segid) {
 			deletion.ctr.blockId_type[blkid] = DeletionOnTxnUnCommit
 		} else {
 			deletion.ctr.blockId_type[blkid] = DeletionOnCommitted

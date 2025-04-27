@@ -949,7 +949,7 @@ func (txn *Transaction) WriteFileLocked(
 			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
 			vector.AppendBytes(bat2.Vecs[0], []byte(blkInfo.MetaLocation().String()), false, txn.proc.Mp())
 
-			colexec.RecordTxnUnCommitSegment(*blkInfo.BlockID.Segment())
+			colexec.RecordTxnUnCommitSegment(blkInfo.BlockID.Segment())
 		}
 
 		// append obj stats, may multiple
@@ -1043,7 +1043,7 @@ func (txn *Transaction) deleteBatch(
 		mp[rowid] = 0
 		rowOffset := rowid.GetRowOffset()
 
-		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, *rowid.BorrowSegmentID()) {
+		if colexec.IsDeletionOnTxnUnCommitPersisted(nil, rowid.BorrowSegmentID()) {
 			txn.deletedBlocks.addDeletedBlocks(&blkid, []int64{int64(rowOffset)})
 			cnRowIdOffsets = append(cnRowIdOffsets, int64(i))
 			continue
