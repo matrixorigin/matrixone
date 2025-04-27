@@ -1,6 +1,5 @@
 FROM ubuntu:22.04 AS builder
 
-
 # Install some utilities used for debugging or by startup script
 RUN apt-get update && apt-get install -y \
     golang-1.23 \
@@ -11,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-ENV PATH ${PATH}:/usr/lib/go-1.23/bin/
+ENV PATH=/usr/lib/go-1.23/bin:${PATH}
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
