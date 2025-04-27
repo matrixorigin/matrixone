@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"sync"
 
@@ -130,14 +131,13 @@ func (d *detector) doCheck(ctx context.Context) {
 			return
 		case txn := <-d.c:
 			w.reset(txn)
-			v := string(txn.waitTxn.TxnID)
-			hasDeadlock, err := d.checkDeadlock(w)
+			hasDeadlock, deadlockTxn, err := d.checkDeadlock(w)
 			if hasDeadlock {
 				if err == nil {
 					err = ErrDeadLockDetected
 				}
-				d.ignoreTxns.Store(v, struct{}{})
-				d.waitTxnAbortFunc(txn.waitTxn, err)
+				d.ignoreTxns.Store(string(deadlockTxn.TxnID), struct{}{})
+				d.waitTxnAbortFunc(deadlockTxn, err)
 			}
 			d.mu.Lock()
 			delete(d.mu.activeCheckTxn, util.UnsafeBytesToString(txn.waitTxn.TxnID))
@@ -146,74 +146,139 @@ func (d *detector) doCheck(ctx context.Context) {
 	}
 }
 
-func (d *detector) checkDeadlock(w *waiters) (bool, error) {
-	waitingTxn := w.getCheckTargetTxn()
+func (d *detector) checkDeadlock(w *waiters) (bool, pb.WaitTxn, error) {
 	for {
-		if w.completed() {
-			return false, nil
-		}
-
 		// find deadlock
 		txn := w.getCheckTargetTxn()
 		added, err := d.waitTxnsFetchFunc(txn, w)
 		if err != nil {
-			logCheckDeadLockFailed(d.logger, txn, waitingTxn, err)
-			return false, err
+			logCheckDeadLockFailed(d.logger, txn, w.root.startTxn(), err)
+			return false, pb.WaitTxn{}, err
 		}
 		if !added {
-			logDeadLockFound(d.logger, waitingTxn, w)
-			return true, nil
+			logDeadLockFound(d.logger, w.deadlockNode().txn, printPathFromRoot(w.deadlockNode()))
+			return true, w.deadlockNode().txn, nil
 		}
-		w.next()
+		if !w.next() {
+			return false, pb.WaitTxn{}, nil
+		}
 	}
 }
 
 type waiters struct {
 	ignoreTxns *sync.Map
-	holdTxnID  []byte
-	waitTxns   []pb.WaitTxn
+	root       *lockNode
+	waitTxns   []*lockNode
 	pos        int
 }
 
 func (w *waiters) getCheckTargetTxn() pb.WaitTxn {
-	return w.waitTxns[w.pos]
+	return w.waitTxns[w.pos].txn
 }
 
-func (w *waiters) next() {
+// there are no next txn, if return false
+func (w *waiters) next() bool {
 	w.pos++
+	return !(w.pos == len(w.waitTxns))
 }
 
 func (w *waiters) String() string {
 	return fmt.Sprintf("%p", w)
 }
 
-func (w *waiters) add(txn pb.WaitTxn) bool {
-	if bytes.Equal(w.holdTxnID, txn.TxnID) {
+func (w *waiters) add(txn pb.WaitTxn, waiterAddress string) bool {
+	txn.WaiterAddress = waiterAddress
+	if w.hasTxn(txn) {
+		node := w.waitTxns[w.pos].addChild(txn)
+		w.waitTxns = append(w.waitTxns, node)
 		return false
 	}
-	for i := 0; i < w.pos; i++ {
-		if bytes.Equal(w.waitTxns[i].TxnID, txn.TxnID) {
-			w.waitTxns = append(w.waitTxns, txn)
-			return false
-		}
-	}
+
 	v := util.UnsafeBytesToString(txn.TxnID)
 	if _, ok := w.ignoreTxns.Load(v); ok {
 		return true
 	}
-	w.waitTxns = append(w.waitTxns, txn)
+
+	node := w.waitTxns[w.pos].addChild(txn)
+	w.waitTxns = append(w.waitTxns, node)
 	return true
 }
 
 func (w *waiters) reset(txn deadlockTxn) {
-	w.pos = 0
-	w.holdTxnID = txn.holdTxnID
+	w.root = newLockNode(pb.WaitTxn{TxnID: txn.holdTxnID})
+	current := w.root.addChild(txn.waitTxn)
 	w.waitTxns = w.waitTxns[:0]
-	w.waitTxns = append(w.waitTxns, txn.waitTxn)
+	w.waitTxns = append(w.waitTxns, w.root)
+	w.waitTxns = append(w.waitTxns, current)
+	w.pos = 1
 }
 
-func (w *waiters) completed() bool {
-	return w.pos == len(w.waitTxns)
+func (w *waiters) deadlockNode() *lockNode {
+	if len(w.waitTxns) > 0 {
+		return w.waitTxns[len(w.waitTxns)-1]
+	}
+	return nil
+}
+
+func (w *waiters) hasTxn(txn pb.WaitTxn) bool {
+	for i := 0; i < w.pos; i++ {
+		if bytes.Equal(w.waitTxns[i].txn.TxnID, txn.TxnID) {
+			return true
+		}
+	}
+	return false
+}
+
+type lockNode struct {
+	txn      pb.WaitTxn
+	children []*lockNode
+	parent   *lockNode
+}
+
+func newLockNode(txn pb.WaitTxn) *lockNode {
+	return &lockNode{
+		txn:      txn,
+		children: make([]*lockNode, 0),
+	}
+}
+
+func (n *lockNode) addChild(txn pb.WaitTxn) *lockNode {
+	child := newLockNode(txn)
+	child.parent = n
+	n.children = append(n.children, child)
+	return child
+}
+
+func (n *lockNode) startTxn() pb.WaitTxn {
+	if len(n.children) > 0 {
+		return n.children[0].txn
+	}
+	return pb.WaitTxn{}
+}
+
+// printPathFromRoot prints the path from root to the given node
+func printPathFromRoot(node *lockNode) string {
+	if node == nil {
+		return "<nil>"
+	}
+
+	// Build path from current node to root
+	path := make([]*lockNode, 0)
+	current := node
+	for current != nil {
+		path = append(path, current)
+		current = current.parent
+	}
+
+	// Build string representation
+	var buf bytes.Buffer
+	for i := len(path) - 1; i >= 0; i-- {
+		if i < len(path)-1 {
+			buf.WriteString(" <= ")
+		}
+		buf.WriteString(hex.EncodeToString(path[i].txn.TxnID))
+	}
+	return buf.String()
 }
 
 type deadlockTxn struct {

@@ -472,7 +472,7 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 		return false, err
 	}
 	for _, v := range waitingList {
-		if !waiters.add(v) {
+		if !waiters.add(v, v.WaiterAddress) {
 			return false, nil
 		}
 	}
@@ -480,9 +480,14 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 }
 
 func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
-	// this wait activeTxn must be hold by current service, because
-	// all transactions found to be deadlocked by the deadlock
-	// detector must be held by the current service
+	if wait.WaiterAddress != "" && wait.WaiterAddress != s.serviceID {
+		ok, err := s.abortRemoteDeadlockTxn(wait)
+		if err != nil || !ok {
+			logAbortRemoteDeadlockFailed(s.logger, wait, err)
+		}
+		return
+	}
+
 	activeTxn := s.activeTxnHolder.getActiveTxn(wait.TxnID, false, "")
 	// the active txn closed
 	if activeTxn == nil {

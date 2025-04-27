@@ -167,7 +167,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					return false
 				})
 		case pb.Method_ValidateService:
-			sid := getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
+			sid = getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
 			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
@@ -183,7 +183,15 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					return false
 				})
 		case pb.Method_GetActiveTxn:
-			sid := getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
+			sid = getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_AbortRemoteDeadlockTxn:
+			sid = getUUIDFromServiceIdentifier(request.AbortRemoteDeadlockTxn.Txn.WaiterAddress)
 			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
