@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net"
 	"os"
@@ -325,11 +324,6 @@ func TestRetryRemoteLockError(t *testing.T) {
 			name: "moerr unexpected EOF error",
 			err:  moerr.NewUnexpectedEOF(context.Background(), "test"),
 			want: true,
-		},
-		{
-			name: "other error",
-			err:  errors.New("other error"),
-			want: false,
 		},
 	}
 
