@@ -459,7 +459,6 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	txn.currentRowId.SetObjOffset(1)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
-	colexec.Get().PutCnSegment(&colexec.TxnWorkspaceSegment, colexec.TxnWorkspaceUnCommitType)
 	return txn
 }
 

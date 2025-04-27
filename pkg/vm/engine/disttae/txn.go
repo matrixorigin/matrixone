@@ -1821,12 +1821,7 @@ func (txn *Transaction) delTransaction() {
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
-	segmentnames = append(segmentnames, colexec.TxnWorkspaceSegment)
 	for blkId := range txn.cnBlkId_Pos {
-		// blkId:
-		// |------|----------|----------|
-		//   uuid    filelen   blkoffset
-		//    16        2          2
 		segmentnames = append(segmentnames, *blkId.Segment())
 	}
 	colexec.Get().DeleteTxnSegmentIds(segmentnames)
