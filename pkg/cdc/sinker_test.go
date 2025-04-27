@@ -56,7 +56,7 @@ func TestNewSinker(t *testing.T) {
 		{
 			args: args{
 				sinkUri: UriInfo{
-					SinkTyp: ConsoleSink,
+					SinkTyp: CDCSinkType_Console,
 				},
 				dbTblInfo:        &DbTableInfo{},
 				watermarkUpdater: nil,
@@ -74,7 +74,7 @@ func TestNewSinker(t *testing.T) {
 		{
 			args: args{
 				sinkUri: UriInfo{
-					SinkTyp: MysqlSink,
+					SinkTyp: CDCSinkType_MySQL,
 				},
 				dbTblInfo: &DbTableInfo{
 					SourceCreateSql: "create table t1 (a int, b int, c int)",
@@ -101,8 +101,8 @@ func TestNewSinker(t *testing.T) {
 		password:      "123456",
 		ip:            "127.0.0.1",
 		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
+		retryTimes:    CDCDefaultRetryTimes,
+		retryDuration: CDCDefaultRetryDuration,
 		conn:          db,
 	}
 
@@ -118,7 +118,7 @@ func TestNewSinker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, DefaultMaxSqlLength, DefaultSendSqlTimeout)
+			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, CDCDefaultTaskExtra_MaxSQLLen, CDCDefaultSendSqlTimeout)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -246,7 +246,7 @@ func TestNewMysqlSink(t *testing.T) {
 				port:          3306,
 				retryTimes:    3,
 				retryDuration: 3 * time.Second,
-				timeout:       DefaultSendSqlTimeout,
+				timeout:       CDCDefaultSendSqlTimeout,
 			},
 			wantErr: assert.NoError,
 		},
@@ -259,7 +259,7 @@ func TestNewMysqlSink(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, DefaultSendSqlTimeout)
+			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, CDCDefaultSendSqlTimeout)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewMysqlSink(%v, %v, %v, %v, %v, %v)", tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -296,8 +296,8 @@ func Test_mysqlSink_Send(t *testing.T) {
 		password:      "123456",
 		ip:            "127.0.0.1",
 		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
+		retryTimes:    CDCDefaultRetryTimes,
+		retryDuration: CDCDefaultRetryDuration,
 		conn:          db,
 	}
 	ar := NewCdcActiveRoutine()
@@ -312,7 +312,7 @@ func Test_mysqlSink_Send(t *testing.T) {
 func TestNewMysqlSinker(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxSqlLength))
+	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(CDCDefaultTaskExtra_MaxSQLLen))
 
 	sink := &mysqlSink{
 		user:          "root",
@@ -341,7 +341,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), DefaultMaxSqlLength, false)
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), CDCDefaultTaskExtra_MaxSQLLen, false)
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -359,8 +359,8 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 		password:      "123456",
 		ip:            "127.0.0.1",
 		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
+		retryTimes:    CDCDefaultRetryTimes,
+		retryDuration: CDCDefaultRetryDuration,
 		conn:          db,
 	}
 
@@ -487,7 +487,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxSqlLength))
+	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(CDCDefaultTaskExtra_MaxSQLLen))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -531,7 +531,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	ar := NewCdcActiveRoutine()
 
-	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, DefaultMaxSqlLength, false)
+	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, CDCDefaultTaskExtra_MaxSQLLen, false)
 	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
@@ -1027,8 +1027,8 @@ func Test_Error(t *testing.T) {
 		password:      "123456",
 		ip:            "127.0.0.1",
 		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
+		retryTimes:    3,
+		retryDuration: 3 * time.Second,
 		conn:          db,
 	}
 	defer sink.Close()

@@ -61,7 +61,7 @@ var NewSinker = func(
 	sendSqlTimeout string,
 ) (Sinker, error) {
 	//TODO: remove console
-	if sinkUri.SinkTyp == ConsoleSink {
+	if sinkUri.SinkTyp == CDCSinkType_Console {
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
@@ -85,7 +85,7 @@ var NewSinker = func(
 	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceTblName, dbTblInfo.SinkTblName)
 	_ = sink.Send(ctx, ar, []byte(padding+createSql), false)
 
-	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength, sinkUri.SinkTyp == MatrixoneSink), nil
+	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength, sinkUri.SinkTyp == CDCSinkType_MO), nil
 }
 
 var _ Sinker = new(consoleSinker)
