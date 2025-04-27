@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -140,6 +142,9 @@ func (t *CDCDao) ShowTasks(
 	ctx context.Context,
 	req *CDCShowTaskRequest,
 ) (err error) {
+
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
 	var (
 		taskId       string
 		taskName     string
