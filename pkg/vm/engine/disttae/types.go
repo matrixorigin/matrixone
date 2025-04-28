@@ -452,11 +452,6 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	}
 
 	txn.readOnly.Store(true)
-	// transaction's local segment for raw batch.
-
-	txn.currentRowId.SetRowOffset(0)
-	txn.currentRowId.SetBlkOffset(0)
-	txn.currentRowId.SetObjOffset(1)
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 	return txn

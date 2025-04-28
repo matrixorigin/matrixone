@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"bytes"
+	"math"
 	"math/rand"
 	"sync"
 	"testing"
@@ -71,16 +72,14 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
 	proc := testutil.NewProc()
-	txn := Transaction{
-		proc: proc,
-	}
-
-	txn.currentRowId.SetRowOffset(0)
-	txn.currentRowId.SetBlkOffset(0)
-	txn.currentRowId.SetObjOffset(1)
-	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 	t.Run("A", func(t *testing.T) {
+		txn := Transaction{
+			proc: proc,
+		}
+
+		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
 		for i := 0; i < 10; i++ {
 			ll := rand.Intn(100) + 1
 			vec, err := txn.batchAllocNewRowIds(ll)
@@ -96,6 +95,12 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 	})
 
 	t.Run("B", func(t *testing.T) {
+		txn := Transaction{
+			proc: proc,
+		}
+
+		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
 		ll := options.DefaultBlockMaxRows*11 + 1
 		mm1 := make(map[types.Blockid]struct{})
 		mm2 := make(map[types.Objectid]struct{})
@@ -108,6 +113,10 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 		for i := range rowIds {
 			if i%options.DefaultBlockMaxRows == 0 {
 				require.Equal(t, 0, int(rowIds[i].GetRowOffset()))
+				if i > 0 {
+					require.Equal(t, int(rowIds[i-1].GetBlockOffset()+1), int(rowIds[i].GetBlockOffset()))
+					require.Equal(t, int(options.DefaultBlockMaxRows-1), int(rowIds[i-1].GetRowOffset()))
+				}
 			}
 
 			mm1[*rowIds[i].BorrowBlockID()] = struct{}{}
@@ -118,5 +127,27 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 		require.Equal(t, 1, len(mm2))
 
 		vec.Free(common.DefaultAllocator)
+	})
+
+	t.Run("C", func(t *testing.T) {
+		txn := Transaction{
+			proc: proc,
+		}
+
+		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
+		ll := math.MaxUint16
+		for i := 0; i < ll; i++ {
+			err := txn.currentRowId.IncrObj()
+			require.NoError(t, err)
+		}
+
+		for i := 0; i < ll; i++ {
+			err := txn.currentRowId.IncrBlk()
+			require.NoError(t, err)
+		}
+
+		_, err := txn.batchAllocNewRowIds(1)
+		require.Error(t, err)
 	})
 }

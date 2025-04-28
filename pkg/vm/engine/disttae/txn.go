@@ -1152,29 +1152,15 @@ func (txn *Transaction) allocateID(ctx context.Context) (uint64, error) {
 // the users need to free the returned vector by themselves.
 func (txn *Transaction) batchAllocNewRowIds(count int) (*vector.Vector, error) {
 
-	newBlk := func() bool {
-		blkOffset := txn.currentRowId.GetBlockOffset()
-		if blkOffset == math.MaxUint16 {
-			objOffset := txn.currentRowId.GetObjectOffset()
-			txn.currentRowId.SetObjOffset(objOffset + 1)
-			blkOffset = 0
-		} else {
-			blkOffset += 1
-		}
-
-		txn.currentRowId.SetBlkOffset(blkOffset)
-		txn.currentRowId.SetRowOffset(0)
-
-		return true
-	}
-
 	var (
 		ptr = 0
 		ret *vector.Vector
 	)
 
 	for ptr < count {
-		newBlk()
+		if err := txn.currentRowId.IncrBlk(); err != nil {
+			return nil, err
+		}
 
 		ll := options.DefaultBlockMaxRows
 		if ptr+ll > count {
