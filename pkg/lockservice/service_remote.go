@@ -30,23 +30,24 @@ import (
 )
 
 var methodVersions = map[pb.Method]int64{
-	pb.Method_Lock:               defines.MORPCVersion1,
-	pb.Method_ForwardLock:        defines.MORPCVersion1,
-	pb.Method_Unlock:             defines.MORPCVersion1,
-	pb.Method_GetTxnLock:         defines.MORPCVersion1,
-	pb.Method_GetWaitingList:     defines.MORPCVersion1,
-	pb.Method_KeepRemoteLock:     defines.MORPCVersion1,
-	pb.Method_GetBind:            defines.MORPCVersion1,
-	pb.Method_KeepLockTableBind:  defines.MORPCVersion1,
-	pb.Method_ForwardUnlock:      defines.MORPCVersion1,
-	pb.Method_SetRestartService:  defines.MORPCVersion2,
-	pb.Method_CanRestartService:  defines.MORPCVersion2,
-	pb.Method_RemainTxnInService: defines.MORPCVersion2,
-	pb.Method_ValidateService:    defines.MORPCVersion2,
-	pb.Method_CannotCommit:       defines.MORPCVersion2,
-	pb.Method_GetActiveTxn:       defines.MORPCVersion2,
-	pb.Method_CheckOrphan:        defines.MORPCVersion2,
-	pb.Method_ResumeInvalidCN:    defines.MORPCVersion2,
+	pb.Method_Lock:                   defines.MORPCVersion1,
+	pb.Method_ForwardLock:            defines.MORPCVersion1,
+	pb.Method_Unlock:                 defines.MORPCVersion1,
+	pb.Method_GetTxnLock:             defines.MORPCVersion1,
+	pb.Method_GetWaitingList:         defines.MORPCVersion1,
+	pb.Method_KeepRemoteLock:         defines.MORPCVersion1,
+	pb.Method_GetBind:                defines.MORPCVersion1,
+	pb.Method_KeepLockTableBind:      defines.MORPCVersion1,
+	pb.Method_ForwardUnlock:          defines.MORPCVersion1,
+	pb.Method_SetRestartService:      defines.MORPCVersion2,
+	pb.Method_CanRestartService:      defines.MORPCVersion2,
+	pb.Method_RemainTxnInService:     defines.MORPCVersion2,
+	pb.Method_ValidateService:        defines.MORPCVersion2,
+	pb.Method_CannotCommit:           defines.MORPCVersion2,
+	pb.Method_GetActiveTxn:           defines.MORPCVersion2,
+	pb.Method_CheckOrphan:            defines.MORPCVersion2,
+	pb.Method_ResumeInvalidCN:        defines.MORPCVersion2,
+	pb.Method_AbortRemoteDeadlockTxn: defines.MORPCVersion2,
 }
 
 func (s *service) initRemote() {
@@ -172,6 +173,8 @@ func (s *service) initRemoteHandler() {
 		s.handleValidateService)
 	s.remote.server.RegisterMethodHandler(pb.Method_GetActiveTxn,
 		s.handleGetActiveTxn)
+	s.remote.server.RegisterMethodHandler(pb.Method_AbortRemoteDeadlockTxn,
+		s.handleAbortRemoteDeadlockTxn)
 }
 
 func (s *service) handleRemoteLock(
@@ -374,6 +377,17 @@ func (s *service) handleRemoteGetWaitingList(
 	}
 }
 
+func (s *service) handleAbortRemoteDeadlockTxn(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	s.abortDeadlockTxn(req.GetAbortRemoteDeadlockTxn().Txn, ErrDeadLockDetected)
+	resp.AbortRemoteDeadlockTxn.OK = true
+	writeResponse(s.logger, cancel, resp, nil, cs)
+}
+
 func (s *service) handleKeepRemoteLock(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -469,6 +483,26 @@ func (s *service) getTxnWaitingListOnRemote(
 	}
 	defer releaseResponse(resp)
 	v := resp.GetWaitingList.WaitingList
+	return v, nil
+}
+
+func (s *service) abortRemoteDeadlockTxn(
+	txn pb.WaitTxn) (bool, error) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), defaultRPCTimeout, moerr.CauseAbortRemoteDeadlockTxn)
+	defer cancel()
+
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_AbortRemoteDeadlockTxn
+	req.AbortRemoteDeadlockTxn.Txn = txn
+
+	resp, err := s.remote.client.Send(ctx, req)
+	if err != nil {
+		return false, moerr.AttachCause(ctx, err)
+	}
+	defer releaseResponse(resp)
+	v := resp.AbortRemoteDeadlockTxn.OK
 	return v, nil
 }
 
@@ -624,7 +658,8 @@ func (s *service) handleFetchWhoWaitingMe(ctx context.Context) {
 			txn.fetchWhoWaitingMe(
 				s.serviceID,
 				w.txnID,
-				func(wt pb.WaitTxn) bool {
+				func(wt pb.WaitTxn, waiterAddress string) bool {
+					wt.WaiterAddress = waiterAddress
 					w.resp.GetWaitingList.WaitingList = append(w.resp.GetWaitingList.WaitingList, wt)
 					return true
 				},
