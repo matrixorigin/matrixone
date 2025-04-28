@@ -124,12 +124,15 @@ func (txn *Transaction) WriteBatch(
 
 		ll := bat.RowCount()
 		rowIdVec, err := txn.batchAllocNewRowIds(ll)
+		defer func() {
+			if rowIdVec != nil {
+				rowIdVec.Free(txn.proc.Mp())
+			}
+		}()
+
 		if err != nil {
 			return nil, err
 		}
-		defer func() {
-			rowIdVec.Free(txn.proc.Mp())
-		}()
 
 		rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVec)
 
@@ -1275,6 +1278,9 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				// all the rowIds in the batch share one blkId.
 				rowIdVector, err := txn.batchAllocNewRowIds(a.bat.RowCount())
 				if err != nil {
+					if rowIdVector != nil {
+						rowIdVector.Free(txn.proc.Mp())
+					}
 					return err
 				}
 
