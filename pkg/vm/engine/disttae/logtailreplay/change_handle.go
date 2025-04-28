@@ -80,8 +80,8 @@ const (
 )
 
 const (
-	SmallBatchThreshold = 8192
-	CoarseMaxRow        = 8192
+	SmallBatchThreshold = objectio.BlockMaxRows
+	CoarseMaxRow        = objectio.BlockMaxRows
 
 	LoadParallism = 20
 	LogThreshold  = time.Minute

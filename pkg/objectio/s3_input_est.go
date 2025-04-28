@@ -15,7 +15,7 @@
 package objectio
 
 // Each 8192 rows of data corresponds to an S3 input unit
-const rowsPerS3Input int64 = 8192
+const rowsPerS3Input = BlockMaxRows
 
 // Estimating S3input using the number of written lines, Maintained by @LeftHandCold
 func EstimateS3Input(writtenRows int64) float64 {
