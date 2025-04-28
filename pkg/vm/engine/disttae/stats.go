@@ -245,6 +245,9 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 
 	info, ok := gs.mu.statsInfoMap[key]
 	if ok && info != nil {
+		if key.TableName == "t_epv_log_part_usage" {
+			logutil.Infof("xxxx Get, tbl:%s, stats:%p", key.TableName, info)
+		}
 		return info
 	}
 
@@ -538,11 +541,12 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		gs.broadcastStats(wrapKey.Key)
 	} else if _, ok := gs.mu.statsInfoMap[wrapKey.Key]; !ok {
 		gs.mu.statsInfoMap[wrapKey.Key] = nil
-
-		if wrapKey.Key.TableName == "t_epv_log_part_usage" {
-			logutil.Infof("xxxx updateTableStats, tbl:%s, return stats is nil" )
-		}
 	}
+
+	if wrapKey.Key.TableName == "t_epv_log_part_usage" {
+		logutil.Infof("xxxx updateTableStats, tbl:%s, updated:%v, ps:%p, stats:%p", wrapKey.Key.TableName, updated, ps, stats)
+	}
+
 
 	// Notify all the waiters to read the new stats info.
 	gs.mu.cond.Broadcast()
