@@ -485,6 +485,9 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	statser := statistic.StatsInfoFromContext(wrapKey.Ctx)
 	crs := new(perfcounter.CounterSet)
 	if !gs.shouldUpdate(wrapKey.Key) {
+		if wrapKey.Key.TableName == "t_epv_log_part_usage" {
+			logutil.Infof("xxxx updateTableStats should not update, tbl:%s", wrapKey.Key.TableName)
+		}
 		return
 	}
 
@@ -511,8 +514,8 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		wrapKey.Key.DatabaseID,
 		wrapKey.Key.DbName)
 	if err != nil {
-		logutil.Warnf(
-			"updateTableStats:failed to subsrcribe table[%d-%s], error:%s",
+		logutil.Infof(
+			"xxxx updateTableStats:failed to subsrcribe table[%d-%s], error:%s",
 			wrapKey.Key.TableID,
 			wrapKey.Key.TableName,
 			err)
