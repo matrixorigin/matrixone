@@ -18,13 +18,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/panjf2000/ants/v2"
 	"math"
 	"runtime"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/panjf2000/ants/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1187,7 +1188,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			continue
 		}
 
-		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
+		if e.bat.RowCount() >= objectio.BlockMaxRows/2 {
 			continue
 		}
 
@@ -1201,7 +1202,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	foo := func(idxes []int64) (err error) {
 		for i := 0; i < len(idxes); i++ {
 			a := &txn.writes[idxes[i]]
-			if a.bat == nil || a.bat.RowCount() == batch.DefaultBatchMaxRow {
+			if a.bat == nil || a.bat.RowCount() == objectio.BlockMaxRows {
 				continue
 			}
 
@@ -1209,7 +1210,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			for j := i + 1; j < len(idxes); j++ {
 				b := &txn.writes[idxes[j]]
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
-					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
+					a.bat.RowCount()+b.bat.RowCount() <= objectio.BlockMaxRows {
 					merged = true
 					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
 						return err
@@ -1219,7 +1220,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					b.bat = nil
 				}
 
-				if a.bat.RowCount() == batch.DefaultBatchMaxRow {
+				if a.bat.RowCount() == objectio.BlockMaxRows {
 					break
 				}
 			}
