@@ -687,6 +687,20 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 		nil)
 
 	defer func() {
+		if tbl.tableName == "t_epv_log_part_usage" {
+			logutil.Info(
+				"xxxx txnTable.doRanges",
+				zap.String("name", tbl.tableDef.Name),
+				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+				zap.Uint64("tbl-id", tbl.tableId),
+				zap.String("txn", tbl.db.op.Txn().DebugString()),
+				zap.Int("blocks", blocks.Len()),
+				zap.String("ps", fmt.Sprintf("%p", part)),
+				zap.Error(err),
+			)
+		}
+	}()
+
 		cost := time.Since(start)
 
 		var (
