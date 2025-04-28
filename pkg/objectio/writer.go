@@ -72,6 +72,7 @@ const (
 	WriterGC
 	WriterETL
 	WriterTmp
+	WriterCopyTable
 )
 
 // make it mutable in ut
@@ -98,6 +99,8 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		name = BuildETLName()
 	case WriterTmp:
 		name = BuildTmpName()
+	case WriterCopyTable:
+		name = BuildCopyTableName()
 	}
 	writer := &objectWriterV1{
 		seqnums:       NewSeqnums(nil),
