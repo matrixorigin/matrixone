@@ -164,7 +164,7 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 				//statsStr = stats.String()
 				statsStr = fmt.Sprintf("[%d, %d]", stats.AccurateObjectNumber, stats.BlockNumber)
 			}
-			logutil.Infof("xxxx txnTable.Stats, tbl:%s, stats:%p, statsStr:%s", tbl.tableName, stats, statsStr)
+			logutil.Infof("xxxx txnTable.Stats, tbl:%s, txn:%s, stats:%p, statsStr:%s", tbl.tableName, tbl.db.op.Txn().DebugString(), stats, statsStr)
 		}
 	}()
 
