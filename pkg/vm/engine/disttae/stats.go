@@ -547,7 +547,6 @@ func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 		logutil.Infof("xxxx updateTableStats, tbl:%s, updated:%v, ps:%p, stats:%p", wrapKey.Key.TableName, updated, ps, stats)
 	}
 
-
 	// Notify all the waiters to read the new stats info.
 	gs.mu.cond.Broadcast()
 }

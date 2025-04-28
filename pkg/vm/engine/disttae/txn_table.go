@@ -699,7 +699,6 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.Error(err),
 			)
 		}
-	}()
 
 		cost := time.Since(start)
 
