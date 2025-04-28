@@ -405,6 +405,9 @@ const (
 	// fault inject function
 	FAULT_INJECT = 340
 
+	// hnsw function
+	HNSW_CDC_UPDATE = 341
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER = 341
@@ -737,4 +740,7 @@ var functionIdRegister = map[string]int32{
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
+
+	// hnsw function
+	"hnsw_cdc_update": HNSW_CDC_UPDATE,
 }

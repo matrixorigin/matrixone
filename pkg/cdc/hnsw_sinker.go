@@ -37,25 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-const (
-	CDC_INSERT = "I"
-	CDC_UPSERT = "U"
-	CDC_DELETE = "D"
-)
-
 var _ Sinker = &hnswSyncSinker[float32]{}
-
-type HnswCdc[T types.RealNumbers] struct {
-	Start string            `json:"start"`
-	End   string            `json:"end"`
-	Data  []HnswCdcEntry[T] `json:"cdc"`
-}
-
-type HnswCdcEntry[T types.RealNumbers] struct {
-	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
-	PKey int64  `json:"pk"`
-	Vec  []T    `json:"v,omitempty"`
-}
 
 type HnswCdcParam struct {
 	DbName   string                `json:"db"`
@@ -65,69 +47,13 @@ type HnswCdcParam struct {
 	Params   vectorindex.HnswParam `json:"params"`
 }
 
-func NewHnswCdc[T types.RealNumbers]() *HnswCdc[T] {
-	return &HnswCdc[T]{
-		Data: make([]HnswCdcEntry[T], 0, 100),
-	}
-}
-
-func (h *HnswCdc[T]) Reset() {
-	h.Data = h.Data[:0]
-}
-
-func (h *HnswCdc[T]) Empty() bool {
-	return len(h.Data) == 0
-}
-
-func (h *HnswCdc[T]) Full() bool {
-	return len(h.Data) >= cap(h.Data)
-}
-
-func (h *HnswCdc[T]) Insert(key int64, v []T) {
-	e := HnswCdcEntry[T]{
-		Type: CDC_INSERT,
-		PKey: key,
-		Vec:  v,
-	}
-
-	h.Data = append(h.Data, e)
-}
-
-func (h *HnswCdc[T]) Upsert(key int64, v []T) {
-	e := HnswCdcEntry[T]{
-		Type: CDC_UPSERT,
-		PKey: key,
-		Vec:  v,
-	}
-
-	h.Data = append(h.Data, e)
-}
-
-func (h *HnswCdc[T]) Delete(key int64) {
-	e := HnswCdcEntry[T]{
-		Type: CDC_DELETE,
-		PKey: key,
-	}
-
-	h.Data = append(h.Data, e)
-}
-
-func (h *HnswCdc[T]) ToJson() (string, error) {
-
-	b, err := json.Marshal(h)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
 type hnswSyncSinker[T types.RealNumbers] struct {
 	mysql            Sink
 	dbTblInfo        *DbTableInfo
 	watermarkUpdater IWatermarkUpdater
 	ar               *ActiveRoutine
 	tableDef         *plan.TableDef
-	cdc              *HnswCdc[T]
+	cdc              *vectorindex.HnswCdc[T]
 	param            HnswCdcParam
 	err              atomic.Value
 
@@ -244,7 +170,7 @@ var NewHnswSyncSinker = func(
 			watermarkUpdater: watermarkUpdater,
 			ar:               ar,
 			tableDef:         tableDef,
-			cdc:              NewHnswCdc[float32](),
+			cdc:              vectorindex.NewHnswCdc[float32](),
 			sqlBufSendCh:     make(chan []byte),
 			pkcol:            pkcol,
 			veccol:           veccol,
@@ -260,7 +186,7 @@ var NewHnswSyncSinker = func(
 			watermarkUpdater: watermarkUpdater,
 			ar:               ar,
 			tableDef:         tableDef,
-			cdc:              NewHnswCdc[float64](),
+			cdc:              vectorindex.NewHnswCdc[float64](),
 			sqlBufSendCh:     make(chan []byte),
 			pkcol:            pkcol,
 			veccol:           veccol,
