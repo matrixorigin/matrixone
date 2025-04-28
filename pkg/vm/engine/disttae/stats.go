@@ -374,6 +374,8 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 		AccId:      tail.Table.AccId,
 		DatabaseID: tail.Table.DbId,
 		TableID:    tail.Table.TbId,
+		TableName:  tail.Table.GetTbName(),
+		DbName:     tail.Table.GetDbName(),
 	}
 
 	wrapkey := pb.StatsInfoKeyWithContext{
