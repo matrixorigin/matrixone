@@ -377,6 +377,8 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 		AccId:      tail.Table.AccId,
 		DatabaseID: tail.Table.DbId,
 		TableID:    tail.Table.TbId,
+		TableName:  tail.Table.GetTbName(),
+		DbName:     tail.Table.GetDbName(),
 	}
 
 	wrapkey := pb.StatsInfoKeyWithContext{
@@ -484,11 +486,11 @@ func (gs *GlobalStats) broadcastStats(key pb.StatsInfoKey) {
 func (gs *GlobalStats) updateTableStats(wrapKey pb.StatsInfoKeyWithContext) {
 	statser := statistic.StatsInfoFromContext(wrapKey.Ctx)
 	crs := new(perfcounter.CounterSet)
+	if wrapKey.Key.TableName == "t_epv_log_part_usage" {
+			logutil.Infof("xxxx updateTableStats start to update, tbl:%s", wrapKey.Key.TableName)
+	}
 	if !gs.shouldUpdate(wrapKey.Key) {
-		if wrapKey.Key.TableName == "t_epv_log_part_usage" {
-			logutil.Infof("xxxx updateTableStats should not update, tbl:%s", wrapKey.Key.TableName)
-		}
-		return
+				return
 	}
 
 	// updated is used to mark that the stats info is updated.
