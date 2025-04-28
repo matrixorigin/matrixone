@@ -74,6 +74,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
+	builder.isCdc = stmt.IsCdc
 	if stmt.IsRestore {
 		builder.isRestore = true
 		if stmt.IsRestoreByTs {
@@ -738,6 +739,7 @@ func getRewriteToReplaceStmt(tableDef *TableDef, stmt *tree.Insert, info *dmlSel
 		PartitionNames: stmt.PartitionNames,
 		Columns:        stmt.Columns,
 		Rows:           stmt.Rows,
+		IsCdc:          stmt.IsCdc,
 	}
 	return replaceStmt
 }
