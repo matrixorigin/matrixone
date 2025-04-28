@@ -16,11 +16,12 @@ package colexec
 
 import (
 	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 
@@ -117,7 +118,7 @@ type CnSegmentMap struct {
 }
 
 const (
-	DefaultBatchSize = 8192
+	DefaultBatchSize = objectio.BlockMaxRows
 )
 
 func GetSharedFSFromProc(proc *process.Process) (fs fileservice.FileService, err error) {
