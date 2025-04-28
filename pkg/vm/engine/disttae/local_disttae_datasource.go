@@ -1106,21 +1106,24 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 		deletedOffsets []int64
 	)
 
-	defer func() {
-		if deletedOffsets != nil {
-			common.DefaultAllocator.PutSels(deletedOffsets)
-		}
-	}()
+	if len(leftRows) <= 100 {
+		// stack allocation
+		deletedOffsets = make([]int64, 0, 100)
+	} else {
+		deletedOffsets = common.DefaultAllocator.GetSels()
+		defer func() {
+			if deletedOffsets != nil {
+				common.DefaultAllocator.PutSels(deletedOffsets)
+			}
+		}()
+	}
 
 	for delIter.Next() {
 		rowid := delIter.Entry().RowID
 		o := rowid.GetRowOffset()
-		if deletedOffsets == nil {
-			deletedOffsets = common.DefaultAllocator.GetSels()
-		}
 
 		deletedOffsets = append(deletedOffsets, int64(o))
-		if len(deletedOffsets) >= len(leftRows) {
+		if len(deletedOffsets) >= cap(deletedOffsets) {
 			readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deletedOffsets)
 			deletedOffsets = deletedOffsets[:0]
 		}

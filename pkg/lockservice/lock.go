@@ -177,7 +177,7 @@ func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
 	}()
 
 	if canRemove {
-		// close all ref in waiter queue
+		// close all ref in waiter waitTxns
 		l.waiters.iter(func(w *waiter) bool {
 			w.close("Lock closeWaiter", logger)
 			return true
