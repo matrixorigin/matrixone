@@ -258,8 +258,8 @@ type Rowid [RowidSize]byte
 // Segmentid
 type Segmentid = Uuid
 
-func (seg *Segmentid) EQ(oth *Segmentid) bool {
-	return bytes.Equal(seg[:], oth[:])
+func (d *Segmentid) EQ(oth *Segmentid) bool {
+	return bytes.Equal(d[:], oth[:])
 }
 
 // Objectid
