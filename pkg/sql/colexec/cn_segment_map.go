@@ -27,7 +27,12 @@ const (
 
 var (
 	// TxnWorkspaceSegment includes a dedicated header which indicates it is a workspace segment.
-	TxnWorkspaceSegment = types.Segmentid{0xFF}
+	TxnWorkspaceSegment = types.Segmentid([16]byte{
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0xFF,
+	})
 )
 
 type CnSegmentMap struct {

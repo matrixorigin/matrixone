@@ -1170,13 +1170,21 @@ func (txn *Transaction) batchAllocNewRowIds(count int) (*vector.Vector, error) {
 			ll = count - ptr
 		}
 
-		if vec, err := objectio.ConstructRowidColumn(txn.currentRowId.BorrowBlockID(),
-			0, uint32(ll), txn.proc.Mp()); err != nil {
+		if vec, err := objectio.ConstructRowidColumn(
+			txn.currentRowId.BorrowBlockID(),
+			0,
+			uint32(ll),
+			txn.proc.Mp()); err != nil {
 			return nil, err
 		} else if ret == nil {
 			ret = vec
 		} else {
-			if err = ret.UnionBatch(vec, 0, vec.Length(), nil, txn.proc.Mp()); err != nil {
+			if err = ret.UnionBatch(
+				vec,
+				0,
+				vec.Length(),
+				nil,
+				txn.proc.Mp()); err != nil {
 				vec.Free(txn.proc.Mp())
 				return nil, err
 			}
