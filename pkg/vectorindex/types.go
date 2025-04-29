@@ -167,6 +167,14 @@ type HnswCdcEntry[T types.RealNumbers] struct {
 	Vec  []T    `json:"v,omitempty"`
 }
 
+type HnswCdcParam struct {
+	DbName   string    `json:"db"`
+	Table    string    `json:"table"`
+	MetaTbl  string    `json:"meta"`
+	IndexTbl string    `json:"index"`
+	Params   HnswParam `json:"params"`
+}
+
 // nthread == 0, result will return NumCPU - 1
 func GetConcurrency(nthread int64) int64 {
 	if nthread > 0 {
