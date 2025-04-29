@@ -22,6 +22,7 @@ package function
 */
 import "C"
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -85,7 +86,7 @@ func c_xcall(f *XCallFunction, mp *mpool.MPool, length int, result *vector.Vecto
 		if cret != 0 {
 			errLen := uint8(f.ErrStr[0])
 			errStr := string(f.ErrStr[1 : 1+errLen])
-			return moerr.NewInternalErrorNoCtx("xcall xfunc failed, error code %d, %s", cret, errStr)
+			return moerr.NewInternalErrorNoCtx(fmt.Sprintf("xcall xfunc failed, error code %d, %s", cret, errStr))
 		}
 		return nil
 	} else {

@@ -116,7 +116,6 @@ ifeq ($(MO_CL_CUDA),1)
 endif
 
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
-CGO_LDFLAGS="-L$(ROOT_DIR)/cgo -lm -lmo $(CUDA_LDFLAGS)"
 GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 TAGS :=
 

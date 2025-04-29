@@ -367,7 +367,6 @@ const (
 	LASTVAL = 313
 
 	// Array Function
-<<<<<<< HEAD
 	SUMMATION         = 314
 	L1_NORM           = 315 // L1_NORMALIZATION
 	L2_NORM           = 316 // L2 NORMALIZATION
