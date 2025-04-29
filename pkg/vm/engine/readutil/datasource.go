@@ -339,10 +339,18 @@ func FastApplyDeletesByRowIds(
 			wayB()
 		}
 	} else if deletesMask != nil {
-		for i := 0; i < len(deletedRowIds); i++ {
-			bid, o := deletedRowIds[i].Decode()
-			if bid.EQ(checkBid) {
+		if IsDeletedRowIdsSorted {
+			s, e := ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
+			for i := s; i < e; i++ {
+				_, o := deletedRowIds[i].Decode()
 				deletesMask.Add(uint64(o))
+			}
+		} else {
+			for i := 0; i < len(deletedRowIds); i++ {
+				bid, o := deletedRowIds[i].Decode()
+				if bid.EQ(checkBid) {
+					deletesMask.Add(uint64(o))
+				}
 			}
 		}
 	}
