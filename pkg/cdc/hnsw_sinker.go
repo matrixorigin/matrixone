@@ -39,14 +39,6 @@ import (
 
 var _ Sinker = &hnswSyncSinker[float32]{}
 
-type HnswCdcParam struct {
-	DbName   string                `json:"db"`
-	Table    string                `json:"table"`
-	MetaTbl  string                `json:"meta"`
-	IndexTbl string                `json:"index"`
-	Params   vectorindex.HnswParam `json:"params"`
-}
-
 type hnswSyncSinker[T types.RealNumbers] struct {
 	mysql            Sink
 	dbTblInfo        *DbTableInfo
@@ -54,7 +46,7 @@ type hnswSyncSinker[T types.RealNumbers] struct {
 	ar               *ActiveRoutine
 	tableDef         *plan.TableDef
 	cdc              *vectorindex.HnswCdc[T]
-	param            HnswCdcParam
+	param            vectorindex.HnswCdcParam
 	err              atomic.Value
 
 	sqlBufSendCh chan []byte
@@ -150,7 +142,7 @@ var NewHnswSyncSinker = func(
 		}
 	}
 
-	param := HnswCdcParam{
+	param := vectorindex.HnswCdcParam{
 		MetaTbl:  meta,
 		IndexTbl: storage,
 		DbName:   dbTblInfo.SinkDbName,
