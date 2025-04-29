@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
@@ -198,12 +200,28 @@ func (r *Rowid) SetRowOffset(offset uint32) {
 	copy(r[BlockidSize:], EncodeUint32(&offset))
 }
 
+func (r *Rowid) SetBlkOffset(offset uint16) {
+	copy(r[ObjectidSize:], EncodeUint16(&offset))
+}
+
+func (r *Rowid) SetObjOffset(offset uint16) {
+	copy(r[SegmentidSize:], EncodeUint16(&offset))
+}
+
+func (r *Rowid) SetSegment(seg Segmentid) {
+	copy(r[:SegmentidSize], seg[:])
+}
+
 func (r *Rowid) GetRowOffset() uint32 {
 	return DecodeUint32(r[BlockidSize:])
 }
 
 func (r *Rowid) GetBlockOffset() uint16 {
 	return DecodeUint16(r[ObjectBytesSize:BlockidSize])
+}
+
+func (r *Rowid) GetObjectOffset() uint16 {
+	return DecodeUint16(r[SegmentidSize:ObjectBytesSize])
 }
 
 func (r *Rowid) GetObjectString() string {
@@ -222,6 +240,38 @@ func (r *Rowid) ShortStringEx() string {
 	b := (*Blockid)(unsafe.Pointer(&r[0]))
 	s := DecodeUint32(r[BlockidSize:])
 	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
+}
+
+func (r *Rowid) IncrBlk() error {
+	blkOffset := r.GetBlockOffset()
+	if blkOffset == math.MaxUint16 {
+		if err := r.IncrObj(); err != nil {
+			return err
+		}
+		blkOffset = 0
+	} else {
+		blkOffset++
+	}
+
+	r.SetBlkOffset(blkOffset)
+	r.SetRowOffset(0)
+
+	return nil
+}
+
+func (r *Rowid) IncrObj() error {
+	objOffset := r.GetObjectOffset()
+	if objOffset == math.MaxUint16 {
+		// we expect that the segment id of a rowId is immutable, so incr the segment
+		// cannot fix the object overflow.
+		return moerr.NewInternalErrorNoCtxf("rowId object offset overflow, curr rowId: %s", r.String())
+	}
+
+	objOffset++
+	r.SetObjOffset(objOffset)
+	r.SetBlkOffset(0)
+	r.SetRowOffset(0)
+	return nil
 }
 
 func (b *Blockid) EQ(than *Blockid) bool {
