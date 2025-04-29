@@ -66,3 +66,6 @@ select * from t3;
 update t3 set b = 'e5c8314e-2ea7-11ed-8ec0-000c29847904' where a = 50;
 select * from t3 where a = 50;
 drop table t3;
+create table t4(a int, b uuid);
+insert into t4 values(1, uuid()),(2, uuid());
+select a from t4 order by b, a;
