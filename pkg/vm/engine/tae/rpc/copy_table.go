@@ -23,15 +23,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+
+	"go.uber.org/zap"
 )
 
 const (
-	CopyTableObjectListName = "object_list"
+	CopyTableObjectList = "object_list"
+	CopyTableDatabase   = "database"
+	CopyTableSchema     = "schema"
+	CopyTableTable      = "table"
 )
 
 const (
@@ -102,11 +110,37 @@ func NewCopyTableArg(
 }
 
 func (c *CopyTableArg) Run() (err error) {
+	logutil.Info(
+		"COPY-TABLE-START",
+		zap.String(
+			"table",
+			fmt.Sprintf(
+				"%d-%v, %d-%s",
+				c.table.GetDB().ID,
+				c.table.GetDB().GetFullName(),
+				c.table.ID,
+				c.table.GetFullName(),
+			),
+		),
+		zap.String("dir", c.dir),
+		zap.String("ts", c.txn.GetStartTS().ToString()),
+	)
+	defer c.objectListBatch.Clean(c.mp)
 	txn, err := c.inspectContext.db.StartTxn(nil)
 	if err != nil {
 		return err
 	}
 	defer txn.Commit(c.ctx)
+
+	if err := c.flushTableSchema(); err != nil {
+		return err
+	}
+	if err := c.flushTableEntry(); err != nil {
+		return err
+	}
+	if err := c.flushDatabaseEntry(); err != nil {
+		return err
+	}
 
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = c.onObject
@@ -114,10 +148,95 @@ func (c *CopyTableArg) Run() (err error) {
 	if err = c.table.RecurLoop(p); err != nil {
 		return err
 	}
-	if err := c.flush(CopyTableObjectListName, c.objectListBatch); err != nil {
+	if err := c.flush(CopyTableObjectList, c.objectListBatch); err != nil {
+		return err
+	}
+	logutil.Info(
+		"COPY-TABLE-END",
+		zap.String(
+			"table",
+			fmt.Sprintf(
+				"%d-%v, %d-%s",
+				c.table.GetDB().ID,
+				c.table.GetDB().GetFullName(),
+				c.table.ID,
+				c.table.GetFullName(),
+			),
+		),
+		zap.String("dir", c.dir),
+		zap.String("ts", c.txn.GetStartTS().ToString()),
+		zap.Int("object_count", c.objectListBatch.RowCount()),
+	)
+	return nil
+}
+
+func (c *CopyTableArg) flushTableSchema() (err error) {
+	bat := containers.NewBatch()
+	typs := catalog.SystemColumnSchema.AllTypes()
+	attrs := catalog.SystemColumnSchema.AllNames()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(attr, containers.MakeVector(typs[i], common.CheckpointAllocator))
+	}
+	for _, def := range catalog.SystemColumnSchema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		txnimpl.FillTableRow(c.table, catalog.SystemColumnSchema, def.Name, bat.Vecs[def.Idx])
+	}
+	cnBatch := containers.ToCNBatch(bat)
+	if err := c.flush(CopyTableSchema, cnBatch); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (c *CopyTableArg) flushTableEntry() (err error) {
+	bat := containers.NewBatch()
+	typs := catalog.SystemTableSchema.AllTypes()
+	attrs := catalog.SystemTableSchema.AllNames()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(attr, containers.MakeVector(typs[i], common.CheckpointAllocator))
+	}
+	for _, def := range catalog.SystemTableSchema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		txnimpl.FillTableRow(c.table, catalog.SystemTableSchema, def.Name, bat.Vecs[def.Idx])
+	}
+	cnBatch := containers.ToCNBatch(bat)
+	if err := c.flush(CopyTableTable, cnBatch); err != nil {
+		return err
+	}
+	return
+}
+
+func (c *CopyTableArg) flushDatabaseEntry() (err error) {
+	bat := containers.NewBatch()
+	typs := catalog.SystemDBSchema.AllTypes()
+	attrs := catalog.SystemDBSchema.AllNames()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(attr, containers.MakeVector(typs[i], common.CheckpointAllocator))
+	}
+	for _, def := range catalog.SystemDBSchema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		txnimpl.FillDBRow(c.table.GetDB(), def.Name, bat.Vecs[def.Idx])
+	}
+	cnBatch := containers.ToCNBatch(bat)
+	if err := c.flush(CopyTableDatabase, cnBatch); err != nil {
+		return err
+	}
+	return
 }
 
 func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
@@ -150,6 +269,22 @@ func (c *CopyTableArg) flush(name string, bat *batch.Batch) (err error) {
 	if err != nil {
 		return
 	}
+	logutil.Info(
+		"COPY-TABLE-FLUSH",
+		zap.String(
+			"table",
+			fmt.Sprintf(
+				"%d-%v, %d-%s",
+				c.table.GetDB().ID,
+				c.table.GetDB().GetFullName(),
+				c.table.ID,
+				c.table.GetFullName(),
+			),
+		),
+		zap.String("dir", c.dir),
+		zap.String("ts", c.txn.GetStartTS().ToString()),
+		zap.String("name", name),
+	)
 	return
 }
 
@@ -185,6 +320,7 @@ func (c *CopyTableArg) collectObjectList(e *catalog.ObjectEntry, isPersisted boo
 	); err != nil {
 		return err
 	}
+	c.objectListBatch.SetRowCount(c.objectListBatch.Vecs[0].Length())
 	return nil
 }
 

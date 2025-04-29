@@ -259,6 +259,33 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
 		return int32(vec.Length()), nil
 	}
 }
+func (obj *aobject) ApplyDebugBatch(bat *containers.Batch) (err error) {
+	node := obj.PinNode()
+	defer node.Unref()
+	if node.IsPersisted(){
+		return
+	}
+	mnode := node.MustMNode()
+
+	commitTSVec := bat.Vecs[len(bat.Vecs)-1]
+	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	prevTS := commitTSs[0]
+	anodeStart := 0
+	for i, ts := range commitTSs {
+		if !ts.EQ(&prevTS) {
+			obj.appendMVCC.AddAppendNodeWithTSLocked(uint32(anodeStart), uint32(i), prevTS)
+			anodeStart = i
+			prevTS = ts
+		}
+	}
+	tmpAttrs := bat.Attrs
+	bat.Attrs = tmpAttrs[:len(tmpAttrs)-1]
+	if _, err = mnode.ApplyAppendLocked(bat); err != nil {
+		return
+	}
+	bat.Attrs = tmpAttrs
+	return
+}
 func (obj *aobject) Contains(
 	ctx context.Context,
 	txn txnif.TxnReader,

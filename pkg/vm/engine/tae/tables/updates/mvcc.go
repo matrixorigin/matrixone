@@ -303,6 +303,16 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 	return
 }
 
+func (n *AppendMVCCHandle) AddAppendNodeWithTSLocked(
+	startRow uint32,
+	maxRow uint32,
+	ts types.TS,
+) (an *AppendNode) {
+	an = NewAppendNodeWithTS(ts, startRow, maxRow, n.meta.IsTombstone, n)
+	n.appends.InsertNode(an)
+	return
+}
+
 // Reschedule until all appendnode is committed.
 // Pending appendnode is not visible for compaction txn.
 func (n *AppendMVCCHandle) PrepareCompactLocked() bool {

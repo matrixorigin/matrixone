@@ -686,7 +686,9 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *Object
 	}
 	return e
 }
-
+func (entry *ObjectEntry) SetTable(tbl *TableEntry) {
+	entry.table = tbl
+}
 func (entry *ObjectEntry) GetMVCCNodeInRange(start, end types.TS) (nodes []*txnbase.TxnMVCCNode) {
 	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
 	if needWait {

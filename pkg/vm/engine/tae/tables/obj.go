@@ -105,6 +105,9 @@ func (obj *object) GetDuplicatedRows(
 		mp,
 	)
 }
+func (obj *object) ApplyDebugBatch(bat *containers.Batch) (err error) {
+	return
+}
 func (obj *object) GetMaxRowByTS(ts types.TS) (uint32, error) {
 	panic("not support")
 }
