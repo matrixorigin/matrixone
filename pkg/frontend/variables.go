@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"math"
 	bits2 "math/bits"
 	"strconv"
@@ -956,12 +957,20 @@ type GlobalSysVarsMgr struct {
 	accountsGlobalSysVarsMap map[uint32]*SystemVariables
 }
 
+func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
+	sysVarsMp["version_comment"] = CNServiceConfig.VersionComment
+	sysVarsMp["version"] = CNServiceConfig.ServerVersionPrefix + CNServiceConfig.MoVersion
+}
+
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
+
+	CNServiceConfig := getPu(ses.service).SV
+	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
 
 	m.Lock()
 	defer m.Unlock()

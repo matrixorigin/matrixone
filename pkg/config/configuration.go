@@ -70,6 +70,8 @@ var (
 
 	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
+	defaultVersionComment = "MatrixOne"
+
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	defaultLengthOfQueryPrinted = 1024
 
@@ -213,6 +215,8 @@ type FrontendParameters struct {
 	//the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID
 	ServerVersionPrefix string `toml:"serverVersionPrefix"`
 
+	VersionComment string `toml:"versionComment"`
+
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
 	LengthOfQueryPrinted int64 `toml:"lengthOfQueryPrinted" user_setting:"advanced"`
 
@@ -354,6 +358,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.ServerVersionPrefix == "" {
 		fp.ServerVersionPrefix = defaultServerVersionPrefix
+	}
+
+	if fp.VersionComment == "" {
+		fp.VersionComment = defaultVersionComment
 	}
 
 	if fp.LengthOfQueryPrinted == 0 {
