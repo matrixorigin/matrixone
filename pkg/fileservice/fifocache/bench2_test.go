@@ -74,7 +74,7 @@ func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64],
 func data_shift(b *testing.B, time int64) {
 	ctx := context.Background()
 	cache_size := g_cache_size
-	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
+	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil, false)
 	r := rand.New(rand.NewPCG(1, 2))
 
 	offset := int64(0)
@@ -96,7 +96,7 @@ func data_shift(b *testing.B, time int64) {
 func data_readNx(b *testing.B, time int64) {
 	ctx := context.Background()
 	cache_size := g_cache_size
-	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil)
+	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil, false)
 	start := int64(0)
 	end := int64(g_cache_size) / int64(g_item_size) * time
 	r := rand.New(rand.NewPCG(1, 2))

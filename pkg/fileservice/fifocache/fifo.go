@@ -33,11 +33,12 @@ type Cache[K comparable, V any] struct {
 
 	htab *ShardMap[K, *_CacheItem[K, V]]
 
-	usedSmall atomic.Int64
-	small     Queue[*_CacheItem[K, V]]
-	usedMain  atomic.Int64
-	main      Queue[*_CacheItem[K, V]]
-	ghost     *ghost[K]
+	usedSmall      atomic.Int64
+	small          Queue[*_CacheItem[K, V]]
+	usedMain       atomic.Int64
+	main           Queue[*_CacheItem[K, V]]
+	ghost          *ghost[K]
+	disable_s3fifo bool
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -119,6 +120,7 @@ func New[K comparable, V any](
 	postSet func(ctx context.Context, key K, value V, size int64),
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64),
+	disable_s3fifo bool,
 ) *Cache[K, V] {
 
 	ghostsize := estimateGhostSize(capacity())
@@ -131,13 +133,14 @@ func New[K comparable, V any](
 			}
 			return cs
 		},
-		small:     *NewQueue[*_CacheItem[K, V]](),
-		main:      *NewQueue[*_CacheItem[K, V]](),
-		ghost:     newGhost[K](ghostsize),
-		postSet:   postSet,
-		postGet:   postGet,
-		postEvict: postEvict,
-		htab:      NewShardMap[K, *_CacheItem[K, V]](keyShardFunc),
+		small:          *NewQueue[*_CacheItem[K, V]](),
+		main:           *NewQueue[*_CacheItem[K, V]](),
+		ghost:          newGhost[K](ghostsize),
+		postSet:        postSet,
+		postGet:        postGet,
+		postEvict:      postEvict,
+		htab:           NewShardMap[K, *_CacheItem[K, V]](keyShardFunc),
+		disable_s3fifo: disable_s3fifo,
 	}
 	return ret
 }
@@ -162,13 +165,18 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	c.evictAll(ctx, nil, 0)
 
 	// enqueue
-	if c.ghost.contains(item.key) {
-		c.ghost.remove(item.key)
-		c.main.enqueue(item)
-		c.usedMain.Add(item.size)
-	} else {
+	if c.disable_s3fifo {
 		c.small.enqueue(item)
 		c.usedSmall.Add(item.size)
+	} else {
+		if c.ghost.contains(item.key) {
+			c.ghost.remove(item.key)
+			c.main.enqueue(item)
+			c.usedMain.Add(item.size)
+		} else {
+			c.small.enqueue(item)
+			c.usedSmall.Add(item.size)
+		}
 	}
 
 }
@@ -265,7 +273,9 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			item.postFunc(ctx, c.postEvict)
 
 			c.usedSmall.Add(-item.size)
-			c.ghost.add(item.key)
+			if !c.disable_s3fifo {
+				c.ghost.add(item.key)
+			}
 			return
 		}
 	}

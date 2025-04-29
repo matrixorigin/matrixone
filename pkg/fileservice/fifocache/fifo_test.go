@@ -24,7 +24,7 @@ import (
 
 func TestCacheSetGet(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil, false)
 
 	cache.Set(ctx, 1, 1, 1)
 	n, ok := cache.Get(ctx, 1)
@@ -42,7 +42,7 @@ func TestCacheSetGet(t *testing.T) {
 
 func TestCacheEvict(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil, false)
 	for i := 0; i < 64; i++ {
 		cache.Set(ctx, i, i, 1)
 		if cache.Used() > cache.capacity() {
@@ -53,7 +53,7 @@ func TestCacheEvict(t *testing.T) {
 
 func TestCacheEvict2(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(20), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(20), ShardInt[int], nil, nil, nil, false)
 	cache.Set(ctx, 1, 1, 1)
 	cache.Set(ctx, 2, 2, 1)
 
@@ -94,6 +94,7 @@ func TestCacheEvict3(t *testing.T) {
 		func(_ context.Context, _ int, _ bool, _ int64) {
 			nEvict++
 		},
+		false,
 	)
 	for i := 0; i < 1024; i++ {
 		cache.Set(ctx, i, true, 1)
@@ -118,7 +119,7 @@ func TestCacheEvict3(t *testing.T) {
 
 func TestCacheOneHitWonder(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int64, int64](fscache.ConstCapacity(1000), ShardInt[int64], nil, nil, nil)
+	cache := New[int64, int64](fscache.ConstCapacity(1000), ShardInt[int64], nil, nil, nil, false)
 
 	capsmall := int64(1000)
 	for i := range capsmall {
@@ -130,7 +131,7 @@ func TestCacheOneHitWonder(t *testing.T) {
 
 func TestCacheMoveMain(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil)
+	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil, false)
 
 	// fill small fifo to 90
 	for i := range int64(90) {
@@ -176,7 +177,7 @@ func TestCacheMoveMain(t *testing.T) {
 
 func TestCacheMoveGhost(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil)
+	cache := New[int64, int64](fscache.ConstCapacity(100), ShardInt[int64], nil, nil, nil, false)
 
 	// fill small fifo to 90
 	for i := range int64(90) {
