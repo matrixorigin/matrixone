@@ -54,6 +54,15 @@ type inspectContext struct {
 	resp   *cmd_util.InspectResp
 }
 
+func MockInspectContext(db *db.DB) *inspectContext {
+	return &inspectContext{
+		db:     db,
+		acinfo: nil,
+		args:   nil,
+		out:    nil,
+	}
+}
+
 // impl Pflag.Value interface
 func (i *inspectContext) String() string   { return "" }
 func (i *inspectContext) Set(string) error { return nil }

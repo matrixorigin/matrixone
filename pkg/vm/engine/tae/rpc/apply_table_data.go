@@ -67,6 +67,7 @@ func NewApplyTableDataArg(
 	ctx context.Context,
 	dir string,
 	inspectContext *inspectContext,
+	catalog *catalog.Catalog,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (*ApplyTableDataArg, error) {
@@ -76,12 +77,12 @@ func NewApplyTableDataArg(
 		inspectContext: inspectContext,
 		mp:             mp,
 		fs:             fs,
+		catalog:        catalog,
 	}
 	var err error
 	if a.txn, err = a.inspectContext.db.StartTxn(nil); err != nil {
 		return nil, err
 	}
-	a.catalog = a.inspectContext.db.Catalog
 	return a, nil
 }
 
