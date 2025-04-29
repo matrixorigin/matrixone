@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,41 +36,85 @@ import (
 )
 
 const (
-	TableLevel   = "table"
-	DbLevel      = "database"
-	AccountLevel = "account"
-	ClusterLevel = "cluster"
-	MatchAll     = "*"
+	CDCSourceUriPrefix = "mysql://"
+	CDCSinkUriPrefix   = "mysql://"
 
-	MysqlSink       = "mysql"
-	MatrixoneSink   = "matrixone"
-	ConsoleSink     = "console"
-	HnswSyncSink    = "hnswsync"
-	SourceUriPrefix = "mysql://"
-	SinkUriPrefix   = "mysql://"
-	ConsolePrefix   = "console://" //only used in testing stage
-
-	SASCommon = "common"
-	SASError  = "error"
-
-	InitSnapshotSplitTxn        = "InitSnapshotSplitTxn"
-	DefaultInitSnapshotSplitTxn = true
-
-	SendSqlTimeout        = "SendSqlTimeout"
-	DefaultSendSqlTimeout = "10m"
-	DefaultRetryTimes     = -1
-	DefaultRetryDuration  = 30 * time.Minute
-
-	MaxSqlLength        = "MaxSqlLength"
-	DefaultMaxSqlLength = 4 * 1024 * 1024
-
-	StartTs = "StartTS"
-	EndTs   = "EndTS"
+	CDCState_Common = "common"
+	CDCState_Error  = "error"
 )
+
+const (
+	CDCDefaultSendSqlTimeout                 = "10m"
+	CDCDefaultRetryTimes                     = -1
+	CDCDefaultRetryDuration                  = 30 * time.Minute
+	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
+	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
+)
+
+const (
+	CDCSinkType_MySQL    = "mysql"
+	CDCSinkType_MO       = "matrixone"
+	CDCSinkType_Console  = "console"
+	CDCSinkType_HnswSync = "hnswsync"
+)
+
+const (
+	CDCPitrGranularity_Table   = "table"
+	CDCPitrGranularity_DB      = "database"
+	CDCPitrGranularity_Account = "account"
+	CDCPitrGranularity_Cluster = "cluster"
+	CDCPitrGranularity_All     = "*"
+)
+
+const (
+	CDCRequestOptions_Level                = "Level"
+	CDCRequestOptions_Exclude              = "Exclude"
+	CDCRequestOptions_StartTs              = "StartTs"
+	CDCRequestOptions_EndTs                = "EndTs"
+	CDCRequestOptions_SendSqlTimeout       = "SendSqlTimeout"
+	CDCRequestOptions_InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
+	CDCRequestOptions_MaxSqlLength         = "MaxSqlLength"
+	CDCRequestOptions_NoFull               = "NoFull"
+	CDCRequestOptions_ConfigFile           = "ConfigFile"
+)
+
+const (
+	CDCTaskExtraOptions_MaxSqlLength         = CDCRequestOptions_MaxSqlLength
+	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
+	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
+)
+
+var CDCRequestOptions = []string{
+	CDCRequestOptions_Level,
+	CDCRequestOptions_Exclude,
+	CDCRequestOptions_StartTs,
+	CDCRequestOptions_EndTs,
+	CDCRequestOptions_MaxSqlLength,
+	CDCRequestOptions_SendSqlTimeout,
+	CDCRequestOptions_InitSnapshotSplitTxn,
+	CDCRequestOptions_ConfigFile,
+	CDCRequestOptions_NoFull,
+}
+
+var CDCTaskExtraOptions = []string{
+	CDCTaskExtraOptions_MaxSqlLength,
+	CDCTaskExtraOptions_SendSqlTimeout,
+	CDCTaskExtraOptions_InitSnapshotSplitTxn,
+}
 
 var (
 	EnableConsoleSink = false
 )
+
+type TaskId = uuid.UUID
+
+func NewTaskId() TaskId {
+	return uuid.Must(uuid.NewV7())
+}
+
+// func StringToTaskId(s string) (TaskId, error) {
+// 	return uuid.Parse(s)
+// }
 
 type Reader interface {
 	Run(ctx context.Context, ar *ActiveRoutine)
@@ -87,6 +132,7 @@ type Sinker interface {
 	SendDummy()
 	// Error must be called after Sink
 	Error() error
+	ClearError()
 	Reset()
 	Close()
 }
@@ -389,7 +435,7 @@ func (info *UriInfo) GetEncodedPassword() (string, error) {
 }
 
 func (info *UriInfo) String() string {
-	return fmt.Sprintf("%s%s:%s@%s:%d", SourceUriPrefix, info.User, "******", info.Ip, info.Port)
+	return fmt.Sprintf("%s%s:%s@%s:%d", CDCSourceUriPrefix, info.User, "******", info.Ip, info.Port)
 }
 
 type PatternTable struct {

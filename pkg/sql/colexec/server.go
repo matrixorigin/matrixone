@@ -27,11 +27,6 @@ import (
 // FIXME: shit design
 var srv atomic.Pointer[Server]
 
-const (
-	TxnWorkSpaceIdType = 1
-	CnBlockIdType      = 2
-)
-
 func Get() *Server {
 	return srv.Load()
 }

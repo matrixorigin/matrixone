@@ -3233,6 +3233,9 @@ var (
 			input:  "delete cdc from t where a in (0, 1)",
 			output: "delete cdc from t where a in (0, 1)",
 		},
+		{
+			input: "alter user u1 lock",
+		},
 	}
 )
 

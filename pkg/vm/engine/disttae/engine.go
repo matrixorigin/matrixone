@@ -777,8 +777,12 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 
 	//  When removing the PartitionState, you need to remove the tid in globalStats,
 	// When re-subscribing, globalStats will wait for the PartitionState to be consumed before updating the object state.
-	//e.globalStats.RemoveTid(tblId)
+	e.globalStats.RemoveTid(tblId)
 	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
+}
+
+func (e *Engine) safeToUnsubscribe(tid uint64) bool {
+	return e.globalStats.safeToUnsubscribe(tid)
 }
 
 func (e *Engine) PushClient() *PushClient {
@@ -786,8 +790,8 @@ func (e *Engine) PushClient() *PushClient {
 }
 
 // TryToSubscribeTable implements the LogtailEngine interface.
-func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
-	return e.PushClient().TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return e.PushClient().TryToSubscribeTable(ctx, dbID, tbID)
 }
 
 // UnsubscribeTable implements the LogtailEngine interface.

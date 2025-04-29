@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
-	"strconv"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +44,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -56,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -156,18 +156,51 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
-	//Stats only stats the committed data of the table.
-	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
-		strings.ToUpper(tbl.relKind) == "V" {
+	_, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
+		return nil, err
+	}
+	if !tbl.db.op.IsSnapOp() {
+		return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+			AccId:      tbl.accountId,
+			DatabaseID: tbl.db.databaseId,
+			TableID:    tbl.tableId,
+		}, sync), nil
+	}
+	info, err := tbl.stats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
+	partitionState, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	e := tbl.db.getEng()
+	approxObjectNum := int64(partitionState.ApproxDataObjectsNum())
+	if approxObjectNum == 0 {
+		// There are no objects flushed yet.
 		return nil, nil
 	}
-	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
-		AccId:      tbl.accountId,
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-		TableName:  tbl.tableName,
-		DbName:     tbl.db.databaseName,
-	}, sync), nil
+
+	stats := plan2.NewStatsInfo()
+	req := newUpdateStatsRequest(
+		tbl.tableDef,
+		partitionState,
+		e.fs,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+		approxObjectNum,
+		stats,
+	)
+	if err := UpdateStats(ctx, req, nil); err != nil {
+		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
+		return nil, err
+	}
+	return stats, nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
@@ -1556,56 +1589,6 @@ func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-//	blkId(string)     deltaLoc(string)                   type(int)
-//
-// |-----------|-----------------------------------|----------------|
-// |  obj_id   |   object stats                    |  FlushDeltaLoc | TN Block
-// |  blk_id   |   batch.Marshal(uint32 offset)    |  CNBlockOffset | CN Block
-// |  blk_id   |   batch.Marshal(rowId)            |  RawRowIdBatch | TN Blcok
-// |  blk_id   |   batch.Marshal(uint32 offset)    | RawBatchOffset | RawBatch (in txn workspace)
-func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
-	_, typ_str := objectio.Str2Blockid(name[:len(name)-2]), string(name[len(name)-1])
-	typ, err := strconv.ParseInt(typ_str, 10, 64)
-	if err != nil {
-		return err
-	}
-	switch typ {
-	case deletion.FlushDeltaLoc:
-		tbl.getTxn().hasS3Op.Store(true)
-		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
-		fileName := stats.ObjectLocation().String()
-		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
-		if err != nil {
-			return err
-		}
-
-		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
-			return err
-		}
-
-		for i := range bat.Vecs[0].Length() {
-			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
-			tbl.getTxn().StashFlushedTombstones(ss)
-		}
-
-	case deletion.CNBlockOffset:
-	case deletion.RawBatchOffset:
-	case deletion.RawRowIdBatch:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-		if bat.RowCount() == 0 {
-			return nil
-		}
-		if err = tbl.writeTnPartition(tbl.getTxn().proc.Ctx, bat); err != nil {
-			return err
-		}
-	default:
-		tbl.getTxn().hasS3Op.Store(true)
-		panic(moerr.NewInternalErrorNoCtxf("Unsupport type for table delete %d", typ))
-	}
-	return nil
-}
-
 func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	if tbl.seqnums != nil && tbl.typs != nil {
 		return
@@ -1630,13 +1613,20 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 	proc := tbl.proc.Load()
 
-	s3Writer := colexec.NewCNS3DataWriter(
-		proc.Mp(), proc.GetFileService(), tbl.tableDef, false)
+	var (
+		err error
+		fs  fileservice.FileService
+	)
+
+	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
+		return nil, "", err
+	}
+
+	s3Writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, tbl.tableDef, false)
 
 	defer func() { s3Writer.Close(proc.Mp()) }()
 
 	var (
-		err      error
 		bat      *batch.Batch
 		stats    []objectio.ObjectStats
 		fileName string
@@ -1646,6 +1636,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 
 			del := deletes[blk.BlockID]
+			slices.Sort(del)
 			if bat, err = blockio.BlockCompactionRead(
 				tbl.getTxn().proc.Ctx,
 				blk.MetaLoc[:],
@@ -1699,15 +1690,65 @@ func (tbl *txnTable) Delete(
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
-	//for S3 delete
-	if !objectio.IsPhysicalAddr(name) {
-		return tbl.EnhanceDelete(bat, name)
-	}
-	bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
-	if bat.RowCount() == 0 {
+
+	var (
+		deletionTyp = bat.Attrs[0]
+	)
+
+	// this should not happen, just in case slice out of bound
+	//if len(bat.Attrs) == 0 {
+	//	logutil.Info("deletion bat has empty attr",
+	//		zap.String("name", name),
+	//		zap.String("bat", common.MoBatchToString(bat, 20)))
+	//
+	//	if objectio.IsPhysicalAddr(name) {
+	//		deletionTyp = name
+	//	} else {
+	//		typStr := string(name[len(name)-1])
+	//		typ, err := strconv.ParseInt(typStr, 10, 64)
+	//		if err != nil {
+	//			return err
+	//		}
+	//
+	//		if typ == deletion.FlushDeltaLoc {
+	//			deletionTyp = catalog.ObjectMeta_ObjectStats
+	//		}
+	//	}
+	//}
+
+	switch deletionTyp {
+	case catalog.Row_ID:
+		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if bat.RowCount() == 0 {
+			return nil
+		}
+		return tbl.writeTnPartition(ctx, bat)
+
+	case catalog.ObjectMeta_ObjectStats:
+		tbl.getTxn().hasS3Op.Store(true)
+		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
+		fileName := stats.ObjectLocation().String()
+		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
+		if err != nil {
+			return err
+		}
+
+		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
+			return err
+		}
+
+		for i := range bat.Vecs[0].Length() {
+			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			tbl.getTxn().StashFlushedTombstones(ss)
+		}
+
 		return nil
+
+	default:
+		panic(moerr.NewInternalErrorNoCtxf(
+			"Unsupport type for table delete %s", common.MoBatchToString(bat, 100)))
 	}
-	return tbl.writeTnPartition(ctx, bat)
 }
 
 func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
@@ -1991,102 +2032,62 @@ func (tbl *txnTable) BuildShardingReaders(
 
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
-) (ps *logtailreplay.PartitionState, err error) {
+) (*logtailreplay.PartitionState, error) {
 
-	defer func() {
+	if !tbl.db.op.IsSnapOp() {
+		ps, err := tbl.tryToSubscribe(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if ps == nil {
+			ps = tbl.getTxn().engine.GetOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot()
+		}
+
 		if tbl.tableId == catalog.MO_COLUMNS_ID {
 			logutil.Info("open partition state for mo_columns",
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.String("desc", ps.Desc(true)),
 				zap.String("pointer", fmt.Sprintf("%p", ps)))
 		}
-	}()
 
-	createdInTxn, err := tbl.isCreatedInTxn(ctx)
-	if err != nil {
-		return nil, err
+		return ps, nil
 	}
 
-	// no need to subscribe a view
-	// for issue #19192
-	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
-		//return an empty partition state.
-		ps = tbl.getTxn().engine.GetOrCreateLatestPart(
-			tbl.db.databaseId,
-			tbl.tableId).Snapshot()
-		return
-	}
-
-	// Subscribe a latest partition state
-	eng := tbl.eng.(*Engine)
-	ps, err = eng.PushClient().toSubscribeTable(
-		ctx,
-		tbl.tableId,
-		tbl.tableName,
-		tbl.db.databaseId,
-		tbl.db.databaseName)
-	if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
-		return
-	}
-
-	//Try to create a snapshot partition state for the table through consume the history checkpoints.
-	start, end := types.MaxTs(), types.MinTs()
-	if ps != nil {
-		start, end = ps.GetDuration()
-	}
-	errStr := ""
-	if err != nil {
-		errStr = err.Error()
-	}
-	logutil.Infof(
-		"xxxx Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		ps,
-		start.ToString(),
-		end.ToString(),
-		errStr,
-	)
-
-	//If ps == nil, it indicates that subscribe failed due to 1: network timeout,
-	//2:table id is too old for snapshot read,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
-
-	// To get a partition state for snapshot read, we need to consume the history checkpoints.
-	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
+	// for snapshot txnOp
+	ps, err := tbl.getTxn().engine.getOrCreateSnapPart(
 		ctx,
 		tbl,
 		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
-
-	start, end = types.MaxTs(), types.MinTs()
-	if ps != nil {
-		start, end = ps.GetDuration()
+	if err != nil {
+		return nil, err
 	}
-	if ps != nil {
-		logutil.Infof(
-			"xxxx Get snapshot partition state succeed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s]",
-			tbl,
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString(),
-			tbl.db.op.IsSnapOp(),
-			ps,
-			start.ToString(),
-			end.ToString(),
-		)
-		return
-	}
-	logutil.Errorf(
-		"xxxx Get partition state failed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v,err:%s",
+	logutil.Infof("Get partition state for snapshot read, tbl:%p, table name:%s, tid:%v, txn:%s, ps:%p",
 		tbl,
 		tbl.tableName,
 		tbl.tableId,
 		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		err.Error())
-	return
+		ps)
+
+	return ps, nil
+}
+
+func (tbl *txnTable) tryToSubscribe(ctx context.Context) (ps *logtailreplay.PartitionState, err error) {
+	eng := tbl.eng.(*Engine)
+	var createdInTxn bool
+	defer func() {
+		eng.globalStats.notifyLogtailUpdate(tbl.tableId, err == nil && !createdInTxn)
+	}()
+
+	createdInTxn, err = tbl.isCreatedInTxn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if createdInTxn {
+		return
+	}
+
+	ps, err = eng.PushClient().toSubscribeTable(ctx, tbl)
+	return ps, err
 }
 
 func (tbl *txnTable) PKPersistedBetween(
@@ -2293,12 +2294,12 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(
-		ctx,
-		tbl.tableId,
-		tbl.tableName,
-		tbl.db.databaseId,
-		tbl.db.databaseName)
+
+	//snap, err := tbl.getPartitionState(ctx)
+	//if err != nil {
+	//	return false, err
+	//}
+	part, err := tbl.eng.(*Engine).LazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}

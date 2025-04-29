@@ -212,25 +212,25 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 			if err := s.mysql.SendBegin(ctx); err != nil {
 				logutil.Errorf("cdc hnswSyncSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
 		} else if bytes.Equal(sqlBuf, commit) {
 			if err := s.mysql.SendCommit(ctx); err != nil {
 				logutil.Errorf("cdc hnswSyncSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
 		} else if bytes.Equal(sqlBuf, rollback) {
 			if err := s.mysql.SendRollback(ctx); err != nil {
 				logutil.Errorf("cdc hnswSyncSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
 		} else {
 			if err := s.mysql.Send(ctx, ar, sqlBuf, true); err != nil {
 				logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
 		}
 	}
@@ -250,7 +250,7 @@ func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
 		// complete sql statement
 		err := s.sendSql()
 		if err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 		}
 		return
 	}
@@ -265,7 +265,7 @@ func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
 	} else if data.outputTyp == OutputTypeTail {
 		s.sinkTail(ctx, data.insertAtmBatch, data.deleteAtmBatch)
 	} else {
-		s.err.Store(moerr.NewInternalError(ctx, fmt.Sprintf("cdc hnswSyncSinker unexpected output type: %v", data.outputTyp)))
+		s.SetError(moerr.NewInternalError(ctx, fmt.Sprintf("cdc hnswSyncSinker unexpected output type: %v", data.outputTyp)))
 	}
 }
 
@@ -286,11 +286,26 @@ func (s *hnswSyncSinker[T]) SendDummy() {
 }
 
 func (s *hnswSyncSinker[T]) Error() error {
-	if val := s.err.Load(); val == nil {
-		return nil
-	} else {
-		return val.(error)
+	if errPtr := s.err.Load().(*error); *errPtr != nil {
+		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
+			return moerr.ConvertGoError(context.Background(), *errPtr)
+		} else {
+			if moErr == nil {
+				return nil
+			}
+			return moErr
+		}
 	}
+	return nil
+}
+
+func (s *hnswSyncSinker[T]) SetError(err error) {
+	s.err.Store(&err)
+}
+
+func (s *hnswSyncSinker[T]) ClearError() {
+	var err *moerr.Error
+	s.SetError(err)
 }
 
 func (s *hnswSyncSinker[T]) Reset() {
@@ -319,7 +334,7 @@ func (s *hnswSyncSinker[T]) sinkSnapshot(ctx context.Context, bat *batch.Batch) 
 			// send sql
 			err := s.sendSql()
 			if err != nil {
-				s.err.Store(err)
+				s.SetError(err)
 				return
 			}
 		}
@@ -345,14 +360,14 @@ func (s *hnswSyncSinker[T]) sinkTail(ctx context.Context, upsertBatch, deleteBat
 		// compare ts, ignore pk
 		if upsertItem.Ts.LT(&deleteItem.Ts) {
 			if err = s.sinkUpsert(ctx, upsertIter); err != nil {
-				s.err.Store(err)
+				s.SetError(err)
 				return
 			}
 			// get next item
 			upsertIterHasNext = upsertIter.Next()
 		} else {
 			if err = s.sinkDelete(ctx, deleteIter); err != nil {
-				s.err.Store(err)
+				s.SetError(err)
 				return
 			}
 			// get next item
@@ -363,7 +378,7 @@ func (s *hnswSyncSinker[T]) sinkTail(ctx context.Context, upsertBatch, deleteBat
 	// output the rest of upsert iterator
 	for upsertIterHasNext {
 		if err = s.sinkUpsert(ctx, upsertIter); err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 			return
 		}
 		// get next item
@@ -373,7 +388,7 @@ func (s *hnswSyncSinker[T]) sinkTail(ctx context.Context, upsertBatch, deleteBat
 	// output the rest of delete iterator
 	for deleteIterHasNext {
 		if err = s.sinkDelete(ctx, deleteIter); err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 			return
 		}
 		// get next item

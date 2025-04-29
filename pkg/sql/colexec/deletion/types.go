@@ -225,12 +225,18 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch,
 }
 
 func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (uint32, error) {
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	if err != nil {
+		return 0, err
+	}
+
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
 		blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
 		for blkid := range blockId_rowIdBatch {
 			//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
-			if ctr.blockId_type[blkid] != RawRowIdBatch {
+			if ctr.blockId_type[blkid] == DeletionOnTxnUnCommit {
 				continue
 			}
 			blkids = append(blkids, blkid)
@@ -256,7 +262,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			if s3writer == nil {
 				pkType := *bat.Vecs[1].GetType()
-				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), pkType)
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType)
 			}
 
 			if err = s3writer.Write(proc.Ctx, proc.Mp(), bat); err != nil {
@@ -323,12 +329,10 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 
 		deletion.ctr.deleted_length += 1
 
-		if deletion.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
-			deletion.ctr.blockId_type[blkid] = RawBatchOffset
-		} else if deletion.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
-			deletion.ctr.blockId_type[blkid] = CNBlockOffset
+		if colexec.IsDeletionOnTxnUnCommit(deletion.SegmentMap, &segid) {
+			deletion.ctr.blockId_type[blkid] = DeletionOnTxnUnCommit
 		} else {
-			deletion.ctr.blockId_type[blkid] = RawRowIdBatch
+			deletion.ctr.blockId_type[blkid] = DeletionOnCommitted
 		}
 
 		if _, ok := deletion.ctr.partitionId_blockId_rowIdBatch[pIdx]; !ok {

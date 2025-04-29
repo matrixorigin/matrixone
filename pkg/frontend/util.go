@@ -22,7 +22,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1563,7 +1562,7 @@ func dbNameIsLegal(name string) bool {
 	if hasSpecialChars(name) {
 		return false
 	}
-	if name == cdc.MatchAll {
+	if name == cdc.CDCPitrGranularity_All {
 		return true
 	}
 
@@ -1588,7 +1587,7 @@ func tableNameIsLegal(name string) bool {
 	if hasSpecialChars(name) {
 		return false
 	}
-	if name == cdc.MatchAll {
+	if name == cdc.CDCPitrGranularity_All {
 		return true
 	}
 
@@ -1613,52 +1612,6 @@ func tableNameIsLegal(name string) bool {
 //	return false
 //}
 
-// compositedUriInfo uri according to the format: mysql://root:111@127.0.0.1:6001
-// if valid, return true and extracted info
-// !!!NOTE!!!
-// user and password does not have the special character ( ':' '@' )
-func compositedUriInfo(uri string, uriPrefix string) (bool, cdc.UriInfo) {
-	if !uriHasPrefix(uri, uriPrefix) {
-		return false, cdc.UriInfo{}
-	}
-	//locate user password
-	rest := uri[len(uriPrefix):]
-	seps := strings.Split(rest, "@")
-	if len(seps) != 2 || len(seps[0]) == 0 || len(seps[1]) == 0 {
-		return false, cdc.UriInfo{}
-	}
-	seps2 := strings.Split(seps[0], ":")
-	if len(seps2) < 2 {
-		return false, cdc.UriInfo{}
-	}
-	userName := strings.Join(seps2[0:len(seps2)-1], ":")
-	password := seps2[len(seps2)-1]
-	passwordStart := len(uriPrefix) + len(userName) + 1
-	passwordEnd := passwordStart + len(password)
-	if passwordEnd > len(uri) || password != uri[passwordStart:passwordEnd] {
-		return false, cdc.UriInfo{}
-	}
-
-	sep3 := strings.Split(seps[1], ":")
-	if len(sep3) != 2 || len(sep3[0]) == 0 || len(sep3[1]) == 0 {
-		return false, cdc.UriInfo{}
-	}
-	ip := sep3[0]
-	port := sep3[1]
-	portInt32, err := strconv.ParseUint(port, 10, 32)
-	if err != nil || portInt32 > 65535 {
-		return false, cdc.UriInfo{}
-	}
-	return true, cdc.UriInfo{
-		User:          userName,
-		Password:      password,
-		Ip:            ip,
-		Port:          int(portInt32),
-		PasswordStart: passwordStart,
-		PasswordEnd:   passwordEnd,
-	}
-}
-
 // replaceStr replaces s[start:end] by s2
 func replaceStr(s string, start, end int, s2 string) string {
 	if start >= end || start < 0 || end < 0 {
@@ -1668,31 +1621,6 @@ func replaceStr(s string, start, end int, s2 string) string {
 		return s[:start] + s2 + s[end:]
 	}
 	return s
-}
-
-// uriHasPrefix
-func uriHasPrefix(uri string, prefix string) bool {
-	if len(uri) < len(prefix) || strings.ToLower(uri[:len(prefix)]) != prefix {
-		return false
-	}
-	return true
-}
-
-/*
-extractUriInfo extracts the uriInfo
-return serialized uriInfo
-*/
-func extractUriInfo(ctx context.Context, uri string, uriPrefix string) (string, cdc.UriInfo, error) {
-	ok, uriInfo := compositedUriInfo(uri, uriPrefix)
-	if !ok {
-		return "", cdc.UriInfo{}, moerr.NewInternalErrorf(ctx, "invalid uri format: %s", uri)
-	}
-
-	jsonUriInfo, err := cdc.JsonEncode(&uriInfo)
-	if err != nil {
-		return "", cdc.UriInfo{}, err
-	}
-	return jsonUriInfo, uriInfo, nil
 }
 
 func buildTableDefFromMoColumns(ctx context.Context, accountId uint64, dbName, table string, ses FeSession) (*plan.TableDef, error) {

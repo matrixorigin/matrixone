@@ -106,7 +106,7 @@ func Test_InsertRows(t *testing.T) {
 	err = txn.Commit(ctx)
 	require.Nil(t, err)
 
-	err = disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName, false)
+	err = disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), false)
 	require.Nil(t, err)
 
 	// check partition state, before flush
@@ -634,21 +634,17 @@ func TestInProgressTransfer(t *testing.T) {
 	var did, tid uint64
 	var theRow *batch.Batch
 	{
-		var (
-			dbName = "db"
-			tName  = "test"
-		)
 		schema := catalog2.MockSchemaAll(10, 3)
-		schema.Name = tName
+		schema.Name = "test"
 		// create and append data
 		txnop := p.StartCNTxn()
-		_, rel := p.CreateDBAndTable(txnop, dbName, schema)
+		_, rel := p.CreateDBAndTable(txnop, "db", schema)
 		did, tid = rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
 		bat := catalog2.MockBatch(schema, 10)
 		theRow = containers.ToCNBatch(bat.CloneWindow(7, 1, p.Mp))
 		require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
 		require.NoError(t, txnop.Commit(p.Ctx))
-		require.Nil(t, p.D.SubscribeTable(p.Ctx, did, tid, dbName, tName, false))
+		require.Nil(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
 	}
 
 	toTransferTxn1 := p.StartCNTxn()
@@ -912,7 +908,7 @@ func TestObjectStats1(t *testing.T) {
 
 	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, "db", schema.Name, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
 	require.Nil(t, err)
 
 	ts := taeHandler.GetDB().TxnMgr.Now()
@@ -1001,7 +997,7 @@ func TestObjectStats2(t *testing.T) {
 
 	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, "db", schema.Name, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
 	require.Nil(t, err)
 
 	ts := taeHandler.GetDB().TxnMgr.Now()
@@ -1073,21 +1069,18 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rmFault()
-	var (
-		dbName = "db"
-		tName  = "mo_account"
-	)
+
 	schema := catalog2.MockSchemaAll(5, 1)
-	schema.Name = tName
+	schema.Name = "mo_account"
 	txnop := p.StartCNTxn()
 	bats := catalog2.MockBatch(schema, 4).Split(2)
 	bat, bat1 := bats[0], bats[1]
-	_, rel := p.CreateDBAndTable(txnop, dbName, schema)
+	_, rel := p.CreateDBAndTable(txnop, "db", schema)
 	rel.Write(p.Ctx, containers.ToCNBatch(bat)) // pk 0 and 1
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	did, tid := rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
-	require.NoError(t, p.D.SubscribeTable(p.Ctx, did, tid, dbName, tName, false))
+	require.NoError(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
 
 	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
@@ -1352,7 +1345,7 @@ func TestWorkspaceQuota2(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 	}
 
-	require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), databaseName, tableName, false))
+	require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false))
 	state, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
 	require.NoError(t, err)
 	t.Log(state.String())
@@ -1551,66 +1544,4 @@ func TestInvalidTxnOp(t *testing.T) {
 
 	_, err = userDb.Relation(p.Ctx, "test", nil)
 	require.Error(t, err)
-}
-
-func Test_SubUnsubTable(t *testing.T) {
-	catalog.SetupDefines("")
-
-	var (
-		accountId    = catalog.System_Account
-		tableName    = "test1"
-		databaseName = "db1"
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
-
-	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
-	defer func() {
-		disttaeEngine.Close(ctx)
-		taeHandler.Close(true)
-		rpcAgent.Close()
-	}()
-
-	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
-	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
-	require.Nil(t, err)
-
-	err = disttaeEngine.Engine.Create(ctx, databaseName, txn)
-	require.Nil(t, err)
-
-	db, err := disttaeEngine.Engine.Database(ctx, databaseName, txn)
-	require.Nil(t, err)
-
-	schema := catalog2.MockSchemaAll(10, 0)
-	schema.Name = tableName
-
-	defs, err := testutil.EngineTableDefBySchema(schema)
-	require.Nil(t, err)
-
-	err = db.Create(ctx, tableName, defs)
-	require.Nil(t, err)
-
-	rel, err := db.Relation(ctx, tableName, nil)
-	require.Nil(t, err)
-	require.Contains(t, rel.GetTableName(), tableName)
-
-	bat := catalog2.MockBatch(schema, 10)
-	err = rel.Write(ctx, containers.ToCNBatch(bat))
-	require.Nil(t, err)
-
-	err = txn.Commit(ctx)
-	require.Nil(t, err)
-
-	//subscribe a valid table
-	require.Nil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName, false))
-
-	//subscribe a invalid table
-	var (
-		inValidTableID   = rel.GetTableID(ctx) + 1
-		inValidTableName = "invalid_table"
-	)
-	require.NotNil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName, false))
 }

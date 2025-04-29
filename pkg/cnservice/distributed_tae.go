@@ -88,11 +88,6 @@ func (s *service) initDistributedTAE(
 	)
 	pu.StorageEngine = s.storeEngine
 
-	// cdc mp
-	if s.cdcMp, err = mpool.NewMPool("cdc", 0, mpool.NoFixed); err != nil {
-		return err
-	}
-
 	// internal sql executor.
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
 	internalExecutorMp, _ := mpool.NewMPool("internal_executor", 0, mpool.NoFixed)
