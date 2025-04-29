@@ -167,6 +167,7 @@ var NewHnswSyncSinker = func(
 			pkcol:            pkcol,
 			veccol:           veccol,
 			err:              atomic.Value{},
+			param:            param,
 		}
 		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 		return s, nil
@@ -286,7 +287,8 @@ func (s *hnswSyncSinker[T]) SendDummy() {
 }
 
 func (s *hnswSyncSinker[T]) Error() error {
-	if errPtr := s.err.Load().(*error); *errPtr != nil {
+	if ptr := s.err.Load(); ptr != nil {
+		errPtr := ptr.(*error)
 		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
 			return moerr.ConvertGoError(context.Background(), *errPtr)
 		} else {
@@ -456,7 +458,7 @@ func (s *hnswSyncSinker[T]) sendSql() error {
 	}
 	// pad extra space at the front and send SQL
 	padding := strings.Repeat(" ", sqlBufReserved)
-	sql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', '%s');", padding, "db", "table", js)
+	sql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', '%s');", padding, s.param.DbName, s.param.Table, js)
 
 	s.sqlBufSendCh <- []byte(sql)
 
