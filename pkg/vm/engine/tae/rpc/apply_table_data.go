@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
 /*
@@ -67,22 +68,25 @@ func NewApplyTableDataArg(
 	ctx context.Context,
 	dir string,
 	inspectContext *inspectContext,
-	catalog *catalog.Catalog,
+	dbName string,
+	tableName string,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (*ApplyTableDataArg, error) {
 	a := &ApplyTableDataArg{
 		ctx:            ctx,
 		dir:            dir,
+		databaseName:   dbName,
+		tableName:      tableName,
 		inspectContext: inspectContext,
 		mp:             mp,
 		fs:             fs,
-		catalog:        catalog,
 	}
 	var err error
 	if a.txn, err = a.inspectContext.db.StartTxn(nil); err != nil {
 		return nil, err
 	}
+	a.catalog = a.inspectContext.db.Catalog
 	return a, nil
 }
 
@@ -178,26 +182,31 @@ func (a *ApplyTableDataArg) Run() (err error) {
 
 func (a *ApplyTableDataArg) createDatabase() (err error) {
 
-	var bat *batch.Batch
-	var release func()
-	if bat, release, err = a.readBatch(CopyTableDatabase); err != nil {
+	var database handle.Database
+	if database, err = a.txn.CreateDatabase(a.databaseName, "", ""); err != nil {
 		return
 	}
-	defer release()
-	defer bat.Clean(a.mp)
-	tnBat := containers.ToTNBatch(bat, a.mp)
 
-	a.databaseName = tnBat.GetVectorByName(pkgcatalog.SystemDBAttr_Name).GetDownstreamVector().GetStringAt(0)
-	a.databaseID = tnBat.GetVectorByName(pkgcatalog.SystemDBAttr_ID).Get(0).(uint64)
+	dbEntry := database.GetMeta().(*catalog.DBEntry)
 
-	panguEpoch := types.BuildTS(42424242, 0)
-	txnNode := &txnbase.TxnMVCCNode{
-		Start:   panguEpoch,
-		Prepare: panguEpoch,
-		End:     panguEpoch,
+	bat := containers.NewBatch()
+	defer bat.Close()
+	typs := catalog.SystemDBSchema.AllTypes()
+	attrs := catalog.SystemDBSchema.AllNames()
+	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
+		bat.AddVector(attr, containers.MakeVector(typs[i], a.mp))
+	}
+	for _, def := range catalog.SystemDBSchema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		txnimpl.FillDBRow(dbEntry, def.Name, bat.Vecs[def.Idx])
 	}
 
-	a.catalog.ReplayMODatabase(a.ctx, txnNode, tnBat)
+	a.databaseID = dbEntry.GetID()
 
 	var db handle.Database
 	if db, err = a.txn.GetDatabase(pkgcatalog.MO_CATALOG); err != nil {
@@ -207,7 +216,7 @@ func (a *ApplyTableDataArg) createDatabase() (err error) {
 	if table, err = db.GetRelationByName(pkgcatalog.MO_DATABASE); err != nil {
 		return
 	}
-	if err = table.Append(a.ctx, tnBat); err != nil {
+	if err = table.Append(a.ctx, bat); err != nil {
 		return
 	}
 	return
@@ -230,8 +239,43 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 	defer tableBatch.Clean(a.mp)
 	tnTableBatch := containers.ToTNBatch(tableBatch, a.mp)
 
-	a.tableName = tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_Name).GetDownstreamVector().GetStringAt(0)
-	a.tableID = tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Get(0).(uint64)
+	a.tableID = a.catalog.NextTable()
+
+	packer := types.NewPacker()
+	tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Update(0, a.tableID, false)
+	tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_Name).Update(0, []byte(a.tableName), false)
+	tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_DBID).Update(0, a.databaseID, false)
+	tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_DBName).Update(0, []byte(a.databaseName), false)
+	tenantID := tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).Get(0).(uint32)
+	packer.EncodeUint32(tenantID)
+	packer.EncodeStringType([]byte(a.databaseName))
+	packer.EncodeStringType([]byte(a.tableName))
+	colData := packer.Bytes()
+	tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_CPKey).Update(0, colData, false)
+
+	uniqNameVec := tnSchemaBatch.GetVectorByName(pkgcatalog.SystemColAttr_UniqName)
+	dbidVec := tnSchemaBatch.GetVectorByName(pkgcatalog.SystemColAttr_DBID)
+	dbNameVec := tnSchemaBatch.GetVectorByName(pkgcatalog.SystemColAttr_DBName)
+	relIDVec := tnSchemaBatch.GetVectorByName(pkgcatalog.SystemColAttr_RelID)
+	relNameVec := tnSchemaBatch.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
+	ckpKeyVec := tnSchemaBatch.GetVectorByName(pkgcatalog.SystemColAttr_CPKey)
+	nameVec := tnSchemaBatch.GetVectorByName(pkgcatalog.SystemColAttr_Name)
+	for i := 0; i < tnSchemaBatch.Length(); i++ {
+		colName := string(nameVec.Get(i).([]byte))
+		uniqNameVec.Update(i, []byte(fmt.Sprintf("%d-%s", a.tableID, colName)), false)
+		dbidVec.Update(i, a.databaseID, false)
+		dbNameVec.Update(i, []byte(a.databaseName), false)
+		relIDVec.Update(i, a.tableID, false)
+		relNameVec.Update(i, []byte(a.tableName), false)
+		packer.Reset()
+		packer.EncodeUint32(tenantID)
+		packer.EncodeStringType([]byte(a.databaseName))
+		packer.EncodeStringType([]byte(a.tableName))
+		packer.EncodeStringType([]byte(colName))
+		colData := packer.Bytes()
+		ckpKeyVec.Update(i, colData, false)
+	}
+	packer.Close()
 
 	panguEpoch := types.BuildTS(42424242, 0)
 	txnNode := &txnbase.TxnMVCCNode{

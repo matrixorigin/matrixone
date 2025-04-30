@@ -37,7 +37,6 @@ import (
 
 const (
 	CopyTableObjectList = "object_list"
-	CopyTableDatabase   = "database"
 	CopyTableSchema     = "schema"
 	CopyTableTable      = "table"
 )
@@ -135,12 +134,6 @@ func (c *CopyTableArg) Run() (err error) {
 	if err := c.flushTableSchema(); err != nil {
 		return err
 	}
-	if err := c.flushTableEntry(); err != nil {
-		return err
-	}
-	if err := c.flushDatabaseEntry(); err != nil {
-		return err
-	}
 
 	p := &catalog.LoopProcessor{}
 	p.ObjectFn = c.onObject
@@ -184,7 +177,7 @@ func (c *CopyTableArg) flushTableSchema() (err error) {
 		if def.IsPhyAddr() {
 			continue
 		}
-		txnimpl.FillTableRow(c.table, catalog.SystemColumnSchema, def.Name, bat.Vecs[def.Idx])
+		txnimpl.FillColumnRow(c.table, catalog.SystemColumnSchema, def.Name, bat.Vecs[def.Idx])
 	}
 	cnBatch := containers.ToCNBatch(bat)
 	if err := c.flush(CopyTableSchema, cnBatch); err != nil {
@@ -211,29 +204,6 @@ func (c *CopyTableArg) flushTableEntry() (err error) {
 	}
 	cnBatch := containers.ToCNBatch(bat)
 	if err := c.flush(CopyTableTable, cnBatch); err != nil {
-		return err
-	}
-	return
-}
-
-func (c *CopyTableArg) flushDatabaseEntry() (err error) {
-	bat := containers.NewBatch()
-	typs := catalog.SystemDBSchema.AllTypes()
-	attrs := catalog.SystemDBSchema.AllNames()
-	for i, attr := range attrs {
-		if attr == catalog.PhyAddrColumnName {
-			continue
-		}
-		bat.AddVector(attr, containers.MakeVector(typs[i], common.CheckpointAllocator))
-	}
-	for _, def := range catalog.SystemDBSchema.ColDefs {
-		if def.IsPhyAddr() {
-			continue
-		}
-		txnimpl.FillDBRow(c.table.GetDB(), def.Name, bat.Vecs[def.Idx])
-	}
-	cnBatch := containers.ToCNBatch(bat)
-	if err := c.flush(CopyTableDatabase, cnBatch); err != nil {
 		return err
 	}
 	return
