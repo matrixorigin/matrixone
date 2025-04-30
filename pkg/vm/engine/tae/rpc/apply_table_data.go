@@ -96,10 +96,14 @@ func (a *ApplyTableDataArg) Run() (err error) {
 		zap.String("dir", a.dir),
 		zap.String("start ts", a.txn.GetStartTS().ToString()),
 	)
-	a.createDatabase()
-	a.createTable()
+	if err = a.createDatabase(); err != nil {
+		return
+	}
+	if err = a.createTable(); err != nil {
+		return
+	}
 
-	objectlistBatch, release, err := a.readBatch(CopyTableObjectList)
+	objectlistBatch, release, err := a.readBatch(CopyTableObjectList, ObjectListAttrs)
 	if err != nil {
 		return
 	}
@@ -143,13 +147,16 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			ObjectState: catalog.ObjectState_Create_ApplyCommit,
 		}
 		objectEntry.SetTable(table)
+		objectEntry.SetObjectData(a.catalog.MakeObjectFactory()(objectEntry))
 		table.AddEntryLocked(objectEntry)
 
 		if !isPersisted[i] {
+			attrs := table.GetLastestSchema(isTombstone).AllNames()
+			attrs = append(attrs, objectio.TombstoneAttr_CommitTs_Attr)
 			name := objectEntry.ObjectName().String()
 			var bat *batch.Batch
 			var objectRelease func()
-			if bat, objectRelease, err = a.readBatch(name); err != nil {
+			if bat, objectRelease, err = a.readBatch(name, attrs); err != nil {
 				return
 			}
 			defer objectRelease()
@@ -226,13 +233,13 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 
 	var schemaBatch, tableBatch *batch.Batch
 	var schemaRelease, tableRelease func()
-	if schemaBatch, schemaRelease, err = a.readBatch(CopyTableSchema); err != nil {
+	if schemaBatch, schemaRelease, err = a.readBatch(CopyTableSchema, catalog.SystemColumnSchema.AllNames()); err != nil {
 		return
 	}
 	defer schemaRelease()
 	defer schemaBatch.Clean(a.mp)
 	tnSchemaBatch := containers.ToTNBatch(schemaBatch, a.mp)
-	if tableBatch, tableRelease, err = a.readBatch(CopyTableTable); err != nil {
+	if tableBatch, tableRelease, err = a.readBatch(CopyTableTable, catalog.SystemTableSchema.AllNames()); err != nil {
 		return
 	}
 	defer tableRelease()
@@ -306,7 +313,7 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 	return
 }
 
-func (a *ApplyTableDataArg) readBatch(name string) (bat *batch.Batch, release func(), err error) {
+func (a *ApplyTableDataArg) readBatch(name string, attrs []string) (bat *batch.Batch, release func(), err error) {
 	logutil.Info(
 		"APPLY-TABLE-DATA-READ-BATCH",
 		zap.String("dir", a.dir),
@@ -334,5 +341,6 @@ func (a *ApplyTableDataArg) readBatch(name string) (bat *batch.Batch, release fu
 		return nil, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid object list batch, %d", len(bats)))
 	}
 	bat = bats[0]
+	bat.Attrs = attrs
 	return
 }

@@ -109,6 +109,10 @@ func NewCopyTableArg(
 }
 
 func (c *CopyTableArg) Run() (err error) {
+	if c.txn, err = c.inspectContext.db.StartTxn(nil); err != nil {
+		return
+	}
+	defer c.txn.Commit(c.ctx)
 	logutil.Info(
 		"COPY-TABLE-START",
 		zap.String(
@@ -132,6 +136,9 @@ func (c *CopyTableArg) Run() (err error) {
 	defer txn.Commit(c.ctx)
 
 	if err := c.flushTableSchema(); err != nil {
+		return err
+	}
+	if err := c.flushTableEntry(); err != nil {
 		return err
 	}
 
@@ -177,7 +184,7 @@ func (c *CopyTableArg) flushTableSchema() (err error) {
 		if def.IsPhyAddr() {
 			continue
 		}
-		txnimpl.FillColumnRow(c.table, catalog.SystemColumnSchema, def.Name, bat.Vecs[def.Idx])
+		txnimpl.FillColumnRow(c.table, c.table.GetLastestSchema(false), def.Name, bat.Vecs[def.Idx])
 	}
 	cnBatch := containers.ToCNBatch(bat)
 	if err := c.flush(CopyTableSchema, cnBatch); err != nil {
@@ -200,7 +207,7 @@ func (c *CopyTableArg) flushTableEntry() (err error) {
 		if def.IsPhyAddr() {
 			continue
 		}
-		txnimpl.FillTableRow(c.table, catalog.SystemTableSchema, def.Name, bat.Vecs[def.Idx])
+		txnimpl.FillTableRow(c.table, c.table.GetLastestSchema(false), def.Name, bat.Vecs[def.Idx])
 	}
 	cnBatch := containers.ToCNBatch(bat)
 	if err := c.flush(CopyTableTable, cnBatch); err != nil {

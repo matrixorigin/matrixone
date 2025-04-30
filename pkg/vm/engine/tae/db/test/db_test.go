@@ -12129,12 +12129,12 @@ func Test_ApplyTableData(t *testing.T) {
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
 	schema := catalog.MockSchema(2, -1)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 2)
-	tae.Close()
 
 	tae.CreateRelAndAppend2(bat, true)
 	txn,table:=tae.GetRelation()
@@ -12151,21 +12151,24 @@ func Test_ApplyTableData(t *testing.T) {
 		common.DebugAllocator,
 		tae.Opts.Fs,
 	)
-	copyArg.Run()
+	err := copyArg.Run()
+	assert.NoError(t, err)
 
+	t.Log(tae.Catalog.SimplePPString(3))
 
-	tae2:=testutil.NewTestEngine(ctx,ModuleName,t,opts)
 	applyArg,err:=taerpc.NewApplyTableDataArg(
 		ctx,
 		dir,
-		taerpc.MockInspectContext(tae2.DB),
+		taerpc.MockInspectContext(tae.DB),
+		"db2",
+		"table2",
 		common.DebugAllocator,
-		tae2.Opts.Fs,
+		tae.Opts.Fs,
 	)
-	assert.NoError(t,err)
-	applyArg.Run()
-	
+	assert.NoError(t, err)
+	err = applyArg.Run()
+	assert.NoError(t, err)
 
-	tae2.Close()
+	t.Log(tae.Catalog.SimplePPString(3))
 
 }
