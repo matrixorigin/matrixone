@@ -204,42 +204,6 @@ func processCheckpointEntry(
 	return nil
 }
 
-func buildCheckpointMeta(
-	ckpEntries []*checkpoint.CheckpointEntry,
-	end *types.TS,
-	cnLocation, tnLocation *objectio.Location,
-) *containers.Batch {
-	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(
-		ckpEntries[0].GetStart(), false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(
-		*end, false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append(
-		[]byte(*cnLocation), false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_EntryType).Append(
-		false, false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_Version).Append(
-		ckpEntries[len(ckpEntries)-1].GetVersion(), false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_AllLocations).Append(
-		[]byte(*tnLocation), false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN).Append(
-		uint64(0), false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(
-		uint64(0), false,
-	)
-	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(
-		int8(checkpoint.ET_Compacted), false,
-	)
-	return bat
-}
-
 func makeBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	bat := containers.NewBatch()
 	// Types() is not used, then empty schema can also be handled here
