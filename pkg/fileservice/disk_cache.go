@@ -119,6 +119,7 @@ func NewDiskCache(
 					)
 				}
 			},
+			-1,
 		),
 	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))

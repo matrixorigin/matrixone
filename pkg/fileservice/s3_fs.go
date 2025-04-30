@@ -194,11 +194,16 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if config.MemoryCapacity != nil &&
 		*config.MemoryCapacity > DisableCacheCapacity {
+		ghostQueueCapacity := -1 // default
+		if config.MemoryGhostQueueCapacity != nil {
+			ghostQueueCapacity = int(*config.MemoryGhostQueueCapacity)
+		}
 		s.memCache = NewMemCache(
 			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 			&config.CacheCallbacks,
 			s.perfCounterSets,
 			s.name,
+			ghostQueueCapacity,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", s.name),

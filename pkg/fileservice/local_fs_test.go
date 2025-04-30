@@ -211,12 +211,14 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 		fscache.ConstCapacity(1<<20), nil,
 		nil,
 		"",
+		-1,
 	)
 	defer memCache1.Close(ctx)
 	memCache2 := NewMemCache(
 		fscache.ConstCapacity(1<<20), nil,
 		nil,
 		"",
+		-1,
 	)
 	defer memCache2.Close(ctx)
 	caches := []IOVectorCache{memCache1, memCache2}

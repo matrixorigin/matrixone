@@ -35,14 +35,15 @@ import (
 )
 
 type CacheConfig struct {
-	MemoryCapacity       *toml.ByteSize `toml:"memory-capacity" user_setting:"advanced"`
-	DiskPath             *string        `toml:"disk-path"`
-	DiskCapacity         *toml.ByteSize `toml:"disk-capacity"`
-	DiskMinEvictInterval *toml.Duration `toml:"disk-min-evict-interval"`
-	DiskEvictTarget      *float64       `toml:"disk-evict-target"`
-	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
-	RPC                  morpc.Config   `toml:"rpc"`
-	CheckOverlaps        bool           `toml:"check-overlaps"`
+	MemoryCapacity           *toml.ByteSize `toml:"memory-capacity" user_setting:"advanced"`
+	MemoryGhostQueueCapacity *toml.ByteSize `toml:"memory-ghost-queue-capacity"` // -1 for default, 0 to disable
+	DiskPath                 *string        `toml:"disk-path"`
+	DiskCapacity             *toml.ByteSize `toml:"disk-capacity"`
+	DiskMinEvictInterval     *toml.Duration `toml:"disk-min-evict-interval"`
+	DiskEvictTarget          *float64       `toml:"disk-evict-target"`
+	RemoteCacheEnabled       bool           `toml:"remote-cache-enabled"`
+	RPC                      morpc.Config   `toml:"rpc"`
+	CheckOverlaps            bool           `toml:"check-overlaps"`
 
 	QueryClient      client.QueryClient            `json:"-"`
 	KeyRouterFactory KeyRouterFactory[pb.CacheKey] `json:"-"`

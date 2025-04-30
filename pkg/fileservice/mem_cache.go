@@ -33,6 +33,7 @@ func NewMemCache(
 	callbacks *CacheCallbacks,
 	counterSets []*perfcounter.CounterSet,
 	name string,
+	ghostQueueCapacity int,
 ) *MemCache {
 
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge(name, "mem")
@@ -113,7 +114,7 @@ func NewMemCache(
 		}
 	}
 
-	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn)
+	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn, ghostQueueCapacity)
 
 	ret := &MemCache{
 		cache:       dataCache,

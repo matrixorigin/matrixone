@@ -51,7 +51,9 @@ type Cache[K comparable, V any] struct {
 	queue1    Queue[*_CacheItem[K, V]]
 	used2     int64
 	queue2    Queue[*_CacheItem[K, V]]
-	ghost     *ghost[K]
+
+	ghost              *ghost[K]
+	ghostQueueCapacity int
 
 	capacityCut atomic.Int64
 }
@@ -87,30 +89,43 @@ func (c *_CacheItem[K, V]) dec() {
 	}
 }
 
+const DefaultGhostQueueCapacity = 10000
+
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
 	keyShardFunc func(K) uint64,
 	postSet func(ctx context.Context, key K, value V, size int64),
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64),
+	ghostQueueCapacity int, // -1 for default, 0 to disable
 ) *Cache[K, V] {
+
 	ret := &Cache[K, V]{
 		capacity: capacity,
 		capacity1: func() int64 {
 			return capacity() / 10
 		},
-		itemQueue:    make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
-		queue1:       *NewQueue[*_CacheItem[K, V]](),
-		queue2:       *NewQueue[*_CacheItem[K, V]](),
-		ghost:        newGhost[K](int(10000)),
-		keyShardFunc: keyShardFunc,
-		postSet:      postSet,
-		postGet:      postGet,
-		postEvict:    postEvict,
+		itemQueue:          make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
+		queue1:             *NewQueue[*_CacheItem[K, V]](),
+		queue2:             *NewQueue[*_CacheItem[K, V]](),
+		keyShardFunc:       keyShardFunc,
+		postSet:            postSet,
+		postGet:            postGet,
+		postEvict:          postEvict,
+		ghostQueueCapacity: ghostQueueCapacity,
 	}
+
+	if ghostQueueCapacity < 0 {
+		ghostQueueCapacity = DefaultGhostQueueCapacity
+	}
+	if ghostQueueCapacity > 0 {
+		ret.ghost = newGhost[K](ghostQueueCapacity)
+	}
+
 	for i := range ret.shards {
 		ret.shards[i].values = make(map[K]*_CacheItem[K, V], 1024)
 	}
+
 	return ret
 }
 
@@ -161,7 +176,7 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 	}
 
 	// enqueue
-	if c.ghost.contains(item.key) {
+	if c.ghostQueueCapacity > 0 && c.ghost.contains(item.key) {
 		c.ghost.remove(item.key)
 		c.queue2.enqueue(item)
 		c.used2 += item.size
@@ -174,11 +189,10 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 	for {
 		select {
 		case item := <-c.itemQueue:
-			if c.ghost.contains(item.key) {
+			if c.ghostQueueCapacity > 0 && c.ghost.contains(item.key) {
 				c.ghost.remove(item.key)
 				c.queue2.enqueue(item)
 				c.used2 += item.size
-
 			} else {
 				c.queue1.enqueue(item)
 				c.used1 += item.size
@@ -296,7 +310,9 @@ func (c *Cache[K, V]) evict1(ctx context.Context) {
 			// evict
 			c.deleteItem(ctx, item)
 			c.used1 -= item.size
-			c.ghost.add(item.key)
+			if c.ghostQueueCapacity > 0 {
+				c.ghost.add(item.key)
+			}
 			return
 		}
 	}

@@ -33,9 +33,10 @@ func NewDataCache(
 	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
 	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	ghostQueueCapacity int,
 ) *DataCache {
 	return &DataCache{
-		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
+		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict, ghostQueueCapacity),
 	}
 }
 

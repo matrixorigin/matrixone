@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 	"io/fs"
 	"iter"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"go.uber.org/zap"
 
@@ -151,11 +152,16 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory
 	if config.MemoryCapacity != nil &&
 		*config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
+		ghostQueueCapacity := -1 // default
+		if config.MemoryGhostQueueCapacity != nil {
+			ghostQueueCapacity = int(*config.MemoryGhostQueueCapacity)
+		}
 		l.memCache = NewMemCache(
 			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
 			&config.CacheCallbacks,
 			l.perfCounterSets,
 			l.name,
+			ghostQueueCapacity,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
