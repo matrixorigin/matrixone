@@ -228,7 +228,14 @@ func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
 		}
 
 		fromSize += float64(obj.OriginSize())
-		estSize += float64(obj.Rows() * 20)
+		estSize += float64(obj.Rows() * 30)
+		rowcnt := 8192
+		if obj.Rows() < 8192 {
+			rowcnt = int(obj.Rows())
+		}
+		estSize += float64(rowcnt * int(obj.OriginSize()/obj.Rows()) * 3 / 2)
+		estSize += float64(obj.Rows()) * 30  // transfer page
+		estSize += float64(obj.OriginSize()) // objectio write buffer
 		rows += int(obj.Rows())
 		blkn += int(obj.BlkCnt())
 	}

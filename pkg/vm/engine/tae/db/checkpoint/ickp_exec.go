@@ -237,18 +237,18 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	if err != nil {
 		return
 	}
-	fields = data.ExportStats("")
 	defer data.Close()
-	var cnLocation, tnLocation objectio.Location
-	cnLocation, tnLocation, files, err = data.WriteTo(
+	var location objectio.Location
+	location, files, err = data.Sync(
 		executor.ctx,
 		executor.runner.rt.Fs,
 	)
+	fields = data.ExportStats("")
 	if err != nil {
 		return
 	}
-	files = append(files, cnLocation.Name().String())
-	entry.SetLocation(cnLocation, tnLocation)
+	files = append(files, location.Name().String())
+	entry.SetLocation(location, location)
 
 	perfcounter.Update(executor.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)

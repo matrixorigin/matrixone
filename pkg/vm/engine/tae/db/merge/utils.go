@@ -171,9 +171,20 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 func estimateMergeSize(objs []*catalog.ObjectEntry) int {
 	size := 0
 	for _, o := range objs {
-		size += int(o.Rows()) * estimateMemUsagePerRow
+		blkRow := 8192
+		if r := o.Rows(); r == 0 {
+			continue
+		} else if r < 8192 {
+			blkRow = int(r)
+		}
+		size += blkRow * int(o.OriginSize()/o.Rows()) / 2 * 3 // read one block
+		size += int(o.Rows()) * estimateMemUsagePerRow        // transfer page
+		size += int(o.OriginSize())                           // objectio write buffer
 	}
-	return size
+	// Go's load factor is 6.5. This means there are average 6.5 key/elem pairs per bucket.
+	// Each bucket holds up to 8 key/elem pairs. So the memory wasted are 1.5 / 8 ~= 0.2.
+	// So we reserve 120% memory per row here.
+	return size / 5 * 6
 }
 
 type resourceController struct {
@@ -187,6 +198,12 @@ type resourceController struct {
 	transferPageLimit int64
 
 	cpuPercent float64
+
+	skippedFromOOM bool
+	count          int
+	prevCount      int
+
+	tableStart time.Time
 }
 
 func (c *resourceController) setMemLimit(total uint64) {
@@ -236,6 +253,9 @@ func (c *resourceController) refresh() {
 	}
 	c.reservedMergeRows = 0
 	c.reserved = 0
+
+	c.skippedFromOOM = false
+	c.count = 0
 }
 
 func (c *resourceController) availableMem() int64 {
@@ -261,15 +281,15 @@ func (c *resourceController) printStats() {
 
 func (c *resourceController) reserveResources(objs []*catalog.ObjectEntry) {
 	for _, obj := range objs {
+		if obj.Rows() == 0 {
+			continue
+		}
 		c.reservedMergeRows += int64(obj.Rows())
-		c.reserved += estimateMemUsagePerRow * int64(obj.Rows())
 	}
+	c.reserved += int64(estimateMergeSize(objs))
 }
 
 func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool {
-	if c.reservedMergeRows*36 /*28 * 1.3 */ > c.transferPageLimit/8 {
-		return false
-	}
 
 	mem := c.availableMem()
 	if mem > constMaxMemCap {
@@ -278,7 +298,7 @@ func (c *resourceController) resourceAvailable(objs []*catalog.ObjectEntry) bool
 	return estimateMergeSize(objs) <= int(2*mem/3)
 }
 
-func objectValid(objectEntry *catalog.ObjectEntry) bool {
+func ObjectValid(objectEntry *catalog.ObjectEntry) bool {
 	if objectEntry.IsAppendable() {
 		return false
 	}
@@ -315,7 +335,7 @@ func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService
 }
 
 type policy interface {
-	onObject(*catalog.ObjectEntry, *BasicPolicyConfig) bool
+	onObject(*catalog.ObjectEntry) bool
 	revise(*resourceController) []reviseResult
 	resetForTable(*catalog.TableEntry, *BasicPolicyConfig)
 }

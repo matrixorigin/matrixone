@@ -49,9 +49,9 @@ var (
 		{
 			Name: "score",
 			Typ: plan.Type{
-				Id:          int32(types.T_float32),
+				Id:          int32(types.T_float64),
 				NotNullable: false,
-				Width:       4,
+				Width:       8,
 			},
 		},
 	}
@@ -84,8 +84,9 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  hnsw_create_func_name,
-				Param: []byte(params),
+				Name:     hnsw_create_func_name,
+				Param:    []byte(params),
+				IsSingle: true, // model building require single thread mode so set IsSingle to true
 			},
 			Cols: colDefs,
 		},

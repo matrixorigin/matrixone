@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,10 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type hnswSearchState struct {
@@ -41,7 +41,7 @@ type hnswSearchState struct {
 	offset    int
 	limit     uint64
 	keys      []int64
-	distances []float32
+	distances []float64
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 }
@@ -73,7 +73,7 @@ func (u *hnswSearchState) call(tf *TableFunction, proc *process.Process) (vm.Cal
 
 	for i := u.offset; i < nkeys && n < 8192; i++ {
 		vector.AppendFixed[int64](u.batch.Vecs[0], u.keys[i], false, proc.Mp())
-		vector.AppendFixed[float32](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
+		vector.AppendFixed[float64](u.batch.Vecs[1], u.distances[i], false, proc.Mp())
 		n++
 	}
 
@@ -145,10 +145,11 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		}
 
 		// default L2Sq
-		if u.param.OpType != "vector_l2_ops" {
+		metrictype, ok := metric.OpTypeToUsearchMetric[u.param.OpType]
+		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
-		u.idxcfg.Usearch.Metric = usearch.L2sq
+		u.idxcfg.Usearch.Metric = metrictype
 
 		if len(u.param.EfConstruction) > 0 {
 			val, err := strconv.Atoi(u.param.EfConstruction)
@@ -212,13 +213,24 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 	}
 
 	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
+	if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(f32a)))
+	}
 
 	veccache.Cache.Once()
 
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
-	u.keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, uint(u.limit))
+
+	var keys any
+	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
 	if err != nil {
 		return err
+	}
+
+	var ok bool
+	u.keys, ok = keys.([]int64)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "keys is not []int64")
 	}
 	return nil
 }

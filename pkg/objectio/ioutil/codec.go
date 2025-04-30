@@ -31,13 +31,16 @@ func IsFullName(name string) bool {
 	return strings.Contains(name, "/")
 }
 
+// name is expected to be like `meta_<start_ts>_<end_ts>.<ext>`
 func DecodeTSRangeFile(name string) (meta TSRangeFile) {
 	fileName := strings.Split(name, ".")
+	// fileName is expected to be like []string{"meta_<start_ts>_<end_ts>", "<ext>"}
 	if len(fileName) != 2 {
 		meta.ext = InvalidExt
 		return
 	}
 	info := strings.Split(fileName[0], "_")
+	// info is expected to be like []string{"meta", "<start_ts>", "<end_ts>"}
 	if len(info) != 3 {
 		meta.ext = InvalidExt
 		return
@@ -80,6 +83,8 @@ func TryDecodeTSRangeFile(name string) (dir string, ret TSRangeFile) {
 }
 
 // with dirname
+// input: start=0, end=100
+// output: /ckp/meta_0_100.ckp
 func EncodeCKPMetadataFullName(
 	start, end types.TS,
 ) string {

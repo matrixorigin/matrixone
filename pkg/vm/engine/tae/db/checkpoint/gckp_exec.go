@@ -121,7 +121,7 @@ func (executor *checkpointExecutor) onGCKPEntries(items ...any) {
 
 	// [force==false and ickpCount < count policy]
 	if !mergedCtx.force {
-		ickpCount := executor.runner.store.GetPenddingIncrementalCount()
+		ickpCount := executor.runner.store.GetIncrementalCountAfterGlobal()
 		if !executor.globalPolicy.Check(ickpCount) {
 			logutil.Debug(
 				"GCKP-Execute-Skip",

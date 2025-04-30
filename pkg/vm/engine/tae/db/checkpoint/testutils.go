@@ -283,9 +283,9 @@ func (r *runner) CreateSpecialCheckpointFile(
 		cfg.FillDefaults()
 	}
 	var (
-		cnLocation, tnLocation objectio.Location
+		loc objectio.Location
 	)
-	if cnLocation, tnLocation, _, err = data.WriteTo(
+	if loc, _, err = data.Sync(
 		ctx, r.rt.Fs,
 	); err != nil {
 		return
@@ -293,10 +293,10 @@ func (r *runner) CreateSpecialCheckpointFile(
 
 	location = fmt.Sprintf(
 		"%s:%d:%s:%s:%s",
-		cnLocation.String(),
+		loc.String(),
 		logtail.CheckpointCurrentVersion,
 		end.ToString(),
-		tnLocation.String(),
+		loc.String(),
 		start.ToString(),
 	)
 	return

@@ -53,7 +53,7 @@ func TestTombstoneData1(t *testing.T) {
 	var tombstoneRowIds []types.Rowid
 	int32Type := types.T_int32.ToType()
 	for i := 0; i < 3; i++ {
-		writer, err := colexec.NewS3TombstoneWriter()
+		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type)
 		require.NoError(t, err)
 		bat := NewCNTombstoneBatch(
 			&int32Type,
@@ -68,13 +68,15 @@ func TestTombstoneData1(t *testing.T) {
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 
-		writer.StashBatch(proc, bat)
-
-		_, ss, err := writer.SortAndSync(ctx, proc)
+		err = writer.Write(ctx, proc.Mp(), bat)
 		require.NoError(t, err)
-		require.False(t, ss.IsZero())
 
-		stats = append(stats, ss)
+		ss, err := writer.Sync(ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+		require.False(t, ss[0].IsZero())
+
+		stats = append(stats, ss...)
 	}
 
 	var stats1, stats2, stats3 objectio.ObjectStats
@@ -249,9 +251,15 @@ func TestRowIdsToOffset(t *testing.T) {
 	skipMask.Add(1)
 	skipMask.Add(3)
 
-	left1 := RowIdsToOffset(rowIds, int32(0), skipMask).([]int32)
-	left2 := RowIdsToOffset(rowIds, uint32(0), skipMask).([]uint32)
-	left3 := RowIdsToOffset(rowIds, uint64(0), skipMask).([]uint64)
+	left1, r1 := RowIdsToOffset(rowIds, skipMask)
+	left2, r2 := RowIdsToOffset(rowIds, skipMask)
+	left3, r3 := RowIdsToOffset(rowIds, skipMask)
+
+	defer func() {
+		r1()
+		r2()
+		r3()
+	}()
 
 	expect := []int{0, 2, 4, 5, 6, 7, 8, 9}
 

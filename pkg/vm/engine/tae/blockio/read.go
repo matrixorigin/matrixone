@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"time"
 
 	"go.uber.org/zap"
@@ -294,14 +295,15 @@ func BlockCompactionRead(
 		return nil, err
 	}
 	defer release()
-	if len(deletes) == 0 {
-		result := batch.NewWithSize(len(seqnums))
-		for i := range cacheVectors {
-			result.Vecs[i] = &cacheVectors[i]
-		}
-		result.SetRowCount(result.Vecs[0].Length())
-		return result, nil
-	}
+	// why comment? the cacheVector will be free when exit this function
+	//if len(deletes) == 0 {
+	//	result := batch.NewWithSize(len(seqnums))
+	//	for i := range cacheVectors {
+	//		result.Vecs[i] = &cacheVectors[i]
+	//	}
+	//	result.SetRowCount(result.Vecs[0].Length())
+	//	return result, nil
+	//}
 	result := batch.NewWithSize(len(seqnums))
 	for i, col := range cacheVectors {
 		typ := *col.GetType()
@@ -378,7 +380,7 @@ func BlockDataReadBackup(
 		return
 	}
 	defer tombstones.Release()
-	rows := tombstones.ToI64Array()
+	rows := tombstones.ToI64Array(nil)
 	if len(rows) > 0 {
 		logutil.Info("[BlockDataReadBackup Shrink]", zap.String("location", info.MetaLocation().String()), zap.Int("rows", len(rows)))
 		loaded.Shrink(rows, true)
@@ -479,7 +481,12 @@ func BlockDataReadInner(
 	// transform delete mask to deleted rows
 	// TODO: avoid this transformation
 	if !deleteMask.IsEmpty() {
-		deletedRows = deleteMask.ToI64Array()
+		arr := common.DefaultAllocator.GetSels()
+		defer func() {
+			common.DefaultAllocator.PutSels(arr)
+		}()
+
+		deletedRows = deleteMask.ToI64Array(&arr)
 	}
 
 	// build rowid column if needed

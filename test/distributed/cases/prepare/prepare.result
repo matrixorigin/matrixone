@@ -690,4 +690,26 @@ col1    col2    col1    col2
 1    null    1    null
 drop table test_prepare_1;
 drop table test_prepare_2;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int primary key, b int);
+insert into t1 values (1,1),(2,2),(3,3);
+create table t2(a int, t1_a int, primary key(a, t1_a));
+insert into t2 values (10,1),(20,2);
+prepare s1 from select t2.* from t2 join t1 on t2.t1_a = t1.a where t2.a in (?,?);
+set @a=20;
+set @b=10;
+execute s1 using @a, @b;
+a    t1_a
+10    1
+20    2
 drop database db1;
+create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
+create role prepare_role1;
+grant create database on account * to prepare_role1;
+create user prepare_user1 identified by '123456' default role prepare_role1;
+select mo_ctl('cn', 'task', ':retention');
+internal error: do not have privilege to execute the statement
+drop user prepare_user1;
+drop role prepare_role1;
+drop account prepare_account_01;

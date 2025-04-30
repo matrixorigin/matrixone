@@ -28,8 +28,7 @@ import (
 */
 
 const (
-	MaxIndexCapacity = 100000
-	MaxChunkSize     = 65536
+	MaxChunkSize = 65536
 )
 
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
@@ -43,6 +42,16 @@ type IndexTableConfig struct {
 	KeyPart       string `json:"part"`
 	ThreadsBuild  int64  `json:"threads_build"`
 	ThreadsSearch int64  `json:"threads_search"`
+	IndexCapacity int64  `json:"index_capacity"`
+
+	// IVF related
+	EntriesTable       string `json:"entries"`
+	DataSize           int64  `json:"datasize"`
+	Nprobe             uint   `json:"nprobe"`
+	PKeyType           int32  `json:"pktype"`
+	KeyPartType        int32  `json:"parttype"`
+	KmeansTrainPercent int64  `json:"kmeans_train_percent"`
+	KmeansMaxIteration int64  `json:"kmeans_max_iteration"`
 }
 
 // HNSW specified parameters
@@ -54,23 +63,41 @@ type HnswParam struct {
 	EfSearch       string `json:"ef_search"`
 }
 
+// IVF specified parameters
+type IvfParam struct {
+	Lists  string `json:"lists"`
+	OpType string `json:"op_type"`
+}
+
+type IvfflatIndexConfig struct {
+	Lists      uint
+	Metric     uint16
+	InitType   uint16
+	Dimensions uint
+	Spherical  bool
+	Version    int64
+	VectorType int32
+}
+
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
 	Type    string
 	Usearch usearch.IndexConfig
+	Ivfflat IvfflatIndexConfig
+}
+
+type RuntimeConfig struct {
+	Limit uint
+	Probe uint
 }
 
 // nthread == 0, result will return NumCPU - 1
 func GetConcurrency(nthread int64) int64 {
-	ret := int64(1)
 	if nthread > 0 {
 		return nthread
 	}
 	ncpu := runtime.NumCPU()
-	if ncpu > 1 {
-		ret = int64(ncpu - 1)
-	}
-	return ret
+	return int64(ncpu)
 }
 
 // nthread == 0, result will return NumCPU

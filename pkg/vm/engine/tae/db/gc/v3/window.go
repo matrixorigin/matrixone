@@ -213,7 +213,7 @@ func (w *GCWindow) ExecuteFastBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error),
+	getCkpReader func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error),
 	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPReader) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
@@ -232,17 +232,17 @@ func (w *GCWindow) ScanCheckpoints(
 		if len(checkpointEntries) == 0 {
 			return true, nil
 		}
-		data, err := collectCkpData(ctx, checkpointEntries[0])
+		ckpReader, err := getCkpReader(ctx, checkpointEntries[0])
 		if err != nil {
 			return false, err
 		}
 		if processCkpData != nil {
-			if err = processCkpData(checkpointEntries[0], data); err != nil {
+			if err = processCkpData(checkpointEntries[0], ckpReader); err != nil {
 				return false, err
 			}
 		}
 		objects := make(map[string]*ObjectEntry)
-		collectObjectsFromCheckpointData(ctx, data, objects)
+		collectObjectsFromCheckpointData(ctx, ckpReader, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -360,8 +360,8 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(ctx context.Context, data *logtail.CKPReader, objects map[string]*ObjectEntry) {
-	data.ForEachRow(
+func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]*ObjectEntry) {
+	ckpReader.ForEachRow(
 		ctx,
 		func(
 			account uint32,

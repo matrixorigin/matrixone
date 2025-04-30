@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -30,7 +29,7 @@ type ShufflePool struct {
 	maxHolders   int32
 	holders      int32
 	finished     int32
-	batches      []*batch.Batch
+	batches      []*batch.CompactBatchs
 	lock         sync.Mutex
 	locks        []sync.Mutex
 	fullBatchIdx []int
@@ -40,7 +39,10 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePool {
 	sp := &ShufflePool{bucketNum: bucketNum, maxHolders: maxHolders}
 	sp.holders = 0
 	sp.finished = 0
-	sp.batches = make([]*batch.Batch, sp.bucketNum)
+	sp.batches = make([]*batch.CompactBatchs, sp.bucketNum)
+	for i := range sp.batches {
+		sp.batches[i] = batch.NewCompactBatchs()
+	}
 	sp.locks = make([]sync.Mutex, bucketNum)
 	sp.fullBatchIdx = make([]int, 0, bucketNum)
 	return sp
@@ -101,19 +103,16 @@ func (sp *ShufflePool) Print() { // only for debug
 }
 
 // shuffle operator is ending, release buf and sending remaining batches
-func (sp *ShufflePool) GetEndingBatch(buf *batch.Batch, proc *process.Process) *batch.Batch {
-	if buf != nil {
-		buf.Clean(proc.Mp())
-	}
+func (sp *ShufflePool) GetEndingBatch(proc *process.Process) *batch.Batch {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 	if sp.finished < sp.maxHolders {
 		return nil
 	}
 	for i := range sp.batches {
-		bat := sp.batches[i]
-		if bat != nil && bat.RowCount() > 0 {
-			sp.batches[i] = nil
+		bat := sp.batches[i].Pop()
+		if bat != nil {
+			bat.ShuffleIDX = int32(i)
 			return bat
 		}
 	}
@@ -121,34 +120,27 @@ func (sp *ShufflePool) GetEndingBatch(buf *batch.Batch, proc *process.Process) *
 }
 
 // if there is full batch (>8192 rows) in pool, return it and put buf in the place to continue writing into pool
-func (sp *ShufflePool) GetFullBatch(buf *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	var err error
-	if buf != nil {
-		buf.CleanOnlyData()
-	}
+func (sp *ShufflePool) GetFullBatch(proc *process.Process) *batch.Batch {
 	sp.lock.Lock()
 	defer sp.lock.Unlock()
 
 	length := len(sp.fullBatchIdx)
 	if length == 0 {
-		return buf, nil
+		return nil
 	}
 	fullIdx := sp.fullBatchIdx[length-1]
 	sp.fullBatchIdx = sp.fullBatchIdx[:length-1]
 	sp.locks[fullIdx].Lock()
 	defer sp.locks[fullIdx].Unlock()
 
-	bat := sp.batches[fullIdx]
-	//find a full batch, put buf in place
-	if buf == nil {
-		buf, err = proc.NewBatchFromSrc(bat, colexec.DefaultBatchSize)
-		if err != nil {
-			return nil, err
+	var bat *batch.Batch
+	if sp.batches[fullIdx].Length() > 1 {
+		bat = sp.batches[fullIdx].PopFront()
+		if bat != nil {
+			bat.ShuffleIDX = int32(fullIdx)
 		}
 	}
-	buf.ShuffleIDX = bat.ShuffleIDX
-	sp.batches[fullIdx] = buf
-	return bat, nil
+	return bat
 
 }
 
@@ -158,39 +150,28 @@ func (sp *ShufflePool) putBatchIntoShuffledPoolsBySels(srcBatch *batch.Batch, se
 		currentSels := sels[i]
 		if len(currentSels) > 0 {
 			sp.locks[i].Lock()
-			bat := sp.batches[i]
-			if bat == nil {
-				bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
-				if err != nil {
-					sp.locks[i].Unlock()
-					return err
-				}
-				bat.ShuffleIDX = int32(i)
-				sp.batches[i] = bat
+
+			err = sp.batches[i].Union(proc.Mp(), srcBatch, currentSels)
+			if err != nil {
+				sp.locks[i].Unlock()
+				return err
 			}
-			for vecIndex := range bat.Vecs {
-				v := bat.Vecs[vecIndex]
-				v.SetSorted(false)
-				err = v.UnionInt32(srcBatch.Vecs[vecIndex], currentSels, proc.Mp())
-				if err != nil {
-					sp.locks[i].Unlock()
-					return err
-				}
-			}
-			bat.AddRowCount(len(currentSels))
-			if bat.RowCount() > colexec.DefaultBatchSize-512 && sp.lock.TryLock() {
-				found := false
-				for _, j := range sp.fullBatchIdx {
-					if i == j {
-						//already in full batch index
-						found = true
-						break
+
+			if sp.batches[i].Length() > 1 {
+				if sp.lock.TryLock() {
+					found := false
+					for _, j := range sp.fullBatchIdx {
+						if i == j {
+							//already in full batch index
+							found = true
+							break
+						}
 					}
+					if !found {
+						sp.fullBatchIdx = append(sp.fullBatchIdx, i)
+					}
+					sp.lock.Unlock()
 				}
-				if !found {
-					sp.fullBatchIdx = append(sp.fullBatchIdx, i)
-				}
-				sp.lock.Unlock()
 			}
 			sp.locks[i].Unlock()
 		}

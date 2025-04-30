@@ -15,9 +15,10 @@
 package moarray
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 )
 
 func TestAdd(t *testing.T) {
@@ -576,12 +577,12 @@ func TestInnerProduct(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{1, 2, 3}},
-			want: 14,
+			want: -14,
 		},
 		{
 			name: "Test2 - float64",
 			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{1, 2, 3}},
-			want: 14,
+			want: -14,
 		},
 	}
 	for _, tt := range tests {
@@ -656,7 +657,7 @@ func TestL2Norm(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argF32: []float32{1, 2, 3}},
-			want: 3.741657386773941,
+			want: 3.741657257080078,
 		},
 		{
 			name: "Test2 - float64",
@@ -777,7 +778,7 @@ func TestL2Distance(t *testing.T) {
 		{
 			name: "Test1 - float32",
 			args: args{argLeftF32: []float32{1, 2, 3}, argRightF32: []float32{10, 20, 30}},
-			want: 33.67491648096547,
+			want: 33.6749153137207,
 		},
 		{
 			name: "Test2 - float64",

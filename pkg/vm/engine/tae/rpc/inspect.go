@@ -776,6 +776,9 @@ func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
 	policyCmd.Flags().BoolP("stopMerge", "s", false, "stop merging the target table")
+
+	wasmArg := &wasmArg{}
+	policyCmd.AddCommand(wasmArg.PrepareCommand())
 	return policyCmd
 }
 

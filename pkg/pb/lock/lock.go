@@ -59,6 +59,8 @@ func (m *Request) DebugString() string {
 		buffer.WriteString(m.KeepLockTableBind.DebugString())
 	case Method_KeepRemoteLock:
 		buffer.WriteString(m.KeepRemoteLock.DebugString())
+	case Method_AbortRemoteDeadlockTxn:
+		buffer.WriteString(m.AbortRemoteDeadlockTxn.DebugString())
 	}
 	return buffer.String()
 }
@@ -94,6 +96,8 @@ func (m *Response) DebugString() string {
 		buffer.WriteString(m.KeepLockTableBind.DebugString())
 	case Method_KeepRemoteLock:
 		buffer.WriteString(m.KeepRemoteLock.DebugString())
+	case Method_AbortRemoteDeadlockTxn:
+		buffer.WriteString(m.AbortRemoteDeadlockTxn.DebugString())
 	}
 	return buffer.String()
 }
@@ -225,6 +229,17 @@ func (m *KeepLockTableBindResponse) DebugString() string {
 	return "false"
 }
 
+func (m *AbortRemoteDeadlockTxnResponse) DebugString() string {
+	if m.OK {
+		return "true"
+	}
+	return "false"
+}
+
+func (m *AbortRemoteDeadlockTxnRequest) DebugString() string {
+	return m.Txn.DebugString()
+}
+
 func (m *KeepRemoteLockRequest) DebugString() string {
 	return m.ServiceID
 }
@@ -259,9 +274,10 @@ func waitTxnArrayString(values []WaitTxn) string {
 }
 
 func (m *WaitTxn) DebugString() string {
-	return fmt.Sprintf("%s(%s)",
+	return fmt.Sprintf("%s(%s), %s",
 		hex.EncodeToString(m.TxnID),
-		m.CreatedOn)
+		m.CreatedOn,
+		m.WaiterAddress)
 }
 
 func (m Request) TypeName() string {

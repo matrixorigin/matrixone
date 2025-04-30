@@ -15,10 +15,12 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"math/rand"
 	"strconv"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 /*
@@ -50,12 +52,16 @@ func Benchmark_kmeans(b *testing.B) {
 		b.ResetTimer()
 		clusterRand, _ := NewKMeans(data, k,
 			500, 0.01,
-			kmeans.L2Distance, kmeans.Random, true)
+			metric.Metric_L2Distance, kmeans.Random, true, 0)
 		_, err := clusterRand.Cluster()
 		if err != nil {
 			panic(err)
 		}
-		b.Log("SSE - clusterRand", strconv.FormatFloat(clusterRand.SSE(), 'f', -1, 32))
+		sse, err := clusterRand.SSE()
+		if err != nil {
+			panic(err)
+		}
+		b.Log("SSE - clusterRand", strconv.FormatFloat(sse, 'f', -1, 32))
 
 	})
 
@@ -64,12 +70,16 @@ func Benchmark_kmeans(b *testing.B) {
 		b.ResetTimer()
 		kmeansPlusPlus, _ := NewKMeans(data, k,
 			500, 0.01,
-			kmeans.L2Distance, kmeans.KmeansPlusPlus, true)
+			metric.Metric_L2Distance, kmeans.KmeansPlusPlus, true, 0)
 		_, err := kmeansPlusPlus.Cluster()
 		if err != nil {
 			panic(err)
 		}
-		b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
+		sse, err := kmeansPlusPlus.SSE()
+		if err != nil {
+			panic(err)
+		}
+		b.Log("SSE - clusterRand", strconv.FormatFloat(sse, 'f', -1, 32))
 	})
 
 }

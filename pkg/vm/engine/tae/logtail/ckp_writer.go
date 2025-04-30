@@ -37,6 +37,7 @@ import (
 type BaseCollector_V2 struct {
 	*catalog.LoopProcessor
 	data       *CheckpointData_V2
+	objectSize int
 	start, end types.TS
 	packer     *types.Packer
 }
@@ -47,7 +48,11 @@ func NewBaseCollector_V2(start, end types.TS, size int, fs fileservice.FileServi
 		data:          NewCheckpointData_V2(common.CheckpointAllocator, size, fs),
 		start:         start,
 		end:           end,
+		objectSize:    size,
 		packer:        types.NewPacker(),
+	}
+	if collector.objectSize == 0 {
+		collector.objectSize = DefaultCheckpointSize
 	}
 	collector.ObjectFn = collector.visitObject
 	collector.TombstoneFn = collector.visitObject
@@ -67,6 +72,10 @@ func NewBackupCollector_V2(start, end types.TS, fs fileservice.FileService) *Bas
 }
 
 func (collector *BaseCollector_V2) Close() {
+	if collector.data != nil {
+		collector.data.Close()
+		collector.data = nil
+	}
 	collector.packer.Close()
 }
 func (collector *BaseCollector_V2) OrphanData() *CheckpointData_V2 {
@@ -86,13 +95,13 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 		if node.IsAborted() {
 			continue
 		}
-		isObjectTombstone := node.End.Equal(&entry.CreatedAt)
+		isObjectTombstone := !node.End.Equal(&entry.CreatedAt)
 		if err := collectObjectBatch(
 			collector.data.batch, entry, isObjectTombstone, collector.packer, collector.data.allocator,
 		); err != nil {
 			return err
 		}
-		if collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
+		if collector.data.batch.Size() >= collector.objectSize || collector.data.batch.RowCount() >= DefaultCheckpointBlockRows {
 			collector.data.sinker.Write(context.Background(), collector.data.batch)
 			collector.data.batch.CleanOnlyData()
 		}
@@ -186,7 +195,7 @@ func collectObjectBatch(
 	); err != nil {
 		return
 	}
-	ckputil.EncodeCluser(encoder, srcObjectEntry.GetTable().ID, objType, srcObjectEntry.ID())
+	ckputil.EncodeCluser(encoder, srcObjectEntry.GetTable().ID, objType, srcObjectEntry.ID(), isObjectTombstone)
 	if err = vector.AppendBytes(
 		data.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], encoder.Bytes(), false, mp,
 	); err != nil {
@@ -197,7 +206,7 @@ func collectObjectBatch(
 	); err != nil {
 		return
 	}
-	if isObjectTombstone {
+	if !isObjectTombstone {
 		if err = vector.AppendFixed(
 			data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp,
 		); err != nil {
@@ -217,6 +226,8 @@ func collectObjectBatch(
 type CheckpointData_V2 struct {
 	batch     *batch.Batch
 	sinker    *ioutil.Sinker
+	rows      int
+	size      int
 	allocator *mpool.MPool
 }
 
@@ -241,10 +252,10 @@ func NewCheckpointDataWithSinker(sinker *ioutil.Sinker, allocator *mpool.MPool) 
 	}
 }
 
-func (data *CheckpointData_V2) WriteTo(
+func (data *CheckpointData_V2) Sync(
 	ctx context.Context,
 	fs fileservice.FileService,
-) (CNLocation, TNLocation objectio.Location, ckpfiles []string, err error) {
+) (location objectio.Location, ckpfiles []string, err error) {
 	if data.batch != nil && data.batch.RowCount() != 0 {
 		err = data.sinker.Write(ctx, data.batch)
 		if err != nil {
@@ -255,6 +266,10 @@ func (data *CheckpointData_V2) WriteTo(
 		return
 	}
 	files, inMems := data.sinker.GetResult()
+	for _, file := range files {
+		data.rows += int(file.Rows())
+		data.size += int(file.Size())
+	}
 	if len(inMems) != 0 {
 		panic("logic error")
 	}
@@ -279,8 +294,7 @@ func (data *CheckpointData_V2) WriteTo(
 	if blks, _, err = writer.Sync(ctx); err != nil {
 		return
 	}
-	CNLocation = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
-	TNLocation = CNLocation
+	location = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 	ckpfiles = make([]string, 0)
 	for _, obj := range files {
 		ckpfiles = append(ckpfiles, obj.ObjectName().String())
@@ -293,15 +307,8 @@ func (data *CheckpointData_V2) Close() {
 }
 func (data *CheckpointData_V2) ExportStats(prefix string) []zap.Field {
 	fields := make([]zap.Field, 0)
-	size := data.batch.Allocated()
-	rows := data.batch.RowCount()
-	persisted, _ := data.sinker.GetResult()
-	for _, obj := range persisted {
-		size += int(obj.Size())
-		rows += int(obj.Rows())
-	}
-	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), size))
-	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), rows))
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalSize", prefix), data.size))
+	fields = append(fields, zap.Int(fmt.Sprintf("%stotalRow", prefix), data.rows))
 	return fields
 }
 

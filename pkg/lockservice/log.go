@@ -396,17 +396,17 @@ func logLockTableClosed(
 func logDeadLockFound(
 	logger *log.MOLogger,
 	txn pb.WaitTxn,
-	waiters *waiters,
+	cycle string,
 ) {
 	if logger == nil {
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log("dead lock found",
-			getLogOptions(zap.DebugLevel),
-			zap.String("txn", txn.DebugString()),
-			waitTxnArrayField("wait-txn-list", waiters.waitTxns),
+			getLogOptions(zap.InfoLevel),
+			zap.String("deadlock txn", txn.DebugString()),
+			zap.String("cycle", cycle),
 		)
 	}
 }
@@ -944,6 +944,25 @@ func logTxnCreated(
 			"txn created",
 			getLogOptions(zap.DebugLevel),
 			txnField(txn),
+		)
+	}
+}
+
+func logAbortRemoteDeadlockFailed(
+	logger *log.MOLogger,
+	txn pb.WaitTxn,
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Log(
+			"abort remote dead lock failed",
+			getLogOptions(zap.ErrorLevel),
+			zap.String("txn", txn.DebugString()),
+			zap.Error(err),
 		)
 	}
 }

@@ -141,11 +141,9 @@ insert into blob_02 values(8,load_file('$resources/blob_file/blob7.pdf'));
 insert into blob_02 values(9,load_file('$resources/blob_file/blob8.xlsx'));
 insert into blob_02 values(10,load_file('$resources/blob_file/blob9.xml'));
 select a,length(b) from blob_02;
--- @bvt:issue#6302
 insert into blob_02 values(1,load_file('$resources/blob_file/blob2.mp3'));
 insert into blob_02 select 2,load_file('$resources/blob_file/blob2.mp3');
 select a,length(b) from blob_02 where a in (1,2);
--- @bvt:issue
 --preparement
 prepare stmt2 from 'create table blob_05(a int,b blob)';
 execute stmt2 ;
