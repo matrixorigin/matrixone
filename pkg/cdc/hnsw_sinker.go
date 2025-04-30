@@ -22,17 +22,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -40,6 +43,7 @@ import (
 var _ Sinker = &hnswSyncSinker[float32]{}
 
 type hnswSyncSinker[T types.RealNumbers] struct {
+	cnUUID           string
 	mysql            Sink
 	dbTblInfo        *DbTableInfo
 	watermarkUpdater IWatermarkUpdater
@@ -57,9 +61,11 @@ type hnswSyncSinker[T types.RealNumbers] struct {
 	pkColNames  []string
 	pkcol       int32
 	veccol      int32
+	exec        executor.SQLExecutor
 }
 
 var NewHnswSyncSinker = func(
+	cnUUID string,
 	sinkUri UriInfo,
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater IWatermarkUpdater,
@@ -71,6 +77,15 @@ var NewHnswSyncSinker = func(
 	sendSqlTimeout string,
 ) (Sinker, error) {
 
+	// sql executor
+	v, ok := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		os.Stderr.WriteString(fmt.Sprintf("sql executor create failed. cnUUID = %s\n", cnUUID))
+		return nil, moerr.NewNotSupportedNoCtx("no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+
+	// sink
 	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)
 	if err != nil {
 		return nil, err
@@ -157,6 +172,7 @@ var NewHnswSyncSinker = func(
 
 	if tableDef.Cols[veccol].Typ.Id == int32(types.T_array_float32) {
 		s := &hnswSyncSinker[float32]{
+			cnUUID:           cnUUID,
 			mysql:            sink,
 			dbTblInfo:        dbTblInfo,
 			watermarkUpdater: watermarkUpdater,
@@ -168,6 +184,7 @@ var NewHnswSyncSinker = func(
 			veccol:           veccol,
 			err:              atomic.Value{},
 			param:            param,
+			exec:             exec,
 		}
 		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 		return s, nil
@@ -185,6 +202,7 @@ var NewHnswSyncSinker = func(
 			veccol:           veccol,
 			err:              atomic.Value{},
 			param:            param,
+			exec:             exec,
 		}
 		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 		return s, nil
@@ -210,29 +228,105 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 		if bytes.Equal(sqlBuf, dummy) {
 			// dummy sql, do nothing
 		} else if bytes.Equal(sqlBuf, begin) {
-			if err := s.mysql.SendBegin(ctx); err != nil {
-				logutil.Errorf("cdc hnswSyncSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
-				// record error
-				s.SetError(err)
-			}
+			os.Stderr.WriteString("BEGIN\n")
+			/*
+				res, err := s.exec.Exec(newctx, "BEGIN;", opts)
+				if err != nil {
+					logutil.Errorf("cdc hnswSyncSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
+					// record error
+					s.SetError(err)
+				}
+				res.Close()
+			*/
+
+			/*
+				if err := s.mysql.SendBegin(ctx); err != nil {
+					logutil.Errorf("cdc hnswSyncSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
+					// record error
+					s.SetError(err)
+				}
+			*/
 		} else if bytes.Equal(sqlBuf, commit) {
-			if err := s.mysql.SendCommit(ctx); err != nil {
-				logutil.Errorf("cdc hnswSyncSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
-				// record error
-				s.SetError(err)
-			}
+			os.Stderr.WriteString("COMMIT\n")
+			/*
+				res, err := s.exec.Exec(newctx, "COMMIT;", opts)
+				if err != nil {
+					logutil.Errorf("cdc hnswSyncSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
+					// record error
+					s.SetError(err)
+				}
+				res.Close()
+			*/
+			/*
+				if err := s.mysql.SendCommit(ctx); err != nil {
+					logutil.Errorf("cdc hnswSyncSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
+					// record error
+					s.SetError(err)
+				}
+			*/
 		} else if bytes.Equal(sqlBuf, rollback) {
-			if err := s.mysql.SendRollback(ctx); err != nil {
-				logutil.Errorf("cdc hnswSyncSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
-				// record error
-				s.SetError(err)
-			}
+			os.Stderr.WriteString("ROLLBACK\n")
+			/*
+				res, err := s.exec.Exec(newctx, "ROLLBACK;", opts)
+				if err != nil {
+					logutil.Errorf("cdc hnswSyncSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
+					// record error
+					s.SetError(err)
+				}
+				res.Close()
+			*/
+			/*
+				if err := s.mysql.SendRollback(ctx); err != nil {
+					logutil.Errorf("cdc hnswSyncSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
+					// record error
+					s.SetError(err)
+				}
+			*/
 		} else {
-			if err := s.mysql.Send(ctx, ar, sqlBuf, true); err != nil {
+			// sql executor
+			/*
+				v, ok := runtime.ServiceRuntime(s.cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
+				if !ok {
+					os.Stderr.WriteString(fmt.Sprintf("sql executor create failed. cnUUID = %s\n", s.cnUUID))
+					s.SetError(moerr.NewNotSupported(ctx, "no implement sqlExecutor"))
+					continue
+				}
+				exec := v.(executor.SQLExecutor)
+				opts := executor.Options{}
+				opts = opts.WithDisableCommit().WithDisableRollback()
+
+				os.Stderr.WriteString(fmt.Sprintf("running SQL... cnUUID = %s\n", s.cnUUID))
+			*/
+
+			newctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			opts := executor.Options{}
+			//opts = opts.WithDisableCommit().WithDisableRollback()
+			//res, err := s.exec.Exec(newctx, string(sqlBuf), opts)
+
+			var res executor.Result
+			err := s.exec.ExecTxn(newctx,
+				func(exec executor.TxnExecutor) error {
+					v, err := exec.Exec(string(sqlBuf), opts.StatementOption())
+					res = v
+					return err
+				},
+				opts)
+			if err != nil {
 				logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
-				// record error
+				os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
+				os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
 				s.SetError(err)
 			}
+			res.Close()
+
+			/*
+				if err := s.mysql.Send(ctx, ar, sqlBuf, true); err != nil {
+					logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+					// record error
+					s.SetError(err)
+				}
+			*/
 		}
 	}
 }

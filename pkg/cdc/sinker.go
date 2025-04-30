@@ -50,6 +50,7 @@ var (
 )
 
 var NewSinker = func(
+	cnUUID string,
 	sinkUri UriInfo,
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater IWatermarkUpdater,
@@ -66,7 +67,7 @@ var NewSinker = func(
 	}
 
 	if sinkUri.SinkTyp == CDCSinkType_HnswSync {
-		return NewHnswSyncSinker(sinkUri, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
+		return NewHnswSyncSinker(cnUUID, sinkUri, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
 	}
 
 	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)

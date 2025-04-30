@@ -45,6 +45,13 @@ func hnswsync(proc *process.Process, db string, tbl string, cdc *vectorindex.Hns
 	}
 	defer res.Close()
 
+	os.Stderr.WriteString(sql)
+	os.Stderr.WriteString(fmt.Sprintf("\nnumber of batch = %d\n", len(res.Batches)))
+
+	if len(res.Batches) == 0 {
+		return nil
+	}
+
 	bat := res.Batches[0]
 
 	idxtblvec := bat.Vecs[0]
