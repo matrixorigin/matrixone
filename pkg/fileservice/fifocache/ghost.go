@@ -1,21 +1,19 @@
 package fifocache
 
-import "container/list"
-
 // ghost represents the `ghost` structure in the S3FIFO algorithm.
 // At the time of writing, this implementation is not carefully designed.
 // There can be a better way to implement `ghost`.
 type ghost[K comparable] struct {
 	size  int
-	ll    *list.List
-	items map[K]*list.Element
+	queue Queue[K]
+	items map[K]struct{}
 }
 
 func newGhost[K comparable](size int) *ghost[K] {
 	return &ghost[K]{
 		size:  size,
-		ll:    list.New(),
-		items: make(map[K]*list.Element),
+		queue: *NewQueue[K](),
+		items: make(map[K]struct{}),
 	}
 }
 
@@ -24,21 +22,22 @@ func (b *ghost[K]) add(key K) {
 		return
 	}
 
-	for b.ll.Len() >= b.size {
-		e := b.ll.Back()
-		delete(b.items, e.Value.(K))
-		b.ll.Remove(e)
+	for len(b.items) >= b.size {
+		key, ok := b.queue.dequeue()
+		if !ok {
+			// empty
+			break
+		}
+		delete(b.items, key)
 	}
 
-	e := b.ll.PushFront(key)
-	b.items[key] = e
+	b.queue.enqueue(key)
+	b.items[key] = struct{}{}
 }
 
 func (b *ghost[K]) remove(key K) {
-	if e, ok := b.items[key]; ok {
-		b.ll.Remove(e)
-		delete(b.items, key)
-	}
+	delete(b.items, key)
+	// keys in queue will be removed in add
 }
 
 func (b *ghost[K]) contains(key K) bool {
@@ -47,8 +46,6 @@ func (b *ghost[K]) contains(key K) bool {
 }
 
 func (b *ghost[K]) clear() {
-	b.ll.Init()
-	for k := range b.items {
-		delete(b.items, k)
-	}
+	b.queue = Queue[K]{}
+	clear(b.items)
 }
