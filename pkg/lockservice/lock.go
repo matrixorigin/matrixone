@@ -356,7 +356,7 @@ func (h *holders) clear() {
 }
 
 func (h *holders) getTxnSlice() []pb.WaitTxn {
-	var values []pb.WaitTxn
+	values := make([]pb.WaitTxn, 0, len(h.txns))
 	for _, v := range h.txns {
 		values = append(values, v)
 	}
