@@ -168,3 +168,9 @@ select * from t3 where a = 50;
 a    b
 50    e5c8314e-2ea7-11ed-8ec0-000c29847904
 drop table t3;
+create table t4(a int, b uuid);
+insert into t4 values(1, uuid()),(2, uuid());
+select a from t4 order by b, a;
+a
+1
+2
