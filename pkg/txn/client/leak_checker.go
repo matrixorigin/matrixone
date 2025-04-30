@@ -15,7 +15,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"sync"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -30,7 +30,7 @@ import (
 type leakChecker struct {
 	sync.RWMutex
 	logger         *log.MOLogger
-	actives        []ActiveTxn
+	actives        map[string]ActiveTxn
 	maxActiveAges  time.Duration
 	leakHandleFunc func([]ActiveTxn)
 	stopper        *stopper.Stopper
@@ -46,6 +46,7 @@ func newLeakCheck(
 		leakHandleFunc: leakHandleFunc,
 		stopper: stopper.NewStopper("txn-leak-checker",
 			stopper.WithLogger(logger.RawLogger())),
+		actives: make(map[string]ActiveTxn, 1000),
 	}
 }
 
@@ -65,26 +66,18 @@ func (lc *leakChecker) txnOpened(
 	options txn.TxnOptions) {
 	lc.Lock()
 	defer lc.Unlock()
-	lc.actives = append(lc.actives, ActiveTxn{
+	lc.actives[util.UnsafeBytesToString(txnID)] = ActiveTxn{
 		Options:  options,
 		ID:       txnID,
 		CreateAt: time.Now(),
 		txnOp:    txnOp,
-	})
+	}
 }
 
 func (lc *leakChecker) txnClosed(txnID []byte) {
 	lc.Lock()
 	defer lc.Unlock()
-	values := lc.actives[:0]
-	for idx, txn := range lc.actives {
-		if bytes.Equal(txn.ID, txnID) {
-			values = append(values, lc.actives[idx+1:]...)
-			break
-		}
-		values = append(values, txn)
-	}
-	lc.actives = values
+	delete(lc.actives, util.UnsafeBytesToString(txnID))
 }
 
 func (lc *leakChecker) check(ctx context.Context) {
