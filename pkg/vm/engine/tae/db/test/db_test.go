@@ -7441,7 +7441,7 @@ func TestPitrMeta(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = db1.GetRelationByName(pitrSchema.Name)
 	assert.NoError(t, err)
-	filter = handle.NewEQFilter([]byte("account"))
+	filter = handle.NewEQFilter([]byte("database"))
 	id, offset, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
 	_, _, err = rel.GetValue(id, offset, 5, false)
