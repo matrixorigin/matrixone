@@ -7324,7 +7324,7 @@ func TestPitrMeta(t *testing.T) {
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
 	schema1.Extra.ObjectMaxBlocks = 2
-	var rel3, rel4 handle.Relation
+	var rel3 handle.Relation
 	var database, database2 handle.Database
 	var err error
 	{
@@ -7335,7 +7335,7 @@ func TestPitrMeta(t *testing.T) {
 		assert.Nil(t, err)
 		database2, err = testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
-		rel4, err = testutil.CreateRelation2(ctx, txn, database2, schema1)
+		_, err = testutil.CreateRelation2(ctx, txn, database2, schema1)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -7372,7 +7372,7 @@ func TestPitrMeta(t *testing.T) {
 				data.Vecs[12].Append([]byte("h"), false)
 			} else {
 				data.Vecs[5].Append([]byte("table"), false)
-				data.Vecs[10].Append(uint64(rel4.ID()), false)
+				data.Vecs[10].Append(uint64(rel3.ID()), false)
 				data.Vecs[11].Append(uint8(4), false)
 				data.Vecs[12].Append([]byte("h"), false)
 			}
