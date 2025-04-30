@@ -40,3 +40,24 @@ func TestNewRangeLock(t *testing.T) {
 	assert.True(t, el.isLockRangeEnd())
 	assert.Equal(t, pb.LockMode_Shared, el.GetLockMode())
 }
+
+func BenchmarkHoldersContains(b *testing.B) {
+	// Preparation phase: create holders and add 2000 txns
+	h := newHolders()
+	for i := 0; i < 2000; i++ {
+		txn := pb.WaitTxn{
+			TxnID: []byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)},
+		}
+		h.add(txn)
+	}
+
+	// Reset timer to exclude preparation time
+	b.ResetTimer()
+
+	// Test searching for a non-existent txn
+	txnID := []byte{0xFF, 0xFF, 0xFF, 0xFF} // A non-existent txn
+
+	for i := 0; i < b.N; i++ {
+		h.contains(txnID)
+	}
+}
