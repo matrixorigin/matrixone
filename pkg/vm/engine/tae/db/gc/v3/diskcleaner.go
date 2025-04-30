@@ -295,16 +295,13 @@ func (cleaner *DiskCleaner) doFastExecute(ctx context.Context, ts *types.TS) (er
 			zap.Error(err),
 		)
 	}()
-	var ok bool
 	if replayErr := cleaner.replayError.Load(); replayErr != nil {
-		if _, ok = replayErr.(error); ok {
-			if err = cleaner.cleaner.Replay(ctx); err != nil {
-				msg = "GC-Replay"
-				cleaner.replayError.Store(err)
-				return
-			} else {
-				cleaner.replayError.Store(0)
-			}
+		if err = cleaner.cleaner.Replay(ctx); err != nil {
+			msg = "GC-Replay"
+			cleaner.replayError.Store(&err)
+			return
+		} else {
+			cleaner.replayError.Store(nil)
 		}
 	}
 	err = cleaner.cleaner.Process(ctx, JT_GCFastExecute, ts)
