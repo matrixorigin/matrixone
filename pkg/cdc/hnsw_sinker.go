@@ -219,115 +219,53 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 		logutil.Infof("cdc hnswSyncSinker(%v).Run: end", s.dbTblInfo)
 	}()
 
-	for sqlBuf := range s.sqlBufSendCh {
-		// have error, skip
-		if s.err.Load() != nil {
-			continue
+	for {
+
+		// make sure there is a BEGIN before start transaction
+		for sqlBuf := range s.sqlBufSendCh {
+			if bytes.Equal(sqlBuf, begin) {
+				break
+			}
 		}
 
-		if bytes.Equal(sqlBuf, dummy) {
-			// dummy sql, do nothing
-		} else if bytes.Equal(sqlBuf, begin) {
-			os.Stderr.WriteString("BEGIN\n")
-			/*
-				res, err := s.exec.Exec(newctx, "BEGIN;", opts)
-				if err != nil {
-					logutil.Errorf("cdc hnswSyncSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
-					// record error
-					s.SetError(err)
-				}
-				res.Close()
-			*/
-
-			/*
-				if err := s.mysql.SendBegin(ctx); err != nil {
-					logutil.Errorf("cdc hnswSyncSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
-					// record error
-					s.SetError(err)
-				}
-			*/
-		} else if bytes.Equal(sqlBuf, commit) {
-			os.Stderr.WriteString("COMMIT\n")
-			/*
-				res, err := s.exec.Exec(newctx, "COMMIT;", opts)
-				if err != nil {
-					logutil.Errorf("cdc hnswSyncSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
-					// record error
-					s.SetError(err)
-				}
-				res.Close()
-			*/
-			/*
-				if err := s.mysql.SendCommit(ctx); err != nil {
-					logutil.Errorf("cdc hnswSyncSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
-					// record error
-					s.SetError(err)
-				}
-			*/
-		} else if bytes.Equal(sqlBuf, rollback) {
-			os.Stderr.WriteString("ROLLBACK\n")
-			/*
-				res, err := s.exec.Exec(newctx, "ROLLBACK;", opts)
-				if err != nil {
-					logutil.Errorf("cdc hnswSyncSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
-					// record error
-					s.SetError(err)
-				}
-				res.Close()
-			*/
-			/*
-				if err := s.mysql.SendRollback(ctx); err != nil {
-					logutil.Errorf("cdc hnswSyncSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
-					// record error
-					s.SetError(err)
-				}
-			*/
-		} else {
-			// sql executor
-			/*
-				v, ok := runtime.ServiceRuntime(s.cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
-				if !ok {
-					os.Stderr.WriteString(fmt.Sprintf("sql executor create failed. cnUUID = %s\n", s.cnUUID))
-					s.SetError(moerr.NewNotSupported(ctx, "no implement sqlExecutor"))
-					continue
-				}
-				exec := v.(executor.SQLExecutor)
-				opts := executor.Options{}
-				opts = opts.WithDisableCommit().WithDisableRollback()
-
-				os.Stderr.WriteString(fmt.Sprintf("running SQL... cnUUID = %s\n", s.cnUUID))
-			*/
-
-			newctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		func() {
+			newctx, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
 			defer cancel()
 			opts := executor.Options{}
-			//opts = opts.WithDisableCommit().WithDisableRollback()
-			//res, err := s.exec.Exec(newctx, string(sqlBuf), opts)
-
-			var res executor.Result
 			err := s.exec.ExecTxn(newctx,
 				func(exec executor.TxnExecutor) error {
-					v, err := exec.Exec(string(sqlBuf), opts.StatementOption())
-					res = v
-					return err
+
+					for sqlBuf := range s.sqlBufSendCh {
+						if bytes.Equal(sqlBuf, dummy) {
+
+						} else if bytes.Equal(sqlBuf, begin) {
+							// BEGIN
+						} else if bytes.Equal(sqlBuf, commit) {
+							// COMMIT - end of data
+							return nil
+						} else if bytes.Equal(sqlBuf, rollback) {
+							// ROLLBACK
+							return moerr.NewInternalError(ctx, "parent rollback")
+						} else {
+							res, err := exec.Exec(string(sqlBuf), opts.StatementOption())
+							if err != nil {
+								logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+								os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
+								os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
+								return err
+							}
+							res.Close()
+						}
+					}
+
+					return nil
+
 				},
 				opts)
 			if err != nil {
-				logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
-				os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
-				os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
 				s.SetError(err)
 			}
-			res.Close()
-
-			/*
-				if err := s.mysql.Send(ctx, ar, sqlBuf, true); err != nil {
-					logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
-					// record error
-					s.SetError(err)
-				}
-			*/
-		}
+		}()
 	}
 }
 
