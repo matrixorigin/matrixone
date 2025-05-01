@@ -33,6 +33,7 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 	switch op {
 	case cmd_util.AddChecker:
 	case cmd_util.RemoveChecker:
+	case cmd_util.ExecuteGC:
 		break
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid operation!")
@@ -42,6 +43,14 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 	case cmd_util.CheckerKeyTTL:
 	case cmd_util.CheckerKeyMinTS:
 		break
+	case cmd_util.FastGC:
+		ts := proc.Base.TxnClient.MinTimestamp()
+		minTS := types.TimestampToTS(ts)
+		return &cmd_util.DiskCleaner{
+			Op:    op,
+			Key:   key,
+			Value: minTS.ToString(),
+		}, nil
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid key!")
 	}
