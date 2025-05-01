@@ -256,8 +256,6 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 								return err
 							}
 							res.Close()
-							//return moerr.NewInternalError(ctx, "fake error")
-							//return moerr.NewQueryInterrupted(ctx)
 						}
 					}
 
