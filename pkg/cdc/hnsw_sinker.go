@@ -223,6 +223,7 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 
 		// make sure there is a BEGIN before start transaction
 		for sqlBuf := range s.sqlBufSendCh {
+			//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
 			if bytes.Equal(sqlBuf, begin) {
 				break
 			}
@@ -245,7 +246,7 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 							return nil
 						} else if bytes.Equal(sqlBuf, rollback) {
 							// ROLLBACK
-							return moerr.NewInternalError(ctx, "parent rollback")
+							return moerr.NewQueryInterrupted(ctx)
 						} else {
 							res, err := exec.Exec(string(sqlBuf), opts.StatementOption())
 							if err != nil {
@@ -255,6 +256,8 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 								return err
 							}
 							res.Close()
+							//return moerr.NewInternalError(ctx, "fake error")
+							//return moerr.NewQueryInterrupted(ctx)
 						}
 					}
 
@@ -263,7 +266,33 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 				},
 				opts)
 			if err != nil {
-				s.SetError(err)
+				moe, ok := err.(*moerr.Error)
+				//os.Stderr.WriteString(fmt.Sprintf("error from txn %v, ok %v\n", err, ok))
+				if ok {
+					if moe.ErrorCode() == moerr.ErrQueryInterrupted {
+						// skip rollback error
+						//os.Stderr.WriteString("error QueryInterrupted....rollback\n")
+						logutil.Errorf("cdc hnswSyncSinker(%v) parent rollback", s.dbTblInfo)
+					} else {
+						s.SetError(err)
+					}
+				} else if uw, ok := err.(interface{ Unwrap() []error }); ok {
+					rollbackfound := false
+					for _, e := range uw.Unwrap() {
+						//os.Stderr.WriteString(fmt.Sprintf("errors... %v\n", e))
+						moe, ok := e.(*moerr.Error)
+						if ok && moe.ErrorCode() == moerr.ErrQueryInterrupted {
+							rollbackfound = true
+						}
+					}
+
+					//os.Stderr.WriteString(fmt.Sprintf("rollback found %v\n", rollbackfound))
+					if !rollbackfound {
+						s.SetError(err)
+					}
+				} else {
+					s.SetError(err)
+				}
 			}
 		}()
 	}
