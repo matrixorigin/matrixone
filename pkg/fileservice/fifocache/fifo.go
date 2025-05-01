@@ -103,7 +103,7 @@ func (c *_CacheItem[K, V]) IncAndPost(ctx context.Context, fn func(ctx context.C
 // assume cache size is 128K
 // if cache capacity is smaller than 4G, ghost size is 100%.  Otherwise, 50%
 func estimateGhostSize(capacity int64) int {
-	estimate := int(capacity / int64(128000))
+	estimate := int(capacity / int64(32806))
 	if capacity > 8000000000 { // 8G
 		// only 50%
 		estimate /= 2
