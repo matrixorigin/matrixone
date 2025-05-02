@@ -89,7 +89,7 @@ func (c *_CacheItem[K, V]) dec() {
 	}
 }
 
-const DefaultGhostQueueCapacity = 10000
+const defaultGhostQueueCapacity = 10000
 
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
@@ -99,6 +99,10 @@ func New[K comparable, V any](
 	postEvict func(ctx context.Context, key K, value V, size int64),
 	ghostQueueCapacity int, // -1 for default, 0 to disable
 ) *Cache[K, V] {
+
+	if ghostQueueCapacity < 0 {
+		ghostQueueCapacity = defaultGhostQueueCapacity
+	}
 
 	ret := &Cache[K, V]{
 		capacity: capacity,
@@ -115,9 +119,6 @@ func New[K comparable, V any](
 		ghostQueueCapacity: ghostQueueCapacity,
 	}
 
-	if ghostQueueCapacity < 0 {
-		ghostQueueCapacity = DefaultGhostQueueCapacity
-	}
 	if ghostQueueCapacity > 0 {
 		ret.ghost = newGhost[K](ghostQueueCapacity)
 	}
