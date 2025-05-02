@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"golang.org/x/sys/cpu"
 
@@ -89,8 +90,6 @@ func (c *_CacheItem[K, V]) dec() {
 	}
 }
 
-const defaultGhostQueueCapacity = 10000
-
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
 	keyShardFunc func(K) uint64,
@@ -101,7 +100,12 @@ func New[K comparable, V any](
 ) *Cache[K, V] {
 
 	if ghostQueueCapacity < 0 {
-		ghostQueueCapacity = defaultGhostQueueCapacity
+		// default to estimation
+		var zero K
+		perKeyMemory := int(unsafe.Sizeof(zero) * 4)
+		maxGhostMemory := 64 << 20
+		ghostQueueCapacity = maxGhostMemory / perKeyMemory
+		ghostQueueCapacity = max(ghostQueueCapacity, 65536)
 	}
 
 	ret := &Cache[K, V]{
