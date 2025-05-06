@@ -136,7 +136,7 @@ func TestSqlBoolean(t *testing.T) {
 		},
 		{
 			pattern: "+读书会 +提效 +社群 +案例 +运营",
-			expect:  "WITH t00 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '读书会'), t01 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'提效')), t02 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'社群')), t03 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'案例')), t04 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'运营')), t0 AS (SELECT t00.doc_id FROM t00, t01, t02, t03, t04 WHERE t00.doc_id = t01.doc_id AND t00.doc_id = t02.doc_id AND t00.doc_id = t03.doc_id AND t00.doc_id = t04.doc_id) SELECT t0.doc_id, CAST(0 as int) FROM t0",
+			expect:  "WITH t00 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '读书会'), t01 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'提效')), t02 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'社群')), t0 AS (SELECT t00.doc_id FROM t00, t01, t02 WHERE t00.doc_id = t01.doc_id AND t00.doc_id = t02.doc_id), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'案例')), t2 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'运营')) SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id UNION ALL SELECT t0.doc_id, CAST(2 as int) FROM t2, t0 WHERE t0.doc_id = t2.doc_id",
 		},
 	}
 
