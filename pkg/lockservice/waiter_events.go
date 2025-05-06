@@ -269,7 +269,9 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 			return nil
 		}
 
-		holders = append(holders, lock.holders.txns...)
+		for _, v := range lock.holders.txns {
+			holders = append(holders, v)
+		}
 		return holders
 	}()
 	if len(holders) == 0 {

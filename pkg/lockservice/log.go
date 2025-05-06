@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -123,7 +124,7 @@ func logHolderAdded(
 			zap.Uint64("table", c.result.LockedOn.Table),
 			bytesArrayField("rows", c.rows),
 			zap.String("opts", c.opts.DebugString()),
-			waitTxnArrayField("holders", lock.holders.txns),
+			waitTxnArrayField("holders", lock.holders.getTxnSlice()),
 			bytesArrayField("waiters", waits),
 		)
 	}

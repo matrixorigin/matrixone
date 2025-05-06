@@ -261,7 +261,7 @@ type Lock struct {
 type holders struct {
 	// all active transactions which hold this lock. Every waiter has a reference to the lock
 	// waiters.
-	txns []pb.WaitTxn
+	txns map[string]pb.WaitTxn
 }
 
 // SetLockServiceByServiceID set lockservice instance into process level runtime.

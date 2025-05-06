@@ -294,7 +294,7 @@ func (l *localLockTable) unlock(
 					zap.Int("keys-count", locks.len()),
 					zap.String("hold-bind", b.DebugString()),
 					zap.String("bind", l.bind.DebugString()),
-					waitTxnArrayField("holders", lock.holders.txns),
+					waitTxnArrayField("holders", lock.holders.getTxnSlice()),
 					txnField(txn))
 			}
 			if len(startKey) > 0 && !lock.isLockRangeEnd() {
