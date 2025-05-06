@@ -405,9 +405,8 @@ const (
 	// fault inject function
 	FAULT_INJECT = 340
 
-	L2_DISTANCE_XC = 341   //L2_DISTANCE
-	L2_DISTANCE_SQ_XC = 342//L2_DISTANCE_SQ
-
+	L2_DISTANCE_XC    = 341
+	L2_DISTANCE_SQ_XC = 342
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
