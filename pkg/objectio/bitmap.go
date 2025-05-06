@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	BitmapBitsInPool = 8192
+	BitmapBitsInPool = BlockMaxRows
 	BitmapPoolSize   = 64
 )
 
