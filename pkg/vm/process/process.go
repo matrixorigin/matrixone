@@ -41,8 +41,6 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-const DefaultBatchSize = 8192
-
 func (proc *Process) QueryId() string {
 	return proc.Base.Id
 }
