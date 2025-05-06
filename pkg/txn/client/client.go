@@ -382,14 +382,10 @@ func (client *txnClient) Close() error {
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 	client.mu.RLock()
-	ops := make([]*txnOperator, 0, len(client.mu.activeTxns))
-	for _, op := range client.mu.activeTxns {
-		ops = append(ops, op)
-	}
-	client.mu.RUnlock()
+	defer client.mu.RUnlock()
 
 	min := timestamp.Timestamp{}
-	for _, op := range ops {
+	for _, op := range client.mu.activeTxns {
 		if min.IsEmpty() ||
 			op.Txn().SnapshotTS.Less(min) {
 			min = op.Txn().SnapshotTS
