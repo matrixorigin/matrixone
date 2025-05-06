@@ -128,7 +128,15 @@ func TestSqlBoolean(t *testing.T) {
 		},
 		{
 			pattern: "+读写汉字 -学中文",
-			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '写汉字'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'汉字')), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'字')) SELECT kw0.doc_id FROM kw0, kw1, kw2, kw3 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 6 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 9), t1 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '学中文'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'中文')), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'文')) SELECT kw0.doc_id FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 6) SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id",
+			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'字')) SELECT kw0.doc_id FROM kw0, kw1 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 9), t1 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '学中文') SELECT t0.doc_id, CAST(0 as int) FROM t0 UNION ALL SELECT t0.doc_id, CAST(1 as int) FROM t1, t0 WHERE t0.doc_id = t1.doc_id",
+		},
+		{
+			pattern: "+SGB11型号的检验报告",
+			expect:  "WITH t0 AS (WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'sgb11'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '型号的'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '检验报'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'告')) SELECT kw0.doc_id FROM kw0, kw1, kw2, kw3 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 5 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 14 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 23) SELECT doc_id, CAST(0 as int) FROM t0",
+		},
+		{
+			pattern: "+读书会 +提效 +社群 +案例 +运营",
+			expect:  "WITH t00 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE word = '读书会'), t01 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'提效')), t02 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'社群')), t03 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'案例')), t04 AS (SELECT doc_id FROM `__mo_index_secondary_` WHERE prefix_eq(word,'运营')), t0 AS (SELECT t00.doc_id FROM t00, t01, t02, t03, t04 WHERE t00.doc_id = t01.doc_id AND t00.doc_id = t02.doc_id AND t00.doc_id = t03.doc_id AND t00.doc_id = t04.doc_id) SELECT t0.doc_id, CAST(0 as int) FROM t0",
 		},
 	}
 
@@ -176,11 +184,15 @@ func TestSqlNL(t *testing.T) {
 		},
 		{
 			pattern: "读写汉字 学中文",
-			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '写汉字'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'汉字')), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'字')), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '学中文'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'中文')), kw6 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'文')) SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5, kw6 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 3 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 6 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 9 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 13 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 16 AND kw0.doc_id = kw6.doc_id AND kw6.pos - kw0.pos = 19",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '读写汉'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE prefix_eq(word,'字')), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '学中文') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 9 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 13",
 		},
 		{
 			pattern: "读写",
 			expect:  "SELECT doc_id, CAST(0 as int) FROM `__mo_index_secondary_` WHERE prefix_eq(word,'读写')",
+		},
+		{
+			pattern: "肥胖的原因都是因为摄入脂肪多导致的吗",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肥胖的'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '原因都'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '是因为'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '摄入脂'), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肪多导'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '致的吗') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 9 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 18 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 27 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 36 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 45",
 		},
 	}
 

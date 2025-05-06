@@ -829,10 +829,24 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 
 	list := make([]*Pattern, 0, 32)
 	tok, _ := tokenizer.NewSimpleTokenizer([]byte(pattern))
+
+	currBytePos := int32(0)
+	currEndBytePos := int32(0)
+
 	for t := range tok.Tokenize() {
 
 		slen := t.TokenBytes[0]
 		word := string(t.TokenBytes[1 : slen+1])
+
+		newBytePos := t.BytePos
+		newEndBytePos := t.BytePos + int32(slen)
+		if newBytePos >= currBytePos && newBytePos < currEndBytePos {
+			// skip the overlapping token
+			continue
+		}
+
+		currBytePos = newBytePos
+		currEndBytePos = newEndBytePos
 
 		runeSlice = []rune(word)
 		if len(runeSlice) < ngram_size {
