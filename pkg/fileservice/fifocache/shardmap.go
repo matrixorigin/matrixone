@@ -77,14 +77,16 @@ func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn 
 	deleted := make([]V, 0, 64)
 	for i := range m.shards {
 		s := &m.shards[i]
-		s.Lock()
-		for k, v := range s.values {
-			if fn(k, key) {
-				delete(s.values, k)
-				deleted = append(deleted, v)
+		func() {
+			s.Lock()
+			defer s.Unlock()
+			for k, v := range s.values {
+				if fn(k, key) {
+					delete(s.values, k)
+					deleted = append(deleted, v)
+				}
 			}
-		}
-		s.Unlock()
+		}()
 	}
 
 	for _, v := range deleted {
