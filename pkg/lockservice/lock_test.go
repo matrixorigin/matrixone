@@ -61,3 +61,32 @@ func BenchmarkHoldersContains(b *testing.B) {
 		h.contains(txnID)
 	}
 }
+
+func TestHoldersGetTxnSlice(t *testing.T) {
+	// Test empty holders
+	h := newHolders()
+	slice := h.getTxnSlice()
+	assert.Equal(t, 0, len(slice))
+
+	// Test with multiple holders
+	txn1 := pb.WaitTxn{TxnID: []byte("1")}
+	txn2 := pb.WaitTxn{TxnID: []byte("2")}
+	txn3 := pb.WaitTxn{TxnID: []byte("3")}
+
+	h.add(txn1)
+	h.add(txn2)
+	h.add(txn3)
+
+	slice = h.getTxnSlice()
+	assert.Equal(t, 3, len(slice))
+
+	// Create a map to check if all txns are present
+	txnMap := make(map[string]bool)
+	for _, txn := range slice {
+		txnMap[string(txn.TxnID)] = true
+	}
+
+	assert.True(t, txnMap["1"])
+	assert.True(t, txnMap["2"])
+	assert.True(t, txnMap["3"])
+}
