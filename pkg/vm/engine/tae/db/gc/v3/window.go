@@ -41,6 +41,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
+type ObjectEntry struct {
+	stats    *objectio.ObjectStats
+	createTS types.TS
+	dropTS   types.TS
+	db       uint64
+	table    uint64
+}
+
 type WindowOption func(*GCWindow)
 
 func WithWindowDir(dir string) WindowOption {
@@ -151,54 +159,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	var metaFile string
 	var err error
 	if metaFile, err = w.writeMetaForRemainings(
-		ctx, filesNotGC, ioutil.EncodeGCMetadataName,
-	); err != nil {
-		return nil, "", err
-	}
-
-	w.files = filesNotGC
-	return filesToGC, metaFile, nil
-}
-
-func (w *GCWindow) ExecuteFastBasedGC(
-	ctx context.Context,
-	ts *types.TS,
-	accountSnapshots map[uint32][]types.TS,
-	pitrs *logtail.PitrInfo,
-	snapshotMeta *logtail.SnapshotMeta,
-	buffer *containers.OneSchemaBatchBuffer,
-	cacheSize int,
-	estimateRows int,
-	probility float64,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) ([]string, string, error) {
-
-	sourcer := w.MakeFilesReader(ctx, fs)
-
-	job := NewCheckpointFastGCJob(
-		ts,
-		sourcer,
-		pitrs,
-		accountSnapshots,
-		snapshotMeta,
-		buffer,
-		false,
-		mp,
-		fs,
-		WithGCJobCoarseConfig(estimateRows, probility, cacheSize),
-	)
-	defer job.Close()
-
-	if err := job.Execute(ctx); err != nil {
-		return nil, "", err
-	}
-
-	filesToGC, filesNotGC := job.Result()
-	var metaFile string
-	var err error
-	if metaFile, err = w.writeMetaForRemainings(
-		ctx, filesNotGC, ioutil.EncodeGCFastMetadataName,
+		ctx, filesNotGC,
 	); err != nil {
 		return nil, "", err
 	}
@@ -280,7 +241,7 @@ func (w *GCWindow) ScanCheckpoints(
 	w.tsRange.end = end
 	newFiles, _ := sinker.GetResult()
 	if metaFile, err = w.writeMetaForRemainings(
-		ctx, newFiles, ioutil.EncodeGCScanMetadataName,
+		ctx, newFiles,
 	); err != nil {
 		return
 	}
@@ -307,14 +268,13 @@ func (w *GCWindow) getSinker(
 func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
-	encode func(types.TS, types.TS) string,
 ) (string, error) {
 	select {
 	case <-ctx.Done():
 		return "", context.Cause(ctx)
 	default:
 	}
-	name := encode(w.tsRange.start, w.tsRange.end)
+	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
