@@ -16,7 +16,6 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,9 +28,112 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
+type BatchType int8
+
+const CurrentVersion = uint16(3)
+
+const (
+	ObjectList BatchType = iota
+	TombstoneList
+)
+
+const (
+	CreateBlock BatchType = iota
+	DeleteBlock
+	DropTable
+	DropDB
+	DeleteFile
+	Tombstone
+)
+
+const (
+	GCAttrObjectName = "name"
+	GCAttrBlockId    = "block_id"
+	GCAttrTableId    = "table_id"
+	GCAttrDBId       = "db_id"
+	GCAttrCommitTS   = "commit_ts"
+	GCCreateTS       = "create_time"
+	GCDeleteTS       = "delete_time"
+	GCAttrTombstone  = "tombstone"
+	GCAttrVersion    = "version"
+)
+
+var (
+	BlockSchemaAttr = []string{
+		GCAttrObjectName,
+		GCCreateTS,
+		GCDeleteTS,
+		GCAttrCommitTS,
+		GCAttrTableId,
+	}
+	BlockSchemaTypes = []types.Type{
+		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_uint64, 0, 0),
+	}
+
+	BlockSchemaAttrV1 = []string{
+		GCAttrBlockId,
+		GCAttrTableId,
+		GCAttrDBId,
+		GCAttrObjectName,
+	}
+	BlockSchemaTypesV1 = []types.Type{
+		types.New(types.T_Blockid, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_varchar, 5000, 0),
+	}
+
+	TombstoneSchemaAttr = []string{
+		GCAttrTombstone,
+		GCAttrObjectName,
+		GCAttrCommitTS,
+	}
+
+	TombstoneSchemaTypes = []types.Type{
+		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+	}
+
+	VersionsSchemaAttr = []string{
+		GCAttrVersion,
+	}
+
+	VersionsSchemaTypes = []types.Type{
+		types.New(types.T_uint16, 0, 0),
+	}
+
+	DropTableSchemaAttr = []string{
+		GCAttrTableId,
+		GCAttrDBId,
+	}
+	DropTableSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+	}
+
+	DropDBSchemaAtt = []string{
+		GCAttrDBId,
+	}
+	DropDBSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+	}
+
+	DeleteFileSchemaAtt = []string{
+		GCAttrObjectName,
+	}
+	DeleteFileSchemaTypes = []types.Type{
+		types.New(types.T_varchar, 5000, 0),
+	}
+)
+
 type Cleaner interface {
 	Replay(context.Context) error
-	Process(context.Context, tasks.JobType, *types.TS) error
+	Process(context.Context) error
 	TryGC(context.Context) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
@@ -40,7 +142,7 @@ type Cleaner interface {
 	GetScannedWindow() *GCWindow
 	Stop()
 	GetMinMerged() *checkpoint.CheckpointEntry
-	DoCheck(bool) error
+	DoCheck(context.Context) error
 	GetPITRs() (*logtail.PitrInfo, error)
 	SetTid(tid uint64)
 	EnableGC()
@@ -63,6 +165,9 @@ var FSinkerFactory ioutil.FileSinkerFactory
 
 const ObjectTablePrimaryKeyIdx = 0
 const ObjectTableVersion = 0
+const (
+	DefaultInMemoryStagedSize = mpool.MB * 32
+)
 
 func init() {
 	ObjectTableAttrs = []string{
@@ -96,6 +201,16 @@ func init() {
 		false,
 		ObjectTableVersion,
 	)
+}
+
+func NewObjectTableBatch() *batch.Batch {
+	ret := batch.New(ObjectTableAttrs)
+	ret.SetVector(0, vector.NewVec(ObjectTableTypes[0]))
+	ret.SetVector(1, vector.NewVec(ObjectTableTypes[1]))
+	ret.SetVector(2, vector.NewVec(ObjectTableTypes[2]))
+	ret.SetVector(3, vector.NewVec(ObjectTableTypes[3]))
+	ret.SetVector(4, vector.NewVec(ObjectTableTypes[4]))
+	return ret
 }
 
 func addObjectToBatch(

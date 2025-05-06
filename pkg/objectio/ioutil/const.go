@@ -22,8 +22,6 @@ const defaultGCDir = "gc/"
 const (
 	// checkpint related
 	CheckpointExt = "ckp"
-	ScanMetaExt   = "scan"
-	FastMetaExt   = "fast"
 	CompactExt    = "cpt"
 
 	// gc related
@@ -54,10 +52,6 @@ func GetGCDir() string {
 
 func IsCKPExt(ext string) bool {
 	return ext == CheckpointExt
-}
-
-func IsScanExt(ext string) bool {
-	return ext == ScanMetaExt
 }
 
 func IsGCMetaExt(ext string) bool {
