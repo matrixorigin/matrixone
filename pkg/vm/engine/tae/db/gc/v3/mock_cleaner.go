@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -65,7 +66,7 @@ func (c *MockCleaner) Replay(ctx context.Context) error {
 	return nil
 }
 
-func (c *MockCleaner) Process(ctx context.Context) error {
+func (c *MockCleaner) Process(ctx context.Context, _ tasks.JobType, _ *types.TS) error {
 	if c.processFunc != nil {
 		return c.processFunc(ctx)
 	}
@@ -114,7 +115,7 @@ func (c *MockCleaner) GetMinMerged() *checkpoint.CheckpointEntry {
 	return nil
 }
 
-func (c *MockCleaner) DoCheck(_ context.Context) error {
+func (c *MockCleaner) DoCheck(_ bool) error {
 	return nil
 }
 

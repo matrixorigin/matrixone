@@ -159,6 +159,8 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return genericPartition[float32](sels, diffs, partitions, vec)
 	case types.T_float64:
 		return genericPartition[float64](sels, diffs, partitions, vec)
+	case types.T_uuid:
+		return genericPartition[types.Uuid](sels, diffs, partitions, vec)
 	case types.T_date:
 		return genericPartition[types.Date](sels, diffs, partitions, vec)
 	case types.T_datetime:
