@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,7 @@ const (
 	JT_GCExecute
 	JT_GCReplay
 	JT_GCReplayAndExecute
+	JT_GCFastExecute
 )
 
 func init() {
@@ -43,6 +45,7 @@ func init() {
 	tasks.RegisterJobType(JT_GCExecute, "GCExecute")
 	tasks.RegisterJobType(JT_GCReplay, "GCReplay")
 	tasks.RegisterJobType(JT_GCReplayAndExecute, "GCReplayAndExecute")
+	tasks.RegisterJobType(JT_GCFastExecute, "GCFastExecute")
 }
 
 type StateStep = uint32
@@ -57,6 +60,11 @@ const (
 type runningCtx struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
+}
+
+type specialGCJob struct {
+	jobType tasks.JobType
+	minTS   *types.TS
 }
 
 // DiskCleaner is the main structure of v2 operation,
@@ -93,6 +101,15 @@ func NewDiskCleaner(
 
 func (cleaner *DiskCleaner) GC(ctx context.Context) (err error) {
 	return cleaner.scheduleGCJob(ctx)
+}
+
+func (cleaner *DiskCleaner) FastGC(ctx context.Context, ts *types.TS) (err error) {
+	logutil.Info("GC-Send-Intents-Fast")
+	gcJob := new(specialGCJob)
+	gcJob.jobType = JT_GCFastExecute
+	gcJob.minTS = ts
+	_, err = cleaner.processQueue.Enqueue(gcJob)
+	return err
 }
 
 func (cleaner *DiskCleaner) IsWriteMode() bool {
@@ -229,6 +246,7 @@ func (cleaner *DiskCleaner) scheduleGCJob(ctx context.Context) (err error) {
 		err = moerr.NewTxnControlErrorNoCtxf("GC-Not-Write-Mode")
 		return
 	}
+	logutil.Info("GC-Send-Intents")
 	_, err = cleaner.processQueue.Enqueue(JT_GCExecute)
 	return
 }
@@ -259,7 +277,34 @@ func (cleaner *DiskCleaner) doExecute(ctx context.Context) (err error) {
 			cleaner.replayError.Store(nil)
 		}
 	}
-	err = cleaner.cleaner.Process(ctx)
+	err = cleaner.cleaner.Process(ctx, JT_GCExecute, nil)
+	return
+}
+
+func (cleaner *DiskCleaner) doFastExecute(ctx context.Context, ts *types.TS) (err error) {
+	now := time.Now()
+	msg := "GC-Fast-Execute"
+	defer func() {
+		logger := logutil.Info
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			msg,
+			zap.Duration("duration", time.Since(now)),
+			zap.Error(err),
+		)
+	}()
+	if replayErr := cleaner.replayError.Load(); replayErr != nil {
+		if err = cleaner.cleaner.Replay(ctx); err != nil {
+			msg = "GC-Replay"
+			cleaner.replayError.Store(&err)
+			return
+		} else {
+			cleaner.replayError.Store(nil)
+		}
+	}
+	err = cleaner.cleaner.Process(ctx, JT_GCFastExecute, ts)
 	return
 }
 
@@ -320,6 +365,20 @@ func (cleaner *DiskCleaner) process(items ...any) {
 				cleaner.doExecute(ctx.ctx)
 			default:
 				logutil.Error("GC-Unknown-JobType", zap.Any("job-type", v))
+			}
+		case *specialGCJob:
+			ctx := cleaner.runningCtx.Load()
+			if ctx == nil {
+				ctx = new(runningCtx)
+				ctx.ctx, ctx.cancel = context.WithCancelCause(context.Background())
+				cleaner.runningCtx.Store(ctx)
+			}
+			job := item.(*specialGCJob)
+			switch job.jobType {
+			case JT_GCFastExecute:
+				cleaner.doFastExecute(ctx.ctx, job.minTS)
+			default:
+				logutil.Error("GC-Unknown-Special-JobType", zap.Any("job-type", job.jobType))
 			}
 		case *tasks.Job:
 			// noop will reset the runningCtx
