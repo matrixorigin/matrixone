@@ -613,10 +613,6 @@ func (h *Handle) HandleDiskCleaner(
 				return !end.GE(&ts)
 			}, cmd_util.CheckerKeyMinTS)
 		return
-	case cmd_util.FastGC:
-		minTS := types.StringToTS(value)
-		err = h.db.DiskCleaner.FastGC(ctx, &minTS)
-		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
 	}

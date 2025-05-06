@@ -871,3 +871,11 @@ var SystemDatabases = []string{
 	"system",
 	"system_metrics",
 }
+
+func IsUniqueIndexTable(name string) bool {
+	return strings.HasPrefix(name, UniqueIndexTableNamePrefix)
+}
+
+func IsSecondaryIndexTable(name string) bool {
+	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
+}

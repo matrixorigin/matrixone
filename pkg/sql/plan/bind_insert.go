@@ -68,11 +68,7 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 		return true
 	}
 
-	if strings.HasPrefix(tableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
-		return true
-	}
-
-	return false
+	return catalog.IsSecondaryIndexTable(tableDef.Name)
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
