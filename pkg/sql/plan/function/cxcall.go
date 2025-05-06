@@ -15,16 +15,14 @@
 package function
 
 /*
-#include "mo.h"
-
-#cgo CFLAGS: -I../../../../cgo
-#cgo LDFLAGS: -L../../../../cgo -lmo
+#include "../../../../cgo/mo.h"
 */
 import "C"
 import (
 	"fmt"
 	"unsafe"
 
+	_ "github.com/matrixorigin/matrixone/cgo"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
