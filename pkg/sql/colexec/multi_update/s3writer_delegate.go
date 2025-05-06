@@ -17,8 +17,9 @@ package multi_update
 import (
 	"bytes"
 	"fmt"
-	"go.uber.org/zap"
 	"slices"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -111,7 +112,7 @@ type s3WriterDelegate struct {
 func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3WriterDelegate{
-		cacheBatchs:    batch.NewCompactBatchs(),
+		cacheBatchs:    batch.NewCompactBatchs(objectio.BlockMaxRows),
 		updateCtxInfos: update.ctr.updateCtxInfos,
 		seqnums:        make([][]uint16, 0, tableCount),
 		sortIdxs:       make([]int, 0, tableCount),
@@ -253,7 +254,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatchs(
 	slices.SortFunc(blkids, func(a, b types.Blockid) int {
 		return a.Compare(&b)
 	})
-	deleteBats := batch.NewCompactBatchs()
+	deleteBats := batch.NewCompactBatchs(objectio.BlockMaxRows)
 	for _, blkid := range blkids {
 		bat := blockMap[blkid].bat
 		delete(blockMap, blkid)
