@@ -136,7 +136,7 @@ func TestPatternNL(t *testing.T) {
 		},
 		{
 			pattern: "读写汉字 学中文",
-			expect:  "(text 0 0 读写汉) (* 1 9 字*) (text 2 13 学中文)",
+			expect:  "(text 0 0 读写汉) (text 1 3 写汉字) (text 2 13 学中文)",
 		},
 		{
 			pattern: "读写",
