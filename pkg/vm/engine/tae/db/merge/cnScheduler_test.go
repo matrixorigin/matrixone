@@ -55,6 +55,7 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 	entry := newSortedDataEntryWithTableEntry(t, tbl, txn2, 0, 1, common.DefaultMinOsizeQualifiedBytes)
 	stat := *entry.GetObjectStats()
 	cnScheduler.addActiveObjects([]*catalog.ObjectEntry{entry})
+	require.True(t, cnScheduler.checkOverlapOnCNActive([]*catalog.ObjectEntry{entry}))
 	require.NotEmpty(t, cnScheduler.activeObjsString())
 
 	cnScheduler.removeActiveObject([]objectio.ObjectId{*entry.ID()})
@@ -81,6 +82,7 @@ func TestScheduler_CNActiveObjectsString(t *testing.T) {
 	require.NoError(t, meta.Unmarshal(tasks[0].Metadata.Context))
 	require.Equal(t, meta.DbName, tbl.GetDB().GetName())
 	require.NoError(t, cnScheduler.sendMergeTask(context.Background(), taskEntry))
+	cnScheduler.prune(1, 0)
 }
 
 func TestExecutorCNMerge(t *testing.T) {

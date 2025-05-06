@@ -379,7 +379,7 @@ func (entry *TableEntry) GetColDefs() []*ColDef {
 }
 
 func (entry *TableEntry) GetNameDesc() string {
-	return fmt.Sprintf("%d-%s", entry.ID, entry.GetLastestSchemaLocked(false).Name)
+	return fmt.Sprintf("%d-%s", entry.ID, entry.GetLastestSchema(false).Name)
 }
 
 func (entry *TableEntry) GetFullName() string {

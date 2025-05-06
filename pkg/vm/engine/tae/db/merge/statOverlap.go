@@ -336,7 +336,7 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 	}
 
 	// handle the last cluster
-	if maxpd > opts.MinPointDepthPerCluster {
+	if maxpd >= opts.MinPointDepthPerCluster {
 		ret.Clusters = append(ret.Clusters,
 			clusterInfo{idx: maxidx, pointDepth: maxpd},
 		)

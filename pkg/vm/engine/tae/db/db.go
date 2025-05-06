@@ -356,6 +356,7 @@ func (db *DB) Close() error {
 			// TODO: error handling
 			db.ReplayCtl.Stop()
 		}
+		db.MergeScheduler.Stop()
 		db.CronJobs.Reset()
 		db.BGFlusher.Stop()
 		db.BGCheckpointRunner.Stop()

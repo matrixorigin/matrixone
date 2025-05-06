@@ -57,20 +57,6 @@ func newSortedDataEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry, txn
 	return entry
 }
 
-func newSortedTombstoneEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry, txn txnif.AsyncTxn, v1, v2 types.Rowid) *catalog.ObjectEntry {
-	zm := index.NewZM(types.T_Rowid, 0)
-	index.UpdateZM(zm, v1[:])
-	index.UpdateZM(zm, v2[:])
-	stats := objectio.NewObjectStats()
-	require.NoError(t, objectio.SetObjectStatsLocation(stats, objectio.NewRandomLocation(2, 1111)))
-	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
-	entry := catalog.NewObjectEntry(tbl, txn, *stats, nil, true)
-	entry.GetLastMVCCNode().Txn = nil
-	tbl.AddEntryLocked(entry)
-	return entry
-}
-
 func newSortedTestObjectEntry(t testing.TB, v1, v2 int32, size uint32) *catalog.ObjectEntry {
 	stats := newTestObjectStats(t, v1, v2, size, 2, 0, nil, 0)
 	return &catalog.ObjectEntry{
@@ -130,13 +116,6 @@ func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.Ob
 	}
 }
 
-func makeObjectEntry(stats *objectio.ObjectStats, isTombstone bool) *catalog.ObjectEntry {
-	return &catalog.ObjectEntry{
-		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
-		ObjectNode:     catalog.ObjectNode{IsTombstone: isTombstone},
-	}
-}
-
 func StatsString(stats objectio.ObjectStats, zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
 	if z := stats.SortKeyZoneMap(); z != nil {
@@ -172,16 +151,16 @@ func DisplayPointEvents(events *btree.BTreeG[*pointEvent]) string {
 	return sb.String()
 }
 
+// func makeStringReader(content string) (io.Reader, func(), error) {
+//	return strings.NewReader(content), func() {}, nil
+// }
+
 func makeFileReader(filepath string) (io.Reader, func(), error) {
 	file, err := os.Open(filepath)
 	if err != nil {
 		return nil, nil, err
 	}
 	return file, func() { file.Close() }, nil
-}
-
-func makeStringReader(content string) (io.Reader, func(), error) {
-	return strings.NewReader(content), func() {}, nil
 }
 
 // parsing the output of `select mo_ctl('dn', 'inspect', 'object -t db.t -vvvv')` into a list of objectio.ObjectStats

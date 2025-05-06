@@ -44,13 +44,6 @@ func NewTNMergeExecutor(rt *dbutils.Runtime) *executor {
 	}
 }
 
-func newMergeExecutor(rt *dbutils.Runtime, sched *CNMergeScheduler) *executor {
-	return &executor{
-		rt: rt,
-		// cnSched: sched,
-	}
-}
-
 func (e *executor) ExecuteFor(target catalog.MergeTable, task mergeTask) (success bool) {
 	entry := target.(catalog.TNMergeTable).TableEntry
 	return e.executeFor(entry, task)

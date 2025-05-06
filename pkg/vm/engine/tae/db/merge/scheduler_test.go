@@ -153,7 +153,7 @@ func TestScheduler(t *testing.T) {
 		// make merge task
 		trigger := NewMMsgTaskTrigger(tables[1])
 		assigns := []mergeTask{}
-		for _ = range t1002TaskCnt {
+		for i := 0; i < t1002TaskCnt; i++ {
 			assigns = append(assigns, mergeTask{
 				objs: []*objectio.ObjectStats{
 					newTestObjectStats(t, 1, 2, 300*common.Const1MBytes, 1000, 1, nil, 0),
@@ -228,7 +228,7 @@ func TestScheduler(t *testing.T) {
 
 		var answer *QueryAnswer
 
-		for _ = range 100 {
+		for i := 0; i < 100; i++ {
 			answer = sched.Query(t1004)
 			if answer.DataMergeCnt == 1 {
 				break
@@ -237,7 +237,7 @@ func TestScheduler(t *testing.T) {
 		}
 		require.Equal(t, answer.DataMergeCnt, 1)
 
-		for _ = range 100 {
+		for i := 0; i < 100; i++ {
 			answer = sched.Query(tables[1])
 			if answer.DataMergeCnt == t1002TaskCnt {
 				break
@@ -247,7 +247,7 @@ func TestScheduler(t *testing.T) {
 		require.Equal(t, answer.DataMergeCnt, t1002TaskCnt)
 		require.Equal(t, answer.BigDataAcc, 1)
 
-		for _ = range 100 {
+		for i := 0; i < 100; i++ {
 			answer = sched.Query(tables[0])
 			if answer.DataMergeCnt == 1 {
 				break
@@ -274,7 +274,7 @@ func TestLaunchPad(t *testing.T) {
 		catalog.MockCreatedObjectEntry2List(table, cata, false, create.Next())
 
 		//l1
-		for _ = range 2 {
+		for i := 0; i < 2; i++ {
 			entry := catalog.MockCreatedObjectEntry2List(table, cata, false, create.Next())
 			entry.SetLevel(1)
 			zm := index.NewZM(types.T_int32.ToType().Oid, 0)
@@ -284,7 +284,7 @@ func TestLaunchPad(t *testing.T) {
 		}
 
 		//l2
-		for _ = range 3 {
+		for i := 0; i < 3; i++ {
 			entry := catalog.MockCreatedObjectEntry2List(table, cata, false, create.Next())
 			entry.SetLevel(2)
 			zm := index.NewZM(types.T_int32.ToType().Oid, 0)
@@ -294,7 +294,7 @@ func TestLaunchPad(t *testing.T) {
 		}
 
 		// l3 no zm to cause ln task error
-		for _ = range 3 {
+		for i := 0; i < 3; i++ {
 			entry := catalog.MockCreatedObjectEntry2List(table, cata, false, create.Next())
 			entry.SetLevel(3)
 		}
@@ -342,4 +342,9 @@ func TestLaunchPad(t *testing.T) {
 	require.Contains(t, tasks[0].note, "test1")
 	require.Contains(t, tasks[0].note, "reduce")
 
+}
+
+func TestXxx(t *testing.T) {
+	now := time.Now().AddDate(0, 0, 3)
+	t.Log(now.UnixNano(), " // ", now)
 }

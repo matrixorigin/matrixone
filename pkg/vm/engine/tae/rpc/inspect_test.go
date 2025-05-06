@@ -121,34 +121,37 @@ func TestMergeCommand(t *testing.T) {
 	require.Contains(t, string(resp.Payload), "auto merge: true")
 
 	resp, err = handle.runInspectCmd("merge switch notOnOrOff")
+	require.NoError(t, err)
 	require.Contains(t, resp.Message, "invalid input")
 
 	resp, err = handle.runInspectCmd("merge switch on off")
+	require.NoError(t, err)
 	require.Contains(t, resp.Message, "invalid input")
 
 	resp, err = handle.runInspectCmd("merge trigger -t db1.test1")
 	require.NoError(t, err)
 	require.Contains(t, resp.Message, "trigger nothing")
 
-	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0")
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0")
 	require.NoError(t, err)
 
-	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind ln")
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind ln")
 	require.NoError(t, err)
 
-	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind vacuum")
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind vacuum")
 	require.NoError(t, err)
 
-	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind tombstone")
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind tombstone")
 	require.NoError(t, err)
 
 	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind xx")
+	require.NoError(t, err)
 	require.Contains(t, resp.Message, "invalid input")
 
-	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind tombstone --tombstone-oneshot --patch-expire 1h")
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind tombstone --tombstone-oneshot --patch-expire 1h")
 	require.NoError(t, err)
 
-	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0 --l0-oneshot --patch-expire 1h")
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0 --l0-oneshot --patch-expire 1h")
 	require.NoError(t, err)
 
 }

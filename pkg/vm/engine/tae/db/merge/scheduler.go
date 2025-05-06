@@ -67,14 +67,15 @@ type MergeScheduler struct {
 
 	// control flow
 	allPaused bool
-	stopCh    chan struct{}
+	stopCh    atomic.Pointer[chan struct{}]
 	stopRecv  chan struct{}
 	stopped   atomic.Bool
 
 	msgChan chan *MMsg
 	ioChan  chan MMsgVacuumCheck
 
-	pad *launchPad
+	pad            *launchPad
+	defaultTrigger *MMsgTaskTrigger
 
 	baseInterval time.Duration
 	rc           *resourceController
@@ -94,12 +95,12 @@ func NewMergeScheduler(
 		supps:     make(map[uint64]*todoSupporter),
 		heartbeat: time.NewTicker(time.Second * 10),
 
-		stopCh:   make(chan struct{}),
 		stopRecv: make(chan struct{}, 1),
 		msgChan:  make(chan *MMsg, 4096),
 		ioChan:   make(chan MMsgVacuumCheck, 1024),
 
-		pad: newLaunchPad(),
+		pad:            newLaunchPad(),
+		defaultTrigger: DefaultTrigger.Clone(),
 	}
 
 	sched.stopped.Store(true)
@@ -117,13 +118,18 @@ func NewMergeScheduler(
 
 func (a *MergeScheduler) Stop() {
 	if a.stopped.CompareAndSwap(false, true) {
-		close(a.stopCh)
+		ch := a.stopCh.Load()
+		if ch != nil {
+			close(*ch)
+		}
 		<-a.stopRecv
 	}
 }
 
 func (a *MergeScheduler) Start() {
 	if a.stopped.CompareAndSwap(true, false) {
+		ch := make(chan struct{})
+		a.stopCh.Store(&ch)
 		a.heartbeat.Reset(time.Second * 10)
 		go a.handleMainLoop()
 		go a.handleIOLoop()
@@ -280,7 +286,8 @@ type MMsgTaskTrigger struct {
 	table catalog.MergeTable
 
 	// l0
-	l0 *LayerZeroOpts
+	l0           *LayerZeroOpts
+	handleBigOld bool
 
 	// ln
 	startlv int
@@ -299,16 +306,17 @@ type MMsgTaskTrigger struct {
 
 func (b *MMsgTaskTrigger) Clone() *MMsgTaskTrigger {
 	return &MMsgTaskTrigger{
-		expire:  b.expire,
-		byUser:  b.byUser,
-		table:   b.table,
-		l0:      b.l0.Clone(),
-		startlv: b.startlv,
-		endlv:   b.endlv,
-		ln:      b.ln.Clone(),
-		tomb:    b.tomb.Clone(),
-		vacuum:  b.vacuum.Clone(),
-		assigns: slices.Clone(b.assigns),
+		expire:       b.expire,
+		byUser:       b.byUser,
+		table:        b.table,
+		l0:           b.l0.Clone(),
+		handleBigOld: b.handleBigOld,
+		startlv:      b.startlv,
+		endlv:        b.endlv,
+		ln:           b.ln.Clone(),
+		tomb:         b.tomb.Clone(),
+		vacuum:       b.vacuum.Clone(),
+		assigns:      slices.Clone(b.assigns),
 	}
 }
 
@@ -323,7 +331,7 @@ func (b *MMsgTaskTrigger) IsEmptyTrigger() bool {
 func (b *MMsgTaskTrigger) String() string {
 	var buf bytes.Buffer
 	if !b.expire.IsZero() {
-		buf.WriteString(fmt.Sprintf("expire{%s}", b.expire.Sub(time.Now()).Round(time.Second)))
+		buf.WriteString(fmt.Sprintf("expire{%s}", time.Until(b.expire).Round(time.Second)))
 	}
 	if b.l0 != nil {
 		if buf.Len() > 0 {
@@ -375,6 +383,11 @@ func NewMMsgTaskTrigger(table catalog.MergeTable) *MMsgTaskTrigger {
 
 func (b *MMsgTaskTrigger) WithL0(opts *LayerZeroOpts) *MMsgTaskTrigger {
 	b.l0 = opts
+	return b
+}
+
+func (b *MMsgTaskTrigger) WithHandleBigOld(handleBigOld bool) *MMsgTaskTrigger {
+	b.handleBigOld = handleBigOld
 	return b
 }
 
@@ -567,9 +580,10 @@ func (m *todoSupporter) NextAfter() time.Time {
 }
 
 func (a *MergeScheduler) handleIOLoop() {
+	stopCh := *a.stopCh.Load()
 	for {
 		select {
-		case <-a.stopCh:
+		case <-stopCh:
 			return
 		case msg := <-a.ioChan:
 
@@ -619,6 +633,8 @@ func (a *MergeScheduler) handleMainLoop() {
 	var nextReadyAtTimer = time.NewTimer(time.Hour * 24)
 	never := make(<-chan time.Time)
 
+	stopCh := *a.stopCh.Load()
+
 	for {
 
 		now := time.Now()
@@ -666,7 +682,7 @@ func (a *MergeScheduler) handleMainLoop() {
 		}
 
 		select {
-		case <-a.stopCh:
+		case <-stopCh:
 			// stop the loop
 			a.heartbeat.Stop()
 			a.stopRecv <- struct{}{}
@@ -737,11 +753,11 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 	if !msg.expire.IsZero() {
 		// this is a policy patch
 		if len(supp.triggers) == 0 {
-			base := DefaultTrigger.Clone().Merge(msg)
+			base := a.defaultTrigger.Clone().Merge(msg)
 			supp.triggers = append(supp.triggers, base)
 		} else if supp.triggers[0].expire.IsZero() {
 			// have a disposable trigger to do, put the new trigger in front of it
-			base := DefaultTrigger.Clone().Merge(msg)
+			base := a.defaultTrigger.Clone().Merge(msg)
 			supp.triggers = append([]*MMsgTaskTrigger{base}, supp.triggers...)
 		} else {
 			// there is patch already, merge it in place
@@ -802,7 +818,7 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 		supp := a.supps[msg.Table.ID()]
 		if supp != nil {
 			answer.AutoMergeOn = !supp.paused
-			answer.NextCheckDue = supp.todo.readyAt.Sub(time.Now())
+			answer.NextCheckDue = time.Until(supp.todo.readyAt)
 			answer.DataMergeCnt = supp.totalDataMergeCnt
 			answer.TombstoneMergeCnt = supp.totalTombstoneMergeCnt
 			answer.PendingMergeCnt = supp.mergingTaskCnt
@@ -876,7 +892,7 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 		return
 	}
 
-	trigger := DefaultTrigger
+	trigger := a.defaultTrigger
 	trigger.table = todo.table
 
 	// remove expired triggers
@@ -989,6 +1005,8 @@ func (p *launchPad) Reset() {
 	p.table = nil
 }
 
+var ReleaseDate int64 = 1747559040461945825 //  2025-05-18 17:04:00.461945825 +0800 CST
+
 func (p *launchPad) InitWithTrigger(trigger *MMsgTaskTrigger, lastMergeTime time.Time) {
 	p.table = trigger.table
 	p.lastMergeTime = time.Since(lastMergeTime)
@@ -996,10 +1014,18 @@ func (p *launchPad) InitWithTrigger(trigger *MMsgTaskTrigger, lastMergeTime time
 		// avoid busy merge when the system is just started
 		p.lastMergeTime = 30 * time.Minute * time.Duration(rand.Intn(9)+1) / 10
 	}
+
+	checkCreateTime := trigger.table.IsSpecialBigTable() && !trigger.handleBigOld
+
 	if trigger.l0 != nil || trigger.ln != nil {
 		for item := range p.table.IterDataItem() {
 			stat := item.GetObjectStats()
 			lv := stat.GetLevel()
+			if checkCreateTime &&
+				item.GetCreatedAt().Physical() < ReleaseDate &&
+				stat.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+				continue
+			}
 			p.leveledObjects[lv] = append(p.leveledObjects[lv], stat)
 		}
 	}

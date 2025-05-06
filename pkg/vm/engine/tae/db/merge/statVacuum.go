@@ -37,7 +37,7 @@ var (
 		HollowTopK: 10,
 
 		// 60 -> 10
-		StartScore: 50,
+		StartScore: 60,
 		EndScore:   10,
 		Duration:   30 * time.Minute,
 	}
@@ -106,14 +106,9 @@ func GatherTombstoneTasks(ctx context.Context,
 	opts *TombstoneOpts,
 	lastMergeAgo time.Duration,
 ) (ret []mergeTask) {
-	if opts.OneShot || lastMergeAgo > 1*time.Hour {
+	if opts.OneShot {
 		targets := slices.Collect(tombstoneStats)
-		minCount := 0
-		if !opts.OneShot {
-			// avoid merge one tombstone object every hour
-			minCount = 1
-		}
-		if len(targets) > minCount {
+		if len(targets) > 0 {
 			ret = append(ret, mergeTask{
 				objs:        targets,
 				note:        "oneshot vacuum",
@@ -130,6 +125,17 @@ func GatherTombstoneTasks(ctx context.Context,
 			small = append(small, stat)
 		} else if stat.OriginSize() < opts.L2Size {
 			big = append(big, stat)
+		}
+	}
+
+	if lastMergeAgo > 1*time.Hour {
+		if len(small)+len(big) >= 2 {
+			ret = append(ret, mergeTask{
+				objs:        slices.Collect(tombstoneStats),
+				note:        "long time no merge, do oneshot vacuum",
+				kind:        taskHostDN,
+				isTombstone: true,
+			})
 		}
 	}
 

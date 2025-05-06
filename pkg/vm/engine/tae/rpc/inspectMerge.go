@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/spf13/cobra"
 )
@@ -143,6 +144,8 @@ type mergeShowArg struct {
 	ctx *inspectContext
 	tbl *catalog.TableEntry
 
+	handleBigOld bool
+
 	lnFitPolyDegree int
 
 	vacuumDetail       bool
@@ -191,8 +194,15 @@ func (arg *mergeShowArg) Run() error {
 		// collect all object stats
 		mergeTable := catalog.ToMergeTable(arg.tbl)
 		statsList := make([]*objectio.ObjectStats, 0, 64)
+		checkTime := mergeTable.IsSpecialBigTable() && !arg.handleBigOld
 		for obj := range mergeTable.IterDataItem() {
-			statsList = append(statsList, obj.GetObjectStats())
+			stat := obj.GetObjectStats()
+			if checkTime &&
+				obj.GetCreatedAt().Physical() < merge.ReleaseDate &&
+				stat.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+				continue
+			}
+			statsList = append(statsList, stat)
 		}
 
 		out.WriteString("\n")
@@ -287,6 +297,8 @@ func (arg *mergeShowArg) PrepareCommand() *cobra.Command {
 		Short: "show merge status",
 		Run:   RunFactory(arg),
 	}
+	cmd.Flags().BoolVar(&arg.handleBigOld, "handle-big-old", false, "handle big old data objects for special big table")
+	cmd.Flags().MarkHidden("handle-big-old")
 	cmd.Flags().BoolVar(&arg.vacuumDetail, "vacuum-detail", false, "show vacuum detail(IO involved)")
 	cmd.Flags().BoolVar(&arg.vacuumCheckBigOnly, "vacuum-big-only", false, "check big only")
 	cmd.Flags().IntVar(&arg.lnFitPolyDegree, "layer-poly-degree", 0, "fit polynomial degree for layers")
@@ -314,6 +326,8 @@ type mergeTriggerArg struct {
 
 	kind        string
 	patchExpire time.Duration
+
+	handleBigOld bool
 
 	vacuumAll      bool
 	vacuumTopK     int
@@ -367,6 +381,9 @@ func (arg *mergeTriggerArg) PrepareCommand() *cobra.Command {
 	cmd.Flags().StringVar(&arg.kind, "kind", "none", "trigger kind(none, l0, ln, tombstone, vacuum)")
 	cmd.Flags().DurationVar(&arg.patchExpire, "patch-expire", 0, "patch expire, keep it zero will trigger once")
 
+	cmd.Flags().BoolVar(&arg.handleBigOld, "handle-big-old", false, "handle big old data objects for special big table")
+	cmd.Flags().MarkHidden("handle-big-old")
+
 	cmd.Flags().BoolVar(&arg.vacuumAll, "vacuum-all", false, "vacuum all tombstones, including those < 128MB")
 	cmd.Flags().IntVar(&arg.vacuumTopK, "vacuum-topk", merge.DefaultVacuumOpts.HollowTopK, "vacuum top k")
 	cmd.Flags().IntVar(&arg.vacuumStart, "vacuum-start", merge.DefaultVacuumOpts.StartScore, "vacuum start score")
@@ -413,7 +430,10 @@ func (arg *mergeTriggerArg) FromCommand(cmd *cobra.Command) (err error) {
 }
 
 func (arg *mergeTriggerArg) Run() error {
-	trigger := merge.NewMMsgTaskTrigger(catalog.ToMergeTable(arg.tbl)).WithByUser(true)
+	mergeTable := catalog.ToMergeTable(arg.tbl)
+	trigger := merge.NewMMsgTaskTrigger(mergeTable).
+		WithByUser(true).
+		WithHandleBigOld(arg.handleBigOld)
 	if arg.patchExpire > 0 {
 		// mark the patch trigger not by user, so that it will be ignored if auto merge is off
 		trigger.WithExpire(time.Now().Add(arg.patchExpire)).WithByUser(false)

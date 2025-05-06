@@ -1,3 +1,17 @@
+// Copyright 2025 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package catalog
 
 import (
@@ -50,17 +64,19 @@ type MergeTable interface {
 	GetNameDesc() string
 	ID() uint64
 	HasDropCommitted() bool
+
+	IsSpecialBigTable() bool // upgrade: old objects in big table is not merged by default
 }
 
 type TNTombstoneItem struct {
 	*ObjectEntry
 }
 
-func (c *Catalog) SetMergeNotifier(notifier MergeNotifierOnCatalog) {
-	c.mergeNotifier = notifier
+func (catalog *Catalog) SetMergeNotifier(notifier MergeNotifierOnCatalog) {
+	catalog.mergeNotifier = notifier
 }
 
-func (c *Catalog) InitSource() iter.Seq[MergeTable] {
+func (catalog *Catalog) InitSource() iter.Seq[MergeTable] {
 	return func(yield func(MergeTable) bool) {
 		p := new(LoopProcessor)
 		p.TableFn = func(table *TableEntry) error {
@@ -69,7 +85,7 @@ func (c *Catalog) InitSource() iter.Seq[MergeTable] {
 			}
 			return moerr.GetOkStopCurrRecur()
 		}
-		c.RecurLoop(p)
+		catalog.RecurLoop(p)
 	}
 }
 
@@ -123,6 +139,18 @@ type TNMergeTable struct {
 
 func (t TNMergeTable) ID() uint64 {
 	return t.TableEntry.ID
+}
+
+func (t TNMergeTable) IsSpecialBigTable() bool {
+	name := t.GetLastestSchema(false).Name
+	dbName := t.GetDB().GetName()
+	if (name == "statement_info" || name == "rawlog") && dbName == "system" {
+		return true
+	}
+	if name == "metric" && dbName == "system_metrics" {
+		return true
+	}
+	return false
 }
 
 func (t TNMergeTable) IterDataItem() iter.Seq[MergeDataItem] {
