@@ -1572,15 +1572,20 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 			continue
 		}
 		ctx := context.WithValue(txn.proc.Ctx, defines.TenantIDKey{}, e.accountId)
+		// Database might craft a sql on the current txn to get the table,
+		// so we need to unlock the txn
+		txn.Unlock()
 		db, err := txn.engine.Database(ctx, e.databaseName, txn.op)
 		if err != nil {
+			txn.Lock()
 			return err
 		}
 		rel, err := db.Relation(ctx, e.tableName, nil)
 		if err != nil {
+			txn.Lock()
 			return err
 		}
-
+		txn.Lock()
 		if v, ok := rel.(*txnTableDelegate); ok {
 			tables[e.tableId] = v.origin
 		} else {
