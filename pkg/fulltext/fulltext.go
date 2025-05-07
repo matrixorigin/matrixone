@@ -829,17 +829,60 @@ func ParsePatternInNLMode(pattern string) ([]*Pattern, error) {
 
 	list := make([]*Pattern, 0, 32)
 	tok, _ := tokenizer.NewSimpleTokenizer([]byte(pattern))
+
+	currBytePos := int32(0)
+	currEndBytePos := int32(0)
+
+	overlaps := make([]tokenizer.Token, 0, 8)
+
 	for t := range tok.Tokenize() {
 
 		slen := t.TokenBytes[0]
 		word := string(t.TokenBytes[1 : slen+1])
 
+		newBytePos := t.BytePos
+		newEndBytePos := t.BytePos + int32(slen)
+		if newBytePos >= currBytePos && newBytePos < currEndBytePos {
+			// skip the overlapping token
+			overlaps = append(overlaps, t)
+			continue
+		}
+
+		currBytePos = newBytePos
+		currEndBytePos = newEndBytePos
+
 		runeSlice = []rune(word)
 		if len(runeSlice) < ngram_size {
-			list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})
+			found := false
+			if len(overlaps) > 0 {
+				// get the longest overlap with the same end.  transverse the beginning and first match is the longest overlap
+				for _, tt := range overlaps {
+					ttslen := tt.TokenBytes[0]
+					ttword := string(tt.TokenBytes[1 : ttslen+1])
+					endpos := tt.BytePos + int32(ttslen)
+					if endpos == newEndBytePos {
+						//  longest overlap
+						runeSlice = []rune(ttword)
+						if len(runeSlice) < ngram_size {
+							list = append(list, &Pattern{Text: ttword + "*", Operator: STAR, Position: tt.BytePos})
+						} else {
+							list = append(list, &Pattern{Text: ttword, Operator: TEXT, Position: tt.BytePos})
+						}
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				list = append(list, &Pattern{Text: word + "*", Operator: STAR, Position: t.BytePos})
+			}
 		} else {
 			list = append(list, &Pattern{Text: word, Operator: TEXT, Position: t.BytePos})
 		}
+
+		// reset overlap
+		overlaps = overlaps[:0]
+
 	}
 
 	if len(list) == 0 {
