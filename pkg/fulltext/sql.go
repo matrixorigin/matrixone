@@ -97,6 +97,9 @@ To simplify the SQL, (+ (GROUP (TEXT C) (TEXT D))) will not considered as JOIN.
 
 WITH t0 (A JOIN B)
 (t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN D) UNION ALL (t0 JOIN E)
+
+IMPORTANT NOTE:
+In SQL, please don't use ORDER BY, UNION to generate the SQL.  ORDER BY is slow and UNION will cause OOM.
 */
 type SqlNode struct {
 	Index    int32
@@ -434,6 +437,12 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 			}
 
 		}
+
+		if mode == int64(tree.FULLTEXT_BOOLEAN) {
+			// in boolean mode, we ignore the word occurrence.  GROUP BY will remove the duplicate doc_id and
+			// hence avoid a huge number of records produced after JOIN.
+			sql += " GROUP BY doc_id"
+		}
 	} else {
 
 		oncond := make([]string, len(ps)-1)
@@ -472,6 +481,12 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 		sql += strings.Join(tables, ", ")
 		sql += " WHERE "
 		sql += strings.Join(oncond, " AND ")
+
+		if mode == int64(tree.FULLTEXT_BOOLEAN) {
+			// in boolean mode, we ignore the word occurrence.  GROUP BY will remove the duplicate doc_id and
+			// hence avoid a huge number of records produced after JOIN.
+			sql += fmt.Sprintf(" GROUP BY %s.doc_id", tables[0])
+		}
 	}
 
 	//logutil.Infof("SQL is %s", sql)
