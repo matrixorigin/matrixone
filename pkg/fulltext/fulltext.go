@@ -904,16 +904,11 @@ func PatternOptimizeJoin(ps []*Pattern) []*Pattern {
 	var join_children []*Pattern
 	var idxs []int
 
-	// limit the number of JOIN to 3 children.  Too many children in JOIN will cause OOM.  MO-Cloud#5122
-	max_join := 3
-
 	for i, p := range ps {
 		if p.Operator == PLUS {
 			if len(p.Children) == 1 && (p.Children[0].Operator == TEXT || p.Children[0].Operator == STAR) {
-				if len(join_children) < max_join {
-					join_children = append(join_children, p)
-					idxs = append(idxs, i)
-				}
+				join_children = append(join_children, p)
+				idxs = append(idxs, i)
 			}
 		}
 	}

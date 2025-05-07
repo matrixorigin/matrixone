@@ -112,7 +112,7 @@ func TestPatternBoolean(t *testing.T) {
 		},
 		{
 			pattern: "+读书会 +提效 +社群 +案例 +运营",
-			expect:  "(join 0 (+ (text 0 读书会)) (+ (text 0 提效)) (+ (text 0 社群))) (+ (text 1 案例)) (+ (text 2 运营))",
+			expect:  "(join 0 (+ (text 0 读书会)) (+ (text 0 提效)) (+ (text 0 社群)) (+ (text 0 案例)) (+ (text 0 运营)))",
 		},
 	}
 
