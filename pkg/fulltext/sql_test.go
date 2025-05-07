@@ -194,6 +194,10 @@ func TestSqlNL(t *testing.T) {
 			pattern: "肥胖的原因都是因为摄入脂肪多导致的吗",
 			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肥胖的'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '原因都'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '是因为'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '摄入脂'), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肪多导'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '致的吗') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 9 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 18 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 27 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 36 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 45",
 		},
+		{
+			pattern: "肥胖的原因都是因为摄入fat多导致的吗",
+			expect:  "WITH kw0 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '肥胖的'), kw1 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '原因都'), kw2 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '是因为'), kw3 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '为摄入'), kw4 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = 'fat'), kw5 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '多导致'), kw6 AS (SELECT doc_id, pos FROM `__mo_index_secondary_` WHERE word = '致的吗') SELECT kw0.doc_id, CAST(0 as int) FROM kw0, kw1, kw2, kw3, kw4, kw5, kw6 WHERE kw0.doc_id = kw1.doc_id AND kw1.pos - kw0.pos = 9 AND kw0.doc_id = kw2.doc_id AND kw2.pos - kw0.pos = 18 AND kw0.doc_id = kw3.doc_id AND kw3.pos - kw0.pos = 24 AND kw0.doc_id = kw4.doc_id AND kw4.pos - kw0.pos = 33 AND kw0.doc_id = kw5.doc_id AND kw5.pos - kw0.pos = 36 AND kw0.doc_id = kw6.doc_id AND kw6.pos - kw0.pos = 42",
+		},
 	}
 
 	idxTable := "`__mo_index_secondary_`"

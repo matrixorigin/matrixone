@@ -146,6 +146,10 @@ func TestPatternNL(t *testing.T) {
 			pattern: "肥胖的原因都是因为摄入脂肪多导致的吗",
 			expect:  "(text 0 0 肥胖的) (text 1 9 原因都) (text 2 18 是因为) (text 3 27 摄入脂) (text 4 36 肪多导) (text 5 45 致的吗)",
 		},
+		{
+			pattern: "肥胖的原因都是因为摄入fat多导致的吗",
+			expect:  "(text 0 0 肥胖的) (text 1 9 原因都) (text 2 18 是因为) (text 3 24 为摄入) (text 4 33 fat) (text 5 36 多导致) (text 6 42 致的吗)",
+		},
 	}
 
 	for _, c := range tests {
