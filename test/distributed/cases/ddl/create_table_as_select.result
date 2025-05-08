@@ -733,9 +733,13 @@ drop table if exists time05;
 create table time05 as select unix_timestamp(col1) from time01;
 
 show create table time05;
-
+Table    Create Table
+time05    CREATE TABLE `time05` (\n  `unix_timestamp(col1)` bigint DEFAULT NULL\n)
 select * from time05;
-
+unix_timestamp(col1)
+1602345600
+null
+null
 drop table time05;
 
 drop table if exists time06;
