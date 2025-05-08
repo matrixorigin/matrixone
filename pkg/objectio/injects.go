@@ -51,6 +51,7 @@ const (
 	FJ_LogWorkspace = "fj/log/workspace"
 
 	FJ_CronJobsOpen = "fj/cronjobs/open"
+	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 )
 
 const (
@@ -489,6 +490,33 @@ func InjectLogRanges(
 
 func PartitionStateInjected(dbName, tableName string) (bool, int) {
 	iarg, sarg, injected := fault.TriggerFault(FJ_TracePartitionState)
+	if !injected {
+		return false, 0
+	}
+	return checkLoggingArgs(int(iarg), sarg, dbName, tableName)
+}
+
+func InjectCDCRecordTxn(
+	databaseName string,
+	tableName string,
+	level int,
+) (rmFault func(), err error) {
+	return InjectLogging(
+		FJ_CDCRecordTxn,
+		databaseName,
+		tableName,
+		level,
+		false,
+	)
+}
+
+func CDCRecordTxnInjected(dbName, tableName string) (bool, int) {
+	// for debug
+	if strings.Contains(tableName, "bmsql") {
+		return true, 0
+	}
+
+	iarg, sarg, injected := fault.TriggerFault(FJ_CDCRecordTxn)
 	if !injected {
 		return false, 0
 	}

@@ -237,7 +237,7 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 	return uint64(id), err
 }
 
-func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
 	return nil
 }
 
