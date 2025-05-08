@@ -212,9 +212,7 @@ select * from cast03;
 
 drop table if exists cast04;
 create table cast04(col1 char(10), col2 char(10), col3 char(10)) as select * from cast03;
--- @bvt:issue#14475
 select * from cast04;
--- @bvt:issue
 drop table cast03;
 drop table cast04;
 

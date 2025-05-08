@@ -936,8 +936,7 @@ func makeOneInsertPlan(
 	//  case 2: the only primary key is auto increment type
 	//  case 3: create hidden table for secondary index
 
-	isSecondaryHidden := strings.Contains(tableDef.Name, catalog.SecondaryIndexTableNamePrefix)
-	if isSecondaryHidden {
+	if catalog.IsSecondaryIndexTable(tableDef.Name) {
 		return nil
 	}
 

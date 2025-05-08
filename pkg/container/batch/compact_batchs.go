@@ -21,20 +21,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-const (
-	DefaultBatchMaxRow = 8192
-)
-
 // simple batch slice
-// if CompactBatchs.Batchs[lastIdx].rowCount < DefaultBatchMaxRow
+// if CompactBatchs.Batchs[lastIdx].rowCount < batchMaxRow
 // just fill data to CompactBatchs.Batchs[lastIdx]
-// until bats.Batchs[lastIdx].rowCount to  DefaultBatchMaxRow
+// until bats.Batchs[lastIdx].rowCount to  batchMaxRow
 type CompactBatchs struct {
-	batchs []*Batch
+	batchs      []*Batch
+	batchMaxRow int
 }
 
-func NewCompactBatchs() *CompactBatchs {
-	batchs := &CompactBatchs{}
+func NewCompactBatchs(batchMaxRow int) *CompactBatchs {
+	batchs := &CompactBatchs{
+		batchMaxRow: batchMaxRow,
+	}
 
 	return batchs
 }
@@ -89,7 +88,7 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 
 	// fast path 1
 	lastBatRowCount := bats.batchs[batLen-1].rowCount
-	if lastBatRowCount == DefaultBatchMaxRow {
+	if lastBatRowCount == bats.batchMaxRow {
 		bats.batchs = append(bats.batchs, inBatch)
 		return nil
 	}
@@ -99,7 +98,7 @@ func (bats *CompactBatchs) Push(mpool *mpool.MPool, inBatch *Batch) error {
 	}()
 
 	// fast path 2
-	if lastBatRowCount+inBatch.RowCount() <= DefaultBatchMaxRow {
+	if lastBatRowCount+inBatch.RowCount() <= bats.batchMaxRow {
 		bats.batchs[batLen-1], err = bats.batchs[batLen-1].Append(context.TODO(), mpool, inBatch)
 		return err
 	}
@@ -133,13 +132,13 @@ func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 
 	// fast path 1
 	lastIdx := batLen - 1
-	if bats.batchs[lastIdx].rowCount == DefaultBatchMaxRow {
+	if bats.batchs[lastIdx].rowCount == bats.batchMaxRow {
 		bats.batchs = append(bats.batchs, copyBat)
 		return nil
 	}
 
 	// fast path 2
-	if copyBat.rowCount == DefaultBatchMaxRow {
+	if copyBat.rowCount == bats.batchMaxRow {
 		lastBat := bats.batchs[lastIdx]
 		bats.batchs[lastIdx] = copyBat
 		bats.batchs = append(bats.batchs, lastBat)
@@ -182,7 +181,7 @@ func (bats *CompactBatchs) Union(mpool *mpool.MPool, inBatch *Batch, sels []int3
 
 	batLen := bats.Length()
 	lastBat := bats.batchs[batLen-1]
-	firstSelsLen := DefaultBatchMaxRow - lastBat.rowCount
+	firstSelsLen := bats.batchMaxRow - lastBat.rowCount
 	if firstSelsLen > selsLen {
 		firstSelsLen = selsLen
 	}
@@ -198,8 +197,8 @@ func (bats *CompactBatchs) Union(mpool *mpool.MPool, inBatch *Batch, sels []int3
 	newSels := sels[firstSelsLen:]
 	for len(newSels) > 0 {
 		tmpSize := len(newSels)
-		if tmpSize > DefaultBatchMaxRow {
-			tmpSize = DefaultBatchMaxRow
+		if tmpSize > bats.batchMaxRow {
+			tmpSize = bats.batchMaxRow
 		}
 		tmpSels := newSels[:tmpSize]
 		tmpBat := NewWithSize(len(inBatch.Vecs))
@@ -248,7 +247,7 @@ func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
 	isNewBat := false
 	for start < end {
 
-		if bats.batchs[batLen-1].rowCount < DefaultBatchMaxRow {
+		if bats.batchs[batLen-1].rowCount < bats.batchMaxRow {
 			tmpBat = bats.batchs[batLen-1]
 			isNewBat = false
 		} else {
@@ -258,7 +257,7 @@ func (bats *CompactBatchs) fillData(mpool *mpool.MPool, inBatch *Batch) error {
 		}
 
 		addRowCount := end - start
-		if left := DefaultBatchMaxRow - tmpBat.RowCount(); addRowCount > left {
+		if left := bats.batchMaxRow - tmpBat.RowCount(); addRowCount > left {
 			addRowCount = left
 		}
 

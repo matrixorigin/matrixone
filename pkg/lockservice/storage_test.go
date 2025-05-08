@@ -42,7 +42,7 @@ func TestAdd(t *testing.T) {
 
 				v, ok := s.Get(k1)
 				assert.True(t, ok)
-				assert.Equal(t, k1, v.holders.txns[0].TxnID)
+				assert.Equal(t, k1, firstHolder(v.holders))
 			})
 		}
 	})
@@ -204,10 +204,17 @@ func checkSeek(t *testing.T, s LockStorage, key []byte, expectKey, expectValue [
 		return
 	}
 	assert.Equal(t, expectKey, k)
-	assert.Equal(t, expectValue, v.holders.txns[0].TxnID)
+	assert.Equal(t, expectValue, firstHolder(v.holders))
 	assert.True(t, ok)
 }
 
 func newTestLock(txnID []byte) Lock {
 	return newLock(getLogger(""), &lockContext{waitTxn: pb.WaitTxn{TxnID: txnID}})
+}
+
+func firstHolder(h *holders) []byte {
+	for _, v := range h.txns {
+		return v.TxnID
+	}
+	return nil
 }
