@@ -83,6 +83,10 @@ func makeSoftDeleteFilterCoarseFilter(
 ) {
 	filterTable := meta.GetSnapshotTableIDs()
 	tables := meta.GetTableIDs()
+	tidMap, err := meta.GetTablesWithSQL(context.Background(), "", tables)
+	if err != nil {
+		return nil, err
+	}
 	logutil.Infof("GetTableIDs count is %d", len(tables))
 	return func(
 		ctx context.Context,
@@ -114,6 +118,12 @@ func makeSoftDeleteFilterCoarseFilter(
 				table := tables[tableIDs[i]]
 				if table != nil && !table.IsDrop() {
 					continue
+				}
+
+				if table == nil {
+					if _, ok := tidMap[tableIDs[i]]; ok {
+						continue
+					}
 				}
 			}
 
