@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 func UnmarshalTombstoneData(data []byte) (engine.Tombstoner, error) {
@@ -313,10 +312,9 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 func RowIdsToOffset(
 	rowIds []types.Rowid,
 	skipMask objectio.Bitmap,
-) ([]int64, func()) {
+) []int64 {
 
-	ret := common.DefaultAllocator.GetSels()
-
+	ret := make([]int64, 0, 10)
 	for i, rowId := range rowIds {
 		if skipMask.Contains(uint64(i)) {
 			continue
@@ -325,7 +323,5 @@ func RowIdsToOffset(
 		ret = append(ret, int64(offset))
 	}
 
-	return ret, func() {
-		common.DefaultAllocator.PutSels(ret)
-	}
+	return ret
 }

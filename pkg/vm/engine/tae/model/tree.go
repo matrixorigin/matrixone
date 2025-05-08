@@ -31,37 +31,19 @@ const (
 )
 
 type TreeVisitor interface {
-	VisitTable(dbID, id uint64) error
-	VisitObject(uint64, uint64, *objectio.ObjectId) error
-	VisitTombstone(uint64, uint64, *objectio.ObjectId) error
+	VisitTable(dbID, id uint64, dCnt, tCnt int) error
 	String() string
 }
 
 type BaseTreeVisitor struct {
-	TableFn     func(uint64, uint64) error
-	ObjectFn    func(uint64, uint64, *objectio.ObjectId) error
-	TombstoneFn func(uint64, uint64, *objectio.ObjectId) error
+	TableFn func(uint64, uint64, int, int) error
 }
 
 func (visitor *BaseTreeVisitor) String() string { return "" }
 
-func (visitor *BaseTreeVisitor) VisitTable(dbID, tableID uint64) (err error) {
+func (visitor *BaseTreeVisitor) VisitTable(dbID, tableID uint64, dCnt, tCnt int) (err error) {
 	if visitor.TableFn != nil {
-		return visitor.TableFn(dbID, tableID)
-	}
-	return
-}
-
-func (visitor *BaseTreeVisitor) VisitObject(dbID, tableID uint64, ObjectID *objectio.ObjectId) (err error) {
-	if visitor.ObjectFn != nil {
-		return visitor.ObjectFn(dbID, tableID, ObjectID)
-	}
-	return
-}
-
-func (visitor *BaseTreeVisitor) VisitTombstone(dbID, tableID uint64, ObjectID *objectio.ObjectId) (err error) {
-	if visitor.TombstoneFn != nil {
-		return visitor.TombstoneFn(dbID, tableID, ObjectID)
+		return visitor.TableFn(dbID, tableID, dCnt, tCnt)
 	}
 	return
 }
@@ -70,11 +52,11 @@ type stringVisitor struct {
 	buf bytes.Buffer
 }
 
-func (visitor *stringVisitor) VisitTable(dbID, id uint64) (err error) {
+func (visitor *stringVisitor) VisitTable(dbID, id uint64, dcnt, tcnt int) (err error) {
 	if visitor.buf.Len() != 0 {
 		_ = visitor.buf.WriteByte('\n')
 	}
-	_, _ = visitor.buf.WriteString(fmt.Sprintf("Tree-TBL(%d,%d)", dbID, id))
+	_, _ = visitor.buf.WriteString(fmt.Sprintf("Tree-TBL(%d,%d)(%d,%d)", dbID, id, dcnt, tcnt))
 	return
 }
 
@@ -100,14 +82,10 @@ type Tree struct {
 }
 
 type TableTree struct {
-	DbID       uint64
-	ID         uint64
-	Objs       map[objectio.ObjectId]*ObjectTree
-	Tombstones map[objectio.ObjectId]*ObjectTree
-}
-
-type ObjectTree struct {
-	ID *objectio.ObjectId
+	DbID    uint64
+	ID      uint64
+	DataCnt int
+	TombCnt int
 }
 
 func NewTree() *Tree {
@@ -118,16 +96,8 @@ func NewTree() *Tree {
 
 func NewTableTree(dbID, id uint64) *TableTree {
 	return &TableTree{
-		DbID:       dbID,
-		ID:         id,
-		Objs:       make(map[objectio.ObjectId]*ObjectTree),
-		Tombstones: make(map[objectio.ObjectId]*ObjectTree),
-	}
-}
-
-func NewObjectTree(id *objectio.ObjectId) *ObjectTree {
-	return &ObjectTree{
-		ID: id,
+		DbID: dbID,
+		ID:   id,
 	}
 }
 
@@ -141,38 +111,13 @@ func (tree *Tree) String() string {
 	return visitor.String()
 }
 
-func (tree *Tree) visitTable(visitor TreeVisitor, table *TableTree) (err error) {
-	for _, Object := range table.Objs {
-		if err = visitor.VisitObject(table.DbID, table.ID, Object.ID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				err = nil
-				continue
-			}
-			return
-		}
-	}
-	for _, Object := range table.Tombstones {
-		if err = visitor.VisitTombstone(table.DbID, table.ID, Object.ID); err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				err = nil
-				continue
-			}
-			return
-		}
-	}
-	return
-}
-
 func (tree *Tree) Visit(visitor TreeVisitor) (err error) {
 	for _, table := range tree.Tables {
-		if err = visitor.VisitTable(table.DbID, table.ID); err != nil {
+		if err = visitor.VisitTable(table.DbID, table.ID, table.DataCnt, table.TombCnt); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
 				continue
 			}
-			return
-		}
-		if err = tree.visitTable(visitor, table); err != nil {
 			return
 		}
 	}
@@ -294,32 +239,16 @@ func (tree *Tree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err err
 	return
 }
 
-func (ttree *TableTree) AddObject(sid *objectio.ObjectId, isTombstone bool) {
-	id := *sid
+func (ttree *TableTree) AddObject(_ *objectio.ObjectId, isTombstone bool) {
 	if isTombstone {
-		if _, exist := ttree.Tombstones[id]; !exist {
-			ttree.Tombstones[id] = NewObjectTree(&id)
-		}
+		ttree.TombCnt++
 	} else {
-		if _, exist := ttree.Objs[id]; !exist {
-			ttree.Objs[id] = NewObjectTree(&id)
-		}
+		ttree.DataCnt++
 	}
 }
 
 func (ttree *TableTree) IsEmpty() bool {
-	return len(ttree.Objs) == 0 && len(ttree.Tombstones) == 0
-}
-
-func (ttree *TableTree) Shrink(objID types.Objectid, isTombstone bool) (empty bool) {
-	if isTombstone {
-		delete(ttree.Tombstones, objID)
-		empty = ttree.IsEmpty()
-		return
-	}
-	delete(ttree.Objs, objID)
-	empty = ttree.IsEmpty()
-	return
+	return ttree.DataCnt == 0 && ttree.TombCnt == 0
 }
 
 func (ttree *TableTree) Compact() (empty bool) {
@@ -334,12 +263,8 @@ func (ttree *TableTree) Merge(ot *TableTree) {
 	if ot.ID != ttree.ID {
 		panic(fmt.Sprintf("Cannot merge 2 different table tree: %d, %d", ttree.ID, ot.ID))
 	}
-	for _, obj := range ot.Objs {
-		ttree.AddObject(obj.ID, false)
-	}
-	for _, obj := range ot.Tombstones {
-		ttree.AddObject(obj.ID, true)
-	}
+	ttree.DataCnt += ot.DataCnt
+	ttree.TombCnt += ot.TombCnt
 }
 
 func (ttree *TableTree) WriteTo(w io.Writer) (n int64, err error) {
@@ -349,28 +274,13 @@ func (ttree *TableTree) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeUint64(&ttree.ID)); err != nil {
 		return
 	}
-	cnt := uint32(len(ttree.Objs))
+	cnt := uint32(ttree.DataCnt)
 	if _, err = w.Write(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
-	n += 8 + 8 + 4
-	var tmpn int64
-	for _, obj := range ttree.Objs {
-		if tmpn, err = obj.WriteTo(w); err != nil {
-			return
-		}
-		n += tmpn
-	}
-	cnt = uint32(len(ttree.Tombstones))
+	cnt = uint32(ttree.TombCnt)
 	if _, err = w.Write(types.EncodeUint32(&cnt)); err != nil {
 		return
-	}
-	n += 8 + 8 + 4
-	for _, obj := range ttree.Tombstones {
-		if tmpn, err = obj.WriteTo(w); err != nil {
-			return
-		}
-		n += tmpn
 	}
 	return
 }
@@ -386,40 +296,12 @@ func (ttree *TableTree) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, e
 	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
-	n += 8 + 8 + 4
-	var tmpn int64
-	if cnt != 0 {
-		for i := 0; i < int(cnt); i++ {
-			id := objectio.NewObjectid()
-			if ver == MemoTreeVersion3 {
-				obj := NewObjectTree(&id)
-				if tmpn, err = obj.ReadFromV3(r); err != nil {
-					return
-				}
-				ttree.Objs[*obj.ID] = obj
-				n += tmpn
-			} else {
-				panic("not supported")
-			}
-		}
-	}
-
+	ttree.DataCnt = int(cnt)
 	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
 		return
 	}
-	n += 8 + 8 + 4
-	if cnt == 0 {
-		return
-	}
-	for i := 0; i < int(cnt); i++ {
-		id := objectio.NewObjectid()
-		obj := NewObjectTree(&id)
-		if tmpn, err = obj.ReadFromV3(r); err != nil {
-			return
-		}
-		ttree.Tombstones[*obj.ID] = obj
-		n += tmpn
-	}
+	ttree.TombCnt = int(cnt)
+
 	return
 }
 
@@ -432,63 +314,5 @@ func (ttree *TableTree) Equal(o *TableTree) bool {
 	if ttree.ID != o.ID || ttree.DbID != o.DbID {
 		return false
 	}
-	if len(ttree.Objs) != len(o.Objs) {
-		return false
-	}
-	if len(ttree.Tombstones) != len(o.Tombstones) {
-		return false
-	}
-	for id, obj := range ttree.Objs {
-		if oobj, found := o.Objs[id]; !found {
-			return false
-		} else {
-			if !obj.Equal(oobj) {
-				return false
-			}
-		}
-	}
-	for id, obj := range ttree.Tombstones {
-		if oobj, found := o.Tombstones[id]; !found {
-			return false
-		} else {
-			if !obj.Equal(oobj) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func (stree *ObjectTree) Merge(ot *ObjectTree) {
-	if ot == nil {
-		return
-	}
-	if !stree.ID.EQ(ot.ID) {
-		panic(fmt.Sprintf("Cannot merge 2 different obj tree: %d, %d", stree.ID, ot.ID))
-	}
-}
-
-func (stree *ObjectTree) Equal(o *ObjectTree) bool {
-	if stree == nil && o == nil {
-		return true
-	} else if stree == nil || o == nil {
-		return false
-	}
-	return stree.ID.EQ(o.ID)
-}
-
-func (stree *ObjectTree) WriteTo(w io.Writer) (n int64, err error) {
-	if _, err = w.Write(stree.ID[:]); err != nil {
-		return
-	}
-	n += int64(types.ObjectidSize)
-	return
-}
-
-func (stree *ObjectTree) ReadFromV3(r io.Reader) (n int64, err error) {
-	if _, err = r.Read(stree.ID[:]); err != nil {
-		return
-	}
-	n += int64(types.ObjectidSize)
-	return
+	return ttree.DataCnt == o.DataCnt && ttree.TombCnt == o.TombCnt
 }

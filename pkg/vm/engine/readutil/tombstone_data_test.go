@@ -251,15 +251,9 @@ func TestRowIdsToOffset(t *testing.T) {
 	skipMask.Add(1)
 	skipMask.Add(3)
 
-	left1, r1 := RowIdsToOffset(rowIds, skipMask)
-	left2, r2 := RowIdsToOffset(rowIds, skipMask)
-	left3, r3 := RowIdsToOffset(rowIds, skipMask)
-
-	defer func() {
-		r1()
-		r2()
-		r3()
-	}()
+	left1 := RowIdsToOffset(rowIds, skipMask)
+	left2 := RowIdsToOffset(rowIds, skipMask)
+	left3 := RowIdsToOffset(rowIds, skipMask)
 
 	expect := []int{0, 2, 4, 5, 6, 7, 8, 9}
 
