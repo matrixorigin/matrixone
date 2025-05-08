@@ -495,22 +495,12 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	}
 
 	var (
-		skipMask objectio.Bitmap
-		packer   *types.Packer
-
-		enableFilter bool
-
-		offsets []int64
-		release func()
-
+		skipMask       objectio.Bitmap
+		packer         *types.Packer
+		enableFilter   bool
+		offsets        []int64
 		retainedRowIds []objectio.Rowid
 	)
-
-	defer func() {
-		if release != nil {
-			release()
-		}
-	}()
 
 	if ls.memPKFilter.Valid() && ls.wsCursor < ls.txnOffset {
 		enableFilter = true
@@ -584,11 +574,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put.Put()
 		}
 
-		if release != nil {
-			release()
-		}
-
-		offsets, release = readutil.RowIdsToOffset(retainedRowIds, skipMask)
+		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
 		skipMask.Release()
 
 		if len(offsets) == 0 {
