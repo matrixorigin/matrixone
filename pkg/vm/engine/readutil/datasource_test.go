@@ -228,7 +228,7 @@ func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 
 			slices.Sort(leftRows)
 
-			slices.Compact(leftRows)
+			leftRows = slices.Compact(leftRows)
 
 			ll := len(leftRows)
 			for j := len(leftRows) - 1; j > 0; j-- {
