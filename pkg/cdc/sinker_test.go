@@ -25,16 +25,17 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/btree"
 )
 
 func TestNewSinker(t *testing.T) {
@@ -259,7 +260,7 @@ func TestNewMysqlSink(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, CDCDefaultSendSqlTimeout)
+			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, CDCDefaultSendSqlTimeout, false)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewMysqlSink(%v, %v, %v, %v, %v, %v)", tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -1055,4 +1056,50 @@ func Test_Error(t *testing.T) {
 
 	s.SetError(nil)
 	assert.Nil(t, s.Error())
+}
+
+func TestRecordTxn(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+
+	rm, err := objectio.InjectCDCRecordTxn("testdb", "t1", 0)
+	assert.NoError(t, err)
+
+	defer func() {
+		rm()
+	}()
+
+	ok, _ := objectio.CDCRecordTxnInjected("testdb", "t1")
+	assert.True(t, ok)
+
+	ok, _ = objectio.CDCRecordTxnInjected("tpcc", "bmsql_stock")
+	assert.True(t, ok)
+
+	{
+		s := &mysqlSink{}
+
+		sql1 := make([]byte, sqlBufReserved)
+		sql1 = append(sql1, []byte("select count(*) from testdb.t1")...)
+
+		s.recordTxnSQL(sql1)
+		s.infoRecordedTxnSQLs(nil)
+		s.infoRecordedTxnSQLs(nil)
+	}
+
+	{
+		s := &mysqlSink{}
+		s.debugTxnRecorder.doRecord = true
+
+		sql1 := make([]byte, sqlBufReserved)
+		sql1 = append(sql1, []byte("select count(*) from testdb.t1")...)
+
+		sql2 := make([]byte, sqlBufReserved)
+		sql2 = append(sql2, []byte("select count(*) from tpcc.bmsql_stock")...)
+
+		s.recordTxnSQL(sql1)
+		s.recordTxnSQL(sql2)
+
+		s.infoRecordedTxnSQLs(nil)
+		s.infoRecordedTxnSQLs(nil)
+	}
 }

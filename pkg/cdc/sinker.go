@@ -19,6 +19,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -65,8 +68,18 @@ var NewSinker = func(
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
-	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)
-	if err != nil {
+	var (
+		err  error
+		sink Sink
+
+		doRecord bool
+	)
+
+	doRecord, _ = objectio.CDCRecordTxnInjected(tableDef.DbName, tableDef.Name)
+
+	if sink, err = NewMysqlSink(
+		sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port,
+		retryTimes, retryDuration, sendSqlTimeout, doRecord); err != nil {
 		return nil, err
 	}
 
@@ -761,6 +774,12 @@ type mysqlSink struct {
 	retryTimes    int
 	retryDuration time.Duration
 	timeout       string
+
+	debugTxnRecorder struct {
+		doRecord bool
+		txnSQL   []string
+		sqlBytes int
+	}
 }
 
 var NewMysqlSink = func(
@@ -769,6 +788,7 @@ var NewMysqlSink = func(
 	retryTimes int,
 	retryDuration time.Duration,
 	timeout string,
+	doRecord bool,
 ) (Sink, error) {
 	ret := &mysqlSink{
 		user:          user,
@@ -779,8 +799,53 @@ var NewMysqlSink = func(
 		retryDuration: retryDuration,
 		timeout:       timeout,
 	}
+
+	ret.debugTxnRecorder.doRecord = doRecord
+
 	err := ret.connect()
 	return ret, err
+}
+
+func (s *mysqlSink) recordTxnSQL(sqlBuf []byte) {
+	if !s.debugTxnRecorder.doRecord {
+		return
+	}
+
+	s.debugTxnRecorder.sqlBytes += len(sqlBuf)
+	s.debugTxnRecorder.txnSQL = append(
+		s.debugTxnRecorder.txnSQL, string(sqlBuf[sqlBufReserved:]))
+}
+
+func (s *mysqlSink) infoRecordedTxnSQLs(err error) {
+	if !s.debugTxnRecorder.doRecord {
+		return
+	}
+
+	if len(s.debugTxnRecorder.txnSQL) == 0 {
+		return
+	}
+
+	if s.debugTxnRecorder.sqlBytes <= mpool.MB {
+		buf := bytes.Buffer{}
+		for _, sqlStr := range s.debugTxnRecorder.txnSQL {
+			buf.WriteString(sqlStr)
+			buf.WriteString("; ")
+		}
+
+		logutil.Info("CDC-RECORDED-TXN",
+			zap.Error(err),
+			zap.String("details", buf.String()))
+	}
+
+	s.resetRecordedTxn()
+}
+
+func (s *mysqlSink) resetRecordedTxn() {
+	if !s.debugTxnRecorder.doRecord {
+		return
+	}
+	s.debugTxnRecorder.sqlBytes = 0
+	s.debugTxnRecorder.txnSQL = s.debugTxnRecorder.txnSQL[:0]
 }
 
 // Send must leave 5 bytes at the head of sqlBuf
@@ -790,6 +855,8 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 		Value: sqlBuf,
 	}
 
+	s.recordTxnSQL(sqlBuf)
+
 	f := func() (err error) {
 		if s.tx != nil {
 			_, err = s.tx.Exec(fakeSql, reuseQueryArg)
@@ -798,6 +865,9 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 		}
 
 		if err != nil {
+
+			s.infoRecordedTxnSQLs(err)
+
 			logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])
 			//logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:])
 		}
@@ -812,11 +882,13 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 }
 
 func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
+	s.resetRecordedTxn()
 	s.tx, err = s.conn.BeginTx(ctx, nil)
 	return err
 }
 
 func (s *mysqlSink) SendCommit(_ context.Context) error {
+	s.resetRecordedTxn()
 	defer func() {
 		s.tx = nil
 	}()
@@ -824,6 +896,7 @@ func (s *mysqlSink) SendCommit(_ context.Context) error {
 }
 
 func (s *mysqlSink) SendRollback(_ context.Context) error {
+	s.resetRecordedTxn()
 	defer func() {
 		s.tx = nil
 	}()
@@ -835,6 +908,8 @@ func (s *mysqlSink) Close() {
 		_ = s.conn.Close()
 		s.conn = nil
 	}
+
+	s.debugTxnRecorder.txnSQL = nil
 }
 
 func (s *mysqlSink) connect() (err error) {
