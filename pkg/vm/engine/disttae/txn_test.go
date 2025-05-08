@@ -16,11 +16,15 @@ package disttae
 
 import (
 	"bytes"
+	"context"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,4 +65,17 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 		require.True(t, found)
 		return true
 	})
+}
+
+func TestTransaction_StartStatement(t *testing.T) {
+	var txn Transaction
+	var fn func()
+	ctx := context.Background()
+	txn.op, fn = client.NewTestTxnOperator(ctx)
+	defer fn()
+	txn.StartStatement(nil)
+	stmts, err := parsers.Parse(ctx, dialect.MYSQL, "show databases", 0)
+	require.NoError(t, err)
+	require.Equal(t, len(stmts), 1)
+	txn.StartStatement(stmts[0])
 }
