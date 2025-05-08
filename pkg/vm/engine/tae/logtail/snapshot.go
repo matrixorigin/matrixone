@@ -969,7 +969,14 @@ func (sm *SnapshotMeta) GetPITR(
 				level := bat.Vecs[0].GetStringAt(r)
 				if level == PitrLevelCluster {
 					if !pitr.cluster.IsEmpty() {
-						panic("cluster duplicate pitr ")
+						logutil.Warn("GC-PANIC-DUP-PIRT-P1",
+							zap.String("level", "cluster"),
+							zap.String("old", pitr.cluster.ToString()),
+							zap.String("new", pitrTs.ToString()),
+						)
+						if pitr.cluster.LT(&pitrTs) {
+							continue
+						}
 					}
 					pitr.cluster = pitrTs
 
@@ -984,14 +991,30 @@ func (sm *SnapshotMeta) GetPITR(
 					id := uint64(account)
 					p := pitr.database[id]
 					if !p.IsEmpty() {
-						panic("db duplicate pitr ")
+						logutil.Warn("GC-PANIC-DUP-PIRT-P2",
+							zap.String("level", "database"),
+							zap.Uint64("id", id),
+							zap.String("old", p.ToString()),
+							zap.String("new", pitrTs.ToString()),
+						)
+						if p.LT(&pitrTs) {
+							continue
+						}
 					}
 					pitr.database[id] = pitrTs
 				} else if level == PitrLevelTable {
 					id := uint64(account)
 					p := pitr.tables[id]
 					if !p.IsEmpty() {
-						panic("table duplicate pitr ")
+						logutil.Warn("GC-PANIC-DUP-PIRT-P3",
+							zap.String("level", "table"),
+							zap.Uint64("id", id),
+							zap.String("old", p.ToString()),
+							zap.String("new", pitrTs.ToString()),
+						)
+						if p.LT(&pitrTs) {
+							continue
+						}
 					}
 					pitr.tables[id] = pitrTs
 				}
