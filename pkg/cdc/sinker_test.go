@@ -107,7 +107,7 @@ func TestNewSinker(t *testing.T) {
 		conn:          db,
 	}
 
-	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string) (Sink, error) {
+	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string, _ bool) (Sink, error) {
 		return sink, nil
 	})
 	defer sinkStub.Reset()

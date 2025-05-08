@@ -75,7 +75,9 @@ var NewSinker = func(
 		doRecord bool
 	)
 
-	doRecord, _ = objectio.CDCRecordTxnInjected(tableDef.DbName, tableDef.Name)
+	if tableDef != nil {
+		doRecord, _ = objectio.CDCRecordTxnInjected(tableDef.DbName, tableDef.Name)
+	}
 
 	if sink, err = NewMysqlSink(
 		sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port,
