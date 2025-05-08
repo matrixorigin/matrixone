@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 )
 
@@ -89,11 +90,9 @@ func (collector *BaseCollector_V2) Collect(c *catalog.Catalog) (err error) {
 }
 
 func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error {
-	mvccNodes := entry.GetMVCCNodeInRange(collector.start, collector.end)
-
-	for _, node := range mvccNodes {
+	return entry.ForeachMVCCNodeInRange(collector.start, collector.end, func(node *txnbase.TxnMVCCNode) error {
 		if node.IsAborted() {
-			continue
+			return nil
 		}
 		isObjectTombstone := !node.End.Equal(&entry.CreatedAt)
 		if err := collectObjectBatch(
@@ -105,8 +104,8 @@ func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error
 			collector.data.sinker.Write(context.Background(), collector.data.batch)
 			collector.data.batch.CleanOnlyData()
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func (collector *BaseCollector_V2) visitObjectForBackup(entry *catalog.ObjectEntry) error {
@@ -325,20 +324,15 @@ func MockCheckpointV12(
 	tombstoneBatch := makeRespBatchFromSchema(ObjectInfoSchema, mp)
 
 	visitObjFn := func(objectEntry *catalog.ObjectEntry, dstBatch *containers.Batch, metaIdx int) {
-		mvccNodes := objectEntry.GetMVCCNodeInRange(start, end)
-		if len(mvccNodes) == 0 {
-			return
-		}
-
 		dataStart := dstBatch.GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
-		for _, node := range mvccNodes {
+		objectEntry.ForeachMVCCNodeInRange(start, end, func(node *txnbase.TxnMVCCNode) error {
 			if node.IsAborted() {
-				continue
+				return nil
 			}
 			create := node.End.Equal(&objectEntry.CreatedAt)
 			visitObject(dstBatch, objectEntry, node, create, false, types.TS{})
-
-		}
+			return nil
+		})
 		dataEnd := dstBatch.GetVectorByName(catalog.ObjectAttr_ObjectStats).Length()
 		if dataEnd <= dataStart {
 			return

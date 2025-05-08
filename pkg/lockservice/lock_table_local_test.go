@@ -1145,6 +1145,55 @@ func TestCannotHungIfRangeConflictWithRowMultiTimes(t *testing.T) {
 	)
 }
 
+func TestUnlockLockNotHeldByCurrentTxn(t *testing.T) {
+	table := uint64(10)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			// Create two different transactions
+			txn1 := newTestTxnID(1)
+			txn2 := newTestTxnID(2)
+			rows := newTestRows(1)
+
+			// Add lock with txn1
+			mustAddTestLock(
+				t,
+				ctx,
+				s,
+				table,
+				txn1,
+				rows,
+				pb.Granularity_Row)
+
+			// Create a cowSlice for the unlock call
+			ls, err := newCowSlice(lt.fsp, rows)
+			require.NoError(t, err)
+			defer ls.close()
+
+			// Get txn2 and add it to the active txn holder
+			txn2Active := s.activeTxnHolder.getActiveTxn(txn2, true, "")
+			require.NotNil(t, txn2Active)
+
+			// Add the same bind to txn2's hold locks to ensure bind is not changed
+			txn2Active.Lock()
+			err = txn2Active.lockAdded(0, lt.bind, rows, lt.logger)
+			require.NoError(t, err)
+			txn2Active.Unlock()
+
+			// Try to unlock with txn2
+			// This should trigger the fatal error
+			require.Panics(t, func() {
+				lt.unlock(
+					txn2Active,
+					ls,
+					timestamp.Timestamp{},
+				)
+			}, "should panic when trying to unlock a lock not held by current transaction")
+		},
+	)
+}
+
 type target struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
