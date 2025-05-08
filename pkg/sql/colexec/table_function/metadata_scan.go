@@ -15,7 +15,12 @@
 package table_function
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"go.uber.org/zap"
+
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -51,15 +56,57 @@ func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (t
 	return &metadataScanState{}, err
 }
 
+func getIndexTableNameByIndexName(proc *process.Process, indexname string) (string, error) {
+	var indexTableName string
+	sql := fmt.Sprintf("SELECT index_table_name FROM mo_catalog.mo_indexes WHERE name = '%s'", indexname)
+	result, err := sqlexec.RunSql(proc, sql)
+	if err != nil {
+		return "", err
+	}
+	for _, batch := range result.Batches {
+		logutil.Info("Batch debug",
+			zap.Int("vec_count", len(batch.Vecs)),
+			zap.Strings("vector_types", func() []string {
+				types := make([]string, len(batch.Vecs))
+				for i, v := range batch.Vecs {
+					types[i] = v.GetType().String()
+				}
+				return types
+			}()),
+		)
+		if len(batch.Vecs) == 0 {
+			continue
+		}
+		vec := batch.Vecs[0]
+		for row := 0; row < vec.Length(); row++ {
+			if !vec.IsNull(uint64(row)) {
+				indexTableName = vec.GetStringAt(row)
+				logutil.Info("Index table name", zap.String("value", indexTableName))
+			}
+		}
+	}
+	return indexTableName, nil
+}
+
 func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 
 	source := tf.ctr.argVecs[0]
 	col := tf.ctr.argVecs[1]
-	dbname, tablename, colname, err := handleDataSource(source, col)
-	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
+	dbname, tablename, indexname, colname, err := handleDataSource(source, col)
+	logutil.Infof("db: %s, table: %s, index: %s, col: %s in metadataScan", dbname, tablename, indexname, colname)
 	if err != nil {
 		return err
+	}
+
+	// When the source format is db_name.table_name.$index_name
+	// metadata_scan actually returns the metadata of the index table
+	if indexname != "" {
+		indexTableName, err := getIndexTableNameByIndexName(proc, indexname)
+		if err != nil {
+			return err
+		}
+		tablename = indexTableName
 	}
 
 	// Oh my
@@ -94,15 +141,47 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 	return nil
 }
 
-func handleDataSource(source, col *vector.Vector) (string, string, string, error) {
+func handleDataSource(source, col *vector.Vector) (string, string, string, string, error) {
 	if source.Length() != 1 || col.Length() != 1 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
+		return "", "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
 	}
-	strs := strings.Split(source.GetStringAt(0), ".")
-	if len(strs) != 2 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of db and tbl input")
+	sourceStr := source.GetStringAt(0)
+	parts := strings.Split(sourceStr, ".")
+	switch len(parts) {
+	// Old source format: db_name.table_name
+	case 2:
+		dbname, tablename := parts[0], parts[1]
+		if !isValidIdentifier(dbname) || !isValidIdentifier(tablename) {
+			return "", "", "", "", moerr.NewInternalErrorNoCtx("invalid db or table name format")
+		}
+		return dbname, tablename, "", col.GetStringAt(0), nil
+	// Newly supported source format: db_name.table_name.$index_name
+	case 3:
+		dbname, tablename, indexPart := parts[0], parts[1], parts[2]
+		if !isValidIdentifier(dbname) || !isValidIdentifier(tablename) {
+			return "", "", "", "", moerr.NewInternalErrorNoCtx("invalid db or table name format")
+		}
+		if len(indexPart) == 0 || indexPart[0] != '$' || !isValidIdentifier(indexPart[1:]) {
+			return "", "", "", "", moerr.NewInternalErrorNoCtx("index name must start with $ and follow identifier rules")
+		}
+		indexName := indexPart[1:]
+		return dbname, tablename, indexName, col.GetStringAt(0), nil
+
+	default:
+		return "", "", "", "", moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.$index_name format")
 	}
-	return strs[0], strs[1], col.GetStringAt(0), nil
+}
+
+func isValidIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunction *TableFunction, info *plan.MetadataScanInfo) error {
