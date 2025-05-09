@@ -16,6 +16,8 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 select count(*) from t;
+-- @ignore:0
+select mo_ctl("dn", "flush", "table_func_metadata_scan_idx.t");
 CREATE INDEX idx_a ON t(a);
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx.t.$idx_a", "*")g;
 CREATE INDEX idx_c_d ON t(c, d);

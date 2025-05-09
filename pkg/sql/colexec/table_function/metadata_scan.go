@@ -56,50 +56,25 @@ func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (t
 	return &metadataScanState{}, err
 }
 
-func getRelID(proc *process.Process, dbname, tablename string) (uint64, error) {
-	sql := fmt.Sprintf(
-		"SELECT rel_id FROM mo_catalog.mo_tables WHERE reldatabase = '%s' AND relname = '%s'",
-		dbname,
-		tablename,
-	)
-	result, err := sqlexec.RunSql(proc, sql)
-	if err != nil {
-		return 0, err
-	}
-
-	var relID uint64
-	for _, batch := range result.Batches {
-		logutil.Info("Batch debug",
-			zap.Int("vec_count", len(batch.Vecs)),
-			zap.Strings("vector_types", func() []string {
-				types := make([]string, len(batch.Vecs))
-				for i, v := range batch.Vecs {
-					types[i] = v.GetType().String()
-				}
-				return types
-			}()),
-		)
-		if len(batch.Vecs) == 0 {
-			continue
-		}
-		vec := batch.Vecs[0]
-		for row := 0; row < vec.Length(); row++ {
-			if !vec.IsNull(uint64(row)) {
-				col := vector.MustFixedColNoTypeCheck[uint64](vec)
-				relID = col[row]
-				logutil.Info("relID", zap.Uint64("value", relID))
-			}
-		}
-	}
-	return relID, nil
-}
-
 func getIndexTableNameByIndexName(proc *process.Process, dbname, tablename, indexname string) (string, error) {
 	var indexTableName string
-	tableid, err := getRelID(proc, dbname, tablename)
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	db, err := e.Database(proc.Ctx, dbname, proc.GetTxnOperator())
+	if err != nil {
+		return "", moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
+	}
+
+	rel, err := db.Relation(proc.Ctx, tablename, nil)
 	if err != nil {
 		return "", err
 	}
+	tableid := rel.GetTableID(proc.Ctx)
+	logutil.Info("relID", zap.Uint64("value", tableid))
+	if err != nil {
+		return "", err
+	}
+
 	sql := fmt.Sprintf("SELECT distinct(index_table_name) FROM mo_catalog.mo_indexes WHERE table_id = '%d' AND name = '%s'", tableid, indexname)
 	result, err := sqlexec.RunSql(proc, sql)
 	if err != nil {
