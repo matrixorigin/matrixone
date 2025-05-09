@@ -71,9 +71,6 @@ func getIndexTableNameByIndexName(proc *process.Process, dbname, tablename, inde
 	}
 	tableid := rel.GetTableID(proc.Ctx)
 	logutil.Info("relID", zap.Uint64("value", tableid))
-	if err != nil {
-		return "", err
-	}
 
 	sql := fmt.Sprintf("SELECT distinct(index_table_name) FROM mo_catalog.mo_indexes WHERE table_id = '%d' AND name = '%s'", tableid, indexname)
 	result, err := sqlexec.RunSql(proc, sql)
