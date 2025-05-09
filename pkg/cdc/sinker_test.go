@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -24,16 +25,17 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
-	"github.com/tidwall/btree"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/btree"
 )
 
 func TestNewSinker(t *testing.T) {
@@ -55,7 +57,7 @@ func TestNewSinker(t *testing.T) {
 		{
 			args: args{
 				sinkUri: UriInfo{
-					SinkTyp: ConsoleSink,
+					SinkTyp: CDCSinkType_Console,
 				},
 				dbTblInfo:        &DbTableInfo{},
 				watermarkUpdater: nil,
@@ -73,7 +75,7 @@ func TestNewSinker(t *testing.T) {
 		{
 			args: args{
 				sinkUri: UriInfo{
-					SinkTyp: MysqlSink,
+					SinkTyp: CDCSinkType_MySQL,
 				},
 				dbTblInfo: &DbTableInfo{
 					SourceCreateSql: "create table t1 (a int, b int, c int)",
@@ -100,12 +102,12 @@ func TestNewSinker(t *testing.T) {
 		password:      "123456",
 		ip:            "127.0.0.1",
 		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
+		retryTimes:    CDCDefaultRetryTimes,
+		retryDuration: CDCDefaultRetryDuration,
 		conn:          db,
 	}
 
-	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string) (Sink, error) {
+	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string, _ bool) (Sink, error) {
 		return sink, nil
 	})
 	defer sinkStub.Reset()
@@ -117,7 +119,7 @@ func TestNewSinker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, DefaultMaxSqlLength, DefaultSendSqlTimeout)
+			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, CDCDefaultTaskExtra_MaxSQLLen, CDCDefaultSendSqlTimeout)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -245,7 +247,7 @@ func TestNewMysqlSink(t *testing.T) {
 				port:          3306,
 				retryTimes:    3,
 				retryDuration: 3 * time.Second,
-				timeout:       DefaultSendSqlTimeout,
+				timeout:       CDCDefaultSendSqlTimeout,
 			},
 			wantErr: assert.NoError,
 		},
@@ -258,7 +260,7 @@ func TestNewMysqlSink(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, DefaultSendSqlTimeout)
+			got, err := NewMysqlSink(tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration, CDCDefaultSendSqlTimeout, false)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewMysqlSink(%v, %v, %v, %v, %v, %v)", tt.args.user, tt.args.password, tt.args.ip, tt.args.port, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -295,8 +297,8 @@ func Test_mysqlSink_Send(t *testing.T) {
 		password:      "123456",
 		ip:            "127.0.0.1",
 		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
+		retryTimes:    CDCDefaultRetryTimes,
+		retryDuration: CDCDefaultRetryDuration,
 		conn:          db,
 	}
 	ar := NewCdcActiveRoutine()
@@ -311,7 +313,7 @@ func Test_mysqlSink_Send(t *testing.T) {
 func TestNewMysqlSinker(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxSqlLength))
+	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(CDCDefaultTaskExtra_MaxSQLLen))
 
 	sink := &mysqlSink{
 		user:          "root",
@@ -340,7 +342,7 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), DefaultMaxSqlLength, false)
+	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), CDCDefaultTaskExtra_MaxSQLLen, false)
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -358,8 +360,8 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 		password:      "123456",
 		ip:            "127.0.0.1",
 		port:          3306,
-		retryTimes:    DefaultRetryTimes,
-		retryDuration: DefaultRetryDuration,
+		retryTimes:    CDCDefaultRetryTimes,
+		retryDuration: CDCDefaultRetryDuration,
 		conn:          db,
 	}
 
@@ -381,6 +383,7 @@ func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
 	s.sqlBufs[1] = make([]byte, sqlBufReserved, len(tsDeletePrefix)+8+sqlBufReserved)
 	s.curBufIdx = 0
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -485,7 +488,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(DefaultMaxSqlLength))
+	mock.ExpectQuery("SELECT @@max_allowed_packet").WillReturnRows(sqlmock.NewRows([]string{""}).AddRow(CDCDefaultTaskExtra_MaxSQLLen))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -529,7 +532,8 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	ar := NewCdcActiveRoutine()
 
-	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, DefaultMaxSqlLength, false)
+	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, CDCDefaultTaskExtra_MaxSQLLen, false)
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -663,6 +667,7 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	s.preSqlBufLen = 128
 	s.sqlBufSendCh = make(chan []byte)
+	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -923,10 +928,6 @@ func Test_mysqlSinker_Close(t *testing.T) {
 func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	assert.NoError(t, err)
-	mock.ExpectBegin()
-	mock.ExpectCommit()
-	mock.ExpectBegin()
-	mock.ExpectRollback()
 
 	ar := NewCdcActiveRoutine()
 	s := &mysqlSinker{
@@ -938,6 +939,7 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		ar:           ar,
 		sqlBufSendCh: make(chan []byte),
 	}
+	s.ClearError()
 	go s.Run(context.Background(), ar)
 	defer func() {
 		// call dummy to guarantee sqls has been sent, then close
@@ -945,15 +947,46 @@ func Test_mysqlSinker_SendBeginCommitRollback(t *testing.T) {
 		s.Close()
 	}()
 
+	mock.ExpectBegin()
+	mock.ExpectCommit()
 	s.SendBegin()
 	assert.NoError(t, err)
 	s.SendCommit()
 	assert.NoError(t, err)
+	s.SendDummy()
 
+	mock.ExpectBegin()
+	mock.ExpectRollback()
 	s.SendBegin()
 	assert.NoError(t, err)
 	s.SendRollback()
 	assert.NoError(t, err)
+	s.SendDummy()
+
+	// begin error
+	mock.ExpectBegin().WillReturnError(moerr.NewInternalErrorNoCtx("begin error"))
+	s.SendBegin()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
+
+	// commit error
+	mock.ExpectBegin()
+	mock.ExpectCommit().WillReturnError(moerr.NewInternalErrorNoCtx("commit error"))
+	s.SendBegin()
+	s.SendCommit()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
+
+	// rollback error
+	mock.ExpectBegin()
+	mock.ExpectRollback().WillReturnError(moerr.NewInternalErrorNoCtx("rollback error"))
+	s.SendBegin()
+	s.SendRollback()
+	s.SendDummy()
+	assert.Error(t, s.Error())
+	s.ClearError()
 }
 
 func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
@@ -961,4 +994,112 @@ func Test_consoleSinker_SendBeginCommitRollback(t *testing.T) {
 	s.SendBegin()
 	s.SendCommit()
 	s.SendRollback()
+}
+
+func Test_mysqlSinker_ClearError(t *testing.T) {
+	s := &mysqlSinker{}
+	s.SetError(moerr.NewInternalErrorNoCtx("test err"))
+	assert.Error(t, s.Error())
+
+	s.ClearError()
+	assert.Nil(t, s.Error())
+}
+
+func Test_mysqlSinker_Reset(t *testing.T) {
+	s := &mysqlSinker{}
+	s.sqlBufs[0] = make([]byte, sqlBufReserved, 1024)
+	s.sqlBufs[1] = make([]byte, sqlBufReserved, 1024)
+	s.curBufIdx = 0
+	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+	s.Reset()
+}
+
+func Test_Error(t *testing.T) {
+
+	tsInsertPrefix := "/* tsInsertPrefix */REPLACE INTO `db`.`table` VALUES "
+	tsDeletePrefix := "/* tsDeletePrefix */DELETE FROM `db`.`table` WHERE a IN ("
+
+	db, mock, err := sqlmock.New()
+	assert.NoError(t, err)
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(1, 1))
+	sink := &mysqlSink{
+		user:          "root",
+		password:      "123456",
+		ip:            "127.0.0.1",
+		port:          3306,
+		retryTimes:    3,
+		retryDuration: 3 * time.Second,
+		conn:          db,
+	}
+	defer sink.Close()
+
+	ar := NewCdcActiveRoutine()
+	s := &mysqlSinker{
+		mysql:          sink,
+		tsInsertPrefix: []byte(tsInsertPrefix),
+		tsDeletePrefix: []byte(tsDeletePrefix),
+		preRowType:     NoOp,
+		ar:             ar,
+		sqlBufSendCh:   make(chan []byte),
+	}
+	defer s.Close()
+	s.SetError(errors.ErrUnsupported)
+	assert.Equal(t, "internal error: convert go error to mo error unsupported operation", s.Error().Error())
+	s.SetError(moerr.NewFileNotFound(context.Background(), "test error"))
+	assert.True(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
+
+	var merr *moerr.Error
+	s.SetError(merr)
+
+	assert.False(t, moerr.IsMoErrCode(s.Error(), moerr.ErrFileNotFound))
+
+	s.SetError(nil)
+	assert.Nil(t, s.Error())
+}
+
+func TestRecordTxn(t *testing.T) {
+	fault.Enable()
+	defer fault.Disable()
+
+	rm, err := objectio.InjectCDCRecordTxn("testdb", "t1", 0)
+	assert.NoError(t, err)
+
+	defer func() {
+		rm()
+	}()
+
+	ok, _ := objectio.CDCRecordTxnInjected("testdb", "t1")
+	assert.True(t, ok)
+
+	ok, _ = objectio.CDCRecordTxnInjected("tpcc", "bmsql_stock")
+	assert.True(t, ok)
+
+	{
+		s := &mysqlSink{}
+
+		sql1 := make([]byte, sqlBufReserved)
+		sql1 = append(sql1, []byte("select count(*) from testdb.t1")...)
+
+		s.recordTxnSQL(sql1)
+		s.infoRecordedTxnSQLs(nil)
+		s.infoRecordedTxnSQLs(nil)
+	}
+
+	{
+		s := &mysqlSink{}
+		s.debugTxnRecorder.doRecord = true
+
+		sql1 := make([]byte, sqlBufReserved)
+		sql1 = append(sql1, []byte("select count(*) from testdb.t1")...)
+
+		sql2 := make([]byte, sqlBufReserved)
+		sql2 = append(sql2, []byte("select count(*) from tpcc.bmsql_stock")...)
+
+		s.recordTxnSQL(sql1)
+		s.recordTxnSQL(sql2)
+
+		s.infoRecordedTxnSQLs(nil)
+		s.infoRecordedTxnSQLs(nil)
+	}
 }

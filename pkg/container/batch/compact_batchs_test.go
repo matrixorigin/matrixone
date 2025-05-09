@@ -23,11 +23,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	TestBatchMaxRow = 8192
+)
+
 func TestCompactBatchsPush(t *testing.T) {
 	var err error
 	var bat1, bat2 *Batch
 	mp := mpool.MustNewZero()
-	bats := NewCompactBatchs()
+	bats := NewCompactBatchs(TestBatchMaxRow)
 
 	//empty input
 	bat1 = NewWithSize(1)
@@ -93,7 +97,7 @@ func TestCompactBatchsExtend(t *testing.T) {
 	var err error
 	var bat1, bat2 *Batch
 	mp := mpool.MustNewZero()
-	bats := NewCompactBatchs()
+	bats := NewCompactBatchs(TestBatchMaxRow)
 
 	//empty input
 	bat1 = NewWithSize(1)
@@ -174,7 +178,7 @@ func TestCompactBatchsExtend(t *testing.T) {
 
 func TestCompactBatchsUnion(t *testing.T) {
 	mp := mpool.MustNewZero()
-	bats := NewCompactBatchs()
+	bats := NewCompactBatchs(TestBatchMaxRow)
 
 	bat1 := makeTestBatch(50, mp)
 	bat2 := makeTestBatch(8192, mp)

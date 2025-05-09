@@ -43,16 +43,6 @@ func NewDataCache(
 var seed = maphash.MakeSeed()
 
 func shardCacheKey(key fscache.CacheKey) uint64 {
-
-	/*
-		hkey := []byte("12345678901234567890098765432112")
-		hasher, _ := highwayhash.New64(hkey)
-		hasher.Write(util.UnsafeToBytes(&key.Offset))
-		hasher.Write(util.UnsafeToBytes(&key.Sz))
-		hasher.Write([]byte(key.Path))
-		return hasher.Sum64()
-	*/
-
 	var hasher maphash.Hash
 	hasher.SetSeed(seed)
 	hasher.Write(util.UnsafeToBytes(&key.Offset))

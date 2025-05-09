@@ -14,7 +14,10 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	node := builder.qry.Nodes[nodeID]
@@ -576,7 +579,7 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 						} else {
 							child.Stats.BlockNum = 1
 						}
-						child.Stats.Cost = float64(child.Stats.BlockNum * DefaultBlockMaxRows)
+						child.Stats.Cost = float64(child.Stats.BlockNum * objectio.BlockMaxRows)
 					}
 				}
 			}

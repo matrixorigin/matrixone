@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -75,7 +76,7 @@ func NewShufflePool(bucketNum int32, maxHolders int32) *ShufflePoolV2 {
 	sp.stoppers = 0
 	sp.batches = make([]*batch.CompactBatchs, sp.bucketNum)
 	for i := range sp.batches {
-		sp.batches[i] = batch.NewCompactBatchs()
+		sp.batches[i] = batch.NewCompactBatchs(objectio.BlockMaxRows)
 	}
 	sp.batchLocks = make([]sync.Mutex, bucketNum)
 	sp.endingWaiters = make([]chan bool, bucketNum)

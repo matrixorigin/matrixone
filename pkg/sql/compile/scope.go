@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -957,10 +956,12 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				hasTombstone bool
 				err2         error
 			)
-			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+
+			fs, err := colexec.GetSharedFSFromProc(c.proc)
 			if err != nil {
 				return err
 			}
+
 			tombstones, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
 			if err != nil {
 				return err

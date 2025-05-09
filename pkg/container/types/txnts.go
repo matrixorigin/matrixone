@@ -130,7 +130,11 @@ func (ts TS) Prev() TS {
 func (ts *TS) Next() TS {
 	p, l := DecodeInt64(ts[4:12]), DecodeUint32(ts[:4])
 	if l == math.MaxUint32 {
-		p += 1
+		if p == math.MaxInt64 {
+			return maxTS
+		} else {
+			p += 1
+		}
 	} else {
 		l += 1
 	}

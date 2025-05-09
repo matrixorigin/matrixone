@@ -248,12 +248,14 @@ func (reader *tableReader) readTableWithTxn(
 			deleteAtmBatch.Close()
 		}
 
-		curTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
-		// if curTs != toTs, means this procedure end abnormally, need to rollback
+		current := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
+		// if current != toTs, means this procedure end abnormally, need to rollback
 		// e.g. encounter errors, or interrupted by user (pause/cancel)
-		if !curTs.Equal(&toTs) {
+		if !current.Equal(&toTs) {
 			logutil.Errorf("cdc tableReader(%v).readTableWithTxn end abnormally", reader.info)
 			if hasBegin {
+				// clear previous error
+				reader.sinker.ClearError()
 				reader.sinker.SendRollback()
 				reader.sinker.SendDummy()
 				if rollbackErr := reader.sinker.Error(); rollbackErr != nil {
@@ -263,14 +265,14 @@ func (reader *tableReader) readTableWithTxn(
 		}
 	}()
 
-	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
-		if atmBatch == nil {
-			atmBatch = NewAtomicBatch(reader.mp)
+	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
+		if atomicBatch == nil {
+			atomicBatch = NewAtomicBatch(reader.mp)
 		}
-		return atmBatch
+		return atomicBatch
 	}
 
-	var curHint engine.ChangesHandle_Hint
+	var currentHint engine.ChangesHandle_Hint
 	for {
 		select {
 		case <-ctx.Done():
@@ -288,7 +290,7 @@ func (reader *tableReader) readTableWithTxn(
 
 		v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
 		start = time.Now()
-		insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp)
+		insertData, deleteData, currentHint, err = changes.Next(ctx, reader.mp)
 		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
 			return
@@ -324,7 +326,7 @@ func (reader *tableReader) readTableWithTxn(
 
 		addStartMetrics(insertData, deleteData)
 
-		switch curHint {
+		switch currentHint {
 		case engine.ChangesHandle_Snapshot:
 			// output sql in a txn
 			if !hasBegin && !reader.initSnapshotSplitTxn {

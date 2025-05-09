@@ -110,6 +110,10 @@ func TestPatternBoolean(t *testing.T) {
 			pattern: "+读写汉字 -学中文",
 			expect:  "(+ (text 0 读写汉字)) (- (text 1 学中文))",
 		},
+		{
+			pattern: "+读书会 +提效 +社群 +案例 +运营",
+			expect:  "(join 0 (+ (text 0 读书会)) (+ (text 0 提效)) (+ (text 0 社群)) (+ (text 0 案例)) (+ (text 0 运营)))",
+		},
 	}
 
 	for _, c := range tests {
@@ -132,11 +136,19 @@ func TestPatternNL(t *testing.T) {
 		},
 		{
 			pattern: "读写汉字 学中文",
-			expect:  "(text 0 0 读写汉) (text 1 3 写汉字) (* 2 6 汉字*) (* 3 9 字*) (text 4 13 学中文) (* 5 16 中文*) (* 6 19 文*)",
+			expect:  "(text 0 0 读写汉) (text 1 3 写汉字) (text 2 13 学中文)",
 		},
 		{
 			pattern: "读写",
 			expect:  "(* 0 0 读写*)",
+		},
+		{
+			pattern: "肥胖的原因都是因为摄入脂肪多导致的吗",
+			expect:  "(text 0 0 肥胖的) (text 1 9 原因都) (text 2 18 是因为) (text 3 27 摄入脂) (text 4 36 肪多导) (text 5 45 致的吗)",
+		},
+		{
+			pattern: "肥胖的原因都是因为摄入fat多导致的吗",
+			expect:  "(text 0 0 肥胖的) (text 1 9 原因都) (text 2 18 是因为) (text 3 24 为摄入) (text 4 33 fat) (text 5 36 多导致) (text 6 42 致的吗)",
 		},
 	}
 

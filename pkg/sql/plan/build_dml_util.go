@@ -936,8 +936,7 @@ func makeOneInsertPlan(
 	//  case 2: the only primary key is auto increment type
 	//  case 3: create hidden table for secondary index
 
-	isSecondaryHidden := strings.Contains(tableDef.Name, catalog.SecondaryIndexTableNamePrefix)
-	if isSecondaryHidden {
+	if catalog.IsSecondaryIndexTable(tableDef.Name) {
 		return nil
 	}
 
@@ -4431,20 +4430,21 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		// create sink scan and join with index table JOIN LEFT ON (sink.pkcol = index.docid) and project with (docid, row_id)
 		// see appendDeleteMasterTablePlan
 
+		rfTag := builder.genNewTag()
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
 
-		var rightRowIdPos int32 = -1
-		var rightDocidPos int32 = 0  // doc_id
-		var rightFakePkPos int32 = 3 // __mo_fake_pk_col_
+		var idxRowIdPos int32 = -1
+		var idxDocidPos int32 = 0  // doc_id
+		var idxFakePkPos int32 = 3 // __mo_fake_pk_col_
 		scanNodeProject := make([]*Expr, len(indexTableDef.Cols))
 		for colIdx, colVal := range indexTableDef.Cols {
 
 			if colVal.Name == catalog.Row_ID {
-				rightRowIdPos = int32(colIdx)
+				idxRowIdPos = int32(colIdx)
 			}
 			if colVal.Name == catalog.FakePrimaryKeyColName {
-				rightFakePkPos = int32(colIdx)
+				idxFakePkPos = int32(colIdx)
 			}
 
 			scanNodeProject[colIdx] = &plan.Expr{
@@ -4458,30 +4458,42 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			}
 		}
 
-		rightId := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			Stats:       &plan.Stats{},
-			ObjRef:      indexObjRef,
-			TableDef:    indexTableDef,
-			ProjectList: scanNodeProject,
-		}, bindCtx)
-
-		var rightExpr = &plan.Expr{
-			Typ: indexTableDef.Cols[rightDocidPos].Typ,
+		probeExpr := &plan.Expr{
+			Typ: indexTableDef.Cols[idxDocidPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightDocidPos,
+					RelPos: 0,
+					ColPos: idxDocidPos,
 					Name:   "doc_id",
 				},
 			},
 		}
 
+		idxScanId := builder.appendNode(&plan.Node{
+			NodeType:               plan.Node_TABLE_SCAN,
+			Stats:                  &plan.Stats{},
+			ObjRef:                 indexObjRef,
+			TableDef:               indexTableDef,
+			ProjectList:            scanNodeProject,
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
+		}, bindCtx)
+
 		var leftExpr = &plan.Expr{
-			Typ: orgPkType,
+			Typ: indexTableDef.Cols[idxDocidPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
+					ColPos: idxDocidPos,
+					Name:   "doc_id",
+				},
+			},
+		}
+
+		var rightExpr = &plan.Expr{
+			Typ: orgPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
 					ColPos: int32(orgPkColPos),
 					Name:   delCtx.tableDef.Pkey.PkeyColName,
 				},
@@ -4495,46 +4507,58 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 
 		projectList := make([]*Expr, 0, 2)
 		projectList = append(projectList, &plan.Expr{
-			Typ: indexTableDef.Cols[rightRowIdPos].Typ,
+			Typ: indexTableDef.Cols[idxRowIdPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightRowIdPos,
+					RelPos: 0,
+					ColPos: idxRowIdPos,
 					Name:   catalog.Row_ID,
 				},
 			},
 		}, &plan.Expr{
-			Typ: indexTableDef.Cols[rightDocidPos].Typ,
+			Typ: indexTableDef.Cols[idxDocidPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightDocidPos,
+					RelPos: 0,
+					ColPos: idxDocidPos,
 					Name:   "doc_id",
 				},
 			},
 		}, &plan.Expr{
-			Typ: indexTableDef.Cols[rightFakePkPos].Typ,
+			Typ: indexTableDef.Cols[idxFakePkPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightFakePkPos,
+					RelPos: 0,
+					ColPos: idxFakePkPos,
 					Name:   catalog.FakePrimaryKeyColName,
 				},
 			},
 		},
 		)
 
+		rfBuildExpr := &plan.Expr{
+			Typ: orgPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 0,
+				},
+			},
+		}
+
+		sid := builder.compCtx.GetProcess().GetService()
 		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_JOIN,
-			JoinType:    plan.Node_LEFT,
-			Children:    []int32{lastNodeId, rightId},
-			OnList:      []*Expr{joinCond},
-			ProjectList: projectList,
+			NodeType:               plan.Node_JOIN,
+			JoinType:               plan.Node_RIGHT,
+			Children:               []int32{idxScanId, lastNodeId},
+			OnList:                 []*Expr{joinCond},
+			ProjectList:            projectList,
+			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr)},
 		}, bindCtx)
 
 		deleteIdx := 0
 		retPkPos := deleteIdx + 2
-		retPkTyp := indexTableDef.Cols[rightFakePkPos].Typ
+		retPkTyp := indexTableDef.Cols[idxFakePkPos].Typ
 
 		return lastNodeId, deleteIdx, retPkPos, retPkTyp, nil
 	}

@@ -67,7 +67,7 @@ func TestShardCacheKeyAllocs(t *testing.T) {
 	if n := testing.AllocsPerRun(64000, func() {
 		shardCacheKey(key)
 	}); n != 0 {
-		t.Fatalf(fmt.Sprintf("should not allocate. %f bytes allocated", n))
+		t.Fatalf("should not allocate")
 	}
 }
 
