@@ -39,5 +39,6 @@ static const int32_t RIGHT_IS_SCALAR = 2;
 
 
 #include "bitmap.h"
+#include "xcall.h"
 
 #endif /* _MO_IMPL_H_ */

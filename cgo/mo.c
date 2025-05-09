@@ -45,3 +45,24 @@ void Bitmap_Or(uint64_t *dst, uint64_t *a, uint64_t *b, uint64_t nbits) {
 void Bitmap_Not(uint64_t *dst, uint64_t *a, uint64_t nbits) {
     bitmap_not(dst, a, nbits);
 }
+
+#define XCALL_L2DISTANCE_F32 0
+#define XCALL_L2DISTANCE_F64 1
+#define XCALL_L2DISTANCE_SQ_F32 2
+#define XCALL_L2DISTANCE_SQ_F64 3
+
+int32_t XCall(int64_t runtimeId, int64_t funcId, uint8_t *errBuf, uint64_t *args, uint64_t len) {
+    switch (funcId) {
+        case XCALL_L2DISTANCE_F32:
+            return xcall_l2distance_f32(runtimeId, errBuf, args, len, false);
+        case XCALL_L2DISTANCE_F64:
+            return xcall_l2distance_f64(runtimeId, errBuf, args, len, false);
+        case XCALL_L2DISTANCE_SQ_F32:
+            return xcall_l2distance_f32(runtimeId, errBuf, args, len, true);
+        case XCALL_L2DISTANCE_SQ_F64:
+            return xcall_l2distance_f64(runtimeId, errBuf, args, len, true);
+        default:
+            return -1;
+    }
+    return -1;
+}

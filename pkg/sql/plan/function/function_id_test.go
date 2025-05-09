@@ -386,8 +386,12 @@ var predefinedFunids = map[int]int{
 	JSON_INSERT:  338,
 	JSON_REPLACE: 339,
 
-	FAULT_INJECT:        340,
-	FUNCTION_END_NUMBER: 341,
+	FAULT_INJECT: 340,
+
+	L2_DISTANCE_XC:    341,
+	L2_DISTANCE_SQ_XC: 342,
+
+	FUNCTION_END_NUMBER: 343,
 }
 
 func Test_funids(t *testing.T) {
