@@ -1,4 +1,4 @@
-select * from metadata_scan('table_func_metadata_scan.no_exist_table', '*') g;
+select * from metadata_scan('table_func_metadata_scan_idx.no_exist_table', '*') g;
 SQL parser error: table "no_exist_table" does not exist
 drop table if exists t;
 create table t(a int, b varchar, c float, d decimal(10, 8), e float(5, 2));
@@ -20,15 +20,15 @@ select count(*) from t;
 count(*)
 8192
 CREATE INDEX idx_a ON t(a);
-select distinct(col_name) from metadata_scan("table_func_metadata_scan.t.$idx_a", "*")g;
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx.t.$idx_a", "*")g;
 col_name
 __mo_index_idx_col
 __mo_index_pri_col
 CREATE INDEX idx_c_d ON t(c, d);
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan.t.$idx_c_d", "*")g;
+select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.$idx_c_d", "*")g;
 origin_size
 274403
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan.t.$idx_invalid", "*")g;
+select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.$idx_invalid", "*")g;
 SQL parser error: table "" does not exist
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan.t.idx_invalid", "*")g;
+select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.idx_invalid", "*")g;
 internal error: index name must start with $ and follow identifier rules

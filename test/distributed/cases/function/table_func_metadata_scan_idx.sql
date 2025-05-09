@@ -1,4 +1,4 @@
-select * from metadata_scan('table_func_metadata_scan.no_exist_table', '*') g;
+select * from metadata_scan('table_func_metadata_scan_idx.no_exist_table', '*') g;
 drop table if exists t;
 create table t(a int, b varchar, c float, d decimal(10, 8), e float(5, 2));
 insert into t values(1, null, 1.1, 1, 1.11);
@@ -17,8 +17,8 @@ insert into t select * from t;
 insert into t select * from t;
 select count(*) from t;
 CREATE INDEX idx_a ON t(a);
-select distinct(col_name) from metadata_scan("table_func_metadata_scan.t.$idx_a", "*")g;
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx.t.$idx_a", "*")g;
 CREATE INDEX idx_c_d ON t(c, d);
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan.t.$idx_c_d", "*")g;
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan.t.$idx_invalid", "*")g;
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan.t.idx_invalid", "*")g;
+select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.$idx_c_d", "*")g;
+select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.$idx_invalid", "*")g;
+select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.idx_invalid", "*")g;
