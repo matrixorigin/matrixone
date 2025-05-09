@@ -4748,3 +4748,16 @@ func Union2VectorValen(
 
 	return nil
 }
+
+func (v *Vector) FillRawPtrLen(dest []uintptr) {
+	dest[0], dest[1] = v.nsp.RawPtrLen()
+	ds := v.UnsafeGetRawData()
+	dest[2] = uintptr(unsafe.Pointer(&ds[0]))
+	dest[3] = uintptr(len(ds))
+	if len(v.area) == 0 {
+		dest[4], dest[5] = 0, 0
+	} else {
+		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
+		dest[5] = uintptr(len(v.area))
+	}
+}
