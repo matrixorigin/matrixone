@@ -110,8 +110,13 @@ THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
+
+ifeq ($(MO_CL_CUDA),1)
+	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -lstdc++
+endif
+
 CGO_OPTS :=CGO_CFLAGS="-I$(THIRDPARTIES_INSTALL_DIR)/include"
-GOLDFLAGS=-ldflags="-extldflags '-L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
+GOLDFLAGS=-ldflags="-extldflags '$(CUDA_LDFLAGS) -L$(THIRDPARTIES_INSTALL_DIR)/lib -Wl,-rpath,\$${ORIGIN}/lib' $(VERSION_INFO)"
 TAGS :=
 
 ifeq ("$(UNAME_S)","darwin")
