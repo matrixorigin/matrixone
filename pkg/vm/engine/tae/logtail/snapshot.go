@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sort"
 	"sync"
 	"time"
@@ -393,8 +394,9 @@ func (sm *SnapshotMeta) updateTableInfo(
 
 	for _, info := range orderedInfos {
 		if info.stats.BlkCnt() != 1 {
-			panic(fmt.Sprintf("mo_table object %v blk cnt %v",
-				info.stats.ObjectName(), info.stats.BlkCnt()))
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P1",
+				zap.String("object", info.stats.ObjectName().String()),
+				zap.Uint32("blkCnt", info.stats.BlkCnt()))
 		}
 		if !info.deleteAt.IsEmpty() {
 			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
@@ -445,7 +447,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
 					logutil.Warn(
-						"GC-PANIC-UPDATE-TABLE-P8",
+						"GC-PANIC-UPDATE-TABLE-P2",
 						zap.Uint64("tid", tid),
 						zap.Uint64("old-tid", sm.pitr.tid),
 					)
@@ -462,8 +464,12 @@ func (sm *SnapshotMeta) updateTableInfo(
 			table := sm.tables[account][tid]
 			if table != nil {
 				if table.createAt.GT(&createAt) {
-					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
-						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
+					logutil.Warn("GC-PANIC-UPDATE-TABLE-P3",
+						zap.Uint64("tid", tid),
+						zap.String("name", tuple.ErrString(nil)),
+						zap.String("old-create-at", table.createAt.ToString()),
+						zap.String("new-create-at", createAt.ToString()))
+					table.createAt = createAt
 				}
 				if table.pk == pk {
 					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
@@ -490,8 +496,9 @@ func (sm *SnapshotMeta) updateTableInfo(
 	deleteRows := make([]tombstone, 0)
 	for _, info := range tTombstones {
 		if info.stats.BlkCnt() != 1 {
-			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
-				info.stats.ObjectName(), info.stats.BlkCnt()))
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P4",
+				zap.String("object", info.stats.ObjectName().String()),
+				zap.Uint32("blk-cnt", info.stats.BlkCnt()))
 		}
 		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
@@ -537,19 +544,20 @@ func (sm *SnapshotMeta) updateTableInfo(
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) == 0 {
-			logutil.Warn(
-				"GC-UpdateTableInfoWarn",
-				zap.String("table", pk),
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P5",
+				zap.String("pk", del.pk.ErrString(nil)),
 				zap.String("rowid", del.rowid.String()),
-				zap.String("commitTs", del.ts.ToString()),
-				zap.String("startTs", startts.ToString()),
-				zap.String("endTs", endts.ToString()),
-			)
+				zap.String("commit", del.ts.ToString()),
+				zap.String("start", startts.ToString()),
+				zap.String("end", endts.ToString()))
 			continue
 		}
 		table := sm.tablePKIndex[pk][0]
 		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {
-			panic(fmt.Sprintf("table %v delete at %v is greater than %v", table.tid, table.deleteAt, del.ts))
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P6",
+				zap.Uint64("tid", table.tid),
+				zap.String("old-delete-at", table.deleteAt.ToString()),
+				zap.String("new-delete-at", del.ts.ToString()))
 		}
 		table.deleteAt = del.ts
 		sm.tablePKIndex[pk] = sm.tablePKIndex[pk][1:]
@@ -574,7 +582,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 	for pk, tables := range sm.tablePKIndex {
 		if len(tables) > 1 {
 			logutil.Warn(
-				"GC-UpdateSnapTable-Error",
+				"GC-PANIC-UPDATE-TABLE-P7",
 				zap.String("table", pk),
 				zap.Int("len", len(tables)),
 			)
@@ -679,8 +687,8 @@ func (sm *SnapshotMeta) Update(
 					createAt: createTS,
 					deleteAt: deleteTS,
 				}
-				logutil.Info(
-					"GC-SnapshotMeta-Update-Collector",
+				logutil.Warn(
+					"GC-PANIC-UPDATE-SNAPSHOT-META",
 					zap.Uint64("table-id", tid),
 					zap.String("object-name", id.String()),
 					zap.String("create-at", createTS.ToString()),
@@ -943,6 +951,16 @@ func (sm *SnapshotMeta) GetPITR(
 
 			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					logutil.Warnf("PITR object %s not found", object.stats.ObjectName().String())
+					if sm.pitr.objects[object.stats.ObjectName().SegmentId()] != nil {
+						delete(sm.pitr.objects, object.stats.ObjectName().SegmentId())
+						continue
+					}
+					logutil.Warnf("PITR tombstone %s not found", object.stats.ObjectName().String())
+					delete(sm.pitr.tombstones, object.stats.ObjectName().SegmentId())
+					continue
+				}
 				return nil, err
 			}
 			defer bat.Clean(mp)
@@ -1226,7 +1244,7 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 		}
 		if len(sm.tablePKIndex[pk]) > 0 {
 			logutil.Warn(
-				"GC-RebuildTableInfo-PK-Exists",
+				"GC-PANIC-REBUILD-TABLE",
 				zap.String("pk", pk),
 				zap.Uint64("table", tid),
 			)
