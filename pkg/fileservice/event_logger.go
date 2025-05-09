@@ -26,10 +26,11 @@ import (
 )
 
 type eventLogger struct {
-	begin  time.Time
-	mu     sync.Mutex
-	events *[]event
-	closed bool
+	begin    time.Time
+	mu       sync.Mutex
+	events   *[]event
+	closed   bool
+	upstream context.Context
 }
 
 type event struct {
@@ -37,13 +38,6 @@ type event struct {
 	ev    stringRef
 	args  []any
 	_args [16]any
-}
-
-func newEventLogger() *eventLogger {
-	return &eventLogger{
-		begin:  time.Now(),
-		events: eventsPool.Get().(*[]event),
-	}
 }
 
 type eventLoggerKey struct{}
@@ -55,8 +49,12 @@ func WithEventLogger(ctx context.Context) context.Context {
 	if v != nil {
 		return ctx
 	}
-	ctx = context.WithValue(ctx, EventLoggerKey, newEventLogger())
-	return ctx
+	ret := &eventLogger{
+		begin:    time.Now(),
+		events:   eventsPool.Get().(*[]event),
+		upstream: ctx,
+	}
+	return ret
 }
 
 func LogEvent(ctx context.Context, ev stringRef, args ...any) {
@@ -136,4 +134,25 @@ var stringsBuilderPool = sync.Pool{
 	New: func() any {
 		return new(strings.Builder)
 	},
+}
+
+var _ context.Context = new(eventLogger)
+
+func (e *eventLogger) Deadline() (deadline time.Time, ok bool) {
+	return e.upstream.Deadline()
+}
+
+func (e *eventLogger) Done() <-chan struct{} {
+	return e.upstream.Done()
+}
+
+func (e *eventLogger) Err() error {
+	return e.upstream.Err()
+}
+
+func (e *eventLogger) Value(key any) any {
+	if key == EventLoggerKey {
+		return e
+	}
+	return e.upstream.Value(key)
 }
