@@ -36,4 +36,6 @@ debug: all
 .PHONY: clean
 clean:
 	rm -f *.o *.a *.so
+ifeq ($(MO_CL_CUDA),1)
 	make -C cuda clean
+endif
