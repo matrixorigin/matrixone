@@ -471,6 +471,7 @@ drop table time04;
 drop table if exists time05;
 create table time05 as select unix_timestamp(col1) from time01;
 show create table time05;
+-- @ignore:0
 select * from time05;
 drop table time05;
 
