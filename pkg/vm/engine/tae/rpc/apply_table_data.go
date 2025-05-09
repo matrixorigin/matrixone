@@ -28,11 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -82,6 +84,50 @@ func NewApplyTableDataArg(
 	return a, nil
 }
 
+func (c *ApplyTableDataArg) PrepareCommand() *cobra.Command {
+	applyTableDataCmd := &cobra.Command{
+		Use:   "apply-table-data",
+		Short: "Apply table data",
+		Run:   RunFactory(c),
+	}
+	applyTableDataCmd.SetUsageTemplate(c.Usage())
+
+	applyTableDataCmd.Flags().StringP("tname", "t", "", "set table name")
+	applyTableDataCmd.Flags().StringP("dname", "d", "", "set database name")
+	applyTableDataCmd.Flags().StringP("dir", "o", "", "set output directory")
+	return applyTableDataCmd
+}
+
+func (c *ApplyTableDataArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.tableName, _ = cmd.Flags().GetString("tname")
+	c.databaseName, _ = cmd.Flags().GetString("dname")
+	c.dir, _ = cmd.Flags().GetString("dir")
+	if cmd.Flag("ictx") != nil {
+		c.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
+		c.mp = common.DefaultAllocator
+		c.fs = c.inspectContext.db.Opts.Fs
+		c.ctx = context.Background()
+	}
+	return nil
+}
+
+func (c *ApplyTableDataArg) String() string {
+	return "apply-table-data"
+}
+
+func (c *ApplyTableDataArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v apply table data\n", "apply-table-data")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect table [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+
+	return
+}
 func (a *ApplyTableDataArg) Run() (err error) {
 	logutil.Info(
 		"APPLY-TABLE-DATA-START",

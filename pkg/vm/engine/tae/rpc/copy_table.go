@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+	"github.com/spf13/cobra"
 
 	"go.uber.org/zap"
 )
@@ -107,7 +108,58 @@ func NewCopyTableArg(
 		fs:              fs,
 	}
 }
+func (c *CopyTableArg) PrepareCommand() *cobra.Command {
+	copyTableCmd := &cobra.Command{
+		Use:   "copy-table",
+		Short: "Copy table",
+		Run:   RunFactory(c),
+	}
+	copyTableCmd.SetUsageTemplate(c.Usage())
 
+	copyTableCmd.Flags().IntP("tid", "t", 0, "set table id")
+	copyTableCmd.Flags().IntP("did", "d", 0, "set database id")
+	copyTableCmd.Flags().StringP("dir", "o", "", "set output directory")
+	return copyTableCmd
+}
+
+func (c *CopyTableArg) FromCommand(cmd *cobra.Command) (err error) {
+	tid, _ := cmd.Flags().GetInt("tid")
+	did, _ := cmd.Flags().GetInt("did")
+	c.dir, _ = cmd.Flags().GetString("dir")
+	database, err := c.inspectContext.db.Catalog.GetDatabaseByID(uint64(did))
+	if err != nil {
+		return err
+	}
+	c.table, err = database.GetTableEntryByID(uint64(tid))
+	if err != nil {
+		return err
+	}
+	if cmd.Flag("ictx") != nil {
+		c.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
+		c.mp = common.DefaultAllocator
+		c.fs = c.inspectContext.db.Opts.Fs
+		c.ctx = context.Background()
+	}
+	return nil
+}
+
+func (c *CopyTableArg) String() string {
+	return "copy-table"
+}
+
+func (c *CopyTableArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v copy table data\n", "copy-table")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect table [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+
+	return
+}
 func (c *CopyTableArg) Run() (err error) {
 	if c.txn, err = c.inspectContext.db.StartTxn(nil); err != nil {
 		return
