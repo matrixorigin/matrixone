@@ -245,8 +245,8 @@ func TestBuildSingleThread(t *testing.T) {
 	sqls, err := build.ToInsertSql(time.Now().UnixMicro())
 	require.Nil(t, err)
 	require.Equal(t, 3, len(sqls))
-	fmt.Println(sqls[0])
-	fmt.Println(sqls[2])
+	//fmt.Println(sqls[0])
+	//fmt.Println(sqls[2])
 
 	indexes := build.GetIndexes()
 	require.Equal(t, 2, len(indexes))
