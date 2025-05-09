@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 	"io/fs"
 	"iter"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"go.uber.org/zap"
 
@@ -156,6 +157,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			&config.CacheCallbacks,
 			l.perfCounterSets,
 			l.name,
+			config.DisableS3Fifo,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
@@ -177,6 +179,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			true,
 			l,
 			l.name,
+			config.DisableS3Fifo,
 		)
 		if err != nil {
 			return err
