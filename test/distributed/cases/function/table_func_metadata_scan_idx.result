@@ -25,10 +25,11 @@ col_name
 __mo_index_idx_col
 __mo_index_pri_col
 CREATE INDEX idx_c_d ON t(c, d);
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.$idx_c_d", "*")g;
-origin_size
-274403
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.$idx_invalid", "*")g;
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx.t.$idx_c_d", "*")g;
+col_name
+__mo_index_idx_col
+__mo_index_pri_col
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx.t.$idx_invalid", "*")g;
 SQL parser error: table "" does not exist
-select distinct(origin_size) from metadata_scan("table_func_metadata_scan_idx.t.idx_invalid", "*")g;
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx.t.idx_invalid", "*")g;
 internal error: index name must start with $ and follow identifier rules
