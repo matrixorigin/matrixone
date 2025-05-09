@@ -16,10 +16,8 @@ package fifocache
 
 import (
 	"context"
-	"hash/maphash"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 )
@@ -39,14 +37,9 @@ func NewDataCache(
 	}
 }
 
-var seed = maphash.MakeSeed()
-
 func shardCacheKey(key fscache.CacheKey) uint64 {
-	var hasher maphash.Hash
-	hasher.SetSeed(seed)
-	hasher.Write(util.UnsafeToBytes(&key.Offset))
-	hasher.WriteString(key.Path)
-	return hasher.Sum64()
+	// fibonacci hashing
+	return uint64(key.Offset) * uint64(key.Sz) * uint64(11400714819323198485)
 }
 
 var _ fscache.DataCache = new(DataCache)

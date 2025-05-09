@@ -16,6 +16,7 @@ package fifocache
 
 import (
 	"context"
+	"math/bits"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,14 @@ import (
 )
 
 const numShards = 256
+
+func init() {
+	if bits.OnesCount(numShards) != 1 {
+		panic("number of shards must be power of 2")
+	}
+}
+
+const shardsMask = numShards - 1
 
 // Cache implements an in-memory cache with FIFO-based eviction
 // it's mostly like the S3-fifo, only without the ghost queue part
@@ -113,7 +122,7 @@ func New[K comparable, V any](
 }
 
 func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_CacheItem[K, V] {
-	shard := &c.shards[c.keyShardFunc(key)%numShards]
+	shard := &c.shards[c.keyShardFunc(key)&shardsMask]
 	shard.Lock()
 	defer shard.Unlock()
 	_, ok := shard.values[key]

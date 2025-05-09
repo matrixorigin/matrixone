@@ -21,6 +21,8 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+var seed = maphash.MakeSeed()
+
 func ShardInt[T constraints.Integer](v T) uint64 {
 	return maphash.Bytes(seed, util.UnsafeToBytes(&v))
 }
