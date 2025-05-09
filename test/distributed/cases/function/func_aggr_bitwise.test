@@ -156,4 +156,5 @@ create table t1(a varbinary(3));
 insert into t1 values(3), (4), (9), (7), (6);
 select bit_and(a), bit_or(a), bit_xor(a) from t1;
 insert into t1 values(33);
+-- @pattern
 select bit_and(a) from t1;

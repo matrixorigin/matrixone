@@ -1530,6 +1530,16 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 }
 
 // buildFullTextIndexTable create a secondary table with schema (doc_id, word, pos) cluster by (word)
+//
+// with the following schema
+// create __mo_secondary_xxx (
+//
+//	doc_id src_pk_type,
+//	word varchar,
+//	pos int,
+//	cluster by (word)
+//
+// )
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
@@ -2178,6 +2188,30 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
+// buildIvfFlatSecondIndexDef create three internal tables
+//
+// with the following schemas,
+//
+// create __mo_secondary_metadata (
+//	__mo_index_key varchar,
+//	__mo_index_val varhcar,
+// 	primary key __mo_index_key,
+//)
+//
+// create __mo_secondary_centroids (
+//	__mo_index_centroid_version bigint,
+//	__mo_index_centroid_id bigint,
+//	__mo_index_centroid vecf32 or vecf64,
+//	primary key (__mo_index_centroid_version, __mo_index_centroid_id),
+// )
+// create __mo_seconary_entries (
+//	__mo_index_centroid_fk_version bigint,
+//	__mo_index_centroid_fk_id bigint,
+//	__mo_index_pri_col src_pk_type,
+//	__mo_index_centroid_fk_entry vecf32 or vecf64,
+//	primary key (__mo_index_centriod_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col)
+// )
+
 func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	indexParts := make([]string, 1)
@@ -2482,6 +2516,29 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 	return indexDefs, tableDefs, nil
 }
+
+// buildHnswSecondaryIndexDef will create two internal tables
+//
+// with the following schemas:
+//
+// create __mo_secondary_metadata (
+//
+//	index_id varchar,
+//	checksum varchar,
+//	timestamp int64,
+//	filesize int64,
+//	primary key index_id
+//
+// )
+//
+// create __mo_secondary_index (
+//
+//	index_id varchar,
+//	chunk_id int64,
+// 	data blob,
+//	tag int64,
+//	primary key (index_id, chunk_id)
+// )
 
 func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 

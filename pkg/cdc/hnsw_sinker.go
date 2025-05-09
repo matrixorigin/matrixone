@@ -44,7 +44,6 @@ var _ Sinker = &hnswSyncSinker[float32]{}
 
 type hnswSyncSinker[T types.RealNumbers] struct {
 	cnUUID           string
-	mysql            Sink
 	dbTblInfo        *DbTableInfo
 	watermarkUpdater IWatermarkUpdater
 	ar               *ActiveRoutine
@@ -85,21 +84,7 @@ var NewHnswSyncSinker = func(
 	}
 	exec := v.(executor.SQLExecutor)
 
-	// sink
-	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-	padding := strings.Repeat(" ", sqlBufReserved)
-	// use db
-	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO: check the tabledef and indexdef
+	// check the tabledef and indexdef
 	if len(tableDef.Pkey.Names) != 1 {
 		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
 	}
@@ -167,13 +152,11 @@ var NewHnswSyncSinker = func(
 
 	// create sinker
 	var maxAllowedPacket uint64
-	_ = sink.(*mysqlSink).conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxAllowedPacket)
 	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
 
 	if tableDef.Cols[veccol].Typ.Id == int32(types.T_array_float32) {
 		s := &hnswSyncSinker[float32]{
 			cnUUID:           cnUUID,
-			mysql:            sink,
 			dbTblInfo:        dbTblInfo,
 			watermarkUpdater: watermarkUpdater,
 			ar:               ar,
@@ -191,7 +174,7 @@ var NewHnswSyncSinker = func(
 
 	} else if tableDef.Cols[veccol].Typ.Id == int32(types.T_array_float64) {
 		s := &hnswSyncSinker[float64]{
-			mysql:            sink,
+			cnUUID:           cnUUID,
 			dbTblInfo:        dbTblInfo,
 			watermarkUpdater: watermarkUpdater,
 			ar:               ar,
@@ -377,7 +360,6 @@ func (s *hnswSyncSinker[T]) Reset() {
 func (s *hnswSyncSinker[T]) Close() {
 	// stop Run goroutine
 	close(s.sqlBufSendCh)
-	s.mysql.Close()
 }
 
 func (s *hnswSyncSinker[T]) sinkSnapshot(ctx context.Context, bat *batch.Batch) {

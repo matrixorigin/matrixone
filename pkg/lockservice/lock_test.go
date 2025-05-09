@@ -40,3 +40,53 @@ func TestNewRangeLock(t *testing.T) {
 	assert.True(t, el.isLockRangeEnd())
 	assert.Equal(t, pb.LockMode_Shared, el.GetLockMode())
 }
+
+func BenchmarkHoldersContains(b *testing.B) {
+	// Preparation phase: create holders and add 2000 txns
+	h := newHolders()
+	for i := 0; i < 2000; i++ {
+		txn := pb.WaitTxn{
+			TxnID: []byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)},
+		}
+		h.add(txn)
+	}
+
+	// Reset timer to exclude preparation time
+	b.ResetTimer()
+
+	// Test searching for a non-existent txn
+	txnID := []byte{0xFF, 0xFF, 0xFF, 0xFF} // A non-existent txn
+
+	for i := 0; i < b.N; i++ {
+		h.contains(txnID)
+	}
+}
+
+func TestHoldersGetTxnSlice(t *testing.T) {
+	// Test empty holders
+	h := newHolders()
+	slice := h.getTxnSlice()
+	assert.Equal(t, 0, len(slice))
+
+	// Test with multiple holders
+	txn1 := pb.WaitTxn{TxnID: []byte("1")}
+	txn2 := pb.WaitTxn{TxnID: []byte("2")}
+	txn3 := pb.WaitTxn{TxnID: []byte("3")}
+
+	h.add(txn1)
+	h.add(txn2)
+	h.add(txn3)
+
+	slice = h.getTxnSlice()
+	assert.Equal(t, 3, len(slice))
+
+	// Create a map to check if all txns are present
+	txnMap := make(map[string]bool)
+	for _, txn := range slice {
+		txnMap[string(txn.TxnID)] = true
+	}
+
+	assert.True(t, txnMap["1"])
+	assert.True(t, txnMap["2"])
+	assert.True(t, txnMap["3"])
+}

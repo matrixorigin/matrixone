@@ -1244,7 +1244,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			continue
 		}
 
-		if e.bat.RowCount() >= batch.DefaultBatchMaxRow/2 {
+		if e.bat.RowCount() >= objectio.BlockMaxRows/2 {
 			continue
 		}
 
@@ -1258,7 +1258,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	foo := func(idxes []int64) (err error) {
 		for i := 0; i < len(idxes); i++ {
 			a := &txn.writes[idxes[i]]
-			if a.bat == nil || a.bat.RowCount() == batch.DefaultBatchMaxRow {
+			if a.bat == nil || a.bat.RowCount() == objectio.BlockMaxRows {
 				continue
 			}
 
@@ -1266,7 +1266,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			for j := i + 1; j < len(idxes); j++ {
 				b := &txn.writes[idxes[j]]
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
-					a.bat.RowCount()+b.bat.RowCount() <= batch.DefaultBatchMaxRow {
+					a.bat.RowCount()+b.bat.RowCount() <= objectio.BlockMaxRows {
 					merged = true
 					if _, err = a.bat.Append(ctx, txn.proc.Mp(), b.bat); err != nil {
 						return err
@@ -1276,7 +1276,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					b.bat = nil
 				}
 
-				if a.bat.RowCount() == batch.DefaultBatchMaxRow {
+				if a.bat.RowCount() == objectio.BlockMaxRows {
 					break
 				}
 			}
@@ -1572,15 +1572,20 @@ func (txn *Transaction) forEachTableHasDeletesLocked(
 			continue
 		}
 		ctx := context.WithValue(txn.proc.Ctx, defines.TenantIDKey{}, e.accountId)
+		// Database might craft a sql on the current txn to get the table,
+		// so we need to unlock the txn
+		txn.Unlock()
 		db, err := txn.engine.Database(ctx, e.databaseName, txn.op)
 		if err != nil {
+			txn.Lock()
 			return err
 		}
 		rel, err := db.Relation(ctx, e.tableName, nil)
 		if err != nil {
+			txn.Lock()
 			return err
 		}
-
+		txn.Lock()
 		if v, ok := rel.(*txnTableDelegate); ok {
 			tables[e.tableId] = v.origin
 		} else {

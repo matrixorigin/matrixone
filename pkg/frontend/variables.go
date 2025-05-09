@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
@@ -956,12 +957,20 @@ type GlobalSysVarsMgr struct {
 	accountsGlobalSysVarsMap map[uint32]*SystemVariables
 }
 
+func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
+	sysVarsMp["version_comment"] = CNServiceConfig.VersionComment
+	sysVarsMp["version"] = CNServiceConfig.ServerVersionPrefix + CNServiceConfig.MoVersion
+}
+
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
+
+	CNServiceConfig := getPu(ses.service).SV
+	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
 
 	m.Lock()
 	defer m.Unlock()
@@ -1148,6 +1157,24 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("character_set_results"),
 		Default:           "utf8mb4",
 	},
+
+	"cl_host": {
+		Name:              "cl_host",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_host"),
+		Default:           "CGO",
+	},
+	"cl_runtime": {
+		Name:              "cl_runtime",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_runtime"),
+		Default:           "C",
+	},
+
 	"collation_connection": {
 		Name:              "collation_connection",
 		Scope:             ScopeBoth,

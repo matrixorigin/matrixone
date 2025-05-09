@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +75,25 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 	assert.Equal(t, 0, len(lc.actives))
 	lc.Unlock()
 	require.NoError(t, c.Close())
+}
+
+func BenchmarkLeakCheckerTxnClosed(b *testing.B) {
+	// Create a leak checker instance
+	lc := newLeakCheck(10*time.Second, func([]ActiveTxn) {})
+
+	// Prepare 10,000 active transactions
+	for i := 0; i < 10000; i++ {
+		txnID := make([]byte, 8)
+		txnID[0] = byte(i)
+		lc.txnOpened(nil, txnID, txn.TxnOptions{})
+	}
+
+	// Create a transaction ID that doesn't exist in active transactions
+	nonExistentTxnID := make([]byte, 8)
+	nonExistentTxnID[0] = 0xFF
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		lc.txnClosed(nonExistentTxnID)
+	}
 }
