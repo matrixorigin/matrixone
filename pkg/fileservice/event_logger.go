@@ -28,8 +28,7 @@ import (
 type eventLogger struct {
 	begin    time.Time
 	mu       sync.Mutex
-	events   *[]event
-	closed   bool
+	events   []event
 	upstream context.Context
 }
 
@@ -44,17 +43,34 @@ type eventLoggerKey struct{}
 
 var EventLoggerKey eventLoggerKey
 
-func WithEventLogger(ctx context.Context) context.Context {
+var eventLoggersPool = sync.Pool{
+	New: func() any {
+		return &eventLogger{
+			events: make([]event, 0, 32),
+		}
+	},
+}
+
+func (e *eventLogger) reset() {
+	e.begin = time.Time{}
+	e.events = e.events[:0]
+	e.upstream = nil
+}
+
+func (e *eventLogger) Stop() {
+	e.reset()
+	eventLoggersPool.Put(e)
+}
+
+func WithEventLogger(ctx context.Context) (_ context.Context, logger *eventLogger) {
 	v := ctx.Value(EventLoggerKey)
 	if v != nil {
-		return ctx
+		return ctx, v.(*eventLogger)
 	}
-	ret := &eventLogger{
-		begin:    time.Now(),
-		events:   eventsPool.Get().(*[]event),
-		upstream: ctx,
-	}
-	return ret
+	ret := eventLoggersPool.Get().(*eventLogger)
+	ret.begin = time.Now()
+	ret.upstream = ctx
+	return ret, ret
 }
 
 func LogEvent(ctx context.Context, ev stringRef, args ...any) {
@@ -69,11 +85,8 @@ func LogEvent(ctx context.Context, ev stringRef, args ...any) {
 func (e *eventLogger) emit(ev stringRef, args ...any) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.closed {
-		return
-	}
-	*e.events = append(*e.events, event{})
-	last := &((*e.events)[len(*e.events)-1])
+	e.events = append(e.events, event{})
+	last := &((e.events)[len(e.events)-1])
 	last.time = time.Since(e.begin)
 	last.ev = ev
 	last.args = last._args[:0]
@@ -88,13 +101,7 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 	logger := v.(*eventLogger)
 
 	logger.mu.Lock()
-	defer func() {
-		*logger.events = (*logger.events)[:0]
-		eventsPool.Put(logger.events)
-		logger.events = nil
-		logger.closed = true
-		logger.mu.Unlock()
-	}()
+	defer logger.mu.Unlock()
 
 	if time.Since(logger.begin) < threshold {
 		return
@@ -106,7 +113,7 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 		stringsBuilderPool.Put(buf)
 	}()
 
-	for _, ev := range *logger.events {
+	for _, ev := range logger.events {
 		buf.WriteString("<")
 		buf.WriteString(ev.time.String())
 		buf.WriteString(" ")
@@ -121,13 +128,6 @@ func LogSlowEvent(ctx context.Context, threshold time.Duration) {
 	logutil.Info("slow event",
 		zap.String("events", buf.String()),
 	)
-}
-
-var eventsPool = sync.Pool{
-	New: func() any {
-		slice := make([]event, 0, 32)
-		return &slice
-	},
 }
 
 var stringsBuilderPool = sync.Pool{

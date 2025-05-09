@@ -481,7 +481,8 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
-	ctx = WithEventLogger(ctx)
+	ctx, logger := WithEventLogger(ctx)
+	defer logger.Stop()
 	LogEvent(ctx, str_s3fs_read, vector)
 	defer func() {
 		LogEvent(ctx, str_read_return)
