@@ -40,14 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
-/*
-read object list
-
-object entry
-object data
-logtail
-*/
-
 type ApplyTableDataArg struct {
 	ctx            context.Context
 	dir            string
@@ -133,36 +125,63 @@ func (a *ApplyTableDataArg) Run() (err error) {
 		} else {
 			panic(fmt.Sprintf("invalid object type: %d", objTypes[i]))
 		}
-		objectEntry := &catalog.ObjectEntry{
+		stats := objectio.ObjectStats(idVec.GetBytesAt(i))
+		createEntry := &catalog.ObjectEntry{
 			ObjectNode: catalog.ObjectNode{IsTombstone: isTombstone},
 			EntryMVCCNode: catalog.EntryMVCCNode{
 				CreatedAt: createTSs[i],
-				DeletedAt: deleteTSs[i],
-			},
-			ObjectMVCCNode: catalog.ObjectMVCCNode{
-				ObjectStats: objectio.ObjectStats(idVec.GetBytesAt(i)),
+				DeletedAt: types.TS{},
 			},
 			CreateNode:  txnbase.NewTxnMVCCNodeWithTS(createTSs[i]),
-			DeleteNode:  txnbase.NewTxnMVCCNodeWithTS(deleteTSs[i]),
 			ObjectState: catalog.ObjectState_Create_ApplyCommit,
 		}
-		objectEntry.SetTable(table)
-		objectEntry.SetObjectData(a.catalog.MakeObjectFactory()(objectEntry))
-		table.AddEntryLocked(objectEntry)
+		if !stats.GetAppendable() {
+			createEntry.ObjectStats = stats
+		} else {
+			emptyStats := objectio.NewObjectStatsWithObjectID(
+				stats.ObjectName().ObjectId(), stats.GetAppendable(), stats.GetSorted(), stats.GetCNCreated(),
+			)
+			createEntry.ObjectStats = *emptyStats
+		}
+		createEntry.SetTable(table)
+		createEntry.SetObjectData(a.catalog.MakeObjectFactory()(createEntry))
+		if !deleteTSs[i].IsEmpty() {
+			dropEntry, createEntry := createEntry.GetDropEntryWithTS(deleteTSs[i])
+			dropEntry.ObjectStats = stats
+			table.AddEntryLocked(dropEntry)
+			table.AddEntryLocked(createEntry)
+		} else {
+			table.AddEntryLocked(createEntry)
+		}
 
+		attrs := table.GetLastestSchema(isTombstone).AllNames()
+		attrs = append(attrs, objectio.TombstoneAttr_CommitTs_Attr)
+		name := createEntry.ObjectName().String()
+		var bat *batch.Batch
+		var objectRelease func()
+		if bat, objectRelease, err = a.readBatch(name, attrs); err != nil {
+			return
+		}
+		defer objectRelease()
+		defer bat.Clean(a.mp)
 		if !isPersisted[i] {
-			attrs := table.GetLastestSchema(isTombstone).AllNames()
-			attrs = append(attrs, objectio.TombstoneAttr_CommitTs_Attr)
-			name := objectEntry.ObjectName().String()
-			var bat *batch.Batch
-			var objectRelease func()
-			if bat, objectRelease, err = a.readBatch(name, attrs); err != nil {
+			tnBat := containers.ToTNBatch(bat, a.mp)
+			createEntry.GetObjectData().ApplyDebugBatch(tnBat)
+		} else {
+
+			var writer *objectio.ObjectWriter
+			writer, err = objectio.NewObjectWriterSpecial(objectio.WriterCopyTable, name, a.fs)
+			if err != nil {
 				return
 			}
-			defer objectRelease()
-			defer bat.Clean(a.mp)
-			tnBat := containers.ToTNBatch(bat, a.mp)
-			objectEntry.GetObjectData().ApplyDebugBatch(tnBat)
+			if _, err = writer.Write(bat); err != nil {
+				return
+			}
+			_, err = writer.WriteEnd(a.ctx)
+			if err != nil {
+				return
+			}
+
 		}
 	}
 	if err = a.txn.Commit(a.ctx); err != nil {

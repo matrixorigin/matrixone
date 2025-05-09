@@ -12137,6 +12137,7 @@ func Test_ApplyTableData(t *testing.T) {
 	bat := catalog.MockBatch(schema, 2)
 
 	tae.CreateRelAndAppend2(bat, true)
+	tae.CompactBlocks(true)
 	txn,table:=tae.GetRelation()
 	tableEntry:=table.GetMeta().(*catalog.TableEntry)
 	assert.NoError(t,txn.Commit(ctx))
