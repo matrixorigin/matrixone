@@ -737,7 +737,7 @@ Table    Create Table
 time05    CREATE TABLE `time05` (\n  `unix_timestamp(col1)` bigint DEFAULT NULL\n)
 select * from time05;
 unix_timestamp(col1)
-1602345600
+1602374400
 null
 null
 drop table time05;
