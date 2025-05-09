@@ -57,6 +57,12 @@ func (c *BoundTableOperator) processTableData() error {
 	if err != nil {
 		return err
 	}
+	if tbl.Stats.SkipCheckDirtyWhenSubscribe {
+		if err = tbl.RecurLoop(c.visitor); err != nil {
+			return err
+		}
+		return nil
+	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
 	for _, dirtyObj := range dirty.Objs {
 		obj, err := tbl.GetObjectByID(dirtyObj.ID, false)

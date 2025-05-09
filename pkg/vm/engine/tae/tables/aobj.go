@@ -262,7 +262,7 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
 func (obj *aobject) ApplyDebugBatch(bat *containers.Batch) (err error) {
 	node := obj.PinNode()
 	defer node.Unref()
-	if node.IsPersisted(){
+	if node.IsPersisted() {
 		return
 	}
 	mnode := node.MustMNode()

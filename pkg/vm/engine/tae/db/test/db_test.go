@@ -12138,13 +12138,13 @@ func Test_ApplyTableData(t *testing.T) {
 
 	tae.CreateRelAndAppend2(bat, true)
 	tae.CompactBlocks(true)
-	txn,table:=tae.GetRelation()
-	tableEntry:=table.GetMeta().(*catalog.TableEntry)
-	assert.NoError(t,txn.Commit(ctx))
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
 
-	dir:="Test_ApplyTableData"
+	dir := "Test_ApplyTableData"
 
-	copyArg:=taerpc.NewCopyTableArg(
+	copyArg := taerpc.NewCopyTableArg(
 		ctx,
 		tableEntry,
 		dir,
@@ -12157,7 +12157,7 @@ func Test_ApplyTableData(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(3))
 
-	applyArg,err:=taerpc.NewApplyTableDataArg(
+	applyArg, err := taerpc.NewApplyTableDataArg(
 		ctx,
 		dir,
 		taerpc.MockInspectContext(tae.DB),

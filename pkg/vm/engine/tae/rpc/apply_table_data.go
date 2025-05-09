@@ -84,13 +84,13 @@ func NewApplyTableDataArg(
 	return a, nil
 }
 
-func (c *ApplyTableDataArg) PrepareCommand() *cobra.Command {
+func (a *ApplyTableDataArg) PrepareCommand() *cobra.Command {
 	applyTableDataCmd := &cobra.Command{
 		Use:   "apply-table-data",
 		Short: "Apply table data",
-		Run:   RunFactory(c),
+		Run:   RunFactory(a),
 	}
-	applyTableDataCmd.SetUsageTemplate(c.Usage())
+	applyTableDataCmd.SetUsageTemplate(a.Usage())
 
 	applyTableDataCmd.Flags().StringP("tname", "t", "", "set table name")
 	applyTableDataCmd.Flags().StringP("dname", "d", "", "set database name")
@@ -98,24 +98,30 @@ func (c *ApplyTableDataArg) PrepareCommand() *cobra.Command {
 	return applyTableDataCmd
 }
 
-func (c *ApplyTableDataArg) FromCommand(cmd *cobra.Command) (err error) {
-	c.tableName, _ = cmd.Flags().GetString("tname")
-	c.databaseName, _ = cmd.Flags().GetString("dname")
-	c.dir, _ = cmd.Flags().GetString("dir")
+func (a *ApplyTableDataArg) FromCommand(cmd *cobra.Command) (err error) {
+	a.tableName, _ = cmd.Flags().GetString("tname")
+	a.databaseName, _ = cmd.Flags().GetString("dname")
+	a.dir, _ = cmd.Flags().GetString("dir")
 	if cmd.Flag("ictx") != nil {
-		c.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
-		c.mp = common.DefaultAllocator
-		c.fs = c.inspectContext.db.Opts.Fs
-		c.ctx = context.Background()
+		a.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
+		a.mp = common.DefaultAllocator
+		a.fs = a.inspectContext.db.Opts.Fs
+		a.ctx = context.Background()
+		if a.txn, err = a.inspectContext.db.StartTxn(nil); err != nil {
+			return err
+		}
+		a.catalog = a.inspectContext.db.Catalog
+	} else {
+		return moerr.NewInternalErrorNoCtx("inspect context not found")
 	}
 	return nil
 }
 
-func (c *ApplyTableDataArg) String() string {
+func (a *ApplyTableDataArg) String() string {
 	return "apply-table-data"
 }
 
-func (c *ApplyTableDataArg) Usage() (res string) {
+func (a *ApplyTableDataArg) Usage() (res string) {
 	res += "Available Commands:\n"
 	res += fmt.Sprintf("  %-5v apply table data\n", "apply-table-data")
 
@@ -161,6 +167,7 @@ func (a *ApplyTableDataArg) Run() (err error) {
 	if table, err = dbEntry.GetTableEntryByID(a.tableID); err != nil {
 		return
 	}
+	table.Stats.SkipCheckDirtyWhenSubscribe = true
 
 	for i := 0; i < objectlistBatch.RowCount(); i++ {
 		var isTombstone bool
@@ -255,6 +262,7 @@ func (a *ApplyTableDataArg) Run() (err error) {
 func (a *ApplyTableDataArg) createDatabase() (err error) {
 
 	var database handle.Database
+
 	if database, err = a.txn.CreateDatabase(a.databaseName, "", ""); err != nil {
 		return
 	}

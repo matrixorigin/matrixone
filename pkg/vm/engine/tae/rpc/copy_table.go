@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -126,19 +127,22 @@ func (c *CopyTableArg) FromCommand(cmd *cobra.Command) (err error) {
 	tid, _ := cmd.Flags().GetInt("tid")
 	did, _ := cmd.Flags().GetInt("did")
 	c.dir, _ = cmd.Flags().GetString("dir")
-	database, err := c.inspectContext.db.Catalog.GetDatabaseByID(uint64(did))
-	if err != nil {
-		return err
-	}
-	c.table, err = database.GetTableEntryByID(uint64(tid))
-	if err != nil {
-		return err
-	}
 	if cmd.Flag("ictx") != nil {
 		c.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
 		c.mp = common.DefaultAllocator
 		c.fs = c.inspectContext.db.Opts.Fs
 		c.ctx = context.Background()
+		database, err := c.inspectContext.db.Catalog.GetDatabaseByID(uint64(did))
+		if err != nil {
+			return err
+		}
+		c.table, err = database.GetTableEntryByID(uint64(tid))
+		if err != nil {
+			return err
+		}
+		c.objectListBatch = NewObjectListBatch()
+	} else {
+		return moerr.NewInternalErrorNoCtx("inspect context not found")
 	}
 	return nil
 }
