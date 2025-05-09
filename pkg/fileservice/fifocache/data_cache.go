@@ -33,18 +33,20 @@ func NewDataCache(
 	postSet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
 	postGet func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
 	postEvict func(ctx context.Context, key fscache.CacheKey, value fscache.Data, size int64),
+	disable_s3fifo bool,
 ) *DataCache {
 	return &DataCache{
-		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict),
+		fifo: New(capacity, shardCacheKey, postSet, postGet, postEvict, disable_s3fifo),
 	}
 }
 
 var seed = maphash.MakeSeed()
 
 func shardCacheKey(key fscache.CacheKey) uint64 {
-	hasher := new(maphash.Hash)
+	var hasher maphash.Hash
 	hasher.SetSeed(seed)
 	hasher.Write(util.UnsafeToBytes(&key.Offset))
+	hasher.Write(util.UnsafeToBytes(&key.Sz))
 	hasher.WriteString(key.Path)
 	return hasher.Sum64()
 }
@@ -52,9 +54,7 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 var _ fscache.DataCache = new(DataCache)
 
 func (d *DataCache) Available() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	ret := d.fifo.capacity() - d.fifo.used1 - d.fifo.used2
+	ret := d.fifo.capacity() - d.fifo.Used()
 	if ret < 0 {
 		ret = 0
 	}
@@ -67,23 +67,13 @@ func (d *DataCache) Capacity() int64 {
 
 func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 	for _, path := range paths {
-		for i := 0; i < len(d.fifo.shards); i++ {
-			d.deletePath(ctx, i, path)
-		}
-	}
-}
 
-func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string) {
-	shard := &d.fifo.shards[shardIndex]
-	shard.Lock()
-	defer shard.Unlock()
-	for key, item := range shard.values {
-		if key.Path == path {
-			delete(shard.values, key)
-			if d.fifo.postEvict != nil {
-				d.fifo.postEvict(ctx, item.key, item.value, item.size)
-			}
-		}
+		key := fscache.CacheKey{Path: path}
+		d.fifo.htab.CompareAndDelete(key, func(key1, key2 fscache.CacheKey) bool {
+			return key1.Path == key2.Path
+		}, func(value *_CacheItem[fscache.CacheKey, fscache.Data]) {
+			value.postFunc(ctx, d.fifo.postEvict)
+		})
 	}
 }
 
@@ -109,7 +99,5 @@ func (d *DataCache) Set(ctx context.Context, key query.CacheKey, value fscache.D
 }
 
 func (d *DataCache) Used() int64 {
-	d.fifo.queueLock.RLock()
-	defer d.fifo.queueLock.RUnlock()
-	return d.fifo.used1 + d.fifo.used2
+	return d.fifo.Used()
 }
