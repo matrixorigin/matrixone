@@ -14,11 +14,15 @@
 
 package fileservice
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type DiskCacheCallbacks struct {
-	OnWritten []OnDiskCacheWrittenFunc
-	OnEvict   []OnDiskCacheEvictFunc
+	OnWritten   []OnDiskCacheWrittenFunc
+	OnEvict     []OnDiskCacheEvictFunc
+	upstreamCtx context.Context
 }
 
 type OnDiskCacheWrittenFunc = func(
@@ -39,12 +43,15 @@ func OnDiskCacheWritten(ctx context.Context, fn OnDiskCacheWrittenFunc) (ret con
 	v := ctx.Value(CtxKeyDiskCacheCallbacks)
 	if v == nil {
 		callbacks = new(DiskCacheCallbacks)
-		ret = context.WithValue(ctx, CtxKeyDiskCacheCallbacks, callbacks)
+		callbacks.upstreamCtx = ctx
+		ret = callbacks
 	} else {
 		callbacks = v.(*DiskCacheCallbacks)
 		ret = ctx
 	}
-	callbacks.OnWritten = append(callbacks.OnWritten, fn)
+	if fn != nil {
+		callbacks.OnWritten = append(callbacks.OnWritten, fn)
+	}
 	return
 }
 
@@ -53,11 +60,35 @@ func OnDiskCacheEvict(ctx context.Context, fn OnDiskCacheEvictFunc) (ret context
 	v := ctx.Value(CtxKeyDiskCacheCallbacks)
 	if v == nil {
 		callbacks = new(DiskCacheCallbacks)
-		ret = context.WithValue(ctx, CtxKeyDiskCacheCallbacks, callbacks)
+		callbacks.upstreamCtx = ctx
+		ret = callbacks
 	} else {
 		callbacks = v.(*DiskCacheCallbacks)
 		ret = ctx
 	}
-	callbacks.OnEvict = append(callbacks.OnEvict, fn)
+	if fn != nil {
+		callbacks.OnEvict = append(callbacks.OnEvict, fn)
+	}
 	return
+}
+
+var _ context.Context = new(DiskCacheCallbacks)
+
+func (d *DiskCacheCallbacks) Deadline() (deadline time.Time, ok bool) {
+	return d.upstreamCtx.Deadline()
+}
+
+func (d *DiskCacheCallbacks) Done() <-chan struct{} {
+	return d.upstreamCtx.Done()
+}
+
+func (d *DiskCacheCallbacks) Err() error {
+	return d.upstreamCtx.Err()
+}
+
+func (d *DiskCacheCallbacks) Value(key any) any {
+	if key == CtxKeyDiskCacheCallbacks {
+		return d
+	}
+	return d.upstreamCtx.Value(key)
 }
