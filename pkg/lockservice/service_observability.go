@@ -33,7 +33,8 @@ func (s *service) GetWaitingList(
 		txn.fetchWhoWaitingMe(
 			s.serviceID,
 			txnID,
-			func(w pb.WaitTxn) bool {
+			func(w pb.WaitTxn, waiterAddress string) bool {
+				w.WaiterAddress = waiterAddress
 				values = append(values, w)
 				return true
 			},

@@ -705,24 +705,21 @@ func (entry *ObjectEntry) SetTable(tbl *TableEntry) {
 func (entry *ObjectEntry) SetObjectData(data data.Object) {
 	entry.objData = data
 }
-func (entry *ObjectEntry) GetMVCCNodeInRange(start, end types.TS) (nodes []*txnbase.TxnMVCCNode) {
+
+func (entry *ObjectEntry) ForeachMVCCNodeInRange(start, end types.TS, f func(*txnbase.TxnMVCCNode) error) error {
 	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
 	if needWait {
 		txn.GetTxnState(true)
 	}
-	in, _ := entry.CreateNode.PreparedIn(start, end)
-	if in {
-		nodes = []*txnbase.TxnMVCCNode{&entry.CreateNode}
-	}
-	if !entry.DeleteNode.IsEmpty() {
-		in, _ := entry.DeleteNode.PreparedIn(start, end)
-		if in {
-			if nodes == nil {
-				nodes = []*txnbase.TxnMVCCNode{&entry.DeleteNode}
-			} else {
-				nodes = append(nodes, &entry.DeleteNode)
-			}
+	if in, _ := entry.CreateNode.PreparedIn(start, end); in {
+		if err := f(&entry.CreateNode); err != nil {
+			return err
 		}
 	}
-	return nodes
+	if in, _ := entry.DeleteNode.PreparedIn(start, end); in {
+		if err := f(&entry.DeleteNode); err != nil {
+			return err
+		}
+	}
+	return nil
 }

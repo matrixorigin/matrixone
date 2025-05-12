@@ -47,11 +47,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    2.4771006
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    1.6474329
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.82570016
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.5491443
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.7612422
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.2537473
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -154,11 +154,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    2.4771006
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    1.6474329
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.82570016
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.5491443
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    3.7612422
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.2537473
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -335,8 +335,8 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    2.4771006
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    1.6474329
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    0.82570016
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.5491443
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful

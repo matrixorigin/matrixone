@@ -17,7 +17,6 @@ package multi_update
 import (
 	"bytes"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -56,9 +55,9 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 
 			tableType := UpdateMainTable
-			if strings.HasPrefix(updateCtx.TableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+			if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 				tableType = UpdateUniqueIndexTable
-			} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
 				tableType = UpdateSecondaryIndexTable
 			}
 			info.tableType = tableType
@@ -378,9 +377,9 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 		}
 
 		tableType := UpdateMainTable
-		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+		if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 			tableType = UpdateUniqueIndexTable
-		} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+		} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
 			tableType = UpdateSecondaryIndexTable
 		}
 		info.tableType = tableType
