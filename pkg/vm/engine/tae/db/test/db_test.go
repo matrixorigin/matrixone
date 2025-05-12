@@ -12123,6 +12123,7 @@ func Test_ApplyTableData(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, -1)

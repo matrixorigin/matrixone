@@ -135,6 +135,13 @@ func (a *ApplyTableDataArg) Usage() (res string) {
 	return
 }
 func (a *ApplyTableDataArg) Run() (err error) {
+	if !a.inspectContext.db.Opts.EnableApplyTableData {
+		err2 := a.txn.Rollback(a.ctx)
+		if err2 != nil {
+			logutil.Error("APPLY-TABLE-DATA-ROLLBACK-ERROR", zap.Error(err2))
+		}
+		return moerr.NewInternalErrorNoCtx("apply table data is not enabled")
+	}
 	logutil.Info(
 		"APPLY-TABLE-DATA-START",
 		zap.String("dir", a.dir),
