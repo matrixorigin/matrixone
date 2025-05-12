@@ -297,24 +297,8 @@ func BlockCompactionRead(
 	}
 	defer release()
 
-	result := batch.NewWithSize(len(seqnums))
-	for i, col := range cacheVectors {
-		result.Vecs[i] = vector.NewVec(*col.GetType())
-		if err = result.Vecs[i].UnionBatch(
-			&col,
-			0,
-			col.Length(),
-			nil,
-			mp,
-		); err != nil {
-			result.Clean(mp)
-			return nil, err
-		}
-		result.Vecs[i].Shrink(deletes, true)
-	}
-
-	result.SetRowCount(result.Vecs[0].Length())
-	return result, nil
+	ret, err := containers.VectorsCopyToBatch(cacheVectors, mp)
+	return ret, err
 }
 
 func windowCNBatch(bat *batch.Batch, start, end uint64) error {

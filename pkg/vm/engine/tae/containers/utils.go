@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -1144,4 +1145,30 @@ func DedupSortedBatches(
 		}
 	}
 	return nil
+}
+
+func VectorsCopyToBatch(
+	vecs Vectors,
+	mp *mpool.MPool,
+) (bat *batch.Batch, err error) {
+	bat = batch.NewWithSize(len(vecs))
+	if len(vecs) == 0 {
+		return
+	}
+	for i, vec := range vecs {
+		bat.Vecs[i] = vector.NewVec(*vec.GetType())
+		if err = bat.Vecs[i].UnionBatch(
+			&vec,
+			0,
+			vec.Length(),
+			nil,
+			mp,
+		); err != nil {
+			bat.Clean(mp)
+			bat = nil
+			return
+		}
+	}
+	bat.SetRowCount(bat.Vecs[0].Length())
+	return
 }
