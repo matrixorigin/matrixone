@@ -58,11 +58,6 @@ func (e *executor) executeFor(entry *catalog.TableEntry, task mergeTask) (succes
 		return
 	}
 
-	// check objects are merging by CNs.
-	// if e.cnSched != nil && e.cnSched.checkOverlapOnCNActive(objs) {
-	// 	return
-	// }
-
 	objs := make([]*catalog.ObjectEntry, 0, len(task.objs))
 
 	for _, obj := range task.objs {
@@ -88,51 +83,6 @@ func (e *executor) executeFor(entry *catalog.TableEntry, task mergeTask) (succes
 	}
 
 	return e.scheduleMergeObjects(slices.Clone(objs), entry, task.isTombstone, level, note, doneCB)
-
-	// prevent CN OOM
-	// if len(objs) > 30 {
-	// 	objs = objs[:30]
-	// }
-
-	// stats := make([][]byte, 0, len(objs))
-	// cids := make([]common.ID, 0, len(objs))
-	// for _, obj := range objs {
-	// 	stat := *obj.GetObjectStats()
-	// 	stats = append(stats, stat[:])
-	// 	cids = append(cids, *obj.AsCommonID())
-	// }
-	// // check objects are merging by TN.
-	// if e.rt.Scheduler != nil && e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
-	// 	return
-	// }
-	// schema := entry.GetLastestSchema(false)
-	// cntask := &api.MergeTaskEntry{
-	// 	AccountId:         schema.AcInfo.TenantID,
-	// 	UserId:            schema.AcInfo.UserID,
-	// 	RoleId:            schema.AcInfo.RoleID,
-	// 	TblId:             entry.ID,
-	// 	DbId:              entry.GetDB().GetID(),
-	// 	TableName:         entry.GetLastestSchema(task.isTombstone).Name,
-	// 	DbName:            entry.GetDB().GetName(),
-	// 	ToMergeObjs:       stats,
-	// 	EstimatedMemUsage: uint64(mergesort.EstimateMergeSize(IterEntryAsStats(objs))),
-	// }
-	// ctx, cancel := context.WithTimeoutCause(
-	// 	context.Background(), 10*time.Second, moerr.CauseCreateCNMerge)
-	// defer cancel()
-	// err := e.cnSched.sendMergeTask(ctx, cntask)
-	// if err != nil {
-	// 	logutil.Info("MergeExecutorError",
-	// 		common.OperationField("send-cn-task"),
-	// 		common.AnyField("task", fmt.Sprintf("table-%d-%s", cntask.TblId, cntask.TableName)),
-	// 		common.AnyField("error", err),
-	// 	)
-	// 	return
-	// }
-
-	// e.cnSched.addActiveObjects(objs)
-	// entry.Stats.SetLastMergeTime()
-	// return true
 }
 
 func (e *executor) scheduleMergeObjects(

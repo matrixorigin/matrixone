@@ -323,9 +323,11 @@ func TestLaunchPad(t *testing.T) {
 				note: "test2 should be removed",
 			},
 		}
+		// prevent ln and l0 task
 		trigger.startlv = 0
 		trigger.endlv = 10
 		trigger.l0.End = 5
+		trigger.ln.MinPointDepthPerCluster = 5
 	}
 
 	pad.InitWithTrigger(trigger, time.Now())
