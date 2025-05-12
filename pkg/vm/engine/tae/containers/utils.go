@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -1156,7 +1155,7 @@ func VectorsCopyToBatch(
 		return
 	}
 	for i, vec := range vecs {
-		outputBat.Vecs[i] = vector.NewVec(*vec.GetType())
+		outputBat.Vecs[i] = movec.NewVec(*vec.GetType())
 		if err = outputBat.Vecs[i].UnionBatch(
 			&vec,
 			0,
