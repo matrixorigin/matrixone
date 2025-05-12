@@ -140,10 +140,10 @@ func (a *ApplyTableDataArg) Run() (err error) {
 		zap.String("dir", a.dir),
 		zap.String("start ts", a.txn.GetStartTS().ToString()),
 	)
-	defer func(){
-		if err!=nil{
+	defer func() {
+		if err != nil {
 			err2 := a.txn.Rollback(a.ctx)
-			if err2!=nil{
+			if err2 != nil {
 				logutil.Error("APPLY-TABLE-DATA-ROLLBACK-ERROR", zap.Error(err2))
 			}
 		}
@@ -272,8 +272,8 @@ func (a *ApplyTableDataArg) createDatabase() (err error) {
 
 	if database, err = a.txn.CreateDatabase(a.databaseName, "", ""); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
-			database,err = a.txn.GetDatabase(a.databaseName)
-			if err!=nil{
+			database, err = a.txn.GetDatabase(a.databaseName)
+			if err != nil {
 				return
 			}
 			a.databaseID = database.GetID()
