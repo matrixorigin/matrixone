@@ -1475,13 +1475,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	return tbl.getTxn().dumpBatch(ctx, tbl.getTxn().GetSnapshotWriteOffset())
 }
 
-func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
-	if tbl.db.op.IsSnapOp() {
-		return moerr.NewInternalErrorNoCtx("update operation is not allowed in snapshot transaction")
-	}
-	return nil
-}
-
 func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	if tbl.seqnums != nil && tbl.typs != nil {
 		return

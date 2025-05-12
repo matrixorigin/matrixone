@@ -428,10 +428,6 @@ func (t *partitionTxnTable) Write(context.Context, *batch.Batch) error {
 	panic("BUG: cannot write data to partition primary table")
 }
 
-func (t *partitionTxnTable) Update(context.Context, *batch.Batch) error {
-	panic("BUG: cannot update data to partition primary table")
-}
-
 func (t *partitionTxnTable) Delete(context.Context, *batch.Batch, string) error {
 	panic("BUG: cannot delete data to partition primary table")
 }

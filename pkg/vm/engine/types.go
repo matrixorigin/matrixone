@@ -874,8 +874,6 @@ type Relation interface {
 	// Note: Write Will access Fileservice
 	Write(context.Context, *batch.Batch) error
 
-	Update(context.Context, *batch.Batch) error
-
 	// Delete(context.Context, *vector.Vector, string) error
 	Delete(context.Context, *batch.Batch, string) error
 

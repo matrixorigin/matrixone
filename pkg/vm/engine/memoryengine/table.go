@@ -417,41 +417,6 @@ func (t *Table) TableRenameInTxn(ctx context.Context, constraint [][]byte) error
 	return nil
 }
 
-func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
-	data.SetRowCount(data.RowCount())
-	shards, err := t.engine.shardPolicy.Batch(
-		ctx,
-		t.id,
-		t.TableDefs,
-		data,
-		getTNServices(t.engine.cluster),
-	)
-	if err != nil {
-		return err
-	}
-
-	for _, shard := range shards {
-		_, err := DoTxnRequest[UpdateResp](
-			ctx,
-			t.txnOperator,
-			false,
-			thisShard(shard.Shard),
-			OpUpdate,
-			&UpdateReq{
-				TableID:      t.id,
-				DatabaseName: t.databaseName,
-				TableName:    t.tableName,
-				Batch:        shard.Batch,
-			},
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 	data.SetRowCount(data.RowCount())
 	shards, err := t.engine.shardPolicy.Batch(
