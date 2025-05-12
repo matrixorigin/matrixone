@@ -1599,9 +1599,10 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		fileName string
 	)
 
-	objectio.ForeachBlkInObjStatsList(true, nil,
+	objectio.ForeachBlkInObjStatsList(
+		true,
+		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-
 			del := deletes[blk.BlockID]
 			slices.Sort(del)
 			if bat, err = blockio.BlockCompactionRead(
@@ -1628,7 +1629,9 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 			return true
 
-		}, obj)
+		},
+		obj,
+	)
 
 	if err != nil {
 		return nil, fileName, err
