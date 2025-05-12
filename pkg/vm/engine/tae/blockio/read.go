@@ -16,8 +16,9 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"go.uber.org/zap"
 
@@ -295,33 +296,23 @@ func BlockCompactionRead(
 		return nil, err
 	}
 	defer release()
-	// why comment? the cacheVector will be free when exit this function
-	//if len(deletes) == 0 {
-	//	result := batch.NewWithSize(len(seqnums))
-	//	for i := range cacheVectors {
-	//		result.Vecs[i] = &cacheVectors[i]
-	//	}
-	//	result.SetRowCount(result.Vecs[0].Length())
-	//	return result, nil
-	//}
+
 	result := batch.NewWithSize(len(seqnums))
 	for i, col := range cacheVectors {
-		typ := *col.GetType()
-		result.Vecs[i] = vector.NewVec(typ)
-		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], &col); err != nil {
-			break
+		result.Vecs[i] = vector.NewVec(*col.GetType())
+		if err = result.Vecs[i].UnionBatch(
+			&col,
+			0,
+			col.Length(),
+			nil,
+			mp,
+		); err != nil {
+			result.Clean(mp)
+			return nil, err
 		}
 		result.Vecs[i].Shrink(deletes, true)
 	}
 
-	if err != nil {
-		for _, col := range result.Vecs {
-			if col != nil {
-				col.Free(mp)
-			}
-		}
-		return nil, err
-	}
 	result.SetRowCount(result.Vecs[0].Length())
 	return result, nil
 }
