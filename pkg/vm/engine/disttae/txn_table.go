@@ -1575,7 +1575,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
-	deletes map[objectio.Blockid][]int64,
+	blockDeletes map[objectio.Blockid][]int64,
 ) (*batch.Batch, string, error) {
 
 	proc := tbl.proc.Load()
@@ -1603,19 +1603,20 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		true,
 		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			del := deletes[blk.BlockID]
-			slices.Sort(del)
+			deletes := blockDeletes[blk.BlockID]
+			slices.Sort(deletes)
 			if bat, err = blockio.BlockCompactionRead(
 				tbl.getTxn().proc.Ctx,
 				blk.MetaLoc[:],
-				del,
+				deletes,
 				tbl.seqnums,
 				tbl.typs,
 				tbl.getTxn().engine.fs,
-				tbl.getTxn().proc.GetMPool()); err != nil {
-
+				tbl.getTxn().proc.GetMPool(),
+			); err != nil {
 				return false
 			}
+			defer bat.Clean(tbl.getTxn().proc.GetMPool())
 
 			if bat.RowCount() == 0 {
 				return true
@@ -1625,10 +1626,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				return false
 			}
 
-			bat.Clean(tbl.getTxn().proc.GetMPool())
-
 			return true
-
 		},
 		obj,
 	)
