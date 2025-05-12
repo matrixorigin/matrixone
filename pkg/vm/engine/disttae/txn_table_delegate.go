@@ -903,15 +903,6 @@ func (tbl *txnTableDelegate) GetPrimaryKeys(
 	return tbl.origin.GetPrimaryKeys(ctx)
 }
 
-func (tbl *txnTableDelegate) GetHideKeys(
-	ctx context.Context,
-) ([]*engine.Attribute, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetHideKeys(ctx)
-	}
-	return tbl.origin.GetHideKeys(ctx)
-}
-
 func (tbl *txnTableDelegate) Write(
 	ctx context.Context,
 	bat *batch.Batch,

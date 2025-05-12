@@ -1187,22 +1187,6 @@ func (mr *MockRelationMockRecorder) GetEngineType() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEngineType", reflect.TypeOf((*MockRelation)(nil).GetEngineType))
 }
 
-// GetHideKeys mocks base method.
-func (m *MockRelation) GetHideKeys(arg0 context.Context) ([]*engine.Attribute, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetHideKeys", arg0)
-	ret0, _ := ret[0].([]*engine.Attribute)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetHideKeys indicates an expected call of GetHideKeys.
-func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
-}
-
-// GetNonAppendableObjectStats mocks base method.
 func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)

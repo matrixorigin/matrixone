@@ -1006,68 +1006,6 @@ func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.Objec
 	return unCommittedObjects, unCommittedObjNames
 }
 
-//func (tbl *txnTable) collectDirtyBlocks(
-//	state *logtailreplay.PartitionState,
-//	uncommittedObjects []objectio.ObjectStats,
-//	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
-//) map[types.Blockid]struct{} {
-//	dirtyBlks := make(map[types.Blockid]struct{})
-//	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
-//	{
-//		iter := state.NewDirtyBlocksIter()
-//		for iter.Next() {
-//			entry := iter.Entry()
-//			//lazy load deletes for block.
-//			dirtyBlks[entry] = struct{}{}
-//		}
-//		iter.Close()
-//
-//	}
-//
-//	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
-//	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
-//		dirtyBlks[bid] = struct{}{}
-//	}
-//
-//	if tbl.getTxn().hasDeletesOnUncommitedObject() {
-//		ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-//			if tbl.getTxn().hasUncommittedDeletesOnBlock(&blk.BlockID) {
-//				dirtyBlks[blk.BlockID] = struct{}{}
-//			}
-//			return true
-//		}, uncommittedObjects...)
-//	}
-//
-//	if tbl.db.op.IsSnapOp() {
-//		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
-//	}
-//
-//	tbl.getTxn().ForEachTableWrites(
-//		tbl.db.databaseId,
-//		tbl.tableId,
-//		txnOffset,
-//		func(entry Entry) {
-//			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
-//			// TODO Adjustments will be made here in the future
-//			if entry.typ == DELETE || entry.typ == DELETE_TXN {
-//				if entry.IsGeneratedByTruncate() {
-//					return
-//				}
-//				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-//				if entry.fileName == "" &&
-//					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-//					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-//					for _, v := range vs {
-//						id, _ := v.Decode()
-//						dirtyBlks[id] = struct{}{}
-//					}
-//				}
-//			}
-//		})
-//
-//	return dirtyBlks
-//}
-
 // the return defs has no rowid column
 func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	//return tbl.defs, nil
@@ -1490,18 +1428,6 @@ func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, e
 			}
 		}
 	}
-	return attrs, nil
-}
-
-func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	attrs := make([]*engine.Attribute, 0, 1)
-	attrs = append(attrs, &engine.Attribute{
-		IsHidden: true,
-		IsRowId:  true,
-		Name:     objectio.PhysicalAddr_Attr,
-		Type:     types.New(types.T_Rowid, 0, 0),
-		Primary:  true,
-	})
 	return attrs, nil
 }
 

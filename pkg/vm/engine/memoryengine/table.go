@@ -487,32 +487,6 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 	return nil
 }
 
-func (t *Table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	resps, err := DoTxnRequest[GetHiddenKeysResp](
-		ctx,
-		t.txnOperator,
-		true,
-		t.engine.anyShard,
-		OpGetHiddenKeys,
-		&GetHiddenKeysReq{
-			TableID: t.id,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	resp := resps[0]
-
-	// convert from []engine.Attribute  to []*engine.Attribute
-	attrs := make([]*engine.Attribute, 0, len(resp.Attrs))
-	for i := 0; i < len(resp.Attrs); i++ {
-		attrs = append(attrs, &resp.Attrs[i])
-	}
-
-	return attrs, nil
-}
-
 func (t *Table) GetTableID(ctx context.Context) uint64 {
 	return uint64(t.id)
 }
