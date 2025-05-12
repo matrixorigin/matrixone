@@ -278,27 +278,35 @@ func BlockDataRead(
 	return nil
 }
 
-func BlockCompactionRead(
+func CopyBlockData(
 	ctx context.Context,
 	location objectio.Location,
 	deletes []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
+	outputBat *batch.Batch,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
-) (*batch.Batch, error) {
-	cacheVectors := containers.NewVectors(len(seqnums))
-
-	release, err := ioutil.LoadColumns(
-		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
+) (err error) {
+	var (
+		release      func()
+		cacheVectors = containers.NewVectors(len(seqnums))
 	)
-	if err != nil {
-		return nil, err
+
+	if release, err = ioutil.LoadColumns(
+		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
+	); err != nil {
+		return
 	}
 	defer release()
 
-	ret, err := containers.VectorsCopyToBatch(cacheVectors, mp)
-	return ret, err
+	if err = containers.VectorsCopyToBatch(
+		cacheVectors, outputBat, mp,
+	); err != nil {
+		return
+	}
+	outputBat.Shrink(deletes, true)
+	return
 }
 
 func windowCNBatch(bat *batch.Batch, start, end uint64) error {
