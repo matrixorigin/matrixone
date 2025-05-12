@@ -374,6 +374,9 @@ func (flusher *flushImpl) fillDefaults() {
 }
 
 func (flusher *flushImpl) triggerJob(ctx context.Context) {
+	if flusher.sourcer == nil {
+		return
+	}
 	flusher.sourcer.Run(flusher.flushLag)
 	entry := flusher.sourcer.GetAndRefreshMerged()
 	if !entry.IsEmpty() {

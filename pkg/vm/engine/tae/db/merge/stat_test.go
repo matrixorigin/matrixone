@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/stretchr/testify/require"
@@ -40,22 +39,6 @@ import (
 )
 
 // region: test utils
-
-func newSortedDataEntryWithTableEntry(t *testing.T, tbl *catalog.TableEntry, txn txnif.AsyncTxn, v1, v2 int32, size uint32) *catalog.ObjectEntry {
-	zm := index.NewZM(types.T_int32, 0)
-	index.UpdateZM(zm, types.EncodeInt32(&v1))
-	index.UpdateZM(zm, types.EncodeInt32(&v2))
-	nobjid := objectio.NewObjectid()
-	stats := objectio.NewObjectStatsWithObjectID(&nobjid, false, true, false)
-	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(stats, zm))
-	require.NoError(t, objectio.SetObjectStatsOriginSize(stats, size))
-	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 2))
-	entry, err := tbl.CreateObject(txn, &objectio.CreateObjOpt{
-		Stats: stats,
-	}, nil)
-	require.NoError(t, err)
-	return entry
-}
 
 func newSortedTestObjectEntry(t testing.TB, v1, v2 int32, size uint32) *catalog.ObjectEntry {
 	stats := newTestObjectStats(t, v1, v2, size, 2, 0, nil, 0)
