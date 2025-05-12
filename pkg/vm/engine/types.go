@@ -871,8 +871,6 @@ type Relation interface {
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
-	GetHideKeys(context.Context) ([]*Attribute, error)
-
 	// Note: Write Will access Fileservice
 	Write(context.Context, *batch.Batch) error
 

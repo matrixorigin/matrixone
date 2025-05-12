@@ -346,10 +346,6 @@ func (t *partitionTxnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attri
 	return t.primary.GetPrimaryKeys(ctx)
 }
 
-func (t *partitionTxnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	return t.primary.GetHideKeys(ctx)
-}
-
 func (t *partitionTxnTable) AddTableDef(context.Context, engine.TableDef) error {
 	return nil
 }
