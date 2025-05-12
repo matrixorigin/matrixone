@@ -1599,24 +1599,35 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		fileName string
 	)
 
+	defer func() {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}()
+
 	objectio.ForeachBlkInObjStatsList(
 		true,
 		nil,
 		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 			deletes := blockDeletes[blk.BlockID]
 			slices.Sort(deletes)
-			if bat, err = blockio.BlockCompactionRead(
+			if bat == nil {
+				bat = batch.NewWithSize(len(tbl.seqnums))
+			}
+			bat.CleanOnlyData()
+
+			if err = blockio.CopyBlockData(
 				tbl.getTxn().proc.Ctx,
 				blk.MetaLoc[:],
 				deletes,
 				tbl.seqnums,
 				tbl.typs,
+				bat,
 				tbl.getTxn().engine.fs,
 				tbl.getTxn().proc.GetMPool(),
 			); err != nil {
 				return false
 			}
-			defer bat.Clean(tbl.getTxn().proc.GetMPool())
 
 			if bat.RowCount() == 0 {
 				return true
