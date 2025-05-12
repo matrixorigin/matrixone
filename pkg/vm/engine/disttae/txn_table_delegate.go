@@ -913,16 +913,6 @@ func (tbl *txnTableDelegate) Write(
 	return tbl.origin.Write(ctx, bat)
 }
 
-func (tbl *txnTableDelegate) Update(
-	ctx context.Context,
-	bat *batch.Batch,
-) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Update(ctx, bat)
-	}
-	return tbl.origin.Update(ctx, bat)
-}
-
 func (tbl *txnTableDelegate) Delete(
 	ctx context.Context,
 	bat *batch.Batch,
