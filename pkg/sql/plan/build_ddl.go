@@ -1127,9 +1127,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name '%s' in primary key", key.ColName.ColNameOrigin())
 				}
 
-				col := colMap[name]
-				if col.Typ.Id == int32(types.T_enum) {
-					return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", name))
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", name))
+					}
 				}
 
 				primaryKeys = append(primaryKeys, name)
@@ -1146,9 +1147,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
 
-				col := colMap[name]
-				if col.Typ.Id == int32(types.T_enum) {
-					return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
+					}
 				}
 
 				indexs = append(indexs, name)
@@ -1163,9 +1165,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
 
-				col := colMap[name]
-				if col.Typ.Id == int32(types.T_enum) {
-					return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", name))
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", name))
+					}
 				}
 
 				indexs = append(indexs, name)
