@@ -16,7 +16,10 @@ package rpc
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
+	"path"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -277,16 +280,78 @@ func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
 	if err != nil {
 		return err
 	}
+	defer bat.Close()
 	if err := c.collectObjectList(e, isPersisted); err != nil {
 		return err
 	}
 	cnBatch := containers.ToCNBatch(bat)
-	objectName := objectio.BuildObjectNameWithObjectID(e.ID())
-	if err := c.flush(objectName.String(), cnBatch); err != nil {
-		return err
+	if isPersisted {
+		name := e.ObjectStats.ObjectName().String()
+		dst := path.Join(c.dir, name)
+		if _, err = fileservice.DoWithRetry(
+			"CopyFile",
+			func() ([]byte, error) {
+				return copyFile(c.ctx, c.fs, name, dst)
+			},
+			64,
+			fileservice.IsRetryableError,
+		); err != nil {
+			return err
+		}
+	} else {
+		objectName := objectio.BuildObjectNameWithObjectID(e.ID())
+		if err := c.flush(objectName.String(), cnBatch); err != nil {
+			return err
+		}
 	}
-	bat.Close()
 	return nil
+}
+
+func copyFile(
+	ctx context.Context,
+	fs fileservice.FileService,
+
+	src string,
+	dst string,
+) ([]byte, error) {
+	var reader io.ReadCloser
+	ioVec := &fileservice.IOVector{
+		FilePath: src,
+		Entries: []fileservice.IOEntry{
+			{
+				ReadCloserForRead: &reader,
+				Offset:            0,
+				Size:              -1,
+			},
+		},
+		Policy: fileservice.SkipAllCache,
+	}
+
+	err := fs.Read(ctx, ioVec)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	// hash
+	hasher := sha256.New()
+	hashingReader := io.TeeReader(reader, hasher)
+	dstIoVec := fileservice.IOVector{
+		FilePath: dst,
+		Entries: []fileservice.IOEntry{
+			{
+				ReaderForWrite: hashingReader,
+				Offset:         0,
+				Size:           -1,
+			},
+		},
+		Policy: fileservice.SkipAllCache,
+	}
+
+	err = fs.Write(ctx, dstIoVec)
+	if err != nil {
+		return nil, err
+	}
+	return hasher.Sum(nil), nil
 }
 
 func (c *CopyTableArg) flush(name string, bat *batch.Batch) (err error) {

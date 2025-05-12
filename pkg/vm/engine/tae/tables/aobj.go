@@ -278,6 +278,7 @@ func (obj *aobject) ApplyDebugBatch(bat *containers.Batch) (err error) {
 			prevTS = ts
 		}
 	}
+	obj.appendMVCC.AddAppendNodeWithTSLocked(uint32(anodeStart), uint32(bat.Length()), prevTS)
 	tmpAttrs := bat.Attrs
 	bat.Attrs = tmpAttrs[:len(tmpAttrs)-1]
 	if _, err = mnode.ApplyAppendLocked(bat); err != nil {

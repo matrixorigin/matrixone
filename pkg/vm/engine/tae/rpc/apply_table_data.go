@@ -140,6 +140,14 @@ func (a *ApplyTableDataArg) Run() (err error) {
 		zap.String("dir", a.dir),
 		zap.String("start ts", a.txn.GetStartTS().ToString()),
 	)
+	defer func(){
+		if err!=nil{
+			err2 := a.txn.Rollback(a.ctx)
+			if err2!=nil{
+				logutil.Error("APPLY-TABLE-DATA-ROLLBACK-ERROR", zap.Error(err2))
+			}
+		}
+	}()
 	if err = a.createDatabase(); err != nil {
 		return
 	}
@@ -210,28 +218,27 @@ func (a *ApplyTableDataArg) Run() (err error) {
 		attrs := table.GetLastestSchema(isTombstone).AllNames()
 		attrs = append(attrs, objectio.TombstoneAttr_CommitTs_Attr)
 		name := createEntry.ObjectName().String()
-		var bat *batch.Batch
-		var objectRelease func()
-		if bat, objectRelease, err = a.readBatch(name, attrs); err != nil {
-			return
-		}
-		defer objectRelease()
-		defer bat.Clean(a.mp)
 		if !isPersisted[i] {
+			var bat *batch.Batch
+			var objectRelease func()
+			if bat, objectRelease, err = a.readBatch(name, attrs); err != nil {
+				return
+			}
+			defer objectRelease()
 			tnBat := containers.ToTNBatch(bat, a.mp)
 			createEntry.GetObjectData().ApplyDebugBatch(tnBat)
 		} else {
 
-			var writer *objectio.ObjectWriter
-			writer, err = objectio.NewObjectWriterSpecial(objectio.WriterCopyTable, name, a.fs)
-			if err != nil {
-				return
-			}
-			if _, err = writer.Write(bat); err != nil {
-				return
-			}
-			_, err = writer.WriteEnd(a.ctx)
-			if err != nil {
+			a.fs.Delete(a.ctx, name)
+			src := path.Join(a.dir, name)
+			if _, err = fileservice.DoWithRetry(
+				"CopyFile",
+				func() ([]byte, error) {
+					return copyFile(a.ctx, a.fs, src, name)
+				},
+				64,
+				fileservice.IsRetryableError,
+			); err != nil {
 				return
 			}
 
@@ -264,6 +271,14 @@ func (a *ApplyTableDataArg) createDatabase() (err error) {
 	var database handle.Database
 
 	if database, err = a.txn.CreateDatabase(a.databaseName, "", ""); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+			database,err = a.txn.GetDatabase(a.databaseName)
+			if err!=nil{
+				return
+			}
+			a.databaseID = database.GetID()
+			return nil
+		}
 		return
 	}
 
