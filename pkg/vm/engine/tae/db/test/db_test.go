@@ -4220,8 +4220,7 @@ func TestWatchDirty(t *testing.T) {
 	visitor := &catalog.LoopProcessor{}
 	watcher := logtail.NewDirtyCollector(logMgr, opts.Clock, tae.Catalog, visitor)
 
-	tbl, obj := watcher.DirtyCount()
-	assert.Zero(t, obj)
+	tbl := watcher.DirtyCount()
 	assert.Zero(t, tbl)
 
 	schema := catalog.MockSchemaAll(1, 0)
@@ -4263,9 +4262,9 @@ func TestWatchDirty(t *testing.T) {
 		default:
 			watcher.Run(0)
 			time.Sleep(5 * time.Millisecond)
-			_, objCnt := watcher.DirtyCount()
+			tbl := watcher.DirtyCount()
 			// find block zero
-			if objCnt == 0 {
+			if tbl == 0 {
 				return
 			}
 		}
@@ -4317,9 +4316,6 @@ func TestDirtyWatchRace(t *testing.T) {
 			for j := 0; j < 300; j++ {
 				time.Sleep(5 * time.Millisecond)
 				watcher.Run(0)
-				// tbl, obj, blk := watcher.DirtyCount()
-				// t.Logf("t%d: tbl %d, obj %d, blk %d", i, tbl, obj, blk)
-				_, _ = watcher.DirtyCount()
 			}
 			wg.Done()
 		}(i)
