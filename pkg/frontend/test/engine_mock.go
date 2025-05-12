@@ -1451,12 +1451,6 @@ func (mr *MockRelationMockRecorder) TableRenameInTxn(ctx, constraint interface{}
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableRenameInTxn", reflect.TypeOf((*MockRelation)(nil).TableRenameInTxn), ctx, constraint)
 }
 
-// Update indicates an expected call of Update.
-func (mr *MockRelationMockRecorder) Update(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockRelation)(nil).Update), arg0, arg1)
-}
-
 // UpdateConstraint mocks base method.
 func (m *MockRelation) UpdateConstraint(arg0 context.Context, arg1 *engine.ConstraintDef) error {
 	m.ctrl.T.Helper()
