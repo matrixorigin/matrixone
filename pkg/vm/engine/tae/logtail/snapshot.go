@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sort"
 	"sync"
 	"time"
@@ -951,16 +950,6 @@ func (sm *SnapshotMeta) GetPITR(
 
 			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
 			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					logutil.Warnf("PITR object %s not found", object.stats.ObjectName().String())
-					if sm.pitr.objects[object.stats.ObjectName().SegmentId()] != nil {
-						delete(sm.pitr.objects, object.stats.ObjectName().SegmentId())
-						continue
-					}
-					logutil.Warnf("PITR tombstone %s not found", object.stats.ObjectName().String())
-					delete(sm.pitr.tombstones, object.stats.ObjectName().SegmentId())
-					continue
-				}
 				return nil, err
 			}
 			defer bat.Clean(mp)
