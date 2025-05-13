@@ -3515,7 +3515,7 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
-	op, err := constructDeletion(n, c.e, c.proc)
+	op, err := constructDeletion(n, c.e)
 	if err != nil {
 		return nil, err
 	}
