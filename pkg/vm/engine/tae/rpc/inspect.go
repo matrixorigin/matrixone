@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -78,7 +77,7 @@ func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	object := &objStatArg{}
 	rootCmd.AddCommand(object.PrepareCommand())
 
-	policy := &mergePolicyArg{}
+	policy := &mergeArg{}
 	rootCmd.AddCommand(policy.PrepareCommand())
 
 	info := &infoArg{}
@@ -281,13 +280,11 @@ func (c *objStatArg) String() string {
 func (c *objStatArg) Run() error {
 	if c.tbl != nil {
 		b := &bytes.Buffer{}
-		p := c.ctx.db.MergeScheduler.GetPolicy(c.tbl)
 		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, false))
 		b.WriteByte('\n')
 		b.WriteByte('\n')
 		b.WriteString(c.tbl.ObjectStatsString(c.verbose, c.start, c.end, true))
 		b.WriteByte('\n')
-		b.WriteString(fmt.Sprintf("\n%s", p.String()))
 		c.ctx.resp.Payload = b.Bytes()
 	} else {
 		visitor := newObjectVisitor()
@@ -748,142 +745,6 @@ func (c *infoArg) Run() error {
 		}
 	}
 	c.ctx.resp.Payload = b.Bytes()
-	return nil
-}
-
-type mergePolicyArg struct {
-	ctx               *inspectContext
-	tbl               *catalog.TableEntry
-	maxMergeObjN      int32
-	minOsizeQualified int32
-	maxOsizeObject    int32
-	cnMinMergeSize    int32
-	hints             []api.MergeHint
-
-	stopMerge bool
-}
-
-func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
-	policyCmd := &cobra.Command{
-		Use:   "policy",
-		Short: "set merge policy for table",
-		Run:   RunFactory(c),
-	}
-	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
-	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
-	policyCmd.Flags().Int32P("minOsizeQualified", "m", common.DefaultMinOsizeQualifiedMB, "objects whose osize are less than minOsizeQualified(MB) will be picked up to merge")
-	policyCmd.Flags().Int32P("maxOsizeObject", "o", common.DefaultMaxOsizeObjMB, "merged objects' osize should be near maxOsizeObject(MB)")
-	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merge task whose memory occupation exceeds minCNMergeSize(MB) will be moved to CN")
-	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
-	policyCmd.Flags().BoolP("stopMerge", "s", false, "stop merging the target table")
-
-	wasmArg := &wasmArg{}
-	policyCmd.AddCommand(wasmArg.PrepareCommand())
-	return policyCmd
-}
-
-func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) error {
-	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-
-	address, err := cmd.Flags().GetString("target")
-	if err != nil {
-		return err
-	}
-	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
-	if err != nil {
-		return err
-	}
-	c.maxMergeObjN, err = cmd.Flags().GetInt32("maxMergeObjN")
-	if err != nil {
-		return err
-	}
-	c.maxOsizeObject, err = cmd.Flags().GetInt32("maxOsizeObject")
-	if err != nil {
-		return err
-	}
-	c.minOsizeQualified, err = cmd.Flags().GetInt32("minOsizeQualified")
-	if err != nil {
-		return err
-	}
-	c.cnMinMergeSize, err = cmd.Flags().GetInt32("minCNMergeSize")
-	if err != nil {
-		return err
-	}
-	if c.maxOsizeObject > 2048 || c.minOsizeQualified > 2048 {
-		return moerr.NewInvalidInputNoCtx("maxOsizeObject or minOsizeQualified should be less than 2048")
-	}
-	hints, err := cmd.Flags().GetInt32Slice("mergeHints")
-	if err != nil {
-		return err
-	}
-	for _, h := range hints {
-		if _, ok := api.MergeHint_name[h]; !ok {
-			return moerr.NewInvalidArgNoCtx("unspported hint %v", h)
-		}
-		c.hints = append(c.hints, api.MergeHint(h))
-	}
-	c.stopMerge, err = cmd.Flags().GetBool("stopMerge")
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *mergePolicyArg) String() string {
-	t := "*"
-	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked(false).Name)
-	}
-	return fmt.Sprintf(
-		"(%s) maxMergeObjN: %v, maxOsizeObj: %vMB, minOsizeQualified: %vMB, offloadToCnSize: %vMB, hints: %v",
-		t, c.maxMergeObjN, c.maxOsizeObject, c.minOsizeQualified, c.cnMinMergeSize, c.hints,
-	)
-}
-
-func (c *mergePolicyArg) Run() error {
-	maxosize := uint32(c.maxOsizeObject * common.Const1MBytes)
-	minosize := uint32(c.minOsizeQualified * common.Const1MBytes)
-	cnsize := uint64(c.cnMinMergeSize) * common.Const1MBytes
-
-	if c.tbl == nil {
-		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
-		common.RuntimeOsizeRowsQualified.Store(minosize)
-		common.RuntimeMaxObjOsize.Store(maxosize)
-		common.RuntimeMinCNMergeSize.Store(cnsize)
-		if c.maxMergeObjN == 0 && c.minOsizeQualified == 0 {
-			merge.StopMerge.Store(true)
-			c.ctx.resp.Payload = []byte("auto merge is disabled")
-		} else {
-			merge.StopMerge.Store(false)
-			c.ctx.resp.Payload = []byte("general setting has been refreshed")
-		}
-	} else {
-		txn, err := c.ctx.db.StartTxn(nil)
-		if err != nil {
-			return err
-		}
-		if err = c.ctx.db.MergeScheduler.ConfigPolicy(c.tbl, txn, &merge.BasicPolicyConfig{
-			MergeMaxOneRun:    int(c.maxMergeObjN),
-			ObjectMinOsize:    minosize,
-			MaxOsizeMergedObj: maxosize,
-			MinCNMergeSize:    cnsize,
-			MergeHints:        c.hints,
-		}); err != nil {
-			return err
-		}
-		if c.stopMerge {
-			if err = c.ctx.db.MergeScheduler.StopMerge(c.tbl, false); err != nil {
-				return err
-			}
-		} else {
-			if c.ctx.db.Runtime.LockMergeService.IsLockedByUser(c.tbl.GetID(), c.tbl.GetLastestSchema(false).Name) {
-				if err = c.ctx.db.MergeScheduler.StartMerge(c.tbl.GetID(), false); err != nil {
-					return err
-				}
-			}
-		}
-		c.ctx.resp.Payload = []byte("success")
-	}
 	return nil
 }
 
