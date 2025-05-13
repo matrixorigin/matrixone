@@ -413,22 +413,23 @@ func (sm *SnapshotMeta) updateTableInfo(
 		// 1 is table name
 		// 11 is account id
 		// len(objectBat.Vecs)-1 is commit ts
-		ids := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[0])
+		tids := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[0])
 		nameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](objectBat.Vecs[1])
 		nameArea := objectBat.Vecs[1].GetArea()
 		dbs := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[3])
 		accounts := vector.MustFixedColWithTypeCheck[uint32](objectBat.Vecs[11])
 		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
-		for i := 0; i < len(ids); i++ {
+		for i := 0; i < len(tids); i++ {
 			createAt := creates[i]
 			if createAt.LT(&startts) || createAt.GT(&endts) {
 				continue
 			}
 			name := string(nameVarlena[i].GetByteSlice(nameArea))
-			tid := ids[i]
+			tid := tids[i]
 			account := accounts[i]
 			db := dbs[i]
-			tuple, _, _, err := types.DecodeTuple(
+			var tuple types.Tuple
+			tuple, _, _, err = types.DecodeTuple(
 				objectBat.Vecs[len(objectBat.Vecs)-3].GetRawBytesAt(i))
 			if err != nil {
 				return err
@@ -509,11 +510,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 			return err
 		}
 
-		commitTsVec := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
-		for i := 0; i < len(commitTsVec); i++ {
+		for i := 0; i < len(commitTSs); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
-			commitTs := commitTsVec[i]
+			commitTs := commitTSs[i]
 			if commitTs.LT(&startts) || commitTs.GT(&endts) {
 				continue
 			}

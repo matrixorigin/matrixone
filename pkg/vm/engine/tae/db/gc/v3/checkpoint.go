@@ -786,7 +786,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	now := time.Now()
 
 	var (
-		tmpDelFiles       []string
 		deleteFiles       []string
 		tmpNewFiles       []string
 		newCkp            *checkpoint.CheckpointEntry
@@ -862,7 +861,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		c.mp,
 	)
 
-	if tmpDelFiles, tmpNewFiles, newCkp, newCkpData, err = MergeCheckpoint(
+	if deleteFiles, tmpNewFiles, newCkp, newCkpData, err = MergeCheckpoint(
 		ctx,
 		c.TaskNameLocked(),
 		c.sid,
@@ -911,7 +910,6 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	newWaterMark := newCkp.GetEnd()
 	c.updateCheckpointGCWaterMark(&newWaterMark)
 
-	deleteFiles = tmpDelFiles
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
@@ -929,13 +927,13 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		}
 	}
 
-	for _, file := range deleteFiles {
-		_, decodedFile := ioutil.TryDecodeTSRangeFile(file)
+	for _, deleteFile := range deleteFiles {
+		_, decodedFile := ioutil.TryDecodeTSRangeFile(deleteFile)
 		if decodedFile.IsMetadataFile() || decodedFile.IsCompactExt() {
 			logutil.Info(
 				"GC-TRACE-DELETE-CHECKPOINT-FILE",
 				zap.String("task", c.TaskNameLocked()),
-				zap.String("file", file),
+				zap.String("delete file", deleteFile),
 			)
 			c.checkpointCli.RemoveCheckpointMetaFile(decodedFile.GetName())
 		}
