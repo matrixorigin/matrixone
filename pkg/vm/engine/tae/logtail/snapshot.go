@@ -578,11 +578,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 		sm.tables[table.accountID][table.tid] = table
 	}
 
-	for pk, tInfos := range sm.tablePKIndex {
+	for pkIndex, tInfos := range sm.tablePKIndex {
 		if len(tInfos) > 1 {
 			logutil.Warn(
 				"GC-PANIC-UPDATE-TABLE-P7",
-				zap.String("table", pk),
+				zap.String("table", pkIndex),
 				zap.Int("len", len(tInfos)),
 			)
 		}
@@ -927,7 +927,7 @@ func (sm *SnapshotMeta) GetPITR(
 	}
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
-	pitr := &PitrInfo{
+	pitrInfo := &PitrInfo{
 		cluster:  types.TS{},
 		account:  make(map[uint32]types.TS),
 		database: make(map[uint64]types.TS),
@@ -975,28 +975,28 @@ func (sm *SnapshotMeta) GetPITR(
 				account := objIDList[r]
 				level := bat.Vecs[0].GetStringAt(r)
 				if level == PitrLevelCluster {
-					if !pitr.cluster.IsEmpty() {
+					if !pitrInfo.cluster.IsEmpty() {
 						logutil.Warn("GC-PANIC-DUP-PIRT-P1",
 							zap.String("level", "cluster"),
-							zap.String("old", pitr.cluster.ToString()),
+							zap.String("old", pitrInfo.cluster.ToString()),
 							zap.String("new", pitrTS.ToString()),
 						)
-						if pitr.cluster.LT(&pitrTS) {
+						if pitrInfo.cluster.LT(&pitrTS) {
 							continue
 						}
 					}
-					pitr.cluster = pitrTS
+					pitrInfo.cluster = pitrTS
 
 				} else if level == PitrLevelAccount {
 					id := uint32(account)
-					p := pitr.account[id]
+					p := pitrInfo.account[id]
 					if !p.IsEmpty() && p.LT(&pitrTS) {
 						continue
 					}
-					pitr.account[id] = pitrTS
+					pitrInfo.account[id] = pitrTS
 				} else if level == PitrLevelDatabase {
 					id := uint64(account)
-					p := pitr.database[id]
+					p := pitrInfo.database[id]
 					if !p.IsEmpty() {
 						logutil.Warn("GC-PANIC-DUP-PIRT-P2",
 							zap.String("level", "database"),
@@ -1008,10 +1008,10 @@ func (sm *SnapshotMeta) GetPITR(
 							continue
 						}
 					}
-					pitr.database[id] = pitrTS
+					pitrInfo.database[id] = pitrTS
 				} else if level == PitrLevelTable {
 					id := uint64(account)
-					p := pitr.tables[id]
+					p := pitrInfo.tables[id]
 					if !p.IsEmpty() {
 						logutil.Warn("GC-PANIC-DUP-PIRT-P3",
 							zap.String("level", "table"),
@@ -1023,7 +1023,7 @@ func (sm *SnapshotMeta) GetPITR(
 							continue
 						}
 					}
-					pitr.tables[id] = pitrTS
+					pitrInfo.tables[id] = pitrTS
 				}
 				// TODO: info to debug
 				logutil.Info(
@@ -1035,7 +1035,7 @@ func (sm *SnapshotMeta) GetPITR(
 			}
 		}
 	}
-	return pitr, nil
+	return pitrInfo, nil
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
