@@ -391,19 +391,19 @@ func (sm *SnapshotMeta) updateTableInfo(
 		return orderedInfos[i].createAt.LT(&orderedInfos[j].createAt)
 	})
 
-	for _, info := range orderedInfos {
-		if info.stats.BlkCnt() != 1 {
+	for _, obj := range orderedInfos {
+		if obj.stats.BlkCnt() != 1 {
 			logutil.Warn("GC-PANIC-UPDATE-TABLE-P1",
-				zap.String("object", info.stats.ObjectName().String()),
-				zap.Uint32("blkCnt", info.stats.BlkCnt()))
+				zap.String("object", obj.stats.ObjectName().String()),
+				zap.Uint32("blkCnt", obj.stats.BlkCnt()))
 		}
-		if !info.deleteAt.IsEmpty() {
-			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
+		if !obj.deleteAt.IsEmpty() {
+			sm.aobjDelTsMap[obj.deleteAt] = struct{}{}
 		}
 		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
-			info.stats.ObjectLocation(),
+			obj.stats.ObjectLocation(),
 			objectio.SchemaData,
 		)
 		if err != nil {
@@ -460,49 +460,49 @@ func (sm *SnapshotMeta) updateTableInfo(
 			if sm.tables[account] == nil {
 				sm.tables[account] = make(map[uint64]*tableInfo)
 			}
-			table := sm.tables[account][tid]
-			if table != nil {
-				if table.createAt.GT(&createAt) {
+			tInfo := sm.tables[account][tid]
+			if tInfo != nil {
+				if tInfo.createAt.GT(&createAt) {
 					logutil.Warn("GC-PANIC-UPDATE-TABLE-P3",
 						zap.Uint64("tid", tid),
 						zap.String("name", tuple.ErrString(nil)),
-						zap.String("old-create-at", table.createAt.ToString()),
+						zap.String("old-create-at", tInfo.createAt.ToString()),
 						zap.String("new-create-at", createAt.ToString()))
-					table.createAt = createAt
+					tInfo.createAt = createAt
 				}
-				if table.pk == pk {
-					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
+				if tInfo.pk == pk {
+					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], tInfo)
 					continue
 				}
-				createAt = table.createAt
+				createAt = tInfo.createAt
 			}
-			table = &tableInfo{
+			tInfo = &tableInfo{
 				accountID: account,
 				dbID:      db,
 				tid:       tid,
 				createAt:  createAt,
 				pk:        pk,
 			}
-			sm.tables[account][tid] = table
-			sm.tableIDIndex[tid] = table
+			sm.tables[account][tid] = tInfo
+			sm.tableIDIndex[tid] = tInfo
 			if sm.tablePKIndex[pk] == nil {
 				sm.tablePKIndex[pk] = make([]*tableInfo, 0)
 			}
-			sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
+			sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], tInfo)
 		}
 	}
 
 	deleteRows := make([]tombstone, 0)
-	for _, info := range tTombstones {
-		if info.stats.BlkCnt() != 1 {
+	for _, obj := range tTombstones {
+		if obj.stats.BlkCnt() != 1 {
 			logutil.Warn("GC-PANIC-UPDATE-TABLE-P4",
-				zap.String("object", info.stats.ObjectName().String()),
-				zap.Uint32("blk-cnt", info.stats.BlkCnt()))
+				zap.String("object", obj.stats.ObjectName().String()),
+				zap.Uint32("blk-cnt", obj.stats.BlkCnt()))
 		}
 		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
-			info.stats.ObjectLocation(),
+			obj.stats.ObjectLocation(),
 			objectio.SchemaData,
 		)
 		if err != nil {
@@ -537,28 +537,28 @@ func (sm *SnapshotMeta) updateTableInfo(
 		return deleteRows[i].ts.LT(&ts2)
 	})
 
-	for _, del := range deleteRows {
-		pk := del.pk.ErrString(nil)
+	for _, delRow := range deleteRows {
+		pk := delRow.pk.ErrString(nil)
 		if sm.tablePKIndex[pk] == nil {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) == 0 {
 			logutil.Warn("GC-PANIC-UPDATE-TABLE-P5",
-				zap.String("pk", del.pk.ErrString(nil)),
-				zap.String("rowid", del.rowid.String()),
-				zap.String("commit", del.ts.ToString()),
+				zap.String("pk", delRow.pk.ErrString(nil)),
+				zap.String("rowid", delRow.rowid.String()),
+				zap.String("commit", delRow.ts.ToString()),
 				zap.String("start", startts.ToString()),
 				zap.String("end", endts.ToString()))
 			continue
 		}
 		table := sm.tablePKIndex[pk][0]
-		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {
+		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&delRow.ts) {
 			logutil.Warn("GC-PANIC-UPDATE-TABLE-P6",
 				zap.Uint64("tid", table.tid),
 				zap.String("old-delete-at", table.deleteAt.ToString()),
-				zap.String("new-delete-at", del.ts.ToString()))
+				zap.String("new-delete-at", delRow.ts.ToString()))
 		}
-		table.deleteAt = del.ts
+		table.deleteAt = delRow.ts
 		sm.tablePKIndex[pk] = sm.tablePKIndex[pk][1:]
 		if len(sm.tablePKIndex[pk]) != 0 {
 			continue
@@ -578,18 +578,18 @@ func (sm *SnapshotMeta) updateTableInfo(
 		sm.tables[table.accountID][table.tid] = table
 	}
 
-	for pk, tables := range sm.tablePKIndex {
-		if len(tables) > 1 {
+	for pk, tInfos := range sm.tablePKIndex {
+		if len(tInfos) > 1 {
 			logutil.Warn(
 				"GC-PANIC-UPDATE-TABLE-P7",
 				zap.String("table", pk),
-				zap.Int("len", len(tables)),
+				zap.Int("len", len(tInfos)),
 			)
 		}
-		if len(tables) == 0 {
+		if len(tInfos) == 0 {
 			continue
 		}
-		tables[0].deleteAt = types.TS{}
+		tInfos[0].deleteAt = types.TS{}
 	}
 	return nil
 }
@@ -957,21 +957,21 @@ func (sm *SnapshotMeta) GetPITR(
 			lengList := vector.MustFixedColWithTypeCheck[uint8](bat.Vecs[2])
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
 				length := lengList[r]
-				leng := int(length)
+				val := int(length)
 				unit := bat.Vecs[3].GetStringAt(r)
 				var ts time.Time
 				if unit == PitrUnitYear {
-					ts = AddDate(gcTime, -leng, 0, 0)
+					ts = AddDate(gcTime, -val, 0, 0)
 				} else if unit == PitrUnitMonth {
-					ts = AddDate(gcTime, 0, -leng, 0)
+					ts = AddDate(gcTime, 0, -val, 0)
 				} else if unit == PitrUnitDay {
-					ts = gcTime.AddDate(0, 0, -leng)
+					ts = gcTime.AddDate(0, 0, -val)
 				} else if unit == PitrUnitHour {
-					ts = gcTime.Add(-time.Duration(leng) * time.Hour)
+					ts = gcTime.Add(-time.Duration(val) * time.Hour)
 				} else if unit == PitrUnitMinute {
-					ts = gcTime.Add(-time.Duration(leng) * time.Minute)
+					ts = gcTime.Add(-time.Duration(val) * time.Minute)
 				}
-				pitrTs := types.BuildTS(ts.UnixNano(), 0)
+				pitrTS := types.BuildTS(ts.UnixNano(), 0)
 				account := objIDList[r]
 				level := bat.Vecs[0].GetStringAt(r)
 				if level == PitrLevelCluster {
@@ -979,21 +979,21 @@ func (sm *SnapshotMeta) GetPITR(
 						logutil.Warn("GC-PANIC-DUP-PIRT-P1",
 							zap.String("level", "cluster"),
 							zap.String("old", pitr.cluster.ToString()),
-							zap.String("new", pitrTs.ToString()),
+							zap.String("new", pitrTS.ToString()),
 						)
-						if pitr.cluster.LT(&pitrTs) {
+						if pitr.cluster.LT(&pitrTS) {
 							continue
 						}
 					}
-					pitr.cluster = pitrTs
+					pitr.cluster = pitrTS
 
 				} else if level == PitrLevelAccount {
 					id := uint32(account)
 					p := pitr.account[id]
-					if !p.IsEmpty() && p.LT(&pitrTs) {
+					if !p.IsEmpty() && p.LT(&pitrTS) {
 						continue
 					}
-					pitr.account[id] = pitrTs
+					pitr.account[id] = pitrTS
 				} else if level == PitrLevelDatabase {
 					id := uint64(account)
 					p := pitr.database[id]
@@ -1002,13 +1002,13 @@ func (sm *SnapshotMeta) GetPITR(
 							zap.String("level", "database"),
 							zap.Uint64("id", id),
 							zap.String("old", p.ToString()),
-							zap.String("new", pitrTs.ToString()),
+							zap.String("new", pitrTS.ToString()),
 						)
-						if p.LT(&pitrTs) {
+						if p.LT(&pitrTS) {
 							continue
 						}
 					}
-					pitr.database[id] = pitrTs
+					pitr.database[id] = pitrTS
 				} else if level == PitrLevelTable {
 					id := uint64(account)
 					p := pitr.tables[id]
@@ -1017,20 +1017,20 @@ func (sm *SnapshotMeta) GetPITR(
 							zap.String("level", "table"),
 							zap.Uint64("id", id),
 							zap.String("old", p.ToString()),
-							zap.String("new", pitrTs.ToString()),
+							zap.String("new", pitrTS.ToString()),
 						)
-						if p.LT(&pitrTs) {
+						if p.LT(&pitrTS) {
 							continue
 						}
 					}
-					pitr.tables[id] = pitrTs
+					pitr.tables[id] = pitrTS
 				}
 				// TODO: info to debug
 				logutil.Info(
 					"GC-GetPITR",
 					zap.String("level", level),
 					zap.Uint64("id", account),
-					zap.String("ts", pitrTs.ToString()),
+					zap.String("ts", pitrTS.ToString()),
 				)
 			}
 		}
