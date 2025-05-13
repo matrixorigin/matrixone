@@ -348,8 +348,9 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 		}
 	}
 	return fmt.Sprintf(
-		"loaded:%t, oSize:%s, cSzie:%s rows:%d, zm: %s",
+		"loaded:%t, lv: %v, oSize:%s, cSzie:%s, rows:%d, zm: %s",
 		entry.GetLoaded(),
+		entry.GetLevel(),
 		common.HumanReadableBytes(int(entry.OriginSize())),
 		common.HumanReadableBytes(int(entry.Size())),
 		entry.Rows(),
@@ -683,6 +684,29 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *Object
 		ObjectMVCCNode: ObjectMVCCNode{*stats},
 		CreateNode:     txnbase.NewTxnMVCCNodeWithTS(ts),
 		ObjectState:    ObjectState_Create_ApplyCommit,
+	}
+	return e
+}
+
+func MockObjectEntry(
+	tbl *TableEntry,
+	stats *objectio.ObjectStats,
+	isTombstone bool,
+	dataFactory ObjectDataFactory,
+	ts types.TS,
+) *ObjectEntry {
+	e := &ObjectEntry{
+		table:      tbl,
+		ObjectNode: ObjectNode{IsTombstone: isTombstone},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{*stats},
+		CreateNode:     txnbase.NewTxnMVCCNodeWithTS(ts),
+		ObjectState:    ObjectState_Create_ApplyCommit,
+	}
+	if dataFactory != nil {
+		e.objData = dataFactory(e)
 	}
 	return e
 }

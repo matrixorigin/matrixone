@@ -10075,7 +10075,7 @@ func TestDeletesInMerge(t *testing.T) {
 	obj := testutil.GetOneBlockMeta(rel)
 	task, _ := jobs.NewMergeObjectsTask(
 		nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime,
-		common.DefaultMaxOsizeObjMB*common.Const1MBytes, false)
+		common.DefaultMaxOsizeObjBytes, false)
 	task.Execute(ctx)
 	{
 		txn, rel := tae.GetRelation()
@@ -10693,44 +10693,6 @@ func TestTransferS3Deletes(t *testing.T) {
 	tae.CheckRowsByScan(9, true)
 	t.Log(tae.Catalog.SimplePPString(3))
 }
-func TestStartStopTableMerge(t *testing.T) {
-	db := testutil.InitTestDB(context.Background(), "MergeTest", t, nil)
-	defer db.Close()
-
-	scheduler := merge.NewScheduler(db.Runtime, nil)
-	scheduler.PreExecute()
-
-	schema := catalog.MockSchema(2, 0)
-	schema.Extra.BlockMaxRows = 1000
-	schema.Extra.ObjectMaxBlocks = 2
-
-	txn, _ := db.StartTxn(nil)
-	database, _ := txn.CreateDatabase("db", "", "")
-	rel, _ := database.CreateRelation(schema)
-	require.NoError(t, txn.Commit(context.Background()))
-
-	tbl := rel.GetMeta().(*catalog.TableEntry)
-	require.NoError(t, scheduler.StopMerge(tbl, false))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
-	require.NoError(t, scheduler.StartMerge(tbl.GetID(), false))
-	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
-	require.Error(t, scheduler.StartMerge(tbl.GetID(), false))
-
-	require.NoError(t, scheduler.StopMerge(tbl, true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
-
-	require.NoError(t, scheduler.StopMerge(tbl, true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
-
-	require.Error(t, scheduler.StopMerge(tbl, false))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
-
-	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
-	require.ErrorIs(t, scheduler.LoopProcessor.OnTable(tbl), moerr.GetOkStopCurrRecur())
-
-	require.NoError(t, scheduler.StartMerge(tbl.GetID(), true))
-	require.NoError(t, scheduler.LoopProcessor.OnTable(tbl))
-}
 
 func TestDeleteByPhyAddrKeys(t *testing.T) {
 	ctx := context.Background()
@@ -10781,7 +10743,7 @@ func TestRollbackMergeInQueue(t *testing.T) {
 
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
-	err = tae.DB.MergeScheduler.StopMerge(rel.GetMeta().(*catalog.TableEntry), false)
+	err = tae.DB.MergeScheduler.StopMerge(rel.GetMeta().(*catalog.TableEntry), false, tae.Runtime)
 	require.NoError(t, err)
 	require.Error(t, txn.Commit(ctx)) // rollback
 
