@@ -10281,7 +10281,7 @@ func TestPersistTransferTable(t *testing.T) {
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs, time.Second, time.Minute, createdObjs)
+	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, time.Minute, createdObjs)
 	ids := make([]types.Rowid, 10)
 	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
@@ -10349,7 +10349,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 			createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 			now := time.Now()
-			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs, time.Second, 2*time.Second, createdObjs)
+			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, 2*time.Second, createdObjs)
 			ids := make([]types.Rowid, 10)
 			transferMap := make(api.TransferMap)
 			for i := 0; i < 10; i++ {

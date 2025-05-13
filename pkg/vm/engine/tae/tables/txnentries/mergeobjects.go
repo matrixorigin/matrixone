@@ -131,7 +131,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			isTransient := !tblEntry.GetLastestSchema(false).HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
+			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.TmpFS, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
 			page.Train(m)
 
 			start = time.Now()

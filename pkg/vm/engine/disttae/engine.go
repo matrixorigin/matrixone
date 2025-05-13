@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -56,6 +55,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -144,9 +145,19 @@ func New(
 		panic(err)
 	}
 
-	e.tmpFS = ioutil.NewTmpFileService(e.fs, ioutil.TmpFileGCInterval)
+	e.tmpFS = model.NewTmpFileService(
+		e.fs,
+		func(fn func(context.Context)) model.CancelableJob {
+			return tasks.NewCancelableCronJob(
+				"TMP-FILE-GC",
+				model.TmpFileGCInterval,
+				fn,
+				true,
+				1,
+			)
+		},
+	)
 	e.tmpFS.Start()
-
 	return e
 }
 

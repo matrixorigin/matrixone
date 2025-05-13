@@ -26,6 +26,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type mockGCJob struct{}
+
+func (job *mockGCJob) Start() {}
+func (job *mockGCJob) Stop()  {}
 func TestTransferPage(t *testing.T) {
 	sid := objectio.NewSegmentid()
 	src := common.ID{
@@ -36,7 +40,14 @@ func TestTransferPage(t *testing.T) {
 	}
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
-	memo1 := NewTransferHashPage(&src, time.Now(), false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL, createdObjs)
+	fs := objectio.TmpNewFileservice(context.Background(), "data")
+	tmpFS := NewTmpFileService(
+		fs,
+		func(fn func(context.Context)) CancelableJob {
+			return &mockGCJob{}
+		},
+	)
+	memo1 := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
 	assert.Zero(t, memo1.RefCount())
 
 	transferMap := make(api.TransferMap)
@@ -54,7 +65,14 @@ func TestTransferPage(t *testing.T) {
 	assert.Zero(t, memo1.RefCount())
 
 	now := time.Now()
-	memo2 := NewTransferHashPage(&src, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, diskTTL, createdObjs)
+	fs = objectio.TmpNewFileservice(context.Background(), "data")
+	tmpFS = NewTmpFileService(
+		fs,
+		func(fn func(context.Context)) CancelableJob {
+			return &mockGCJob{}
+		},
+	)
+	memo2 := NewTransferHashPage(&src, now, false, tmpFS, ttl, diskTTL, createdObjs)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
 
@@ -89,7 +107,14 @@ func TestTransferTable(t *testing.T) {
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	page1 := NewTransferHashPage(&id1, now, false, objectio.TmpNewFileservice(context.Background(), "data"), ttl, 2*time.Second, createdObjs)
+	fs := objectio.TmpNewFileservice(context.Background(), "data")
+	tmpFS := NewTmpFileService(
+		fs,
+		func(fn func(context.Context)) CancelableJob {
+			return &mockGCJob{}
+		},
+	)
+	page1 := NewTransferHashPage(&id1, now, false, tmpFS, ttl, 2*time.Second, createdObjs)
 	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
 		transferMap[uint32(i)] = api.TransferDestPos{

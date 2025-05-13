@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ioutil
+package model
 
 import (
 	"context"
@@ -22,8 +22,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
+
+type CancelableJob interface {
+	Start()
+	Stop()
+}
 
 const (
 	TmpFileDir = "tmp"
@@ -35,7 +39,7 @@ type TmpFileService struct {
 	fs   fileservice.FileService
 	apps map[string]*AppConfig
 
-	gcJob *tasks.CancelableJob
+	gcJob CancelableJob
 }
 
 type AppConfig struct {
@@ -46,18 +50,12 @@ type AppConfig struct {
 	decodeNameFunc func(name string) (createTime time.Time, err error)
 }
 
-func NewTmpFileService(fs fileservice.FileService, gcInterval time.Duration) *TmpFileService {
+func NewTmpFileService(fs fileservice.FileService, jobFactory func(fn func(context.Context)) CancelableJob) *TmpFileService {
 	service := &TmpFileService{
 		fs:   fs,
 		apps: make(map[string]*AppConfig),
 	}
-	service.gcJob = tasks.NewCancelableCronJob(
-		"TMP-FILE-GC",
-		gcInterval,
-		service.gc,
-		true,
-		1,
-	)
+	service.gcJob = jobFactory(service.gc)
 	return service
 }
 func (fs *TmpFileService) Start() {
@@ -79,24 +77,11 @@ func (fs *TmpFileService) Write(
 	}
 	return
 }
-
 func (fs *TmpFileService) AddApp(appConfig *AppConfig) error {
 	fs.apps[appConfig.name] = appConfig
 	return nil
 }
 
-func (fs *TmpFileService) ListFiles(ctx context.Context, appName string) ([]string, error) {
-	appPath := path.Join(TmpFileDir, appName)
-	entries := fs.fs.List(ctx, appPath)
-	files := make([]string, 0)
-	for entry, err := range entries {
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, path.Join(appPath, entry.Name))
-	}
-	return files, nil
-}
 
 func (fs *TmpFileService) gc(ctx context.Context) {
 	for _, appConfig := range fs.apps {
@@ -125,4 +110,23 @@ func (fs *TmpFileService) gc(ctx context.Context) {
 			zap.Int("gced_files", len(gcedFiles)),
 		)
 	}
+}
+
+func (fs *TmpFileService) Read(ctx context.Context, appName string, ioVector *fileservice.IOVector) (err error) {
+	return fs.fs.Read(ctx, ioVector)
+}
+func (fs *TmpFileService) Delete(ctx context.Context,filePath string) (err error) {
+	return fs.fs.Delete(ctx, filePath)
+}
+func (fs *TmpFileService) ListFiles(ctx context.Context, appName string) ([]string, error) {
+	appPath := path.Join(TmpFileDir, appName)
+	entries := fs.fs.List(ctx, appPath)
+	files := make([]string, 0)
+	for entry, err := range entries {
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, path.Join(appPath, entry.Name))
+	}
+	return files, nil
 }

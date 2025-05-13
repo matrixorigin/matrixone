@@ -146,7 +146,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 			id,
 			bts,
 			isTransient,
-			entry.rt.LocalFs,
+			entry.rt.TmpFS,
 			model.GetTTL(),
 			model.GetDiskTTL(),
 			objectIDs,

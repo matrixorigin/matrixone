@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -61,7 +60,7 @@ func WithRuntimeLocalFS(fs fileservice.FileService) RuntimeOption {
 	}
 }
 
-func WithRuntimeTmpFS(fs *ioutil.TmpFileService) RuntimeOption {
+func WithRuntimeTmpFS(fs *model.TmpFileService) RuntimeOption {
 	return func(r *Runtime) {
 		r.TmpFS = fs
 	}
@@ -271,7 +270,7 @@ type Runtime struct {
 
 	Fs      fileservice.FileService
 	LocalFs fileservice.FileService
-	TmpFS   *ioutil.TmpFileService
+	TmpFS   *model.TmpFileService
 
 	TransferTable   *model.HashPageTable
 	TransferDelsMap *model.TransDelsForBlks

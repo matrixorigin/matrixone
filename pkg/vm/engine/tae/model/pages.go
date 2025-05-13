@@ -28,10 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
+
+const (
+	TransferDir = "transfer"
 )
 
 type HashPageTable = TransferTable[*TransferHashPage]
@@ -80,12 +83,12 @@ type TransferHashPage struct {
 	hashmap     atomic.Pointer[api.TransferMap]
 	path        Path
 	isTransient bool
-	fs          ioutil.TmpFileService
+	fs          *TmpFileService
 	ttl         time.Duration
 	diskTTL     time.Duration
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs fileservice.FileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
 
 	page := &TransferHashPage{
 		id:          id,
@@ -271,7 +274,7 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseLoadTable)
 	defer cancel()
-	err := page.fs.Read(ctx, &ioVector)
+	err := page.fs.Read(ctx, TransferDir, &ioVector)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("[TransferPage] read persist table %v: %v", page.path.Name, err)

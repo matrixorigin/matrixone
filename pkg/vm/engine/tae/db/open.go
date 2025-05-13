@@ -24,7 +24,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -35,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 const (
@@ -137,7 +137,18 @@ func Open(
 		scheduler.Stop()
 		return nil
 	})
-	db.TmpFS = ioutil.NewTmpFileService(db.Opts.LocalFs, ioutil.TmpFileGCInterval)
+	db.TmpFS = model.NewTmpFileService(
+		db.Opts.LocalFs,
+		 func(fn func(context.Context)) model.CancelableJob {
+		return tasks.NewCancelableCronJob(
+			"TMP-FILE-GC",
+				model.TmpFileGCInterval,
+				fn,
+				true,
+				1,
+			)
+		},
+	)
 	db.TmpFS.Start()
 
 	db.Runtime = dbutils.NewRuntime(
