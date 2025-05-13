@@ -28,6 +28,7 @@ const (
 	MemoTreeVersion1 uint16 = iota
 	MemoTreeVersion2
 	MemoTreeVersion3
+	MemoTreeVersion4
 )
 
 type TreeVisitor interface {
@@ -207,6 +208,7 @@ func (ttree *TableRecord) WriteTo(w io.Writer) (n int64, err error) {
 	if _, err = w.Write(types.EncodeUint64(&ttree.ID)); err != nil {
 		return
 	}
+	n += 8 + 8
 	return
 }
 
@@ -216,6 +218,44 @@ func (ttree *TableRecord) ReadFromWithVersion(r io.Reader, ver uint16) (n int64,
 	}
 	if _, err = r.Read(types.EncodeUint64(&ttree.ID)); err != nil {
 		return
+	}
+	n += 8 + 8
+	if ver >= MemoTreeVersion4 {
+		return
+	}
+	// ver3 skip old data
+	var cnt uint32
+	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
+		return
+	}
+	n += 4
+	if cnt != 0 {
+		for i := 0; i < int(cnt); i++ {
+			id := objectio.NewObjectid()
+			if ver == MemoTreeVersion3 {
+				if _, err = r.Read(id[:]); err != nil {
+					return
+				}
+				n += types.ObjectidSize
+			} else {
+				panic("not supported")
+			}
+		}
+	}
+
+	if _, err = r.Read(types.EncodeUint32(&cnt)); err != nil {
+		return
+	}
+	n += 4
+	if cnt == 0 {
+		return
+	}
+	for i := 0; i < int(cnt); i++ {
+		id := objectio.NewObjectid()
+		if _, err = r.Read(id[:]); err != nil {
+			return
+		}
+		n += types.ObjectidSize
 	}
 	return
 }
