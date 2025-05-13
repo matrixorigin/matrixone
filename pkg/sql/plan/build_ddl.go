@@ -1935,6 +1935,15 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 	return nil
 }
 
+// buildMasterSecondaryIndexDef will create hidden internal table with schema.
+//
+// create table __mo_index_secondary_xxx (
+//
+//	__mo_index_idx_col varchar,
+//	__mo_index_pri_col src_pk_type,
+//	primary key __mo_index_idx_col,
+//
+// )
 func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
@@ -2051,6 +2060,27 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
+// buildRegularSecondingIndexDef will create a hidden index table with schema
+//
+// when number of primary key == 1
+//
+// create table __mo_index_secondary_xxx (
+//
+//	__mo_index_idx_col src_pk_type,
+//	__mo_index_pri_col src_pk_type,
+//	primary key __mo_index_idx_col,
+//
+// )
+//
+// when number of primary key > 1
+//
+// create table __mo_index_secondary_xxx (
+//
+//	__mo_index_idx_col varchar,
+//	__mo_index_pri_col src_pk_type,
+//	primary key __mo_index_idx_col,
+//
+// )
 func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	// 1. indexDef init
