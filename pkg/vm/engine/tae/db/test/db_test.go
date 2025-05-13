@@ -55,7 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -6656,12 +6655,12 @@ func TestAppendAndGC(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	merge.StopMerge.Store(true)
-	defer merge.StopMerge.Store(false)
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+
+	db.MergeScheduler.PauseAll()
 
 	fault.Enable()
 	defer fault.Disable()
@@ -7095,11 +7094,10 @@ func TestSnapshotMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	merge.StopMerge.Store(true)
-	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+	db.MergeScheduler.PauseAll()
 
 	fault.Enable()
 	defer fault.Disable()
@@ -7273,11 +7271,10 @@ func TestPitrMeta(t *testing.T) {
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	options.WithDisableGCCheckpoint()(opts)
-	merge.StopMerge.Store(true)
-	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+	db.MergeScheduler.PauseAll()
 
 	fault.Enable()
 	defer fault.Disable()
@@ -7693,12 +7690,11 @@ func TestCkpLeak(t *testing.T) {
 
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
-	merge.StopMerge.Store(true)
-	defer merge.StopMerge.Store(false)
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
+	db.MergeScheduler.PauseAll()
 
 	fault.Enable()
 	defer fault.Disable()

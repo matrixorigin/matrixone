@@ -20,7 +20,6 @@ import (
 	"iter"
 	"os"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
@@ -34,8 +33,6 @@ import (
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/process"
 )
-
-var StopMerge atomic.Bool
 
 type taskHostKind int
 
