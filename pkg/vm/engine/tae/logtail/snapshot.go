@@ -510,7 +510,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 
 		commitTsVec := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
-		rowIDVec := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
+		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
 		for i := 0; i < len(commitTsVec); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
 			commitTs := commitTsVec[i]
@@ -526,7 +526,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 				continue
 			}
 			deleteRows = append(deleteRows, tombstone{
-				rowid: rowIDVec[i],
+				rowid: rowIDs[i],
 				pk:    pk,
 				ts:    commitTs,
 			})
@@ -812,8 +812,8 @@ func (sm *SnapshotMeta) GetSnapshot(
 		default:
 		}
 		tombstonesStats := make([]objectio.ObjectStats, 0)
-		for ttid, tombstoneMap := range tombstones {
-			if ttid != tid {
+		for tombstoneTid, tombstoneMap := range tombstones {
+			if tombstoneTid != tid {
 				continue
 			}
 			for _, object := range tombstoneMap {
@@ -922,8 +922,8 @@ func (sm *SnapshotMeta) GetPITR(
 ) (*PitrInfo, error) {
 	idxes := []uint16{ColPitrLevel, ColPitrObjId, ColPitrLength, ColPitrUnit}
 	tombstonesStats := make([]objectio.ObjectStats, 0)
-	for _, tombstone := range sm.pitr.tombstones {
-		tombstonesStats = append(tombstonesStats, tombstone.stats)
+	for _, obj := range sm.pitr.tombstones {
+		tombstonesStats = append(tombstonesStats, obj.stats)
 	}
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)

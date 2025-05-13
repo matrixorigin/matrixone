@@ -786,14 +786,14 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	now := time.Now()
 
 	var (
-		tmpDelFiles    []string
-		deleteFiles    []string
-		tmpNewFiles    []string
-		newCkp         *checkpoint.CheckpointEntry
-		ckpMaxEnd      types.TS
-		toMergeEntries []*checkpoint.CheckpointEntry
-		extraErrMsg    string
-		newCkpData     *batch.Batch
+		tmpDelFiles       []string
+		deleteFiles       []string
+		tmpNewFiles       []string
+		newCkp            *checkpoint.CheckpointEntry
+		ckpMaxEnd         types.TS
+		toMergeCheckpoint []*checkpoint.CheckpointEntry
+		extraErrMsg       string
+		newCkpData        *batch.Batch
 	)
 
 	defer func() {
@@ -813,15 +813,15 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			zap.Strings("delete-files", deleteFiles),
 			zap.String("new-checkpoint", newCkp.String()),
 			zap.String("checkpoint-max-end", ckpMaxEnd.ToString()),
-			zap.Int("checkpoint-to-merge-len", len(toMergeEntries)),
+			zap.Int("checkpoint-to-merge-len", len(toMergeCheckpoint)),
 		)
 	}()
 
-	if toMergeEntries = c.getEntriesToMerge(checkpointLowWaterMark); len(toMergeEntries) == 0 {
+	if toMergeCheckpoint = c.getEntriesToMerge(checkpointLowWaterMark); len(toMergeCheckpoint) == 0 {
 		return
 	}
 
-	ckpMaxEnd = toMergeEntries[len(toMergeEntries)-1].GetEnd()
+	ckpMaxEnd = toMergeCheckpoint[len(toMergeCheckpoint)-1].GetEnd()
 	if ckpMaxEnd.GT(checkpointLowWaterMark) {
 		logutil.Warn("GC-PANIC-MERGE-FILES",
 			zap.String("task", c.TaskNameLocked()),
@@ -831,13 +831,13 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		return
 	}
 
-	if toMergeEntries, err = c.filterCheckpoints(
+	if toMergeCheckpoint, err = c.filterCheckpoints(
 		checkpointLowWaterMark,
-		toMergeEntries,
+		toMergeCheckpoint,
 	); err != nil {
 		return
 	}
-	if len(toMergeEntries) == 0 {
+	if len(toMergeCheckpoint) == 0 {
 		return
 	}
 
@@ -866,7 +866,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		ctx,
 		c.TaskNameLocked(),
 		c.sid,
-		toMergeEntries,
+		toMergeCheckpoint,
 		bf,
 		&ckpMaxEnd,
 		c.checkpointCli,
