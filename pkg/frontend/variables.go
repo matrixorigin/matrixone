@@ -3560,6 +3560,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(0),
 	},
+	"kmeans_train_percent": {
+		Name:              "kmeans_train_percent",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("kmeans_train_percent", 1, 100, false),
+		Default:           int64(10),
+	},
+	"kmeans_max_iteration": {
+		Name:              "kmeans_max_iteration",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("kmeans_max_iteration", 10, 500, false),
+		Default:           int64(20),
+	},
 	"ft_relevancy_algorithm": {
 		Name:              fulltext.FulltextRelevancyAlgo,
 		Scope:             ScopeBoth,
