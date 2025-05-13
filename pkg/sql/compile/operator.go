@@ -671,7 +671,11 @@ func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 	return op
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine) (vm.Operator, error) {
+func constructDeletion(
+	proc *process.Process,
+	n *plan.Node,
+	eg engine.Engine,
+) (vm.Operator, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		Ref:             oldCtx.Ref,
@@ -685,7 +689,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine) (vm.Operator, error) {
 	op := deletion.NewArgument()
 	op.DeleteCtx = delCtx
 
-	if !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
+	ps := proc.GetPartitionService()
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return op, nil
 	}
 	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
@@ -875,7 +880,8 @@ func constructMultiUpdate(
 	}
 	arg.Action = action
 
-	if !features.IsPartitioned(n.UpdateCtxList[0].TableDef.FeatureFlag) {
+	ps := proc.GetPartitionService()
+	if !ps.Enabled() || !features.IsPartitioned(n.UpdateCtxList[0].TableDef.FeatureFlag) {
 		return arg, nil
 	}
 
@@ -909,7 +915,8 @@ func constructInsert(
 	arg.InsertCtx = newCtx
 	arg.ToWriteS3 = toS3
 
-	if !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
+	ps := proc.GetPartitionService()
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return arg, nil
 	}
 

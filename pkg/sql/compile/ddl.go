@@ -1445,7 +1445,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if !features.IsPartitioned(qry.TableDef.FeatureFlag) {
+	ps := c.proc.GetPartitionService()
+	if !ps.Enabled() || !features.IsPartitioned(qry.TableDef.FeatureFlag) {
 		return nil
 	}
 
@@ -1457,7 +1458,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		c.getLower(),
 	)
 
-	err = partitionservice.GetService(c.proc.GetService()).Create(
+	err = ps.Create(
 		c.proc.Ctx,
 		qry.TableDef.TblId,
 		stmt.(*tree.CreateTable),
