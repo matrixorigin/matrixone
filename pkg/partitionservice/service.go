@@ -159,6 +159,10 @@ func (s *service) GetPartitionMetadata(
 	return s.readMetadata(ctx, tableID, txnOp)
 }
 
+func (s *service) Enabled() bool {
+	return s.cfg.Enable
+}
+
 func (s *service) getMetadata(
 	def *plan.TableDef,
 	option *tree.PartitionOption,

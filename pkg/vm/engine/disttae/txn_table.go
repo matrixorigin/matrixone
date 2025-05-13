@@ -92,8 +92,8 @@ func newTxnTable(
 	tbl.isLocal = tbl.isLocalFunc
 
 	if db.databaseId != catalog.MO_CATALOG_ID {
-		if item.IsPartitionTable() {
-			ps := process.GetPartitionService()
+		ps := process.GetPartitionService()
+		if ps.Enabled() && item.IsPartitionTable() {
 			metadata, err := ps.GetPartitionMetadata(
 				ctx,
 				item.Id,
