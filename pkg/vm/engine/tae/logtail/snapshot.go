@@ -806,7 +806,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 		snapshotSchemaTypes[ColLevel],
 		snapshotSchemaTypes[ColObjId],
 	}
-	for tid, objectMap := range objects {
+	for tid, objMap := range objects {
 		select {
 		case <-ctx.Done():
 			return nil, context.Cause(ctx)
@@ -822,9 +822,9 @@ func (sm *SnapshotMeta) GetSnapshot(
 			}
 			break
 		}
-		checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-		ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
-		for _, object := range objectMap {
+		ckpTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+		ds := NewSnapshotDataSource(ctx, fs, ckpTS, tombstonesStats)
+		for _, object := range objMap {
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
 				blk := object.stats.ConstructBlockInfo(uint16(i))
 				buildBatch := func() *batch.Batch {
