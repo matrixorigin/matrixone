@@ -972,11 +972,11 @@ func (sm *SnapshotMeta) GetPITR(
 				unit := bat.Vecs[3].GetStringAt(r)
 				var ts time.Time
 				if unit == PitrUnitYear {
-					ts = AddDate(gcTime, 1-leng, 0, 0)
+					ts = AddDate(gcTime, -leng, 0, 0)
 				} else if unit == PitrUnitMonth {
-					ts = AddDate(gcTime, 0, 1-leng, 0)
+					ts = AddDate(gcTime, 0, -leng, 0)
 				} else if unit == PitrUnitDay {
-					ts = gcTime.AddDate(0, 0, 1-leng)
+					ts = gcTime.AddDate(0, 0, -leng)
 				} else if unit == PitrUnitHour {
 					ts = gcTime.Add(-time.Duration(leng) * time.Hour)
 				} else if unit == PitrUnitMinute {
