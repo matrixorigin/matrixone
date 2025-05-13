@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -143,6 +144,9 @@ func New(
 		panic(err)
 	}
 
+	e.tmpFS = ioutil.NewTmpFileService(e.fs, ioutil.TmpFileGCInterval)
+	e.tmpFS.Start()
+
 	return e
 }
 
@@ -151,6 +155,7 @@ func (e *Engine) Close() error {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
 	e.dynamicCtx.Close()
+	e.tmpFS.Stop()
 	return nil
 }
 

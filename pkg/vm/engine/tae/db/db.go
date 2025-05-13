@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -112,6 +113,8 @@ type DB struct {
 	Runtime *dbutils.Runtime
 
 	ReplayCtl *replayCtl
+
+	TmpFS *ioutil.TmpFileService
 
 	DBLocker io.Closer
 
@@ -356,6 +359,7 @@ func (db *DB) Close() error {
 			// TODO: error handling
 			db.ReplayCtl.Stop()
 		}
+		db.TmpFS.Stop()
 		db.CronJobs.Reset()
 		db.BGFlusher.Stop()
 		db.BGCheckpointRunner.Stop()

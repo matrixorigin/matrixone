@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -136,11 +137,14 @@ func Open(
 		scheduler.Stop()
 		return nil
 	})
+	db.TmpFS = ioutil.NewTmpFileService(db.Opts.LocalFs, ioutil.TmpFileGCInterval)
+	db.TmpFS.Start()
 
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeObjectFS(opts.Fs),
 		dbutils.WithRuntimeLocalFS(opts.LocalFs),
+		dbutils.WithRuntimeTmpFS(db.TmpFS),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),

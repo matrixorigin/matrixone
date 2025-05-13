@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -79,7 +80,7 @@ type TransferHashPage struct {
 	hashmap     atomic.Pointer[api.TransferMap]
 	path        Path
 	isTransient bool
-	fs          fileservice.FileService
+	fs          ioutil.TmpFileService
 	ttl         time.Duration
 	diskTTL     time.Duration
 }

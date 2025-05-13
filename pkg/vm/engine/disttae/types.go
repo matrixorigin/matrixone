@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -220,6 +221,8 @@ type Engine struct {
 	cli      client.TxnClient
 	idGen    IDGenerator
 	tnID     string
+
+	tmpFS *ioutil.TmpFileService
 
 	config struct {
 		insertEntryMaxCount      int
