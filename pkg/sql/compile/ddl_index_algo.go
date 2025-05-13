@@ -236,6 +236,18 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	cfg.ThreadsBuild = val.(int64)
 
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.KmeansTrainPercent = val.(int64)
+
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.KmeansMaxIteration = val.(int64)
+
 	params_str := indexDef.IndexAlgoParams
 
 	cfgbytes, err := json.Marshal(cfg)
