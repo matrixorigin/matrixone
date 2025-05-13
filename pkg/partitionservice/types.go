@@ -89,6 +89,8 @@ type PartitionService interface {
 	) ([]int, error)
 
 	GetStorage() PartitionStorage
+
+	Enabled() bool
 }
 
 type PartitionStorage interface {
