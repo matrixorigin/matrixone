@@ -209,7 +209,6 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 similar to findDeletes
 */
 func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
-	// TODO(aptend): handle the iterator correctly
 	var objIt btree.IterG[*catalog.ObjectEntry]
 	if tbl.isTombstone {
 		tbl.txnTable.entry.WaitTombstoneObjectCommitted(to)

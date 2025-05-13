@@ -263,6 +263,10 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewObj() {
+		// another site to SetLevel is in committing merge task
+		if stats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+			stats.SetLevel(1)
+		}
 		space.nobj, err = space.table.CreateNonAppendableObject(
 			&objectio.CreateObjOpt{Stats: &stats, IsTombstone: space.isTombstone})
 		if err != nil {

@@ -219,14 +219,14 @@ func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (rele
 			return nil, err
 		}
 
-		err = h.db.MergeScheduler.StopMerge(relation.GetMeta().(*catalog.TableEntry), true)
+		err = h.db.MergeScheduler.StopMerge(relation.GetMeta().(*catalog.TableEntry), true, h.db.Runtime)
 		if err != nil {
 			return nil, err
 		}
 		logutil.Info("LockMerge Bulk Delete",
 			zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
 		release := func() {
-			err = h.db.MergeScheduler.StartMerge(id, true)
+			err = h.db.MergeScheduler.StartMerge(h.db.Runtime, id, true)
 			if err != nil {
 				return
 			}

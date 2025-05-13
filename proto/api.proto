@@ -403,6 +403,7 @@ message MergeCommitEntry {
     BlkTransferBooking booking = 7;
     repeated string booking_loc = 8;
     string err = 9;
+    int32 level = 10;
 }
 
 message MergeTaskEntry {

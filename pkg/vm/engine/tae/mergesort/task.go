@@ -17,6 +17,7 @@ package mergesort
 import (
 	"context"
 	"fmt"
+	"iter"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ type MergeTaskHost interface {
 	DisposableVecPool
 	Name() string
 	HostHintName() string
+	TaskSourceNote() string
 	GetCommitEntry() *api.MergeCommitEntry
 	InitTransferMaps(blkCnt int)
 	GetTransferMaps() api.TransferMaps
@@ -57,7 +59,7 @@ type MergeTaskHost interface {
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
-	LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
+	LoadNextBatch(ctx context.Context, objIdx uint32, reuseBatch *batch.Batch) (*batch.Batch, *nulls.Nulls, func(), error)
 	GetTotalSize() uint64 // total size of all objects, definitely there are cases where the size exceeds 4G, so use uint64
 	GetTotalRowCnt() uint32
 	GetBlockMaxRows() uint32
@@ -95,11 +97,13 @@ func DoMergeAndWrite(
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	logMergeStart(
+		mergehost.TaskSourceNote(),
 		mergehost.Name(),
 		txnInfo,
 		mergehost.HostHintName(),
 		commitEntry.StartTs.DebugString(),
 		commitEntry.MergedObjs,
+		int8(commitEntry.Level),
 	)
 	defer func() {
 		if err != nil {
@@ -204,7 +208,7 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 	}
 }
 
-func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
+func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [][]byte, level int8) {
 	var fromObjsDescBuilder strings.Builder
 	fromSize, estSize := float64(0), float64(0)
 	rows, blkn := 0, 0
@@ -252,6 +256,8 @@ func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
 		zap.Int("num-obj", len(mergedObjs)),
 		common.AnyField("num-blk", blkn),
 		common.AnyField("rows", rows),
+		common.AnyField("task-source-note", tasksource),
+		common.AnyField("level", level),
 	)
 
 	if host == "TN" {
@@ -292,4 +298,22 @@ func cutIfByteSlice(value any) any {
 	default:
 	}
 	return value
+}
+
+func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
+	estSize := 0
+	totalSize := 0
+	for obj := range objs {
+		blkRowCnt := 8192
+		if r := obj.Rows(); r == 0 {
+			continue
+		} else if r < 8192 {
+			blkRowCnt = int(r)
+		}
+		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2 // read one block, x 2 factor
+		estSize += int(obj.Rows()) * 30                             // transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
+		totalSize += int(obj.OriginSize()) / 2
+	}
+	estSize += totalSize / 3 * 2 // leave some margin for gc
+	return estSize
 }

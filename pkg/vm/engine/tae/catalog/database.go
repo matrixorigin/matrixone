@@ -597,3 +597,8 @@ func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 
 	return entry
 }
+
+// for test
+func (e *DBEntry) TestSetCatalog(catalog *Catalog) {
+	e.catalog = catalog
+}
