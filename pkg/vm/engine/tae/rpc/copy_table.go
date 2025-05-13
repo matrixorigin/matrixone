@@ -19,7 +19,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"iter"
 	"path"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,6 +43,62 @@ import (
 
 	"go.uber.org/zap"
 )
+
+const (
+	DumpTableDir = "DumpTable"
+)
+
+const (
+	DumpTableFileTTL = time.Hour * 24 * 30
+)
+
+func DecodeDumpTableDir(dir string) (tid uint64, createTime time.Time, snapshotTS types.TS, err error) {
+	parts := strings.Split(dir, "_")
+	if len(parts) != 3 {
+		return 0, time.Time{}, types.TS{}, moerr.NewInternalErrorNoCtx("invalid dump table directory")
+	}
+	tid, err = strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return 0, time.Time{}, types.TS{}, err
+	}
+	createTime, err = time.Parse(time.RFC3339, parts[1])
+	if err != nil {
+		return 0, time.Time{}, types.TS{}, err
+	}
+	snapshotTS = types.StringToTS(parts[2])
+	if err != nil {
+		return 0, time.Time{}, types.TS{}, err
+	}
+	return
+}
+
+func GCDumpTableFiles(ctx context.Context, fs fileservice.FileService) (err error) {
+	var entries iter.Seq2[*fileservice.DirEntry, error]
+	if entries = fs.List(
+		ctx, DumpTableDir,
+	); err != nil {
+		return
+	}
+	for entry, err := range entries {
+		if err != nil {
+			return err
+		}
+		name := entry.Name
+		tid, createTime, _, err := DecodeDumpTableDir(name)
+		if err != nil {
+			return err
+		}
+		if createTime.Add(time.Hour * 24 * 30).Before(time.Now()) {
+			fs.Delete(ctx, path.Join(DumpTableDir, name))
+		}
+	}
+	return
+}
+
+func GetDumpTableDir(tid uint64, snapshotTS types.TS) string {
+	dir := fmt.Sprintf("%v/%s_%v_%s", DumpTableDir, tid, time.Now(), snapshotTS.ToString())
+	return dir
+}
 
 const (
 	CopyTableObjectList = "object_list"
@@ -122,18 +182,16 @@ func (c *CopyTableArg) PrepareCommand() *cobra.Command {
 
 	copyTableCmd.Flags().IntP("tid", "t", 0, "set table id")
 	copyTableCmd.Flags().IntP("did", "d", 0, "set database id")
-	copyTableCmd.Flags().StringP("dir", "o", "", "set output directory")
 	return copyTableCmd
 }
 
 func (c *CopyTableArg) FromCommand(cmd *cobra.Command) (err error) {
 	tid, _ := cmd.Flags().GetInt("tid")
 	did, _ := cmd.Flags().GetInt("did")
-	c.dir, _ = cmd.Flags().GetString("dir")
 	if cmd.Flag("ictx") != nil {
 		c.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
 		c.mp = common.DefaultAllocator
-		c.fs = c.inspectContext.db.Opts.Fs
+		c.fs = c.inspectContext.db.Opts.LocalFs
 		c.ctx = context.Background()
 		database, err := c.inspectContext.db.Catalog.GetDatabaseByID(uint64(did))
 		if err != nil {
@@ -172,6 +230,7 @@ func (c *CopyTableArg) Run() (err error) {
 		return
 	}
 	defer c.txn.Commit(c.ctx)
+	c.dir = GetDumpTableDir(c.table.ID, c.txn.GetStartTS())
 	logutil.Info(
 		"COPY-TABLE-START",
 		zap.String(
@@ -185,7 +244,6 @@ func (c *CopyTableArg) Run() (err error) {
 			),
 		),
 		zap.String("dir", c.dir),
-		zap.String("ts", c.txn.GetStartTS().ToString()),
 	)
 	defer c.objectListBatch.Clean(c.mp)
 	txn, err := c.inspectContext.db.StartTxn(nil)
@@ -223,7 +281,6 @@ func (c *CopyTableArg) Run() (err error) {
 			),
 		),
 		zap.String("dir", c.dir),
-		zap.String("ts", c.txn.GetStartTS().ToString()),
 		zap.Int("object_count", c.objectListBatch.RowCount()),
 	)
 	return nil
@@ -276,12 +333,17 @@ func (c *CopyTableArg) flushTableEntry() (err error) {
 }
 
 func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
-	isPersisted, bat, err := c.visitObjectData(e)
+	startTS := c.txn.GetStartTS()
+	if e.CreatedAt.EQ(&txnif.UncommitTS) || e.CreatedAt.LT(&startTS) {
+		return nil
+	}
+	bat, err := c.visitObjectData(e)
 	if err != nil {
 		return err
 	}
 	defer bat.Close()
-	if err := c.collectObjectList(e, isPersisted); err != nil {
+	var isPersisted bool
+	if isPersisted, err = c.collectObjectList(e); err != nil {
 		return err
 	}
 	cnBatch := containers.ToCNBatch(bat)
@@ -298,6 +360,21 @@ func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
 		); err != nil {
 			return err
 		}
+		logutil.Info(
+			"COPY-TABLE-FLUSH",
+			zap.String(
+				"table",
+				fmt.Sprintf(
+					"%d-%v, %d-%s",
+					c.table.GetDB().ID,
+					c.table.GetDB().GetFullName(),
+					c.table.ID,
+					c.table.GetFullName(),
+				),
+			),
+			zap.String("dir", c.dir),
+			zap.String("name", name),
+		)
 	} else {
 		objectName := objectio.BuildObjectNameWithObjectID(e.ID())
 		if err := c.flush(objectName.String(), cnBatch); err != nil {
@@ -380,13 +457,13 @@ func (c *CopyTableArg) flush(name string, bat *batch.Batch) (err error) {
 			),
 		),
 		zap.String("dir", c.dir),
-		zap.String("ts", c.txn.GetStartTS().ToString()),
 		zap.String("name", name),
 	)
 	return
 }
 
-func (c *CopyTableArg) collectObjectList(e *catalog.ObjectEntry, isPersisted bool) error {
+func (c *CopyTableArg) collectObjectList(e *catalog.ObjectEntry) (isPersisted bool, err error) {
+	startTS := c.txn.GetStartTS()
 	var objectType int8
 	if e.IsTombstone {
 		objectType = ckputil.ObjectType_Tombstone
@@ -396,43 +473,44 @@ func (c *CopyTableArg) collectObjectList(e *catalog.ObjectEntry, isPersisted boo
 	if err := vector.AppendFixed(
 		c.objectListBatch.Vecs[ObjectListAttr_ObjectType_Idx], objectType, false, c.mp,
 	); err != nil {
-		return err
+		return false, err
 	}
 	if err := vector.AppendBytes(
 		c.objectListBatch.Vecs[ObjectListAttr_ID_Idx], []byte(e.ObjectStats[:]), false, c.mp,
 	); err != nil {
-		return err
+		return false, err
 	}
 	if err := vector.AppendFixed(
 		c.objectListBatch.Vecs[ObjectListAttr_CreateTS_Idx], e.CreatedAt, false, c.mp,
 	); err != nil {
-		return err
+		return false, err
+	}
+	var deleteTS types.TS
+	if e.DeletedAt.EQ(&txnif.UncommitTS) || e.DeletedAt.LT(&startTS) {
+		deleteTS = types.TS{}
+	} else {
+		deleteTS = e.DeletedAt
+	}
+	if e.GetAppendable() && deleteTS.IsEmpty() {
+		isPersisted = false
+	} else {
+		isPersisted = true
 	}
 	if err := vector.AppendFixed(
-		c.objectListBatch.Vecs[ObjectListAttr_DeleteTS_Idx], e.DeletedAt, false, c.mp,
+		c.objectListBatch.Vecs[ObjectListAttr_DeleteTS_Idx], deleteTS, false, c.mp,
 	); err != nil {
-		return err
+		return false, err
 	}
 	if err := vector.AppendFixed(
 		c.objectListBatch.Vecs[ObjectListAttr_IsPersisted_Idx], isPersisted, false, c.mp,
 	); err != nil {
-		return err
+		return false, err
 	}
 	c.objectListBatch.SetRowCount(c.objectListBatch.Vecs[0].Length())
-	return nil
+	return
 }
 
-func (c *CopyTableArg) visitObjectData(e *catalog.ObjectEntry) (isPersisted bool, bat *containers.Batch, err error) {
-	batches := make(map[uint32]*containers.BatchWithVersion)
-	if err = e.GetObjectData().ScanInMemory(
-		c.ctx, batches, types.TS{}, c.txn.GetStartTS(), c.mp,
-	); err != nil {
-		return
-	}
-	if len(batches) != 0 {
-		return false, batches[e.GetTable().GetLastestSchema(e.IsTombstone).Version].Batch, nil
-	}
-	isPersisted = true
+func (c *CopyTableArg) visitObjectData(e *catalog.ObjectEntry) (bat *containers.Batch, err error) {
 	schema := e.GetTable().GetLastestSchema(e.IsTombstone)
 	colIdxes := make([]int, 0)
 	// user rows, rowID, commitTS
