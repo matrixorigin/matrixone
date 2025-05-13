@@ -127,13 +127,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	case plan.Node_FILTER:
 		canPushdown = filters
-		for _, filter := range node.FilterList {
-			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
+		if !node.RollupFilter {
+			for _, filter := range node.FilterList {
+				canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
+			}
 		}
-
+		
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
-		if len(cantPushdownChild) > 0 {
+		if node.RollupFilter {
+			if len(cantPushdownChild) > 0 {
+				node.Children[0] = childID
+				node.FilterList = append(node.FilterList, cantPushdownChild...)
+			}
+		} else if len(cantPushdownChild) > 0 {
 			node.Children[0] = childID
 			node.FilterList = cantPushdownChild
 		} else {
