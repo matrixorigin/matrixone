@@ -151,5 +151,15 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 		idxcfg.Usearch.ExpansionSearch = uint(val)
 	}
 
+	os.Stderr.WriteString(fmt.Sprintf("idxtblcfg: %v\n", idxtblcfg))
+	os.Stderr.WriteString(fmt.Sprintf("idxcfg: %v\n", idxcfg))
+
+	// load metadata
+	indexes, err := LoadMetadata(proc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
+	if err != nil {
+		return err
+	}
+
+	os.Stderr.WriteString(fmt.Sprintf("meta: %v\n", indexes))
 	return nil
 }
