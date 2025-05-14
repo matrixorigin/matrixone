@@ -176,139 +176,145 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 
 	maxcap := uint(0)
 
+	// try to find index cap
+	cdclen := len(cdc.Data)
+	midx := make([]int, cdclen)
+	// reset idx to -1
+	for i := range midx {
+		midx[i] = -1
+	}
+
+	// find corresponding indexes
+	for i, m := range indexes {
+		err = m.LoadIndex(proc, idxcfg, tblcfg, tblcfg.ThreadsBuild, true)
+		if err != nil {
+			return err
+		}
+
+		capacity, err := m.Index.Capacity()
+		if err != nil {
+			return err
+		}
+		m.MaxCapacity = capacity
+		mlen, err := m.Index.Len()
+		if err != nil {
+			return err
+		}
+		m.Len = mlen
+
+		if maxcap < capacity {
+			maxcap = capacity
+		}
+
+		for j, row := range cdc.Data {
+			switch row.Type {
+			case vectorindex.CDC_UPSERT, vectorindex.CDC_DELETE:
+				if midx[j] == -1 {
+					found, err := m.Contains(row.PKey)
+					if err != nil {
+						return err
+					}
+					if found {
+						midx[j] = i
+					}
+				}
+			}
+		}
+
+		m.Unload()
+	}
+
+	current := (*HnswModel)(nil)
+	last := (*HnswModel)(nil)
 	if len(indexes) == 0 {
 		// create a new model and do insert
+		newmodel, err := NewHnswModelForBuild("", idxcfg, int(tblcfg.ThreadsBuild), maxcap)
+		if err != nil {
+			return err
+		}
+		indexes = append(indexes, newmodel)
+		last = newmodel
+	} else {
+		last = indexes[len(indexes)-1]
+	}
+	// last model not load yet so check the last.Len instead of Full()
+	if last.Len >= last.MaxCapacity {
+		// model is already full, create a new model for insert
+		newmodel, err := NewHnswModelForBuild("", idxcfg, int(tblcfg.ThreadsBuild), maxcap)
+		if err != nil {
+			return err
+		}
+		indexes = append(indexes, newmodel)
+		last = newmodel
 
 	} else {
-		// try to find index cap
-		cdclen := len(cdc.Data)
-		midx := make([]int, cdclen)
-		// reset idx to -1
-		for i := range midx {
-			midx[i] = -1
-		}
+		// load last
+		last.LoadIndex(proc, idxcfg, tblcfg, tblcfg.ThreadsBuild, true)
 
-		// find corresponding indexes
-		for i, m := range indexes {
-			err = m.LoadIndex(proc, idxcfg, tblcfg, tblcfg.ThreadsBuild, true)
-			if err != nil {
-				return err
-			}
+	}
 
-			capacity, err := m.Index.Capacity()
-			if err != nil {
-				return err
-			}
-			m.MaxCapacity = capacity
-			mlen, err := m.Index.Len()
-			if err != nil {
-				return err
-			}
-			m.Len = mlen
+	for i, row := range cdc.Data {
 
-			if maxcap < capacity {
-				maxcap = capacity
-			}
-
-			for j, row := range cdc.Data {
-				switch row.Type {
-				case vectorindex.CDC_UPSERT, vectorindex.CDC_DELETE:
-					if midx[j] == -1 {
-						found, err := m.Contains(row.PKey)
-						if err != nil {
-							return err
-						}
-						if found {
-							midx[j] = i
-						}
-					}
-				}
-			}
-
-			m.Unload()
-		}
-
-		current := (*HnswModel)(nil)
-		last := indexes[len(indexes)-1]
-		// last model not load yet so check the last.Len instead of Full()
-		if last.Len >= last.MaxCapacity {
-			// model is already full, create a new model for insert
-			newmodel, err := NewHnswModelForBuild("", idxcfg, int(tblcfg.ThreadsBuild), maxcap)
-			if err != nil {
-				return err
-			}
-			indexes = append(indexes, newmodel)
-			last = newmodel
-
-		} else {
-			// load last
-			last.LoadIndex(proc, idxcfg, tblcfg, tblcfg.ThreadsBuild, true)
-
-		}
-
-		for i, row := range cdc.Data {
-
-			switch row.Type {
-			case vectorindex.CDC_UPSERT:
-				if midx[i] == -1 {
-					// cannot find key from existing model. simple insert
-					last, err = getLastModel(proc, idxcfg, tblcfg, indexes, last, maxcap)
-					if err != nil {
-						return err
-					}
-					// insert
-					err = last.Add(row.PKey, row.Vec)
-					if err != nil {
-						return err
-					}
-
-					break
-
-				}
-				current, err := getCurrentModel(proc, idxcfg, tblcfg, indexes, current, midx[i])
-				if err != nil {
-					return err
-				}
-
-				// update
-				_ = current
-
-			case vectorindex.CDC_DELETE:
-				if midx[i] == -1 {
-					// cannot find key from existing models. ignore it
-					continue
-				}
-
-				current, err := getCurrentModel(proc, idxcfg, tblcfg, indexes, current, midx[i])
-				if err != nil {
-					return err
-				}
-
-				// delete
-				err = current.Remove(row.PKey)
-				if err != nil {
-					return err
-				}
-
-			case vectorindex.CDC_INSERT:
+		switch row.Type {
+		case vectorindex.CDC_UPSERT:
+			if midx[i] == -1 {
+				// cannot find key from existing model. simple insert
 				last, err = getLastModel(proc, idxcfg, tblcfg, indexes, last, maxcap)
 				if err != nil {
 					return err
 				}
-
 				// insert
 				err = last.Add(row.PKey, row.Vec)
 				if err != nil {
 					return err
 				}
+
+				break
+
+			}
+			current, err := getCurrentModel(proc, idxcfg, tblcfg, indexes, current, midx[i])
+			if err != nil {
+				return err
 			}
 
+			// update
+			_ = current
+
+		case vectorindex.CDC_DELETE:
+			if midx[i] == -1 {
+				// cannot find key from existing models. ignore it
+				continue
+			}
+
+			current, err := getCurrentModel(proc, idxcfg, tblcfg, indexes, current, midx[i])
+			if err != nil {
+				return err
+			}
+
+			// delete
+			err = current.Remove(row.PKey)
+			if err != nil {
+				return err
+			}
+
+		case vectorindex.CDC_INSERT:
+			last, err = getLastModel(proc, idxcfg, tblcfg, indexes, last, maxcap)
+			if err != nil {
+				return err
+			}
+
+			// insert
+			err = last.Add(row.PKey, row.Vec)
+			if err != nil {
+				return err
+			}
 		}
 
-		// save to files
-
-		// save to database
 	}
+
+	// save to files
+
+	// save to database
 
 	return nil
 }
