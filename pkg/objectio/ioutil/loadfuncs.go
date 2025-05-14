@@ -16,6 +16,7 @@ package ioutil
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -30,7 +31,7 @@ import (
 
 func LoadColumnsData(
 	ctx context.Context,
-	cols []uint16,
+	columns []uint16,
 	typs []types.Type,
 	fs fileservice.FileService,
 	location objectio.Location,
@@ -50,7 +51,7 @@ func LoadColumnsData(
 		&dataMeta,
 		name,
 		location.ID(),
-		cols,
+		columns,
 		typs,
 		m,
 		fs,
@@ -62,8 +63,9 @@ func LoadColumnsData(
 		objectio.ReleaseIOVector(&ioVectors)
 		cacheVectors.Free(m)
 	}
-	for i := range cols {
+	for i := range columns {
 		if err = objectio.MustVectorTo(&cacheVectors[i], ioVectors.Entries[i].CachedData.Bytes()); err != nil {
+			logutil.Errorf("LoadColumnsData %s error: %v", location.String(), err.Error())
 			release()
 			release = nil
 			return

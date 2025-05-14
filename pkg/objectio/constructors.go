@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -77,18 +78,18 @@ func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
 	if !toVec.NeedDup() && toVec.Allocated() > 0 {
 		logutil.Warn("input vector should be readonly or empty")
 	}
-	header := DecodeIOEntryHeader(buf)
-	if header.Type != IOET_ColData {
-		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
+	entryHeader := DecodeIOEntryHeader(buf)
+	if entryHeader.Type != IOET_ColData {
+		return moerr.NewInternalError(context.Background(), fmt.Sprintf("invalid object meta: %s", entryHeader.String()))
 	}
-	if header.Version == IOET_ColumnData_V2 {
+	if entryHeader.Version == IOET_ColumnData_V2 {
 		err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
 		return
-	} else if header.Version == IOET_ColumnData_V1 {
+	} else if entryHeader.Version == IOET_ColumnData_V1 {
 		err = toVec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
 		return
 	}
-	panic(fmt.Sprintf("invalid column data: %s", header.String()))
+	panic(fmt.Sprintf("invalid column data: %s", entryHeader.String()))
 }
 
 func MustObjectMeta(buf []byte) ObjectMeta {
