@@ -41,12 +41,12 @@ func LoadColumnsData(
 ) (dataMeta objectio.ObjectDataMeta, release func(), err error) {
 	name := location.Name().UnsafeString()
 	var meta objectio.ObjectMeta
-	var ioVectors fileservice.IOVector
+	var vectors fileservice.IOVector
 	if meta, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs); err != nil {
 		return
 	}
 	dataMeta = meta.MustGetMeta(objectio.SchemaData)
-	if ioVectors, err = objectio.ReadOneBlock(
+	if vectors, err = objectio.ReadOneBlock(
 		ctx,
 		&dataMeta,
 		name,
@@ -60,11 +60,11 @@ func LoadColumnsData(
 		return
 	}
 	release = func() {
-		objectio.ReleaseIOVector(&ioVectors)
+		objectio.ReleaseIOVector(&vectors)
 		cacheVectors.Free(m)
 	}
 	for i := range columns {
-		if err = objectio.MustVectorTo(&cacheVectors[i], ioVectors.Entries[i].CachedData.Bytes()); err != nil {
+		if err = objectio.MustVectorTo(&cacheVectors[i], vectors.Entries[i].CachedData.Bytes()); err != nil {
 			logutil.Errorf("LoadColumnsData %s error: %v", location.String(), err.Error())
 			release()
 			release = nil

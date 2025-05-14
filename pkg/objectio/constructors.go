@@ -73,23 +73,23 @@ func Decode(buf []byte) (any, error) {
 }
 
 // NOTE: hack way to get vector
-func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
+func MustVectorTo(vec *vector.Vector, buf []byte) (err error) {
 	// check if vector cannot be freed
-	if !toVec.NeedDup() && toVec.Allocated() > 0 {
+	if !vec.NeedDup() && vec.Allocated() > 0 {
 		logutil.Warn("input vector should be readonly or empty")
 	}
-	entryHeader := DecodeIOEntryHeader(buf)
-	if entryHeader.Type != IOET_ColData {
-		return moerr.NewInternalError(context.Background(), fmt.Sprintf("invalid object meta: %s", entryHeader.String()))
+	header := DecodeIOEntryHeader(buf)
+	if header.Type != IOET_ColData {
+		return moerr.NewInternalError(context.Background(), fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
-	if entryHeader.Version == IOET_ColumnData_V2 {
-		err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
+	if header.Version == IOET_ColumnData_V2 {
+		err = vec.UnmarshalBinary(buf[IOEntryHeaderSize:])
 		return
-	} else if entryHeader.Version == IOET_ColumnData_V1 {
-		err = toVec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
+	} else if header.Version == IOET_ColumnData_V1 {
+		err = vec.UnmarshalBinaryV1(buf[IOEntryHeaderSize:])
 		return
 	}
-	panic(fmt.Sprintf("invalid column data: %s", entryHeader.String()))
+	panic(fmt.Sprintf("invalid column data: %s", header.String()))
 }
 
 func MustObjectMeta(buf []byte) ObjectMeta {
