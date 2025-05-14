@@ -110,9 +110,9 @@ func TestBuildMulti(t *testing.T) {
 
 	fmt.Printf("load model from files\n")
 	// load index
-	search.Indexes = make([]*HnswSearchIndex, len(indexes))
+	search.Indexes = make([]*HnswModel, len(indexes))
 	for i, idx := range indexes {
-		sidx := &HnswSearchIndex{}
+		sidx := &HnswModel{}
 		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
 		require.Nil(t, err)
 
@@ -173,7 +173,7 @@ func TestBuildIndex(t *testing.T) {
 	idxcfg.Usearch.Metric = 100
 	//tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
-	idx, err := NewHnswBuildIndex("abc-0", idxcfg, 1, MaxIndexCapacity)
+	idx, err := NewHnswModelForBuild("abc-0", idxcfg, 1, MaxIndexCapacity)
 	require.Nil(t, err)
 
 	empty, err := idx.Empty()
@@ -273,9 +273,9 @@ func TestBuildSingleThread(t *testing.T) {
 
 	fmt.Printf("load model from files\n")
 	// load index
-	search.Indexes = make([]*HnswSearchIndex, len(indexes))
+	search.Indexes = make([]*HnswModel, len(indexes))
 	for i, idx := range indexes {
-		sidx := &HnswSearchIndex{}
+		sidx := &HnswModel{}
 		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
 		require.Nil(t, err)
 
