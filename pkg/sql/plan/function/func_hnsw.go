@@ -28,7 +28,7 @@ import (
 
 var hnswsync_runsql = sqlexec.RunSql
 
-func hnswsync(proc *process.Process, db string, tbl string, cdc *vectorindex.HnswCdc[float32]) error {
+func hnswsync(proc *process.Process, db string, tbl string, cdc *vectorindex.VectorIndexCdc[float32]) error {
 
 	b, err := json.Marshal(cdc)
 	if err != nil {
@@ -97,7 +97,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is null")
 		}
 
-		var cdc vectorindex.HnswCdc[float32]
+		var cdc vectorindex.VectorIndexCdc[float32]
 		err := json.Unmarshal([]byte(cdcstr), &cdc)
 		if err != nil {
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is not json object")

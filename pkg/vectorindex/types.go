@@ -99,32 +99,32 @@ type RuntimeConfig struct {
 	Probe uint
 }
 
-type HnswCdc[T types.RealNumbers] struct {
-	Start string            `json:"start"`
-	End   string            `json:"end"`
-	Data  []HnswCdcEntry[T] `json:"cdc"`
+type VectorIndexCdc[T types.RealNumbers] struct {
+	Start string                   `json:"start"`
+	End   string                   `json:"end"`
+	Data  []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
-func NewHnswCdc[T types.RealNumbers]() *HnswCdc[T] {
-	return &HnswCdc[T]{
-		Data: make([]HnswCdcEntry[T], 0, 100),
+func NewVectorIndexCdc[T types.RealNumbers]() *VectorIndexCdc[T] {
+	return &VectorIndexCdc[T]{
+		Data: make([]VectorIndexCdcEntry[T], 0, 100),
 	}
 }
 
-func (h *HnswCdc[T]) Reset() {
+func (h *VectorIndexCdc[T]) Reset() {
 	h.Data = h.Data[:0]
 }
 
-func (h *HnswCdc[T]) Empty() bool {
+func (h *VectorIndexCdc[T]) Empty() bool {
 	return len(h.Data) == 0
 }
 
-func (h *HnswCdc[T]) Full() bool {
+func (h *VectorIndexCdc[T]) Full() bool {
 	return len(h.Data) >= cap(h.Data)
 }
 
-func (h *HnswCdc[T]) Insert(key int64, v []T) {
-	e := HnswCdcEntry[T]{
+func (h *VectorIndexCdc[T]) Insert(key int64, v []T) {
+	e := VectorIndexCdcEntry[T]{
 		Type: CDC_INSERT,
 		PKey: key,
 		Vec:  v,
@@ -133,8 +133,8 @@ func (h *HnswCdc[T]) Insert(key int64, v []T) {
 	h.Data = append(h.Data, e)
 }
 
-func (h *HnswCdc[T]) Upsert(key int64, v []T) {
-	e := HnswCdcEntry[T]{
+func (h *VectorIndexCdc[T]) Upsert(key int64, v []T) {
+	e := VectorIndexCdcEntry[T]{
 		Type: CDC_UPSERT,
 		PKey: key,
 		Vec:  v,
@@ -143,8 +143,8 @@ func (h *HnswCdc[T]) Upsert(key int64, v []T) {
 	h.Data = append(h.Data, e)
 }
 
-func (h *HnswCdc[T]) Delete(key int64) {
-	e := HnswCdcEntry[T]{
+func (h *VectorIndexCdc[T]) Delete(key int64) {
+	e := VectorIndexCdcEntry[T]{
 		Type: CDC_DELETE,
 		PKey: key,
 	}
@@ -152,7 +152,7 @@ func (h *HnswCdc[T]) Delete(key int64) {
 	h.Data = append(h.Data, e)
 }
 
-func (h *HnswCdc[T]) ToJson() (string, error) {
+func (h *VectorIndexCdc[T]) ToJson() (string, error) {
 
 	b, err := json.Marshal(h)
 	if err != nil {
@@ -161,7 +161,7 @@ func (h *HnswCdc[T]) ToJson() (string, error) {
 	return string(b), nil
 }
 
-type HnswCdcEntry[T types.RealNumbers] struct {
+type VectorIndexCdcEntry[T types.RealNumbers] struct {
 	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
 	PKey int64  `json:"pk"`
 	Vec  []T    `json:"v,omitempty"`

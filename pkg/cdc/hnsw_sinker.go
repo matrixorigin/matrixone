@@ -48,7 +48,7 @@ type hnswSyncSinker[T types.RealNumbers] struct {
 	watermarkUpdater IWatermarkUpdater
 	ar               *ActiveRoutine
 	tableDef         *plan.TableDef
-	cdc              *vectorindex.HnswCdc[T]
+	cdc              *vectorindex.VectorIndexCdc[T]
 	param            vectorindex.HnswCdcParam
 	err              atomic.Value
 
@@ -161,7 +161,7 @@ var NewHnswSyncSinker = func(
 			watermarkUpdater: watermarkUpdater,
 			ar:               ar,
 			tableDef:         tableDef,
-			cdc:              vectorindex.NewHnswCdc[float32](),
+			cdc:              vectorindex.NewVectorIndexCdc[float32](),
 			sqlBufSendCh:     make(chan []byte),
 			pkcol:            pkcol,
 			veccol:           veccol,
@@ -179,7 +179,7 @@ var NewHnswSyncSinker = func(
 			watermarkUpdater: watermarkUpdater,
 			ar:               ar,
 			tableDef:         tableDef,
-			cdc:              vectorindex.NewHnswCdc[float64](),
+			cdc:              vectorindex.NewVectorIndexCdc[float64](),
 			sqlBufSendCh:     make(chan []byte),
 			pkcol:            pkcol,
 			veccol:           veccol,
