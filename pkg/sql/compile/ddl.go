@@ -883,6 +883,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case api.AlterKind_DropColumn:
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
+		case api.AlterKind_ReplaceDef:
+			// TODO: req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)
 		default:
 		}
 		reqs = append(reqs, req)
