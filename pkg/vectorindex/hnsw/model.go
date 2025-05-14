@@ -205,6 +205,16 @@ func (idx *HnswModel) Add(key int64, vec []float32) error {
 	return idx.Index.Add(uint64(key), vec)
 }
 
+// remove key
+func (idx *HnswModel) Remove(key int64) error {
+	return idx.Index.Remove(uint64(key))
+}
+
+// contains key
+func (idx *HnswModel) Contains(key int64) (found bool, err error) {
+	return idx.Index.Contains(uint64(key))
+}
+
 // load chunk from database
 func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
 	var res executor.Result
@@ -249,7 +259,7 @@ func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor
 // 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
 // 4. according to the chunk_id, seek to the offset and write the chunk
 // 5. check the checksum to verify the correctness of the file
-func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64, view bool) error {
 
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
@@ -307,7 +317,11 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 		return err
 	}
 
-	err = usearchidx.Load(fp.Name())
+	if view {
+		err = usearchidx.View(fp.Name())
+	} else {
+		err = usearchidx.Load(fp.Name())
+	}
 	if err != nil {
 		return err
 	}
