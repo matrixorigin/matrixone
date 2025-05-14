@@ -688,7 +688,7 @@ func TestCompaction2(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		t.Log("run ScanInRangePruned")
 		dirty := db.BGCheckpointRunner.GetDirtyCollector().ScanInRangePruned(types.TS{}, types.MaxTs())
-		return dirty.GetTree().Compact()
+		return dirty.GetTree().IsEmpty()
 	})
 	{
 		txn, _ := db.TxnMgr.StartTxn(nil)

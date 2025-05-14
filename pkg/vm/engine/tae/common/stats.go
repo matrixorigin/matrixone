@@ -24,11 +24,13 @@ import (
 )
 
 const (
-	DefaultMinOsizeQualifiedMB   = 90    // MB
-	DefaultMaxOsizeObjMB         = 128   // MB
-	DefaultMinCNMergeSize        = 80000 // MB
-	DefaultCNMergeMemControlHint = 8192  // MB
-	DefaultMaxMergeObjN          = 16
+	DefaultMinOsizeQualifiedMB    = 90 // MB
+	DefaultMinOsizeQualifiedBytes = DefaultMinOsizeQualifiedMB * Const1MBytes
+	DefaultMaxOsizeObjMB          = 128 // MB
+	DefaultMaxOsizeObjBytes       = DefaultMaxOsizeObjMB * Const1MBytes
+	DefaultMinCNMergeSize         = 80000 // MB
+	DefaultCNMergeMemControlHint  = 8192  // MB
+	DefaultMaxMergeObjN           = 16
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20
@@ -52,8 +54,8 @@ var (
 
 func init() {
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
-	RuntimeOsizeRowsQualified.Store(DefaultMinOsizeQualifiedMB * Const1MBytes)
-	RuntimeMaxObjOsize.Store(DefaultMaxOsizeObjMB * Const1MBytes)
+	RuntimeOsizeRowsQualified.Store(DefaultMinOsizeQualifiedBytes)
+	RuntimeMaxObjOsize.Store(DefaultMaxOsizeObjBytes)
 	FlushMemCapacity.Store(20 * Const1MBytes)
 }
 
@@ -70,11 +72,20 @@ type TableCompactStat struct {
 	lastMergeTime time.Time
 }
 
+func NewTableCompactStatWithRandomMergeTime() TableCompactStat {
+	return TableCompactStat{
+		lastMergeTime: time.Now().Add(-30 * time.Minute * time.Duration(rand.Intn(9)+1) / 10),
+	}
+}
+
 func (s *TableCompactStat) Init(maxFlushInterval time.Duration) {
 	s.Lock()
 	defer s.Unlock()
 	if s.flushDeadline.IsZero() {
 		s.resetDeadlineLocked(maxFlushInterval)
+	}
+	if s.lastMergeTime.IsZero() {
+		s.lastMergeTime = time.Now().Add(-30 * time.Minute * time.Duration(rand.Intn(9)+1) / 10)
 	}
 }
 

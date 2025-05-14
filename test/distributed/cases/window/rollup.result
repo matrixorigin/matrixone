@@ -151,7 +151,18 @@ product with rollup
 having
 (product is not null and quarter is not null) or
 (product is null and quarter is null);
-[unknown result because it is related to issue#19984]
+year    quarter    product    total_sales
+null    null    null    22000.00
+2022    null    null    7000.00
+2023    null    null    15000.00
+2022    Q1    Product A    1000.00
+2022    Q1    Product B    1500.00
+2022    Q2    Product A    2000.00
+2022    Q2    Product C    2500.00
+2023    Q1    Product A    3000.00
+2023    Q1    Product B    3500.00
+2023    Q2    Product B    4000.00
+2023    Q2    Product C    4500.00
 select
 year,
 quarter,
@@ -165,7 +176,13 @@ quarter,
 product with rollup
 having
 (product = 'Product A') or (product = 'Product B');
-[unknown result because it is related to issue#19984]
+year    quarter    product    total_sales
+2022    Q1    Product A    1000.00
+2022    Q1    Product B    1500.00
+2022    Q2    Product A    2000.00
+2023    Q1    Product A    3000.00
+2023    Q1    Product B    3500.00
+2023    Q2    Product B    4000.00
 drop table sales;
 drop table if exists orders;
 drop table if exists order_items;
@@ -367,7 +384,15 @@ group by
 j, i with rollup
 having
 (i is not null and j is not null);
-[unknown result because it is related to issue#19984]
+i    j    total
+18446744073709551615    2147483647    123214
+4294967295    2147483647    2
+18446744073709551615    1    2
+2147483647    23289483    123214
+13289392    2    2
+18446744073709551615    23289483    1
+3824    13289392    123215
+2438294    1    2
 drop table uint_64;
 drop table if exists sales;
 create table sales (

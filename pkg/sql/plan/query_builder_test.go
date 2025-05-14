@@ -456,7 +456,7 @@ func TestQueryBuilder_appendAggNode(t *testing.T) {
 	boundHavingList, err := builder.bindHaving(bindCtx, selectClause.Having, NewHavingBinder(builder, bindCtx))
 	require.NoError(t, err)
 
-	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList)
+	nodeID, err = builder.appendAggNode(bindCtx, nodeID, boundHavingList, false)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), nodeID)
 	require.Equal(t, 3, len(builder.qry.Nodes))
