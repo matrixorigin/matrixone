@@ -1744,7 +1744,7 @@ more:
 		}
 		if pempty[i] != OK {
 			fatfl = 0
-			errorf("nonterminal " + nontrst[i].name + " never derives any token string")
+			errorf("nonterminal %s never derives any token string", nontrst[i].name)
 		}
 	}
 
