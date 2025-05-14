@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kmeans
+package config
 
-const DefaultRandSeed = 1
+import (
+	"testing"
+	"time"
 
-type Clusterer interface {
-	InitCentroids() error
-	Cluster() (any, error)
-	SSE() (float64, error)
-}
-
-type InitType uint16
-
-const (
-	Random InitType = iota
-	KmeansPlusPlus
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
+
+func TestWithQuickScanAndLongCKPOpts(t *testing.T) {
+	opts := WithLongScanAndCKPOpts(nil)
+	WithQuickScanCKPAndLongGCOpts(opts, options.WithCatalogGCInterval(time.Millisecond*10))
+}
