@@ -143,11 +143,12 @@ var NewHnswSyncSinker = func(
 	}
 
 	param := vectorindex.HnswCdcParam{
-		MetaTbl:  meta,
-		IndexTbl: storage,
-		DbName:   dbTblInfo.SinkDbName,
-		Table:    dbTblInfo.SinkTblName,
-		Params:   hnswparam,
+		MetaTbl:   meta,
+		IndexTbl:  storage,
+		DbName:    dbTblInfo.SinkDbName,
+		Table:     dbTblInfo.SinkTblName,
+		Params:    hnswparam,
+		Dimension: tableDef.Cols[veccol].Typ.Width,
 	}
 
 	// create sinker
@@ -499,7 +500,7 @@ func (s *hnswSyncSinker[T]) sendSql() error {
 	}
 	// pad extra space at the front and send SQL
 	padding := strings.Repeat(" ", sqlBufReserved)
-	sql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', '%s');", padding, s.param.DbName, s.param.Table, js)
+	sql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', %d, '%s');", padding, s.param.DbName, s.param.Table, s.param.Dimension, js)
 
 	s.sqlBufSendCh <- []byte(sql)
 

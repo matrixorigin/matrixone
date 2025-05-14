@@ -168,11 +168,12 @@ type VectorIndexCdcEntry[T types.RealNumbers] struct {
 }
 
 type HnswCdcParam struct {
-	DbName   string    `json:"db"`
-	Table    string    `json:"table"`
-	MetaTbl  string    `json:"meta"`
-	IndexTbl string    `json:"index"`
-	Params   HnswParam `json:"params"`
+	DbName    string    `json:"db"`
+	Table     string    `json:"table"`
+	MetaTbl   string    `json:"meta"`
+	IndexTbl  string    `json:"index"`
+	Params    HnswParam `json:"params"`
+	Dimension int32     `json:"dimension"`
 }
 
 // nthread == 0, result will return NumCPU - 1

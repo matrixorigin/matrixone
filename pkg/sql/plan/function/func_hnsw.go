@@ -28,13 +28,14 @@ import (
 
 func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 
-	if len(ivecs) != 3 {
-		return moerr.NewInvalidInput(proc.Ctx, "number of arguments != 3")
+	if len(ivecs) != 4 {
+		return moerr.NewInvalidInput(proc.Ctx, "number of arguments != 4")
 	}
 
 	dbVec := vector.GenerateFunctionStrParameter(ivecs[0])
 	tblVec := vector.GenerateFunctionStrParameter(ivecs[1])
-	cdcVec := vector.GenerateFunctionStrParameter(ivecs[2])
+	dimVec := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
+	cdcVec := vector.GenerateFunctionStrParameter(ivecs[3])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		dbname, isnull := dbVec.GetStrValue(i)
@@ -47,6 +48,12 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			return moerr.NewInvalidInput(proc.Ctx, "table name is null")
 
 		}
+
+		dim, isnull := dimVec.GetValue(i)
+		if isnull {
+			return moerr.NewInvalidInput(proc.Ctx, "dimension is null")
+		}
+
 		cdcstr, isnull := cdcVec.GetStrValue(i)
 		if isnull {
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is null")
@@ -58,8 +65,8 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is not json object")
 		}
 		// hnsw sync
-		os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, json=%s\n", dbname, tblname, cdcstr))
-		err = hnsw.CdcSync(proc, string(dbname), string(tblname), &cdc)
+		os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
+		err = hnsw.CdcSync(proc, string(dbname), string(tblname), dim, &cdc)
 		if err != nil {
 			return err
 		}
