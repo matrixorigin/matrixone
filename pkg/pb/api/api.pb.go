@@ -117,6 +117,7 @@ const (
 	AlterKind_UpdatePolicy     AlterKind = 6
 	AlterKind_AddPartition     AlterKind = 7
 	AlterKind_RenameColumn     AlterKind = 8
+	AlterKind_ReplaceDef       AlterKind = 9
 )
 
 var AlterKind_name = map[int32]string{

@@ -190,6 +190,9 @@ func (arg *mergeShowArg) Run() error {
 		if len(answer.Triggers) > 0 {
 			out.WriteString(fmt.Sprintf("\n\ttriggers: %s", answer.Triggers))
 		}
+		if len(answer.BaseTrigger) > 0 {
+			out.WriteString(fmt.Sprintf("\n\tbase trigger: %s", answer.BaseTrigger))
+		}
 		// check object distribution
 		// collect all object stats
 		mergeTable := catalog.ToMergeTable(arg.tbl)
@@ -346,7 +349,7 @@ type mergeTriggerArg struct {
 	l0CPoints  []float64
 
 	tombstoneOneShot bool
-	tombstoneL1Size  uint32
+	tombstoneL1Size  int
 	tombstoneL1Count int
 	tombstoneL2Count int
 }
@@ -401,7 +404,7 @@ func (arg *mergeTriggerArg) PrepareCommand() *cobra.Command {
 	cmd.Flags().IntVar(&arg.l0End, "l0-end", merge.DefaultLayerZeroOpts.End, "l0 end count")
 
 	cmd.Flags().BoolVar(&arg.tombstoneOneShot, "tombstone-oneshot", false, "merge all tombstone objects")
-	cmd.Flags().Uint32Var(&arg.tombstoneL1Size, "tombstone-l1-size", merge.DefaultTombstoneOpts.L1Size, "tombstone l1 size")
+	cmd.Flags().IntVar(&arg.tombstoneL1Size, "tombstone-l1-size", merge.DefaultTombstoneOpts.L1Size, "tombstone l1 size")
 	cmd.Flags().IntVar(&arg.tombstoneL1Count, "tombstone-l1-count", merge.DefaultTombstoneOpts.L1Count, "tombstone l1 count")
 	cmd.Flags().IntVar(&arg.tombstoneL2Count, "tombstone-l2-count", merge.DefaultTombstoneOpts.L2Count, "tombstone l2 count")
 

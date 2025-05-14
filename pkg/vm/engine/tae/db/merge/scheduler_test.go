@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -53,6 +54,12 @@ func (c *dummyCatalogSource) InitSource() iter.Seq[catalog.MergeTable] {
 }
 
 func (c *dummyCatalogSource) SetMergeNotifier(catalog.MergeNotifierOnCatalog) {}
+
+func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func()) {
+	return func() (*batch.Batch, func()) {
+		return nil, func() {}
+	}
+}
 
 type droppedMergeTable struct {
 	catalog.MergeTable
