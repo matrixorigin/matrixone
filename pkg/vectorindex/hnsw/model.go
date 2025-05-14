@@ -47,6 +47,8 @@ type HnswModel struct {
 
 	// for cdc update
 	Dirty bool
+	View  bool
+	Len   uint
 }
 
 // New HnswModel struct
@@ -85,11 +87,13 @@ func (idx *HnswModel) Destroy() error {
 		idx.Index = nil
 	}
 
-	if idx.Saved && len(idx.Path) > 0 {
+	if (idx.Saved || idx.View) && len(idx.Path) > 0 {
 		// remove the file
-		err := os.Remove(idx.Path)
-		if err != nil {
-			return err
+		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
+			err := os.Remove(idx.Path)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -205,11 +209,13 @@ func (idx *HnswModel) Full() (bool, error) {
 
 // add vector to the index
 func (idx *HnswModel) Add(key int64, vec []float32) error {
+	idx.Dirty = true
 	return idx.Index.Add(uint64(key), vec)
 }
 
 // remove key
 func (idx *HnswModel) Remove(key int64) error {
+	idx.Dirty = true
 	return idx.Index.Remove(uint64(key))
 }
 
@@ -264,45 +270,61 @@ func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor
 // 5. check the checksum to verify the correctness of the file
 func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64, view bool) error {
 
+	if idx.Index != nil {
+		return nil
+
+	}
+
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
 
-	// create tempfile for writing
-	fp, err := os.CreateTemp("", "hnswindx")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(fp.Name())
-
-	err = fallocate.Fallocate(fp, 0, idx.FileSize)
-	if err != nil {
-		return err
-	}
-
-	// run streaming sql
-	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
-	go func() {
-		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-		if err != nil {
-			error_chan <- err
-			return
-		}
-	}()
-
-	// incremental load from database
-	sql_closed := false
-	for !sql_closed {
-		sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp)
+	if len(idx.Path) == 0 {
+		// create tempfile for writing
+		fp, err := os.CreateTemp("", "hnswindx")
 		if err != nil {
 			return err
 		}
+
+		// load index to memory
+		defer func() {
+			if !view {
+				// if view == false, remove the file
+				os.Remove(fp.Name())
+			}
+		}()
+
+		err = fallocate.Fallocate(fp, 0, idx.FileSize)
+		if err != nil {
+			fp.Close()
+			return err
+		}
+
+		// run streaming sql
+		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+		go func() {
+			_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
+			if err != nil {
+				error_chan <- err
+				return
+			}
+		}()
+
+		// incremental load from database
+		sql_closed := false
+		for !sql_closed {
+			sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp)
+			if err != nil {
+				fp.Close()
+				return err
+			}
+		}
+
+		idx.Path = fp.Name()
+		fp.Close()
 	}
 
-	// load index to memory
-	fp.Close()
-
 	// check checksum
-	chksum, err := vectorindex.CheckSum(fp.Name())
+	chksum, err := vectorindex.CheckSum(idx.Path)
 	if err != nil {
 		return err
 	}
@@ -321,9 +343,10 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 	}
 
 	if view {
-		err = usearchidx.View(fp.Name())
+		err = usearchidx.View(idx.Path)
+		idx.View = true
 	} else {
-		err = usearchidx.Load(fp.Name())
+		err = usearchidx.Load(idx.Path)
 	}
 	if err != nil {
 		return err
