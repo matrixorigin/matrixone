@@ -23,54 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-var hnswsync_runsql = sqlexec.RunSql
-
-func hnswsync(proc *process.Process, db string, tbl string, cdc *vectorindex.VectorIndexCdc[float32]) error {
-
-	b, err := json.Marshal(cdc)
-	if err != nil {
-		return err
-	}
-	os.Stderr.WriteString(string(b))
-
-	sql := fmt.Sprintf("select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s') and algo='hnsw';",
-		tbl, db)
-
-	res, err := hnswsync_runsql(proc, sql)
-	if err != nil {
-		return err
-	}
-	defer res.Close()
-
-	os.Stderr.WriteString(sql)
-	os.Stderr.WriteString(fmt.Sprintf("\nnumber of batch = %d\n", len(res.Batches)))
-
-	if len(res.Batches) == 0 {
-		return nil
-	}
-
-	bat := res.Batches[0]
-
-	idxtblvec := bat.Vecs[0]
-	algotypevec := bat.Vecs[1]
-	paramvec := bat.Vecs[2]
-	colvec := bat.Vecs[3]
-
-	for i := 0; i < bat.RowCount(); i++ {
-
-		idxtbl := idxtblvec.UnsafeGetStringAt(i)
-		algotyp := algotypevec.UnsafeGetStringAt(i)
-		param := paramvec.UnsafeGetStringAt(i)
-		cname := colvec.UnsafeGetStringAt(i)
-		os.Stderr.WriteString(fmt.Sprintf("idxtbl %s, type %s, param %s, cname %s\n", idxtbl, algotyp, param, cname))
-	}
-
-	return nil
-}
 
 func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 
@@ -105,7 +59,10 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		}
 		// hnsw sync
 		os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, json=%s\n", dbname, tblname, cdcstr))
-		hnsw.CdcSync(proc, string(dbname), string(tblname), &cdc)
+		err = hnsw.CdcSync(proc, string(dbname), string(tblname), &cdc)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
