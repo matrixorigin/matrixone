@@ -49,13 +49,13 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 		}
 
 		// lz4 compress
-		decompressed := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
-		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
+		decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
+		bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
 		if err != nil {
 			return
 		}
-		decompressed = decompressed.Slice(len(bs))
-		return decompressed, nil
+		decompressedData = decompressedData.Slice(len(bs))
+		return decompressedData, nil
 	}
 }
 
