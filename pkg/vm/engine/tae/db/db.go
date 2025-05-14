@@ -106,7 +106,7 @@ type DB struct {
 	BGCheckpointRunner checkpoint.Runner
 	BGFlusher          checkpoint.Flusher
 
-	MergeScheduler *merge.Scheduler
+	MergeScheduler *merge.MergeScheduler
 
 	DiskCleaner *gc2.DiskCleaner
 
@@ -360,6 +360,7 @@ func (db *DB) Close() error {
 			db.ReplayCtl.Stop()
 		}
 		db.TmpFS.Stop()
+		db.MergeScheduler.Stop()
 		db.CronJobs.Reset()
 		db.BGFlusher.Stop()
 		db.BGCheckpointRunner.Stop()
