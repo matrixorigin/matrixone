@@ -44,6 +44,9 @@ type HnswModel struct {
 	// from metadata.  info required for search
 	Timestamp int64
 	Checksum  string
+
+	// for cdc update
+	Dirty bool
 }
 
 // New HnswModel struct
@@ -328,6 +331,21 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 
 	idx.Index = usearchidx
 
+	return nil
+}
+
+// unload
+func (idx *HnswModel) Unload() error {
+	if idx.Index != nil {
+		err := idx.Index.Destroy()
+		if err != nil {
+			return err
+		}
+		// reset variable
+		idx.Index = nil
+		idx.Saved = false
+		idx.Dirty = false
+	}
 	return nil
 }
 
