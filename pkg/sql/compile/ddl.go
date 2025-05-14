@@ -926,6 +926,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			dropColIdx++
 		case api.AlterKind_AddPartition:
 			req = api.NewAddPartitionReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), changePartitionDef)
+		case api.AlterKind_ReplaceDef:
+			// TODO: req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)
 		default:
 		}
 		reqs = append(reqs, req)

@@ -1339,7 +1339,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 
 	// update TableDef
-	tbl.defs = append(tbl.defs, appendDef...)
+	if len(reqs) == 1 && reqs[0].GetKind() == api.AlterKind_ReplaceDef {
+		replaceDef := reqs[0].GetReplaceDef()
+		defs, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
+		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
+		tbl.defs = defs
+		tbl.tableDef = nil
+	} else {
+		tbl.defs = append(tbl.defs, appendDef...)
+	}
 	tbl.tableDef = nil
 	tbl.GetTableDef(ctx)
 

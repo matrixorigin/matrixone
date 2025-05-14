@@ -292,6 +292,7 @@ enum AlterKind {
     UpdatePolicy     = 6;
     AddPartition     = 7;
     RenameColumn     = 8;
+    ReplaceDef       = 9;
 }
 
 message AlterTablePolicy {
@@ -331,6 +332,10 @@ message AlterTableAddPartition {
     plan.PartitionByDef  partition_def  = 1;
 }
 
+message AlterTableReplaceDef {
+    plan.TableDef def    = 1;
+}
+
 message AlterTableDropColumn {
     uint32 logical_idx  = 1;
     uint32 sequence_num = 2;  // used to double check
@@ -350,6 +355,7 @@ message AlterTableReq {
         AlterTablePolicy update_policy       = 9;
         AlterTableAddPartition add_partition = 10;
         AlterTableRenameCol rename_col       = 11;
+        AlterTableReplaceDef replace_def     = 12;
     }
 }
 
