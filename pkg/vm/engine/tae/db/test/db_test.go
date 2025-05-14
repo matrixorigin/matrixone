@@ -10294,9 +10294,8 @@ func TestPersistTransferTable(t *testing.T) {
 	page.Train(transferMap)
 	tae.Runtime.TransferTable.AddPage(page)
 
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	ioVector := fileservice.IOVector{
-		FilePath: name.String(),
+		FilePath: model.GetTransferFileName(),
 	}
 	offset := int64(0)
 	data := page.Marshal()
@@ -10307,7 +10306,11 @@ func TestPersistTransferTable(t *testing.T) {
 	}
 	ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-	err := tae.Runtime.Fs.Write(context.Background(), ioVector)
+	transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&model.AppConfig{Name: "transfer",})
+	if err != nil {
+		return
+	}
+	err = transferFS.Write(context.Background(), ioVector)
 	if err != nil {
 		return
 	}
@@ -10363,9 +10366,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 			page.Train(transferMap)
 			tae.Runtime.TransferTable.AddPage(page)
 
-			name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 			ioVector := fileservice.IOVector{
-				FilePath: name.String(),
+				FilePath: model.GetTransferFileName(),
 			}
 			offset := int64(0)
 			data := page.Marshal()
@@ -10376,7 +10378,11 @@ func TestClearPersistTransferTable(t *testing.T) {
 			}
 			ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-			err := tae.Runtime.Fs.Write(context.Background(), ioVector)
+			transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&model.AppConfig{Name: "transfer",})
+			if err != nil {
+				return
+			}
+			err = transferFS.Write(context.Background(), ioVector)
 			if err != nil {
 				return
 			}
@@ -12126,22 +12132,33 @@ func Test_TmpFileService(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	tae.Runtime.TmpFS.AddApp(&model.AppConfig{
+	getNameFn := func() string {
+		now := time.Now()
+		return fmt.Sprintf("test_%v", now.Format("2006-01-02.15.04.05.000.MST"))
+	}
+	decodeNameFn := func(name string) (time.Time, error) {
+		strs := strings.Split(name, "_")
+		return time.Parse("2006-01-02.15.04.05.000.MST", strs[1])
+	}
+
+	testFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&model.AppConfig{
 		Name: "test",
-		GCFn: func(filePath string, fs fileservice.FileService) {
-			err := fs.Delete(ctx, filePath)
-			assert.NoError(t, err)
-		},
-		TTL: time.Millisecond * 100,
-		NameFunc: func(createTime time.Time) string {
-			return fmt.Sprintf("test_%v", createTime.Format("2006-01-02.15.04.05.MST"))
-		},
-		DecodeNameFunc: func(name string) (createTime time.Time, err error) {
-			strs:=strings.Split(name,"_")
-			createTime, err = time.Parse("2006-01-02.15.04.05.MST", strs[1])
+		GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
+			createTime, err := decodeNameFn(filePath)
+			if err != nil {
+				return
+			}
+			if time.Since(createTime) > time.Millisecond*100 {
+				neesGC = true
+				if err = fs.Delete(context.Background(), filePath); err != nil {
+					return
+				}
+				return
+			}
 			return
 		},
 	})
+	assert.NoError(t, err)
 
 	data := []byte("test")
 	ioEntry := fileservice.IOEntry{
@@ -12149,32 +12166,33 @@ func Test_TmpFileService(t *testing.T) {
 		Size:   int64(len(data)),
 		Data:   data,
 	}
-	_, err := tae.Runtime.TmpFS.Write(
+	err = testFS.Write(
 		ctx,
-		"test",
 		fileservice.IOVector{
-			FilePath: "test",
+			FilePath: getNameFn(),
 			Entries:  []fileservice.IOEntry{ioEntry},
 		},
 	)
 	assert.NoError(t, err)
-	files, err := tae.Runtime.TmpFS.ListFiles(ctx, "test")
-	assert.NoError(t, err)
-	t.Log(files)
+	listFn := func() []string {
+		entries := testFS.List(ctx, "")
+		files := make([]string, 0)
+		for entry, err := range entries {
+			assert.NoError(t, err)
+			files = append(files, entry.Name)
+		}
+		return files
+	}
+
+	files := listFn()
 	assert.Equal(t, 1, len(files))
-	// assert.Equal(t, "tmp/test/test_2025-05-14.11.34.35", files[0])
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			files, err := tae.Runtime.TmpFS.ListFiles(ctx, "test")
-			if err!=nil{
-				return false
-			}
+			files := listFn()
 			return len(files) == 0
 		},
 	)
-	files, err = tae.Runtime.TmpFS.ListFiles(ctx, "test")
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(files))
+	assert.Equal(t, 0, len(listFn()))
 
 }

@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"path"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +43,8 @@ var (
 	ttl      = 5 * time.Second
 	diskTTL  = 5 * time.Minute
 	ttlLatch sync.RWMutex
+
+	backgroundGCTTL = 10 * time.Minute
 )
 
 func SetTTL(t time.Duration) {
@@ -83,17 +85,51 @@ type TransferHashPage struct {
 	hashmap     atomic.Pointer[api.TransferMap]
 	path        Path
 	isTransient bool
-	fs          *TmpFileService
+	fs          fileservice.FileService
 	ttl         time.Duration
 	diskTTL     time.Duration
 }
 
+func GetTransferFileName() string {
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	now := time.Now()
+	return fmt.Sprintf("%v_%v", now.Format("2006-01-02.15.04.05.MST"), name.String())
+}
+
+func DecodeTransferFileName(name string) (time.Time, error) {
+	strs := strings.Split(name, "_")
+	createTime, err := time.Parse("2006-01-02.15.04.05.MST", strs[0])
+	return createTime, err
+}
+
 func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
 
+	transferFS, err := fs.GetOrCreateApp(
+		&AppConfig{
+			Name: "transfer",
+			GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
+				createTime, err := DecodeTransferFileName(filePath)
+				if err != nil {
+					return
+				}
+				if time.Since(createTime) > backgroundGCTTL {
+					neesGC = true
+					if err = fs.Delete(context.Background(), filePath); err != nil {
+						return
+					}
+					return
+				}
+				return
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
 	page := &TransferHashPage{
 		id:          id,
 		isTransient: isTransient,
-		fs:          fs,
+		fs:          transferFS,
 		ttl:         ttl,
 		diskTTL:     diskTTL,
 		objects:     createdObjIDs,
@@ -274,7 +310,7 @@ func (page *TransferHashPage) loadTable() *api.TransferMap {
 	ctx := context.Background()
 	ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseLoadTable)
 	defer cancel()
-	err := page.fs.Read(ctx, TransferDir, &ioVector)
+	err := page.fs.Read(ctx, &ioVector)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
 		logutil.Errorf("[TransferPage] read persist table %v: %v", page.path.Name, err)
@@ -317,9 +353,8 @@ func (page *TransferHashPage) IsPersist() bool {
 }
 
 func InitTransferPageIO() *fileservice.IOVector {
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	return &fileservice.IOVector{
-		FilePath: path.Join("transfer", "transfer-"+name.String()),
+		FilePath: GetTransferFileName(),
 	}
 }
 
