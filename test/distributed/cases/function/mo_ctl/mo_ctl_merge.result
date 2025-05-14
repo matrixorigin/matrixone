@@ -5,9 +5,9 @@ a int primary key,
 b varchar(10)
 );
 
-select mo_ctl('dn', 'inspect', 'policy -r 0 -m 0');
-mo_ctl(dn, inspect, policy -r 0 -m 0)
-\nmsg: (*) maxMergeObjN: 0, maxOsizeObj: 128MB, minOsizeQualified: 0MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nauto merge is disabled
+select mo_ctl('dn', 'inspect', 'merge switch off');
+mo_ctl(dn, inspect, merge switch off)
+\nmsg: merge is disabled for table (*)\n\nauto merge is disabled
 insert into t1 values (100, 'a');
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
 mo_ctl(dn, flush, mo_ctl_merge.t1)
@@ -240,6 +240,6 @@ rows_cnt
 select rows_cnt from metadata_scan('mo_ctl_merge.%!%p3%!%p_table_01', 'col1') g;
 rows_cnt
 2
-select mo_ctl('dn', 'inspect', 'policy');
-mo_ctl(dn, inspect, policy)
-\nmsg: (*) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 90MB, offloadToCnSize: 80000MB, hints: [Auto]\n\ngeneral setting has been refreshed
+select mo_ctl('dn', 'inspect', 'merge switch on');
+mo_ctl(dn, inspect, merge switch on)
+\nmsg: merge is enabled for table (*)\n\nauto merge is enabled
