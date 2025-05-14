@@ -1,17 +1,14 @@
-FROM ubuntu:22.04 AS builder
+FROM matrixorigin/golang:1.24-ubuntu22.04 AS builder
 
 
 # Install some utilities used for debugging or by startup script
 RUN apt-get update && apt-get install -y \
-    golang-1.23 \
     build-essential \
     dnsutils \
     curl \
     git \
     cmake \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-ENV PATH ${PATH}:/usr/lib/go-1.23/bin/
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
