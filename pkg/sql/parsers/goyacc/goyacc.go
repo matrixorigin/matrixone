@@ -616,7 +616,7 @@ outer:
 				}
 				j = chfind(2, tokname)
 				if j >= NTBASE {
-					lerrorf(ruleline, "nonterminal "+nontrst[j-NTBASE].name+" illegal after %%prec")
+					lerrorf(ruleline, "nonterminal %s illegal after %%prec", nontrst[j-NTBASE].name)
 				}
 				levprd[nprod] = toklev[j]
 				t = gettok()
