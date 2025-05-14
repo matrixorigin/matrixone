@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -104,7 +105,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		}
 		// hnsw sync
 		os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, json=%s\n", dbname, tblname, cdcstr))
-		hnswsync(proc, string(dbname), string(tblname), &cdc)
+		hnsw.CdcSync(proc, string(dbname), string(tblname), &cdc)
 	}
 
 	return nil
