@@ -12117,3 +12117,64 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	assert.NoError(t, err)
 	defer bat2.Clean(common.DebugAllocator)
 }
+
+func Test_TmpFileService(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.TmpFSGCInterval = time.Millisecond * 10
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	tae.Runtime.TmpFS.AddApp(&model.AppConfig{
+		Name: "test",
+		GCFn: func(filePath string, fs fileservice.FileService) {
+			err := fs.Delete(ctx, filePath)
+			assert.NoError(t, err)
+		},
+		TTL: time.Millisecond * 100,
+		NameFunc: func(createTime time.Time) string {
+			return fmt.Sprintf("test_%v", createTime.Format("2006-01-02.15.04.05.MST"))
+		},
+		DecodeNameFunc: func(name string) (createTime time.Time, err error) {
+			strs:=strings.Split(name,"_")
+			createTime, err = time.Parse("2006-01-02.15.04.05.MST", strs[1])
+			return
+		},
+	})
+
+	data := []byte("test")
+	ioEntry := fileservice.IOEntry{
+		Offset: 0,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	_, err := tae.Runtime.TmpFS.Write(
+		ctx,
+		"test",
+		fileservice.IOVector{
+			FilePath: "test",
+			Entries:  []fileservice.IOEntry{ioEntry},
+		},
+	)
+	assert.NoError(t, err)
+	files, err := tae.Runtime.TmpFS.ListFiles(ctx, "test")
+	assert.NoError(t, err)
+	t.Log(files)
+	assert.Equal(t, 1, len(files))
+	// assert.Equal(t, "tmp/test/test_2025-05-14.11.34.35", files[0])
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			files, err := tae.Runtime.TmpFS.ListFiles(ctx, "test")
+			if err!=nil{
+				return false
+			}
+			return len(files) == 0
+		},
+	)
+	files, err = tae.Runtime.TmpFS.ListFiles(ctx, "test")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(files))
+
+}

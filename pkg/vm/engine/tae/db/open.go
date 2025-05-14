@@ -141,8 +141,8 @@ func Open(
 		db.Opts.LocalFs,
 		 func(fn func(context.Context)) model.CancelableJob {
 		return tasks.NewCancelableCronJob(
-			"TMP-FILE-GC",
-				model.TmpFileGCInterval,
+				"TMP-FILE-GC",
+				opts.TmpFSGCInterval,
 				fn,
 				true,
 				1,

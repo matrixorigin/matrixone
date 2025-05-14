@@ -16,9 +16,11 @@ package model
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"path"
+	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -43,11 +45,11 @@ type TmpFileService struct {
 }
 
 type AppConfig struct {
-	name           string
-	gcFunc         func(filePath string, fs fileservice.FileService)
+	Name           string
+	GCFn         func(filePath string, fs fileservice.FileService)
 	TTL            time.Duration
-	nameFunc       func(createTime time.Time) string
-	decodeNameFunc func(name string) (createTime time.Time, err error)
+	NameFunc       func(createTime time.Time) string
+	DecodeNameFunc func(name string) (createTime time.Time, err error)
 }
 
 func NewTmpFileService(fs fileservice.FileService, jobFactory func(fn func(context.Context)) CancelableJob) *TmpFileService {
@@ -64,11 +66,46 @@ func (fs *TmpFileService) Start() {
 func (fs *TmpFileService) Stop() {
 	fs.gcJob.Stop()
 }
+func (fs *TmpFileService) AddApp(appConfig *AppConfig) error {
+	fs.apps[appConfig.Name] = appConfig
+	return nil
+}
+
+
+func (fs *TmpFileService) gc(ctx context.Context) {
+	for _, appConfig := range fs.apps {
+		appPath := path.Join(TmpFileDir, appConfig.Name)
+		entries := fs.fs.List(ctx, appPath)
+		gcedFiles := make([]string, 0)
+		for entry, err := range entries {
+			if err != nil {
+				logutil.Warnf("TMP-FILE-GC failed, err: %v", err)
+				continue
+			}
+			createTime, err := appConfig.DecodeNameFunc(entry.Name)
+			if err != nil {
+				logutil.Warnf("TMP-FILE-GC gc failed, err: %v", err)
+				continue
+			}
+			if time.Since(createTime) > appConfig.TTL {
+				filePath := path.Join(appPath, entry.Name)
+				appConfig.GCFn(filePath, fs.fs)
+				gcedFiles = append(gcedFiles, filePath)
+			}
+		}
+		logutil.Info(
+			"TMP-FILE-GC",
+			zap.String("app", appConfig.Name),
+			zap.String("gced_files", strings.Join(gcedFiles, ",")),
+		)
+	}
+}
+
 func (fs *TmpFileService) Write(
 	ctx context.Context, appName string, ioVector fileservice.IOVector,
 ) (fullName string, err error) {
 	createTime := time.Now()
-	fileName := fs.apps[appName].nameFunc(createTime)
+	fileName := fs.apps[appName].NameFunc(createTime)
 	appPath := path.Join(TmpFileDir, appName)
 	fullName = path.Join(appPath, fileName)
 	ioVector.FilePath = fullName
@@ -77,41 +114,6 @@ func (fs *TmpFileService) Write(
 	}
 	return
 }
-func (fs *TmpFileService) AddApp(appConfig *AppConfig) error {
-	fs.apps[appConfig.name] = appConfig
-	return nil
-}
-
-
-func (fs *TmpFileService) gc(ctx context.Context) {
-	for _, appConfig := range fs.apps {
-		appPath := path.Join(TmpFileDir, appConfig.name)
-		entries := fs.fs.List(ctx, appPath)
-		gcedFiles := make([]string, 0)
-		for entry, err := range entries {
-			if err != nil {
-				logutil.Warnf("TMP-FILE-GC failed, err: %v", err)
-				continue
-			}
-			createTime, err := appConfig.decodeNameFunc(entry.Name)
-			if err != nil {
-				logutil.Warnf("TMP-FILE-GC gc failed, err: %v", err)
-				continue
-			}
-			if time.Since(createTime) > appConfig.TTL {
-				filePath := path.Join(appPath, entry.Name)
-				appConfig.gcFunc(filePath, fs.fs)
-				gcedFiles = append(gcedFiles, filePath)
-			}
-		}
-		logutil.Info(
-			"TMP-FILE-GC",
-			zap.String("app", appConfig.name),
-			zap.Int("gced_files", len(gcedFiles)),
-		)
-	}
-}
-
 func (fs *TmpFileService) Read(ctx context.Context, appName string, ioVector *fileservice.IOVector) (err error) {
 	return fs.fs.Read(ctx, ioVector)
 }
