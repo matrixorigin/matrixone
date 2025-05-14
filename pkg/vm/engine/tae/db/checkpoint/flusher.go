@@ -478,7 +478,7 @@ func (flusher *flushImpl) collectTableMemUsage(entry *logtail.DirtyTreeEntry, la
 	sizevisitor := new(model.BaseTreeVisitor)
 	var totalSize int
 	_, end := entry.GetTimeRange()
-	sizevisitor.TableFn = func(did, tid uint64, _, _ int) error {
+	sizevisitor.TableFn = func(did, tid uint64) error {
 		db, err := flusher.catalogCache.GetDatabaseByID(did)
 		if err != nil {
 			panic(err)
@@ -657,7 +657,6 @@ func (flusher *flushImpl) ForceFlushWithInterval(
 ) (err error) {
 	makeRequest := func() *FlushRequest {
 		tree := flusher.sourcer.ScanInRangePruned(types.TS{}, ts)
-		tree.GetTree().Compact()
 		if tree.IsEmpty() {
 			return nil
 		}
@@ -719,7 +718,6 @@ func (flusher *flushImpl) FlushTable(
 	}
 	makeRequest := func() *FlushRequest {
 		tree := flusher.sourcer.ScanInRangePruned(types.TS{}, ts)
-		tree.GetTree().Compact()
 		tableTree := tree.GetTree().GetTable(tableID)
 		if tableTree == nil {
 			return nil
