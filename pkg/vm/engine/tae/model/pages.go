@@ -113,7 +113,10 @@ func GetTransferFS(fs *TmpFileService) (fileservice.FileService, error) {
 				}
 				if time.Since(createTime) > backgroundGCTTL {
 					neesGC = true
-					if err = fs.Delete(context.Background(), filePath); err != nil {
+					ctx := context.Background()
+					ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
+					defer cancel()
+					if err = fs.Delete(ctx, filePath); err != nil {
 						return
 					}
 					return

@@ -12124,13 +12124,16 @@ func Test_TmpFileService(t *testing.T) {
 		Size:   int64(len(data)),
 		Data:   data,
 	}
+	filePath := getNameFn()
 	err = testFS.Write(
 		ctx,
 		fileservice.IOVector{
-			FilePath: getNameFn(),
+			FilePath: name,
 			Entries:  []fileservice.IOEntry{ioEntry},
 		},
 	)
+	assert.NoError(t, err)
+	_, err = testFS.StatFile(ctx, filePath)
 	assert.NoError(t, err)
 	listFn := func() []string {
 		entries := testFS.List(ctx, "")
