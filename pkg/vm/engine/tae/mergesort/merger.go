@@ -173,6 +173,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	defer releaseF()
 
 	transferMaps := m.host.GetTransferMaps()
+	bigblk := false
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -206,8 +207,11 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		m.stats.blkRowCnt++
 		m.stats.objRowCnt++
 		m.stats.mergedRowCnt++
+		if m.stats.blkRowCnt%100 == 0 {
+			bigblk = m.buffer.Size() > int(m.stats.targetObjSize)*3/2
+		}
 		// write new block
-		if m.stats.blkRowCnt == int(m.rowPerBlk) {
+		if m.stats.blkRowCnt == int(m.rowPerBlk) || bigblk {
 			m.stats.blkRowCnt = 0
 			m.stats.objBlkCnt++
 
@@ -217,11 +221,12 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 				return err
 			}
+			m.stats.writtenBytes = m.writer.GetWrittenOriginalSize()
 			// force clean
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if m.stats.needNewObject() {
+			if m.stats.needNewObject() || bigblk {
 				// write object and reset writer
 				if err := m.syncObject(ctx); err != nil {
 					return err
@@ -230,6 +235,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 				m.stats.objBlkCnt = 0
 				m.stats.objRowCnt = 0
 				m.stats.objCnt++
+				bigblk = false
 			}
 		}
 

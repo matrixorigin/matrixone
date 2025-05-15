@@ -17,8 +17,10 @@ package catalog
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -157,7 +159,7 @@ func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (ob
 	defer iter2.Release()
 	for ok := iter2.Last(); ok; ok = iter2.Prev() {
 		obj := iter2.Item()
-		if obj.IsCommitted() && (obj.CreatedAt.LT(&dedupedTS) || obj.DeleteBefore(dedupedTS)) {
+		if obj.IsCommitted() && obj.CreatedAt.LT(&dedupedTS) && obj.DeleteBefore(dedupedTS) {
 			// In committed zone, all the objects are sorted by max(CreatedAt, DeletedAt), so we can break here
 			break
 		}
@@ -230,6 +232,51 @@ func (entry *TableEntry) MakeDataVisibleObjectIt(txn txnif.TxnReader) *VisibleCo
 
 func (entry *TableEntry) WaitDataObjectCommitted(ts types.TS) {
 	entry.dataObjects.WaitUntilCommitted(ts)
+}
+
+func (entry *TableEntry) IsTableTailFlushed(start, end types.TS) (bool, *ObjectEntry) {
+	ready, notFlushed := IsTableTailFlushed(entry, start, end, false)
+	if !ready {
+		return false, notFlushed
+	}
+	return IsTableTailFlushed(entry, start, end, true)
+}
+
+func IsTableTailFlushed(table *TableEntry, start, end types.TS, isTombstone bool) (bool, *ObjectEntry) {
+	var it btree.IterG[*ObjectEntry]
+	if isTombstone {
+		table.WaitTombstoneObjectCommitted(end)
+		it = table.MakeTombstoneObjectIt()
+	} else {
+		table.WaitDataObjectCommitted(end)
+		it = table.MakeDataObjectIt()
+	}
+	earlybreak := false
+	// some entries shared the same timestamp with end, so we need to seek to the next one
+	key := &ObjectEntry{EntryMVCCNode: EntryMVCCNode{DeletedAt: end.Next()}}
+	var ok bool
+	if ok = it.Seek(key); !ok {
+		ok = it.Last()
+	}
+	for ; ok; ok = it.Prev() {
+		if earlybreak {
+			break
+		}
+		obj := it.Item()
+		if !obj.IsAppendable() || obj.IsDEntry() || obj.CreatedAt.GT(&end) {
+			continue
+		}
+		// check only appendable C entries
+		if obj.CreatedAt.LT(&start) {
+			earlybreak = true
+		}
+		// the C entry has no counterpart D entry or the D entry is not committed yet
+		if next := obj.GetNextVersion(); next == nil || !next.IsCommitted() {
+			return false, obj
+		}
+	}
+
+	return true, nil
 }
 
 func (entry *TableEntry) CreateObject(
@@ -435,18 +482,23 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 		}
 	}
 
-	// slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
-	// 	zmA := a.SortKeyZoneMap()
-	// 	zmB := b.SortKeyZoneMap()
+	slices.SortFunc(objEntries, func(a, b *ObjectEntry) int {
+		zmA := a.SortKeyZoneMap()
+		zmB := b.SortKeyZoneMap()
+		if !zmA.IsInited() {
+			return -1
+		}
+		if !zmB.IsInited() {
+			return 1
+		}
+		c := zmA.CompareMin(zmB)
+		if c != 0 {
+			return c
+		}
+		return zmA.CompareMax(zmB)
+	})
 
-	// 	c := zmA.CompareMin(zmB)
-	// 	if c != 0 {
-	// 		return c
-	// 	}
-	// 	return zmA.CompareMax(zmB)
-	// })
-
-	if level > common.PPL0 {
+	if level > common.PPL0 && level < common.PPL4 {
 		for _, objEntry := range objEntries {
 			_ = w.WriteByte('\n')
 			_, _ = w.WriteString(objEntry.ID().String())
@@ -455,6 +507,20 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int, isTom
 
 			if w.Len() > 8*common.Const1MBytes {
 				w.WriteString("\n...(truncated for too long, more than 8 MB)")
+				break
+			}
+		}
+		if stat.ObjectCnt > 0 {
+			w.WriteByte('\n')
+		}
+	}
+
+	if level == common.PPL4 {
+		for _, objEntry := range objEntries {
+			_ = w.WriteByte('\n')
+			_, _ = w.WriteString(objEntry.ID().ShortStringEx() + " " + base64.StdEncoding.EncodeToString(objEntry.ObjectStats[:]))
+			if w.Len() > 64*common.Const1MBytes {
+				w.WriteString("\n...(truncated for too long, more than 64 MB)")
 				break
 			}
 		}
@@ -685,9 +751,7 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 
 // deprecated: handle column change in CN
 // hasColumnChangedSchema checks if add or drop columns on previous schema
-func (entry *TableEntry) isColumnChangedInSchema() bool {
-	entry.RLock()
-	defer entry.RUnlock()
+func (entry *TableEntry) isColumnChangedInSchemaLocked() bool {
 	node := entry.GetLatestNodeLocked()
 	toCommitted := node.BaseNode.Schema
 	ver := toCommitted.Version
@@ -696,6 +760,12 @@ func (entry *TableEntry) isColumnChangedInSchema() bool {
 		return false
 	}
 	return toCommitted.Extra.ColumnChanged
+}
+
+func (entry *TableEntry) isColumnChangedInSchema() bool {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.isColumnChangedInSchemaLocked()
 }
 
 func (entry *TableEntry) FreezeAppend() {

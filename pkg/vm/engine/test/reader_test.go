@@ -1384,20 +1384,23 @@ func Test_SimpleReader(t *testing.T) {
 	}
 	bat1.SetRowCount(bat1.Vecs[0].Length())
 
-	w, err := colexec.NewS3TombstoneWriter()
-	require.NoError(t, err)
-	defer w.Free(mp)
-	w.StashBatch(proc, bat1)
-	_, stats, err := w.SortAndSync(proc.Ctx, proc)
-	require.NoError(t, err)
-	require.Equal(t, uint32(20), stats.Rows())
-	t.Logf("stats: %s", stats.String())
-
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
+	w := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+	defer w.Close(mp)
+
+	err = w.Write(proc.Ctx, proc.Mp(), bat1)
+	require.NoError(t, err)
+
+	stats, err := w.Sync(proc.Ctx, proc.Mp())
+	require.NoError(t, err)
+	require.Equal(t, 1, len(stats))
+	require.Equal(t, uint32(20), stats[0].Rows())
+	t.Logf("stats: %s", stats[0].String())
+
 	r := readutil.SimpleTombstoneObjectReader(
-		context.Background(), fs, &stats, timestamp.Timestamp{},
+		context.Background(), fs, &stats[0], timestamp.Timestamp{},
 		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
@@ -1428,7 +1431,7 @@ func Test_SimpleReader(t *testing.T) {
 
 	r = readutil.SimpleMultiObjectsReader(
 		context.Background(), fs,
-		[]objectio.ObjectStats{stats, stats}, timestamp.Timestamp{},
+		[]objectio.ObjectStats{stats[0], stats[0]}, timestamp.Timestamp{},
 		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{objectio.RowidType, pkType},
@@ -1462,4 +1465,80 @@ func Test_SimpleReader(t *testing.T) {
 	done, err = r.Read(context.Background(), bat1.Attrs, nil, mp, bat2)
 	require.NoError(t, err)
 	require.True(t, done)
+}
+
+func TestGetStats(t *testing.T) {
+	var (
+		err error
+		//mp           *mpool.MPool
+		accountId    = catalog.System_Account
+		tableName    = "test_stats_table"
+		databaseName = "test_stats_database"
+
+		primaryKeyIdx int = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	// mock a schema with 4 columns and the 4th column as primary key
+	// the first column is the 9th column in the predefined columns in
+	// the mock function. Here we exepct the type of the primary key
+	// is types.T_char or types.T_varchar
+	schema := catalog2.MockSchemaEnhanced(4, primaryKeyIdx, 9)
+	schema.Name = tableName
+
+	{
+
+		disttaeEngine, taeEngine, rpcAgent, _ = testutil.CreateEngines(
+			ctx,
+			testutil.TestOptions{},
+			t,
+			testutil.WithDisttaeEngineCommitWorkspaceThreshold(mpool.MB*2),
+			testutil.WithDisttaeEngineInsertEntryMaxCount(10000),
+		)
+		defer func() {
+			disttaeEngine.Close(ctx)
+			taeEngine.Close(true)
+			rpcAgent.Close()
+		}()
+
+		ctx, cancel = context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+		require.NoError(t, err)
+
+	}
+
+	{
+		txn, err := taeEngine.StartTxn()
+		require.NoError(t, err)
+
+		database, _ := txn.GetDatabase(databaseName)
+		rel, _ := database.GetRelationByName(schema.Name)
+
+		rowsCnt := 8192 * 2
+		bat := catalog2.MockBatch(schema, rowsCnt)
+		err = rel.Append(ctx, bat)
+		require.Nil(t, err)
+
+		err = txn.Commit(context.Background())
+		require.Nil(t, err)
+
+	}
+	//flush
+	testutil2.CompactBlocks(t, accountId, taeEngine.GetDB(), databaseName, schema, false)
+
+	{
+		_, rel, _, _ := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		stats, err := rel.Stats(ctx, true)
+		require.Nil(t, err)
+		require.Equal(t, 2, int(stats.GetBlockNumber()))
+	}
+
 }

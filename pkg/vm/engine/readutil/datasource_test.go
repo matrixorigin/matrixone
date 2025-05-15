@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -67,21 +68,22 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 
 	bat.SetRowCount(bat.Vecs[0].Length())
 
-	writer, err := colexec.NewS3TombstoneWriter()
-	assert.Nil(t, err)
+	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
 
-	writer.StashBatch(proc, bat)
-	_, ss, err := writer.SortAndSync(ctx, proc)
-	assert.Nil(t, err)
+	err := writer.Write(ctx, proc.Mp(), bat)
+	require.NoError(t, err)
 
-	require.Equal(t, len(rowIds)/2, int(ss.Rows()))
+	ss, err := writer.Sync(ctx, proc.Mp())
+	assert.Nil(t, err)
+	require.Equal(t, 1, len(ss))
+	require.Equal(t, len(rowIds)/2, int(ss[0].Rows()))
 
 	tData := NewEmptyTombstoneData()
 	for i := len(rowIds) / 2; i < len(rowIds)-1; i++ {
 		require.NoError(t, tData.AppendInMemory(rowIds[i]))
 	}
 
-	require.NoError(t, tData.AppendFiles(ss))
+	require.NoError(t, tData.AppendFiles(ss[0]))
 
 	relData := NewBlockListRelationData(0)
 	require.NoError(t, relData.AttachTombstones(tData))
@@ -157,4 +159,96 @@ func TestObjListRelData4(t *testing.T) {
 	}()
 	objlistRelData := &ObjListRelData{}
 	objlistRelData.AppendShardID(1)
+}
+
+func TestFastApplyDeletesByRowIds(t *testing.T) {
+	//rowIdStrs := []string{
+	//	"0196a9cb-3fc6-7245-a9ad-51f37d9541cb-0-0-2900",
+	//	"0196a9cb-4184-775b-a4cb-2047eace6e7c-0-0-1022",
+	//	"0196a9cb-4184-775b-a4cb-2047eace6e7c-0-1-4345",
+	//	"0196a9cb-44fd-7631-94e7-abbe8df59685-0-0-100",
+	//	"0196a9cb-44fd-7631-94e7-abbe8df59685-0-1-302",
+	//	"0196a9cc-7718-7810-8ac3-d6acbd662256-0-2-1231",
+	//	"0196a9cc-7718-7810-8ac3-d6acbd662256-0-2-2834",
+	//	"0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-6305",
+	//	"0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-6994",
+	//}
+	//
+	//	0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0
+	//	3967, 3988, 4068, 4111, 4207, 4328, 4515, 5007, 5051, 5492, 5777, 5988, 6273, 6305, 6564, 7459, 7676, 7849,
+
+	var deletedRowIds []types.Rowid
+	bid0 := types.BuildTestBlockid(1, 0)
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 2900))
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 1022))
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 4345))
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 100))
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 302))
+
+	bid1 := types.BuildTestBlockid(2, 0)
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid1, 1231))
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid1, 2834))
+
+	bid2 := types.BuildTestBlockid(3, 0)
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid2, 6305))
+	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid2, 6994))
+
+	checkBid := bid2
+	leftRows := []int64{
+		3967, 3988, 4068, 4111, 4207, 4328,
+		4515, 5007, 5051, 5492, 5777, 5988, 6273,
+		6305, 6564, 7459, 7676, 7849,
+	}
+
+	FastApplyDeletesByRowIds(&checkBid, &leftRows, nil, deletedRowIds, true)
+
+	idx := slices.Index(leftRows, 6305)
+	require.Equal(t, -1, idx)
+}
+
+func TestFastApplyDeletesByRowOffsets(t *testing.T) {
+	foo := func(leftRowsLen, offsetsLen int) {
+		var leftRows []int64
+		var offsets []int64
+
+		limit := max(leftRowsLen, offsetsLen)
+
+		mm := make(map[int64]struct{})
+
+		for range 10 {
+			for range leftRowsLen {
+				leftRows = append(leftRows, int64(rand.Intn(limit)))
+			}
+
+			for range offsetsLen {
+				x := int64(rand.Intn(limit))
+				mm[x] = struct{}{}
+				offsets = append(offsets, x)
+			}
+
+			slices.Sort(leftRows)
+
+			leftRows = slices.Compact(leftRows)
+
+			ll := len(leftRows)
+			for j := len(leftRows) - 1; j > 0; j-- {
+				if leftRows[j] == 0 {
+					ll--
+				}
+			}
+			leftRows = leftRows[:ll]
+
+			FastApplyDeletesByRowOffsets(&leftRows, nil, offsets)
+
+			for j := range leftRows {
+				_, ok := mm[leftRows[j]]
+				require.False(t, ok, fmt.Sprintf("\nhit: %v\noffsets: %v\nleftRows: %v;", leftRows[j], offsets, leftRows))
+			}
+		}
+	}
+
+	foo(1, 1)
+	foo(100, 100)
+	foo(10, 300)
+	foo(300, 10)
 }

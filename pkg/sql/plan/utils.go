@@ -364,8 +364,23 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr) *plan.Expr {
 
 		condMap := make(map[string]int)
 
+		relPos := int32(-1)
 		for _, cond := range rightConds {
 			condMap[cond.String()] = JoinSideRight
+			args := cond.GetF().GetArgs()
+			if len(args) != 2 {
+				continue
+			}
+			if col := args[0].GetCol(); col != nil {
+				if relPos == -1 {
+					relPos = col.RelPos
+				} else if relPos != col.RelPos {
+					relPos = -2
+				}
+			}
+		}
+		if relPos >= 0 {
+			return expr
 		}
 
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
@@ -641,7 +656,7 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in", "cast":
+		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "prefix_between", "in", "prefix_in", "cast":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
 			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec, *plan.Expr_List, *plan.Expr_T:
 				return extractColRefInFilter(exprImpl.F.Args[0])
@@ -1919,6 +1934,12 @@ func ExprType2Type(typ *plan.Type) types.Type {
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
 }
 
+func PkColByTableDef(tblDef *plan.TableDef) *plan.ColDef {
+	pkColIdx := tblDef.Name2ColIndex[tblDef.Pkey.PkeyColName]
+	pkCol := tblDef.Cols[pkColIdx]
+	return pkCol
+}
+
 func FormatExprs(exprs []*plan.Expr) string {
 	var w bytes.Buffer
 	for _, expr := range exprs {
@@ -1956,10 +1977,14 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 		out.WriteString(fmt.Sprintf("%sExpr_Vec(len=%d)", prefix, t.Vec.Len))
 	case *plan.Expr_Fold:
 		out.WriteString(fmt.Sprintf("%sExpr_Fold(id=%d)", prefix, t.Fold.Id))
+	case *plan.Expr_List:
+		out.WriteString(fmt.Sprintf("%sExpr_List(len=%d)", prefix, len(t.List.List)))
+		for _, arg := range t.List.List {
+			doFormatExpr(arg, out, depth+1)
+		}
 	default:
 		out.WriteString(fmt.Sprintf("%sExpr_Unknown(%s)", prefix, expr.String()))
 	}
-	out.WriteString(fmt.Sprintf("%sExpr_Selectivity(%v)", prefix, expr.Selectivity))
 }
 
 // databaseIsValid checks whether the database exists or not.

@@ -30,7 +30,7 @@ RUN go mod download
 
 COPY . .
 
-RUN make build
+RUN make clean && make build
 
 FROM ubuntu:22.04
 

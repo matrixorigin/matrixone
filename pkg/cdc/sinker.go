@@ -19,15 +19,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"go.uber.org/zap"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/mysql"
@@ -61,12 +64,24 @@ var NewSinker = func(
 	sendSqlTimeout string,
 ) (Sinker, error) {
 	//TODO: remove console
-	if sinkUri.SinkTyp == ConsoleSink {
+	if sinkUri.SinkTyp == CDCSinkType_Console {
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
-	sink, err := NewMysqlSink(sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port, retryTimes, retryDuration, sendSqlTimeout)
-	if err != nil {
+	var (
+		err  error
+		sink Sink
+
+		doRecord bool
+	)
+
+	if tableDef != nil {
+		doRecord, _ = objectio.CDCRecordTxnInjected(tableDef.DbName, tableDef.Name)
+	}
+
+	if sink, err = NewMysqlSink(
+		sinkUri.User, sinkUri.Password, sinkUri.Ip, sinkUri.Port,
+		retryTimes, retryDuration, sendSqlTimeout, doRecord); err != nil {
 		return nil, err
 	}
 
@@ -85,7 +100,7 @@ var NewSinker = func(
 	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceTblName, dbTblInfo.SinkTblName)
 	_ = sink.Send(ctx, ar, []byte(padding+createSql), false)
 
-	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength, sinkUri.SinkTyp == MatrixoneSink), nil
+	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength, sinkUri.SinkTyp == CDCSinkType_MO), nil
 }
 
 var _ Sinker = new(consoleSinker)
@@ -149,6 +164,8 @@ func (s *consoleSinker) SendDummy() {}
 func (s *consoleSinker) Error() error {
 	return nil
 }
+
+func (s *consoleSinker) ClearError() {}
 
 func (s *consoleSinker) Reset() {}
 
@@ -309,8 +326,8 @@ var NewMysqlSinker = func(
 	s.preRowType = NoOp
 	s.preSqlBufLen = sqlBufReserved
 
-	// err
-	s.err = atomic.Value{}
+	// reset err
+	s.ClearError()
 
 	s.isMO = isMO
 	return s
@@ -322,37 +339,37 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 		logutil.Infof("cdc mysqlSinker(%v).Run: end", s.dbTblInfo)
 	}()
 
-	for sqlBuf := range s.sqlBufSendCh {
+	for sqlBuffer := range s.sqlBufSendCh {
 		// have error, skip
-		if s.err.Load() != nil {
+		if s.Error() != nil {
 			continue
 		}
 
-		if bytes.Equal(sqlBuf, dummy) {
+		if bytes.Equal(sqlBuffer, dummy) {
 			// dummy sql, do nothing
-		} else if bytes.Equal(sqlBuf, begin) {
+		} else if bytes.Equal(sqlBuffer, begin) {
 			if err := s.mysql.SendBegin(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendBegin, err: %v", s.dbTblInfo, err)
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
-		} else if bytes.Equal(sqlBuf, commit) {
+		} else if bytes.Equal(sqlBuffer, commit) {
 			if err := s.mysql.SendCommit(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendCommit, err: %v", s.dbTblInfo, err)
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
-		} else if bytes.Equal(sqlBuf, rollback) {
+		} else if bytes.Equal(sqlBuffer, rollback) {
 			if err := s.mysql.SendRollback(ctx); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) SendRollback, err: %v", s.dbTblInfo, err)
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
 		} else {
-			if err := s.mysql.Send(ctx, ar, sqlBuf, true); err != nil {
-				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+			if err := s.mysql.Send(ctx, ar, sqlBuffer, true); err != nil {
+				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuffer[sqlBufReserved:])
 				// record error
-				s.err.Store(err)
+				s.SetError(err)
 			}
 		}
 	}
@@ -408,8 +425,6 @@ func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) {
 		s.sinkSnapshot(ctx, data.checkpointBat)
 	} else if data.outputTyp == OutputTypeTail {
 		s.sinkTail(ctx, data.insertAtmBatch, data.deleteAtmBatch)
-	} else {
-		s.err.Store(moerr.NewInternalError(ctx, fmt.Sprintf("cdc mysqlSinker unexpected output type: %v", data.outputTyp)))
 	}
 }
 
@@ -430,11 +445,26 @@ func (s *mysqlSinker) SendDummy() {
 }
 
 func (s *mysqlSinker) Error() error {
-	if val := s.err.Load(); val == nil {
-		return nil
-	} else {
-		return val.(error)
+	if errPtr := s.err.Load().(*error); *errPtr != nil {
+		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
+			return moerr.ConvertGoError(context.Background(), *errPtr)
+		} else {
+			if moErr == nil {
+				return nil
+			}
+			return moErr
+		}
 	}
+	return nil
+}
+
+func (s *mysqlSinker) SetError(err error) {
+	s.err.Store(&err)
+}
+
+func (s *mysqlSinker) ClearError() {
+	var err *moerr.Error
+	s.SetError(err)
 }
 
 func (s *mysqlSinker) Reset() {
@@ -444,7 +474,7 @@ func (s *mysqlSinker) Reset() {
 	s.sqlBuf = s.sqlBufs[s.curBufIdx]
 	s.preRowType = NoOp
 	s.preSqlBufLen = sqlBufReserved
-	s.err = atomic.Value{}
+	s.ClearError()
 }
 
 func (s *mysqlSinker) Close() {
@@ -477,19 +507,19 @@ func (s *mysqlSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
 	for i := 0; i < batchRowCount(bat); i++ {
 		// step1: get row from the batch
 		if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 			return
 		}
 
 		// step2: transform rows into sql parts
 		if err = s.getInsertRowBuf(ctx); err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 			return
 		}
 
 		// step3: append to sqlBuf, send sql if sqlBuf is full
 		if err = s.appendSqlBuf(InsertRow); err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 			return
 		}
 	}
@@ -514,14 +544,14 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 		// compare ts, ignore pk
 		if insertItem.Ts.LT(&deleteItem.Ts) {
 			if err = s.sinkInsert(ctx, insertIter); err != nil {
-				s.err.Store(err)
+				s.SetError(err)
 				return
 			}
 			// get next item
 			insertIterHasNext = insertIter.Next()
 		} else {
 			if err = s.sinkDelete(ctx, deleteIter); err != nil {
-				s.err.Store(err)
+				s.SetError(err)
 				return
 			}
 			// get next item
@@ -532,7 +562,7 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 	// output the rest of insert iterator
 	for insertIterHasNext {
 		if err = s.sinkInsert(ctx, insertIter); err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 			return
 		}
 		// get next item
@@ -542,12 +572,13 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 	// output the rest of delete iterator
 	for deleteIterHasNext {
 		if err = s.sinkDelete(ctx, deleteIter); err != nil {
-			s.err.Store(err)
+			s.SetError(err)
 			return
 		}
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
+	s.tryFlushSqlBuf()
 }
 
 func (s *mysqlSinker) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
@@ -605,6 +636,26 @@ func (s *mysqlSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRow
 		return
 	}
 
+	return
+}
+
+func (s *mysqlSinker) tryFlushSqlBuf() (err error) {
+	if s.isNonEmptyInsertStmt() {
+		s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
+		s.preSqlBufLen = len(s.sqlBuf)
+	}
+	if s.isNonEmptyDeleteStmt() {
+		s.sqlBuf = appendBytes(s.sqlBuf, s.deleteSuffix)
+		s.preSqlBufLen = len(s.sqlBuf)
+	}
+	// send it to downstream
+	s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
+	s.curBufIdx ^= 1
+	s.sqlBuf = s.sqlBufs[s.curBufIdx]
+
+	s.preSqlBufLen = sqlBufReserved
+	s.sqlBuf = s.sqlBuf[:s.preSqlBufLen]
+	s.preRowType = NoOp
 	return
 }
 
@@ -725,6 +776,12 @@ type mysqlSink struct {
 	retryTimes    int
 	retryDuration time.Duration
 	timeout       string
+
+	debugTxnRecorder struct {
+		doRecord bool
+		txnSQL   []string
+		sqlBytes int
+	}
 }
 
 var NewMysqlSink = func(
@@ -733,6 +790,7 @@ var NewMysqlSink = func(
 	retryTimes int,
 	retryDuration time.Duration,
 	timeout string,
+	doRecord bool,
 ) (Sink, error) {
 	ret := &mysqlSink{
 		user:          user,
@@ -743,8 +801,53 @@ var NewMysqlSink = func(
 		retryDuration: retryDuration,
 		timeout:       timeout,
 	}
+
+	ret.debugTxnRecorder.doRecord = doRecord
+
 	err := ret.connect()
 	return ret, err
+}
+
+func (s *mysqlSink) recordTxnSQL(sqlBuf []byte) {
+	if !s.debugTxnRecorder.doRecord {
+		return
+	}
+
+	s.debugTxnRecorder.sqlBytes += len(sqlBuf)
+	s.debugTxnRecorder.txnSQL = append(
+		s.debugTxnRecorder.txnSQL, string(sqlBuf[sqlBufReserved:]))
+}
+
+func (s *mysqlSink) infoRecordedTxnSQLs(err error) {
+	if !s.debugTxnRecorder.doRecord {
+		return
+	}
+
+	if len(s.debugTxnRecorder.txnSQL) == 0 {
+		return
+	}
+
+	if s.debugTxnRecorder.sqlBytes <= mpool.MB {
+		buf := bytes.Buffer{}
+		for _, sqlStr := range s.debugTxnRecorder.txnSQL {
+			buf.WriteString(sqlStr)
+			buf.WriteString("; ")
+		}
+
+		logutil.Info("CDC-RECORDED-TXN",
+			zap.Error(err),
+			zap.String("details", buf.String()))
+	}
+
+	s.resetRecordedTxn()
+}
+
+func (s *mysqlSink) resetRecordedTxn() {
+	if !s.debugTxnRecorder.doRecord {
+		return
+	}
+	s.debugTxnRecorder.sqlBytes = 0
+	s.debugTxnRecorder.txnSQL = s.debugTxnRecorder.txnSQL[:0]
 }
 
 // Send must leave 5 bytes at the head of sqlBuf
@@ -754,6 +857,8 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 		Value: sqlBuf,
 	}
 
+	s.recordTxnSQL(sqlBuf)
+
 	f := func() (err error) {
 		if s.tx != nil {
 			_, err = s.tx.Exec(fakeSql, reuseQueryArg)
@@ -762,6 +867,9 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 		}
 
 		if err != nil {
+
+			s.infoRecordedTxnSQLs(err)
+
 			logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:min(len(sqlBuf), sqlPrintLen)])
 			//logutil.Errorf("cdc mysqlSink Send failed, err: %v, sql: %s", err, sqlBuf[sqlBufReserved:])
 		}
@@ -776,11 +884,13 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 }
 
 func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
+	s.resetRecordedTxn()
 	s.tx, err = s.conn.BeginTx(ctx, nil)
 	return err
 }
 
 func (s *mysqlSink) SendCommit(_ context.Context) error {
+	s.resetRecordedTxn()
 	defer func() {
 		s.tx = nil
 	}()
@@ -788,6 +898,7 @@ func (s *mysqlSink) SendCommit(_ context.Context) error {
 }
 
 func (s *mysqlSink) SendRollback(_ context.Context) error {
+	s.resetRecordedTxn()
 	defer func() {
 		s.tx = nil
 	}()
@@ -799,6 +910,8 @@ func (s *mysqlSink) Close() {
 		_ = s.conn.Close()
 		s.conn = nil
 	}
+
+	s.debugTxnRecorder.txnSQL = nil
 }
 
 func (s *mysqlSink) connect() (err error) {

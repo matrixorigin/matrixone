@@ -15,46 +15,96 @@
 package moarray
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
-	"gonum.org/v1/gonum/mat"
-	"math"
+	"gonum.org/v1/gonum/blas/blas32"
+	"gonum.org/v1/gonum/blas/blas64"
 )
 
 // These functions are exposed externally via SQL API.
 
 func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return nil, err
+	if len(v1) != len(v2) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	vec[0].AddVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0])
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
+		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
+		data := make([]T, len(v1))
+		f32 := any(data).([]float32)
+		ret := blas32.Vector{N: len(v1), Inc: 1, Data: f32}
+		blas32.Copy(_v1, ret)
+		blas32.Axpy(1, _v2, ret)
+		return data, nil
+	case []float64:
+		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
+		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
+		data := make([]T, len(v1))
+		f64 := any(data).([]float64)
+		ret := blas64.Vector{N: len(v1), Inc: 1, Data: f64}
+		blas64.Copy(_v1, ret)
+		blas64.Axpy(1, _v2, ret)
+		return data, nil
+	default:
+		panic("Add type not supported")
+
+	}
 }
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return nil, err
+	if len(v1) != len(v2) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	vec[0].SubVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0])
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
+		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
+		data := make([]T, len(v1))
+		f32 := any(data).([]float32)
+		ret := blas32.Vector{N: len(v1), Inc: 1, Data: f32}
+		blas32.Copy(_v1, ret)
+		blas32.Axpy(-1, _v2, ret)
+		return data, nil
+	case []float64:
+		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
+		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
+		data := make([]T, len(v1))
+		f64 := any(data).([]float64)
+		ret := blas64.Vector{N: len(v1), Inc: 1, Data: f64}
+		blas64.Copy(_v1, ret)
+		blas64.Axpy(-1, _v2, ret)
+		return data, nil
+	default:
+		panic("Subtract type not supported")
+
+	}
 }
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return nil, err
+	if len(v1) != len(v2) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	vec[0].MulElemVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0])
+	ret := make([]T, len(v1))
+
+	for i := range v1 {
+		ret[i] = v1[i] * v2[i]
+	}
+	return ret, nil
 }
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
+	if len(v1) != len(v2) {
+		return nil, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+
 	// pre-check for division by zero
 	for i := 0; i < len(v2); i++ {
 		if v2[i] == 0 {
@@ -62,13 +112,11 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 		}
 	}
 
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return nil, err
+	ret := make([]T, len(v1))
+	for i := range v1 {
+		ret[i] = v1[i] / v2[i]
 	}
-
-	vec[0].DivElemVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0])
+	return ret, nil
 }
 
 // Compare returns an integer comparing two arrays/vectors lexicographically.
@@ -100,25 +148,32 @@ func Compare[T types.RealNumbers](v1, v2 []T) int {
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return 0, err
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	return mat.Dot(vec[0], vec[1]), nil
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
+		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
+		return -blas32.DDot(_v1, _v2), nil
+	case []float64:
+		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
+		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
+		return -blas64.Dot(_v1, _v2), nil
+	default:
+		panic("InnerProduct type not supported")
+
+	}
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	if len(v1) != len(v2) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
-	var sumOfSquares T
-	var difference T
-	for i := range v1 {
-		difference = v1[i] - v2[i]
-		sumOfSquares += difference * difference
-	}
-	return math.Sqrt(float64(sumOfSquares)), nil
+
+	ret, err := metric.L2Distance[T](v1, v2)
+	return float64(ret), err
 }
 
 // L2DistanceSq returns the squared L2 distance between two vectors.
@@ -127,47 +182,62 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	if len(v1) != len(v2) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
-	var sumOfSquares T
-	var difference T
-	for i := range v1 {
-		difference = v1[i] - v2[i]
-		sumOfSquares += difference * difference
-	}
-	return float64(sumOfSquares), nil
+
+	ret, err := metric.L2DistanceSq[T](v1, v2)
+	return float64(ret), err
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	cosineSimilarity, err := CosineSimilarity[T](v1, v2)
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
+
+	cosine, err := CosineSimilarity[T](v1, v2)
 	if err != nil {
 		return 0, err
 	}
 
-	return 1 - cosineSimilarity, nil
+	return float64(1 - cosine), nil
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
-
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return 0, err
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	dotProduct := mat.Dot(vec[0], vec[1])
+	var dot, normV1, normV2 float64
 
-	normVec1 := mat.Norm(vec[0], 2)
-	normVec2 := mat.Norm(vec[1], 2)
+	switch any(v1).(type) {
+	case []float32:
+		_v1 := blas32.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float32)}
+		_v2 := blas32.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float32)}
 
-	if normVec1 == 0 || normVec2 == 0 {
-		return 0, moerr.NewInternalErrorNoCtx("cosine_similarity: one of the vectors is zero")
+		dot = float64(blas32.Dot(_v1, _v2))
+
+		normV1 = float64(blas32.Nrm2(_v1))
+		normV2 = float64(blas32.Nrm2(_v2))
+
+	case []float64:
+		_v1 := blas64.Vector{N: len(v1), Inc: 1, Data: any(v1).([]float64)}
+		_v2 := blas64.Vector{N: len(v2), Inc: 1, Data: any(v2).([]float64)}
+
+		dot = blas64.Dot(_v1, _v2)
+
+		normV1 = blas64.Nrm2(_v1)
+		normV2 = blas64.Nrm2(_v2)
 	}
 
-	cosineSimilarity := dotProduct / (normVec1 * normVec2)
+	if normV1 == 0 || normV2 == 0 {
+		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
+	}
 
-	// Handle precision issues. Clamp the cosine_similarity to the range [-1, 1].
-	if cosineSimilarity > 1.0 {
-		cosineSimilarity = 1.0
-	} else if cosineSimilarity < -1.0 {
-		cosineSimilarity = -1.0
+	cosine := dot / (normV1 * normV2)
+
+	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
+	if cosine > 1.0 {
+		cosine = 1.0
+	} else if cosine < -1.0 {
+		cosine = -1.0
 	}
 
 	// NOTE: Downcast the float64 cosine_similarity to float32 and check if it is
@@ -200,14 +270,15 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	//+---------------------------------------------------------------------------+
 	// 3. We only need to handle the case for 1.0 and -1.0 with float32 precision.
 	//    Rest of the cases can have float64 precision.
-	cosineSimilarityF32 := float32(cosineSimilarity)
-	if cosineSimilarityF32 == 1 {
-		cosineSimilarity = 1
-	} else if cosineSimilarityF32 == -1 {
-		cosineSimilarity = -1
+
+	cosinef32 := float32(cosine)
+	if cosinef32 == 1 {
+		cosine = 1
+	} else if cosinef32 == -1 {
+		cosine = -1
 	}
 
-	return cosineSimilarity, nil
+	return cosine, nil
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
@@ -237,35 +308,48 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 
 // L1Norm returns l1 distance to origin.
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
-	vec := ToGonumVector[T](v)
-
-	return mat.Norm(vec, 1), nil
+	switch any(v).(type) {
+	case []float32:
+		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
+		return float64(blas32.Asum(_v)), nil
+	case []float64:
+		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
+		return blas64.Asum(_v), nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("L1Norm type not supported")
+	}
 }
 
 // L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
-	vec := ToGonumVector[T](v)
-
-	return mat.Norm(vec, 2), nil
+	switch any(v).(type) {
+	case []float32:
+		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
+		return float64(blas32.Nrm2(_v)), nil
+	case []float64:
+		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
+		return blas64.Nrm2(_v), nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtx("L2Norm type not supported")
+	}
 }
 
 func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T, error) {
-	vec := ToGonumVector[T](v)
+
+	ret := make([]T, len(v))
+
 	switch operation {
 	case "+", "-":
 		//TODO: optimize this in future.
-		scalarVec := make([]float64, vec.Len())
 		if operation == "+" {
-			for i := range scalarVec {
-				scalarVec[i] = scalar
+			for i := range v {
+				ret[i] = v[i] + T(scalar)
 			}
 		} else {
-			for i := range scalarVec {
-				scalarVec[i] = -scalar
+			for i := range v {
+				ret[i] = v[i] - T(scalar)
 			}
 		}
-		scalarDenseVec := mat.NewVecDense(vec.Len(), scalarVec)
-		vec.AddVec(vec, scalarDenseVec)
 	case "*", "/":
 		var scale float64
 		if operation == "/" {
@@ -276,11 +360,21 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T
 		} else {
 			scale = scalar
 		}
-		vec.ScaleVec(scale, vec)
+
+		for i := range v {
+			ret[i] = v[i] * T(scale)
+		}
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("scale_vector: invalid operation")
 	}
-	return ToMoArray[T](vec)
+
+	// check overflow
+	for i := range ret {
+		if math.IsInf(float64(ret[i]), 0) {
+			return nil, moerr.NewInternalErrorNoCtx("vector contains infinity values")
+		}
+	}
+	return ret, nil
 }
 
 /* ------------ [END] Performance critical functions. ------- */

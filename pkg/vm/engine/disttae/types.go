@@ -146,7 +146,9 @@ var (
 	_ client.Workspace = (*Transaction)(nil)
 )
 
-var GcCycle = 10 * time.Second
+var (
+	GcCycle = 10 * time.Second
+)
 
 type DNStore = metadata.TNService
 
@@ -311,9 +313,8 @@ type Transaction struct {
 
 	idGen IDGenerator
 
-	// interim incremental rowid
-	rowId [6]uint32
-	segId types.Uuid
+	currentRowId types.Rowid
+
 	// use to cache opened snapshot tables by current txn.
 	tableCache *sync.Map
 
@@ -353,9 +354,9 @@ type Transaction struct {
 		lastTransferred types.TS
 		timestamps      []timestamp.Timestamp
 		pendingTransfer bool
-
-		//workerPool *ants.Pool
 	}
+
+	compactWorker *ants.Pool
 
 	//the start time of first statement in a txn.
 	start time.Time
@@ -429,8 +430,6 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 }
 
 func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
-	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
 		proc:         proc,
 		engine:       eng,
@@ -440,15 +439,6 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		databaseOps:  newDbOps(),
 		tableOps:     newTableOps(),
 		tablesInVain: make(map[uint64]int),
-		rowId: [6]uint32{
-			types.DecodeUint32(bytes[0:4]),
-			types.DecodeUint32(bytes[4:8]),
-			types.DecodeUint32(bytes[8:12]),
-			types.DecodeUint32(bytes[12:16]),
-			0,
-			0,
-		},
-		segId: *id,
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
@@ -461,11 +451,9 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
 	}
 
-	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
-
 	txn.readOnly.Store(true)
-	// transaction's local segment for raw batch.
-	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
 	return txn
 }
 

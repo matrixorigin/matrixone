@@ -278,6 +278,17 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	return err
 }
 
+func (e *TestEngine) AllCheckpointsFinished() bool {
+	if e.Wal.GetPenddingCnt() != 0 {
+		return false
+	}
+	ckp := e.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+	if ckp == nil {
+		return true
+	}
+	return ckp.IsFinished()
+}
+
 func (e *TestEngine) Truncate() {
 	txn, db := e.GetTestDB()
 	_, err := db.TruncateByName(e.schema.Name)
@@ -396,14 +407,14 @@ func writeIncrementalCheckpoint(
 	c *catalog.Catalog,
 	checkpointSize int,
 	fs fileservice.FileService,
-) (objectio.Location, objectio.Location) {
+) objectio.Location {
 	factory := logtail.IncrementalCheckpointDataFactory(start, end, checkpointSize, fs)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
-	cnLocation, tnLocation, _, err := data.WriteTo(ctx, fs)
+	location, _, err := data.Sync(ctx, fs)
 	assert.NoError(t, err)
-	return cnLocation, tnLocation
+	return location
 }
 
 func checkTNCheckpointData(
@@ -567,7 +578,7 @@ func CheckCheckpointReadWrite(
 ) {
 	start := types.TS{}
 	ctx := context.Background()
-	location, _ := writeIncrementalCheckpoint(ctx, t, start, end, c, checkpointSize, e.Opts.Fs)
+	location := writeIncrementalCheckpoint(ctx, t, start, end, c, checkpointSize, e.Opts.Fs)
 
 	checkTNCheckpointData(ctx, t, location, end, e)
 	p := &catalog.LoopProcessor{}

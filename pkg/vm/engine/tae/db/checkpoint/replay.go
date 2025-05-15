@@ -21,8 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -37,6 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"go.uber.org/zap"
+
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 const (
@@ -54,10 +58,7 @@ type CkpReplayer struct {
 	dir        string
 	r          *runner
 	ckpEntries []*CheckpointEntry
-	ckpReader  []*logtail.CKPReader
-	emptyFile  []*CheckpointEntry
-
-	globalCkpIdx int
+	ckpReader  *CheckpointReader
 
 	readDuration, applyDuration       time.Duration
 	readCount, applyCount, totalCount int
@@ -73,6 +74,15 @@ func (c *CkpReplayer) Close() {
 	}
 }
 
+// readCheckpointEntries reads the checkpoint entries from the meta files.
+// It returns the checkpoint entries and the max global timestamp.
+// The checkpoint entries are sorted by the start timestamp.
+// steps:
+// 1. list all the meta files under the checkpoint directory `ckp/`
+// 2. read the compacted entries from the meta files
+// 3. read the global entries from the meta files
+// 4. sort the entries by the start timestamp
+// 5. return the entries and the max global timestamp
 func (c *CkpReplayer) readCheckpointEntries() (
 	allEntries []*CheckpointEntry, maxGlobalTS types.TS, err error,
 ) {
@@ -217,6 +227,7 @@ func (c *CkpReplayer) readCheckpointEntries() (
 			},
 		)
 		for _, entry := range allEntries {
+			entry.sid = c.r.rt.SID()
 			logutil.Info(
 				"Read-CKP-META",
 				zap.String("entry", entry.String()),
@@ -241,58 +252,11 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 
 	// step2. read checkpoint data, output is the ckpdatas
 
-	c.ckpReader = make([]*logtail.CKPReader, len(c.ckpEntries))
+	c.ckpReader = NewCheckpointReader(ctx, c.ckpEntries, maxGlobalEnd, common.CheckpointAllocator, r.rt.Fs)
 
-	readfn := func(i int, readType uint16) (err error) {
-		checkpointEntry := c.ckpEntries[i]
-		checkpointEntry.sid = r.rt.SID()
-		if checkpointEntry.end.LT(&maxGlobalEnd) {
-			return
-		}
-		var err2 error
-		if readType == PrefetchData {
-			c.ckpReader[i].PrefetchData(checkpointEntry.sid)
-		} else if readType == PrefetchMetaIdx {
-			c.readCount++
-			c.ckpReader[i] = logtail.NewCKPReader(
-				checkpointEntry.GetVersion(), checkpointEntry.GetLocation(), common.CheckpointAllocator, r.rt.Fs,
-			)
-			ioutil.Prefetch(checkpointEntry.sid, r.rt.Fs, checkpointEntry.GetLocation())
-		} else if readType == ReadMetaIdx {
-			if err2 = c.ckpReader[i].ReadMeta(ctx); err2 != nil {
-				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
-				c.emptyFile = append(c.emptyFile, checkpointEntry)
-			}
-		}
-		return nil
+	if err = c.ckpReader.Prepare(ctx); err != nil {
+		return
 	}
-
-	for _, entry := range c.ckpEntries {
-		if err = ioutil.PrefetchMeta(
-			r.rt.SID(), r.rt.Fs, entry.GetLocation(),
-		); err != nil {
-			return
-		}
-	}
-
-	for i := 0; i < len(c.ckpEntries); i++ {
-		if err = readfn(i, PrefetchMetaIdx); err != nil {
-			return
-		}
-	}
-
-	for i := 0; i < len(c.ckpEntries); i++ {
-		if err = readfn(i, ReadMetaIdx); err != nil {
-			return
-		}
-	}
-
-	for i := 0; i < len(c.ckpEntries); i++ {
-		if err = readfn(i, PrefetchData); err != nil {
-			return
-		}
-	}
-
 	c.readDuration += time.Since(t0)
 
 	// step3. Add entries to the runner
@@ -301,7 +265,7 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 			continue
 		}
 		if entry.IsGlobal() {
-			c.globalCkpIdx = i
+			c.ckpReader.globalIdx = i
 		}
 		if err = r.ReplayCKPEntry(entry); err != nil {
 			return
@@ -320,6 +284,45 @@ func (c *CkpReplayer) ReadCkpFiles() (err error) {
 	return
 }
 
+func (c *CkpReplayer) replayObjectList(
+	ctx context.Context,
+	forSys bool,
+) (maxTS types.TS, maxLsn uint64, err error) {
+	tmpBatch := ckputil.MakeDataScanTableIDBatch()
+	defer tmpBatch.Clean(common.CheckpointAllocator)
+	defer c.ckpReader.Reset(ctx)
+	for {
+		tmpBatch.CleanOnlyData()
+		var end bool
+		if end, err = c.ckpReader.Read(ctx, tmpBatch); err != nil {
+			return
+		}
+		if end {
+			maxTS = c.ckpReader.maxTS
+			maxLsn = c.ckpReader.maxLSN
+			return
+		}
+		dbids := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[1])
+		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBatch.Vecs[2])
+		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBatch.Vecs[3])
+		objectStatsVec := tmpBatch.Vecs[4]
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[5])
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBatch.Vecs[6])
+		for i, rows := 0, tmpBatch.RowCount(); i < rows; i++ {
+			if forSys == pkgcatalog.IsSystemTable(tableIds[i]) {
+				c.r.catalog.OnReplayObjectBatch_V2(
+					dbids[i],
+					tableIds[i],
+					objectTypes[i],
+					objectio.ObjectStats(objectStatsVec.GetBytesAt(i)),
+					createTSs[i],
+					deleteTSs[i],
+				)
+			}
+		}
+	}
+}
+
 // ReplayThreeTablesObjectlist replays the object list the three tables, and check the LSN and TS.
 func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 	maxTs types.TS,
@@ -335,82 +338,23 @@ func (c *CkpReplayer) ReplayThreeTablesObjectlist(phase string) (
 		return
 	}
 
-	r := c.r
 	ctx := c.r.ctx
-	entries := c.ckpEntries
-	maxGlobal := r.MaxGlobalCheckpoint()
-	if maxGlobal != nil {
-		err = logtail.ReplayCheckpoint(
-			ctx, r.catalog, true, c.ckpReader[c.globalCkpIdx],
-		)
-		c.applyCount++
-		logger := logutil.Info
-		if err != nil {
-			logger = logutil.Error
-		}
-		logger(
-			"Replay-3-Table-From-Global",
-			zap.String("phase", phase),
-			zap.String("checkpoint", maxGlobal.String()),
-			zap.Duration("cost", time.Since(t0)),
-			zap.Error(err),
-		)
-		if err != nil {
-			return
-		}
-		if maxTs.LT(&maxGlobal.end) {
-			maxTs = maxGlobal.end
-		}
-		// for force checkpoint, ckpLSN is 0.
-		if maxGlobal.ckpLSN > 0 {
-			if maxGlobal.ckpLSN < maxLSN {
-				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, maxGlobal.ckpLSN))
-			}
-			maxLSN = maxGlobal.ckpLSN
-		}
-	}
-	for _, e := range c.emptyFile {
-		if e.end.GE(&maxTs) {
-			return types.TS{}, 0,
-				moerr.NewInternalErrorf(ctx, "read checkpoint %v failed", e.String())
-		}
-	}
+
+	maxTs, maxLSN, err = c.replayObjectList(ctx, true)
 	logger := logutil.Info
-	for i := 0; i < len(entries); i++ {
-		checkpointEntry := entries[i]
-		if checkpointEntry == nil {
-			continue
-		}
-		if checkpointEntry.end.LE(&maxTs) {
-			continue
-		}
-		start := time.Now()
-		if err = logtail.ReplayCheckpoint(
-			ctx, r.catalog, true, c.ckpReader[i],
-		); err != nil {
-			logger = logutil.Error
-		}
-		logger(
-			"Replay-3-Table-From-Incremental",
-			zap.String("phase", phase),
-			zap.String("checkpoint", checkpointEntry.String()),
-			zap.Duration("cost", time.Since(start)),
-			zap.Error(err),
-		)
-		c.applyCount++
-		if err != nil {
-			return
-		}
-		if maxTs.LT(&checkpointEntry.end) {
-			maxTs = checkpointEntry.end
-		}
-		if checkpointEntry.ckpLSN != 0 {
-			if checkpointEntry.ckpLSN < maxLSN {
-				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", maxLSN, checkpointEntry.ckpLSN))
-			}
-			maxLSN = checkpointEntry.ckpLSN
-		}
+	if err != nil {
+		logger = logutil.Error
 	}
+	logger(
+		"Replay-3-Table-From-Global",
+		zap.String("phase", phase),
+		zap.Duration("cost", time.Since(t0)),
+		zap.Error(err),
+	)
+	if err != nil {
+		return
+	}
+
 	c.wg.Wait()
 	return
 }
@@ -466,36 +410,21 @@ func (c *CkpReplayer) ReplayObjectlist(ctx context.Context, phase string) (err e
 	}
 	t0 := time.Now()
 	r := c.r
-	entries := c.ckpEntries
-	maxTs := types.TS{}
-	if maxGlobal := r.MaxGlobalCheckpoint(); maxGlobal != nil {
-		if err = logtail.ReplayCheckpoint(
-			ctx, r.catalog, false, c.ckpReader[c.globalCkpIdx],
-		); err != nil {
-			return
-		}
-		maxTs = maxGlobal.end
+
+	var maxTS types.TS
+	if maxTS, _, err = c.replayObjectList(ctx, false); err != nil {
+		logutil.Error(
+			"Replay-Checkpoints",
+			zap.String("phase", phase),
+			zap.Duration("cost", time.Since(t0)),
+			zap.Error(err),
+		)
+		return
 	}
-	for i := 0; i < len(entries); i++ {
-		checkpointEntry := entries[i]
-		if checkpointEntry == nil {
-			continue
-		}
-		if checkpointEntry.end.LE(&maxTs) {
-			continue
-		}
-		if err = logtail.ReplayCheckpoint(
-			ctx, r.catalog, false, c.ckpReader[i],
-		); err != nil {
-			return
-		}
-		if maxTs.LT(&checkpointEntry.end) {
-			maxTs = checkpointEntry.end
-		}
-	}
+
 	c.wg.Wait()
 	c.applyDuration += time.Since(t0)
-	r.source.Init(maxTs)
+	r.source.Init(maxTS)
 	maxTableID, maxObjectCount := uint64(0), 0
 	for tid, count := range c.objectCountMap {
 		if count > maxObjectCount {
@@ -676,4 +605,163 @@ func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 		}
 	}
 	return
+}
+
+type CheckpointReader struct {
+	checkpointEntries []*CheckpointEntry
+	maxGlobalEnd      types.TS
+
+	readers    []*logtail.CKPReader
+	currentIdx int
+	globalIdx  int
+	globalDone bool
+
+	mp *mpool.MPool
+	fs fileservice.FileService
+
+	maxTS  types.TS
+	maxLSN uint64
+}
+
+func NewCheckpointReader(
+	ctx context.Context,
+	checkpointEntries []*CheckpointEntry,
+	maxGlobalEnd types.TS,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) *CheckpointReader {
+	return &CheckpointReader{
+		checkpointEntries: checkpointEntries,
+		maxGlobalEnd:      maxGlobalEnd,
+		readers:           make([]*logtail.CKPReader, len(checkpointEntries)),
+		mp:                mp,
+		fs:                fs,
+		globalIdx:         -1,
+	}
+}
+
+func (reader *CheckpointReader) Prepare(ctx context.Context) (err error) {
+	for i, entry := range reader.checkpointEntries {
+		if entry.end.LT(&reader.maxGlobalEnd) {
+			continue
+		}
+		ioutil.Prefetch(entry.sid, reader.fs, entry.GetLocation())
+		reader.readers[i] = logtail.NewCKPReader(
+			entry.version,
+			entry.GetLocation(),
+			reader.mp,
+			reader.fs,
+		)
+	}
+
+	for i, entry := range reader.checkpointEntries {
+		if entry.end.LT(&reader.maxGlobalEnd) {
+			continue
+		}
+		if err = reader.readers[i].ReadMeta(ctx); err != nil {
+			return
+		}
+		reader.readers[i].PrefetchData(entry.sid)
+	}
+	return
+}
+
+func (reader *CheckpointReader) Read(
+	ctx context.Context,
+	bat *batch.Batch,
+) (end bool, err error) {
+	if !reader.globalDone && reader.globalIdx != -1 {
+		ckpEntry := reader.checkpointEntries[reader.globalIdx]
+		if end, err = reader.readers[reader.globalIdx].Read(
+			ctx,
+			bat,
+			reader.mp,
+		); err != nil {
+			logutil.Error(
+				"Read Checkpoint Failed",
+				zap.String("checkpoint", ckpEntry.String()),
+				zap.Error(err),
+			)
+			return
+		}
+		if !end {
+			return
+		} else {
+			logutil.Info(
+				"Read Checkpoint",
+				zap.String("checkpoint", ckpEntry.String()),
+			)
+			reader.globalDone = true
+			if reader.maxTS.LT(&ckpEntry.end) {
+				reader.maxTS = ckpEntry.end
+			}
+			// for force checkpoint, ckp LSN is 0.
+			if ckpEntry.ckpLSN > 0 {
+				if ckpEntry.ckpLSN < reader.maxLSN {
+					reader.maxLSN = ckpEntry.ckpLSN
+				}
+			}
+			if ckpEntry.ckpLSN < reader.maxLSN {
+				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", reader.maxLSN, ckpEntry.ckpLSN))
+			}
+			reader.maxLSN = ckpEntry.ckpLSN
+		}
+	}
+	for {
+		if reader.currentIdx >= len(reader.readers) {
+			return true, nil
+		}
+		if reader.checkpointEntries[reader.currentIdx] == nil {
+			reader.currentIdx++
+			continue
+		}
+		if reader.checkpointEntries[reader.currentIdx].end.LT(&reader.maxGlobalEnd) {
+			reader.currentIdx++
+			continue
+		}
+		ckpEntry := reader.checkpointEntries[reader.currentIdx]
+		if end, err = reader.readers[reader.currentIdx].Read(
+			ctx,
+			bat,
+			reader.mp,
+		); err != nil {
+			logutil.Error(
+				"Read Checkpoint Failed",
+				zap.String("checkpoint", ckpEntry.String()),
+				zap.Error(err),
+			)
+			return
+		}
+		if !end {
+			return
+		}
+		logutil.Info(
+			"Read Checkpoint",
+			zap.String("checkpoint", ckpEntry.String()),
+		)
+		if reader.maxTS.LT(&ckpEntry.end) {
+			reader.maxTS = ckpEntry.end
+		}
+		// for backup checkpoint, ckp LSN is 0.
+		if ckpEntry.ckpLSN != 0 {
+			if ckpEntry.ckpLSN < reader.maxLSN {
+				panic(fmt.Sprintf("logic error, current lsn %d, incoming lsn %d", reader.maxLSN, ckpEntry.ckpLSN))
+			}
+			reader.maxLSN = ckpEntry.ckpLSN
+		}
+		reader.currentIdx++
+	}
+}
+
+func (reader *CheckpointReader) Reset(ctx context.Context) {
+	for i, entry := range reader.checkpointEntries {
+		if entry.end.LT(&reader.maxGlobalEnd) {
+			continue
+		}
+		reader.readers[i].Reset(ctx)
+	}
+	reader.currentIdx = 0
+	reader.globalDone = false
+	reader.maxLSN = 0
+	reader.maxTS = types.TS{}
 }

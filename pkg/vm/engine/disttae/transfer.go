@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -88,15 +89,22 @@ func transferTombstoneObjects(
 	start, end types.TS,
 ) (err error) {
 
-	var logs []zap.Field
-	var flow *TransferFlow
+	var (
+		fs   fileservice.FileService
+		logs []zap.Field
+		flow *TransferFlow
+	)
+
+	if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
+		return
+	}
+
 	return txn.forEachTableHasDeletesLocked(
 		true,
 		func(tbl *txnTable) error {
 			now := time.Now()
 			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
-				ctx, start, end,
-				tbl, txn, txn.proc.Mp(), txn.proc.GetFileService()); err != nil {
+				ctx, start, end, tbl, txn, txn.proc.Mp(), fs); err != nil {
 				return err
 			} else if flow == nil {
 				logutil.Info("CN-TRANSFER-TOMBSTONE-OBJ", logs...)
@@ -198,7 +206,7 @@ func transferTombstones(
 	if len(objectList) >= 10 {
 		proc := table.proc.Load()
 		for _, obj := range objectList {
-			ioutil.Prefetch(proc.GetService(), proc.GetFileService(), obj.ObjectLocation())
+			ioutil.Prefetch(proc.GetService(), fs, obj.ObjectLocation())
 		}
 	}
 
@@ -240,7 +248,7 @@ func transferTombstones(
 		// skip all non-delete entries
 		if entry.tableId != table.tableId ||
 			entry.typ != DELETE ||
-			entry.fileName != "" {
+			entry.fileName != "" || entry.bat == nil {
 			continue
 		}
 

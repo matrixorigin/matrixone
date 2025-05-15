@@ -281,67 +281,16 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 
-				//1.b if sortNode has more than one order by, skip
-				if len(sortNode.OrderBy) != 1 {
-					goto END0
-				}
-
-				// 1.c if sortNode does not have a registered distance function, skip
-				distFnExpr := sortNode.OrderBy[0].Expr.GetF()
-				if distFnExpr == nil {
-					goto END0
-				}
-				if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-					goto END0
-				}
-
-				// 1.d if the order by argument order is not of the form dist_func(col, const), swap and see
-				// if that works. if not, skip
-				if isRuntimeConstExpr(distFnExpr.Args[0]) && distFnExpr.Args[1].GetCol() != nil {
-					distFnExpr.Args[0], distFnExpr.Args[1] = distFnExpr.Args[1], distFnExpr.Args[0]
-				}
-				if !isRuntimeConstExpr(distFnExpr.Args[1]) {
-					goto END0
-				}
-				if distFnExpr.Args[0].GetCol() == nil {
-					goto END0
-				}
-				// NOTE: here we assume the first argument is the column to order by
-				colPosOrderBy := distFnExpr.Args[0].GetCol().ColPos
-
-				// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
-
-				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
-				if err != nil {
-					continue
-				}
-				storedOpType, ok := storedParams[catalog.IndexAlgoParamOpType]
-				if !ok {
+				if !builder.checkValidIvfflatDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
 					continue
 				}
 
-				// if index is not the order by column, skip
-				idxDef0 := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPosOrderBy {
-					continue
-				}
+				return builder.applyIndicesForSortUsingIvfflat(nodeID, projNode, sortNode, scanNode,
+					colRefCnt, idxColMap, multiTableIndex)
 
-				// if index is of the same distance function in order by, the index is valid
-				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
-					multiTableIndexWithSortDistFn := multiTableIndex
-
-					newSortNode := builder.applyIndicesForSortUsingVectorIndex(nodeID, projNode, sortNode, scanNode,
-						colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
-
-					// TODO: consult with nitao and aungr
-					projNode.Children[0] = newSortNode
-					replaceColumnsForNode(projNode, idxColMap)
-
-					return newSortNode, nil
-				}
 			case catalog.MoIndexHnswAlgo.ToString():
 
-				if !builder.checkValidDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
+				if !builder.checkValidHnswDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
 					continue
 				}
 

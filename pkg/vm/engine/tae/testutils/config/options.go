@@ -65,6 +65,31 @@ func WithQuickScanAndCKPOpts(
 	return opts
 }
 
+func WithQuickScanCKPAndLongGCOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScanInterval = time.Millisecond * 10
+	opts.CheckpointCfg.FlushInterval = time.Millisecond * 10
+	opts.CheckpointCfg.MinCount = 1
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
+	opts.CheckpointCfg.GlobalMinCount = 1
+	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
+	opts.CheckpointCfg.BlockRows = 10
+	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
+	opts.Ctx = context.Background()
+	for _, op := range ops {
+		op(opts)
+	}
+	return opts
+}
+
 func WithQuickScanAndCKPAndGCOpts(
 	in *options.Options,
 	ops ...func(*options.Options),

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"io"
 	"io/fs"
 	"iter"
@@ -30,6 +29,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"go.uber.org/zap"
 
@@ -156,6 +157,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			&config.CacheCallbacks,
 			l.perfCounterSets,
 			l.name,
+			config.DisableS3Fifo,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", l.name),
@@ -177,6 +179,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 			true,
 			l,
 			l.name,
+			config.DisableS3Fifo,
 		)
 		if err != nil {
 			return err
@@ -259,6 +262,13 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+		}
+	}()
+
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
@@ -763,7 +773,7 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry,
 				IsDir: isDir,
 				Size:  contentSize,
 			}, nil) {
-				break
+				return
 			}
 		}
 

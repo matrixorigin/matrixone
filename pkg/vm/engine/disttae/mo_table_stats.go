@@ -945,6 +945,28 @@ func joinAccountDatabase(accIds []uint64, dbIds []uint64) (string, func()) {
 	}
 }
 
+func constructInStmt(
+	tblIds []uint64,
+	by string,
+) (string, func()) {
+
+	bb := builderPool.Get().(*builder)
+	bb.writeString(fmt.Sprintf("%s in (", by))
+	for i, id := range tblIds {
+		bb.writeString(strconv.FormatUint(id, 10))
+		if i < len(tblIds)-1 {
+			bb.writeString(",")
+		}
+	}
+
+	bb.writeString(")")
+
+	return bb.string(), func() {
+		bb.reset()
+		builderPool.Put(bb)
+	}
+}
+
 func joinAccountDatabaseTable(
 	accIds []uint64, dbIds []uint64, tblIds []uint64,
 ) (string, func()) {
@@ -2367,15 +2389,15 @@ func (d *dynamicCtx) gamaCleanDeletes(
 			return
 		}
 
-		if accIds, dbIds, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+		if _, dbIds, _, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
 			return
 		}
 
-		if len(accIds) == 0 {
+		if len(dbIds) == 0 {
 			return
 		}
 
-		where, release := joinAccountDatabase(accIds, dbIds)
+		where, release := constructInStmt(dbIds, "database_id")
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
 		release()
 
@@ -2392,15 +2414,15 @@ func (d *dynamicCtx) gamaCleanDeletes(
 			return
 		}
 
-		if accIds, dbIds, tblIds, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
+		if _, _, tblIds, err = decodeIdsFromMoTableStatsSqlRet(ctx, sqlRet); err != nil {
 			return
 		}
 
-		if len(accIds) == 0 {
+		if len(tblIds) == 0 {
 			return
 		}
 
-		where, release := joinAccountDatabaseTable(accIds, dbIds, tblIds)
+		where, release := constructInStmt(tblIds, "table_id")
 		sql = fmt.Sprintf(getDeleteFromStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, where)
 		release()
 
@@ -2936,7 +2958,14 @@ func subscribeTable(
 	txnTbl.relKind = tbl.relKind
 	txnTbl.primarySeqnum = tbl.pkSequence
 
-	if pState, err = txnTbl.tryToSubscribe(ctx); err != nil {
+	e := eng.(*Engine)
+
+	if pState, err = e.PushClient().toSubscribeTable(
+		ctx,
+		txnTbl.tableId,
+		txnTbl.tableName,
+		txnTbl.db.databaseId,
+		txnTbl.db.databaseName); err != nil {
 		return nil, err
 	}
 
@@ -3074,7 +3103,7 @@ func applyTombstones(
 		attrs := objectio.GetTombstoneAttrs(hidden)
 		persistedDeletes := containers.NewVectors(len(attrs))
 
-		ForeachBlkInObjStatsList(true, nil,
+		objectio.ForeachBlkInObjStatsList(true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 
 				if _, release, err = ioutil.ReadDeletes(

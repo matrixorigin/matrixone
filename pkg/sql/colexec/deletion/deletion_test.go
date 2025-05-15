@@ -156,3 +156,15 @@ func resetChildren(arg *Deletion) {
 	arg.Children = nil
 	arg.AppendChild(op)
 }
+
+func TestFlush(t *testing.T) {
+	proc := &process.Process{
+		Base: &process.BaseProcess{
+			FileService: nil,
+		},
+	}
+
+	ct := container{}
+	_, err := ct.flush(proc, nil)
+	require.Error(t, err)
+}

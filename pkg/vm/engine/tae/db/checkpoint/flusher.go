@@ -404,6 +404,9 @@ func (flusher *flushImpl) scheduleFlush(
 	entry *logtail.DirtyTreeEntry,
 	force bool,
 ) {
+	if _, injected := objectio.PrintFlushEntryInjected(); injected {
+		logutil.Infof("scheduleFlush: %v", entry.String())
+	}
 	if entry.IsEmpty() {
 		return
 	}
@@ -417,24 +420,6 @@ func (flusher *flushImpl) scheduleFlush(
 	}
 	pressure := flusher.collectTableMemUsage(entry, lastCkp)
 	flusher.checkFlushConditionAndFire(entry, force, pressure, lastCkp)
-}
-
-func (flusher *flushImpl) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
-	for _, obj := range tree.Objs {
-		object, err := table.GetObjectByID(obj.ID, false)
-		if err != nil {
-			panic(err)
-		}
-		asize += object.GetObjectData().EstimateMemSize()
-	}
-	for _, obj := range tree.Tombstones {
-		object, err := table.GetObjectByID(obj.ID, true)
-		if err != nil {
-			panic(err)
-		}
-		dsize += object.GetObjectData().EstimateMemSize()
-	}
-	return
 }
 
 func foreachAobjBefore(_ context.Context,
@@ -490,7 +475,7 @@ func (flusher *flushImpl) collectTableMemUsage(entry *logtail.DirtyTreeEntry, la
 	sizevisitor := new(model.BaseTreeVisitor)
 	var totalSize int
 	_, end := entry.GetTimeRange()
-	sizevisitor.TableFn = func(did, tid uint64) error {
+	sizevisitor.TableFn = func(did, tid uint64, _, _ int) error {
 		db, err := flusher.catalogCache.GetDatabaseByID(did)
 		if err != nil {
 			panic(err)

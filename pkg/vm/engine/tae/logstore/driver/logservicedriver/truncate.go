@@ -226,22 +226,22 @@ func (d *LogServiceDriver) getTruncatedPSNFromBackend(
 	}
 	defer client.Putback()
 
-	cfg := d.config
-
-	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeoutCause(
+	for {
+		ctx, cancel := context.WithTimeoutCause(
 			ctx,
-			cfg.MaxTimeout,
+			d.config.MaxTimeout,
 			moerr.CauseGetLogserviceTruncate,
 		)
 		psn, err = client.wrapped.GetTruncatedLsn(ctx)
-		err = moerr.AttachCause(ctx, err)
 		cancel()
 		if err == nil {
 			break
 		}
-		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
+		retryTimes++
+		if time.Since(start) > d.config.MaxTimeout {
+			break
+		}
+		time.Sleep(d.config.RetryInterval(retryTimes))
 	}
 	return
 }

@@ -317,7 +317,7 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: []byte("test"), typ: &types.Type{Oid: types.T_blob}, sqlBuff: []byte{}},
-			want:    []byte("'test'"),
+			want:    []byte("x'74657374'"),
 			wantErr: assert.NoError,
 		},
 		{
@@ -327,12 +327,12 @@ func Test_convertColIntoSql(t *testing.T) {
 		},
 		{
 			args:    args{ctx: context.Background(), data: []byte("test"), typ: &types.Type{Oid: types.T_binary}, sqlBuff: []byte{}},
-			want:    []byte("'test'"),
+			want:    []byte("x'74657374'"),
 			wantErr: assert.NoError,
 		},
 		{
 			args:    args{ctx: context.Background(), data: []byte("test"), typ: &types.Type{Oid: types.T_varbinary}, sqlBuff: []byte{}},
-			want:    []byte("'test'"),
+			want:    []byte("x'74657374'"),
 			wantErr: assert.NoError,
 		},
 		{
@@ -791,7 +791,7 @@ func Test_openDbConn(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, DefaultSendSqlTimeout)
+	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	assert.Nil(t, err)
 	assert.Nil(t, conn)
 }
@@ -802,7 +802,7 @@ func Test_openDbConnFailed(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	conn, err := OpenDbConn("user", "password", "host", 1234, DefaultSendSqlTimeout)
+	conn, err := OpenDbConn("user", "password", "host", 1234, CDCDefaultSendSqlTimeout)
 	assert.Error(t, err)
 	assert.Nil(t, conn)
 }
@@ -934,4 +934,33 @@ func Test_batchRowCount(t *testing.T) {
 	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 	bat.SetRowCount(3)
 	assert.Equal(t, 3, batchRowCount(bat))
+}
+
+func Test_compUriInfo(t *testing.T) {
+	ret, _ := compositedUriInfo("", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefix", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:65536", "prefix")
+	assert.False(t, ret)
+
+	ret, _ = compositedUriInfo("prefixroot:111@3:4", "prefix")
+	assert.True(t, ret)
+}
+
+func Test_uriHasPrefix(t *testing.T) {
+	assert.False(t, uriHasPrefix("ab", "abc"))
+}
+
+func Test_extractUriInfo(t *testing.T) {
+	_, _, err := ExtractUriInfo(context.Background(), "abc", "t")
+	assert.Error(t, err)
 }

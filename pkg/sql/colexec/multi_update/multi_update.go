@@ -17,7 +17,6 @@ package multi_update
 import (
 	"bytes"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -56,9 +55,9 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 
 			tableType := UpdateMainTable
-			if strings.HasPrefix(updateCtx.TableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+			if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 				tableType = UpdateUniqueIndexTable
-			} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+			} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
 				tableType = UpdateSecondaryIndexTable
 			}
 			info.tableType = tableType
@@ -102,6 +101,9 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			if err != nil {
 				return err
 			}
+			if svc := colexec.Get(); svc != nil {
+				writer.segmentMap = svc.GetCnSegmentMap()
+			}
 			update.ctr.s3Writer = writer
 		}
 
@@ -111,7 +113,9 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-
+		if svc := colexec.Get(); svc != nil {
+			writer.segmentMap = svc.GetCnSegmentMap()
+		}
 		update.MultiUpdateCtx = writer.updateCtxs
 
 		err = writer.free(proc)
@@ -373,9 +377,9 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 		}
 
 		tableType := UpdateMainTable
-		if strings.HasPrefix(updateCtx.TableDef.Name, catalog.UniqueIndexTableNamePrefix) {
+		if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 			tableType = UpdateUniqueIndexTable
-		} else if strings.HasPrefix(updateCtx.TableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
+		} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
 			tableType = UpdateSecondaryIndexTable
 		}
 		info.tableType = tableType
