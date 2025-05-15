@@ -57,7 +57,11 @@ func Benchmark_kmeans(b *testing.B) {
 		if err != nil {
 			panic(err)
 		}
-		b.Log("SSE - clusterRand", strconv.FormatFloat(clusterRand.SSE(), 'f', -1, 32))
+		sse, err := clusterRand.SSE()
+		if err != nil {
+			panic(err)
+		}
+		b.Log("SSE - clusterRand", strconv.FormatFloat(sse, 'f', -1, 32))
 
 	})
 
@@ -71,7 +75,11 @@ func Benchmark_kmeans(b *testing.B) {
 		if err != nil {
 			panic(err)
 		}
-		b.Log("SSE - clusterRand", strconv.FormatFloat(kmeansPlusPlus.SSE(), 'f', -1, 32))
+		sse, err := kmeansPlusPlus.SSE()
+		if err != nil {
+			panic(err)
+		}
+		b.Log("SSE - clusterRand", strconv.FormatFloat(sse, 'f', -1, 32))
 	})
 
 }

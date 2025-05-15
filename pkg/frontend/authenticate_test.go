@@ -6392,8 +6392,61 @@ func Test_doAlterUser(t *testing.T) {
 			}
 			au.Users = append(au.Users, u)
 		}
+		au.MiscOpt = stmt.MiscOpt
 		return au
 	}
+	convey.Convey("alter user lock success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.AlterUser{
+			Users: []*tree.User{
+				{Username: "u1", Hostname: "%", AuthOption: nil},
+			},
+			MiscOpt: tree.NewUserMiscOptionAccountLock(),
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		pu.SV.KillRountinesInterval = 0
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		rm, _ := NewRoutineManager(ctx, "")
+		ses.rm = rm
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		for i, user := range stmt.Users {
+			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
+			mrs := newMrsForPasswordOfUser([][]interface{}{
+				{i, "111", 0},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "root", moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
+				{0, 0},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql = getSqlForUpdateStatusLockOfUserForever(userStatusLockForever, user.Username)
+			bh.sql2result[sql] = &MysqlResultSet{}
+		}
+
+		err := doAlterUser(ctx, ses, alterUserFrom(stmt))
+		convey.So(err, convey.ShouldBeNil)
+	})
 
 	convey.Convey("alter user success", t, func() {
 		ctrl := gomock.NewController(t)

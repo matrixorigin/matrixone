@@ -261,16 +261,17 @@ func convertColIntoSql(
 	case types.T_float64:
 		value := data.(float64)
 		sqlBuff = appendFloat64(sqlBuff, value, 64)
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		sqlBuff = appendHex(sqlBuff, data.([]byte))
 	case types.T_char,
 		types.T_varchar,
-		types.T_blob,
 		types.T_text,
-		types.T_binary,
-		types.T_varbinary,
 		types.T_datalink:
-		value := data.([]byte)
+		value := string(data.([]byte))
+		value = strings.Replace(value, "\\", "\\\\", -1)
+		value = strings.Replace(value, "'", "\\'", -1)
 		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, value)
+		sqlBuff = appendBytes(sqlBuff, []byte(value))
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
@@ -351,6 +352,13 @@ func convertColIntoSql(
 	}
 
 	return sqlBuff, nil
+}
+
+func appendHex(dst []byte, src []byte) []byte {
+	dst = append(dst, "x'"...)
+	dst = hex.AppendEncode(dst, src)
+	dst = append(dst, '\'')
+	return dst
 }
 
 func appendByte(buf []byte, d byte) []byte {
@@ -775,4 +783,79 @@ func addTailEndMetrics(bat *AtomicBatch) {
 	v2.CdcTotalProcessingRecordCountGauge.Sub(count)
 	v2.CdcHoldChangesBytesGauge.Sub(allocated)
 	v2.CdcSinkRecordCounter.Add(count)
+}
+
+// uriHasPrefix
+func uriHasPrefix(uri string, prefix string) bool {
+	if len(uri) < len(prefix) || strings.ToLower(uri[:len(prefix)]) != prefix {
+		return false
+	}
+	return true
+}
+
+/*
+ExtractUriInfo extracts the uriInfo
+return serialized uriInfo
+*/
+func ExtractUriInfo(
+	ctx context.Context,
+	uri string,
+	uriPrefix string,
+) (string, UriInfo, error) {
+	ok, uriInfo := compositedUriInfo(uri, uriPrefix)
+	if !ok {
+		return "", UriInfo{}, moerr.NewInternalErrorf(ctx, "invalid uri format: %s", uri)
+	}
+
+	jsonUriInfo, err := JsonEncode(&uriInfo)
+	if err != nil {
+		return "", UriInfo{}, err
+	}
+	return jsonUriInfo, uriInfo, nil
+}
+
+// compositedUriInfo uri according to the format: mysql://root:111@127.0.0.1:6001
+// if valid, return true and extracted info
+// !!!NOTE!!!
+// user and password does not have the special character ( ':' '@' )
+func compositedUriInfo(uri string, uriPrefix string) (bool, UriInfo) {
+	if !uriHasPrefix(uri, uriPrefix) {
+		return false, UriInfo{}
+	}
+	//locate user password
+	rest := uri[len(uriPrefix):]
+	seps := strings.Split(rest, "@")
+	if len(seps) != 2 || len(seps[0]) == 0 || len(seps[1]) == 0 {
+		return false, UriInfo{}
+	}
+	seps2 := strings.Split(seps[0], ":")
+	if len(seps2) < 2 {
+		return false, UriInfo{}
+	}
+	userName := strings.Join(seps2[0:len(seps2)-1], ":")
+	password := seps2[len(seps2)-1]
+	passwordStart := len(uriPrefix) + len(userName) + 1
+	passwordEnd := passwordStart + len(password)
+	if passwordEnd > len(uri) || password != uri[passwordStart:passwordEnd] {
+		return false, UriInfo{}
+	}
+
+	sep3 := strings.Split(seps[1], ":")
+	if len(sep3) != 2 || len(sep3[0]) == 0 || len(sep3[1]) == 0 {
+		return false, UriInfo{}
+	}
+	ip := sep3[0]
+	port := sep3[1]
+	portInt32, err := strconv.ParseUint(port, 10, 32)
+	if err != nil || portInt32 > 65535 {
+		return false, UriInfo{}
+	}
+	return true, UriInfo{
+		User:          userName,
+		Password:      password,
+		Ip:            ip,
+		Port:          int(portInt32),
+		PasswordStart: passwordStart,
+		PasswordEnd:   passwordEnd,
+	}
 }

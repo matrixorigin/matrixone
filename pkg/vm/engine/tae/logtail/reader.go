@@ -41,14 +41,12 @@ func (r *Reader) GetDirty() (tree *model.Tree, count int) {
 	return
 }
 
-// Merge all dirty table/object/block of **a table** into one tree
-func (r *Reader) GetDirtyByTable(
-	dbID, id uint64,
-) (tree *model.TableTree) {
-	tree = model.NewTableTree(dbID, id)
+func (r *Reader) IsDirtyOnTable(DbID, id uint64) bool {
+	found := false
 	op := func(row RowT) (moveOn bool) {
 		if memo := row.GetMemo(); memo.HasTableDataChanges(id) {
-			tree.Merge(memo.GetDirtyTableByID(id))
+			found = true
+			return false
 		}
 		return true
 	}
@@ -61,7 +59,7 @@ func (r *Reader) GetDirtyByTable(
 		return !exist
 	}
 	r.table.ForeachRowInBetween(r.from, r.to, skipFn, op)
-	return
+	return found
 }
 
 // TODO: optimize

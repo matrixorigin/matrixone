@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	BitmapBitsInPool = 8192
+	BitmapBitsInPool = BlockMaxRows
 	BitmapPoolSize   = 64
 )
 
@@ -130,11 +130,11 @@ func (r *Bitmap) PreExtend(nbits int) {
 	r.bm.TryExpandWithSize(nbits)
 }
 
-func (r *Bitmap) ToI64Array() []int64 {
+func (r *Bitmap) ToI64Array(out *[]int64) []int64 {
 	if r.IsEmpty() {
 		return nil
 	}
-	return r.bm.ToI64Array()
+	return r.bm.ToI64Array(out)
 }
 
 func (r *Bitmap) ToArray() []uint64 {

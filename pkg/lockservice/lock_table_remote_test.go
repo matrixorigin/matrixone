@@ -16,10 +16,13 @@ package lockservice
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"io"
+	"net"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -284,6 +287,52 @@ func TestRemoteWithBindChanged(t *testing.T) {
 			c <- bind
 		},
 	)
+}
+
+func TestRetryRemoteLockError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "net timeout error",
+			err:  &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded},
+			want: true,
+		},
+		{
+			name: "io EOF error",
+			err:  io.EOF,
+			want: true,
+		},
+		{
+			name: "io unexpected EOF error",
+			err:  io.ErrUnexpectedEOF,
+			want: true,
+		},
+		{
+			name: "os deadline exceeded error",
+			err:  os.ErrDeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "context deadline exceeded error",
+			err:  context.DeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "moerr unexpected EOF error",
+			err:  moerr.NewUnexpectedEOF(context.Background(), "test"),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := retryRemoteLockError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func runRemoteLockTableTests(

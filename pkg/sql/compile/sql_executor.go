@@ -403,8 +403,12 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if !statementOption.DisableLog() {
+		printSql := sql
+		if len(printSql) > 1000 {
+			printSql = printSql[:1000] + "..."
+		}
 		logutil.Info("sql_executor exec",
-			zap.String("sql", sql),
+			zap.String("sql", printSql),
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),

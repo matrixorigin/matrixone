@@ -4,6 +4,7 @@
 *.exe
 *.lib
 *.swp
+*.fatbin
 bin/
 y.go
 *.output
@@ -40,6 +41,7 @@ thirdparties/StringZilla-*/*
 thirdparties/fp16/*
 thirdparties/install/*
 thirdparties/usearch-*/*
+**/lib
 
 # bvt generate files
 test/distributed/resources/into_outfile/outfile_*.csv

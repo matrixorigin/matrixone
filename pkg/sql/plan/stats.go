@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
 const BlockThresholdForOneCN = 512
 const costThresholdForOneCN = 160000
@@ -712,7 +711,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 				ret = 0.5
 			}
 		case "prefix_between":
-			ret = 0.1
+			ret = 0.001
 		case "isnull", "is_null":
 			ret = getNullSelectivity(exprImpl.F.Args[0], builder, true)
 		case "isnotnull", "is_not_null":
@@ -974,7 +973,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = 1
 			node.Stats.Selectivity = 1
 		}
-		node.Stats.BlockNum = int32(childStats.Outcnt/DefaultBlockMaxRows) + 1
+		node.Stats.BlockNum = int32(childStats.Outcnt/objectio.BlockMaxRows) + 1
 
 	case plan.Node_UNION:
 		if needResetHashMapStats {
@@ -1268,7 +1267,7 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		if newBlockNum < float64(scanNode.Stats.BlockNum) {
 			scanNode.Stats.BlockNum = int32(newBlockNum)
 		}
-		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * objectio.BlockMaxRows
 		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
 			scanNode.Stats.Cost = scanNode.Stats.TableCnt
 		}

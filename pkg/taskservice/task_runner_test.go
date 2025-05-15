@@ -212,13 +212,14 @@ func TestCancelRunningTask(t *testing.T) {
 func TestDoHeartbeatInvalidTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		ctx, cancel := context.WithCancelCause(context.TODO())
+		r.runningTasks.Lock()
 		r.runningTasks.m = make(map[uint64]runningTask)
 		r.runningTasks.m[1] = runningTask{
 			task:   task.AsyncTask{},
 			ctx:    ctx,
 			cancel: cancel,
 		}
-
+		r.runningTasks.Unlock()
 		r.doHeartbeat(context.Background())
 
 		r.runningTasks.RLock()
@@ -280,7 +281,7 @@ func TestRemoveRunningTaskNotExists(t *testing.T) {
 		_, completed := r.runningTasks.completedTasks[999]
 		assert.True(t, completed, "non-existent task should be added to completedTasks")
 	}, WithRunnerParallelism(1),
-		WithRunnerFetchInterval(time.Millisecond))
+		WithRunnerFetchInterval(time.Hour))
 }
 
 func runTaskRunnerTest(t *testing.T,

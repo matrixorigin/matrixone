@@ -376,15 +376,15 @@ func (s *service) registerExecutorsLocked() {
 	})
 
 	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
-		frontend.RegisterCdcExecutor(
+		frontend.CDCTaskExecutorFactory(
 			s.logger,
-			ts,
 			ieFactory,
 			s.task.runner.Attach,
 			s.cfg.UUID,
+			ts,
 			s.fileService,
 			s._txnClient,
 			s.storeEngine,
-			s.cdcMp,
-		))
+		),
+	)
 }
