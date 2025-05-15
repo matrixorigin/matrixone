@@ -144,7 +144,6 @@ func (idx *HnswModel) SaveToFile() error {
 		return err
 	}
 	idx.Index = nil
-	idx.Dirty = false
 	idx.Path = f.Name()
 	return nil
 }
@@ -339,7 +338,7 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 
 	if len(idx.Path) == 0 {
 		// create tempfile for writing
-		fp, err := os.CreateTemp("", "hnswindx")
+		fp, err := os.CreateTemp("", "hnsw")
 		if err != nil {
 			return err
 		}
@@ -422,13 +421,21 @@ func (idx *HnswModel) Unload() error {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
 
-	err := idx.Index.Destroy()
+	// SaveToFile will check Dirty bit. If dirty is true, save to file before unload
+	err := idx.SaveToFile()
 	if err != nil {
 		return err
 	}
-	// reset variable
-	idx.Index = nil
-	idx.Dirty = false
+
+	// SaveToFile will release the usearch index when dirty is true so always check nil index
+	if idx.Index != nil {
+		err := idx.Index.Destroy()
+		if err != nil {
+			return err
+		}
+		// reset variable
+		idx.Index = nil
+	}
 	return nil
 }
 
