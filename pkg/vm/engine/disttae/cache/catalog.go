@@ -121,7 +121,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		deletedCpkey := make([]*TableItem, 0, 16)
 		deletedItems := make([]*TableItem, 0, 16)
 		seenLargest := false
-		// TODO(aptend)gc stale deleted items
 		cc.tables.data.Scan(func(item *TableItem) bool {
 			if item.DatabaseId != prevDbId {
 				prevDbId = item.DatabaseId
@@ -158,7 +157,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			cc.tables.cpkeyIndex.Delete(item)
 		}
 
-		// TODO(aptend): Add Metric
 	}
 	{ // database cache gc
 		var prevName string

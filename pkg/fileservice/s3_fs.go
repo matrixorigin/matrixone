@@ -199,6 +199,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			&config.CacheCallbacks,
 			s.perfCounterSets,
 			s.name,
+			config.DisableS3Fifo,
 		)
 		logutil.Info("fileservice: memory cache initialized",
 			zap.Any("fs-name", s.name),
@@ -219,6 +220,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			true,
 			s,
 			s.name,
+			config.DisableS3Fifo,
 		)
 		if err != nil {
 			return err
