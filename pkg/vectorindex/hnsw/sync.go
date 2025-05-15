@@ -24,14 +24,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
 	catalogsql = "select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s') and algo='hnsw';"
 )
+
+var runTxn = sqlexec.RunTxn
 
 func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc *vectorindex.VectorIndexCdc[float32]) error {
 
@@ -340,15 +344,26 @@ func (s *HnswSync) run(proc *process.Process) error {
 
 	}
 
-	// save to files
-
-	// save to database
+	// save to files and then save to database
 	sqls, err := s.ToSql(s.ts)
 	if err != nil {
 		return err
 	}
 
-	_ = sqls
+	opts := executor.Options{}
+	err = runTxn(proc, func(exec executor.TxnExecutor) error {
+		for _, sql := range sqls {
+			res, err := exec.Exec(sql, opts.StatementOption())
+			if err != nil {
+				return err
+			}
+			res.Close()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
