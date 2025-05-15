@@ -343,6 +343,12 @@ func (s *HnswSync) run(proc *process.Process) error {
 	// save to files
 
 	// save to database
+	sqls, err := s.ToSql(s.ts)
+	if err != nil {
+		return err
+	}
+
+	_ = sqls
 
 	return nil
 }
@@ -390,7 +396,7 @@ func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap u
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (s *HnswSync) ToInsertSql(ts int64) ([]string, error) {
+func (s *HnswSync) ToSql(ts int64) ([]string, error) {
 
 	if len(s.indexes) == 0 {
 		return []string{}, nil
@@ -406,6 +412,13 @@ func (s *HnswSync) ToInsertSql(ts int64) ([]string, error) {
 		}
 
 		// delete sql
+		deletesqls, err := idx.ToDeleteSql(s.tblcfg)
+		if err != nil {
+			return nil, err
+		}
+		if len(deletesqls) > 0 {
+			sqls = append(sqls, deletesqls...)
+		}
 
 		// insert sql
 		indexsqls, err := idx.ToSql(s.tblcfg)
@@ -427,7 +440,6 @@ func (s *HnswSync) ToInsertSql(ts int64) ([]string, error) {
 		}
 		fs := finfo.Size()
 
-		// check idx.InsertMeta.  If true, Insert else Update
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 

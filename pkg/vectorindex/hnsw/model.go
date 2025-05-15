@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/detailyang/go-fallocate"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -205,6 +206,22 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 
 	//sql += strings.Join(values, ", ")
 	//return []string{sql}, nil
+	return sqls, nil
+}
+
+func (idx *HnswModel) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+	if idx.InsertMeta {
+		// this index is newly created and no DELETE sql required
+		return []string{}, nil
+	}
+
+	sqls := make([]string, 0, 2)
+
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.IndexTable, catalog.Hnsw_TblCol_Storage_Index_Id, idx.Id)
+	sqls = append(sqls, sql)
+	sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.MetadataTable, catalog.Hnsw_TblCol_Metadata_Index_Id, idx.Id)
+	sqls = append(sqls, sql)
+
 	return sqls, nil
 }
 
