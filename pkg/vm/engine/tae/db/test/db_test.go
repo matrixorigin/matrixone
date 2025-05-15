@@ -12082,7 +12082,7 @@ func Test_TmpFileService(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.TmpFSGCInterval = time.Millisecond * 10
+	options.WithTmpFSGCInterval(time.Millisecond * 10)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -12114,6 +12114,10 @@ func Test_TmpFileService(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
+	testFS.Name()
+	name:=model.GetTransferFileName()
+	_,err = model.DecodeTransferFileName(name)
+	assert.NoError(t, err)
 	data := []byte("test")
 	ioEntry := fileservice.IOEntry{
 		Offset: 0,
