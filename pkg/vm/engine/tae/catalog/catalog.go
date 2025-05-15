@@ -59,6 +59,8 @@ type Catalog struct {
 	link      *common.GenericSortedDList[*DBEntry]
 	nodesMu   sync.RWMutex
 	gcTS      types.TS
+
+	mergeNotifier MergeNotifierOnCatalog
 }
 
 func MockCatalog(dataFactory DataFactory) *Catalog {

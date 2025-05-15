@@ -147,6 +147,7 @@ func (node *persistedNode) Scan(
 				attr = readSchema.ColDefs[idx].Name
 			}
 			(*bat).GetVectorByName(attr).Extend(vecs[i])
+			vecs[i].Close()
 		}
 	}
 	return

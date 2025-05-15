@@ -390,8 +390,9 @@ func (node *SelectClause) GetQueryType() string     { return QueryTypeDQL }
 
 // WHERE or HAVING clause.
 type Where struct {
-	Type string
-	Expr Expr
+	Type         string
+	RollupHaving bool
+	Expr         Expr
 }
 
 func (node *Where) Format(ctx *FmtCtx) {

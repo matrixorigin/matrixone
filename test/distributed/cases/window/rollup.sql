@@ -84,7 +84,6 @@ group by
     product with rollup;
 -- @bvt:issue
 
--- @bvt:issue#19984
 select
     year,
     quarter,
@@ -113,7 +112,6 @@ group by
     product with rollup
 having
      (product = 'Product A') or (product = 'Product B');
--- @bvt:issue
 drop table sales;
 
 
@@ -301,7 +299,6 @@ group by
     j, i with rollup;
 -- @bvt:issue
 
--- @bvt:issue#19984
 select
     i, j, sum(k) as total
 from
@@ -310,7 +307,6 @@ group by
     j, i with rollup
 having
     (i is not null and j is not null);
--- @bvt:issue
 drop table uint_64;
 
 

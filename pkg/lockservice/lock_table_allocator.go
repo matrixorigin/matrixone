@@ -154,8 +154,8 @@ func (l *lockTableAllocator) Valid(
 	binds []pb.LockTable,
 ) ([]uint64, error) {
 	var invalid []uint64
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	for _, b := range binds {
 		if !b.Valid {
@@ -210,8 +210,8 @@ func (l *lockTableAllocator) Close() error {
 }
 
 func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTable {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	m := l.getLockTablesLocked(groupID)
 	if old, ok := m[tableID]; ok {
