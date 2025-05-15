@@ -353,6 +353,10 @@ func (s *HnswSync) run(proc *process.Process) error {
 		return err
 	}
 
+	if len(sqls) == 0 {
+		return nil
+	}
+
 	return s.runSqls(proc, sqls)
 }
 
