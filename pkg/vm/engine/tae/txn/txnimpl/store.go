@@ -470,10 +470,6 @@ func (store *txnStore) CreateDatabaseWithID(ctx context.Context, name, createSql
 		return
 	}
 
-	// TODO(aptend): write ddl row
-	// if err = store.Append(ctx, pkgcatalog.MO_CATALOG_ID, pkgcatalog.MO_DATABASE_ID, nil); err != nil {
-	// 	return
-	// }
 	h = buildDB(db)
 	return
 }
