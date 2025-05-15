@@ -12078,11 +12078,11 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	defer bat2.Clean(common.DebugAllocator)
 }
 
-func Test_TmpFileService(t *testing.T) {
+func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	options.WithTmpFSGCInterval(time.Millisecond * 10)(opts)
+	options.WithTmpFSGCInterval(time.Millisecond * 100)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -12124,11 +12124,12 @@ func Test_TmpFileService(t *testing.T) {
 		Size:   int64(len(data)),
 		Data:   data,
 	}
+
 	filePath := getNameFn()
 	err = testFS.Write(
 		ctx,
 		fileservice.IOVector{
-			FilePath: name,
+			FilePath: filePath,
 			Entries:  []fileservice.IOEntry{ioEntry},
 		},
 	)
@@ -12157,5 +12158,49 @@ func Test_TmpFileService(t *testing.T) {
 		},
 	)
 	assert.Equal(t, 0, len(listFn()))
+
+}
+
+func Test_TmpFileService2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	options.WithTmpFSGCInterval(time.Millisecond * 100)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	transferFS, err := model.GetTransferFS(tae.Runtime.TmpFS)
+	assert.NoError(t, err)
+
+	name := model.GetTransferFileName()
+	data := []byte("test")
+	ioEntry := fileservice.IOEntry{
+		Offset: 0,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	err = transferFS.Write(
+		ctx,
+		fileservice.IOVector{
+			FilePath: name,
+			Entries:  []fileservice.IOEntry{ioEntry},
+		},
+	)
+	assert.NoError(t, err)
+
+	listFn := func() []string {
+		entries := transferFS.List(ctx, "")
+		files := make([]string, 0)
+		for entry, err := range entries {
+			if err != nil {
+				continue
+			}
+			files = append(files, entry.Name)
+		}
+		return files
+	}
+
+	files := listFn()
+	assert.Equal(t, 1, len(files))
 
 }
