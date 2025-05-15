@@ -214,19 +214,8 @@ func (s *HnswSync) run(proc *process.Process) error {
 			return err
 		}
 
-		capacity, err := m.Index.Capacity()
-		if err != nil {
-			return err
-		}
-		m.MaxCapacity = capacity
-		mlen, err := m.Index.Len()
-		if err != nil {
-			return err
-		}
-		m.Len = mlen
-
-		if maxcap < capacity {
-			maxcap = capacity
+		if maxcap < m.MaxCapacity {
+			maxcap = m.MaxCapacity
 		}
 
 		for j, row := range s.cdc.Data {

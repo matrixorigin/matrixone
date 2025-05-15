@@ -261,6 +261,7 @@ func (idx *HnswModel) Add(key int64, vec []float32) error {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
 	idx.Dirty = true
+	idx.Len++
 	return idx.Index.Add(uint64(key), vec)
 }
 
@@ -270,6 +271,7 @@ func (idx *HnswModel) Remove(key int64) error {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
 	idx.Dirty = true
+	idx.Len--
 	return idx.Index.Remove(uint64(key))
 }
 
@@ -410,7 +412,17 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 		return err
 	}
 
+	// always get the number of item and capacity when model loaded.
 	idx.Index = usearchidx
+	idx.Len, err = idx.Index.Len()
+	if err != nil {
+		return err
+	}
+
+	idx.MaxCapacity, err = idx.Index.Capacity()
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
