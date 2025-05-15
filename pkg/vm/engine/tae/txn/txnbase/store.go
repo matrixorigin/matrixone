@@ -160,11 +160,10 @@ func (store *NoopTxnStore) IsOffline() bool               { return false }
 func (store *NoopTxnStore) IsReadonly() bool              { return false }
 func (store *NoopTxnStore) IncreateWriteCnt(string) error { return nil }
 
-func (store *NoopTxnStore) HasAnyTableDataChanges() bool                 { return false }
-func (store *NoopTxnStore) GetDirty() *model.Tree                        { return nil }
-func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool           { return false }
-func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *model.TableTree { return nil }
-func (store *NoopTxnStore) HasCatalogChanges() bool                      { return false }
+func (store *NoopTxnStore) HasAnyTableDataChanges() bool       { return false }
+func (store *NoopTxnStore) GetDirty() *model.Tree              { return nil }
+func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool { return false }
+func (store *NoopTxnStore) HasCatalogChanges() bool            { return false }
 
 func (store *NoopTxnStore) ObserveTxn(
 	visitDatabase func(db any),

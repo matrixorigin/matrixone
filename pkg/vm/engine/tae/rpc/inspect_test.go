@@ -18,10 +18,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 )
@@ -42,5 +48,110 @@ func Test_storageUsageDetails(t *testing.T) {
 		},
 	}
 	err := storageUsageDetails(storage)
-	assert.NoError(t, err)
+	require.NoError(t, err)
+}
+
+func TestMergeCommand(t *testing.T) {
+	handle := mockTAEHandle(context.Background(), t, &options.Options{})
+	asyncTxn, err := handle.db.StartTxn(nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	database, err := testutil.CreateDatabase2(ctx, asyncTxn, "db1")
+	require.NoError(t, err)
+	schema := catalog.MockSchema(2, 1)
+	schema.Name = "test1"
+	table, err := testutil.CreateRelation2(ctx, asyncTxn, database, schema)
+	require.NoError(t, err)
+	vector := containers.NewVector(types.T_varchar.ToType())
+	{
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, true, true, false)
+		vector.Append(stats.Marshal(), false)
+
+		id = objectio.NewObjectid()
+		stats = objectio.NewObjectStatsWithObjectID(&id, false, true, false)
+		zm := index.NewZM(types.T_int32, 0)
+		v1 := int32(1)
+		v2 := int32(2)
+		index.UpdateZM(zm, types.EncodeInt32(&v1))
+		index.UpdateZM(zm, types.EncodeInt32(&v2))
+		objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
+		vector.Append(stats.Marshal(), false)
+
+		id = objectio.NewObjectid()
+		stats = objectio.NewObjectStatsWithObjectID(&id, false, true, false)
+		zm = index.NewZM(types.T_int32, 0)
+		v1 = int32(2)
+		v2 = int32(3)
+		index.UpdateZM(zm, types.EncodeInt32(&v1))
+		index.UpdateZM(zm, types.EncodeInt32(&v2))
+		objectio.SetObjectStatsSortKeyZoneMap(stats, zm)
+		vector.Append(stats.Marshal(), false)
+	}
+	require.NoError(t, table.AddDataFiles(ctx, vector))
+	require.NoError(t, asyncTxn.Commit(context.Background()))
+
+	resp, err := handle.runInspectCmd("merge show")
+	require.NoError(t, err)
+	require.Contains(t, string(resp.Payload), "auto merge for all: true")
+
+	handle.runInspectCmd("merge switch off")
+	resp, err = handle.runInspectCmd("merge show")
+	require.NoError(t, err)
+	require.Contains(t, string(resp.Payload), "auto merge for all: false")
+
+	handle.runInspectCmd("merge switch off -t db1.test1")
+	resp, err = handle.runInspectCmd("merge show -t db1.test1")
+	require.NoError(t, err)
+	require.Contains(t, string(resp.Payload), "auto merge for all: false")
+	require.Contains(t, string(resp.Payload), "auto merge: false")
+	require.Contains(t, string(resp.Payload), "Obj(s,c,u): 2-0-0")
+
+	handle.runInspectCmd("merge switch on -t db1.test1")
+	resp, err = handle.runInspectCmd("merge show -t db1.test1")
+	require.NoError(t, err)
+	require.Contains(t, string(resp.Payload), "auto merge for all: false")
+	require.Contains(t, string(resp.Payload), "auto merge: true")
+
+	handle.runInspectCmd("merge switch on")
+	resp, err = handle.runInspectCmd("merge show -t db1.test1")
+	require.NoError(t, err)
+	require.Contains(t, string(resp.Payload), "auto merge for all: true")
+	require.Contains(t, string(resp.Payload), "auto merge: true")
+
+	resp, err = handle.runInspectCmd("merge switch notOnOrOff")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid input")
+
+	resp, err = handle.runInspectCmd("merge switch on off")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid input")
+
+	resp, err = handle.runInspectCmd("merge trigger -t db1.test1")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "trigger nothing")
+
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0")
+	require.NoError(t, err)
+
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind ln")
+	require.NoError(t, err)
+
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind vacuum")
+	require.NoError(t, err)
+
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind tombstone")
+	require.NoError(t, err)
+
+	resp, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind xx")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid input")
+
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind tombstone --tombstone-oneshot --patch-expire 1h")
+	require.NoError(t, err)
+
+	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0 --l0-oneshot --patch-expire 1h")
+	require.NoError(t, err)
+
 }

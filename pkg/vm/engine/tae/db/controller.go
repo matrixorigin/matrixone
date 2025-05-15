@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -288,6 +289,11 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	}()
 
 	// 1. stop the merge scheduler
+	c.db.MergeScheduler.Stop()
+	rollbackSteps.Add("stop merge scheduler", func() error {
+		c.db.MergeScheduler.Start()
+		return nil
+	})
 	// TODO
 
 	// 2. switch the checkpoint|diskcleaner to replay mode
@@ -295,7 +301,7 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 2.1 remove GC disk cron job. no new GC job will be issued from now on
 	RemoveCronJob(c.db, CronJobs_Name_GCDisk)
 	RemoveCronJob(c.db, CronJobs_Name_GCCheckpoint)
-	RemoveCronJob(c.db, CronJobs_Name_Scanner)
+	// RemoveCronJob(c.db, CronJobs_Name_Scanner)
 	if err = c.db.DiskCleaner.SwitchToReplayMode(ctx); err != nil {
 		// Rollback
 		return
@@ -422,6 +428,12 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		return
 	}
 
+	c.db.MergeScheduler.Start()
+	rollbackSteps.Add("stop merge scheduler", func() error {
+		c.db.MergeScheduler.Stop()
+		return nil
+	})
+
 	// 5. start merge scheduler|checkpoint|diskcleaner
 	// 5.1 TODO: start the merger|checkpoint|flusher
 	c.db.BGFlusher.Restart() // TODO: Restart with new config
@@ -447,12 +459,12 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		// Rollback
 		return
 	}
-	if err = AddCronJob(
-		c.db, CronJobs_Name_Scanner, true,
-	); err != nil {
-		// Rollback
-		return
-	}
+	// if err = AddCronJob(
+	// 	c.db, CronJobs_Name_Scanner, true,
+	// ); err != nil {
+	// 	// Rollback
+	// 	return
+	// }
 	if err = CheckCronJobs(c.db, DBTxnMode_Write); err != nil {
 		// Rollback
 		return
@@ -675,6 +687,17 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		replayCtl.Stop()
 		replayCtl = nil
 	}
+
+	db.MergeScheduler = merge.NewMergeScheduler(
+		db.Runtime.Options.CheckpointCfg.ScanInterval,
+		db.Catalog,
+		merge.NewTNMergeExecutor(db.Runtime),
+	)
+	db.MergeScheduler.Start()
+	rollbackSteps.Add("stop merge scheduler", func() error {
+		db.MergeScheduler.Stop()
+		return nil
+	})
 
 	// start flusher and disk cleaner
 	db.BGFlusher.Start()
