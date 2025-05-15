@@ -38,7 +38,6 @@ type HnswModel struct {
 	FileSize int64
 
 	// info required for build
-	Saved       bool
 	MaxCapacity uint
 
 	// from metadata.  info required for search
@@ -87,7 +86,7 @@ func (idx *HnswModel) Destroy() error {
 		idx.Index = nil
 	}
 
-	if (idx.Saved || idx.View) && len(idx.Path) > 0 {
+	if len(idx.Path) > 0 {
 		// remove the file
 		if _, err := os.Stat(idx.Path); err == nil || os.IsExist(err) {
 			err := os.Remove(idx.Path)
@@ -101,10 +100,26 @@ func (idx *HnswModel) Destroy() error {
 
 // Save the index to file
 func (idx *HnswModel) SaveToFile() error {
-	if idx.Saved {
+
+	if !idx.Dirty {
+		// nothing change. ignore
 		return nil
 	}
 
+	// delete old file
+	oldpath := idx.Path
+	if len(oldpath) > 0 {
+		// remove the file
+		if _, err := os.Stat(oldpath); err == nil || os.IsExist(err) {
+			err := os.Remove(oldpath)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	idx.Path = ""
+
+	// save to file
 	f, err := os.CreateTemp("", "hnsw")
 	if err != nil {
 		return err
@@ -122,8 +137,6 @@ func (idx *HnswModel) SaveToFile() error {
 		return err
 	}
 	idx.Index = nil
-
-	idx.Saved = true
 	idx.Path = f.Name()
 	return nil
 }
@@ -135,6 +148,11 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 	err := idx.SaveToFile()
 	if err != nil {
 		return nil, err
+	}
+
+	if len(idx.Path) == 0 {
+		// file path is empty string. No file is written
+		return []string{}, nil
 	}
 
 	fi, err := os.Stat(idx.Path)
@@ -191,6 +209,10 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 
 // is the index empty
 func (idx *HnswModel) Empty() (bool, error) {
+	if idx.Index == nil {
+		return false, moerr.NewInternalErrorNoCtx("usearch index is nil")
+	}
+
 	sz, err := idx.Index.Len()
 	if err != nil {
 		return false, err
@@ -200,6 +222,9 @@ func (idx *HnswModel) Empty() (bool, error) {
 
 // check the index is full, i.e. 10K vectors
 func (idx *HnswModel) Full() (bool, error) {
+	if idx.Index == nil {
+		return false, moerr.NewInternalErrorNoCtx("usearch index is nil")
+	}
 	sz, err := idx.Index.Len()
 	if err != nil {
 		return false, err
@@ -209,18 +234,27 @@ func (idx *HnswModel) Full() (bool, error) {
 
 // add vector to the index
 func (idx *HnswModel) Add(key int64, vec []float32) error {
+	if idx.Index == nil {
+		return moerr.NewInternalErrorNoCtx("usearch index is nil")
+	}
 	idx.Dirty = true
 	return idx.Index.Add(uint64(key), vec)
 }
 
 // remove key
 func (idx *HnswModel) Remove(key int64) error {
+	if idx.Index == nil {
+		return moerr.NewInternalErrorNoCtx("usearch index is nil")
+	}
 	idx.Dirty = true
 	return idx.Index.Remove(uint64(key))
 }
 
 // contains key
 func (idx *HnswModel) Contains(key int64) (found bool, err error) {
+	if idx.Index == nil {
+		return false, moerr.NewInternalErrorNoCtx("usearch index is nil")
+	}
 	return idx.Index.Contains(uint64(key))
 }
 
@@ -271,6 +305,7 @@ func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor
 func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64, view bool) error {
 
 	if idx.Index != nil {
+		// index already loaded. ignore
 		return nil
 
 	}
@@ -359,20 +394,24 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 
 // unload
 func (idx *HnswModel) Unload() error {
-	if idx.Index != nil {
-		err := idx.Index.Destroy()
-		if err != nil {
-			return err
-		}
-		// reset variable
-		idx.Index = nil
-		idx.Saved = false
-		idx.Dirty = false
+	if idx.Index == nil {
+		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
+
+	err := idx.Index.Destroy()
+	if err != nil {
+		return err
+	}
+	// reset variable
+	idx.Index = nil
+	idx.Dirty = false
 	return nil
 }
 
 // Call usearch.Search
 func (idx *HnswModel) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
+	if idx.Index == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
+	}
 	return idx.Index.Search(query, limit)
 }

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -162,14 +163,28 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 
 	os.Stderr.WriteString(fmt.Sprintf("meta: %v\n", indexes))
 
-	return startsync(proc, indexes, idxcfg, idxtblcfg, cdc)
+	// assume CDC run in single thread
+	// model id for CDC is cdc:1:0:timestamp
+	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
+	ts := time.Now().Unix()
+	sync := &HnswSync{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, cdc: cdc, uid: uid, ts: ts}
+	return sync.run(proc)
 }
 
-func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, cdc *vectorindex.VectorIndexCdc[float32]) error {
+type HnswSync struct {
+	indexes []*HnswModel
+	idxcfg  vectorindex.IndexConfig
+	tblcfg  vectorindex.IndexTableConfig
+	cdc     *vectorindex.VectorIndexCdc[float32]
+	uid     string
+	ts      int64
+}
+
+func (s *HnswSync) run(proc *process.Process) error {
 	var err error
 
 	defer func() {
-		for _, m := range indexes {
+		for _, m := range s.indexes {
 			m.Destroy()
 		}
 	}()
@@ -177,7 +192,7 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 	maxcap := uint(0)
 
 	// try to find index cap
-	cdclen := len(cdc.Data)
+	cdclen := len(s.cdc.Data)
 	midx := make([]int, cdclen)
 	// reset idx to -1
 	for i := range midx {
@@ -185,8 +200,8 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 	}
 
 	// find corresponding indexes
-	for i, m := range indexes {
-		err = m.LoadIndex(proc, idxcfg, tblcfg, tblcfg.ThreadsBuild, true)
+	for i, m := range s.indexes {
+		err = m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, true)
 		if err != nil {
 			return err
 		}
@@ -206,7 +221,7 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 			maxcap = capacity
 		}
 
-		for j, row := range cdc.Data {
+		for j, row := range s.cdc.Data {
 			switch row.Type {
 			case vectorindex.CDC_UPSERT, vectorindex.CDC_DELETE:
 				if midx[j] == -1 {
@@ -226,40 +241,42 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 
 	current := (*HnswModel)(nil)
 	last := (*HnswModel)(nil)
-	if len(indexes) == 0 {
+	if len(s.indexes) == 0 {
 		// create a new model and do insert
-		newmodel, err := NewHnswModelForBuild("", idxcfg, int(tblcfg.ThreadsBuild), maxcap)
+		id := s.getModelId()
+		newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
 		if err != nil {
 			return err
 		}
-		indexes = append(indexes, newmodel)
+		s.indexes = append(s.indexes, newmodel)
 		last = newmodel
 	} else {
-		last = indexes[len(indexes)-1]
-	}
-	// last model not load yet so check the last.Len instead of Full()
-	if last.Len >= last.MaxCapacity {
-		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild("", idxcfg, int(tblcfg.ThreadsBuild), maxcap)
-		if err != nil {
-			return err
+		last = s.indexes[len(s.indexes)-1]
+		// last model not load yet so check the last.Len instead of Full()
+		if last.Len >= last.MaxCapacity {
+			id := s.getModelId()
+			// model is already full, create a new model for insert
+			newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+			if err != nil {
+				return err
+			}
+			s.indexes = append(s.indexes, newmodel)
+			last = newmodel
+
+		} else {
+			// load last
+			last.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, true)
+
 		}
-		indexes = append(indexes, newmodel)
-		last = newmodel
-
-	} else {
-		// load last
-		last.LoadIndex(proc, idxcfg, tblcfg, tblcfg.ThreadsBuild, true)
-
 	}
 
-	for i, row := range cdc.Data {
+	for i, row := range s.cdc.Data {
 
 		switch row.Type {
 		case vectorindex.CDC_UPSERT:
 			if midx[i] == -1 {
 				// cannot find key from existing model. simple insert
-				last, err = getLastModel(proc, idxcfg, tblcfg, indexes, last, maxcap)
+				last, err = s.getLastModel(proc, last, maxcap)
 				if err != nil {
 					return err
 				}
@@ -272,13 +289,21 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 				break
 
 			}
-			current, err := getCurrentModel(proc, idxcfg, tblcfg, indexes, current, midx[i])
+			current, err := s.getCurrentModel(proc, current, midx[i])
 			if err != nil {
 				return err
 			}
 
 			// update
-			_ = current
+			err = current.Remove(row.PKey)
+			if err != nil {
+				return err
+			}
+
+			err = current.Add(row.PKey, row.Vec)
+			if err != nil {
+				return err
+			}
 
 		case vectorindex.CDC_DELETE:
 			if midx[i] == -1 {
@@ -286,7 +311,7 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 				continue
 			}
 
-			current, err := getCurrentModel(proc, idxcfg, tblcfg, indexes, current, midx[i])
+			current, err := s.getCurrentModel(proc, current, midx[i])
 			if err != nil {
 				return err
 			}
@@ -298,7 +323,7 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 			}
 
 		case vectorindex.CDC_INSERT:
-			last, err = getLastModel(proc, idxcfg, tblcfg, indexes, last, maxcap)
+			last, err = s.getLastModel(proc, last, maxcap)
 			if err != nil {
 				return err
 			}
@@ -319,19 +344,25 @@ func startsync(proc *process.Process, indexes []*HnswModel, idxcfg vectorindex.I
 	return nil
 }
 
-func getCurrentModel(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, indexes []*HnswModel, current *HnswModel, idx int) (*HnswModel, error) {
-	m := indexes[idx]
+func (s *HnswSync) getModelId() string {
+	id := fmt.Sprintf("%s:%d", s.uid, s.ts)
+	s.ts++
+	return id
+}
+
+func (s *HnswSync) getCurrentModel(proc *process.Process, current *HnswModel, idx int) (*HnswModel, error) {
+	m := s.indexes[idx]
 	if current != m {
 		if current != nil {
 			current.Unload()
 		}
-		m.LoadIndex(proc, idxcfg, tblcfg, tblcfg.ThreadsBuild, true)
+		m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, true)
 		current = m
 	}
 	return current, nil
 }
 
-func getLastModel(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, indexes []*HnswModel, last *HnswModel, maxcap uint) (*HnswModel, error) {
+func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap uint) (*HnswModel, error) {
 
 	full, err := last.Full()
 	if err != nil {
@@ -339,12 +370,13 @@ func getLastModel(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg 
 	}
 
 	if full {
+		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild("", idxcfg, int(tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
 		if err != nil {
 			return nil, err
 		}
-		indexes = append(indexes, newmodel)
+		s.indexes = append(s.indexes, newmodel)
 		last = newmodel
 
 	}
