@@ -301,7 +301,7 @@ func (c *Config) setDefaultValue() error {
 
 func (c *Config) initMetaCache() {
 	if c.MetaCache.MemoryCapacity > 0 {
-		objectio.InitMetaCache(int64(c.MetaCache.MemoryCapacity), c.MetaCache.DisableS3Fifo)
+		objectio.InitMetaCache(int64(c.MetaCache.MemoryCapacity))
 	}
 }
 

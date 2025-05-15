@@ -43,7 +43,6 @@ type CacheConfig struct {
 	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
 	RPC                  morpc.Config   `toml:"rpc"`
 	CheckOverlaps        bool           `toml:"check-overlaps"`
-	DisableS3Fifo        bool           `toml:"disable-s3fifo"`
 
 	QueryClient      client.QueryClient            `json:"-"`
 	KeyRouterFactory KeyRouterFactory[pb.CacheKey] `json:"-"`
