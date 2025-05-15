@@ -119,7 +119,7 @@ func TestToPath(t *testing.T) {
 		Name:   "mystage",
 		Url:    u,
 		Status: ""}
-	mopath, query, err = s.ToPath()
+	mopath, _, err = s.ToPath()
 	require.Nil(t, err)
 	require.Equal(t, mopath, "hdfs,endpoint=localhost:8080\n:/dir/path.txt")
 
