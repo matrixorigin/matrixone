@@ -45,9 +45,10 @@ type HnswModel struct {
 	Checksum  string
 
 	// for cdc update
-	Dirty bool
-	View  bool
-	Len   uint
+	Dirty      bool
+	View       bool
+	Len        uint
+	InsertMeta bool
 }
 
 // New HnswModel struct

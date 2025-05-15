@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -248,6 +249,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
+		newmodel.InsertMeta = true
 		s.indexes = append(s.indexes, newmodel)
 		last = newmodel
 	} else {
@@ -260,6 +262,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 			if err != nil {
 				return err
 			}
+			newmodel.InsertMeta = true
 			s.indexes = append(s.indexes, newmodel)
 			last = newmodel
 
@@ -376,9 +379,60 @@ func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap u
 		if err != nil {
 			return nil, err
 		}
+		newmodel.InsertMeta = true
 		s.indexes = append(s.indexes, newmodel)
 		last = newmodel
 
 	}
 	return last, nil
+}
+
+// generate SQL to update the secondary index tables
+// 1. sync the metadata table
+// 2. sync the index file to index table
+func (s *HnswSync) ToInsertSql(ts int64) ([]string, error) {
+
+	if len(s.indexes) == 0 {
+		return []string{}, nil
+	}
+
+	sqls := make([]string, 0, len(s.indexes)+1)
+
+	metas := make([]string, 0, len(s.indexes))
+	for _, idx := range s.indexes {
+		// check Dirty.  Only update when Dirty is true
+		if !idx.Dirty {
+			continue
+		}
+
+		// delete sql
+
+		// insert sql
+		indexsqls, err := idx.ToSql(s.tblcfg)
+		if err != nil {
+			return nil, err
+		}
+
+		sqls = append(sqls, indexsqls...)
+
+		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
+		chksum, err := vectorindex.CheckSum(idx.Path)
+		if err != nil {
+			return nil, err
+		}
+
+		finfo, err := os.Stat(idx.Path)
+		if err != nil {
+			return nil, err
+		}
+		fs := finfo.Size()
+
+		// check idx.InsertMeta.  If true, Insert else Update
+		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
+	}
+
+	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", s.tblcfg.DbName, s.tblcfg.MetadataTable, strings.Join(metas, ", "))
+
+	sqls = append(sqls, metasql)
+	return sqls, nil
 }
