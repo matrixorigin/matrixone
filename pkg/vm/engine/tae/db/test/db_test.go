@@ -12203,4 +12203,8 @@ func Test_TmpFileService2(t *testing.T) {
 	files := listFn()
 	assert.Equal(t, 1, len(files))
 
+	neesGC, err := model.TransferFileGCFn(name, transferFS)
+	assert.NoError(t, err)
+	assert.False(t, neesGC)
+
 }

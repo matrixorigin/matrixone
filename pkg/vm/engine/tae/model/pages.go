@@ -102,27 +102,29 @@ func DecodeTransferFileName(name string) (time.Time, error) {
 	return createTime, err
 }
 
+func TransferFileGCFn(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
+	createTime, err := DecodeTransferFileName(filePath)
+	if err != nil {
+		return
+	}
+	if time.Since(createTime) > backgroundGCTTL {
+		neesGC = true
+		ctx := context.Background()
+		ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
+		defer cancel()
+		if err = fs.Delete(ctx, filePath); err != nil {
+			return
+		}
+		return
+	}
+	return
+}
+
 func GetTransferFS(fs *TmpFileService) (fileservice.FileService, error) {
 	return fs.GetOrCreateApp(
 		&AppConfig{
 			Name: "transfer",
-			GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
-				createTime, err := DecodeTransferFileName(filePath)
-				if err != nil {
-					return
-				}
-				if time.Since(createTime) > backgroundGCTTL {
-					neesGC = true
-					ctx := context.Background()
-					ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
-					defer cancel()
-					if err = fs.Delete(ctx, filePath); err != nil {
-						return
-					}
-					return
-				}
-				return
-			},
+			GCFn: TransferFileGCFn,
 		},
 	)
 }
