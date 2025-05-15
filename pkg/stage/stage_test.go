@@ -75,6 +75,31 @@ func TestGetCredentials(t *testing.T) {
 	require.Equal(t, v, "default")
 }
 
+func TestToPathMinio(t *testing.T) {
+	c := make(map[string]string)
+	c[PARAMKEY_AWS_KEY_ID] = "key"
+	c[PARAMKEY_AWS_SECRET_KEY] = "secret"
+	c[PARAMKEY_AWS_REGION] = "region"
+	c[PARAMKEY_ENDPOINT] = "endpoint"
+	c[PARAMKEY_PROVIDER] = S3_PROVIDER_MINIO
+
+	// minio path
+	u, err := url.Parse("s3://bucket/path/a.csv")
+	require.Nil(t, err)
+	s := StageDef{Id: 0,
+		Name:        "mystage",
+		Url:         u,
+		Credentials: c,
+		Status:      ""}
+
+	mopath, query, err := s.ToPath()
+	require.Nil(t, err)
+
+	require.Equal(t, mopath, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,secret=secret,is-minio=true\n:/path/a.csv")
+	fmt.Printf("mo=%s, query = %s", mopath, query)
+
+}
+
 func TestToPath(t *testing.T) {
 	c := make(map[string]string)
 	c[PARAMKEY_AWS_KEY_ID] = "key"
@@ -95,7 +120,7 @@ func TestToPath(t *testing.T) {
 	mopath, query, err := s.ToPath()
 	require.Nil(t, err)
 
-	require.Equal(t, mopath, "s3,endpoint,region,bucket,key,secret,\n:/path/a.csv")
+	require.Equal(t, mopath, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,secret=secret\n:/path/a.csv")
 	fmt.Printf("mo=%s, query = %s", mopath, query)
 
 	// file path
@@ -111,6 +136,17 @@ func TestToPath(t *testing.T) {
 	require.Equal(t, query, "")
 
 	require.Equal(t, mopath, "/tmp/dir/subdir/file.pdf")
+
+	// hdfs path
+	u, err = url.Parse("hdfs://localhost:8080/dir/path.txt")
+	require.Nil(t, err)
+	s = StageDef{Id: 0,
+		Name:   "mystage",
+		Url:    u,
+		Status: ""}
+	mopath, _, err = s.ToPath()
+	require.Nil(t, err)
+	require.Equal(t, mopath, "hdfs,endpoint=localhost:8080\n:/dir/path.txt")
 
 	// invalid schema
 	u, err = url.Parse("https://localhost/path/file.pdf")
