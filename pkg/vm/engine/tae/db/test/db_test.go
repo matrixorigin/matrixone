@@ -12115,8 +12115,8 @@ func Test_TmpFileService(t *testing.T) {
 	assert.NoError(t, err)
 
 	testFS.Name()
-	name:=model.GetTransferFileName()
-	_,err = model.DecodeTransferFileName(name)
+	name := model.GetTransferFileName()
+	_, err = model.DecodeTransferFileName(name)
 	assert.NoError(t, err)
 	data := []byte("test")
 	ioEntry := fileservice.IOEntry{
