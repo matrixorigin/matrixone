@@ -185,14 +185,17 @@ type HnswSync struct {
 	ts      int64
 }
 
+func (s *HnswSync) destroy() {
+	for _, m := range s.indexes {
+		m.Destroy()
+	}
+	s.indexes = nil
+}
+
 func (s *HnswSync) run(proc *process.Process) error {
 	var err error
 
-	defer func() {
-		for _, m := range s.indexes {
-			m.Destroy()
-		}
-	}()
+	defer s.destroy()
 
 	maxcap := uint(0)
 
@@ -350,8 +353,12 @@ func (s *HnswSync) run(proc *process.Process) error {
 		return err
 	}
 
+	return s.runSqls(proc, sqls)
+}
+
+func (s *HnswSync) runSqls(proc *process.Process, sqls []string) error {
 	opts := executor.Options{}
-	err = runTxn(proc, func(exec executor.TxnExecutor) error {
+	err := runTxn(proc, func(exec executor.TxnExecutor) error {
 		for _, sql := range sqls {
 			res, err := exec.Exec(sql, opts.StatementOption())
 			if err != nil {
