@@ -103,6 +103,11 @@ func (idx *HnswModel) Destroy() error {
 // Save the index to file
 func (idx *HnswModel) SaveToFile() error {
 
+	if idx.Index == nil {
+		// index is nil. ignore
+		return nil
+	}
+
 	if !idx.Dirty {
 		// nothing change. ignore
 		return nil
@@ -139,6 +144,7 @@ func (idx *HnswModel) SaveToFile() error {
 		return err
 	}
 	idx.Index = nil
+	idx.Dirty = false
 	idx.Path = f.Name()
 	return nil
 }
