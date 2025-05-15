@@ -179,7 +179,7 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 			blkid := objectio.NewBlockidWithObjectID(obj.ID(), uint16(blkOffset))
 			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, &blkid, common.CheckpointAllocator)
 			if err != nil || bat == nil || bat.Length() == prevLen {
-				panic(fmt.Sprintf("blkbat is nil, obj %v, blkid %v, err %v", obj.ID().String(), blkid, err))
+				panic(fmt.Sprintf("blkbat is nil, obj %v, blkid %v, err %v", obj.ID().String(), blkOffset, err))
 			}
 		}
 	}
