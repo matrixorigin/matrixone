@@ -197,7 +197,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 
 	defer s.destroy()
 
-	maxcap := uint(0)
+	maxcap := uint(s.tblcfg.IndexCapacity)
 
 	// try to find index cap
 	cdclen := len(s.cdc.Data)
@@ -361,6 +361,9 @@ func (s *HnswSync) run(proc *process.Process) error {
 }
 
 func (s *HnswSync) runSqls(proc *process.Process, sqls []string) error {
+	for _, s := range sqls {
+		os.Stderr.WriteString(fmt.Sprintf("sql : %s\n", s))
+	}
 	opts := executor.Options{}
 	err := runTxn(proc, func(exec executor.TxnExecutor) error {
 		for _, sql := range sqls {
