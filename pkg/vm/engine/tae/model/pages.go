@@ -102,9 +102,8 @@ func DecodeTransferFileName(name string) (time.Time, error) {
 	return createTime, err
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
-
-	transferFS, err := fs.GetOrCreateApp(
+func GetTransferFS(fs *TmpFileService) (fileservice.FileService, error) {
+	return fs.GetOrCreateApp(
 		&AppConfig{
 			Name: "transfer",
 			GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
@@ -123,6 +122,11 @@ func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *TmpF
 			},
 		},
 	)
+}
+
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
+
+	transferFS, err := GetTransferFS(fs)
 	if err != nil {
 		panic(err)
 	}
