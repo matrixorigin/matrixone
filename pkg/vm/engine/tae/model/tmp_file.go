@@ -93,8 +93,18 @@ func (fs *TmpFileService) GetOrCreateApp(appConfig *AppConfig) (*AppFS, error) {
 	return app, nil
 }
 
+func (fs *TmpFileService) getAllApps() []*AppFS {
+	fs.appsMu.RLock()
+	defer fs.appsMu.RUnlock()
+	apps := make([]*AppFS, 0, len(fs.apps))
+	for _, app := range fs.apps {
+		apps = append(apps, app)
+	}
+	return apps
+}
 func (fs *TmpFileService) gc(ctx context.Context) {
-	for _, appFS := range fs.apps {
+	apps := fs.getAllApps()
+	for _, appFS := range apps {
 		appConfig := appFS.appConfig
 		appPath := path.Join(TmpFileDir, appConfig.Name)
 		entries := fs.fs.List(ctx, appPath)

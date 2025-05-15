@@ -287,6 +287,5 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.TmpFSGCInterval = model.TmpFileGCInterval
 	}
 
-
 	return o
 }

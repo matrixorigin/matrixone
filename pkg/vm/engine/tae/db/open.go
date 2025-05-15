@@ -139,8 +139,8 @@ func Open(
 	})
 	db.TmpFS = model.NewTmpFileService(
 		db.Opts.LocalFs,
-		 func(fn func(context.Context)) model.CancelableJob {
-		return tasks.NewCancelableCronJob(
+		func(fn func(context.Context)) model.CancelableJob {
+			return tasks.NewCancelableCronJob(
 				"TMP-FILE-GC",
 				opts.TmpFSGCInterval,
 				fn,
