@@ -313,7 +313,7 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 		item, ok := c.main.dequeue()
 		if !ok {
 			// empty queue
-			break
+			return
 		}
 
 		deleted := item.isDeleted()
