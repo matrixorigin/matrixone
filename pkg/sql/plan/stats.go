@@ -109,8 +109,8 @@ func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *StatsInfoWrappe
 	if sc == nil {
 		return nil
 	}
-	if s, ok := sc.cache[tableID]; ok {
-		return s
+	if w, ok := sc.cache[tableID]; ok {
+		return w
 	}
 
 	if create {
@@ -131,7 +131,7 @@ func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *StatsInfoWrappe
 
 // SetStatsInfo updates the stats info in the cache.
 func (sc *StatsCache) SetStatsInfo(tableID uint64, s *pb.StatsInfo) {
-	if sc == nil {
+	if sc == nil || s == nil {
 		return
 	}
 
