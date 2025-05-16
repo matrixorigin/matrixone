@@ -43,7 +43,7 @@ func get_rand(start int64, end int64, r *rand.Rand) int64 {
 	return start + r.Int64N(end-start)
 }
 
-func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64], startkey int64, endkey int64, r *rand.Rand) {
+func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64], startkey int64, endkey int64, r *rand.Rand, mutex *sync.Mutex) {
 
 	ncpu := runtime.NumCPU()
 	var wg sync.WaitGroup
@@ -60,8 +60,9 @@ func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64],
 
 				//fmt.Printf("start = %d, end = %d\n", startkey, endkey)
 				for range endkey - startkey {
-
+					mutex.Lock()
 					key := get_rand(startkey, endkey, r)
+					mutex.Unlock()
 					cache_read(ctx, cache, key)
 				}
 			}
@@ -72,6 +73,7 @@ func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64],
 }
 
 func data_shift(b *testing.B, time int64) {
+	var mutex sync.Mutex
 	ctx := context.Background()
 	cache_size := g_cache_size
 	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil, false)
@@ -88,12 +90,13 @@ func data_shift(b *testing.B, time int64) {
 
 	b.ResetTimer()
 
-	dataset_read(b, ctx, cache, d1[0], d1[1], r)
-	dataset_read(b, ctx, cache, d2[0], d2[1], r)
-	dataset_read(b, ctx, cache, d3[0], d3[1], r)
+	dataset_read(b, ctx, cache, d1[0], d1[1], r, &mutex)
+	dataset_read(b, ctx, cache, d2[0], d2[1], r, &mutex)
+	dataset_read(b, ctx, cache, d3[0], d3[1], r, &mutex)
 }
 
 func data_readNx(b *testing.B, time int64) {
+	var mutex sync.Mutex
 	ctx := context.Background()
 	cache_size := g_cache_size
 	cache := New[int64, int64](fscache.ConstCapacity(int64(cache_size)), ShardInt[int64], nil, nil, nil, false)
@@ -102,7 +105,7 @@ func data_readNx(b *testing.B, time int64) {
 	r := rand.New(rand.NewPCG(1, 2))
 
 	b.ResetTimer()
-	dataset_read(b, ctx, cache, start, end, r)
+	dataset_read(b, ctx, cache, start, end, r, &mutex)
 }
 
 func BenchmarkSimCacheRead1x(b *testing.B) {

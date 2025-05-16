@@ -42,11 +42,12 @@ type Cache[K comparable, V any] struct {
 }
 
 type _CacheItem[K comparable, V any] struct {
-	mu    sync.Mutex
-	key   K
-	value V
-	size  int64
-	freq  int8
+	mu      sync.Mutex
+	key     K
+	value   V
+	size    int64
+	freq    int8
+	deleted bool
 }
 
 /*
@@ -73,6 +74,22 @@ func (c *_CacheItem[K, V]) getFreq() int8 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.freq
+}
+
+func (c *_CacheItem[K, V]) isDeleted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deleted
+}
+
+func (c *_CacheItem[K, V]) setDeleted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.deleted {
+		c.deleted = true
+		return true
+	}
+	return false
 }
 
 // thread safe to run post function such as postGet, postSet and postEvict
@@ -196,14 +213,17 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
-	item, ok := c.htab.Get(key)
+	item, ok := c.htab.GetAndDelete(key)
 	if !ok {
 		return
 	}
-	c.htab.Remove(key)
+
+	needsPostEvict := item.setDeleted()
 
 	// post evict
-	item.postFunc(ctx, c.postEvict)
+	if needsPostEvict {
+		item.postFunc(ctx, c.postEvict)
+	}
 	// queues will be update in evict
 }
 
@@ -261,6 +281,12 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			return
 		}
 
+		deleted := item.isDeleted()
+		if deleted {
+			c.usedSmall.Add(-item.size)
+			return
+		}
+
 		if item.getFreq() > 1 {
 			// put main
 			c.main.enqueue(item)
@@ -288,6 +314,12 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 		if !ok {
 			// empty queue
 			break
+		}
+
+		deleted := item.isDeleted()
+		if deleted {
+			c.usedMain.Add(-item.size)
+			return
 		}
 
 		if item.getFreq() > 0 {
