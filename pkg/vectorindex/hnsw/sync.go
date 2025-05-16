@@ -166,7 +166,9 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 		return err
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("meta: %v\n", indexes))
+	for i, idxx := range indexes {
+		os.Stderr.WriteString(fmt.Sprintf("meta: %d id=%s\n", i, idxx.Id))
+	}
 
 	// assume CDC run in single thread
 	// model id for CDC is cdc:1:0:timestamp
@@ -227,6 +229,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 						return err
 					}
 					if found {
+						os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
 						midx[j] = i
 					}
 				}
@@ -252,6 +255,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 		last = s.indexes[len(s.indexes)-1]
 		// last model not load yet so check the last.Len instead of Full()
 		if last.Len >= last.MaxCapacity {
+			os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", last.Len, last.MaxCapacity))
 			id := s.getModelId()
 			// model is already full, create a new model for insert
 			newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
@@ -263,6 +267,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 			last = newmodel
 
 		} else {
+			os.Stderr.WriteString(fmt.Sprintf("load model with index %d\n", len(s.indexes)-1))
 			// load last
 			last.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, true)
 
@@ -307,6 +312,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 		case vectorindex.CDC_DELETE:
 			if midx[i] == -1 {
 				// cannot find key from existing models. ignore it
+				os.Stderr.WriteString("DELETE NOT FOUND\n")
 				continue
 			}
 
@@ -408,6 +414,7 @@ func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap u
 		last = newmodel
 
 	}
+	os.Stderr.WriteString(fmt.Sprintf("getlast model full %v id = %s\n", full, last.Id))
 	return last, nil
 }
 
@@ -461,8 +468,9 @@ func (s *HnswSync) ToSql(ts int64) ([]string, error) {
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 
-	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", s.tblcfg.DbName, s.tblcfg.MetadataTable, strings.Join(metas, ", "))
-
-	sqls = append(sqls, metasql)
+	if len(metas) > 0 {
+		metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", s.tblcfg.DbName, s.tblcfg.MetadataTable, strings.Join(metas, ", "))
+		sqls = append(sqls, metasql)
+	}
 	return sqls, nil
 }

@@ -169,7 +169,7 @@ func (s *HnswSearch) Destroy() {
 // load metadata from database
 func LoadMetadata(proc *process.Process, dbname string, metatbl string) ([]*HnswModel, error) {
 
-	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s`", dbname, metatbl)
+	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
 	res, err := runSql(proc, sql)
 	if err != nil {
 		return nil, err
