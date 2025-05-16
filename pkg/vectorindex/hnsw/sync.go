@@ -211,7 +211,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 
 	// find corresponding indexes
 	for i, m := range s.indexes {
-		err = m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, true)
+		err = m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 		if err != nil {
 			return err
 		}
@@ -269,7 +269,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 		} else {
 			os.Stderr.WriteString(fmt.Sprintf("load model with index %d\n", len(s.indexes)-1))
 			// load last
-			last.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, true)
+			last.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 
 		}
 	}
@@ -389,7 +389,7 @@ func (s *HnswSync) getCurrentModel(proc *process.Process, current *HnswModel, id
 		if current != nil {
 			current.Unload()
 		}
-		m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, true)
+		m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 		current = m
 	}
 	return current, nil

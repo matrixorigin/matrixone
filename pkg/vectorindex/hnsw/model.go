@@ -410,10 +410,10 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 
 	if view {
 		err = usearchidx.Load(idx.Path)
-		usearchidx.Reserve(uint(tblcfg.IndexCapacity))
 		idx.View = true
 	} else {
 		err = usearchidx.Load(idx.Path)
+		usearchidx.Reserve(uint(tblcfg.IndexCapacity))
 	}
 	if err != nil {
 		return err
