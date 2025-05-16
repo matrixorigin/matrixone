@@ -37,4 +37,5 @@ func TestShardMap(t *testing.T) {
 
 	v, ok = m.GetAndDelete(1)
 	assert.Equal(t, v, "1")
+	assert.Equal(t, ok, true)
 }
