@@ -113,7 +113,9 @@ func (s *taskScheduler) ScheduleMultiScopedTxnTaskWithObserver(
 	observers ...base.Observer) (task tasks.Task, err error) {
 	task = NewScheduledTxnTask(ctx, s.db, taskType, scopes, factory)
 	for _, observer := range observers {
-		task.AddObserver(observer)
+		if observer != nil {
+			task.AddObserver(observer)
+		}
 	}
 	err = s.Schedule(task)
 	return
