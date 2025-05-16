@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -12070,4 +12071,34 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	bat2, err := reader.GetCheckpointData(ctx)
 	assert.NoError(t, err)
 	defer bat2.Clean(common.DebugAllocator)
+}
+
+func TestTNCatalogEventSource(t *testing.T) {
+	ctx := context.Background()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+
+	source := &merge.TNCatalogEventSource{
+		Catalog:    tae.Catalog,
+		TxnManager: tae.TxnMgr,
+	}
+
+	require.Nil(t, source.GetMergeSettingsBatchFn()) // no mo_merge_settings table
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	assert.NoError(t, err)
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.Name = pkgcatalog.MO_MERGE_SETTINGS
+	initData := catalog.MockBatch(schema, 1)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	rel.Append(ctx, initData)
+	assert.NoError(t, txn.Commit(ctx))
+
+	bat, free := source.GetMergeSettingsBatchFn()()
+	defer free()
+	require.NotNil(t, bat)
+	require.Equal(t, 1, bat.RowCount())
 }

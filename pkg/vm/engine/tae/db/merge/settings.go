@@ -50,6 +50,9 @@ var mergeSettingsDecoders = map[uint32]func(bs []byte) (*MergeSettings, error){
 		if err := json.Unmarshal(normal, &settings); err != nil {
 			return nil, err
 		}
+		if settings.LNMinPointDepthPerCluster == 0 {
+			return nil, moerr.NewInternalErrorNoCtxf("probable corrupted merge settings")
+		}
 		return &settings, nil
 	},
 }
