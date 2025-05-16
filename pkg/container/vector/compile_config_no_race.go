@@ -19,3 +19,7 @@ package vector
 func checkTypeIfRaceDetectorEnabled[T any](vec *Vector) {
 	// do nothing
 }
+
+func shrinkSortedCheckIfRaceDetectorEnabled(sels []int64) {
+	// do nothing
+}

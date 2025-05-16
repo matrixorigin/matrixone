@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build race
+//go:build !race
 
-package vector
+package readutil
 
-func checkTypeIfRaceDetectorEnabled[T any](vec *Vector) {
-	checkType[T](vec)
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
+func panicIfRowIdsUnsortedIfRaceDetectorEnabled(
+	deletedRowIds []types.Rowid,
+) {
+	// do nothing
 }

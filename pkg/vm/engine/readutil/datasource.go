@@ -230,6 +230,10 @@ func FastApplyDeletesByRowIds(
 	isDeletedRowIdsSorted bool,
 ) {
 
+	if isDeletedRowIdsSorted {
+		panicIfRowIdsUnsortedIfRaceDetectorEnabled(deletedRowIds)
+	}
+
 	var (
 		ptr int
 		cur types.Rowid

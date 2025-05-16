@@ -898,6 +898,9 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
 func (v *Vector) Shrink(sels []int64, negate bool) {
+
+	shrinkSortedCheckIfRaceDetectorEnabled(sels)
+
 	if v.IsConst() {
 		if negate {
 			v.length -= len(sels)

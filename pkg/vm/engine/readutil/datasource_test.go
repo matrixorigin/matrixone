@@ -163,43 +163,39 @@ func TestObjListRelData4(t *testing.T) {
 }
 
 func TestFastApplyDeletesByRowIds(t *testing.T) {
-	//rowIdStrs := []string{
-	//	"0196a9cb-3fc6-7245-a9ad-51f37d9541cb-0-0-2900",
-	//	"0196a9cb-4184-775b-a4cb-2047eace6e7c-0-0-1022",
-	//	"0196a9cb-4184-775b-a4cb-2047eace6e7c-0-1-4345",
-	//	"0196a9cb-44fd-7631-94e7-abbe8df59685-0-0-100",
-	//	"0196a9cb-44fd-7631-94e7-abbe8df59685-0-1-302",
-	//	"0196a9cc-7718-7810-8ac3-d6acbd662256-0-2-1231",
-	//	"0196a9cc-7718-7810-8ac3-d6acbd662256-0-2-2834",
-	//	"0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-6305",
-	//	"0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-6994",
-	//}
-	//
-	//	0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0
-	//	3967, 3988, 4068, 4111, 4207, 4328, 4515, 5007, 5051, 5492, 5777, 5988, 6273, 6305, 6564, 7459, 7676, 7849,
+	rowIdStrs := []string{
+		"0196a9cb-3fc6-7245-a9ad-51f37d9541cb-0-0-2900",
+		"0196a9cb-4184-775b-a4cb-2047eace6e7c-0-0-1022",
+		"0196a9cb-4184-775b-a4cb-2047eace6e7c-0-1-4345",
+		"0196a9cb-44fd-7631-94e7-abbe8df59685-0-0-100",
+		"0196a9cb-44fd-7631-94e7-abbe8df59685-0-1-302",
+		"0196a9cc-7718-7810-8ac3-d6acbd662256-0-2-1231",
+		"0196a9cc-7718-7810-8ac3-d6acbd662256-0-2-2834",
+		"0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-6305",
+		"0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-6994",
+	}
 
-	var deletedRowIds []types.Rowid
-	bid0 := types.BuildTestBlockid(1, 0)
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 2900))
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 1022))
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 4345))
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 100))
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid0, 302))
+	deletedRowIds := make([]types.Rowid, 0, len(rowIdStrs))
+	for _, rowIdStr := range rowIdStrs {
+		rowId, err := types.ParseRowIdFromString(rowIdStr)
+		assert.Nil(t, err)
+		deletedRowIds = append(deletedRowIds, *rowId)
+	}
 
-	bid1 := types.BuildTestBlockid(2, 0)
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid1, 1231))
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid1, 2834))
+	checkRowIdStr := "0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-0"
+	checkRowId, err := types.ParseRowIdFromString(checkRowIdStr)
+	assert.Nil(t, err)
 
-	bid2 := types.BuildTestBlockid(3, 0)
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid2, 6305))
-	deletedRowIds = append(deletedRowIds, types.NewRowid(&bid2, 6994))
+	checkBid := checkRowId.CloneBlockID()
 
-	checkBid := bid2
 	leftRows := []int64{
 		3967, 3988, 4068, 4111, 4207, 4328,
 		4515, 5007, 5051, 5492, 5777, 5988, 6273,
 		6305, 6564, 7459, 7676, 7849,
 	}
+
+	sorted := slices.IsSortedFunc(deletedRowIds, func(a, b types.Rowid) int { return a.Compare(&b) })
+	require.True(t, sorted)
 
 	FastApplyDeletesByRowIds(&checkBid, &leftRows, nil, deletedRowIds, true)
 
@@ -292,11 +288,6 @@ func TestFastApplyDeletesByRowIds2(t *testing.T) {
 	{
 		sorted := slices.IsSortedFunc(rowIds, func(a, b types.Rowid) int { return a.Compare(&b) })
 		require.False(t, sorted)
-
-		FastApplyDeletesByRowIds(&checkBid, &offsets, nil, rowIds, true)
-
-		idx = slices.Index(offsets, 6361)
-		require.NotEqual(t, -1, idx)
 	}
 
 	{
@@ -368,6 +359,9 @@ func TestFastApplyDeletesByRowIdsRandom(t *testing.T) {
 			old := make([]int64, len(leftRows))
 			copy(old, leftRows)
 
+			sorted := slices.IsSortedFunc(deletedRowIds, func(a, b types.Rowid) int { return a.Compare(&b) })
+			require.True(t, sorted)
+
 			FastApplyDeletesByRowIds(&checkBid, &leftRows, nil, deletedRowIds, i%2 == 0)
 
 			for j := range leftRows {
@@ -398,8 +392,8 @@ func TestFastApplyDeletesByRowIdsRandom(t *testing.T) {
 
 func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 	foo := func(leftRowsLen, offsetsLen int) {
-		var leftRows []int64
-		var offsets []int64
+		var leftRows []int64 = make([]int64, 0, leftRowsLen)
+		var offsets []int64 = make([]int64, 0, offsetsLen)
 
 		limit := max(leftRowsLen, offsetsLen)
 
