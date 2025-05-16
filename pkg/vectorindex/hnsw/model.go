@@ -353,8 +353,11 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 
 		// load index to memory
 		defer func() {
-			if !view {
-				// if view == false, remove the file
+			if view {
+				// if view == true, remove the file.  right now view equals to read-only model when search.
+				// since model loads into memory anyway, we can safely remove the file after load.
+				// NOTE: when choose to load with usearch.View() mmap(), we cannot remove this file.
+				// for update, we need this file for Load() and unload().
 				os.Remove(fp.Name())
 			}
 		}()
