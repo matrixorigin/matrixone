@@ -1145,3 +1145,27 @@ func DedupSortedBatches(
 	}
 	return nil
 }
+
+func VectorsCopyToBatch(
+	vecs Vectors,
+	outputBat *batch.Batch,
+	mp *mpool.MPool,
+) (err error) {
+	if len(vecs) == 0 {
+		return
+	}
+	for i, vec := range vecs {
+		outputBat.Vecs[i] = movec.NewVec(*vec.GetType())
+		if err = outputBat.Vecs[i].UnionBatch(
+			&vec,
+			0,
+			vec.Length(),
+			nil,
+			mp,
+		); err != nil {
+			return
+		}
+	}
+	outputBat.SetRowCount(outputBat.Vecs[0].Length())
+	return
+}
