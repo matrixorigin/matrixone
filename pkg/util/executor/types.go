@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -84,6 +85,7 @@ type Result struct {
 	AffectedRows uint64
 	Batches      []*batch.Batch
 	Mp           *mpool.MPool
+	LogicalPlan  *plan.Query
 }
 
 // NewResult create result

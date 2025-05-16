@@ -128,6 +128,36 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 			return err
 		}
 	}
+
+	for i, bq := range e.QueryPlan.BackgroundQueries {
+		nodes := bq.Nodes
+
+		isForest := false
+		if len(bq.Steps) > 1 {
+			isForest = true
+		}
+
+		for index, rootNodeID := range bq.Steps {
+			logutil.Debugf("------------------------------------Query Plan-%v_%v ---------------------------------------------", i, index)
+			settings := FormatSettings{
+				buffer: buffer,
+				offset: 0,
+				indent: 2,
+				level:  0,
+			}
+
+			if isForest {
+				title := fmt.Sprintf("Plan %v:", index)
+				settings.buffer.PushPlanTitle(title)
+			}
+
+			err := traversalPlan(ctx, nodes[rootNodeID], nodes, &settings, options)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
