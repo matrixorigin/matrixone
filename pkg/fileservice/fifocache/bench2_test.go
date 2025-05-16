@@ -39,7 +39,9 @@ func cache_read(ctx context.Context, cache *Cache[int64, int64], key int64) {
 	}
 }
 
-func get_rand(start int64, end int64, r *rand.Rand) int64 {
+func get_rand(start int64, end int64, r *rand.Rand, mutex *sync.Mutex) int64 {
+	mutex.Lock()
+	defer mutex.Unlock()
 	return start + r.Int64N(end-start)
 }
 
@@ -60,9 +62,7 @@ func dataset_read(b *testing.B, ctx context.Context, cache *Cache[int64, int64],
 
 				//fmt.Printf("start = %d, end = %d\n", startkey, endkey)
 				for range endkey - startkey {
-					mutex.Lock()
-					key := get_rand(startkey, endkey, r)
-					mutex.Unlock()
+					key := get_rand(startkey, endkey, r, mutex)
 					cache_read(ctx, cache, key)
 				}
 			}
