@@ -3171,15 +3171,3 @@ func TestProtoVector(t *testing.T) {
 	_, err = ProtoVectorToVector(vec2)
 	require.NoError(t, err)
 }
-
-func TestX(t *testing.T) {
-	mp := mpool.MustNewZero()
-	vec := NewVec(types.T_int32.ToType())
-	for i := 0; i < 100; i++ {
-		AppendFixed[int32](vec, int32(i), false, mp)
-	}
-
-	//vec.Shrink([]int64{3, 1, 2}, false)
-
-	AppendFixed[int64](vec, int64(100), false, mp)
-}
