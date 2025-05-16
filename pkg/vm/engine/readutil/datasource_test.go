@@ -175,7 +175,7 @@ func TestFastApplyDeletesByRowIds(t *testing.T) {
 		"0196a9cd-1213-79cb-b81f-1b4a74f8b50a-0-0-6994",
 	}
 
-	var deletedRowIds []types.Rowid
+	deletedRowIds := make([]types.Rowid, 0, len(rowIdStrs))
 	for _, rowIdStr := range rowIdStrs {
 		rowId, err := types.ParseRowIdFromString(rowIdStr)
 		assert.Nil(t, err)
@@ -193,6 +193,9 @@ func TestFastApplyDeletesByRowIds(t *testing.T) {
 		4515, 5007, 5051, 5492, 5777, 5988, 6273,
 		6305, 6564, 7459, 7676, 7849,
 	}
+
+	sorted := slices.IsSortedFunc(deletedRowIds, func(a, b types.Rowid) int { return a.Compare(&b) })
+	require.True(t, sorted)
 
 	FastApplyDeletesByRowIds(&checkBid, &leftRows, nil, deletedRowIds, true)
 
@@ -389,8 +392,8 @@ func TestFastApplyDeletesByRowIdsRandom(t *testing.T) {
 
 func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 	foo := func(leftRowsLen, offsetsLen int) {
-		var leftRows []int64
-		var offsets []int64
+		var leftRows []int64 = make([]int64, 0, leftRowsLen)
+		var offsets []int64 = make([]int64, 0, offsetsLen)
 
 		limit := max(leftRowsLen, offsetsLen)
 
