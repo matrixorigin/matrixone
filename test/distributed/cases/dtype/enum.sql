@@ -298,4 +298,16 @@ drop table cte01;
 
 drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key);
+
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), primary key (col2));
+
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') unique);
+
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), unique key (col2));
+
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), key (col2));
 drop table if exists agg01;

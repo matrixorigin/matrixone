@@ -15,6 +15,7 @@
 package datalink
 
 import (
+	"encoding/csv"
 	"io"
 	"net/url"
 	"path/filepath"
@@ -104,6 +105,16 @@ func ParseDatalink(fsPath string, proc *process.Process) (string, []int64, error
 	switch u.Scheme {
 	case stage.FILE_PROTOCOL:
 		moUrl = strings.Join([]string{u.Host, u.Path}, "")
+	case stage.HDFS_PROTOCOL:
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		opts := []string{"hdfs", "endpoint=" + u.Host}
+
+		if err = w.Write(opts); err != nil {
+			return "", nil, err
+		}
+		w.Flush()
+		moUrl = fileservice.JoinPath(buf.String(), u.Path)
 	case stage.STAGE_PROTOCOL:
 		moUrl, _, err = stageutil.UrlToPath(fsPath, proc)
 		if err != nil {
