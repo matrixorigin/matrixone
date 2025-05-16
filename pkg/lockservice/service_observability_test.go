@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -192,7 +193,7 @@ func TestIterLocks(t *testing.T) {
 				require.NoError(t, s.Unlock(ctx, txn4, timestamp.Timestamp{}))
 			}()
 
-			// txn5 wait txn2 and txn3 on [3,4]
+			// txn5 wait txn2 and txn3 on [2,3]
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -219,6 +220,11 @@ func TestIterLocks(t *testing.T) {
 			expectedHolders = append(expectedHolders, [][]byte{txn2, txn3})
 			expectedWaiters = append(expectedWaiters, [][]byte{txn5})
 
+			// txn1 : 1
+			// txn2 : 2, 3 shares
+			// txn3 : 2, 3 shares
+			// txn4 -> txn1 on 1
+			// txn5 -> txn2, txn3 on 2, 3
 			n := 0
 			s.IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool {
 				require.Equal(t, table, tableID)
@@ -227,7 +233,12 @@ func TestIterLocks(t *testing.T) {
 
 				i := 0
 				lock.IterHolders(func(holder pb.WaitTxn) bool {
-					require.Equal(t, expectedHolders[n][i], holder.TxnID)
+					if n == 1 {
+						// holders in map
+						require.True(t, bytes.Equal(expectedHolders[n][0], holder.TxnID) || bytes.Equal(expectedHolders[n][1], holder.TxnID))
+					} else {
+						require.Equal(t, expectedHolders[n][i], holder.TxnID)
+					}
 					i++
 					return true
 				})
