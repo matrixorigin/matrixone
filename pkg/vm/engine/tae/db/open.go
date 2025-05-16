@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 const (
@@ -136,11 +137,25 @@ func Open(
 		scheduler.Stop()
 		return nil
 	})
+	db.TmpFS = model.NewTmpFileService(
+		db.Opts.LocalFs,
+		func(fn func(context.Context)) model.CancelableJob {
+			return tasks.NewCancelableCronJob(
+				"TMP-FILE-GC",
+				opts.TmpFSGCInterval,
+				fn,
+				true,
+				1,
+			)
+		},
+	)
+	db.TmpFS.Start()
 
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeObjectFS(opts.Fs),
 		dbutils.WithRuntimeLocalFS(opts.LocalFs),
+		dbutils.WithRuntimeTmpFS(db.TmpFS),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),

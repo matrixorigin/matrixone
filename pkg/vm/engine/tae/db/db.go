@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -112,6 +113,8 @@ type DB struct {
 	Runtime *dbutils.Runtime
 
 	ReplayCtl *replayCtl
+
+	TmpFS *model.TmpFileService
 
 	DBLocker io.Closer
 
@@ -356,6 +359,7 @@ func (db *DB) Close() error {
 			// TODO: error handling
 			db.ReplayCtl.Stop()
 		}
+		db.TmpFS.Stop()
 		db.MergeScheduler.Stop()
 		db.CronJobs.Reset()
 		db.BGFlusher.Stop()
