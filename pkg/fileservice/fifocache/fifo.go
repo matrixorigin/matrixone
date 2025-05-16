@@ -296,7 +296,9 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			// evict
 			c.htab.Remove(item.key)
 			// post evict
-			item.postFunc(ctx, c.postEvict)
+			if item.setDeleted() {
+				item.postFunc(ctx, c.postEvict)
+			}
 
 			c.usedSmall.Add(-item.size)
 			if !c.disable_s3fifo {
@@ -330,7 +332,9 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			// evict
 			c.htab.Remove(item.key)
 			// post evict
-			item.postFunc(ctx, c.postEvict)
+			if item.setDeleted() {
+				item.postFunc(ctx, c.postEvict)
+			}
 			c.usedMain.Add(-item.size)
 			return
 		}
