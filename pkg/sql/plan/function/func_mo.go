@@ -963,6 +963,7 @@ var (
 		"mo_snapshots":                0,
 		"mo_pitr":                     0,
 		catalog.MO_TABLE_STATS:        0,
+		catalog.MO_MERGE_SETTINGS:     0,
 	}
 )
 
