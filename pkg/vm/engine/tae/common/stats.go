@@ -70,6 +70,9 @@ type TableCompactStat struct {
 	flushDeadline time.Time
 	// lastMergeTime is the last merge time.
 	lastMergeTime time.Time
+
+	// SkipCheckDirtyWhenSubscribe is true if the table is subscribed by MOCtl.
+	SkipCheckDirtyWhenSubscribe bool
 }
 
 func NewTableCompactStatWithRandomMergeTime() TableCompactStat {

@@ -74,6 +74,7 @@ type Options struct {
 	TransferTableTTL time.Duration
 	IncrementalDedup bool
 	IsStandalone     bool
+	EnableApplyTableData bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`

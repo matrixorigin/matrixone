@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	taerpc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -12070,4 +12071,55 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	bat2, err := reader.GetCheckpointData(ctx)
 	assert.NoError(t, err)
 	defer bat2.Clean(common.DebugAllocator)
+}
+
+func Test_ApplyTableData(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchema(2, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	tae.CompactBlocks(true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dir := "Test_ApplyTableData"
+
+	copyArg := taerpc.NewCopyTableArg(
+		ctx,
+		tableEntry,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err := copyArg.Run()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	applyArg, err := taerpc.NewApplyTableDataArg(
+		ctx,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		"db2",
+		"table2",
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	err = applyArg.Run()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
 }
