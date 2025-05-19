@@ -55,8 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -144,20 +142,6 @@ func New(
 	if err != nil {
 		panic(err)
 	}
-
-	e.tmpFS = model.NewTmpFileService(
-		e.fs,
-		func(fn func(context.Context)) model.CancelableJob {
-			return tasks.NewCancelableCronJob(
-				"TMP-FILE-GC",
-				model.TmpFileGCInterval,
-				fn,
-				true,
-				1,
-			)
-		},
-	)
-	e.tmpFS.Start()
 	return e
 }
 
@@ -166,7 +150,6 @@ func (e *Engine) Close() error {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
 	e.dynamicCtx.Close()
-	e.tmpFS.Stop()
 	return nil
 }
 

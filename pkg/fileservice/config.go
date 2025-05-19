@@ -27,6 +27,7 @@ const (
 	memFileServiceBackend     = "MEM"
 	diskFileServiceBackend    = "DISK"
 	diskETLFileServiceBackend = "DISK-ETL"
+	diskTmpFileServiceBackend = "DISK-TMP"
 	s3FileServiceBackend      = "S3"
 	minioFileServiceBackend   = "MINIO"
 )
@@ -64,6 +65,8 @@ func NewFileService(
 		return newDiskFileService(ctx, cfg, perfCounterSets)
 	case diskETLFileServiceBackend:
 		return newDiskETLFileService(cfg, perfCounterSets)
+	case diskTmpFileServiceBackend:
+		return newTmpFileService(cfg, perfCounterSets)
 	case minioFileServiceBackend:
 		return newMinioFileService(ctx, cfg, perfCounterSets)
 	case s3FileServiceBackend:
@@ -104,6 +107,17 @@ func newDiskFileService(ctx context.Context, cfg Config, perfCounters []*perfcou
 
 func newDiskETLFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService, error) {
 	fs, err := NewLocalETLFS(
+		cfg.Name,
+		cfg.DataDir,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return fs, nil
+}
+
+func newTmpFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService, error) {
+	fs, err := NewTmpFileService(
 		cfg.Name,
 		cfg.DataDir,
 	)

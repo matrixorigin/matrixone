@@ -10298,7 +10298,7 @@ func TestPersistTransferTable(t *testing.T) {
 	}
 	ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-	transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&model.AppConfig{Name: "transfer"})
+	transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{Name: "transfer"})
 	if err != nil {
 		return
 	}
@@ -10370,7 +10370,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 			}
 			ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-			transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&model.AppConfig{Name: "transfer"})
+			transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{Name: "transfer"})
 			if err != nil {
 				return
 			}
@@ -12082,7 +12082,6 @@ func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	options.WithTmpFSGCInterval(time.Millisecond * 100)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -12095,7 +12094,7 @@ func Test_TmpFileService1(t *testing.T) {
 		return time.Parse("2006-01-02.15.04.05.000.MST", strs[1])
 	}
 
-	testFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&model.AppConfig{
+	testFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{
 		Name: "test",
 		GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
 			createTime, err := decodeNameFn(filePath)
@@ -12165,7 +12164,6 @@ func Test_TmpFileService2(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	options.WithTmpFSGCInterval(time.Millisecond * 100)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 

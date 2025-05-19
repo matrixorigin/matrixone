@@ -364,6 +364,12 @@ func (c *ServiceConfig) createFileService(
 		}
 	}
 
+	// ensure tmp exists and is TMP
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.TmpFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	return fs, nil
 }
 
@@ -586,6 +592,21 @@ func (c *ServiceConfig) setFileserviceDefaultValues() {
 		})
 	}
 
+	// default TMP fs
+	ok = false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.TmpFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.TmpFileServiceName,
+			Backend: "DISK-TMP",
+		})
+	}
 }
 
 func dumpCommonConfig(cfg ServiceConfig) (map[string]*logservicepb.ConfigItem, error) {

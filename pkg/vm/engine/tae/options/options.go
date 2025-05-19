@@ -22,11 +22,11 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 func WithTransferTableTTL(ttl time.Duration) func(*Options) {
@@ -137,12 +137,6 @@ func WithDisableGCCatalog() func(*Options) {
 func WithReserveWALEntryCount(count uint64) func(*Options) {
 	return func(r *Options) {
 		r.CheckpointCfg.ReservedWALEntryCount = count
-	}
-}
-
-func WithTmpFSGCInterval(interval time.Duration) func(*Options) {
-	return func(o *Options) {
-		o.TmpFSGCInterval = interval
 	}
 }
 
@@ -283,8 +277,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.LocalFs == nil {
 		o.LocalFs = objectio.TmpNewFileservice(o.Ctx, path.Join(dirname, "data"))
 	}
-	if o.TmpFSGCInterval == 0 {
-		o.TmpFSGCInterval = model.TmpFileGCInterval
+
+	if o.TmpFs == nil {
+		var err error
+		o.TmpFs, err = fileservice.NewTmpFileService("TMP", path.Join(dirname, "data"))
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	return o

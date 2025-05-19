@@ -120,16 +120,16 @@ func TransferFileGCFn(filePath string, fs fileservice.FileService) (neesGC bool,
 	return
 }
 
-func GetTransferFS(fs *TmpFileService) (fileservice.FileService, error) {
+func GetTransferFS(fs *fileservice.TmpFileService) (fileservice.FileService, error) {
 	return fs.GetOrCreateApp(
-		&AppConfig{
+		&fileservice.AppConfig{
 			Name: "transfer",
 			GCFn: TransferFileGCFn,
 		},
 	)
 }
 
-func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
+func NewTransferHashPage(id *common.ID, ts time.Time, isTransient bool, fs *fileservice.TmpFileService, ttl, diskTTL time.Duration, createdObjIDs []*objectio.ObjectId) *TransferHashPage {
 
 	transferFS, err := GetTransferFS(fs)
 	if err != nil {

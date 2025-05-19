@@ -159,6 +159,12 @@ func (s *store) newTAEStorage(
 		return nil, err2
 	}
 
+	// tmp fs
+	tmpFs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.TmpFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	ckpcfg := &options.CheckpointCfg{
 		MinCount:               s.cfg.Ckp.MinCount,
 		ScanInterval:           s.cfg.Ckp.ScanInterval.Duration,
@@ -208,6 +214,7 @@ func (s *store) newTAEStorage(
 		Clock:             s.rt.Clock(),
 		Fs:                fs,
 		LocalFs:           localFs,
+		TmpFs:             tmpFs.(*fileservice.TmpFileService),
 		WalClientFactory:  logservicedriver.LogServiceClientFactory(factory),
 		Shard:             shard,
 		CheckpointCfg:     ckpcfg,

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -40,13 +41,8 @@ func TestTransferPage(t *testing.T) {
 	}
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
-	fs := objectio.TmpNewFileservice(context.Background(), "data")
-	tmpFS := NewTmpFileService(
-		fs,
-		func(fn func(context.Context)) CancelableJob {
-			return &mockGCJob{}
-		},
-	)
+	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp")
+	assert.NoError(t, err)
 	memo1 := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
 	assert.Zero(t, memo1.RefCount())
 
@@ -65,13 +61,8 @@ func TestTransferPage(t *testing.T) {
 	assert.Zero(t, memo1.RefCount())
 
 	now := time.Now()
-	fs = objectio.TmpNewFileservice(context.Background(), "data")
-	tmpFS = NewTmpFileService(
-		fs,
-		func(fn func(context.Context)) CancelableJob {
-			return &mockGCJob{}
-		},
-	)
+	tmpFS, err = fileservice.NewTmpFileService("tmp", "tmp")
+	assert.NoError(t, err)
 	memo2 := NewTransferHashPage(&src, now, false, tmpFS, ttl, diskTTL, createdObjs)
 	defer memo2.Close()
 	assert.Zero(t, memo2.RefCount())
@@ -107,13 +98,8 @@ func TestTransferTable(t *testing.T) {
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	fs := objectio.TmpNewFileservice(context.Background(), "data")
-	tmpFS := NewTmpFileService(
-		fs,
-		func(fn func(context.Context)) CancelableJob {
-			return &mockGCJob{}
-		},
-	)
+	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp")
+	assert.NoError(t, err)
 	page1 := NewTransferHashPage(&id1, now, false, tmpFS, ttl, 2*time.Second, createdObjs)
 	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
@@ -128,7 +114,7 @@ func TestTransferTable(t *testing.T) {
 	assert.True(t, table.AddPage(page1))
 	assert.Equal(t, int64(1), page1.RefCount())
 
-	_, err := table.Pin(id2)
+	_, err = table.Pin(id2)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
 	pinned, err := table.Pin(id1)
 	assert.NoError(t, err)

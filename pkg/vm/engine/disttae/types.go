@@ -53,7 +53,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -221,8 +220,6 @@ type Engine struct {
 	cli      client.TxnClient
 	idGen    IDGenerator
 	tnID     string
-
-	tmpFS *model.TmpFileService
 
 	config struct {
 		insertEntryMaxCount      int

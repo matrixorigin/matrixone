@@ -31,7 +31,7 @@ type TmpFileService struct {
 	appsMu sync.RWMutex
 
 	cancel context.CancelFunc
-	wg sync.WaitGroup
+	wg     sync.WaitGroup
 }
 
 const (
@@ -40,9 +40,15 @@ const (
 	TmpFileGCInterval = time.Hour
 )
 
-func NewTmpFileService(fs FileService) *TmpFileService {
+func NewTmpFileService(name, rootPath string) (*TmpFileService, error) {
+	var etlfs FileService
+	var err error
+	if etlfs, err = NewLocalETLFS(name, rootPath); err != nil {
+		return nil, err
+	}
+
 	service := &TmpFileService{
-		FileService: fs,
+		FileService: etlfs,
 		apps:        make(map[string]*AppFS),
 		appsMu:      sync.RWMutex{},
 		wg:          sync.WaitGroup{},
@@ -50,7 +56,7 @@ func NewTmpFileService(fs FileService) *TmpFileService {
 	var ctx context.Context
 	ctx, service.cancel = context.WithCancel(context.Background())
 	go service.tmpFileServiceGCTicker(ctx)
-	return service
+	return service, nil
 }
 
 func (fs *TmpFileService) GetOrCreateApp(appConfig *AppConfig) (*AppFS, error) {
