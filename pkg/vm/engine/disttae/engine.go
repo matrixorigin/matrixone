@@ -142,6 +142,7 @@ func New(
 	if err != nil {
 		panic(err)
 	}
+
 	return e
 }
 
