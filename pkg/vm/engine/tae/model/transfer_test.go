@@ -27,10 +27,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type mockGCJob struct{}
-
-func (job *mockGCJob) Start() {}
-func (job *mockGCJob) Stop()  {}
 func TestTransferPage(t *testing.T) {
 	sid := objectio.NewSegmentid()
 	src := common.ID{
