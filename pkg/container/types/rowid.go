@@ -19,6 +19,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/google/uuid"
@@ -272,6 +274,63 @@ func (r *Rowid) IncrObj() error {
 	r.SetBlkOffset(0)
 	r.SetRowOffset(0)
 	return nil
+}
+
+func ParseRowIdFromString(rowStr string) (*Rowid, error) {
+	const (
+		segStrLen = SegmentidSize*2 + 4
+	)
+
+	var (
+		err    error
+		seg    uuid.UUID
+		parts  []string
+		segStr string
+
+		rowId Rowid
+
+		objOffset int
+		blkOffset int
+		rowOffset int
+
+		objOffsetStr string
+		blkOffsetStr string
+		rowOffsetStr string
+	)
+
+	segStr = rowStr[:segStrLen]
+
+	parts = strings.Split(rowStr[segStrLen:], "-")
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid rowId: %s", rowStr)
+	}
+
+	objOffsetStr = parts[1]
+	blkOffsetStr = parts[2]
+	rowOffsetStr = parts[3]
+
+	if objOffset, err = strconv.Atoi(objOffsetStr); err != nil {
+		return nil, err
+	}
+
+	if blkOffset, err = strconv.Atoi(blkOffsetStr); err != nil {
+		return nil, err
+	}
+
+	if rowOffset, err = strconv.Atoi(rowOffsetStr); err != nil {
+		return nil, err
+	}
+
+	if seg, err = uuid.Parse(segStr); err != nil {
+		return nil, err
+	}
+
+	rowId.SetSegment(Segmentid(seg[:]))
+	rowId.SetObjOffset(uint16(objOffset))
+	rowId.SetBlkOffset(uint16(blkOffset))
+	rowId.SetRowOffset(uint32(rowOffset))
+
+	return &rowId, nil
 }
 
 func (b *Blockid) EQ(than *Blockid) bool {

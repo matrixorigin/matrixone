@@ -1048,6 +1048,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					if colType.GetId() == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", colNameOrigin))
+
+					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
 						Name:     colName,
@@ -1121,6 +1125,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if _, ok := pksMap[name]; ok {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name '%s' in primary key", key.ColName.ColNameOrigin())
 				}
+
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", name))
+					}
+				}
+
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
 				indexs = append(indexs, name)
@@ -1134,6 +1145,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			secondaryIndexInfos = append(secondaryIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
+
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
+					}
+				}
+
 				indexs = append(indexs, name)
 			}
 		case *tree.UniqueIndex:
@@ -1145,6 +1163,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			uniqueIndexInfos = append(uniqueIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
+
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", name))
+					}
+				}
+
 				indexs = append(indexs, name)
 			}
 		case *tree.FullTextIndex:
