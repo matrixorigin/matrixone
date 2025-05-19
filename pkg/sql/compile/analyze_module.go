@@ -394,8 +394,7 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 					RemoteUuid: "",
 				})
 			}
-		}
-		if id == vm.Dispatch {
+		} else if id == vm.Dispatch {
 			arg := op.(*dispatch.Dispatch)
 			for i := range arg.LocalRegs {
 				if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
@@ -422,7 +421,7 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 			}
 		}
 	} else {
-		panic("unkonw operator type")
+		panic(fmt.Sprintf("unkonw operator type: %v", id))
 	}
 	return receivers
 }
