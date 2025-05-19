@@ -47,6 +47,13 @@ var (
 	backgroundGCTTL = 10 * time.Minute
 )
 
+func init() {
+	fileservice.RegisterAppConfig(&fileservice.AppConfig{
+		Name: TransferDir,
+		GCFn: TransferFileGCFn,
+	})
+}
+
 func SetTTL(t time.Duration) {
 	ttlLatch.Lock()
 	defer ttlLatch.Unlock()

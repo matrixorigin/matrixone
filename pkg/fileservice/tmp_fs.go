@@ -25,6 +25,20 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	tmpService *TmpFileService
+
+	appConfigs = map[string]*AppConfig{}
+)
+
+func init() {
+	appConfigs = make(map[string]*AppConfig)
+}
+
+func RegisterAppConfig(appConfig *AppConfig) {
+	appConfigs[appConfig.Name] = appConfig
+}
+
 type TmpFileService struct {
 	FileService
 	apps   map[string]*AppFS
@@ -41,6 +55,9 @@ const (
 )
 
 func NewTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFileService, error) {
+	if tmpService != nil {
+		return tmpService, nil
+	}
 	var etlfs FileService
 	var err error
 	if etlfs, err = NewLocalETLFS(name, rootPath); err != nil {
@@ -57,6 +74,8 @@ func NewTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFil
 	var ctx context.Context
 	ctx, service.cancel = context.WithCancel(context.Background())
 	go service.tmpFileServiceGCTicker(ctx)
+	tmpService = service
+	service.init()
 	return service, nil
 }
 
@@ -98,7 +117,7 @@ func (fs *TmpFileService) gc(ctx context.Context) {
 	apps := fs.getAllApps()
 	for _, appFS := range apps {
 		appConfig := appFS.appConfig
-		appPath :=appConfig.Name
+		appPath := appConfig.Name
 		entries := fs.FileService.List(ctx, appPath)
 		gcedFiles := make([]string, 0)
 		for entry, err := range entries {
@@ -149,4 +168,20 @@ func (fs *TmpFileService) Close(ctx context.Context) {
 	fs.wg.Wait()
 	fs.FileService.Close(ctx)
 	logutil.Infof("TMP-FILE Service closed.")
+}
+
+func (fs *TmpFileService) init() {
+	entries := fs.List(context.Background(), "")
+	for entry, err := range entries {
+		if err != nil {
+			logutil.Warnf("TMP-FILE-INIT failed, err: %v", err)
+			continue
+		}
+		config, ok := appConfigs[entry.Name]
+		if !ok {
+			logutil.Warnf("TMP-FILE-INIT failed, %v not Existed", entry.Name)
+			continue
+		}
+		fs.GetOrCreateApp(config)
+	}
 }
