@@ -73,6 +73,7 @@ type Object interface {
 	GetMeta() any
 
 	MakeAppender() (ObjectAppender, error)
+	ApplyDebugBatch(bat *containers.Batch) (err error)
 
 	TryUpgrade() error
 

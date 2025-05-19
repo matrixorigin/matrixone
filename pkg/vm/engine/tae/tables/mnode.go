@@ -240,7 +240,7 @@ func (node *memoryNode) getDataWindowLocked(
 
 func (node *memoryNode) ApplyAppendLocked(
 	bat *containers.Batch,
-	txn txnif.AsyncTxn) (from int, err error) {
+) (from int, err error) {
 	schema := node.writeSchema
 	from = int(node.mustData().Length())
 	for srcPos, attr := range bat.Attrs {

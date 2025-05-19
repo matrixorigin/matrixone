@@ -40,6 +40,12 @@ type ObjectListReplayer interface {
 	Submit(uint64, func())
 }
 
+type BaseReplayer struct{}
+
+func (r *BaseReplayer) Submit(_ uint64, fn func()) {
+	fn()
+}
+
 //#region Replay WAL related
 
 func (catalog *Catalog) ReplayCmd(
