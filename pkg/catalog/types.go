@@ -170,6 +170,8 @@ const (
 	MO_TABLE_STATS = "mo_table_stats_alpha"
 
 	MO_ACCOUNT_LOCK = "__mo_account_lock"
+
+	MO_MERGE_SETTINGS = "mo_merge_settings"
 )
 
 func IsSystemTable(id uint64) bool {
