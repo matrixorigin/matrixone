@@ -129,7 +129,7 @@ func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) (V, bool) {
 
 func (m *ShardMap[K, V]) ValueIsDeleted(key K, value V, isDeleted func(V) bool) bool {
 	s := &m.shards[m.hashfn(key)%numShards]
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
+	defer s.RUnlock()
 	return isDeleted(value)
 }
