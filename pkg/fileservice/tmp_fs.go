@@ -19,6 +19,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -40,6 +41,7 @@ func RegisterAppConfig(appConfig *AppConfig) {
 }
 
 type TmpFileService struct {
+	closed atomic.Bool
 	FileService
 	apps   map[string]*AppFS
 	appsMu sync.RWMutex
@@ -164,10 +166,14 @@ func (fs *TmpFileService) tmpFileServiceGCTicker(ctx context.Context) {
 }
 
 func (fs *TmpFileService) Close(ctx context.Context) {
+	if fs.closed.Load() {
+		return
+	}
+	defer logutil.Infof("TMP-FILE Service closed.")
+	fs.closed.Store(true)
 	fs.cancel()
 	fs.wg.Wait()
 	fs.FileService.Close(ctx)
-	logutil.Infof("TMP-FILE Service closed.")
 }
 
 func (fs *TmpFileService) init() {
