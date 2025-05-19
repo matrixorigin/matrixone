@@ -120,6 +120,7 @@ func newTmpFileService(cfg Config, _ []*perfcounter.CounterSet) (FileService, er
 	fs, err := NewTmpFileService(
 		cfg.Name,
 		cfg.DataDir,
+		TmpFileGCInterval,
 	)
 	if err != nil {
 		return nil, err

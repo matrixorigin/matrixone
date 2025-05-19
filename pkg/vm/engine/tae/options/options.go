@@ -280,7 +280,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.TmpFs == nil {
 		var err error
-		o.TmpFs, err = fileservice.NewTmpFileService("TMP", path.Join(dirname, "data"))
+		o.TmpFs, err = fileservice.NewTmpFileService("TMP", path.Join(dirname, "data"), fileservice.TmpFileGCInterval)
 		if err != nil {
 			panic(err)
 		}

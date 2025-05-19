@@ -12081,9 +12081,9 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
 
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	defer tae.Close()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	tmpTS, err := fileservice.NewTmpFileService("TMP", dir, time.Millisecond*100)
+	assert.NoError(t, err)
 
 	getNameFn := func() string {
 		now := time.Now()
@@ -12094,7 +12094,7 @@ func Test_TmpFileService1(t *testing.T) {
 		return time.Parse("2006-01-02.15.04.05.000.MST", strs[1])
 	}
 
-	testFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{
+	testFS, err := tmpTS.GetOrCreateApp(&fileservice.AppConfig{
 		Name: "test",
 		GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
 			createTime, err := decodeNameFn(filePath)

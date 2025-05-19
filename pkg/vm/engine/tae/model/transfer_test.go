@@ -41,7 +41,7 @@ func TestTransferPage(t *testing.T) {
 	}
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
-	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp")
+	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
 	assert.NoError(t, err)
 	memo1 := NewTransferHashPage(&src, time.Now(), false, tmpFS, ttl, diskTTL, createdObjs)
 	assert.Zero(t, memo1.RefCount())
@@ -61,7 +61,7 @@ func TestTransferPage(t *testing.T) {
 	assert.Zero(t, memo1.RefCount())
 
 	now := time.Now()
-	tmpFS, err = fileservice.NewTmpFileService("tmp", "tmp")
+	tmpFS, err = fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
 	assert.NoError(t, err)
 	memo2 := NewTransferHashPage(&src, now, false, tmpFS, ttl, diskTTL, createdObjs)
 	defer memo2.Close()
@@ -98,7 +98,7 @@ func TestTransferTable(t *testing.T) {
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp")
+	tmpFS, err := fileservice.NewTmpFileService("tmp", "tmp", fileservice.TmpFileGCInterval)
 	assert.NoError(t, err)
 	page1 := NewTransferHashPage(&id1, now, false, tmpFS, ttl, 2*time.Second, createdObjs)
 	transferMap := make(api.TransferMap)

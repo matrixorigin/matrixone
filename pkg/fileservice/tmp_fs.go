@@ -30,6 +30,8 @@ type TmpFileService struct {
 	apps   map[string]*AppFS
 	appsMu sync.RWMutex
 
+	gcInterval time.Duration
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -40,7 +42,7 @@ const (
 	TmpFileGCInterval = time.Hour
 )
 
-func NewTmpFileService(name, rootPath string) (*TmpFileService, error) {
+func NewTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFileService, error) {
 	var etlfs FileService
 	var err error
 	if etlfs, err = NewLocalETLFS(name, rootPath); err != nil {
@@ -49,6 +51,7 @@ func NewTmpFileService(name, rootPath string) (*TmpFileService, error) {
 
 	service := &TmpFileService{
 		FileService: etlfs,
+		gcInterval:  gcInterval,
 		apps:        make(map[string]*AppFS),
 		appsMu:      sync.RWMutex{},
 		wg:          sync.WaitGroup{},
@@ -123,9 +126,13 @@ func (fs *TmpFileService) gc(ctx context.Context) {
 }
 
 func (fs *TmpFileService) tmpFileServiceGCTicker(ctx context.Context) {
+	logutil.Info(
+		"TMP-FILE-GC-START",
+		zap.String("gc interval", fs.gcInterval.String()),
+	)
 	fs.wg.Add(1)
 	defer fs.wg.Done()
-	ticker := time.NewTicker(TmpFileGCInterval)
+	ticker := time.NewTicker(fs.gcInterval)
 	defer ticker.Stop()
 	for {
 		select {
