@@ -45,6 +45,8 @@ func (b *Bytes) Bytes() []byte {
 }
 
 func (b *Bytes) Slice(length int) fscache.Data {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.bytes = b.bytes[:length]
 	return b
 }
