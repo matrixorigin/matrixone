@@ -310,7 +310,9 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			return
 		}
 
-		deleted := item.isDeleted()
+		deleted := c.htab.ValueIsDeleted(item.key, item, func(v *_CacheItem[K, V]) bool {
+			return v.deleted
+		})
 		if deleted {
 			c.usedMain.Add(-item.size)
 			return
