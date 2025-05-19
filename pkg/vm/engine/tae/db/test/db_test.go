@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -12082,7 +12083,7 @@ func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
 
 	dir := testutils.InitTestEnv(ModuleName, t)
-	tmpTS, err := fileservice.NewTmpFileService("TMP", dir, time.Millisecond*100)
+	tmpTS, err := fileservice.NewTmpFileService("TMP", path.Join(dir, "tmp"), time.Millisecond*100)
 	assert.NoError(t, err)
 
 	getNameFn := func() string {
@@ -12114,9 +12115,11 @@ func Test_TmpFileService1(t *testing.T) {
 	assert.NoError(t, err)
 
 	testFS.Name()
-	name := model.GetTransferFileName()
-	_, err = model.DecodeTransferFileName(name)
-	assert.NoError(t, err)
+	{
+		name := model.GetTransferFileName()
+		_, err = model.DecodeTransferFileName(name)
+		assert.NoError(t, err)
+	}
 	data := []byte("test")
 	ioEntry := fileservice.IOEntry{
 		Offset: 0,
