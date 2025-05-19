@@ -670,7 +670,7 @@ func aesCFBEncodeWithKey(data []byte, aesKey []byte) (string, error) {
 	iv := encoded[:aes.BlockSize]
 	salt := generateSalt(aes.BlockSize)
 	copy(iv, salt)
-	stream := cipher.NewCFBEncrypter(block, iv)
+	stream := cipher.NewCTR(block, iv)
 	stream.XORKeyStream(encoded[aes.BlockSize:], data)
 	return hex.EncodeToString(encoded), nil
 }
@@ -697,7 +697,7 @@ var AesCFBDecodeWithKey = func(ctx context.Context, data string, aesKey []byte) 
 	}
 	iv := encodedData[:aes.BlockSize]
 	encodedData = encodedData[aes.BlockSize:]
-	stream := cipher.NewCFBDecrypter(block, iv)
+	stream := cipher.NewCTR(block, iv)
 	stream.XORKeyStream(encodedData, encodedData)
 	return string(encodedData), nil
 }

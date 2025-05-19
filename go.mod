@@ -1,7 +1,7 @@
 module github.com/matrixorigin/matrixone
 
 // Minimum Go version required
-go 1.23.0
+go 1.24.3
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -223,7 +223,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240814211410-ddb44dafa142 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-
 )
 
 // required until memberlist issue 272 is resolved
