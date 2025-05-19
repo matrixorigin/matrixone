@@ -1,0 +1,141 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package fileservice
+
+import (
+	"context"
+	"path"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+)
+
+type TmpFileService struct {
+	FileService
+	apps   map[string]*AppFS
+	appsMu sync.RWMutex
+
+	cancel context.CancelFunc
+	wg sync.WaitGroup
+}
+
+const (
+	TmpFileDir = "tmp"
+
+	TmpFileGCInterval = time.Hour
+)
+
+func NewTmpFileService(fs FileService) *TmpFileService {
+	service := &TmpFileService{
+		FileService: fs,
+		apps:        make(map[string]*AppFS),
+		appsMu:      sync.RWMutex{},
+		wg:          sync.WaitGroup{},
+	}
+	var ctx context.Context
+	ctx, service.cancel = context.WithCancel(context.Background())
+	go service.tmpFileServiceGCTicker(ctx)
+	return service
+}
+
+func (fs *TmpFileService) GetOrCreateApp(appConfig *AppConfig) (*AppFS, error) {
+	fs.appsMu.RLock()
+	app, ok := fs.apps[appConfig.Name]
+	fs.appsMu.RUnlock()
+	if ok {
+		return app, nil
+	}
+	fs.appsMu.Lock()
+	defer fs.appsMu.Unlock()
+	app, ok = fs.apps[appConfig.Name]
+	if ok {
+		return app, nil
+	}
+	logutil.Info(
+		"TMP-FILE-CREATE-APP",
+		zap.String("app", appConfig.Name),
+	)
+	app = &AppFS{
+		tmpFS:     fs,
+		appConfig: appConfig,
+	}
+	fs.apps[appConfig.Name] = app
+	return app, nil
+}
+
+func (fs *TmpFileService) getAllApps() []*AppFS {
+	fs.appsMu.RLock()
+	defer fs.appsMu.RUnlock()
+	apps := make([]*AppFS, 0, len(fs.apps))
+	for _, app := range fs.apps {
+		apps = append(apps, app)
+	}
+	return apps
+}
+func (fs *TmpFileService) gc(ctx context.Context) {
+	apps := fs.getAllApps()
+	for _, appFS := range apps {
+		appConfig := appFS.appConfig
+		appPath := path.Join(TmpFileDir, appConfig.Name)
+		entries := fs.FileService.List(ctx, appPath)
+		gcedFiles := make([]string, 0)
+		for entry, err := range entries {
+			if err != nil {
+				logutil.Warnf("TMP-FILE-GC failed, err: %v", err)
+				continue
+			}
+			needGC, err := appFS.appConfig.GCFn(entry.Name, appFS)
+			if err != nil {
+				logutil.Warnf("TMP-FILE-GC failed, err: %v, filePath: %v", err, path.Join(appPath, entry.Name))
+				continue
+			}
+			if needGC {
+				gcedFiles = append(gcedFiles, path.Join(appPath, entry.Name))
+			}
+		}
+		logutil.Info(
+			"TMP-FILE-GC",
+			zap.String("app", appConfig.Name),
+			zap.String("gced_files", strings.Join(gcedFiles, ",")),
+		)
+	}
+}
+
+func (fs *TmpFileService) tmpFileServiceGCTicker(ctx context.Context) {
+	fs.wg.Add(1)
+	defer fs.wg.Done()
+	ticker := time.NewTicker(TmpFileGCInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			logutil.Infof("GC tmp_file_service process exit.")
+			return
+
+		case <-ticker.C:
+			fs.gc(ctx)
+		}
+	}
+}
+
+func (fs *TmpFileService) Close(ctx context.Context) {
+	fs.cancel()
+	fs.wg.Wait()
+	fs.FileService.Close(ctx)
+	logutil.Infof("TMP-FILE Service closed.")
+}
