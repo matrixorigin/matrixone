@@ -96,7 +96,10 @@ func NewMemCache(
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
 
 		// relaese
-		value.Release()
+		released := value.Release()
+		if released {
+			// value is deallocated
+		}
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
@@ -210,6 +213,7 @@ func (m *MemCache) Update(
 		}
 
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
+		// NOTE: cache data may not be put to the cache if data already exists
 		m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
 	}

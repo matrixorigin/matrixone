@@ -42,15 +42,17 @@ type Cache[K comparable, V any] struct {
 }
 
 type _CacheItem[K comparable, V any] struct {
-	mu      sync.Mutex
-	key     K
-	value   V
-	size    int64
-	freq    int8
-	deleted bool
+	key   K
+	value V
+	size  int64
+
+	// mutex only protect the freq
+	mu   sync.Mutex
+	freq int8
+
+	deleted atomic.Bool
 }
 
-/*
 func (c *_CacheItem[K, V]) inc() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -59,7 +61,6 @@ func (c *_CacheItem[K, V]) inc() {
 		c.freq += 1
 	}
 }
-*/
 
 func (c *_CacheItem[K, V]) dec() {
 	c.mu.Lock()
@@ -77,44 +78,11 @@ func (c *_CacheItem[K, V]) getFreq() int8 {
 }
 
 func (c *_CacheItem[K, V]) isDeleted() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.deleted
+	return c.deleted.Load()
 }
 
 func (c *_CacheItem[K, V]) setDeleted() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.deleted {
-		c.deleted = true
-		return true
-	}
-	return false
-}
-
-// thread safe to run post function such as postGet, postSet and postEvict
-func (c *_CacheItem[K, V]) postFunc(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
-	if fn == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	fn(ctx, c.key, c.value, c.size)
-}
-
-// IncAndPost merge inc() and postFunc() into one to save one mutex Lock operation
-func (c *_CacheItem[K, V]) IncAndPost(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.freq < 3 {
-		c.freq += 1
-	}
-
-	if fn == nil {
-		return
-	}
-	fn(ctx, c.key, c.value, c.size)
+	return c.deleted.CompareAndSwap(false, true)
 }
 
 // assume cache size is 128K
@@ -169,14 +137,16 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		size:  size,
 	}
 
-	ok := c.htab.Set(key, item)
+	ok := c.htab.Set(key, item, func(v *_CacheItem[K, V]) {
+		if c.postSet != nil {
+			c.postSet(ctx, v.key, v.value, v.size)
+		}
+
+	})
 	if !ok {
 		// existed
 		return
 	}
-
-	// post set
-	item.postFunc(ctx, c.postSet)
 
 	// evict
 	c.evictAll(ctx, nil, 0)
@@ -201,29 +171,36 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	var item *_CacheItem[K, V]
 
-	item, ok = c.htab.Get(key)
+	item, ok = c.htab.Get(key, func(v *_CacheItem[K, V]) {
+		if c.postGet != nil {
+			c.postGet(ctx, v.key, v.value, v.size)
+		}
+	})
 	if !ok {
 		return
 	}
 
-	// increment and postGet
-	item.IncAndPost(ctx, c.postGet)
+	// increment
+	item.inc()
 
 	return item.value, true
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
-	item, ok := c.htab.GetAndDelete(key)
+	_, ok := c.htab.GetAndDelete(key, func(v *_CacheItem[K, V]) {
+		needsPostEvict := v.setDeleted()
+
+		// post evict
+		if needsPostEvict {
+			if c.postEvict != nil {
+				c.postEvict(ctx, v.key, v.value, v.size)
+			}
+		}
+	})
 	if !ok {
 		return
 	}
 
-	needsPostEvict := item.setDeleted()
-
-	// post evict
-	if needsPostEvict {
-		item.postFunc(ctx, c.postEvict)
-	}
 	// queues will be update in evict
 }
 
@@ -294,11 +271,14 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			c.usedMain.Add(item.size)
 		} else {
 			// evict
-			c.htab.Remove(item.key)
-			// post evict
-			if item.setDeleted() {
-				item.postFunc(ctx, c.postEvict)
-			}
+			c.htab.Remove(item.key, item, func(v *_CacheItem[K, V]) {
+				// post evict
+				if v.setDeleted() {
+					if c.postEvict != nil {
+						c.postEvict(ctx, v.key, v.value, v.size)
+					}
+				}
+			})
 
 			c.usedSmall.Add(-item.size)
 			if !c.disable_s3fifo {
@@ -330,11 +310,15 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			c.main.enqueue(item)
 		} else {
 			// evict
-			c.htab.Remove(item.key)
-			// post evict
-			if item.setDeleted() {
-				item.postFunc(ctx, c.postEvict)
-			}
+			c.htab.Remove(item.key, item, func(v *_CacheItem[K, V]) {
+				// post evict
+				if v.setDeleted() {
+					if c.postEvict != nil {
+						c.postEvict(ctx, v.key, v.value, v.size)
+					}
+				}
+
+			})
 			c.usedMain.Add(-item.size)
 			return
 		}

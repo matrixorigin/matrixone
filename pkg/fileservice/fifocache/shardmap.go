@@ -40,7 +40,7 @@ func NewShardMap[K comparable, V any](hashfn func(K) uint64) *ShardMap[K, V] {
 	return m
 }
 
-func (m *ShardMap[K, V]) Set(key K, value V) bool {
+func (m *ShardMap[K, V]) Set(key K, value V, postfn func(V)) bool {
 
 	s := &m.shards[m.hashfn(key)%numShards]
 	s.Lock()
@@ -52,24 +52,40 @@ func (m *ShardMap[K, V]) Set(key K, value V) bool {
 	}
 
 	s.values[key] = value
+
+	if postfn != nil {
+		postfn(value)
+	}
 	return true
 }
 
-func (m *ShardMap[K, V]) Get(key K) (V, bool) {
+func (m *ShardMap[K, V]) Get(key K, postfn func(V)) (V, bool) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
 	s.RLock()
 	defer s.RUnlock()
 	v, ok := s.values[key]
+
+	if !ok {
+		return v, ok
+	}
+
+	if postfn != nil {
+		postfn(v)
+	}
 	return v, ok
 }
 
-func (m *ShardMap[K, V]) Remove(key K) {
+func (m *ShardMap[K, V]) Remove(key K, value V, postfn func(V)) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
 	s.Lock()
 	defer s.Unlock()
 	delete(s.values, key)
+
+	if postfn != nil {
+		postfn(value)
+	}
 }
 
 func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn func(V)) {
@@ -90,11 +106,13 @@ func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn 
 	}
 
 	for _, v := range deleted {
-		postfn(v)
+		if postfn != nil {
+			postfn(v)
+		}
 	}
 }
 
-func (m *ShardMap[K, V]) GetAndDelete(key K) (V, bool) {
+func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) (V, bool) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
 	s.Lock()
@@ -106,5 +124,10 @@ func (m *ShardMap[K, V]) GetAndDelete(key K) (V, bool) {
 	}
 
 	delete(s.values, key)
+
+	if postfn != nil {
+		postfn(v)
+	}
+
 	return v, ok
 }

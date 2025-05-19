@@ -28,7 +28,9 @@ func (i *IOVector) allDone() bool {
 func (i *IOVector) Release() {
 	for _, entry := range i.Entries {
 		if entry.CachedData != nil {
-			entry.CachedData.Release()
+			if entry.CachedData.Release() {
+				entry.CachedData = nil
+			}
 		}
 		if entry.releaseData != nil {
 			entry.releaseData()

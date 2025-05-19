@@ -23,19 +23,24 @@ import (
 func TestShardMap(t *testing.T) {
 
 	m := NewShardMap[int, string](ShardInt[int])
-	ok := m.Set(1, "1")
+	ok := m.Set(1, "1", func(v string) {
+	})
 	assert.Equal(t, ok, true)
-	ok = m.Set(1, "1")
+	ok = m.Set(1, "1", func(v string) {
+	})
 	assert.Equal(t, ok, false)
 
-	v, ok := m.Get(1)
+	v, ok := m.Get(1, func(v string) {
+	})
 	assert.Equal(t, ok, true)
 	assert.Equal(t, v, "1")
 
-	_, ok = m.GetAndDelete(0)
+	_, ok = m.GetAndDelete(0, func(v string) {
+	})
 	assert.Equal(t, ok, false)
 
-	v, ok = m.GetAndDelete(1)
+	v, ok = m.GetAndDelete(1, func(v string) {
+	})
 	assert.Equal(t, v, "1")
 	assert.Equal(t, ok, true)
 }

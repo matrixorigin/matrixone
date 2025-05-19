@@ -49,17 +49,19 @@ func (b *Bytes) Retain() {
 	}
 }
 
-func (b *Bytes) Release() {
+func (b *Bytes) Release() bool {
 	if b.bytes == nil {
 		panic("fileservice.Bytes.Release() double free")
 	}
 
 	if b.refs != nil {
-		if n := b.refs.Add(-1); n == 0 {
+		n := b.refs.Add(-1)
+		if n == 0 {
 			if b.deallocator != nil &&
 				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
 				b.deallocator.Deallocate(malloc.NoHints)
 				b.bytes = nil
+				return true
 			}
 		}
 	} else {
@@ -67,8 +69,10 @@ func (b *Bytes) Release() {
 			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
 			b.deallocator.Deallocate(malloc.NoHints)
 			b.bytes = nil
+			return true
 		}
 	}
+	return false
 }
 
 type bytesAllocator struct {
