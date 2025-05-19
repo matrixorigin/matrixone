@@ -19,12 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"go.uber.org/zap"
 
-	"strings"
-	"unicode"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -99,6 +97,10 @@ func getIndexTableNameByIndexName(proc *process.Process, dbname, tablename, inde
 			}
 		}
 	}
+	invalidIndexErr := "check whether the index \"" + indexname + "\" really exists"
+	if indexTableName == "" {
+		return "", moerr.NewInternalError(proc.Ctx, invalidIndexErr)
+	}
 	return indexTableName, nil
 }
 
@@ -113,7 +115,7 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 		return err
 	}
 
-	// When the source format is db_name.table_name.$index_name
+	// When the source format is db_name.table_name.?index_name
 	// metadata_scan actually returns the metadata of the index table
 	if indexname != "" {
 		indexTableName, err := getIndexTableNameByIndexName(proc, dbname, tablename, indexname)
@@ -165,37 +167,19 @@ func handleDataSource(source, col *vector.Vector) (string, string, string, strin
 	// Old source format: db_name.table_name
 	case 2:
 		dbname, tablename := parts[0], parts[1]
-		if !isValidIdentifier(dbname) || !isValidIdentifier(tablename) {
-			return "", "", "", "", moerr.NewInternalErrorNoCtx("invalid db or table name format")
-		}
 		return dbname, tablename, "", col.GetStringAt(0), nil
-	// Newly supported source format: db_name.table_name.$index_name
+	// Newly supported source format: db_name.table_name.?index_name
 	case 3:
 		dbname, tablename, indexPart := parts[0], parts[1], parts[2]
-		if !isValidIdentifier(dbname) || !isValidIdentifier(tablename) {
-			return "", "", "", "", moerr.NewInternalErrorNoCtx("invalid db or table name format")
-		}
-		if len(indexPart) == 0 || indexPart[0] != '$' || !isValidIdentifier(indexPart[1:]) {
-			return "", "", "", "", moerr.NewInternalErrorNoCtx("index name must start with $ and follow identifier rules")
+		if len(indexPart) == 0 || indexPart[0] != '?' {
+			return "", "", "", "", moerr.NewInternalErrorNoCtx("index name must start with ? and follow identifier rules")
 		}
 		indexName := indexPart[1:]
 		return dbname, tablename, indexName, col.GetStringAt(0), nil
 
 	default:
-		return "", "", "", "", moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.$index_name format")
+		return "", "", "", "", moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.?index_name format")
 	}
-}
-
-func isValidIdentifier(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, c := range s {
-		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '_' {
-			return false
-		}
-	}
-	return true
 }
 
 func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunction *TableFunction, info *plan.MetadataScanInfo) error {
