@@ -33,7 +33,7 @@ type AppFS struct {
 }
 
 func (fs *AppFS) getAppDir() string {
-	return path.Join(TmpFileDir, fs.appConfig.Name)
+	return fs.appConfig.Name
 }
 
 func (fs *AppFS) Name() string {

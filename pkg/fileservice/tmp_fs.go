@@ -37,8 +37,6 @@ type TmpFileService struct {
 }
 
 const (
-	TmpFileDir = "tmp"
-
 	TmpFileGCInterval = time.Hour
 )
 
@@ -100,7 +98,7 @@ func (fs *TmpFileService) gc(ctx context.Context) {
 	apps := fs.getAllApps()
 	for _, appFS := range apps {
 		appConfig := appFS.appConfig
-		appPath := path.Join(TmpFileDir, appConfig.Name)
+		appPath :=appConfig.Name
 		entries := fs.FileService.List(ctx, appPath)
 		gcedFiles := make([]string, 0)
 		for entry, err := range entries {
