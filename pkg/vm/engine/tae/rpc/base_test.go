@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -58,6 +59,15 @@ const (
 type txnCommand struct {
 	typ CmdType
 	cmd any
+}
+
+func (h *mockHandle) runInspectCmd(cmd string) (resp *cmd_util.InspectResp, err error) {
+	resp = &cmd_util.InspectResp{}
+	_, err = h.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
+		AccessInfo: cmd_util.AccessInfo{},
+		Operation:  cmd,
+	}, resp)
+	return
 }
 
 func (h *mockHandle) HandleClose(ctx context.Context) error {
