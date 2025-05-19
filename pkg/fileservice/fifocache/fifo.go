@@ -23,6 +23,8 @@ import (
 )
 
 // Cache implements an in-memory cache with S3-FIFO-based eviction
+// All postfn is very critical.  They will increment and decrement the reference counter of the cache data and deallocate the memory when reference counter is 0.
+// Make sure the postfn is protected by mutex from shardmap.
 type Cache[K comparable, V any] struct {
 	capacity fscache.CapacityFunc
 	capSmall fscache.CapacityFunc
@@ -50,7 +52,8 @@ type _CacheItem[K comparable, V any] struct {
 	mu   sync.Mutex
 	freq int8
 
-	deleted atomic.Bool
+	// deleted is protected by shardmap
+	deleted bool
 }
 
 func (c *_CacheItem[K, V]) inc() {
@@ -77,12 +80,18 @@ func (c *_CacheItem[K, V]) getFreq() int8 {
 	return c.freq
 }
 
+// protected by shardmap
 func (c *_CacheItem[K, V]) isDeleted() bool {
-	return c.deleted.Load()
+	return c.deleted
 }
 
+// protected by shardmap
 func (c *_CacheItem[K, V]) setDeleted() bool {
-	return c.deleted.CompareAndSwap(false, true)
+	if !c.deleted {
+		c.deleted = true
+		return true
+	}
+	return false
 }
 
 // assume cache size is 128K
@@ -258,7 +267,10 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			return
 		}
 
-		deleted := item.isDeleted()
+		deleted := c.htab.ValueIsDeleted(item.key, item, func(v *_CacheItem[K, V]) bool {
+			return v.deleted
+		})
+
 		if deleted {
 			c.usedSmall.Add(-item.size)
 			return
