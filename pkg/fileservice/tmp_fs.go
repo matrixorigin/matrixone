@@ -81,6 +81,28 @@ func NewTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFil
 	return service, nil
 }
 
+func NewTestTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFileService, error) {
+	var etlfs FileService
+	var err error
+	if etlfs, err = NewLocalETLFS(name, rootPath); err != nil {
+		return nil, err
+	}
+
+	service := &TmpFileService{
+		FileService: etlfs,
+		gcInterval:  gcInterval,
+		apps:        make(map[string]*AppFS),
+		appsMu:      sync.RWMutex{},
+		wg:          sync.WaitGroup{},
+	}
+	var ctx context.Context
+	ctx, service.cancel = context.WithCancel(context.Background())
+	go service.tmpFileServiceGCTicker(ctx)
+	tmpService = service
+	service.init()
+	return service, nil
+}
+
 func (fs *TmpFileService) GetOrCreateApp(appConfig *AppConfig) (*AppFS, error) {
 	fs.appsMu.RLock()
 	app, ok := fs.apps[appConfig.Name]

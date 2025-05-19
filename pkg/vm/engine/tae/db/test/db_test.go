@@ -12083,8 +12083,9 @@ func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
 
 	dir := testutils.InitTestEnv(ModuleName, t)
-	tmpTS, err := fileservice.NewTmpFileService("TMP", path.Join(dir, "tmp"), time.Millisecond*100)
+	tmpFS, err := fileservice.NewTestTmpFileService("TMP", path.Join(dir, "tmp"), time.Millisecond*100)
 	assert.NoError(t, err)
+	defer tmpFS.Close(ctx)
 
 	getNameFn := func() string {
 		now := time.Now()
@@ -12095,7 +12096,7 @@ func Test_TmpFileService1(t *testing.T) {
 		return time.Parse("2006-01-02.15.04.05.000.MST", strs[1])
 	}
 
-	testFS, err := tmpTS.GetOrCreateApp(&fileservice.AppConfig{
+	testFS, err := tmpFS.GetOrCreateApp(&fileservice.AppConfig{
 		Name: "test",
 		GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
 			createTime, err := decodeNameFn(filePath)
@@ -12151,7 +12152,7 @@ func Test_TmpFileService1(t *testing.T) {
 	}
 
 	files := listFn()
-	assert.Equal(t, 1, len(files))
+	assert.Equal(t, 1, len(files), "files are %v", files)
 	testutils.WaitExpect(
 		4000,
 		func() bool {
@@ -12159,7 +12160,9 @@ func Test_TmpFileService1(t *testing.T) {
 			return len(files) == 0
 		},
 	)
-	assert.Equal(t, 0, len(listFn()))
+
+	files = listFn()
+	assert.Equal(t, 0, len(files), "files are %v", files)
 
 }
 
@@ -12170,6 +12173,7 @@ func Test_TmpFileService2(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
+	tae.Runtime.TmpFS.Delete(ctx, "transfer")
 	transferFS, err := model.GetTransferFS(tae.Runtime.TmpFS)
 	assert.NoError(t, err)
 
@@ -12202,7 +12206,7 @@ func Test_TmpFileService2(t *testing.T) {
 	}
 
 	files := listFn()
-	assert.Equal(t, 1, len(files))
+	assert.Equal(t, 1, len(files), "files are %v", files)
 
 	neesGC, err := model.TransferFileGCFn(name, transferFS)
 	assert.NoError(t, err)
