@@ -1155,7 +1155,11 @@ func VectorsCopyToBatch(
 		return
 	}
 	for i, vec := range vecs {
-		outputBat.Vecs[i] = movec.NewVec(*vec.GetType())
+		if outputBat.Vecs[i] == nil {
+			outputBat.Vecs[i] = movec.NewVec(*vec.GetType())
+		} else {
+			outputBat.Vecs[i].ResetWithNewType(vec.GetType())
+		}
 		if err = outputBat.Vecs[i].UnionBatch(
 			&vec,
 			0,
