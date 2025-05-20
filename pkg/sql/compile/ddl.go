@@ -20,9 +20,6 @@ import (
 	"math"
 	"strings"
 
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -37,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -47,6 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -314,14 +314,10 @@ func (s *Scope) AlterView(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
-
-	// if _, err := dbSource.Relation(c.proc.Ctx, tblName); err == nil {
-	//  	 return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
-	// }
 
 	return dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...))
 }
@@ -950,7 +946,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, extra, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
@@ -1023,7 +1019,22 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
-	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+	if len(qry.IndexTables) > 0 {
+		for _, def := range qry.IndexTables {
+			id, err := c.e.AllocateIDByKey(c.proc.Ctx, "")
+			if err != nil {
+				return err
+			}
+			def.TblId = id
+			extra.IndexTables = append(extra.IndexTables, id)
+		}
+	}
+
+	if err = dbSource.Create(
+		context.WithValue(c.proc.Ctx,
+			defines.SqlKey{}, c.sql), tblName,
+		append(exeCols, exeDefs...),
+	); err != nil {
 		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
@@ -1294,10 +1305,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	// build index table
-	for _, def := range qry.IndexTables {
+	main, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
+	if err != nil {
+		c.proc.Info(c.proc.Ctx, "createTable",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	for i, def := range qry.IndexTables {
 		planCols = def.GetCols()
 		exeCols = planColsToExeCols(planCols)
-		exeDefs, err = planDefsToExeDefs(def)
+		exeDefs, indexExtra, err := planDefsToExeDefs(def)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
@@ -1320,7 +1341,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, def.Name)
 		}
 
-		if err := dbSource.Create(c.proc.Ctx, def.Name, append(exeCols, exeDefs...)); err != nil {
+		def.TblId = extra.IndexTables[i]
+		indexExtra.FeatureFlag |= features.IndexTable
+		indexExtra.ParentTableID = main.GetTableID(c.proc.Ctx)
+
+		if err := dbSource.Create(
+			context.WithValue(c.proc.Ctx, defines.TableIDKey{}, def.TblId),
+			def.Name,
+			append(exeCols, exeDefs...),
+		); err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
@@ -1444,24 +1473,27 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if qry.IsPartition {
-		// cannot has err.
-		stmt, _ := parsers.ParseOne(
-			c.proc.Ctx,
-			dialect.MYSQL,
-			qry.RawSQL,
-			c.getLower(),
-		)
+	ps := c.proc.GetPartitionService()
+	if !ps.Enabled() || !features.IsPartitioned(qry.TableDef.FeatureFlag) {
+		return nil
+	}
 
-		err = partitionservice.GetService(c.proc.GetService()).Create(
-			c.proc.Ctx,
-			qry.GetTableDef().TblId,
-			stmt.(*tree.CreateTable),
-			c.proc.GetTxnOperator(),
-		)
-		if err != nil {
-			return err
-		}
+	// cannot has err.
+	stmt, _ := parsers.ParseOne(
+		c.proc.Ctx,
+		dialect.MYSQL,
+		qry.RawSQL,
+		c.getLower(),
+	)
+
+	err = ps.Create(
+		c.proc.Ctx,
+		qry.TableDef.TblId,
+		stmt.(*tree.CreateTable),
+		c.proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return err
 	}
 
 	return shardservice.GetService(c.proc.GetService()).Create(
@@ -1494,7 +1526,7 @@ func (s *Scope) CreateView(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
@@ -1613,7 +1645,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
@@ -1659,7 +1691,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	for _, def := range qry.IndexTables {
 		planCols = def.GetCols()
 		exeCols = planColsToExeCols(planCols)
-		exeDefs, err = planDefsToExeDefs(def)
+		exeDefs, _, err = planDefsToExeDefs(def)
 		if err != nil {
 			return err
 		}
@@ -1789,11 +1821,19 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	}
 
 	// build and update constraint def (no need to handle IVF related logic here)
-	defs, err := planDefsToExeDefs(indexTableDef)
+	defs, _, err := planDefsToExeDefs(indexTableDef)
 	if err != nil {
 		return err
 	}
-	ct := defs[0].(*engine.ConstraintDef)
+
+	var ok bool
+	var ct *engine.ConstraintDef
+	for _, def := range defs {
+		ct, ok = def.(*engine.ConstraintDef)
+		if ok {
+			break
+		}
+	}
 
 	oldCt, err := GetConstraintDef(c.proc.Ctx, r)
 	if err != nil {
@@ -1827,7 +1867,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 func indexTableBuild(c *Compile, def *plan.TableDef, dbSource engine.Database) error {
 	planCols := def.GetCols()
 	exeCols := planColsToExeCols(planCols)
-	exeDefs, err := planDefsToExeDefs(def)
+	exeDefs, _, err := planDefsToExeDefs(def)
 	if err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
@@ -2672,9 +2712,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	)
 }
 
-var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error) {
+var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
 	planDefs := tableDef.GetDefs()
 	var exeDefs []engine.TableDef
+	var propDef *engine.PropertiesDef
 	c := new(engine.ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
@@ -2686,14 +2727,30 @@ var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error)
 					Value: p.GetValue(),
 				}
 			}
-			exeDefs = append(exeDefs, &engine.PropertiesDef{
-				Properties: properties,
-			})
+			propDef = &engine.PropertiesDef{Properties: properties}
+			exeDefs = append(exeDefs, propDef)
 			c.Cts = append(c.Cts, &engine.StreamConfigsDef{
 				Configs: defVal.Properties.GetProperties(),
 			})
 		}
 	}
+
+	if propDef == nil {
+		propDef = &engine.PropertiesDef{Properties: make([]engine.Property, 0)}
+		exeDefs = append(exeDefs, propDef)
+	}
+	extra := &api.SchemaExtra{
+		FeatureFlag: tableDef.FeatureFlag,
+	}
+	propDef.Properties = append(
+		propDef.Properties,
+		engine.Property{
+			Key: catalog.PropSchemaExtra,
+			ValueFactory: func() string {
+				return string(api.MustMarshalTblExtra(extra))
+			},
+		},
+	)
 
 	if tableDef.Indexes != nil {
 		c.Cts = append(c.Cts, &engine.IndexDef{
@@ -2734,7 +2791,7 @@ var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error)
 			Name: tableDef.ClusterBy.Name,
 		})
 	}
-	return exeDefs, nil
+	return exeDefs, extra, nil
 }
 
 func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
@@ -2781,7 +2838,7 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
@@ -2852,7 +2909,7 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	exeCols := planColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}

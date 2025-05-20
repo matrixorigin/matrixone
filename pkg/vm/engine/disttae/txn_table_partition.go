@@ -43,13 +43,12 @@ func newPartitionTxnTable(
 	primary *txnTable,
 	metadata partition.PartitionMetadata,
 	ps partitionservice.PartitionService,
-) (*partitionTxnTable, error) {
-	tbl := &partitionTxnTable{
+) *partitionTxnTable {
+	return &partitionTxnTable{
 		primary:  primary,
 		metadata: metadata,
 		ps:       ps,
 	}
-	return tbl, nil
 }
 
 func (t *partitionTxnTable) getRelation(
@@ -452,6 +451,10 @@ func (t *partitionTxnTable) PrimaryKeysMayBeUpserted(
 
 func (t *partitionTxnTable) Reset(op client.TxnOperator) error {
 	return t.primary.Reset(op)
+}
+
+func (t *partitionTxnTable) GetExtraInfo() *api.SchemaExtra {
+	return t.primary.extraInfo
 }
 
 type partitionedRelData struct {

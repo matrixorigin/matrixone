@@ -53,42 +53,6 @@ func TestDelete(t *testing.T) {
 			require.NotEmpty(t, s.mu.tables)
 
 			require.NoError(t, s.Delete(ctx, tableID, nil))
-
-			ok, metadata, err := s.Is(ctx, tableID, nil)
-			require.NoError(t, err)
-			require.False(t, ok)
-			require.True(t, metadata.IsEmpty())
-		},
-	)
-}
-
-func TestIs(t *testing.T) {
-	num := uint64(2)
-	tableID := uint64(1)
-	columns := []string{"a"}
-
-	runTestPartitionServiceTest(
-		func(
-			ctx context.Context,
-			txnOp client.TxnOperator,
-			s *service,
-			store *memStorage,
-		) {
-			def := newTestTableDefine(1, columns, []types.T{types.T_int8})
-			store.addUncommittedTable(def)
-
-			stmt := newTestHashOption(t, columns[0], num)
-			assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
-
-			ok, metadata, err := s.Is(ctx, tableID, txnOp)
-			require.NoError(t, err)
-			require.True(t, ok)
-			require.True(t, !metadata.IsEmpty())
-
-			ok, metadata, err = s.Is(ctx, tableID+1, txnOp)
-			require.NoError(t, err)
-			require.False(t, ok)
-			require.True(t, metadata.IsEmpty())
 		},
 	)
 }

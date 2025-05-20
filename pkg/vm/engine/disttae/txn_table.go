@@ -91,22 +91,23 @@ func newTxnTable(
 	}
 	tbl.isLocal = tbl.isLocalFunc
 
-	ps := process.GetPartitionService()
-	if ps != nil && db.databaseId != catalog.MO_CATALOG_ID {
-
-		is, metadata, err := ps.Is(ctx, item.Id, txn.op)
-		if err != nil {
-			return nil, err
-		}
-		if is {
-			p, err := newPartitionTxnTable(
-				tbl.origin,
-				metadata,
-				ps,
+	if db.databaseId != catalog.MO_CATALOG_ID {
+		ps := process.GetPartitionService()
+		if ps.Enabled() && item.IsPartitionTable() {
+			metadata, err := ps.GetPartitionMetadata(
+				ctx,
+				item.Id,
+				process.GetTxnOperator(),
 			)
 			if err != nil {
 				return nil, err
 			}
+
+			p := newPartitionTxnTable(
+				tbl.origin,
+				metadata,
+				ps,
+			)
 			tbl.partition.tbl = p
 			tbl.partition.is = true
 			tbl.partition.service = ps
@@ -1264,6 +1265,9 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Indexes:       indexes,
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
+		}
+		if tbl.extraInfo != nil {
+			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
 		}
 	}
 	return tbl.tableDef
@@ -2665,4 +2669,8 @@ func (tbl *txnTable) getCommittedRows(
 		return rows, nil
 	}
 	return uint64(s.TableCnt) + rows, nil
+}
+
+func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
+	return tbl.extraInfo
 }
