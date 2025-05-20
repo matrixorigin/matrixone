@@ -35,18 +35,27 @@ type Bytes struct {
 func (b *Bytes) Size() int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Size() buffer already deallocated")
+	}
 	return int64(len(b.bytes))
 }
 
 func (b *Bytes) Bytes() []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Bytes() buffer already deallocated")
+	}
 	return b.bytes
 }
 
 func (b *Bytes) Slice(length int) fscache.Data {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Slice() buffer already deallocated")
+	}
 	b.bytes = b.bytes[:length]
 	return b
 }
@@ -54,6 +63,11 @@ func (b *Bytes) Slice(length int) fscache.Data {
 func (b *Bytes) Retain() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Retain() buffer already deallocated")
+	}
+
 	if b.refs != nil {
 		(*b.refs) += 1
 	}
