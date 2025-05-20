@@ -95,11 +95,8 @@ func NewMemCache(
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
 
-		// relaese
-		released := value.Release()
-		if released {
-			// value is deallocated
-		}
+		// release after all callbacks executed
+		defer value.Release()
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
@@ -115,6 +112,7 @@ func NewMemCache(
 			}
 			LogEvent(ctx, str_memory_cache_callbacks_end)
 		}
+
 	}
 
 	dataCache := fifocache.NewDataCache(capacityFunc, postSetFn, postGetFn, postEvictFn, disable_s3fifo)
