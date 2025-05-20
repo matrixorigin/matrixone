@@ -54,6 +54,7 @@ func (m *ShardMap[K, V]) Set(key K, value V, postfn func(V)) bool {
 	s.values[key] = value
 
 	if postfn != nil {
+		// call postSet to increment the cache reference counter
 		postfn(value)
 	}
 	return true
@@ -71,6 +72,7 @@ func (m *ShardMap[K, V]) Get(key K, postfn func(V)) (V, bool) {
 	}
 
 	if postfn != nil {
+		// call postGet to increment the cache reference counter
 		postfn(v)
 	}
 	return v, ok
@@ -84,6 +86,7 @@ func (m *ShardMap[K, V]) Remove(key K, value V, postfn func(V)) {
 	delete(s.values, key)
 
 	if postfn != nil {
+		// call postEvict to decrement the cache reference counter, deallocate the buffer when ref counter = 0
 		postfn(value)
 	}
 }
@@ -99,6 +102,7 @@ func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn 
 				if fn(k, key) {
 					delete(s.values, k)
 					if postfn != nil {
+						// call postEvict to decrement the cache reference counter, deallocate the buffer when ref counter = 0
 						postfn(v)
 					}
 				}
@@ -121,6 +125,7 @@ func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) (V, bool) {
 	delete(s.values, key)
 
 	if postfn != nil {
+		// call postEvict to decrement the cache reference counter, deallocate the buffer when ref counter = 0
 		postfn(v)
 	}
 
