@@ -16,8 +16,13 @@ package features
 
 const (
 	Partitioned = 1 << iota
+	IndexTable  = 1 << iota
 )
 
 func IsPartitioned(f uint64) bool {
 	return f&Partitioned != 0
+}
+
+func IsIndexTable(f uint64) bool {
+	return f&IndexTable != 0
 }

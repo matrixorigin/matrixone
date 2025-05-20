@@ -453,6 +453,10 @@ func (t *partitionTxnTable) Reset(op client.TxnOperator) error {
 	return t.primary.Reset(op)
 }
 
+func (t *partitionTxnTable) GetExtraInfo() *api.SchemaExtra {
+	return t.primary.extraInfo
+}
+
 type partitionedRelData struct {
 	cnt        int
 	blocks     objectio.BlockInfoSlice

@@ -375,9 +375,17 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
 	txn := db.getTxn()
-	tableId, err := txn.allocateID(ctx)
-	if err != nil {
-		return err
+
+	var tableId uint64
+	var err error
+	value := ctx.Value(defines.TableIDKey{})
+	if value != nil {
+		tableId = value.(uint64)
+	} else {
+		tableId, err = txn.allocateID(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
 	return db.createWithID(ctx, name, tableId, defs, false)
@@ -416,6 +424,10 @@ func (db *txnDatabase) createWithID(
 			switch defVal := def.(type) {
 			case *engine.PropertiesDef:
 				for _, property := range defVal.Properties {
+					if property.ValueFactory != nil {
+						property.Value = property.ValueFactory()
+					}
+
 					switch strings.ToLower(property.Key) {
 					case catalog.SystemRelAttr_Comment:
 						tbl.comment = property.Value

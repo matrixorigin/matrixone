@@ -2670,3 +2670,7 @@ func (tbl *txnTable) getCommittedRows(
 	}
 	return uint64(s.TableCnt) + rows, nil
 }
+
+func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
+	return tbl.extraInfo
+}

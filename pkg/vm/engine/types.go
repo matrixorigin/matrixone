@@ -86,8 +86,9 @@ type PropertiesDef struct {
 }
 
 type Property struct {
-	Key   string
-	Value string
+	Key          string
+	Value        string
+	ValueFactory func() string
 }
 
 type ClusterByDef struct {
@@ -864,6 +865,8 @@ type Relation interface {
 	CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (ChangesHandle, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
+
+	GetExtraInfo() *api.SchemaExtra
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
 	GetTableDef(context.Context) *plan.TableDef
