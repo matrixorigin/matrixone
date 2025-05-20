@@ -147,6 +147,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	}
 
 	ok := c.htab.Set(key, item, func(v *_CacheItem[K, V]) {
+		// call Bytes.Retain() to increment the ref counter and protected by shardmap mutex
 		if c.postSet != nil {
 			c.postSet(ctx, v.key, v.value, v.size)
 		}
@@ -181,6 +182,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	var item *_CacheItem[K, V]
 
 	item, ok = c.htab.Get(key, func(v *_CacheItem[K, V]) {
+		// call Bytes.Retain() to increment the ref counter and protected by shardmap mutex
 		if c.postGet != nil {
 			c.postGet(ctx, v.key, v.value, v.size)
 		}
@@ -197,6 +199,8 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	_, ok := c.htab.GetAndDelete(key, func(v *_CacheItem[K, V]) {
+		// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
+		// item.deleted makes sure postEvict only call once.
 		needsPostEvict := v.setDeleted()
 
 		// post evict
@@ -268,6 +272,7 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 		}
 
 		deleted := c.htab.ValueIsDeleted(item.key, item, func(v *_CacheItem[K, V]) bool {
+			// check item is deleted and protected by shardmap mutex.
 			return v.deleted
 		})
 
@@ -284,6 +289,8 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 		} else {
 			// evict
 			c.htab.Remove(item.key, item, func(v *_CacheItem[K, V]) {
+				// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
+				// item.deleted makes sure postEvict only call once.
 				// post evict
 				if v.setDeleted() {
 					if c.postEvict != nil {
@@ -311,6 +318,7 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 		}
 
 		deleted := c.htab.ValueIsDeleted(item.key, item, func(v *_CacheItem[K, V]) bool {
+			// check item is deleted and protected by shardmap mutex.
 			return v.deleted
 		})
 		if deleted {
@@ -325,6 +333,8 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 		} else {
 			// evict
 			c.htab.Remove(item.key, item, func(v *_CacheItem[K, V]) {
+				// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
+				// item.deleted makes sure postEvict only call once.
 				// post evict
 				if v.setDeleted() {
 					if c.postEvict != nil {
