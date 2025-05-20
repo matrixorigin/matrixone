@@ -377,7 +377,6 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 		TableName:  tail.Table.GetTbName(),
 		DbName:     tail.Table.GetDbName(),
 	}
-	// deep copy from key.TableName to a new variable
 	tableName := make([]byte, len(key.TableName))
 	copy(tableName, key.TableName)
 
@@ -386,16 +385,8 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 
 	defer func() {
 		if r := recover(); r != nil {
-			logutil.Error(
-				"Panic-In-ConsumeLogtail1",
-				zap.String("table", string(tableName)),
-				zap.String("db", string(dbName)),
-			)
-			logutil.Error(
-				"Panic-In-ConsumeLogtail2",
-				zap.String("db", key.DbName),
-				zap.String("table", key.TableName),
-			)
+			logutil.Error("Panic-In-ConsumeLogtail1", zap.String("table", string(tableName)), zap.String("db", string(dbName)))
+			logutil.Error("Panic-In-ConsumeLogtail2", zap.String("db", key.DbName), zap.String("table", key.TableName))
 			panic(r)
 		}
 	}()
