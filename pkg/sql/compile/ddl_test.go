@@ -390,7 +390,7 @@ func TestScope_CreateTable(t *testing.T) {
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
-		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
 		mockDbMeta.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, tblName string, _ []engine.TableDef) error {
 			if tblName == "dept" {
