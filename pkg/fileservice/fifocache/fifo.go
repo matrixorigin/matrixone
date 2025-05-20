@@ -198,7 +198,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
-	ok := c.htab.GetAndDelete(key, func(v *_CacheItem[K, V]) {
+	c.htab.GetAndDelete(key, func(v *_CacheItem[K, V]) {
 		// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
 		// item.deleted makes sure postEvict only call once.
 		needsPostEvict := v.setDeleted()
@@ -210,11 +210,6 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 			}
 		}
 	})
-	if !ok {
-		return
-	}
-
-	// queues will be update in evict
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
