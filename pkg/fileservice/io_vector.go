@@ -14,7 +14,9 @@
 
 package fileservice
 
-import "math"
+import (
+	"math"
+)
 
 func (i *IOVector) allDone() bool {
 	for _, entry := range i.Entries {
@@ -30,6 +32,7 @@ func (i *IOVector) Release() {
 		if entry.CachedData != nil {
 			if entry.CachedData.Release() {
 				entry.CachedData = nil
+				entry.fromCache = nil
 			}
 		}
 		if entry.releaseData != nil {

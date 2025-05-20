@@ -283,7 +283,7 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			c.usedMain.Add(item.size)
 		} else {
 			// evict
-			c.htab.Remove(item.key, item, func(v *_CacheItem[K, V]) {
+			c.htab.GetAndDelete(item.key, func(v *_CacheItem[K, V]) {
 				// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
 				// item.deleted makes sure postEvict only call once.
 				// post evict
@@ -327,7 +327,7 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			c.main.enqueue(item)
 		} else {
 			// evict
-			c.htab.Remove(item.key, item, func(v *_CacheItem[K, V]) {
+			c.htab.GetAndDelete(item.key, func(v *_CacheItem[K, V]) {
 				// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
 				// item.deleted makes sure postEvict only call once.
 				// post evict
