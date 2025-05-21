@@ -346,10 +346,6 @@ func (t *partitionTxnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attri
 	return t.primary.GetPrimaryKeys(ctx)
 }
 
-func (t *partitionTxnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	return t.primary.GetHideKeys(ctx)
-}
-
 func (t *partitionTxnTable) AddTableDef(context.Context, engine.TableDef) error {
 	return nil
 }
@@ -430,10 +426,6 @@ func (t *partitionTxnTable) PrimaryKeysMayBeModified(
 
 func (t *partitionTxnTable) Write(context.Context, *batch.Batch) error {
 	panic("BUG: cannot write data to partition primary table")
-}
-
-func (t *partitionTxnTable) Update(context.Context, *batch.Batch) error {
-	panic("BUG: cannot update data to partition primary table")
 }
 
 func (t *partitionTxnTable) Delete(context.Context, *batch.Batch, string) error {
