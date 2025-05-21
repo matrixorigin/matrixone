@@ -735,7 +735,7 @@ create table time05 as select unix_timestamp(col1) from time01;
 show create table time05;
 Table    Create Table
 time05    CREATE TABLE `time05` (\n  `unix_timestamp(col1)` bigint DEFAULT NULL\n)
-select * from time05;
+select count(*) from time05;
 count(*)
 3
 drop table time05;
