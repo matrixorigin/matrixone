@@ -685,22 +685,22 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			step = uint64(1)
 		} else if rangesLen < 10 {
 			step = uint64(5)
-		} else if rangesLen < 20 {
+		} else if rangesLen < 30 {
 			step = uint64(10)
 		} else {
 			slowStep = uint64(1)
 		}
 		tbl.enableLogFilterExpr.Store(false)
-		if traceFilterExprInterval.Add(step) >= 500000 {
+		if traceFilterExprInterval.Add(step) >= 1000000 {
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 50 {
+		if traceFilterExprInterval2.Add(slowStep) >= 60 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if rangesLen >= 60 {
+		if rangesLen >= 80 {
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
