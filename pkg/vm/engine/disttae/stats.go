@@ -726,6 +726,7 @@ func updateInfoFromZoneMap(
 		req.ts,
 		onObjFn,
 		executor,
+		false,
 	); err != nil {
 		return err
 	}
