@@ -113,11 +113,12 @@ func (e *executor) scheduleMergeObjects(
 		task.SetTaskSourceNote(note)
 		return task, nil
 	}
-	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(
+	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTaskWithObserver(
 		nil,
 		tasks.DataCompactionTask,
 		scopes,
 		factory,
+		doneCB,
 	)
 	if err != nil {
 		if !errors.Is(err, tasks.ErrScheduleScopeConflict) {
@@ -129,9 +130,6 @@ func (e *executor) scheduleMergeObjects(
 			)
 		}
 		return
-	}
-	if doneCB != nil {
-		task.AddObserver(doneCB)
 	}
 	entry.Stats.SetLastMergeTime()
 	return true
