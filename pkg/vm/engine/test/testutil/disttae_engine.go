@@ -16,15 +16,16 @@ package testutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
@@ -70,6 +71,7 @@ type TestDisttaeEngine struct {
 	mp                       *mpool.MPool
 	commitWorkspaceThreshold uint64
 	writeWorkspaceThreshold  uint64
+	quota                    uint64
 	insertEntryMaxCount      int
 
 	rootDir string
@@ -133,6 +135,9 @@ func NewTestDisttaeEngine(
 	}
 	if de.writeWorkspaceThreshold != 0 {
 		engineOpts = append(engineOpts, disttae.WithWriteWorkspaceThreshold(de.writeWorkspaceThreshold))
+	}
+	if de.quota != 0 {
+		engineOpts = append(engineOpts, disttae.WithExtraWorkspaceThresholdQuota(de.quota))
 	}
 
 	internalExecutorFactory := func() ie.InternalExecutor {
@@ -199,6 +204,7 @@ func NewTestDisttaeEngine(
 			de.txnClient,
 			fs,
 			new(mockLockService),
+			nil,
 			qc,
 			hakeeper,
 			nil,
@@ -321,6 +327,7 @@ func (de *TestDisttaeEngine) analyzeCheckpoint(
 	ckps := state.Checkpoints()
 	for x := range ckps {
 		locAndVersions := strings.Split(ckps[x], ";")
+		locAndVersions = locAndVersions[1:]
 		stats.CheckpointCnt += len(locAndVersions) / 2
 		for y := 0; y < len(locAndVersions); y += 2 {
 			stats.Details.CheckpointLocs[0] = append(stats.Details.CheckpointLocs[0], locAndVersions[y])
@@ -361,7 +368,10 @@ func (de *TestDisttaeEngine) analyzeTombstone(
 }
 
 func (de *TestDisttaeEngine) SubscribeTable(
-	ctx context.Context, dbID, tbID uint64, setSubscribed bool,
+	ctx context.Context,
+	dbID, tbID uint64,
+	dbName, tblName string,
+	setSubscribed bool,
 ) (err error) {
 	ticker := time.NewTicker(time.Second)
 	timeout := 5
@@ -372,7 +382,7 @@ func (de *TestDisttaeEngine) SubscribeTable(
 			break
 		}
 
-		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID)
+		err = de.Engine.TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
 		if err != nil {
 			timeout--
 			logutil.Errorf("test disttae engine subscribe table err %v, left trie %d", err, timeout)

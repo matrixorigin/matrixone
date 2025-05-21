@@ -55,8 +55,8 @@ type Vector struct {
 	capacity int
 	length   int
 
-	nsp nulls.Nulls    // nulls list
-	gsp nulls.Grouping // grouping list
+	nsp nulls.Nulls // nulls list
+	gsp nulls.Nulls // grouping list
 
 	cantFreeData bool
 	cantFreeArea bool
@@ -88,14 +88,24 @@ func (t *typedSlice) setFromVector(v *Vector) {
 }
 
 func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
+	checkTypeIfRaceDetectorEnabled[T](vec)
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
+func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
+	checkTypeIfRaceDetectorEnabled[T](vec)
+	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
 func ToSlice[T any](vec *Vector, ret *[]T) {
-	if !typeCompatible[T](vec.typ) {
-		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
-	}
+	checkType[T](vec)
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
+func checkType[T any](vec *Vector) {
+	if !typeCompatible[T](vec.typ) {
+		panic(fmt.Sprintf("type mismatch: casting %v vector to %T", vec.typ.String(), []T{}))
+	}
 }
 
 func (v *Vector) GetSorted() bool {
@@ -274,12 +284,26 @@ func GetFixedAtWithTypeCheck[T any](v *Vector, idx int) T {
 	return slice[idx]
 }
 
+func (v *Vector) CloneBytesAt(i int) []byte {
+	bs := v.GetBytesAt(i)
+	ret := make([]byte, len(bs))
+	copy(ret, bs)
+	return ret
+}
+
 func (v *Vector) GetBytesAt(i int) []byte {
 	if v.IsConst() {
 		i = 0
 	}
 	var bs []types.Varlena
 	ToSliceNoTypeCheck(v, &bs)
+	return bs[i].GetByteSlice(v.area)
+}
+
+func (v *Vector) GetBytesAt2(bs []types.Varlena, i int) []byte {
+	if v.IsConst() {
+		i = 0
+	}
 	return bs[i].GetByteSlice(v.area)
 }
 
@@ -338,6 +362,13 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	}
 	var bs []types.Varlena
 	ToSliceNoTypeCheck(v, &bs)
+	return types.GetArray[T](&bs[i], v.area)
+}
+
+func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T {
+	if v.IsConst() {
+		i = 0
+	}
 	return types.GetArray[T](&bs[i], v.area)
 }
 
@@ -867,6 +898,9 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
 func (v *Vector) Shrink(sels []int64, negate bool) {
+
+	shrinkSortedCheckIfRaceDetectorEnabled(sels)
+
 	if v.IsConst() {
 		if negate {
 			v.length -= len(sels)
@@ -4716,4 +4750,17 @@ func Union2VectorValen(
 	}
 
 	return nil
+}
+
+func (v *Vector) FillRawPtrLen(dest []uintptr) {
+	dest[0], dest[1] = v.nsp.RawPtrLen()
+	ds := v.UnsafeGetRawData()
+	dest[2] = uintptr(unsafe.Pointer(&ds[0]))
+	dest[3] = uintptr(len(ds))
+	if len(v.area) == 0 {
+		dest[4], dest[5] = 0, 0
+	} else {
+		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
+		dest[5] = uintptr(len(v.area))
+	}
 }

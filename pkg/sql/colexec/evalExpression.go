@@ -191,7 +191,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			executor.overloadID = overloadID
 			executor.volatile, executor.timeDependent = overload.CannotFold(), overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
-			executor.evalFn, executor.freeFn = overload.GetExecuteMethod()
+			executor.evalFn, executor.resetFn, executor.freeFn = overload.GetExecuteMethod()
 		}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 
@@ -269,15 +269,21 @@ type ParamExpressionExecutor struct {
 	vec  *vector.Vector
 	pos  int
 	typ  types.Type
+
+	folded bool
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
-	if expr.vec != nil {
-		return expr.vec, nil
+	if expr.folded {
+		if expr.null != nil {
+			return expr.null, nil
+		}
+		if expr.vec != nil {
+			return expr.vec, nil
+		}
 	}
-	if expr.null != nil {
-		return expr.null, nil
-	}
+
+	expr.folded = true
 	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
@@ -1392,7 +1398,7 @@ func GetExprZoneMap(
 						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
-				fn, fnFree := overload.GetExecuteMethod()
+				fn, _, fnFree := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 
 				result := vector.NewFunctionResultWrapper(typ, proc.Mp())

@@ -19,7 +19,7 @@ select count(*) from snapshot01;
 select * from snapshot01;
 show create table snapshot01;
 drop snapshot if exists sp01;
-create snapshot sp01 for account sys;
+create snapshot sp01 for account;
 select * from snapshot01 {snapshot = 'sp01'};
 select count(*) from snapshot01 {snapshot = 'sp01'};
 
@@ -74,8 +74,8 @@ drop table if exists snapshot02;
 create table test_snapshot_read (a int);
 insert into test_snapshot_read (a) VALUES(1), (2), (3), (4), (5),(6), (7), (8), (9), (10), (11), (12),(13), (14), (15), (16), (17), (18), (19), (20),(21), (22), (23), (24), (25), (26), (27), (28), (29), (30),(31), (32), (33), (34), (35), (36), (37), (38), (39), (40),(41), (42), (43), (44), (45), (46), (47), (48), (49), (50),(51), (52), (53), (54), (55), (56), (57), (58), (59), (60),(61), (62), (63), (64), (65), (66), (67), (68), (69), (70),(71), (72), (73), (74), (75), (76), (77), (78), (79), (80), (81), (82), (83), (84), (85), (86), (87), (88), (89), (90),(91), (92), (93), (94), (95), (96), (97), (98), (99), (100);
 select count(*) from test_snapshot_read;
-create snapshot snapshot_01 for account sys;
-create snapshot snapshot_01 for account sys;
+create snapshot snapshot_01 for account;
+create snapshot snapshot_01 for account;
 drop snapshot snapshot_01;
 drop table test_snapshot_read;
 
@@ -100,13 +100,13 @@ select * from snapshot03;
 select * from snapshot04;
 
 drop snapshot if exists sp03;
-create snapshot sp03 for account sys;
+create snapshot sp03 for account;
 -- @ignore:1
 show snapshots where account_name = 'sys';
 insert into snapshot03 values(3,'sfhuwe',1,1);
 insert into snapshot03 values(4,'37829901k3d',2,2);
 drop snapshot if exists sp04;
-create snapshot sp04 for account sys;
+create snapshot sp04 for account;
 -- @ignore:1
 show snapshots;
 select * from snapshot03;
@@ -122,7 +122,7 @@ insert into snapshot03 values(5,'sfhuwe',1);
 select * from snapshot03;
 select count(*) from snapshot03 {snapshot = 'sp03'};
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 -- @ignore:1
 show snapshots;
 select count(*) from snapshot03 {snapshot = 'sp05'};
@@ -247,7 +247,7 @@ insert into testsnap_03(employeeNumber,lastName,firstName,extension,email,office
 
 drop snapshot if exists testsnap_03;
 select count(*) from testsnap_03;
-create snapshot sp04 for account sys;
+create snapshot sp04 for account;
 select count(*) from testsnap_03 {snapshot = 'sp04'};
 insert into testsnap_03 values (1286,'Tseng','Foon Yue','x2248','ftseng@classicmodelcars.com','3',1143,'Sales Rep'),
                                (1323,'Vanauf','George','x4102','gvanauf@classicmodelcars.com','3',1143,'Sales Rep'),
@@ -256,7 +256,7 @@ insert into testsnap_03 values (1286,'Tseng','Foon Yue','x2248','ftseng@classicm
                                (1401,'Castillo','Pamela','x2759','pcastillo@classicmodelcars.com','4',1102,'Sales Rep');
 select count(*) from testsnap_03 {snapshot = 'sp04'};
 drop snapshot if exists sp05;
-create snapshot sp05 for account sys;
+create snapshot sp05 for account;
 select * from testsnap_03;
 select * from testsnap_03 {snapshot = 'sp04'} where jobTitle = 'President';
 select employeeNumber,lastName,firstName,extension from testsnap_03 {snapshot = 'sp04'} where extension = 'x4611';
@@ -289,7 +289,7 @@ insert into cluster01 values(1,2,0);
 insert into cluster01 values(2,3,0);
 select * from cluster01;
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
@@ -315,7 +315,7 @@ use sub_database01;
 show tables;
 -- @session
 drop snapshot if exists sp06;
-create snapshot sp06 for account sys;
+create snapshot sp06 for account;
 select * from pub01 {snapshot = 'sp06'};
 select count(*) from pub01 {snapshot = 'sp06'};
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp06'} where reldatabase = 'test03';
@@ -335,12 +335,13 @@ drop snapshot sp06;
 drop table pub01;
 
 -- table with partition by
+-- @bvt:issue#16438
 drop table if exists pt_table;
 create table pt_table(col1 tinyint,col2 smallint,col3 int,clo4 bigint,col5 tinyint unsigned,col6 smallint unsigned,col7 int unsigned,col8 bigint unsigned,col9 float,col10 double,col11 varchar(255),col12 Date,col13 DateTime,col14 timestamp,col15 bool,col16 decimal(5,2),col17 text,col18 varchar(255),col19 varchar(255),col20 text)partition by key(col13)partitions 10;
 load data infile '$resources/external_table_file/pt_table_data.csv' into table  pt_table fields terminated by ',';
 select count(*) from pt_table;
 drop snapshot if exists sp07;
-create snapshot sp07 for account sys;
+create snapshot sp07 for account;
 -- @ignore:1
 show snapshots;
 select count(*) from pt_table{snapshot = 'sp07'};
@@ -351,6 +352,7 @@ select * from mo_catalog.mo_database{snapshot = 'sp07'} where datname = 'test03'
 select attname from mo_catalog.mo_columns{snapshot = 'sp07'} where att_database = 'test03';
 drop snapshot sp07;
 drop table pt_table;
+-- @bvt:issue
 drop database test03;
 
 -- A database contains multiple tables at the same time, including tables of any type
@@ -385,7 +387,7 @@ create database sub_database02 from sys publication publication01;
 use sub_database02;
 -- @session
 drop snapshot if exists sp08;
-create snapshot sp08 for account sys;
+create snapshot sp08 for account;
 use test04;
 select count(*) from normal_table01 {snapshot = 'sp08'};
 select count(*) from t3 {snapshot = 'sp08'};
@@ -434,7 +436,7 @@ insert into t1 values('abcd_f');
 insert into t1 values('abcde_');
 select count(*) from t1;
 drop snapshot if exists `binary`;
-create snapshot `binary` for account sys;
+create snapshot `binary` for account;
 select count(*) from mo_catalog.mo_tables{snapshot = `binary`} where reldatabase = 'test05';
 -- @ignore:0,6,7
 select * from mo_catalog.mo_database{snapshot = `binary`} where datname = 'test05';
@@ -451,7 +453,7 @@ create table t1 (
 insert into t1 values('2022-01-01', 1);
 insert into t1 values('2022-01-02', 2);
 drop snapshot if exists consistent;
-create snapshot consistent for account sys;
+create snapshot consistent for account;
 -- @ignore:0,6,7
 select count(*) from mo_catalog.mo_tables{snapshot = consistent} where reldatabase = 'test05';
 -- @ignore:0,6,7
@@ -469,12 +471,12 @@ drop table if exists tran01;
 start transaction;
 create table tran01(col1 enum('red','blue','green'));
 insert into tran01 values('red'),('blue'),('green');
-create snapshot sp09 for account sys;
+create snapshot sp09 for account;
 -- @ignore:1
 show snapshots;
 commit;
 drop snapshot if exists sp09;
-create snapshot sp09 for account sys;
+create snapshot sp09 for account;
 -- @ignore:1
 show snapshots;
 select count(*) from tran01{snapshot = 'sp09'};
@@ -521,7 +523,7 @@ drop table t3;
 drop table t2;
 
 drop snapshot if exists sp10;
-create snapshot sp10 for account sys;
+create snapshot sp10 for account;
 
 select count(*) from t3{snapshot = 'sp10'};
 select count(*) from t2{snapshot = 'sp10'};

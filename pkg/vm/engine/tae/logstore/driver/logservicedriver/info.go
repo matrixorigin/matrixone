@@ -19,252 +19,179 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"go.uber.org/zap"
 )
 
-var ErrDriverLsnNotFound = moerr.NewInternalErrorNoCtx("driver info: driver lsn not found")
-var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("driver info: retry time out")
+var ErrDSNNotFound = moerr.NewInternalErrorNoCtx("dsn not found")
+var ErrRetryTimeOut = moerr.NewInternalErrorNoCtx("retry time out")
 
-type driverInfo struct {
-	addr                   map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate
-	validLsn               *roaring64.Bitmap
-	addrMu                 sync.RWMutex
-	driverLsn              uint64 //
-	syncing                uint64
-	synced                 uint64
-	syncedMu               sync.RWMutex
-	driverLsnMu            sync.RWMutex
-	truncating             atomic.Uint64 //
-	truncatedLogserviceLsn uint64        //
-
-	appending  uint64
-	appended   *common.ClosedIntervals
-	appendedMu sync.RWMutex
-	commitCond sync.Cond
-	inReplay   bool
+type DSNStats struct {
+	Truncated uint64
+	Min       uint64
+	Max       uint64
 }
 
-func newDriverInfo() *driverInfo {
-	return &driverInfo{
-		addr:        make(map[uint64]*common.ClosedIntervals),
-		validLsn:    roaring64.NewBitmap(),
-		addrMu:      sync.RWMutex{},
-		driverLsnMu: sync.RWMutex{},
-		appended:    common.NewClosedIntervals(),
-		appendedMu:  sync.RWMutex{},
-		commitCond:  *sync.NewCond(new(sync.Mutex)),
+type sequenceNumberState struct {
+	// PSN: physical sequence number. here is the lsn from logservice
+	sequence struct {
+		mu sync.RWMutex
+		// key: PSN, value: DSNs
+		psn2DSNMap map[uint64]common.ClosedInterval
+		psns       roaring64.Bitmap
 	}
-}
 
-func (d *LogServiceDriver) GetCurrSeqNum() uint64 {
-	d.driverLsnMu.Lock()
-	lsn := d.driverLsn
-	d.driverLsnMu.Unlock()
-	return lsn
-}
-func (info *driverInfo) PreReplay() {
-	info.inReplay = true
-}
-func (info *driverInfo) PostReplay() {
-	info.inReplay = false
-}
-func (info *driverInfo) IsReplaying() bool {
-	return info.inReplay
-}
-func (info *driverInfo) onReplay(r *replayer) {
-	info.driverLsn = r.maxDriverLsn
-	info.synced = r.maxDriverLsn
-	info.syncing = r.maxDriverLsn
-	if r.minDriverLsn != math.MaxUint64 {
-		info.truncating.Store(r.minDriverLsn - 1)
+	watermark struct {
+		mu           sync.RWMutex
+		committedDSN uint64
+
+		// dsn: driver sequence number
+		// it is monotonically continuously increasing
+		// PSN:[DSN:LSN, DSN:LSN, DSN:LSN, ...]
+		// One : Many
+		nextDSN atomic.Uint64
 	}
-	info.truncatedLogserviceLsn = r.truncatedLogserviceLsn
-	info.appended.TryMerge(*common.NewClosedIntervalsBySlice(r.appended))
+
+	truncateDSNIntent atomic.Uint64 //
+	truncatedPSN      uint64        //
 }
 
-func (info *driverInfo) onReplayRecordEntry(lsn uint64, driverLsns *common.ClosedIntervals) {
-	info.addr[lsn] = driverLsns
-	info.validLsn.Add(lsn)
+func newSequenceNumberState() *sequenceNumberState {
+	d := new(sequenceNumberState)
+	d.sequence.psn2DSNMap = make(map[uint64]common.ClosedInterval)
+	return d
 }
 
-func (info *driverInfo) getNextValidLogserviceLsn(lsn uint64) uint64 {
-	info.addrMu.Lock()
-	defer info.addrMu.Unlock()
-	if info.validLsn.IsEmpty() {
+func (sns *sequenceNumberState) initState(stats *DSNStats) {
+	sns.watermark.nextDSN.Store(stats.Max)
+	sns.watermark.committedDSN = stats.Max
+	if stats.Min != math.MaxUint64 {
+		sns.truncateDSNIntent.Store(stats.Min - 1)
+	}
+	sns.truncatedPSN = stats.Truncated
+}
+
+// psn: physical sequence number
+// dsns: dsns in the log entry of the psn
+func (sns *sequenceNumberState) recordSequenceNumbers(
+	psn uint64, dsns common.ClosedInterval,
+) {
+	sns.sequence.mu.Lock()
+	defer sns.sequence.mu.Unlock()
+	sns.sequence.psn2DSNMap[psn] = dsns
+	sns.sequence.psns.Add(psn)
+}
+
+func (sns *sequenceNumberState) GetDSN() uint64 {
+	return sns.watermark.nextDSN.Load()
+}
+
+func (sns *sequenceNumberState) getNextValidPSN(psn uint64) uint64 {
+	sns.sequence.mu.RLock()
+	defer sns.sequence.mu.RUnlock()
+	if sns.sequence.psns.IsEmpty() {
 		return 0
 	}
-	max := info.validLsn.Maximum()
-	if lsn >= max {
-		return max
+	maxPSN := sns.sequence.psns.Maximum()
+	// [psn >= maxPSN]
+	if psn >= maxPSN {
+		return maxPSN
 	}
-	lsn++
-	for !info.validLsn.Contains(lsn) {
-		lsn++
+	// [psn < maxPSN]
+	// PXU TODO: psn++???
+	psn++
+	for !sns.sequence.psns.Contains(psn) {
+		psn++
 	}
-	return lsn
+	return psn
 }
 
-func (info *driverInfo) isToTruncate(logserviceLsn, driverLsn uint64) bool {
-	maxlsn := info.getMaxDriverLsn(logserviceLsn)
-	if maxlsn == 0 {
+func (sns *sequenceNumberState) isToTruncate(psn, dsn uint64) bool {
+	maxDSN := sns.getMaxDSN(psn)
+
+	// psn cannot be found in the psn.psn2DSNMap
+	if maxDSN == 0 {
 		return false
 	}
-	return maxlsn <= driverLsn
+
+	// the maxDSN of the psn is less equal to the dsn
+	return maxDSN <= dsn
 }
 
-func (info *driverInfo) getMaxDriverLsn(logserviceLsn uint64) uint64 {
-	info.addrMu.RLock()
-	intervals, ok := info.addr[logserviceLsn]
+func (sns *sequenceNumberState) getMaxDSN(psn uint64) uint64 {
+	sns.sequence.mu.RLock()
+	defer sns.sequence.mu.RUnlock()
+	dsnRange, ok := sns.sequence.psn2DSNMap[psn]
 	if !ok {
-		info.addrMu.RUnlock()
 		return 0
 	}
-	lsn := intervals.GetMax()
-	info.addrMu.RUnlock()
-	return lsn
+	return dsnRange.End
 }
 
-func (info *driverInfo) allocateDriverLsn() uint64 {
-	info.driverLsn++
-	lsn := info.driverLsn
-	return lsn
+func (sns *sequenceNumberState) allocateDSN() uint64 {
+	return sns.watermark.nextDSN.Add(1)
 }
 
-func (info *driverInfo) getDriverLsn() uint64 {
-	info.driverLsnMu.RLock()
-	lsn := info.driverLsn
-	info.driverLsnMu.RUnlock()
-	return lsn
-}
+func (sns *sequenceNumberState) recordCommitInfo(committer *groupCommitter) {
+	dsnRange := committer.writer.Entry.DSNRange()
 
-func (info *driverInfo) getAppended() uint64 {
-	info.appendedMu.RLock()
-	defer info.appendedMu.RUnlock()
-	if info.appended == nil || len(info.appended.Intervals) == 0 || info.appended.Intervals[0].Start != 1 {
-		return 0
+	sns.sequence.mu.Lock()
+	sns.sequence.psns.Add(committer.psn)
+	sns.sequence.psn2DSNMap[committer.psn] = dsnRange
+	sns.sequence.mu.Unlock()
+
+	sns.watermark.mu.Lock()
+	defer sns.watermark.mu.Unlock()
+	if dsnRange.Start != sns.watermark.committedDSN+1 {
+		panic(fmt.Sprintf(
+			"logic err, expect %d, actual %s",
+			sns.watermark.committedDSN+1,
+			dsnRange.String(),
+		))
 	}
-	return info.appended.Intervals[0].End
+	sns.watermark.committedDSN = dsnRange.End
 }
 
-func (info *driverInfo) retryAllocateAppendLsnWithTimeout(maxPendding uint64, timeout time.Duration) (lsn uint64, err error) {
-	lsn, err = info.tryAllocate(maxPendding)
-	if err == ErrTooMuchPenddings {
-		err = RetryWithTimeout(timeout, func() (shouldReturn bool) {
-			info.commitCond.L.Lock()
-			lsn, err = info.tryAllocate(maxPendding)
-			if err != ErrTooMuchPenddings {
-				info.commitCond.L.Unlock()
-				return true
-			}
-			info.commitCond.Wait()
-			info.commitCond.L.Unlock()
-			lsn, err = info.tryAllocate(maxPendding)
-			return err != ErrTooMuchPenddings
-		})
-	}
-	return
-}
-
-func (info *driverInfo) tryAllocate(maxPendding uint64) (lsn uint64, err error) {
-	appended := info.getAppended()
-	if info.appending-appended >= maxPendding {
-		return 0, ErrTooMuchPenddings
-	}
-	info.appending++
-	return info.appending, nil
-}
-
-func (info *driverInfo) logAppend(appender *driverAppender) {
-	info.addrMu.Lock()
-	array := make([]uint64, 0)
-	for key := range appender.entry.Meta.addr {
-		array = append(array, key)
-	}
-	info.validLsn.Add(appender.logserviceLsn)
-	interval := common.NewClosedIntervalsBySlice(array)
-	info.addr[appender.logserviceLsn] = interval
-	info.addrMu.Unlock()
-	if interval.GetMin() != info.syncing+1 {
-		panic(fmt.Sprintf("logic err, expect %d, min is %d", info.syncing+1, interval.GetMin()))
-	}
-	if len(interval.Intervals) != 1 {
-		logutil.Debugf("interval is %v", interval)
-		panic("logic err")
-	}
-	info.syncing = interval.GetMax()
-}
-
-func (info *driverInfo) gcAddr(logserviceLsn uint64) {
-	info.addrMu.Lock()
-	defer info.addrMu.Unlock()
-	lsnToDelete := make([]uint64, 0)
-	for serviceLsn := range info.addr {
-		if serviceLsn < logserviceLsn {
-			lsnToDelete = append(lsnToDelete, serviceLsn)
+func (sns *sequenceNumberState) truncateByPSN(psn uint64) {
+	var (
+		beforeCnt uint64
+		afterCnt  uint64
+	)
+	defer func() {
+		logutil.Info(
+			"Wal-Truncate-By-PSN",
+			zap.Uint64("psn", psn),
+			zap.Uint64("before", beforeCnt),
+			zap.Uint64("after", afterCnt),
+			zap.Uint64("deleted", beforeCnt-afterCnt),
+		)
+	}()
+	sns.sequence.mu.Lock()
+	defer sns.sequence.mu.Unlock()
+	beforeCnt = uint64(len(sns.sequence.psn2DSNMap))
+	candidates := make([]uint64, 0)
+	// collect all the PSN that is less than the given PSN
+	for sn := range sns.sequence.psn2DSNMap {
+		if sn < psn {
+			candidates = append(candidates, sn)
 		}
 	}
-	info.validLsn.RemoveRange(0, logserviceLsn)
-	for _, lsn := range lsnToDelete {
-		delete(info.addr, lsn)
+	// remove 0 to the given PSN from the validPSN
+	sns.sequence.psns.RemoveRange(0, psn)
+
+	// remove the PSN from the map
+	for _, lsn := range candidates {
+		delete(sns.sequence.psn2DSNMap, lsn)
 	}
+	afterCnt = uint64(len(sns.sequence.psn2DSNMap))
 }
 
-func (info *driverInfo) getSynced() uint64 {
-	info.syncedMu.RLock()
-	lsn := info.synced
-	info.syncedMu.RUnlock()
-	return lsn
-}
-func (info *driverInfo) onAppend(appended []uint64) {
-	info.syncedMu.Lock()
-	info.synced = info.syncing
-	info.syncedMu.Unlock()
-
-	appendedArray := common.NewClosedIntervalsBySlice(appended)
-	info.appendedMu.Lock()
-	info.appended.TryMerge(*appendedArray)
-	info.appendedMu.Unlock()
-
-	info.commitCond.L.Lock()
-	info.commitCond.Broadcast()
-	info.commitCond.L.Unlock()
-}
-
-func (info *driverInfo) tryGetLogServiceLsnByDriverLsn(driverLsn uint64) (uint64, error) {
-	lsn, err := info.getLogServiceLsnByDriverLsn(driverLsn)
-	if err == ErrDriverLsnNotFound {
-		if lsn <= info.getDriverLsn() {
-			for i := 0; i < 10; i++ {
-				logutil.Infof("retry get logserviceLsn, driverlsn=%d", driverLsn)
-				info.commitCond.L.Lock()
-				lsn, err = info.getLogServiceLsnByDriverLsn(driverLsn)
-				if err == nil {
-					info.commitCond.L.Unlock()
-					break
-				}
-				info.commitCond.Wait()
-				info.commitCond.L.Unlock()
-			}
-			if err != nil {
-				return 0, ErrRetryTimeOut
-			}
-		}
-	}
-	return lsn, err
-}
-
-func (info *driverInfo) getLogServiceLsnByDriverLsn(driverLsn uint64) (uint64, error) {
-	info.addrMu.RLock()
-	defer info.addrMu.RUnlock()
-	for lsn, intervals := range info.addr {
-		if intervals.Contains(*common.NewClosedIntervalsByInt(driverLsn)) {
-			return lsn, nil
-		}
-	}
-	return 0, ErrDriverLsnNotFound
+func (sns *sequenceNumberState) getCommittedDSNWatermark() uint64 {
+	sns.watermark.mu.RLock()
+	defer sns.watermark.mu.RUnlock()
+	return sns.watermark.committedDSN
 }

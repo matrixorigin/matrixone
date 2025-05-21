@@ -40,27 +40,27 @@ var (
 	SnapshotAttr_LogIndex_Size = "log_index_size"
 )
 
-func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
+func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) TxnMVCCNode {
 	var ts types.TS
 	if txn != nil {
 		ts = txn.GetStartTS()
 	}
-	return &TxnMVCCNode{
+	return TxnMVCCNode{
 		Start:   ts,
 		Prepare: txnif.UncommitTS,
 		End:     txnif.UncommitTS,
 		Txn:     txn,
 	}
 }
-func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
-	return &TxnMVCCNode{
+func NewTxnMVCCNodeWithTS(ts types.TS) TxnMVCCNode {
+	return TxnMVCCNode{
 		Start:   ts,
 		Prepare: ts,
 		End:     ts,
 	}
 }
-func NewTxnMVCCNodeWithStartEnd(start, end types.TS) *TxnMVCCNode {
-	return &TxnMVCCNode{
+func NewTxnMVCCNodeWithStartEnd(start, end types.TS) TxnMVCCNode {
+	return TxnMVCCNode{
 		Start:   start,
 		Prepare: end,
 		End:     end,
@@ -390,8 +390,8 @@ func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
 	}
 }
 
-func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
-	n := &TxnMVCCNode{}
+func (un *TxnMVCCNode) CloneAll() TxnMVCCNode {
+	n := TxnMVCCNode{}
 	n.Start = un.Start
 	n.Prepare = un.Prepare
 	n.End = un.End
@@ -413,28 +413,6 @@ func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
 	un.Prepare = un.Txn.GetPrepareTS()
 	ts = un.Prepare
 	return
-}
-
-func (un *TxnMVCCNode) AppendTuple(bat *containers.Batch) {
-	startTSVec := bat.GetVectorByName(SnapshotAttr_StartTS)
-	vector.AppendFixed(
-		startTSVec.GetDownstreamVector(),
-		un.Start,
-		false,
-		startTSVec.GetAllocator(),
-	)
-	vector.AppendFixed(
-		bat.GetVectorByName(SnapshotAttr_PrepareTS).GetDownstreamVector(),
-		un.Prepare,
-		false,
-		startTSVec.GetAllocator(),
-	)
-	vector.AppendFixed(
-		bat.GetVectorByName(SnapshotAttr_CommitTS).GetDownstreamVector(),
-		un.End,
-		false,
-		startTSVec.GetAllocator(),
-	)
 }
 
 // In push model, logtail is prepared before committing txn,
@@ -463,16 +441,4 @@ func (un *TxnMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, commitTS t
 
 func (un *TxnMVCCNode) ReadTuple(bat *containers.Batch, offset int) {
 	// TODO
-}
-
-func ReadTuple(bat *containers.Batch, row int) (un *TxnMVCCNode) {
-	end := bat.GetVectorByName(SnapshotAttr_CommitTS).Get(row).(types.TS)
-	start := bat.GetVectorByName(SnapshotAttr_StartTS).Get(row).(types.TS)
-	prepare := bat.GetVectorByName(SnapshotAttr_PrepareTS).Get(row).(types.TS)
-	un = &TxnMVCCNode{
-		Start:   start,
-		Prepare: prepare,
-		End:     end,
-	}
-	return
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -44,7 +45,6 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -113,7 +113,7 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx.reqCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan, "")
+	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan, "")
 	return p, st, err
 }
 
@@ -842,11 +842,11 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
-	stats := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
-		stats.AddBuildPlanStatsConsumption(time.Since(start))
+		statser.AddBuildPlanStatsConsumption(time.Since(start))
 	}()
 
 	dbName := obj.GetSchemaName()
@@ -879,69 +879,11 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	if !needUpdate {
 		return cached, nil
 	}
-	tableDefs, err := table.TableDefs(ctx)
+
+	newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
+	statsInfo, err := table.Stats(newCtx, true)
 	if err != nil {
-		return nil, err
-	}
-	var partitionInfo *plan.PartitionByDef
-	for _, def := range tableDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					return nil, err
-				}
-				partitionInfo = p
-			}
-			break
-		}
-	}
-
-	var statsInfo *pb.StatsInfo
-	// This is a partition table.
-	if partitionInfo != nil {
-		crs := new(perfcounter.CounterSet)
-		statsInfo = plan2.NewStatsInfo()
-		for _, partitionTable := range partitionInfo.PartitionTableNames {
-			parCtx, parTable, err := tcc.getRelation(dbName, partitionTable, sub, snapshot)
-			if err != nil {
-				return cached, err
-			}
-			newParCtx := perfcounter.AttachS3RequestKey(parCtx, crs)
-			parStats, err := parTable.Stats(newParCtx, true)
-			if err != nil {
-				return cached, err
-			}
-			statsInfo.Merge(parStats)
-		}
-
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
-
-	} else {
-		crs := new(perfcounter.CounterSet)
-		newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-
-		statsInfo, err = table.Stats(newCtx, true)
-		if err != nil {
-			return cached, err
-		}
-
-		stats.AddBuildPlanStatsS3Request(statistic.S3Request{
-			List:      crs.FileService.S3.List.Load(),
-			Head:      crs.FileService.S3.Head.Load(),
-			Put:       crs.FileService.S3.Put.Load(),
-			Get:       crs.FileService.S3.Get.Load(),
-			Delete:    crs.FileService.S3.Delete.Load(),
-			DeleteMul: crs.FileService.S3.DeleteMulti.Load(),
-		})
+		return cached, err
 	}
 
 	if statsInfo != nil {
@@ -958,59 +900,31 @@ func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
 // statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
 // else, check if the info needs to be updated.
 func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation, snapshot *plan2.Snapshot) (*pb.StatsInfo, bool) {
-	s := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
-	if s == nil {
+	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
+	start := time.Now()
+	defer func() {
+		statser.AddStatsStatsInCacheDuration(time.Since(start))
+	}()
+
+	w := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
+	if w == nil {
 		return nil, false
 	}
 
-	var partitionInfo *plan2.PartitionByDef
-	engineDefs, err := table.TableDefs(ctx)
-	if err != nil {
-		return nil, false
-	}
-	for _, def := range engineDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan2.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					return nil, false
-				}
-				partitionInfo = p
-			}
-		}
-	}
-
-	second := time.Now().Unix()
-	var diff int64 = 3
-	if partitionInfo != nil {
-		diff = 30
-	}
-	if s.ApproxObjectNumber > 0 && second-s.TimeSecond < diff {
+	var limit int64 = 3
+	if w.Stats.AccurateObjectNumber > 0 && w.IsRecentlyVisitIn(limit) {
 		// do not call ApproxObjectsNum within a short time limit
-		return s, false
+		return w.Stats, true
 	}
-	s.TimeSecond = second
 
-	approxNumObjects := 0
-	if partitionInfo != nil {
-		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
-			_, ptable, err := tcc.getRelation(dbName, PartitionTableName, nil, snapshot)
-			if err != nil {
-				return nil, false
-			}
-			approxNumObjects += ptable.ApproxObjectsNum(ctx)
-		}
-	} else {
-		approxNumObjects = table.ApproxObjectsNum(ctx)
-	}
+	approxNumObjects := table.ApproxObjectsNum(ctx)
 	if approxNumObjects == 0 {
 		return nil, false
 	}
-	if s.NeedUpdate(int64(approxNumObjects)) {
-		return s, true
+	if w.Stats.NeedUpdate(int64(approxNumObjects)) {
+		return w.Stats, true
 	}
-	return s, false
+	return w.Stats, false
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
@@ -1024,7 +938,7 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 	// get file size
 	path := catalog.BuildQueryResultMetaPath(proc.GetSessionInfo().Account, uuid)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(proc.GetService(), proc.Base.FileService, path)
+	reader, err := ioutil.NewFileReader(proc.Base.FileService, path)
 	if err != nil {
 		return nil, "", err
 	}

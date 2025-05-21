@@ -23,11 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func (s *service) initDistributedTAE(
@@ -56,7 +56,7 @@ func (s *service) initDistributedTAE(
 	colexec.NewServer(hakeeper)
 
 	// start I/O pipeline
-	blockio.Start(s.cfg.UUID)
+	ioutil.Start(s.cfg.UUID)
 
 	internalExecutorFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(s.cfg.UUID)
@@ -88,11 +88,6 @@ func (s *service) initDistributedTAE(
 	)
 	pu.StorageEngine = s.storeEngine
 
-	// cdc mp
-	if s.cdcMp, err = mpool.NewMPool("cdc", 0, mpool.NoFixed); err != nil {
-		return err
-	}
-
 	// internal sql executor.
 	// InitLoTailPushModel presupposes that the internal sql executor has been initialized.
 	internalExecutorMp, _ := mpool.NewMPool("internal_executor", 0, mpool.NoFixed)
@@ -113,6 +108,7 @@ func (s *service) initDistributedTAE(
 	}
 
 	s.initProcessCodecService()
+	s.initPartitionService()
 	s.initShardService()
 	return nil
 }

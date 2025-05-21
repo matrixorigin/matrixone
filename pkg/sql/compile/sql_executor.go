@@ -22,7 +22,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -119,7 +118,7 @@ func (s *sqlExecutor) Exec(
 			res = v
 			return err
 		},
-		opts)
+		opts.WithSQL(sql))
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -138,7 +137,7 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		logutil.Errorf("internal sql executor error: %v", err)
+		logutil.Error("internal sql executor error", zap.Error(err), zap.String("sql", opts.SQL()), zap.String("txn", exec.Txn().Txn().DebugString()))
 		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
@@ -241,27 +240,26 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
-
-	//-----------------------------------------------------------------------------------------
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
-	recoverAccount := func(exec *txnExecutor, accId uint32) {
-		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
-	}
-
+	var originCtx context.Context
 	if statementOption.HasAccountID() {
-		originAccountID := catalog.System_Account
-		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
-			originAccountID = v.(uint32)
+		// save the current context
+		originCtx = exec.ctx
+		// switch tenantID
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, statementOption.AccountID())
+		if statementOption.HasUserID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.UserIDKey{}, statementOption.UserID())
 		}
-
-		exec.ctx = context.WithValue(exec.ctx,
-			defines.TenantIDKey{},
-			statementOption.AccountID())
-		// NOTE: Restore AccountID information in context.Context
-		defer recoverAccount(exec, originAccountID)
+		if statementOption.HasRoleID() {
+			exec.ctx = context.WithValue(exec.ctx, defines.RoleIDKey{}, statementOption.RoleID())
+		}
+		defer func() {
+			// restore context at the end of the function
+			exec.ctx = originCtx
+		}()
 	}
-	//-----------------------------------------------------------------------------------------
+	//------------------------------------------------------------------------------------------------------------------
 	if statementOption.IgnoreForeignKey() {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.IgnoreForeignKey{},
@@ -307,7 +305,17 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
+	//accId, err := defines.GetAccountId(proc.Ctx)
+	//if err != nil {
+	//	return executor.Result{}, err
+	//}
+	//useId := defines.GetUserId(proc.Ctx)
+	//roleId := defines.GetRoleId(proc.Ctx)
+
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
+	//proc.Base.SessionInfo.AccountId = accId
+	//proc.Base.SessionInfo.UserId = useId
+	//proc.Base.SessionInfo.RoleId = roleId
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
@@ -336,7 +344,7 @@ func (exec *txnExecutor) Exec(
 
 	result := executor.NewResult(exec.s.mp)
 
-	stream_chan, streaming := exec.opts.Streaming()
+	stream_chan, err_chan, streaming := exec.opts.Streaming()
 	if streaming {
 		defer close(stream_chan)
 	}
@@ -359,6 +367,7 @@ func (exec *txnExecutor) Exec(
 					for len(stream_chan) == cap(stream_chan) {
 						select {
 						case <-proc.Ctx.Done():
+							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 							return moerr.NewInternalError(proc.Ctx, "context cancelled")
 						default:
 							time.Sleep(1 * time.Millisecond)
@@ -374,11 +383,17 @@ func (exec *txnExecutor) Exec(
 
 		})
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {
+		if streaming {
+			err_chan <- err
+		}
 		for _, bat := range batches {
 			if bat != nil {
 				bat.Clean(exec.s.mp)
@@ -388,8 +403,12 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if !statementOption.DisableLog() {
+		printSql := sql
+		if len(printSql) > 1000 {
+			printSql = printSql[:1000] + "..."
+		}
 		logutil.Info("sql_executor exec",
-			zap.String("sql", sql),
+			zap.String("sql", printSql),
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),

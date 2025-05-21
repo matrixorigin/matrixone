@@ -274,7 +274,7 @@ import (
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
 %nonassoc LOWER_THAN_COMMA
-%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
+%token <str> SELECT INSERT UPDATE DELETE FROM WHERE GROUP HAVING BY LIMIT OFFSET FOR OF CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS NULLS FIRST LAST AFTER
@@ -282,7 +282,7 @@ import (
 %token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
-%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CROSS_L2 APPLY DEDUP
+%left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE CENTROIDX APPLY DEDUP
 %nonassoc LOWER_THAN_ON
 %nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
@@ -362,8 +362,8 @@ import (
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M QUANTIZATION
 
 
 // Alter
@@ -485,7 +485,7 @@ import (
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR
+%token <str> PITR RECOVERY_WINDOW
 
 // CDC
 %token <str> CDC
@@ -553,7 +553,7 @@ import (
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
-%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt
+%type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
@@ -575,7 +575,8 @@ import (
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
-%type <str> insert_column
+%type <str> insert_column optype_opt
+%type <str> optype
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
@@ -1112,16 +1113,46 @@ snapshot_object_opt:
             ObjName: tree.Identifier($2.Compare()),
         }
     }
+|   ACCOUNT
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier(""),
+        }
+    }
+|   DATABASE ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELDATABASE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+|   TABLE ident ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELTABLE,
+        }
+        $$ = tree.ObjectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare() + "." + $3.Compare()),
+        }
+    }
 
 create_pitr_stmt:
-    CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Level: tree.PITRLEVELACCOUNT,
-            PitrValue: $6,
-            PitrUnit: $7,
+            PitrValue: $8,
+            PitrUnit: $9,
         }
     }
 |   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING
@@ -1156,9 +1187,31 @@ create_pitr_stmt:
             PitrUnit: $10,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR TABLE ident ident RANGE pitr_value STRING
     {
         $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELTABLE,
+            DatabaseName: tree.Identifier($7.Compare()),
+            TableName: tree.Identifier($8.Compare()),
+            PitrValue: $10,
+            PitrUnit: $11,
+        }
+    }
+|   CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+    {
+        $$ = &tree.CreatePitr{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Level: tree.PITRLEVELACCOUNT,
+            PitrValue: $6,
+            PitrUnit: $7,
+        }
+    }
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+    {
+         $$ = &tree.CreatePitr{
             IfNotExists: $3,
             Name: tree.Identifier($4.Compare()),
             Level: tree.PITRLEVELTABLE,
@@ -1168,6 +1221,7 @@ create_pitr_stmt:
             PitrUnit: $12,
         }
     }
+
 
 pitr_value:
     INTEGRAL
@@ -2964,12 +3018,12 @@ unlock_table_stmt:
 
 prepareable_stmt:
     create_stmt
+|   alter_stmt
 |   insert_stmt
 |   delete_stmt
 |   drop_stmt
 |   show_stmt
 |   update_stmt
-|   alter_account_stmt
 |   select_stmt
     {
         $$ = $1
@@ -3726,6 +3780,12 @@ alter_table_alter:
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
     }
+| REINDEX ident HNSW
+    {
+        var keyType = tree.INDEX_TYPE_HNSW
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, 0)
+    }
 |   CHECK ident enforce
     {
         var checkType = $1
@@ -3864,6 +3924,17 @@ alter_user_stmt:
         user := tree.NewUser(Username,Hostname,nil)
         users := []*tree.User{user}
         miscOpt := tree.NewUserMiscOptionAccountUnlock()
+        commentOrAttribute := $6
+        $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
+    }
+|   ALTER USER exists_opt user_name LOCK user_comment_or_attribute_opt
+    {
+        ifExists := $3
+        var Username = $4.Username
+        var Hostname = $4.Hostname
+        user := tree.NewUser(Username,Hostname,nil)
+        users := []*tree.User{user}
+        miscOpt := tree.NewUserMiscOptionAccountLock()
         commentOrAttribute := $6
         $$ = tree.NewAlterUser(ifExists, users, nil, miscOpt, commentOrAttribute)
     }
@@ -4038,6 +4109,7 @@ show_stmt:
 |   show_connectors_stmt
 |   show_snapshots_stmt
 |   show_pitr_stmt
+|   show_recovery_window_stmt
 |   show_cdc_stmt
 |   show_logservice_replicas_stmt
 |   show_logservice_stores_stmt
@@ -4091,6 +4163,36 @@ show_pitr_stmt:
     {
         $$ = &tree.ShowPitr{
             Where: $3,
+        }
+    }
+
+show_recovery_window_stmt:
+    SHOW RECOVERY_WINDOW FOR ACCOUNT
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELACCOUNT,
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR DATABASE ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELDATABASE,
+            DatabaseName: tree.Identifier($5.Compare()),
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR TABLE ident ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELTABLE,
+            DatabaseName: tree.Identifier($5.Compare()),
+            TableName:tree.Identifier($6.Compare()),
+        }
+    }
+|   SHOW RECOVERY_WINDOW FOR ACCOUNT ident
+    {
+        $$ = &tree.ShowRecoveryWindow{
+            Level: tree.RECOVERYWINDOWLEVELACCOUNT,
+            AccountName: tree.Identifier($5.Compare()),
         }
     }
 
@@ -5764,36 +5866,36 @@ group_by_opt:
         exprsList := []tree.Exprs{$3}
         $$ = &tree.GroupByClause{
             GroupByExprsList: exprsList,
-            Apart: false,
+            Apart:      false,
             Cube :      false,
-            Rollup:       $4,
+            Rollup:     $4,
         }
     }
 |   GROUP BY GROUPING SETS '(' grouping_sets ')'
     {
         $$ = &tree.GroupByClause{
             GroupByExprsList: $6,
-            Apart: false,
+            Apart:      false,
             Cube :      false,
-            Rollup:       false,
+            Rollup:     false,
         }
     }
 |   GROUP BY CUBE '('  expression_list ')'
     {
         $$ = &tree.GroupByClause{
             GroupByExprsList: []tree.Exprs{$5},
-            Apart: false,
+            Apart:      false,
             Cube :      true,
-            Rollup:       false,
+            Rollup:     false,
         }
     }
 |   GROUP BY ROLLUP '(' expression_list ')'
     {
         $$ = &tree.GroupByClause{
             GroupByExprsList: []tree.Exprs{$5},
-            Apart: false,
+            Apart:      false,
             Cube :      false,
-            Rollup:       true,
+            Rollup:     true,
         }
     }
 
@@ -5907,12 +6009,23 @@ table_reference:
 join_table:
     table_reference inner_join table_factor join_condition_opt
     {
-        $$ = &tree.JoinTableExpr{
-            Left: $1,
-            JoinType: $2,
-            Right: $3,
-            Cond: $4,
-        }
+	if strings.Contains($2, ":") {
+		ss := strings.SplitN($2, ":", 2)
+        	$$ = &tree.JoinTableExpr{
+            		Left: $1,
+            		JoinType: ss[0],
+            		Right: $3,
+            		Cond: $4,
+			Option: ss[1],
+        	}
+	} else {
+        	$$ = &tree.JoinTableExpr{
+            		Left: $1,
+            		JoinType: $2,
+            		Right: $3,
+            		Cond: $4,
+        	}
+	}
     }
 |   table_reference straight_join table_factor on_expression_opt
     {
@@ -6045,6 +6158,19 @@ on_expression_opt:
         $$ = &tree.OnJoinCond{Expr: $2}
     }
 
+optype:
+    STRING
+    {
+        $$ = $1
+    }
+
+
+optype_opt:
+	  '(' optype ')'
+    {
+	$$ = $2
+    }
+
 straight_join:
     STRAIGHT_JOIN
     {
@@ -6064,9 +6190,9 @@ inner_join:
     {
         $$ = tree.JOIN_TYPE_CROSS
     }
-|   CROSS_L2 JOIN
+|   CENTROIDX optype_opt JOIN
     {
-        $$ = tree.JOIN_TYPE_CROSS_L2
+        $$ = tree.JOIN_TYPE_CENTROIDX + ":" + $2
     }
 
 join_condition_opt:
@@ -7405,7 +7531,15 @@ index_option_list:
 	      opt1.AlgoParamList = opt2.AlgoParamList
 	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
 	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
-	    }
+	    } else if opt2.HnswM > 0 {
+	      opt1.HnswM = opt2.HnswM
+	    } else if opt2.HnswEfConstruction > 0 {
+ 	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
+ 	    } else if len(opt2.HnswQuantization) > 0 {
+	      opt1.HnswQuantization = opt2.HnswQuantization
+            } else if opt2.HnswEfSearch > 0 {
+	      opt1.HnswEfSearch = opt2.HnswEfSearch
+ 	    }
             $$ = opt1
         }
     }
@@ -7459,6 +7593,46 @@ index_option:
         io.Visible = tree.VISIBLE_TYPE_INVISIBLE
         $$ = io
     }
+|   M equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("M should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.HnswM = val
+	$$ = io
+    }
+|   EF_CONSTRUCTION equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("EF_CONSTRUCTION should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.HnswEfConstruction = val
+	$$ = io
+     }
+|   EF_SEARCH equal_opt INTEGRAL
+    {
+        val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("EF_SEARCH should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.HnswEfSearch = val
+	$$ = io
+     }
+|    QUANTIZATION equal_opt STRING
+     {
+	io := tree.NewIndexOption()
+	io.HnswQuantization = $3
+	$$ = io
+     }
+	
 
 index_column_list:
     index_column
@@ -7510,6 +7684,10 @@ using_opt:
 |   USING IVFFLAT
     {
 	$$ = tree.INDEX_TYPE_IVFFLAT
+    }
+|   USING HNSW
+    {
+	$$ = tree.INDEX_TYPE_HNSW
     }
 |   USING MASTER
     {
@@ -8805,6 +8983,13 @@ table_snapshot_opt:
             Expr: $4,
         }
     }
+|   '{' AS OF TIMESTAMP STRING '}'
+    {
+        $$ = &tree.AtTimeStamp{
+           Type: tree.ASOFTIMESTAMP,
+           Expr: tree.NewNumVal($5, $5, false, tree.P_char),
+        }
+    }
 
 table_elem_list_opt:
     {
@@ -8893,6 +9078,8 @@ index_def:
                 keyTyp = tree.INDEX_TYPE_ZONEMAP
             case "bsi":
                 keyTyp = tree.INDEX_TYPE_BSI
+	    case "hnsw":
+ 	        keyTyp = tree.INDEX_TYPE_HNSW
             default:
                 yylex.Error("Invalid the type of index")
                 goto ret1
@@ -8932,6 +9119,8 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_ZONEMAP
 	     case "bsi":
 		keyTyp = tree.INDEX_TYPE_BSI
+	     case "hnsw":
+	        keyTyp = tree.INDEX_TYPE_HNSW
             default:
                 yylex.Error("Invalid type of index")
                 goto ret1
@@ -9096,6 +9285,7 @@ index_type:
 |   IVFFLAT
 |   MASTER
 |   BSI
+|   HNSW
 
 insert_method_options:
     NO
@@ -12396,6 +12586,8 @@ non_reserved_keyword:
 |   DIRECTORY
 |   DUPLICATE
 |   DELAY_KEY_WRITE
+|   EF_CONSTRUCTION
+|   EF_SEARCH
 |   ENUM
 |   ENCRYPTION
 |   ENGINE
@@ -12413,6 +12605,7 @@ non_reserved_keyword:
 |   GEOMETRY
 |   GEOMETRYCOLLECTION
 |   GLOBAL
+|   HNSW
 |   PERSIST
 |   GRANT
 |   INT
@@ -12436,6 +12629,7 @@ non_reserved_keyword:
 |   LOCAL
 |   LINEAR
 |   LIST
+|   M
 |   MEDIUMBLOB
 |   MEDIUMINT
 |   MEDIUMTEXT
@@ -12472,6 +12666,7 @@ non_reserved_keyword:
 |   QUERY
 |   PAUSE
 |   PROFILES
+|   QUANTIZATION
 |   ROLE
 |   RANGE
 |   READ
@@ -12496,6 +12691,7 @@ non_reserved_keyword:
 |   SMALLINT
 |   SNAPSHOT
 |   PITR
+|   RECOVERY_WINDOW
 |   SPATIAL
 |   START
 |   STATUS

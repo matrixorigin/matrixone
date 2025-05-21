@@ -42,7 +42,7 @@ func NewDataCache(
 var seed = maphash.MakeSeed()
 
 func shardCacheKey(key fscache.CacheKey) uint64 {
-	hasher := new(maphash.Hash)
+	var hasher maphash.Hash
 	hasher.SetSeed(seed)
 	hasher.Write(util.UnsafeToBytes(&key.Offset))
 	hasher.WriteString(key.Path)

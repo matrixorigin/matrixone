@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
@@ -32,14 +33,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
-
-	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
-	// if err != nil {
-	// 	return 0, err
-	// }
-	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
-	// 	return 0, moerr.NewNotSupported(builder.compCtx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
-	// }
 
 	if stmt.IsRestore {
 		builder.isRestore = true
@@ -58,7 +51,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}()
 	}
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertStmt(bindCtx, stmt, dmlCtx.objRefs[0], dmlCtx.tableDefs[0])
+	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false)
 	if err != nil {
 		return 0, err
 	}
@@ -75,11 +68,7 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 		return true
 	}
 
-	if strings.HasPrefix(tableDef.Name, catalog.SecondaryIndexTableNamePrefix) {
-		return true
-	}
-
-	return false
+	return catalog.IsSecondaryIndexTable(tableDef.Name)
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
@@ -90,11 +79,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	skipUniqueIdx []bool,
 	astUpdateExprs tree.UpdateExprs,
 ) (int32, error) {
-	var err error
-
-	selectNode := builder.qry.Nodes[lastNodeID]
-	selectTag := selectNode.BindingTags[0]
-
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
 
@@ -109,7 +93,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	var onDupAction plan.Node_OnDuplicateAction
+	var (
+		err         error
+		onDupAction plan.Node_OnDuplicateAction
+	)
+
+	selectNode := builder.qry.Nodes[lastNodeID]
+	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewTag()
 	updateExprs := make(map[string]*plan.Expr)
 
@@ -179,8 +169,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	partitionExprIdx := int32(len(selectNode.ProjectList) - 1)
-
 	objRef := dmlCtx.objRefs[0]
 	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
 	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
@@ -191,16 +179,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if col.Name == pkName && pkName != catalog.FakePrimaryKeyColName {
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
-				PrimaryColIdxInBat: int32(colName2Idx[tableDef.Name+"."+col.Name]),
+				ObjRef:             DeepCopyObjectRef(objRef),
+				PrimaryColIdxInBat: colName2Idx[tableDef.Name+"."+col.Name],
 				PrimaryColRelPos:   selectTag,
 				PrimaryColTyp:      col.Typ,
-			}
-			if tableDef.Partition != nil {
-				partitionTableIDs, _ := getPartitionInfos(builder.compCtx, dmlCtx.objRefs[0], tableDef)
-				lockTarget.IsPartitionTable = true
-				lockTarget.PartitionTableIds = partitionTableIDs
-				lockTarget.FilterColIdxInBat = partitionExprIdx
-				lockTarget.FilterColRelPos = selectTag
 			}
 			lockTargets = append(lockTargets, lockTarget)
 			break
@@ -211,7 +193,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if !idxDef.TableExist || skipUniqueIdx[j] || !idxDef.Unique {
 			continue
 		}
-		_, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
 		var pkIdxInBat int32
 
 		if len(idxDef.Parts) == 1 {
@@ -221,6 +203,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		lockTarget := &plan.LockTarget{
 			TableId:            idxTableDef.TblId,
+			ObjRef:             idxObjRef,
 			PrimaryColIdxInBat: pkIdxInBat,
 			PrimaryColRelPos:   selectTag,
 			PrimaryColTyp:      selectNode.ProjectList[int(pkIdxInBat)].Typ,
@@ -605,18 +588,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
 	updateCtx := &plan.UpdateCtx{
-		ObjRef:          objRef,
-		TableDef:        tableDef,
-		InsertCols:      insertCols,
-		OldPartitionIdx: -1,
-		NewPartitionIdx: -1,
-	}
-	if tableDef.Partition != nil {
-		partitionTableIDs, partitionTableNames := getPartitionInfos(builder.compCtx, objRef, tableDef)
-		updateCtx.NewPartitionIdx = partitionExprIdx
-		updateCtx.PartitionTableIds = partitionTableIDs
-		updateCtx.PartitionTableNames = partitionTableNames
-		dmlNode.BindingTags = append(dmlNode.BindingTags, selectTag)
+		ObjRef:     objRef,
+		TableDef:   tableDef,
+		InsertCols: insertCols,
 	}
 
 	for i, col := range tableDef.Cols {
@@ -649,11 +623,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		idxInsertCols := make([]plan.ColRef, len(idxTableDef.Cols)-1)
 		updateCtx := &plan.UpdateCtx{
-			ObjRef:          idxObjRefs[i],
-			TableDef:        idxTableDef,
-			InsertCols:      idxInsertCols,
-			OldPartitionIdx: -1,
-			NewPartitionIdx: -1,
+			ObjRef:     idxObjRefs[i],
+			TableDef:   idxTableDef,
+			InsertCols: idxInsertCols,
 		}
 
 		for j, col := range idxTableDef.Cols {
@@ -694,20 +666,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
-func (builder *QueryBuilder) getInsertColsFromStmt(stmt *tree.Insert, tableDef *TableDef) ([]string, error) {
+func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, tableDef *TableDef) ([]string, error) {
 	var insertColNames []string
 	colToIdx := make(map[string]int)
 	for i, col := range tableDef.Cols {
 		colToIdx[strings.ToLower(col.Name)] = i
 	}
-	if stmt.Columns == nil {
+	if astCols == nil {
 		for _, col := range tableDef.Cols {
 			if !col.Hidden {
 				insertColNames = append(insertColNames, col.Name)
 			}
 		}
 	} else {
-		for _, column := range stmt.Columns {
+		for _, column := range astCols {
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
 			if !ok {
@@ -719,7 +691,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(stmt *tree.Insert, tableDef *
 	return insertColNames, nil
 }
 
-func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Insert, objRef *plan.ObjectRef, tableDef *plan.TableDef) (int32, map[string]int32, []bool, error) {
+func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, error) {
 	var (
 		lastNodeID int32
 		err        error
@@ -729,12 +701,12 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 	var insertColumns []string
 
 	//var ifInsertFromUniqueColMap map[string]bool
-	if insertColumns, err = builder.getInsertColsFromStmt(stmt, tableDef); err != nil {
+	if insertColumns, err = builder.getInsertColsFromStmt(astCols, tableDef); err != nil {
 		return 0, nil, nil, err
 	}
 
 	var astSelect *tree.Select
-	switch selectImpl := stmt.Rows.Select.(type) {
+	switch selectImpl := astRows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
 		isAllDefault := false
@@ -759,7 +731,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		// example1:insert into a values ();
 		// but it does not work at the case:
 		// insert into a(a) values (); insert into a values (0),();
-		if isAllDefault && stmt.Columns != nil {
+		if isAllDefault && astCols != nil {
 			return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		lastNodeID, err = builder.buildValueScan(isAllDefault, bindCtx, tableDef, selectImpl, insertColumns)
@@ -768,7 +740,7 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		}
 
 	case *tree.SelectClause:
-		astSelect = stmt.Rows
+		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
@@ -828,7 +800,11 @@ func (builder *QueryBuilder) initInsertStmt(bindCtx *BindContext, stmt *tree.Ins
 		insertColToExpr[column] = projExpr
 	}
 
-	return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+	if isReplace {
+		return builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+	} else {
+		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+	}
 }
 
 func (builder *QueryBuilder) appendNodesForInsertStmt(
@@ -858,6 +834,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	)
 
 	columnIsNull := make(map[string]bool)
+	hasCompClusterBy := tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -891,7 +868,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					},
 				},
 			})
-		} else if tableDef.ClusterBy != nil && col.Name == tableDef.ClusterBy.Name {
+		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
 			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			//args := make([]*plan.Expr, len(names))
 			//
@@ -1000,14 +977,6 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			},
 			BindingTags: []int32{preInsertTag},
 		}, tmpCtx)
-	}
-
-	if tableDef.Partition != nil {
-		partitionExpr, err := getRemapParitionExpr(tableDef, projTag1, colName2Idx, true)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		projList2 = append(projList2, partitionExpr)
 	}
 
 	lastNodeID = builder.appendNode(&plan.Node{

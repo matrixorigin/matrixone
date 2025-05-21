@@ -220,12 +220,15 @@ const (
 	ErrTxnCannotRetry             uint16 = 20630
 	ErrTxnNeedRetryWithDefChanged uint16 = 20631
 	ErrTxnStale                   uint16 = 20632
-	ErrRetryForCNRollingRestart   uint16 = 20633
-	ErrNewTxnInCNRollingRestart   uint16 = 20634
-	ErrPrevCheckpointNotFinished  uint16 = 20635
-	ErrCantDelGCChecker           uint16 = 20636
-	ErrTxnUnknown                 uint16 = 20637
-	ErrTxnControl                 uint16 = 20638
+	// ErrRetryForCNRollingRestart rolling upgrade related, do not modify
+	ErrRetryForCNRollingRestart uint16 = 20634
+	// ErrNewTxnInCNRollingRestart rolling upgrade related, do not modify
+	ErrNewTxnInCNRollingRestart  uint16 = 20635
+	ErrPrevCheckpointNotFinished uint16 = 20636
+	ErrCantDelGCChecker          uint16 = 20637
+	ErrTxnUnknown                uint16 = 20638
+	ErrTxnControl                uint16 = 20639
+	ErrOfflineTxnWrite           uint16 = 20640
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -471,6 +474,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
 	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
+	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -569,7 +573,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return e.message
+	return e.Display()
 }
 
 func (e *Error) Detail() string {
@@ -593,6 +597,10 @@ func (e *Error) MySQLCode() uint16 {
 
 func (e *Error) SqlState() string {
 	return e.sqlState
+}
+
+func (e *Error) SetDetail(detail string) {
+	e.detail = detail
 }
 
 var _ encoding.BinaryMarshaler = new(Error)
@@ -638,6 +646,40 @@ func IsMoErrCode(e error, rc uint16) bool {
 	return me.code == rc
 }
 
+func GetMoErrCode(e error) (uint16, bool) {
+	if e == nil {
+		return 0, false
+	}
+
+	me, ok := e.(*Error)
+	if !ok {
+		return 0, false
+	}
+
+	return me.code, true
+}
+
+func IsSameMoErr(a error, b error) bool {
+	if a == nil || b == nil {
+		return false
+	}
+
+	var (
+		ok     bool
+		aa, bb *Error
+	)
+
+	if aa, ok = a.(*Error); !ok {
+		return false
+	}
+
+	if bb, ok = b.(*Error); !ok {
+		return false
+	}
+
+	return aa.code == bb.code
+}
+
 func DowncastError(e error) *Error {
 	if err, ok := e.(*Error); ok {
 		return err
@@ -649,7 +691,14 @@ func DowncastError(e error) *Error {
 // ConvertPanicError converts a runtime panic to internal error.
 func ConvertPanicError(ctx context.Context, v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
-		return e
+		err := &Error{
+			code:      e.code,
+			mysqlCode: e.mysqlCode,
+			message:   e.message,
+			sqlState:  e.sqlState,
+			detail:    fmt.Sprintf("%s\n%+v", e.detail, stack.Callers(3)),
+		}
+		return err
 	}
 	return newError(ctx, ErrInternal, fmt.Sprintf("panic %v: %+v", v, stack.Callers(3)))
 }

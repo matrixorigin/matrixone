@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -41,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -119,7 +120,7 @@ func newBatch(ts []types.Type, rows int, proc *process.Process) *batch.Batch {
 }
 
 func Test_saveQueryResultMeta(t *testing.T) {
-	blockio.RunPipelineTest(
+	ioutil.RunPipelineTest(
 		func() {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
@@ -268,4 +269,31 @@ func Test_getFileSize(t *testing.T) {
 	}
 	assert.Equal(t, int64(1), getFileSize(files, "a"))
 	assert.Equal(t, int64(-1), getFileSize(files, "b"))
+}
+
+func Test_checkPrivilege(t *testing.T) {
+	convey.Convey("checkPrivilege error test", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		uuids := []string{
+			"xxxxx#####01",
+		}
+		ctx := context.Background()
+		_, err := checkPrivilege("", uuids, ctx, ses)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
 }

@@ -104,6 +104,7 @@ var (
 	CauseInitRemote2               = NewInternalError(context.Background(), "initRemote 2")
 	CauseGetTxnWaitingListOnRemote = NewInternalError(context.Background(), "getTxnWaitingListOnRemote")
 	CauseGetLockTableBind          = NewInternalError(context.Background(), "getLockTableBind")
+	CauseAbortRemoteDeadlockTxn    = NewInternalError(context.Background(), "abortRemoteDeadlockTxn")
 	//pkg/logservice
 	CauseNewStandbyClientWithRetry     = NewInternalError(context.Background(), "NewStandbyClientWithRetry")
 	CauseNewLogHAKeeperClientWithRetry = NewInternalError(context.Background(), "NewLogHAKeeperClientWithRetry")
@@ -124,6 +125,7 @@ var (
 	CauseRunClientTest                 = NewInternalError(context.Background(), "RunClientTest")
 	CauseProcessShardTruncateLog       = NewInternalError(context.Background(), "processShardTruncateLog")
 	CauseProcessHAKeeperTruncation     = NewInternalError(context.Background(), "processHAKeeperTruncation")
+	CauseProcessTruncationReadState    = NewInternalError(context.Background(), "processTruncationReadState")
 	//pkg/proxy
 	CauseProxyBootstrap  = NewInternalError(context.Background(), "proxy Bootstrap")
 	CauseGenConnID       = NewInternalError(context.Background(), "genConnID")

@@ -132,26 +132,13 @@ func (obj *aobject) PrepareCompact() bool {
 	}
 	if droppedCommitted {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				obj.meta.Load().PrintPrepareCompactDebugLog()
-			}
 			return false
 		}
 	} else {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				obj.meta.Load().PrintPrepareCompactDebugLog()
-			}
 			return false
 		}
 		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
-				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
-					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
-					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
-				}
-			}
 			return false
 		}
 	}
@@ -307,6 +294,8 @@ func (obj *aobject) Contains(
 }
 
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
+	obj.Lock()
+	defer obj.Unlock()
 	an := node.(*updates.AppendNode)
 	obj.appendMVCC.OnReplayAppendNode(an)
 	return
@@ -332,16 +321,16 @@ func (obj *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
 
 func (obj *aobject) Init() (err error) { return }
 
-func (obj *aobject) EstimateMemSize() (int, int) {
+func (obj *aobject) EstimateMemSize() int {
 	node := obj.PinNode()
 	defer node.Unref()
 	obj.RLock()
 	defer obj.RUnlock()
-	asize := obj.appendMVCC.EstimateMemSizeLocked()
+	size := obj.appendMVCC.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
-		asize += node.MustMNode().EstimateMemSizeLocked()
+		size += node.MustMNode().EstimateMemSizeLocked()
 	}
-	return asize, 0
+	return size
 }
 
 func (obj *aobject) GetRowsOnReplay() uint64 {

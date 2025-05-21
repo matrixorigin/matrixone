@@ -129,6 +129,20 @@ func MakeMockBatchs() *batch.Batch {
 	return bat
 }
 
+func MakeMockPartitionBatchs(val int32) *batch.Batch {
+	bat := batch.New([]string{"a"})
+	vecs := makeMockPartitionVecs(val)
+	bat.Vecs = vecs
+	bat.SetRowCount(vecs[0].Length())
+	return bat
+}
+
+func makeMockPartitionVecs(val int32) []*vector.Vector {
+	vecs := make([]*vector.Vector, 1)
+	vecs[0] = testutil.MakeInt32Vector([]int32{val, val, val}, nil)
+	return vecs
+}
+
 func makeMockTimeWinVecs() []*vector.Vector {
 	vecs := make([]*vector.Vector, 2)
 	vecs[0] = testutil.MakeDatetimeVector([]string{
@@ -154,8 +168,8 @@ func MakeMockBatchsWithRowID() *batch.Batch {
 
 	uuid1 := objectio.NewSegmentid()
 	blkId1 := objectio.NewBlockid(uuid1, 0, 0)
-	rowid1 := *objectio.NewRowid(blkId1, 0)
-	rowid2 := *objectio.NewRowid(blkId1, 0)
+	rowid1 := objectio.NewRowid(blkId1, 0)
+	rowid2 := objectio.NewRowid(blkId1, 0)
 	bat.Vecs[0] = testutil.MakeRowIdVector([]types.Rowid{rowid1, rowid2}, nil)
 	for i := range vecs {
 		bat.Vecs[i+1] = vecs[i]

@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -258,7 +258,7 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
-	relData, err := engine_util.UnmarshalRelationData(param.ReaderBuildParam.RelData)
+	relData, err := readutil.UnmarshalRelationData(param.ReaderBuildParam.RelData)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +274,7 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
-	rd, err := engine_util.NewReader(
+	rd, err := readutil.NewReader(
 		ctx,
 		tbl.proc.Load().Mp(),
 		e.(*Engine).packerPool,
@@ -283,7 +283,7 @@ func HandleShardingReadBuildReader(
 		tbl.db.op.SnapshotTS(),
 		param.ReaderBuildParam.Expr,
 		ds,
-		engine_util.GetThresholdForReader(1),
+		readutil.GetThresholdForReader(1),
 		engine.FilterHint{},
 	)
 	if err != nil {
@@ -511,11 +511,14 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 		return nil, err
 	}
 
+	batch := batch.NewWithSize(1)
+	batch.SetVector(0, keyVector)
 	modify, err := tbl.PrimaryKeysMayBeModified(
 		ctx,
 		from,
 		to,
-		keyVector,
+		batch,
+		0,
 	)
 	if err != nil {
 		return nil, err
@@ -561,11 +564,14 @@ func HandleShardingReadPrimaryKeysMayBeUpserted(
 		return nil, err
 	}
 
+	batch := batch.NewWithSize(1)
+	batch.SetVector(0, keyVector)
 	modify, err := tbl.PrimaryKeysMayBeUpserted(
 		ctx,
 		from,
 		to,
-		keyVector,
+		batch,
+		0,
 	)
 	if err != nil {
 		return nil, err

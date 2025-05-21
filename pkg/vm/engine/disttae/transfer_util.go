@@ -16,18 +16,19 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 )
 
@@ -99,7 +100,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	logs = append(logs, zap.Int("origin-tombstoneObjects", len(tombstoneObjects)))
 
-	if tombstoneObjects, err = blockio.CoarseFilterTombstoneObject(
+	if tombstoneObjects, err = ioutil.CoarseFilterTombstoneObject(
 		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
 		return nil, logs, err
 	} else if len(tombstoneObjects) == 0 {
@@ -110,11 +111,11 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	pkColIdx := table.tableDef.Name2ColIndex[table.tableDef.Pkey.PkeyColName]
 	pkCol := table.tableDef.Cols[pkColIdx]
-	r := engine_util.SimpleMultiObjectsReader(
+	r := readutil.SimpleMultiObjectsReader(
 		ctx, fs,
 		tombstoneObjects,
 		end.ToTimestamp(),
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			[]uint16{0, 1},
 			[]types.Type{types.T_Rowid.ToType(), plan2.ExprType2Type(&pkCol.Typ)},
 		),
@@ -164,7 +165,7 @@ type TransferFlow struct {
 	newDataObjects    []objectio.ObjectStats
 	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
-	sinker            *engine_util.Sinker
+	sinker            *ioutil.Sinker
 	mp                *mpool.MPool
 	fs                fileservice.FileService
 
@@ -187,15 +188,15 @@ func (flow *TransferFlow) fillDefaults() {
 		)
 	}
 	if flow.sinker == nil {
-		flow.sinker = engine_util.NewTombstoneSinker(
+		flow.sinker = ioutil.NewTombstoneSinker(
 			flow.hiddenSelection,
 			pkType,
 			flow.mp,
 			flow.fs,
-			engine_util.WithBuffer(flow.buffer, false),
-			engine_util.WithMemorySizeThreshold(mpool.MB*16),
-			engine_util.WithTailSizeCap(0),
-			//engine_util.WithAllMergeSorted(),
+			ioutil.WithBuffer(flow.buffer, false),
+			ioutil.WithMemorySizeThreshold(mpool.MB*16),
+			ioutil.WithTailSizeCap(0),
+			//readutil.WithAllMergeSorted(),
 		)
 	}
 
@@ -286,7 +287,7 @@ func (flow *TransferFlow) transferStaged(ctx context.Context) error {
 
 	// sort staged batch by primary key
 	// TODO: do not sort if fake pk
-	if err := mergesort.SortColumnsByIndex(
+	if err := mergeutil.SortColumnsByIndex(
 		staged.Vecs,
 		1,
 		flow.mp,

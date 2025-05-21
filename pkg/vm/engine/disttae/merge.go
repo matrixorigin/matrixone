@@ -17,9 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
 	"strings"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -34,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -64,12 +67,14 @@ type cnMergeTask struct {
 	fs fileservice.FileService
 
 	blkCnts  []int
-	blkIters []*StatsBlkIter
+	blkIters []*objectio.StatsBlkIter
 
 	targetObjSize uint32
 
 	segmentID *objectio.Segmentid
 	num       uint16
+
+	arena *objectio.WriteArena
 }
 
 func newCNMergeTask(
@@ -81,7 +86,15 @@ func newCNMergeTask(
 	targets []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	relData := engine_util.NewBlockListRelationData(1)
+
+	part, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	relData := readutil.NewBlockListRelationData(1,
+		readutil.WithPartitionState(part))
+
 	source, err := tbl.buildLocalDataSource(
 		ctx,
 		0,
@@ -101,7 +114,7 @@ func newCNMergeTask(
 	fs := proc.Base.FileService
 
 	blkCnts := make([]int, len(targets))
-	blkIters := make([]*StatsBlkIter, len(targets))
+	blkIters := make([]*objectio.StatsBlkIter, len(targets))
 	for i, objStats := range targets {
 		blkCnts[i] = int(objStats.BlkCnt())
 
@@ -111,8 +124,14 @@ func newCNMergeTask(
 			return nil, err
 		}
 
-		blkIters[i] = NewStatsBlkIter(&objStats, meta.MustDataMeta())
+		blkIters[i] = objectio.NewStatsBlkIter(&objStats, meta.MustDataMeta())
 	}
+
+	var arena *objectio.WriteArena
+	if targetObjSize > 300*common.Const1MBytes {
+		arena = objectio.NewArena(300 * common.Const1MBytes)
+	}
+
 	return &cnMergeTask{
 		taskId:        gTaskID.Add(1),
 		host:          tbl,
@@ -128,7 +147,12 @@ func newCNMergeTask(
 		blkIters:      blkIters,
 		targetObjSize: targetObjSize,
 		segmentID:     objectio.NewSegmentid(),
+		arena:         arena,
 	}, nil
+}
+
+func (t *cnMergeTask) TaskSourceNote() string {
+	return ""
 }
 
 func (t *cnMergeTask) Name() string {
@@ -175,7 +199,7 @@ func (t *cnMergeTask) GetSortKeyType() types.Type {
 	return types.Type{}
 }
 
-func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32, _ *batch.Batch) (*batch.Batch, *nulls.Nulls, func(), error) {
 	iter := t.blkIters[objIdx]
 	if iter.Next() {
 		blk := iter.Entry()
@@ -247,8 +271,11 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	return commitEntry
 }
 
-func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
-	writer := blockio.ConstructWriterWithSegmentID(
+func (t *cnMergeTask) PrepareNewWriter() *ioutil.BlockWriter {
+	if t.arena != nil {
+		t.arena.Reset()
+	}
+	writer := ioutil.ConstructWriterWithSegmentID(
 		t.segmentID,
 		t.num,
 		t.host.version,
@@ -257,6 +284,7 @@ func (t *cnMergeTask) PrepareNewWriter() *blockio.BlockWriter {
 		t.sortkeyIsPK,
 		false,
 		t.fs,
+		t.arena,
 	)
 	t.num++
 	return writer // TODO obj.isTombstone

@@ -212,9 +212,7 @@ select * from cast03;
 
 drop table if exists cast04;
 create table cast04(col1 char(10), col2 char(10), col3 char(10)) as select * from cast03;
--- @bvt:issue#14475
 select * from cast04;
--- @bvt:issue
 drop table cast03;
 drop table cast04;
 
@@ -470,13 +468,11 @@ show create table time04;
 select * from time04;
 drop table time04;
 
--- @bvt:issue#14804
 drop table if exists time05;
 create table time05 as select unix_timestamp(col1) from time01;
 show create table time05;
 select * from time05;
 drop table time05;
--- @bvt:issue
 
 drop table if exists time06;
 create table time06 as select datediff('2007-12-31 23:59:59', col1) as timedifferent from time01;
@@ -1041,6 +1037,7 @@ drop table row01;
 drop table row02;
 drop table row03;
 
+-- @bvt:issue#16438
 drop table if exists dense_rank01;
 create table dense_rank01 (id integer, sex char(1));
 insert into dense_rank01 values (1, 'm');
@@ -1057,6 +1054,7 @@ select * from dense_rank03;
 drop table dense_rank01;
 drop table dense_rank02;
 drop table dense_rank03;
+-- @bvt:issue
 
 -- combine with pub-sub table
 drop table if exists test01;
@@ -1336,7 +1334,6 @@ drop role role_r1;
 drop user role_u1;
 drop database db7;
 
-
 -- issue 17822
 drop database if exists db8;
 create database db8;
@@ -1356,3 +1353,20 @@ select * from agg01;
 drop table agg01;
 drop table math01;
 drop database db8;
+
+drop database if exists db9;
+create database db9;
+use db9;
+
+CREATE TABLE tx1 (
+    category INT NOT NULL,
+    id INT NOT NULL,
+    name VARCHAR(20) NOT NULL,
+    price DECIMAL,
+    PRIMARY KEY (category, id)
+);
+
+-- error test
+create dynamic table dt_test as select * from tx1;
+drop table tx1;
+drop database db9;

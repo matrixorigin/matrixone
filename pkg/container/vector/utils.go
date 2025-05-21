@@ -336,7 +336,8 @@ func typeCompatible[T any](typ types.Type) bool {
 	var t T
 	switch (any)(t).(type) {
 	case types.Varlena:
-		return typ.IsVarlen()
+		return typ.IsVarlen() ||
+			typ.Oid == types.T_Rowid
 	case bool:
 		return typ.IsBoolean()
 	case int8:
@@ -346,7 +347,10 @@ func typeCompatible[T any](typ types.Type) bool {
 	case int32:
 		return typ.Oid == types.T_int32
 	case int64:
-		return typ.Oid == types.T_int64
+		return typ.Oid == types.T_int64 ||
+			typ.Oid == types.T_uint64 ||
+			typ.Oid == types.T_timestamp ||
+			typ.Oid == types.T_decimal64
 	case uint8:
 		return typ.Oid == types.T_uint8
 	case uint16:
@@ -354,7 +358,10 @@ func typeCompatible[T any](typ types.Type) bool {
 	case uint32:
 		return typ.Oid == types.T_uint32
 	case uint64:
-		return typ.Oid == types.T_uint64 || typ.Oid == types.T_bit
+		return typ.Oid == types.T_uint64 ||
+			typ.Oid == types.T_int64 ||
+			typ.Oid == types.T_bit ||
+			typ.Oid == types.T_decimal64
 	case float32:
 		return typ.Oid == types.T_float32
 	case float64:

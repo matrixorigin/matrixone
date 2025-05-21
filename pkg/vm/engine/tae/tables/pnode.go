@@ -147,6 +147,7 @@ func (node *persistedNode) Scan(
 				attr = readSchema.ColDefs[idx].Name
 			}
 			(*bat).GetVectorByName(attr).Extend(vecs[i])
+			vecs[i].Close()
 		}
 	}
 	return
@@ -185,12 +186,12 @@ func (node *persistedNode) CollectObjectTombstoneInRange(
 		ctx,
 		node.object.meta.Load().GetLocation(),
 		false,
-		node.object.rt.Fs.Service,
+		node.object.rt.Fs,
 	); err != nil {
 		return
 	}
 	objLocation := node.object.meta.Load().GetLocation()
-	objDataMeta, err := objectio.FastLoadObjectMeta(ctx, &objLocation, false, node.object.GetFs().Service)
+	objDataMeta, err := objectio.FastLoadObjectMeta(ctx, &objLocation, false, node.object.GetFs())
 	if err != nil {
 		return err
 	}
@@ -286,7 +287,7 @@ func (node *persistedNode) FillBlockTombstones(
 		ctx,
 		node.object.meta.Load().GetLocation(),
 		false,
-		node.object.rt.Fs.Service,
+		node.object.rt.Fs,
 	); err != nil {
 		return err
 	}

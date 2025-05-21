@@ -15,11 +15,13 @@
 package batchstoredriver
 
 import (
+	"context"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -45,7 +47,7 @@ func initEnv(t *testing.T) *baseStore {
 func restartStore(s *baseStore, t *testing.T) *baseStore {
 	err := s.Close()
 	assert.NoError(t, err)
-	maxlsn := s.GetCurrSeqNum()
+	maxlsn := s.GetDSN()
 	// for ver,lsns:=range s.addrs{
 	// 	logutil.Infof("v%d lsn%v",ver,lsns.Intervals)
 	// }
@@ -55,17 +57,25 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	s, err = NewBaseStore(s.dir, s.name, cfg)
 	assert.NoError(t, err)
 	tempLsn := uint64(0)
-	err = s.Replay(func(e *entry.Entry) {
-		if e.Lsn < tempLsn {
-			panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.Lsn, tempLsn))
-		}
-		tempLsn = e.Lsn
-		_, err = s.Read(e.Lsn)
-		assert.NoError(t, err)
-		// logutil.Infof("lsn is %d",e.Lsn)
-	})
+	err = s.Replay(
+		context.Background(),
+		func(e *entry.Entry) driver.ReplayEntryState {
+			if e.DSN < tempLsn {
+				panic(moerr.NewInternalErrorNoCtxf("logic error %d<%d", e.DSN, tempLsn))
+			}
+			tempLsn = e.DSN
+			_, err = s.Read(e.DSN)
+			assert.NoError(t, err)
+			// logutil.Infof("lsn is %d",e.DSN)
+			return driver.RE_Nomal
+		},
+		func() driver.ReplayMode {
+			return driver.ReplayMode_ReplayForWrite
+		},
+		nil,
+	)
 	assert.NoError(t, err)
-	assert.Equal(t, maxlsn, s.GetCurrSeqNum())
+	assert.Equal(t, maxlsn, s.GetDSN())
 	assert.Equal(t, maxlsn, s.synced)
 	assert.Equal(t, maxlsn, s.syncing)
 	// for ver,lsns:=range s.addrs{
@@ -90,8 +100,8 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 			e := entries[i]
 			err := s.Append(e)
 			assert.NoError(t, err)
-			lsn := s.GetCurrSeqNum()
-			assert.GreaterOrEqual(t, lsn, e.Lsn)
+			lsn := s.GetDSN()
+			assert.GreaterOrEqual(t, lsn, e.DSN)
 			wg.Done()
 		}
 	}
@@ -100,7 +110,7 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 		return func() {
 			e := entries[i]
 			assert.NoError(t, e.WaitDone())
-			e2, err := s.Read(e.Lsn)
+			e2, err := s.Read(e.DSN)
 			assert.NoError(t, err)
 			assert.Equal(t, e2.Entry.GetInfo().(*storeEntry.Info).GroupLSN, e.Info.GroupLSN)
 			e2.Entry.Free()
@@ -111,12 +121,12 @@ func concurrentAppendReadCheckpoint(s *baseStore, t *testing.T) {
 	truncatefn := func(i int) func() {
 		return func() {
 			e := entries[i]
-			err := s.Truncate(e.Lsn)
+			err := s.Truncate(e.DSN)
 			assert.NoError(t, err)
 			e.Entry.Free()
 			lsn, err := s.GetTruncated()
 			assert.NoError(t, err)
-			assert.GreaterOrEqual(t, lsn, e.Lsn)
+			assert.GreaterOrEqual(t, lsn, e.DSN)
 			wg.Done()
 		}
 	}

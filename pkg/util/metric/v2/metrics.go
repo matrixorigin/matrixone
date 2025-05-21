@@ -58,6 +58,8 @@ func init() {
 	registry.MustRegister(HeartbeatRecvHistogram)
 	registry.MustRegister(HeartbeatRecvFailureCounter)
 	registry.MustRegister(statsTriggerCounter)
+	registry.MustRegister(StatsTriggerQueueSizeGauge)
+	registry.MustRegister(StatsUpdateDurationHistogram)
 	registry.MustRegister(StatsUpdateBlockCounter)
 }
 
@@ -162,6 +164,7 @@ func initTxnMetrics() {
 	registry.MustRegister(txnReaderTombstoneSelectivityHistogram)
 	registry.MustRegister(txnTransferDurationHistogram)
 	registry.MustRegister(TransferTombstonesCountHistogram)
+	registry.MustRegister(TxnExtraWorkspaceQuotaGauge)
 }
 
 func initRPCMetrics() {

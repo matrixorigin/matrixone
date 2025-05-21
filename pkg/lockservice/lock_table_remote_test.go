@@ -16,8 +16,13 @@ package lockservice
 
 import (
 	"context"
+	"io"
+	"net"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,6 +59,39 @@ func TestLockRemote(t *testing.T) {
 			defer txn.Unlock()
 			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
 				assert.NoError(t, err)
+			})
+			reuse.Free(txn, nil)
+		},
+		func(lt pb.LockTable) {},
+	)
+}
+
+func TestIssue20747(t *testing.T) {
+	runRemoteLockTableTests(
+		t,
+		pb.LockTable{ServiceID: "s1"},
+		func(s Server) {
+			s.RegisterMethodHandler(
+				pb.Method_Lock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(getLogger(""), cancel, resp, io.EOF, cs)
+				},
+			)
+		},
+		func(l *remoteLockTable, s Server) {
+			txnID := []byte("txn1")
+			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			txn.Lock()
+			defer txn.Unlock()
+			l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(r pb.Result, err error) {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 			})
 			reuse.Free(txn, nil)
 		},
@@ -249,6 +287,52 @@ func TestRemoteWithBindChanged(t *testing.T) {
 			c <- bind
 		},
 	)
+}
+
+func TestRetryRemoteLockError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "net timeout error",
+			err:  &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded},
+			want: true,
+		},
+		{
+			name: "io EOF error",
+			err:  io.EOF,
+			want: true,
+		},
+		{
+			name: "io unexpected EOF error",
+			err:  io.ErrUnexpectedEOF,
+			want: true,
+		},
+		{
+			name: "os deadline exceeded error",
+			err:  os.ErrDeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "context deadline exceeded error",
+			err:  context.DeadlineExceeded,
+			want: true,
+		},
+		{
+			name: "moerr unexpected EOF error",
+			err:  moerr.NewUnexpectedEOF(context.Background(), "test"),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := retryRemoteLockError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func runRemoteLockTableTests(

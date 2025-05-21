@@ -34,11 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -116,13 +117,13 @@ func saveBatch(ctx context.Context, ses *Session, bat *batch.Batch) error {
 
 	s := ses.curResultSize + float64(bat.Size())/(1024*1024)
 	if s > ses.limitResultSize {
-		ses.Info(ctx, "open save query result", zap.Float64("current result size:", s))
+		ses.Debug(ctx, "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
 	fs := getPu(ses.GetService()).FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.GetStmtId()).String(), ses.GetIncBlockIdx())
-	ses.Info(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.GetStmtId()).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
+	ses.Debug(ctx, "open save query result", zap.String("statemant id is:", uuid.UUID(ses.GetStmtId()).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterQueryResult, path, fs)
 	if err != nil {
 		return err
@@ -198,11 +199,16 @@ func saveMeta(ctx context.Context, ses *Session) error {
 	if err != nil {
 		return err
 	}
+
+	//-------------------------------------------------------
+	roleId := defines.GetRoleId(ctx)
+	//-------------------------------------------------------
+
 	m := &catalog.Meta{
 		QueryId:       ses.GetStmtId(),
 		Statement:     ses.GetSql(),
 		AccountId:     ses.GetTenantInfo().GetTenantID(),
-		RoleId:        ses.proc.GetSessionInfo().RoleId,
+		RoleId:        roleId,
 		ResultPath:    buf.String(),
 		CreateTime:    types.UnixToTimestamp(ses.createdTime.Unix()),
 		ResultSize:    ses.curResultSize,
@@ -357,19 +363,22 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 	return uuids, nil
 }
 
-func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Session) error {
+func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Session) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	f := getPu(ses.GetService()).FileService
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
-		reader, err := blockio.NewFileReader(sid, f, path)
+		reader, err := ioutil.NewFileReader(f, path)
 		if err != nil {
-			return err
+			return stats, err
 		}
 		idxs := []uint16{catalog.PLAN_IDX, catalog.AST_IDX}
 		bats, closeCB, err := reader.LoadAllColumns(reqCtx, idxs, ses.GetMemPool())
 		if err != nil {
-			return err
+			return stats, err
 		}
 		defer func() {
 			if closeCB != nil {
@@ -380,18 +389,21 @@ func checkPrivilege(sid string, uuids []string, reqCtx context.Context, ses *Ses
 		p := bat.Vecs[0].UnsafeGetStringAt(0)
 		pn := &plan.Plan{}
 		if err = pn.Unmarshal([]byte(p)); err != nil {
-			return err
+			return stats, err
 		}
 		a := bat.Vecs[1].UnsafeGetStringAt(0)
 		var ast tree.Statement
 		if ast, err = simpleAstUnmarshal([]byte(a)); err != nil {
-			return err
+			return stats, err
 		}
-		if err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, ast, pn); err != nil {
-			return err
+
+		delta, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses, ast, pn)
+		if err != nil {
+			return stats, err
 		}
+		stats.Add(&delta)
 	}
-	return nil
+	return stats, nil
 }
 
 type simpleAst struct {
@@ -423,7 +435,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors,
-		*tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores, *tree.ShowLogserviceSettings:
+		*tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores, *tree.ShowLogserviceSettings, *tree.ShowRecoveryWindow:
 		s.Typ = int(astShowNone)
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		s.Typ = int(astExplain)
@@ -553,7 +565,7 @@ type resultFileInfo struct {
 func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
 	var err error
 	var columnDefs *plan.ResultColDef
-	var reader *blockio.BlockReader
+	var reader *ioutil.BlockReader
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
 
@@ -662,7 +674,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0])
+				err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0], false)
 				if err != nil {
 					return err
 				}
@@ -690,7 +702,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(ses.service, getPu(ses.GetService()).FileService, metaFile)
+	reader, err := ioutil.NewFileReader(getPu(ses.GetService()).FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
@@ -748,10 +760,10 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 }
 
 // openResultFile reads all blocks of the result file
-func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
+func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*ioutil.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(ses.GetService(), getPu(ses.GetService()).FileService, filePath)
+	reader, err := ioutil.NewFileReader(getPu(ses.GetService()).FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}

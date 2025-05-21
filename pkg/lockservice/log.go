@@ -18,10 +18,10 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -124,7 +124,7 @@ func logHolderAdded(
 			zap.Uint64("table", c.result.LockedOn.Table),
 			bytesArrayField("rows", c.rows),
 			zap.String("opts", c.opts.DebugString()),
-			waitTxnArrayField("holders", lock.holders.txns),
+			waitTxnArrayField("holders", lock.holders.getTxnSlice()),
 			bytesArrayField("waiters", waits),
 		)
 	}
@@ -397,17 +397,17 @@ func logLockTableClosed(
 func logDeadLockFound(
 	logger *log.MOLogger,
 	txn pb.WaitTxn,
-	waiters *waiters,
+	cycle string,
 ) {
 	if logger == nil {
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log("dead lock found",
-			getLogOptions(zap.DebugLevel),
-			zap.String("txn", txn.DebugString()),
-			waitTxnArrayField("wait-txn-list", waiters.waitTxns),
+			getLogOptions(zap.InfoLevel),
+			zap.String("deadlock txn", txn.DebugString()),
+			zap.String("cycle", cycle),
 		)
 	}
 }
@@ -525,6 +525,22 @@ func logPingFailed(
 		"failed to ping lock service",
 		getLogOptions(zap.ErrorLevel),
 		zap.String("serviceID", serviceID),
+		zap.Error(err))
+}
+
+func logValidTxnFailed(
+	logger *log.MOLogger,
+	txn pb.WaitTxn,
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	logger.Log(
+		"failed to valid txn",
+		getLogOptions(zap.ErrorLevel),
+		zap.String("wait-txn", txn.DebugString()),
 		zap.Error(err))
 }
 
@@ -929,6 +945,25 @@ func logTxnCreated(
 			"txn created",
 			getLogOptions(zap.DebugLevel),
 			txnField(txn),
+		)
+	}
+}
+
+func logAbortRemoteDeadlockFailed(
+	logger *log.MOLogger,
+	txn pb.WaitTxn,
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Log(
+			"abort remote dead lock failed",
+			getLogOptions(zap.ErrorLevel),
+			zap.String("txn", txn.DebugString()),
+			zap.Error(err),
 		)
 	}
 }

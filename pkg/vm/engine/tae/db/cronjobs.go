@@ -21,10 +21,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
+
+var ErrCronJobsOpen = moerr.NewInternalErrorNoCtx("cron jobs mock error")
 
 const (
 	CronJobs_Name_GCTransferTable = "GC-Transfer-Table"
@@ -37,6 +40,7 @@ const (
 	CronJobs_Name_ReportStats = "Report-Stats"
 
 	CronJobs_Name_Checker = "Checker"
+	// CronJobs_Name_Scanner = "Scanner"
 )
 
 var CronJobs_Open_WriteMode = []string{
@@ -47,6 +51,7 @@ var CronJobs_Open_WriteMode = []string{
 	CronJobs_Name_GCLogtail,
 	CronJobs_Name_GCLockMerge,
 	CronJobs_Name_ReportStats,
+	// CronJobs_Name_Scanner,
 }
 
 var CronJobs_Open_ReplayMode = []string{
@@ -69,6 +74,7 @@ var CronJobs_Spec = map[string][]bool{
 	CronJobs_Name_GCLockMerge:     {true, true, true, false},
 	CronJobs_Name_ReportStats:     {true, true, true, true},
 	CronJobs_Name_Checker:         {true, false, true, false},
+	// CronJobs_Name_Scanner:         {true, true, false, false},
 }
 
 func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
@@ -85,6 +91,9 @@ func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
 }
 
 func AddCronJobs(db *DB) (err error) {
+	if objectio.SimpleInjected(objectio.FJ_CronJobsOpen) {
+		return ErrCronJobsOpen
+	}
 	isWriteMode := db.IsWriteMode()
 	if isWriteMode {
 		for _, name := range CronJobs_Open_WriteMode {
@@ -122,6 +131,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			db.Opts.CheckpointCfg.TransferInterval,
 			func(context.Context) {
 				db.Runtime.PoolUsageReport()
+				// dbutils.PrintMemStats()
 				db.Runtime.TransferDelsMap.Prune(db.Opts.TransferTableTTL)
 				db.Runtime.TransferTable.RunTTL()
 			},
@@ -182,11 +192,15 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCLogtail,
 			db.Opts.CheckpointCfg.GCCheckpointInterval,
 			func(ctx context.Context) {
-				logutil.Info(db.Runtime.ExportLogtailStats())
 				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
-				if ckp != nil {
-					ts := types.BuildTS(ckp.GetStart().Physical(), 0) // GetStart is previous + 1, reset it here
-					db.LogtailMgr.GCByTS(ctx, ts)
+				if ckp == nil {
+					return
+				}
+				endTS := ckp.GetEnd()
+				if ts := types.TSSubDuration(&endTS, time.Second*55); ts.Valid() {
+					if updated := db.LogtailMgr.GCByTS(ctx, ts); updated {
+						logutil.Info(db.Runtime.ExportLogtailStats())
+					}
 				}
 			},
 			1,
@@ -222,6 +236,19 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			1,
 		)
 		return
+		// case CronJobs_Name_Scanner:
+		// scanner := NewDBScanner(db, nil)
+		// db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(db.Opts.TaskServiceGetter))
+		// scanner.RegisterOp(db.MergeScheduler)
+		// err = db.CronJobs.AddJob(
+		// 	CronJobs_Name_Scanner,
+		// 	db.Opts.CheckpointCfg.ScanInterval,
+		// 	func(ctx context.Context) {
+		// 		scanner.OnExec()
+		// 	},
+		// 	1,
+		// )
+		// return
 	}
 	err = moerr.NewInternalErrorNoCtxf(
 		"unknown cron job name: %s", name,

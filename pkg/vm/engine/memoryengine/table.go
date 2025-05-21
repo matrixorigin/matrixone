@@ -16,14 +16,12 @@ package memoryengine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -262,7 +260,6 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
 	var TableType, Createsql string
-	var partitionInfo *plan2.PartitionByDef
 	var viewSql *plan2.ViewDef
 	var foreignKeys []*plan2.ForeignKeyDef
 	var primarykey *plan2.PrimaryKeyDef
@@ -336,15 +333,6 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: commnetDef.Comment,
 			})
-		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan2.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
-				}
-				partitionInfo = p
-			}
 		} else if v, ok := def.(*engine.VersionDef); ok {
 			schemaVersion = v.Version
 		}
@@ -377,7 +365,6 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 		Createsql:    Createsql,
 		Pkey:         primarykey,
 		ViewSql:      viewSql,
-		Partition:    partitionInfo,
 		Fkeys:        foreignKeys,
 		RefChildTbls: refChildTbls,
 		ClusterBy:    clusterByDef,
@@ -547,11 +534,11 @@ func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*p
 	return nil, nil
 }
 
-func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
+func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx int32) (bool, error) {
 	return true, nil
 }
 
-func (t *Table) PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
+func (t *Table) PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx int32) (bool, error) {
 	return true, nil
 }
 
@@ -565,4 +552,8 @@ func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStat
 
 func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return nil, nil
+}
+
+func (t *Table) Reset(op client.TxnOperator) error {
+	return nil
 }

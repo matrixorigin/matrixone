@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestBuildAlterView(t *testing.T) {
@@ -487,4 +488,37 @@ func TestParseDuration(t *testing.T) {
 		assert.Equal(t, c.expected, duration)
 		assert.Equal(t, err, c.expectedErr)
 	}
+}
+
+func Test_buildTableDefs(t *testing.T) {
+	stmt := &tree.CreateTable{
+		Temporary:          false,
+		IsClusterTable:     false,
+		IfNotExists:        false,
+		Table:              tree.TableName{},
+		Defs:               nil,
+		Options:            nil,
+		PartitionOption:    nil,
+		ClusterByOption:    nil,
+		Param:              nil,
+		AsSource:           &tree.Select{Select: &tree.SelectClause{From: &tree.From{}}},
+		IsDynamicTable:     false,
+		DTOptions:          nil,
+		IsAsSelect:         true,
+		IsAsLike:           false,
+		LikeTableName:      tree.TableName{},
+		SubscriptionOption: nil,
+	}
+
+	ctx := &MockCompilerContext{}
+
+	createTable := &plan.CreateTable{
+		Database: "db",
+		TableDef: &plan.TableDef{
+			Name: "table",
+		},
+	}
+
+	err := buildTableDefs(stmt, ctx, createTable, nil)
+	assert.Error(t, err)
 }

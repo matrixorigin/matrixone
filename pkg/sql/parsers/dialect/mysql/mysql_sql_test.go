@@ -2560,6 +2560,27 @@ var (
 			output: "alter publication pub1 account acc0 database db1 table t1, t2",
 		},
 		{
+			input: "create snapshot cluster_sp for cluster",
+		},
+		{
+			input: "create snapshot snapshot_01 for account account_01",
+		},
+		{
+			input: "create snapshot snapshot_01 for database db1",
+		},
+		{
+			input:  "create snapshot snapshot_01 for table db1 t1",
+			output: "create snapshot snapshot_01 for table db1.t1",
+		},
+		{
+			input:  "select * from t1 {as of timestamp '2019-01-01 00:00:00'}",
+			output: "select * from t1{as of timestamp 2019-01-01 00:00:00}",
+		},
+		{
+			input:  "create table t1 as select * from t2 {as of timestamp '2019-01-01 00:00:00'}",
+			output: "create table t1 as select * from t2{as of timestamp 2019-01-01 00:00:00}",
+		},
+		{
 			input: "restore cluster from snapshot snapshot_01",
 		},
 		{
@@ -2987,16 +3008,24 @@ var (
 			output: "create pitr pitr2 for account acc01 range 1  d",
 		},
 		{
-			input:  "create pitr `pitr3` range 1 'h'",
-			output: "create pitr pitr3 for self account range 1  h",
+			input:  "create pitr `pitr3` for account range 1 'h'",
+			output: "create pitr pitr3 for account range 1  h",
 		},
 		{
 			input:  "create pitr `pitr4` for database db01 range 1 'h'",
 			output: "create pitr pitr4 for database db01 range 1  h",
 		},
 		{
+			input:  "create pitr `pitr5` for table db01 t01 range 1 'h'",
+			output: "create pitr pitr5 for table db01.t01 range 1  h",
+		},
+		{
+			input:  "create pitr `pitr3` range 1 'h'",
+			output: "create pitr pitr3 for account range 1  h",
+		},
+		{
 			input:  "create pitr `pitr5` for database db01 table t01 range 1 'h'",
-			output: "create pitr pitr5 for database db01 table t01 range 1  h",
+			output: "create pitr pitr5 for table db01.t01 range 1  h",
 		},
 		{
 			input: "show pitr",
@@ -3040,6 +3069,19 @@ var (
 		{
 			input:  "restore cluster from pitr pitr01 '2021-01-01 00:00:00'",
 			output: "restore cluster from pitr pitr01 timestamp = 2021-01-01 00:00:00",
+		},
+		{
+			input: "show recovery_window for account",
+		},
+		{
+			input: "show recovery_window for database db01",
+		},
+		{
+			input:  "show recovery_window for table db01 t01",
+			output: "show recovery_window for database db01 table t01",
+		},
+		{
+			input: "show recovery_window for account acc01",
 		},
 		{
 			input:  "show create table t1 {snapshot = 'sp01'}",
@@ -3162,6 +3204,25 @@ var (
 		{
 			input:  "use ",
 			output: "use",
+		},
+		{
+			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 QUANTIZATION 'BF16' OP_TYPE 'VECTOR_L2_OPS'",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 QUANTIZATION BF16 OP_TYPE VECTOR_L2_OPS ",
+		},
+		{
+			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_search = 64 ef_construction = 100  quantization 'bf16'  op_type 'vector_l2_ops' )",
+			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 QUANTIZATION bf16 OP_TYPE vector_l2_ops )",
+		},
+		{
+			input:  "alter table t1 alter reindex idx1 hnsw",
+			output: "alter table t1 alter reindex idx1 hnsw",
+		},
+		{
+			input:  "select t.a from sa.t centroidx ('Vector_ip_ops') join u",
+			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
+		},
+		{
+			input: "alter user u1 lock",
 		},
 	}
 )

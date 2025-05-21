@@ -17,6 +17,8 @@ package disttae
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -406,95 +408,11 @@ func ListTnService(
 	})
 }
 
-func ForeachBlkInObjStatsList(
-	next bool,
-	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
-	objects ...objectio.ObjectStats,
-) {
-	stop := false
-	objCnt := len(objects)
-
-	for idx := 0; idx < objCnt && !stop; idx++ {
-		iter := NewStatsBlkIter(&objects[idx], dataMeta)
-		pos := uint32(0)
-		for iter.Next() {
-			blk := iter.Entry()
-			var meta objectio.BlockObject
-			if !dataMeta.IsEmpty() {
-				meta = dataMeta.GetBlockMeta(pos)
-			}
-			pos++
-			if !onBlock(blk, meta) {
-				stop = true
-				break
-			}
-		}
-
-		if stop && next {
-			stop = false
-		}
-	}
-}
-
-type StatsBlkIter struct {
-	name       objectio.ObjectName
-	extent     objectio.Extent
-	blkCnt     uint16
-	totalRows  uint32
-	cur        int
-	accRows    uint32
-	curBlkRows uint32
-	meta       objectio.ObjectDataMeta
-}
-
-func NewStatsBlkIter(stats *objectio.ObjectStats, meta objectio.ObjectDataMeta) *StatsBlkIter {
-	return &StatsBlkIter{
-		name:       stats.ObjectName(),
-		blkCnt:     uint16(stats.BlkCnt()),
-		extent:     stats.Extent(),
-		cur:        -1,
-		accRows:    0,
-		totalRows:  stats.Rows(),
-		curBlkRows: objectio.BlockMaxRows,
-		meta:       meta,
-	}
-}
-
-func (i *StatsBlkIter) Next() bool {
-	if i.cur >= 0 {
-		i.accRows += i.curBlkRows
-	}
-	i.cur++
-	return i.cur < int(i.blkCnt)
-}
-
-func (i *StatsBlkIter) Entry() objectio.BlockInfo {
-	if i.cur == -1 {
-		i.cur = 0
-	}
-
-	// assume that all blks have BlockMaxRows, except the last one
-	if i.meta.IsEmpty() {
-		if i.cur == int(i.blkCnt-1) {
-			i.curBlkRows = i.totalRows - i.accRows
-		}
-	} else {
-		i.curBlkRows = i.meta.GetBlockMeta(uint32(i.cur)).GetRows()
-	}
-
-	var blk objectio.BlockInfo
-	objectio.BuildLocationTo(i.name, i.extent, i.curBlkRows, uint16(i.cur), blk.MetaLoc[:])
-	objectio.BuildObjectBlockidTo(i.name, uint16(i.cur), blk.BlockID[:])
-
-	return blk
-}
-
 func ForeachCommittedObjects(
 	createObjs map[objectio.ObjectNameShort]struct{},
 	delObjs map[objectio.ObjectNameShort]struct{},
 	p *logtailreplay.PartitionState,
-	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
+	onObj func(info objectio.ObjectEntry) error) (err error) {
 	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
@@ -515,7 +433,7 @@ func ForeachCommittedObjects(
 
 func ForeachTombstoneObject(
 	ts types.TS,
-	onTombstone func(tombstone logtailreplay.ObjectEntry) (next bool, err error),
+	onTombstone func(tombstone objectio.ObjectEntry) (next bool, err error),
 	pState *logtailreplay.PartitionState,
 ) error {
 	iter, err := pState.NewObjectsIter(ts, true, true)
@@ -536,14 +454,14 @@ func ForeachTombstoneObject(
 
 func ForeachSnapshotObjects(
 	ts timestamp.Timestamp,
-	onObject func(obj logtailreplay.ObjectInfo, isCommitted bool) error,
+	onObject func(obj objectio.ObjectEntry, isCommitted bool) error,
 	tableSnapshot *logtailreplay.PartitionState,
 	extraCommitted []objectio.ObjectStats,
 	uncommitted ...objectio.ObjectStats,
 ) (err error) {
 	// process all uncommitted objects first
 	for _, obj := range uncommitted {
-		info := logtailreplay.ObjectInfo{
+		info := objectio.ObjectEntry{
 			ObjectStats: obj,
 		}
 		if err = onObject(info, false); err != nil {
@@ -552,7 +470,7 @@ func ForeachSnapshotObjects(
 	}
 	// process all uncommitted objects first
 	for _, obj := range extraCommitted {
-		info := logtailreplay.ObjectInfo{
+		info := objectio.ObjectEntry{
 			ObjectStats: obj,
 		}
 		if err = onObject(info, true); err != nil {
@@ -572,7 +490,7 @@ func ForeachSnapshotObjects(
 	defer iter.Close()
 	for iter.Next() {
 		obj := iter.Entry()
-		if err = onObject(obj.ObjectInfo, true); err != nil {
+		if err = onObject(obj, true); err != nil {
 			return
 		}
 	}
@@ -625,6 +543,10 @@ func txnIsValid(txnOp client.TxnOperator) (*Transaction, error) {
 	var ok bool
 	if wsTxn, ok = ws.(*Transaction); ok {
 		if wsTxn == nil {
+			return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
+		}
+		if wsTxn.removed {
+			logutil.Error("txn is removed", zap.String("id", hex.EncodeToString(txnOp.Txn().ID)), zap.String("status", txnOp.Status().String()))
 			return nil, moerr.NewTxnClosedNoCtx(txnOp.Txn().ID)
 		}
 	}
@@ -683,7 +605,9 @@ func (e *concurrentExecutor) Run(ctx context.Context) {
 
 				case t := <-e.tasks:
 					if err := t(); err != nil {
-						logutil.Errorf("failed to execute task: %v", err)
+						if !errors.Is(err, context.Canceled) {
+							logutil.Errorf("failed to execute task: %v", err)
+						}
 					}
 				}
 			}
@@ -776,4 +700,32 @@ func isColumnsBatchPerfectlySplitted(bs []*batch.Batch) bool {
 		prevTableId = vector.GetFixedAtNoTypeCheck[uint64](b.Vecs[tidIdx], b.RowCount()-1)
 	}
 	return true
+}
+
+// shrinkBatchWithRowids shrinks the batch with rowids
+// the first column of the batch is rowids and all belong to the same block id
+// the rowids are 0-based and consecutive
+// Example:
+// bat:
+//
+//	[blk0-0, blk0-1, blk0-2, blk0-3, blk0-4]
+//	[1, 2, 3, 4, 5]
+//
+// toDeleteOffsets: [1, 3]
+// result:
+//
+//	[blk0-0, blk0-1, blk0-2]
+//	[1, 3, 5]
+func shrinkBatchWithRowids(
+	bat *batch.Batch,
+	toDeleteOffsets []int64,
+) {
+	bat.Shrink(toDeleteOffsets, true)
+	if bat.RowCount() == 0 {
+		return
+	}
+	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])
+	for i := range rowids {
+		rowids[i].SetRowOffset(uint32(i))
+	}
 }

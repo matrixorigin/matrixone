@@ -20,10 +20,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -36,7 +37,7 @@ type flushObjTask struct {
 	*tasks.BaseTask
 	data      *containers.Batch
 	meta      *catalog.ObjectEntry
-	fs        *objectio.ObjectFS
+	fs        fileservice.FileService
 	name      objectio.ObjectName
 	blocks    []objectio.BlockObject
 	schemaVer uint32
@@ -54,7 +55,7 @@ func NewFlushObjTask(
 	ctx *tasks.Context,
 	schemaVer uint32,
 	seqnums []uint16,
-	fs *objectio.ObjectFS,
+	fs fileservice.FileService,
 	meta *catalog.ObjectEntry,
 	data *containers.Batch,
 	parentTask string,
@@ -94,8 +95,8 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
-	writer, err := blockio.NewBlockWriterNew(
-		task.fs.Service,
+	writer, err := ioutil.NewBlockWriterNew(
+		task.fs,
 		name,
 		task.schemaVer,
 		task.seqnums,

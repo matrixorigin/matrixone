@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 
@@ -108,9 +109,6 @@ type SessionInfo struct {
 	Host                 string
 	Role                 string
 	ConnectionID         uint64
-	AccountId            uint32
-	RoleId               uint32
-	UserId               uint32
 	LastInsertID         uint64
 	Database             string
 	Version              string
@@ -274,12 +272,13 @@ type BaseProcess struct {
 	Lim Limitation
 	mp  *mpool.MPool
 	// unix timestamp
-	UnixTime    int64
-	TxnClient   client.TxnClient
-	SessionInfo SessionInfo
-	FileService fileservice.FileService
-	LockService lockservice.LockService
-	IncrService incrservice.AutoIncrementService
+	UnixTime         int64
+	TxnClient        client.TxnClient
+	SessionInfo      SessionInfo
+	FileService      fileservice.FileService
+	LockService      lockservice.LockService
+	PartitionService partitionservice.PartitionService
+	IncrService      incrservice.AutoIncrementService
 
 	LastInsertID        *uint64
 	LoadLocalReader     *io.PipeReader
@@ -319,6 +318,7 @@ type Process struct {
 type sqlHelper interface {
 	GetCompilerContext() any
 	ExecSql(string) ([][]interface{}, error)
+	ExecSqlWithCtx(context.Context, string) ([][]interface{}, error)
 	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 

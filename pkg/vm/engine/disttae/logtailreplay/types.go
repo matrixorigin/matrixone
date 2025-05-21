@@ -24,78 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-type ObjectInfo struct {
-	objectio.ObjectStats
-	CreateTime types.TS
-	DeleteTime types.TS
-}
-
-func (o ObjectInfo) String() string {
-	return fmt.Sprintf(
-		"%s; appendable: %v; sorted: %v; createTS: %s; deleteTS: %s",
-		o.ObjectStats.String(),
-		o.ObjectStats.GetAppendable(),
-		o.ObjectStats.GetSorted(),
-		o.CreateTime.ToString(),
-		o.DeleteTime.ToString())
-}
-
-func (o ObjectInfo) Location() objectio.Location {
-	return o.ObjectLocation()
-}
-
-type ObjectEntry struct {
-	ObjectInfo
-}
-
-func (o ObjectEntry) ObjectNameIndexLess(than ObjectEntry) bool {
-	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
-}
-
-// ObjectDTSIndexLess has the order:
-// 1. if the delete time is empty, let it be the max ts
-// 2. ascending object with delete ts.
-// 3. ascending object with createts when same dts.
-//
-// sort by DELETE time and then CREATE time
-func (o ObjectEntry) ObjectDTSIndexLess(than ObjectEntry) bool {
-	// (c, d), (c, d), (c, d), (c, inf), (c, inf) ...
-	x, y := o.DeleteTime, than.DeleteTime
-	if x.IsEmpty() {
-		x = types.MaxTs()
-	}
-	if y.IsEmpty() {
-		y = types.MaxTs()
-	}
-
-	if !x.Equal(&y) {
-		return x.LT(&y)
-	}
-
-	if !o.CreateTime.Equal(&than.CreateTime) {
-		return o.CreateTime.LT(&than.CreateTime)
-	}
-
-	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
-}
-
-func (o ObjectEntry) IsEmpty() bool {
-	return o.Size() == 0
-}
-
-func (o ObjectEntry) Visible(ts types.TS) bool {
-	return o.CreateTime.LE(&ts) &&
-		(o.DeleteTime.IsEmpty() || ts.LT(&o.DeleteTime))
-}
-
-func (o ObjectEntry) Location() objectio.Location {
-	return o.ObjectLocation()
-}
-
-func (o ObjectInfo) StatsValid() bool {
-	return o.ObjectStats.Rows() != 0
-}
-
 // sharedStates is shared among all PartitionStates
 type sharedStates struct {
 	sync.Mutex
@@ -126,7 +54,7 @@ func (r RowEntry) String() string {
 		r.PrimaryIndexBytes)
 }
 
-func (r RowEntry) Less(than RowEntry) bool {
+func (r *RowEntry) Less(than *RowEntry) bool {
 	// asc
 	if cmp := r.BlockID.Compare(&than.BlockID); cmp != 0 {
 		return cmp < 0

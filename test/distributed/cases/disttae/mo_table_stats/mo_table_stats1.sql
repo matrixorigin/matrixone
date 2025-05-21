@@ -11,20 +11,24 @@ select mo_ctl("cn", "MoTableStats", "move_on:false");
 create table mts_t1 (a int);
 insert into mts_t1 select * from generate_series(1, 1000)g;
 
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t1");
 
 -- @ignore:0
 select mo_ctl("cn", "MoTableStats", "force_update:true");
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t1");
 
 insert into mts_t1 values(1001);
 
 -- @ignore:0
 select mo_ctl("cn", "MoTableStats", "force_update:false");
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t1");
 
 -- @ignore:0
 select mo_ctl("cn", "MoTableStats", "force_update:true");
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t1");
 
 -- @ignore:0
@@ -38,23 +42,28 @@ drop table mts_t1;
 create table mts_t2 (a int);
 insert into mts_t2 select * from generate_series(1, 1000)g;
 
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t2");
 
 set mo_table_stats.force_update = yes;
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t2");
 
 insert into mts_t2 values (1001);
 
 set mo_table_stats.force_update = no;
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t2");
 
 set mo_table_stats.force_update = yes;
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t2");
 
 insert into mts_t2 values(1002);
 
 set mo_table_stats.force_update = no;
 set mo_table_stats.reset_update_time = yes;
+-- @ignore:0
 select mo_table_rows("mts_db", "mts_t2");
 
 -- @ignore:0

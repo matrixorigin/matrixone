@@ -329,32 +329,22 @@ func doComQueryInBack(
 	//!!!does not init sequence in the background exec
 	if backSes.tenant != nil {
 		proc.Base.SessionInfo.Account = backSes.tenant.GetTenant()
-		proc.Base.SessionInfo.AccountId = backSes.tenant.GetTenantID()
 		proc.Base.SessionInfo.Role = backSes.tenant.GetDefaultRole()
-		proc.Base.SessionInfo.RoleId = backSes.tenant.GetDefaultRoleID()
-		proc.Base.SessionInfo.UserId = backSes.tenant.GetUserID()
 
 		if len(backSes.tenant.GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = backSes.tenant.GetVersion()
 		}
 		userNameOnly = backSes.tenant.GetUser()
-	} else {
-		var accountId uint32
-		accountId, retErr = defines.GetAccountId(execCtx.reqCtx)
-		if retErr != nil {
-			return retErr
-		}
-		proc.Base.SessionInfo.AccountId = accountId
-		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
+
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
 	// Instantiate StatsInfo to track SQL resource statistics
-	statsInfo := new(statistic.StatsInfo)
+	//statsInfo := new(statistic.StatsInfo)
+	statsInfo := statistic.NewStatsInfo()
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.input = input
@@ -684,7 +674,7 @@ func fillResultSet(ctx context.Context, dataSet *batch.Batch, ses FeSession, mrs
 	n := dataSet.RowCount()
 	for j := 0; j < n; j++ { //row index
 		row := make([]any, mrs.GetColumnCount())
-		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row)
+		err := extractRowFromEveryVector(ctx, ses, dataSet, j, row, false)
 		if err != nil {
 			return err
 		}
@@ -1140,11 +1130,12 @@ func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta,
 	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, nil)
 }
 
-// Made for sequence func. nextval, setval.
-func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
+func (sh *SqlHelper) execSql(
+	ctx context.Context,
+	sql string,
+) (ret [][]interface{}, err error) {
 	var erArray []ExecResult
 
-	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
 	/*
 		if we run the transaction statement (BEGIN, ect) here , it creates an independent transaction.
 		if we do not run the transaction statement (BEGIN, ect) here, it runs the sql in the share transaction
@@ -1170,4 +1161,14 @@ func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
 	}
 
 	return erArray[0].(*MysqlResultSet).Data, nil
+}
+
+// Made for sequence func. nextval, setval.
+func (sh *SqlHelper) ExecSql(sql string) (ret [][]interface{}, err error) {
+	ctx := sh.ses.txnCompileCtx.execCtx.reqCtx
+	return sh.execSql(ctx, sql)
+}
+
+func (sh *SqlHelper) ExecSqlWithCtx(ctx context.Context, sql string) ([][]interface{}, error) {
+	return sh.execSql(ctx, sql)
 }

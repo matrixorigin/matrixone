@@ -29,11 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
-
-const BatchSize = 8192
 
 var _ table.RowWriter = (*TAEWriter)(nil)
 
@@ -48,7 +46,7 @@ type TAEWriter struct {
 	filename     string
 	fs           fileservice.FileService
 	//writer       objectio.Writer
-	writer *blockio.BlockWriter
+	writer *ioutil.BlockWriter
 	rows   []*table.Row
 
 	flushRows int
@@ -59,11 +57,11 @@ type TAEWriter struct {
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
 	w := &TAEWriter{
 		ctx:       ctx,
-		batchSize: BatchSize,
+		batchSize: objectio.BlockMaxRows,
 		mp:        mp,
 		filename:  filePath,
 		fs:        fs,
-		rows:      make([]*table.Row, 0, BatchSize),
+		rows:      make([]*table.Row, 0, objectio.BlockMaxRows),
 	}
 
 	w.idxs = make([]uint16, len(tbl.Columns))
@@ -71,7 +69,7 @@ func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePa
 		w.columnsTypes = append(w.columnsTypes, c.ColType.ToType())
 		w.idxs[idx] = uint16(idx)
 	}
-	w.writer, _ = blockio.NewBlockWriter(fs, filePath)
+	w.writer, _ = ioutil.NewBlockWriter(fs, filePath)
 	return w
 }
 
@@ -308,7 +306,7 @@ type TAEReader struct {
 	typs     []types.Type
 	idxs     []uint16
 
-	blockReader *blockio.BlockReader
+	blockReader *ioutil.BlockReader
 
 	bs       []objectio.BlockObject
 	batchs   []*batch.Batch
@@ -334,7 +332,7 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 		r.typs = append(r.typs, c.ColType.ToType())
 		r.idxs[idx] = uint16(idx)
 	}
-	r.blockReader, err = blockio.NewFileReaderNoCache(r.fs, r.filepath)
+	r.blockReader, err = ioutil.NewFileReaderNoCache(r.fs, r.filepath)
 	if err != nil {
 		return nil, err
 	}

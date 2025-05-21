@@ -87,6 +87,27 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 				GetFetchRowsFunc(lockOp.targets[idx].primaryColumnType))
 		}
 	}
+	if len(lockOp.ctr.relations) == 0 {
+		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
+		for i, target := range lockOp.targets {
+			if target.objRef != nil {
+				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
+				if err != nil {
+					return err
+				}
+				lockOp.ctr.relations[i] = rel
+			}
+		}
+	} else {
+		for i, target := range lockOp.targets {
+			if target.objRef != nil {
+				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
 	lockOp.ctr.parker = types.NewPacker()
 	return nil
 }
@@ -140,6 +161,28 @@ func callNonBlocking(
 	return result, nil
 }
 
+// if input vec is not allnull and has null, return a copy vector without null value
+func getVec(proc *process.Process, vec *vector.Vector) (*vector.Vector, error) {
+	if vec.HasNull() {
+		nulls := vec.GetNulls()
+		newVec := vector.NewVec(*vec.GetType())
+		for i := 0; i < vec.Length(); i++ {
+			if !nulls.Contains(uint64(i)) {
+				if err := vector.AppendBytes(newVec, nil, true, proc.Mp()); err != nil {
+					newVec.Free(proc.GetMPool())
+					return nil, err
+				}
+				if err := newVec.Copy(vec, int64(newVec.Length()-1), int64(i), proc.GetMPool()); err != nil {
+					newVec.Free(proc.GetMPool())
+					return nil, err
+				}
+			}
+		}
+		return newVec, nil
+	}
+	return vec, nil
+}
+
 func performLock(
 	bat *batch.Batch,
 	proc *process.Process,
@@ -161,25 +204,34 @@ func performLock(
 			zap.Int32("filter-col", target.filterColIndexInBatch),
 			zap.Int32("primary-index", target.primaryColumnIndexInBatch))
 		var filterCols []int32
-		priVec := bat.GetVector(target.primaryColumnIndexInBatch)
 		// For partitioned tables, filter is not nil
-		if target.filter != nil {
-			filterCols = vector.MustFixedColWithTypeCheck[int32](bat.GetVector(target.filterColIndexInBatch))
+		// no function call AddLockTargetWithPartition to set target.filter, so next code is unused
+		/* 		if target.filter != nil {
+			srcVec := bat.GetVector(target.filterColIndexInBatch)
+			vec, err := getVec(proc, srcVec)
+			if err != nil {
+				return err
+			}
+			filterCols = vector.MustFixedColWithTypeCheck[int32](vec)
+			if srcVec != vec {
+				vec.Free(proc.GetMPool())
+			}
 			for _, value := range filterCols {
 				// has Illegal Partition index
 				if value == -1 {
 					return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 				}
 			}
-		}
+		} */
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
 			lockOp.engine,
 			analyzer,
-			nil,
+			lockOp.ctr.relations[idx],
 			target.tableID,
 			proc,
-			priVec,
+			bat,
+			target.primaryColumnIndexInBatch,
 			target.primaryColumnType,
 			DefaultLockOptions(lockOp.ctr.parker).
 				WithLockMode(lock.LockMode_Exclusive).
@@ -207,6 +259,7 @@ func performLock(
 		// refreshTS is last commit ts + 1, because we need see the committed data.
 		if proc.Base.TxnClient.RefreshExpressionEnabled() &&
 			target.refreshTimestampIndexInBatch != -1 {
+			priVec := bat.GetVector(target.primaryColumnIndexInBatch)
 			vec := bat.GetVector(target.refreshTimestampIndexInBatch)
 			ts := types.BuildTS(refreshTS.PhysicalTime, refreshTS.LogicalTime)
 			n := priVec.Length()
@@ -279,6 +332,7 @@ func LockTable(
 		tableID,
 		proc,
 		nil,
+		0,
 		pkType,
 		opts)
 	if err != nil {
@@ -301,7 +355,8 @@ func LockRows(
 	proc *process.Process,
 	rel engine.Relation,
 	tableID uint64,
-	vec *vector.Vector,
+	bat *batch.Batch,
+	idx int32,
 	pkType types.Type,
 	lockMode lock.LockMode,
 	sharding lock.Sharding,
@@ -343,7 +398,8 @@ func LockRows(
 		rel,
 		tableID,
 		proc,
-		vec,
+		bat,
+		idx,
 		pkType,
 		opts)
 	if err != nil {
@@ -370,7 +426,8 @@ func doLock(
 	rel engine.Relation,
 	tableID uint64,
 	proc *process.Process,
-	vec *vector.Vector,
+	bat *batch.Batch,
+	idx int32,
 	pkType types.Type,
 	opts LockOptions,
 ) (bool, bool, timestamp.Timestamp, error) {
@@ -403,8 +460,23 @@ func doLock(
 	// update t1 set b = b+1 where a = 1;
 	//    here MO will use 't1 left join hidden_tbl' to fetch the PK in hidden table to lock,
 	//    but the result will be ConstNull vector
-	if vec != nil && vec.IsConstNull() {
+	var vec *vector.Vector
+	if bat != nil {
+		vec = bat.GetVector(idx)
+	}
+
+	var err error
+	if vec != nil && vec.AllNull() {
 		return false, false, timestamp.Timestamp{}, nil
+	}
+	if vec != nil {
+		inputVec := vec
+		if vec, err = getVec(proc, inputVec); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		if vec != inputVec {
+			defer vec.Free(proc.GetMPool())
+		}
 	}
 
 	if opts.maxCountPerLock == 0 {
@@ -540,7 +612,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, rel, analyzer, tableID, eng, vec, snapshotTS, newSnapshotTS)
+		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -666,8 +738,7 @@ func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
-	if txn.LockTableCount() > 0 &&
-		txn.HasLockTable(table) {
+	if txn.HasLockTable(table) {
 		return false
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
@@ -772,6 +843,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			Mode:               target.mode,
 			LockRows:           plan.DeepCopyExpr(target.lockRows),
 			LockTableAtTheEnd:  target.lockTableAtTheEnd,
+			ObjRef:             plan.DeepCopyObjectRef(target.objRef),
 		}
 	}
 	return targets
@@ -780,6 +852,7 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 // AddLockTarget add lock target, LockMode_Exclusive will used
 func (lockOp *LockOp) AddLockTarget(
 	tableID uint64,
+	objRef *plan.ObjectRef,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
 	refreshTimestampIndexInBatch int32,
@@ -787,6 +860,7 @@ func (lockOp *LockOp) AddLockTarget(
 	lockTableAtTheEnd bool) *LockOp {
 	return lockOp.AddLockTargetWithMode(
 		tableID,
+		objRef,
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
@@ -798,6 +872,7 @@ func (lockOp *LockOp) AddLockTarget(
 // AddLockTargetWithMode add lock target with lock mode
 func (lockOp *LockOp) AddLockTargetWithMode(
 	tableID uint64,
+	objRef *plan.ObjectRef,
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
@@ -806,6 +881,7 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	lockTableAtTheEnd bool) *LockOp {
 	lockOp.targets = append(lockOp.targets, lockTarget{
 		tableID:                      tableID,
+		objRef:                       objRef,
 		primaryColumnIndexInBatch:    primaryColumnIndexInBatch,
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
@@ -889,6 +965,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 	// only one partition table, process as normal table
 	if len(tableIDs) == 1 {
 		return lockOp.AddLockTarget(tableIDs[0],
+			nil,
 			primaryColumnIndexInBatch,
 			primaryColumnType,
 			refreshTimestampIndexInBatch,
@@ -922,6 +999,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanParker()
+	lockOp.ctr.relations = nil
 }
 
 func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -960,10 +1038,11 @@ func hasNewVersionInRange(
 	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
-	vec *vector.Vector,
+	bat *batch.Batch,
+	idx int32,
 	from, to timestamp.Timestamp,
 ) (bool, error) {
-	if vec == nil {
+	if bat == nil {
 		return false, nil
 	}
 
@@ -991,7 +1070,7 @@ func hasNewVersionInRange(
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, vec)
+	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx)
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {

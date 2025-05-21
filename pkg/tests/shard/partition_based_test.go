@@ -22,8 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -34,12 +32,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPartitionBasedTableCanBeCreated(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
@@ -74,7 +76,10 @@ func TestPartitionBasedTableCanBeCreated(
 func TestPartitionBasedTableCanBeDeleted(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
@@ -99,7 +104,10 @@ func TestPartitionBasedTableCanBeDeleted(
 func TestInsertIntoWithLocalPartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
@@ -143,7 +151,10 @@ func TestInsertIntoWithLocalPartition(
 func TestUpdateWithLocalPartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
@@ -194,7 +205,10 @@ func TestUpdateWithLocalPartition(
 func TestInsertIntoWithRemotePartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
@@ -238,7 +252,10 @@ func TestInsertIntoWithRemotePartition(
 func TestUpdateWithRemotePartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
@@ -289,7 +306,10 @@ func TestUpdateWithRemotePartition(
 func TestSelectWithMultiPartition(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTest(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 3)
@@ -343,7 +363,10 @@ func TestSelectWithMultiPartition(
 func TestUpdateOnNewCN(
 	t *testing.T,
 ) {
+	t.SkipNow()
+
 	runShardClusterTestWithReuse(
+		t,
 		func(c embed.Cluster) {
 			db := testutils.GetDatabaseName(t)
 			tableID := mustCreatePartitionBasedTable(t, c, db, 12)

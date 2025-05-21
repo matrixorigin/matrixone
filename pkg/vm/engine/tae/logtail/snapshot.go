@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 
 	"go.uber.org/zap"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -338,7 +340,7 @@ type tombstone struct {
 func (sm *SnapshotMeta) updateTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData, startts, endts types.TS,
+	data *CKPReader, startts, endts types.TS,
 ) error {
 	var objects map[uint64]map[objectio.Segmentid]*objectInfo
 	var tombstones map[uint64]map[objectio.Segmentid]*objectInfo
@@ -364,14 +366,21 @@ func (sm *SnapshotMeta) updateTableInfo(
 		moTable := (*objects)[tid]
 
 		// dropped object will overwrite the created object, updating the deleteAt
-		moTable[id] = &objectInfo{
-			stats:    stats,
-			createAt: createTS,
-			deleteAt: deleteTS,
+		obj := moTable[id]
+		if obj == nil {
+			moTable[id] = &objectInfo{
+				stats: stats,
+			}
+		}
+		if !createTS.IsEmpty() {
+			moTable[id].createAt = createTS
+		}
+		if !deleteTS.IsEmpty() {
+			moTable[id].deleteAt = deleteTS
 		}
 	}
-	collectObjects(&objects, nil, data.GetObjectBatchs(), collector)
-	collectObjects(&tombstones, nil, data.GetTombstoneObjectBatchs(), collector)
+	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects(ctx, &tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -390,7 +399,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 		if !info.deleteAt.IsEmpty() {
 			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
 		}
-		objectBat, _, err := blockio.LoadOneBlock(
+		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
 			info.stats.ObjectLocation(),
@@ -435,7 +444,14 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
-					panic(fmt.Sprintf("pitr table %v is not unique", tid))
+					logutil.Warn("GC-PANIC-UPDATE-TABLE-P8",
+						zap.Uint64("tid", tid),
+						zap.Uint64("old-tid", sm.pitr.tid),
+					)
+					sm.pitr.objects = nil
+					sm.pitr.tombstones = nil
+					sm.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
+					sm.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
 				}
 				sm.pitr.tid = tid
 			}
@@ -476,7 +492,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
 				info.stats.ObjectName(), info.stats.BlkCnt()))
 		}
-		objectBat, _, err := blockio.LoadOneBlock(
+		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
 			info.stats.ObjectLocation(),
@@ -560,9 +576,11 @@ func (sm *SnapshotMeta) updateTableInfo(
 }
 
 func collectObjects(
+	ctx context.Context,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
-	ins *containers.Batch,
+	data *CKPReader,
+	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
 		*map[objectio.Segmentid]*objectInfo,
@@ -571,27 +589,28 @@ func collectObjects(
 		types.TS, types.TS,
 	),
 ) {
-	insDeleteTSs := vector.MustFixedColWithTypeCheck[types.TS](
-		ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
-	insCreateTSs := vector.MustFixedColWithTypeCheck[types.TS](
-		ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
-	insTableIDs := vector.MustFixedColWithTypeCheck[uint64](
-		ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
-	insStats := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector()
-
-	for i := 0; i < ins.Length(); i++ {
-		table := insTableIDs[i]
-		deleteTS := insDeleteTSs[i]
-		createTS := insCreateTSs[i]
-		objectStats := (objectio.ObjectStats)(insStats.GetBytesAt(i))
-		collector(objects, objects2, table, objectStats, createTS, deleteTS)
-	}
+	data.ForEachRow(
+		ctx,
+		func(
+			account uint32,
+			dbid, table uint64,
+			objectType int8,
+			objectStats objectio.ObjectStats,
+			createTS, deleteTS types.TS,
+			rowID types.Rowid,
+		) error {
+			if objectType == objType {
+				collector(objects, objects2, table, objectStats, createTS, deleteTS)
+			}
+			return nil
+		},
+	)
 }
 
 func (sm *SnapshotMeta) Update(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData,
+	data *CKPReader,
 	startts, endts types.TS,
 	taskName string,
 ) (err error) {
@@ -643,12 +662,10 @@ func (sm *SnapshotMeta) Update(
 			}
 			id := stats.ObjectName().SegmentId()
 			if objects1[id] == nil {
-				if !deleteTS.IsEmpty() {
-					return
-				}
 				objects1[id] = &objectInfo{
 					stats:    stats,
 					createAt: createTS,
+					deleteAt: deleteTS,
 				}
 				logutil.Info(
 					"GC-SnapshotMeta-Update-Collector",
@@ -660,27 +677,15 @@ func (sm *SnapshotMeta) Update(
 
 				return
 			}
-			if deleteTS.IsEmpty() {
-				// Compatible with the cluster restored by backup
-				logutil.Warn(
-					"GC-SnapshotMeta-Update-Collector-Skip",
+			if objects1[id].deleteAt.IsEmpty() {
+				objects1[id].deleteAt = deleteTS
+				logutil.Info(
+					"GC-SnapshotMeta-Update-Collector",
 					zap.Uint64("table-id", tid),
-					zap.String("object-name", stats.ObjectName().String()),
-					zap.String("create-at", createTS.ToString()),
-					zap.String("task", taskName),
-					zap.String("start", startts.ToString()),
-					zap.String("end", endts.ToString()),
+					zap.String("object-name", id.String()),
+					zap.String("delete-at", deleteTS.ToString()),
 				)
-				return
 			}
-			logutil.Info(
-				"GC-SnapshotMeta-Update-Collector",
-				zap.Uint64("table-id", tid),
-				zap.String("object-name", id.String()),
-				zap.String("delete-at", deleteTS.ToString()),
-			)
-
-			delete(objects1, id)
 		}
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
@@ -694,17 +699,40 @@ func (sm *SnapshotMeta) Update(
 		mapFun((*objects1)[tid])
 	}
 	collectObjects(
+		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
-		data.GetObjectBatchs(),
+		data,
+		ckputil.ObjectType_Data,
 		collector,
 	)
 	collectObjects(
+		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
-		data.GetTombstoneObjectBatchs(),
+		data,
+		ckputil.ObjectType_Tombstone,
 		collector,
 	)
+
+	trimList := func(
+		objects map[uint64]map[objectio.Segmentid]*objectInfo,
+		objects2 map[objectio.Segmentid]*objectInfo) {
+		for _, objs := range objects {
+			for id, info := range objs {
+				if !info.deleteAt.IsEmpty() {
+					delete(objs, id)
+				}
+			}
+		}
+		for id, info := range objects2 {
+			if !info.deleteAt.IsEmpty() {
+				delete(objects2, id)
+			}
+		}
+	}
+	trimList(sm.objects, sm.pitr.objects)
+	trimList(sm.tombstones, sm.pitr.tombstones)
 	return
 }
 
@@ -1281,7 +1309,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 	default:
 	}
 
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}
@@ -1342,7 +1370,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 }
 
 func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs fileservice.FileService) error {
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}
@@ -1409,7 +1437,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 func (sm *SnapshotMeta) InitTableInfo(
 	ctx context.Context,
 	fs fileservice.FileService,
-	data *CheckpointData,
+	data *CKPReader,
 	startts, endts types.TS,
 ) {
 	sm.Lock()
@@ -1600,13 +1628,15 @@ func isSnapshotRefers(table *tableInfo, snapVec []types.TS, pitr *types.TS) bool
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GE(&table.createAt) && snapTS.LT(&table.deleteAt) {
-			logutil.Info(
-				"isSnapshotRefers",
-				zap.String("snap-ts", snapTS.ToString()),
-				zap.String("create-ts", table.createAt.ToString()),
-				zap.String("drop-ts", table.deleteAt.ToString()),
-				zap.Uint64("tid", table.tid),
-			)
+			common.DoIfDebugEnabled(func() {
+				logutil.Debug(
+					"isSnapshotRefers",
+					zap.String("snap-ts", snapTS.ToString()),
+					zap.String("create-ts", table.createAt.ToString()),
+					zap.String("drop-ts", table.deleteAt.ToString()),
+					zap.Uint64("tid", table.tid),
+				)
+			})
 			return true
 		} else if snapTS.LT(&table.createAt) {
 			left = mid + 1

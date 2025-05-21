@@ -408,3 +408,13 @@ var (
 	TransferTombstonesDurationHistogram      = txnTransferDurationHistogram.WithLabelValues("tombstones")
 	BatchTransferTombstonesDurationHistogram = txnTransferDurationHistogram.WithLabelValues("batch")
 )
+
+var (
+	TxnExtraWorkspaceQuotaGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "extra_workspace_quota",
+			Help:      "Extra workspace quota for txn.",
+		})
+)

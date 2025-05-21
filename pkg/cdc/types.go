@@ -24,47 +24,96 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
 )
 
 const (
-	TableLevel   = "table"
-	DbLevel      = "database"
-	AccountLevel = "account"
-	MatchAll     = "*"
+	CDCSourceUriPrefix = "mysql://"
+	CDCSinkUriPrefix   = "mysql://"
 
-	MysqlSink       = "mysql"
-	MatrixoneSink   = "matrixone"
-	ConsoleSink     = "console"
-	SourceUriPrefix = "mysql://"
-	SinkUriPrefix   = "mysql://"
-	ConsolePrefix   = "console://" //only used in testing stage
-
-	SASCommon = "common"
-	SASError  = "error"
-
-	InitSnapshotSplitTxn        = "InitSnapshotSplitTxn"
-	DefaultInitSnapshotSplitTxn = true
-
-	SendSqlTimeout        = "SendSqlTimeout"
-	DefaultSendSqlTimeout = "10m"
-	DefaultRetryTimes     = -1
-	DefaultRetryDuration  = 30 * time.Minute
-
-	MaxSqlLength        = "MaxSqlLength"
-	DefaultMaxSqlLength = 4 * 1024 * 1024
+	CDCState_Common = "common"
+	CDCState_Error  = "error"
 )
+
+const (
+	CDCDefaultSendSqlTimeout                 = "10m"
+	CDCDefaultRetryTimes                     = -1
+	CDCDefaultRetryDuration                  = 30 * time.Minute
+	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
+	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
+)
+
+const (
+	CDCSinkType_MySQL   = "mysql"
+	CDCSinkType_MO      = "matrixone"
+	CDCSinkType_Console = "console"
+)
+
+const (
+	CDCPitrGranularity_Table   = "table"
+	CDCPitrGranularity_DB      = "database"
+	CDCPitrGranularity_Account = "account"
+	CDCPitrGranularity_Cluster = "cluster"
+	CDCPitrGranularity_All     = "*"
+)
+
+const (
+	CDCRequestOptions_Level                = "Level"
+	CDCRequestOptions_Exclude              = "Exclude"
+	CDCRequestOptions_StartTs              = "StartTs"
+	CDCRequestOptions_EndTs                = "EndTs"
+	CDCRequestOptions_SendSqlTimeout       = "SendSqlTimeout"
+	CDCRequestOptions_InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
+	CDCRequestOptions_MaxSqlLength         = "MaxSqlLength"
+	CDCRequestOptions_NoFull               = "NoFull"
+	CDCRequestOptions_ConfigFile           = "ConfigFile"
+)
+
+const (
+	CDCTaskExtraOptions_MaxSqlLength         = CDCRequestOptions_MaxSqlLength
+	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
+	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
+)
+
+var CDCRequestOptions = []string{
+	CDCRequestOptions_Level,
+	CDCRequestOptions_Exclude,
+	CDCRequestOptions_StartTs,
+	CDCRequestOptions_EndTs,
+	CDCRequestOptions_MaxSqlLength,
+	CDCRequestOptions_SendSqlTimeout,
+	CDCRequestOptions_InitSnapshotSplitTxn,
+	CDCRequestOptions_ConfigFile,
+	CDCRequestOptions_NoFull,
+}
+
+var CDCTaskExtraOptions = []string{
+	CDCTaskExtraOptions_MaxSqlLength,
+	CDCTaskExtraOptions_SendSqlTimeout,
+	CDCTaskExtraOptions_InitSnapshotSplitTxn,
+}
 
 var (
 	EnableConsoleSink = false
 )
+
+type TaskId = uuid.UUID
+
+func NewTaskId() TaskId {
+	return uuid.Must(uuid.NewV7())
+}
+
+// func StringToTaskId(s string) (TaskId, error) {
+// 	return uuid.Parse(s)
+// }
 
 type Reader interface {
 	Run(ctx context.Context, ar *ActiveRoutine)
@@ -82,16 +131,17 @@ type Sinker interface {
 	SendDummy()
 	// Error must be called after Sink
 	Error() error
+	ClearError()
 	Reset()
 	Close()
 }
 
 // Sink represents the destination mysql or matrixone
 type Sink interface {
-	Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte) error
-	SendBegin(ctx context.Context, ar *ActiveRoutine) error
-	SendCommit(ctx context.Context, ar *ActiveRoutine) error
-	SendRollback(ctx context.Context, ar *ActiveRoutine) error
+	Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, needRetry bool) error
+	SendBegin(ctx context.Context) error
+	SendCommit(ctx context.Context) error
+	SendRollback(ctx context.Context) error
 	Close()
 }
 
@@ -103,7 +153,6 @@ type IWatermarkUpdater interface {
 	UpdateMem(dbName, tblName string, watermark types.TS)
 	DeleteFromMem(dbName, tblName string)
 	DeleteFromDb(dbName, tblName string) error
-	DeleteAllFromDb() error
 	SaveErrMsg(dbName, tblName string, errMsg string) error
 }
 
@@ -197,6 +246,18 @@ func (info DbTableInfo) String() string {
 	)
 }
 
+func (info DbTableInfo) Clone() *DbTableInfo {
+	return &DbTableInfo{
+		SourceDbId:      info.SourceDbId,
+		SourceDbName:    info.SourceDbName,
+		SourceTblId:     info.SourceTblId,
+		SourceTblName:   info.SourceTblName,
+		SourceCreateSql: info.SourceCreateSql,
+		SinkDbName:      info.SinkDbName,
+		SinkTblName:     info.SinkTblName,
+	}
+}
+
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
 // These batches have atomicity
 type AtomicBatch struct {
@@ -273,7 +334,7 @@ func (bat *AtomicBatch) Append(
 		//ts columns
 		tsVec := vector.MustFixedColWithTypeCheck[types.TS](batch.Vecs[tsColIdx])
 		//composited pk columns
-		compositedPkBytes := logtailreplay.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
+		compositedPkBytes := readutil.EncodePrimaryKeyVector(batch.Vecs[compositedPkColIdx], packer)
 
 		for i, pk := range compositedPkBytes {
 			// if ts is constant, then tsVec[0] is the ts for all rows
@@ -373,7 +434,7 @@ func (info *UriInfo) GetEncodedPassword() (string, error) {
 }
 
 func (info *UriInfo) String() string {
-	return fmt.Sprintf("%s%s:%s@%s:%d", SourceUriPrefix, info.User, "******", info.Ip, info.Port)
+	return fmt.Sprintf("%s%s:%s@%s:%d", CDCSourceUriPrefix, info.User, "******", info.Ip, info.Port)
 }
 
 type PatternTable struct {

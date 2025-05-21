@@ -26,6 +26,16 @@ import (
 )
 
 const (
+	// system tenant default role ID and user ID
+	sysAdminRoleID = 0
+	sysRootID      = 0
+
+	// general tenant default role ID and user ID
+	accountAdminRoleID = 2
+	accountAdminUserID = 2
+)
+
+const (
 	T_any           = "ANY"
 	T_bool          = "BOOL"
 	T_bit           = "BIT"
@@ -131,6 +141,13 @@ type UpgradeEntry struct {
 
 // Upgrade entity execution upgrade entrance
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
+	userId := uint32(sysRootID)
+	roleId := uint32(sysAdminRoleID)
+	if accountId != catalog.System_Account {
+		userId = accountAdminUserID
+		roleId = accountAdminRoleID
+	}
+
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
 		getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
@@ -142,7 +159,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	} else {
 		// 1. First, judge whether there is prefix sql
 		if u.PreSql != "" {
-			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId))
+			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry pre-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
@@ -151,7 +168,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		}
 
 		// 2. Second, Execute upgrade sql
-		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
+		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
 		if err != nil {
 			getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
@@ -160,7 +177,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 
 		// 2. Third, after the upgrade is completed, judge whether there is post-sql
 		if u.PostSql != "" {
-			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId))
+			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId).WithUserID(userId).WithRoleID(roleId))
 			if err != nil {
 				getLogger(txn.Txn().TxnOptions().CN).Error("execute upgrade entry post-sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 				return err
@@ -269,7 +286,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
 }
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition
-func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
+var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
 	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND account_id = 0 AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
@@ -292,7 +309,7 @@ func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema stri
 	})
 
 	if loaded && n > 1 {
-		panic("BUG: Duplicate column names in table")
+		getLogger(txn.Txn().TxnOptions().CN).Fatal("BUG: Duplicate column names in table")
 	}
 	return loaded, view_def, nil
 }

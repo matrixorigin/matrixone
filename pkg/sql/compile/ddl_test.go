@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 
@@ -28,9 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -198,8 +201,8 @@ func TestScope_CreateTable(t *testing.T) {
 		proc := testutil.NewProcess()
 		proc.Base.SessionInfo.Buf = buffer.New()
 
-		ctx := context.Background()
-		proc.Ctx = context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
@@ -220,7 +223,7 @@ func TestScope_CreateTable(t *testing.T) {
 		assert.Error(t, s.CreateTable(c))
 	})
 
-	convey.Convey("create table FaultTolerance1", t, func() {
+	convey.Convey("create table FaultTolerance2", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
@@ -230,8 +233,8 @@ func TestScope_CreateTable(t *testing.T) {
 		proc.Base.TxnOperator = txnOp
 		proc.Base.SessionInfo.Buf = buffer.New()
 
-		ctx := context.Background()
-		proc.Ctx = context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 		proc.ReplaceTopCtx(ctx)
 
 		relation := mock_frontend.NewMockRelation(ctrl)
@@ -259,6 +262,184 @@ func TestScope_CreateTable(t *testing.T) {
 		assert.Error(t, s.CreateTable(c))
 	})
 
+	convey.Convey("create table FaultTolerance3", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
+
+		planDef2ExecDef := gostub.Stub(&planDefsToExeDefs, func(_ *plan.TableDef) ([]engine.TableDef, error) {
+			return nil, moerr.NewInternalErrorNoCtx("test error")
+		})
+		defer planDef2ExecDef.Reset()
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateTable(c))
+	})
+
+	convey.Convey("create table FaultTolerance4", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
+
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoDb.Reset()
+
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error {
+			return moerr.NewTxnNeedRetryNoCtx()
+		})
+		defer lockMoTbl.Reset()
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateTable(c))
+	})
+
+	convey.Convey("create table FaultTolerance5", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+		mockDbMeta.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(moerr.NewInternalErrorNoCtx("test err")).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
+
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoDb.Reset()
+
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoTbl.Reset()
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateTable(c))
+	})
+
+	convey.Convey("create table FaultTolerance10", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+		proc.ReplaceTopCtx(ctx)
+
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+
+		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
+		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
+		mockDbMeta.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, tblName string, _ []engine.TableDef) error {
+			if tblName == "dept" {
+				return nil
+			} else if tblName == "%!%p0%!%dept" || tblName == "%!%p1%!%dept" {
+				return nil
+			} else if tblName == "__mo_index_secondary_0193d918-3e7b-7506-9f70-64fbcf055c19" {
+				return nil
+			}
+			return nil
+		}).AnyTimes()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
+
+		planDef2ExecDef := gostub.Stub(&planDefsToExeDefs, func(tbl *plan.TableDef) ([]engine.TableDef, error) {
+			if tbl.Name == "dept" {
+				return nil, nil
+			} else if tbl.Name == "%!%p0%!%dept" || tbl.Name == "%!%p1%!%dept" {
+				return nil, nil
+			} else if tbl.Name == "__mo_index_secondary_0193d918-3e7b-7506-9f70-64fbcf055c19" {
+				return nil, nil
+			}
+			return nil, nil
+		})
+		defer planDef2ExecDef.Reset()
+
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoDb.Reset()
+
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error {
+			return nil
+		})
+		defer lockMoTbl.Reset()
+
+		checkIndexInit := gostub.Stub(&checkIndexInitializable, func(_ string, _ string) bool {
+			return false
+		})
+		defer checkIndexInit.Reset()
+
+		createAutoIncrement := gostub.Stub(&maybeCreateAutoIncrement, func(_ context.Context, _ string, _ engine.Database, _ *plan.TableDef, _ client.TxnOperator, _ func() string) error {
+			return moerr.NewInternalErrorNoCtx("test err")
+		})
+		defer createAutoIncrement.Reset()
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.CreateTable(c))
+	})
 }
 
 func TestScope_CreateView(t *testing.T) {
@@ -358,8 +539,8 @@ func TestScope_CreateView(t *testing.T) {
 		proc := testutil.NewProcess()
 		proc.Base.SessionInfo.Buf = buffer.New()
 
-		ctx := context.Background()
-		proc.Ctx = context.Background()
+		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
@@ -420,4 +601,49 @@ func TestScope_CreateView(t *testing.T) {
 		assert.Error(t, s.CreateView(c))
 	})
 
+}
+
+func TestScope_Database(t *testing.T) {
+	dropDbDef := &plan2.DropDatabase{
+		IfExists: false,
+		Database: "test",
+	}
+
+	cplan := &plan.Plan{
+		Plan: &plan2.Plan_Ddl{
+			Ddl: &plan2.DataDefinition{
+				DdlType: plan2.DataDefinition_DROP_DATABASE,
+				Definition: &plan2.DataDefinition_DropDatabase{
+					DropDatabase: dropDbDef,
+				},
+			},
+		},
+	}
+
+	s := &Scope{
+		Magic:     DropDatabase,
+		Plan:      cplan,
+		TxnOffset: 0,
+	}
+
+	sql := `create database test;`
+
+	convey.Convey("create table FaultTolerance1", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		proc := testutil.NewProcess()
+		proc.Base.SessionInfo.Buf = buffer.New()
+
+		proc.Ctx = context.Background()
+		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+		proc.Base.TxnClient = txnCli
+		proc.Base.TxnOperator = txnOp
+		proc.ReplaceTopCtx(context.Background())
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+
+		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
+		assert.Error(t, s.DropDatabase(c))
+	})
 }

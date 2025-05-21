@@ -18,14 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
 func New(attrs []string) *Batch {
@@ -361,6 +360,19 @@ func (bat *Batch) VectorCount() int {
 
 func (bat *Batch) SetAttributes(attrs []string) {
 	bat.Attrs = attrs
+}
+
+func (bat *Batch) InsertVector(
+	pos int32,
+	attr string,
+	vec *vector.Vector,
+) {
+	bat.Vecs = append(bat.Vecs, nil)
+	copy(bat.Vecs[pos+1:], bat.Vecs[pos:])
+	bat.Vecs[pos] = vec
+	bat.Attrs = append(bat.Attrs, "")
+	copy(bat.Attrs[pos+1:], bat.Attrs[pos:])
+	bat.Attrs[pos] = attr
 }
 
 func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {

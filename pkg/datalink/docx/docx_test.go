@@ -67,7 +67,6 @@ func TestOpenWordFileValidFile(t *testing.T) {
 	if !strings.Contains(string(doc), "This is a word file") {
 		t.Errorf("Error reading document.xml %s ", doc)
 	}
-	fmt.Printf("%s", err)
 }
 
 func TestParseText(t *testing.T) {
@@ -195,4 +194,20 @@ func TestParseTextFromReader(t *testing.T) {
 		}
 	}
 	//fmt.Printf(doc)
+}
+
+func TestWiki(t *testing.T) {
+	dat, err := os.ReadFile("testfiles/wiki.docx")
+	if err != nil {
+		t.Errorf("read file error %s", err)
+	}
+
+	doctext, err := ParseTextFromReader(bytes.NewReader(dat), int64(len(dat)))
+	if err != nil {
+		t.Errorf("parsing test.docx should work \n %s", err)
+	}
+
+	if !strings.Contains(doctext, "In the philosophy of religion") {
+		t.Errorf("parsed text does not contain expected text \n %s", doctext)
+	}
 }

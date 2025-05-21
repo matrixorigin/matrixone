@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -56,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
 
@@ -127,8 +127,7 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type     EngineType           `toml:"type"`
-		Logstore options.LogstoreType `toml:"logstore"`
+		Type EngineType `toml:"type"`
 
 		MoTableStatsUseOldImpl         bool          `toml:"mo-table-stats-use-old-impl"`
 		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
@@ -193,6 +192,9 @@ type Config struct {
 
 	// ShardService shard service config
 	ShardService shardservice.Config `toml:"shardservice"`
+
+	// PartitionService partition service config
+	PartitionService partitionservice.Config `toml:"partitionservice"`
 
 	// Txn txn config
 	Txn struct {
@@ -343,9 +345,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
-	}
-	if c.Engine.Logstore == "" {
-		c.Engine.Logstore = options.LogstoreLogservice
 	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
@@ -502,9 +501,6 @@ func (c *Config) SetDefaultValue() {
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
-	if c.Engine.Logstore == "" {
-		c.Engine.Logstore = options.LogstoreLogservice
-	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -603,6 +599,11 @@ func (s *service) getShardServiceConfig() shardservice.Config {
 	return s.cfg.ShardService
 }
 
+func (s *service) getPartitionServiceConfig() partitionservice.Config {
+	s.cfg.PartitionService.ServiceID = s.cfg.UUID
+	return s.cfg.PartitionService
+}
+
 type service struct {
 	metadata       metadata.CNStore
 	cfg            *Config
@@ -634,7 +635,6 @@ type service struct {
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
 	distributeTaeMp        *mpool.MPool
-	cdcMp                  *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService
@@ -642,6 +642,7 @@ type service struct {
 	moCluster              clusterservice.MOCluster
 	lockService            lockservice.LockService
 	shardService           shardservice.ShardService
+	partitionService       partitionservice.PartitionService
 	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
 	// queryService is used to handle query request from other CN service.

@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,10 +50,11 @@ var (
 )
 
 type testCase struct {
-	op           *MultiUpdate
-	inputBatchs  []*batch.Batch
-	expectErr    bool
-	affectedRows uint64
+	op                *MultiUpdate
+	inputBatchs       []*batch.Batch
+	expectErr         bool
+	relResetExpectErr bool
+	affectedRows      uint64
 }
 
 func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
@@ -101,7 +103,17 @@ func runTestCases(t *testing.T, proc *process.Process, tcs []*testCase) {
 		if tc.op.ctr.s3Writer != nil {
 			tc.op.ctr.s3Writer.flushThreshold = 2 * mpool.MB
 		}
+		if tc.relResetExpectErr {
+			require.Error(t, err)
+			for _, bat := range tc.inputBatchs {
+				bat.Clean(proc.GetMPool())
+			}
+			tc.op.Children[0].Free(proc, false, nil)
+			tc.op.Free(proc, true, err)
+			continue
+		}
 		require.NoError(t, err)
+
 		for {
 			res, err = vm.Exec(tc.op, proc)
 			if res.Batch == nil || res.Status == vm.ExecStop {
@@ -172,7 +184,7 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 	return ctx, ctrl, proc
 }
 
-func prepareTestEng(ctrl *gomock.Controller) engine.Engine {
+func prepareTestEng(ctrl *gomock.Controller, relationResetReturnError bool) engine.Engine {
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	eng.EXPECT().Hints().Return(engine.Hints{
@@ -184,6 +196,12 @@ func prepareTestEng(ctrl *gomock.Controller) engine.Engine {
 
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	if relationResetReturnError {
+		relation.EXPECT().Reset(gomock.Any()).Return(moerr.NewInternalErrorNoCtx("")).AnyTimes()
+	} else {
+		relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
+	}
+
 	relation.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
@@ -191,7 +209,7 @@ func prepareTestEng(ctrl *gomock.Controller) engine.Engine {
 	return eng
 }
 
-func getTestMainTable(isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
+func getTestMainTable() (*plan.ObjectRef, *plan.TableDef) {
 	objRef := &plan.ObjectRef{Schema: 1, Obj: 1, SchemaName: "test", ObjName: "t1"}
 
 	tableDef := &plan.TableDef{
@@ -223,17 +241,10 @@ func getTestMainTable(isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
 	tableDef.Name2ColIndex["d"] = 3
 	tableDef.Name2ColIndex[catalog.Row_ID] = 4
 
-	if isPartition {
-		tableDef.Partition = &plan.PartitionByDef{
-			Type:                pbPlan.PartitionType_KEY,
-			PartitionTableNames: []string{"t1_part_1", "t1_part_2", "t1_part_3"},
-		}
-	}
-
 	return objRef, tableDef
 }
 
-func getTestUniqueIndexTable(uniqueTblName string, isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
+func getTestUniqueIndexTable(uniqueTblName string) (*plan.ObjectRef, *plan.TableDef) {
 	uniqueObjRef := &plan.ObjectRef{Schema: 1, Obj: 2, SchemaName: "test", ObjName: uniqueTblName}
 	uniqueTableDef := &plan.TableDef{
 		TblId:  1,
@@ -243,7 +254,7 @@ func getTestUniqueIndexTable(uniqueTblName string, isPartition bool) (*plan.Obje
 			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
 				NullAbility: false,
 			}},
-			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: varcharTyp, NotNull: true, Default: &pbPlan.Default{
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i64typ, NotNull: true, Default: &pbPlan.Default{
 				NullAbility: false,
 			}},
 			{ColId: 2, Name: catalog.Row_ID, Typ: rowIdTyp},
@@ -262,17 +273,10 @@ func getTestUniqueIndexTable(uniqueTblName string, isPartition bool) (*plan.Obje
 	uniqueTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName] = 1
 	uniqueTableDef.Name2ColIndex[catalog.Row_ID] = 2
 
-	if isPartition {
-		uniqueTableDef.Partition = &plan.PartitionByDef{
-			Type:                pbPlan.PartitionType_KEY,
-			PartitionTableNames: []string{"t1_uk_part_1", "t1_uk_part_2", "t1_uk_part_3"},
-		}
-	}
-
 	return uniqueObjRef, uniqueTableDef
 }
 
-func getTestSecondaryIndexTable(secondaryIdxTblName string, isPartition bool) (*plan.ObjectRef, *plan.TableDef) {
+func getTestSecondaryIndexTable(secondaryIdxTblName string) (*plan.ObjectRef, *plan.TableDef) {
 	secondaryIdxObjRef := &plan.ObjectRef{Schema: 1, Obj: 2, SchemaName: "test", ObjName: secondaryIdxTblName}
 	secondaryIdxTableDef := &plan.TableDef{
 		TblId:  1,
@@ -282,7 +286,7 @@ func getTestSecondaryIndexTable(secondaryIdxTblName string, isPartition bool) (*
 			{ColId: 0, Name: catalog.IndexTableIndexColName, Typ: varcharTyp, NotNull: true, Primary: true, Default: &pbPlan.Default{
 				NullAbility: false,
 			}},
-			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: varcharTyp, NotNull: true},
+			{ColId: 1, Name: catalog.IndexTablePrimaryColName, Typ: i64typ, NotNull: true},
 			{ColId: 2, Name: catalog.Row_ID, Typ: rowIdTyp},
 		},
 		TableType: catalog.SystemOrdinaryRel,
@@ -299,13 +303,6 @@ func getTestSecondaryIndexTable(secondaryIdxTblName string, isPartition bool) (*
 	secondaryIdxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName] = 1
 	secondaryIdxTableDef.Name2ColIndex[catalog.Row_ID] = 2
 
-	if isPartition {
-		secondaryIdxTableDef.Partition = &plan.PartitionByDef{
-			Type:                pbPlan.PartitionType_KEY,
-			PartitionTableNames: []string{"t1_sk_part_1", "t1_sk_part_2", "t1_sk_part_3"},
-		}
-	}
-
 	return secondaryIdxObjRef, secondaryIdxTableDef
 }
 
@@ -314,7 +311,7 @@ func buildTestCase(
 	eng engine.Engine,
 	inputBats []*batch.Batch,
 	affectRows uint64,
-	action UpdateAction) *testCase {
+	action UpdateAction, relResetExpectErr bool) *testCase {
 
 	retCase := &testCase{
 		op: &MultiUpdate{
@@ -331,9 +328,10 @@ func buildTestCase(
 				},
 			},
 		},
-		inputBatchs:  inputBats,
-		expectErr:    false,
-		affectedRows: affectRows,
+		inputBatchs:       inputBats,
+		expectErr:         false,
+		relResetExpectErr: relResetExpectErr,
+		affectedRows:      affectRows,
 	}
 
 	return retCase
@@ -343,14 +341,6 @@ func makeTestPkArray(from int64, rowCount int) []int64 {
 	val := make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
 		val[i] = from + int64(i)
-	}
-	return val
-}
-
-func makeTestPartitionArray(rowCount int, partitionCount int) []int32 {
-	val := make([]int32, rowCount)
-	for i := 0; i < rowCount; i++ {
-		val[i] = int32(i % partitionCount)
 	}
 	return val
 }
@@ -367,8 +357,8 @@ func makeTestRowIDVector(m *mpool.MPool, objectID *types.Objectid, blockNum uint
 	blockID := types.NewBlockidWithObjectID(objectID, blockNum+1000)
 	vec := vector.NewVec(types.T_Rowid.ToType())
 	for i := 0; i < rowCount; i++ {
-		rowID := types.NewRowid(blockID, uint32(i)+1)
-		if err := vector.AppendFixed(vec, *rowID, false, m); err != nil {
+		rowID := types.NewRowid(&blockID, uint32(i)+1)
+		if err := vector.AppendFixed(vec, rowID, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

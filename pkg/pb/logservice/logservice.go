@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"encoding/binary"
 	"fmt"
 	"reflect"
 	"sort"
@@ -31,14 +32,64 @@ const (
 	HeaderSize = 4
 )
 
+func NewUserLogRecord(
+	replicaID uint64,
+	payloadSize int,
+) LogRecord {
+	return NewLogRecord(UserEntryUpdate, replicaID, payloadSize)
+}
+
+func NewLogRecord(
+	updateType UpdateType,
+	replicaID uint64,
+	payloadSize int,
+) LogRecord {
+	ret := LogRecord{
+		Data: make([]byte, HeaderSize+8+payloadSize),
+	}
+	ret.SetUpdateType(updateType)
+	ret.SetReplicaID(replicaID)
+	return ret
+}
+
+func (m LogRecord) SetUpdateType(updateType UpdateType) {
+	binary.BigEndian.PutUint32(m.Data, uint32(updateType))
+}
+
+func (m LogRecord) GetUpdateType() UpdateType {
+	return UpdateType(binary.BigEndian.Uint32(m.Data))
+}
+
+func (m LogRecord) SetReplicaID(replicaID uint64) {
+	binary.BigEndian.PutUint64(m.Data[HeaderSize:], replicaID)
+}
+
+func (m LogRecord) GetReplicaID() uint64 {
+	return binary.BigEndian.Uint64(m.Data[HeaderSize:])
+}
+
 // ResizePayload resizes the payload length to length bytes.
 func (m *LogRecord) ResizePayload(length int) {
 	m.Data = m.Data[:HeaderSize+8+length]
 }
 
+func (m LogRecord) SetPayload(payload []byte) {
+	copy(m.Data[HeaderSize+8:], payload)
+}
+
 // Payload returns the payload byte slice.
 func (m *LogRecord) Payload() []byte {
 	return m.Data[HeaderSize+8:]
+}
+
+func (m LogRecord) Clone() LogRecord {
+	ret := LogRecord{
+		Data: make([]byte, len(m.Data)),
+		Lsn:  m.Lsn,
+		Type: m.Type,
+	}
+	copy(ret.Data, m.Data)
+	return ret
 }
 
 // NewRSMState creates a new HAKeeperRSMState instance.
@@ -174,6 +225,7 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 		storeInfo.ConfigData = hb.ConfigData
 	}
 	storeInfo.QueryAddress = hb.QueryAddress
+	storeInfo.ReplayedLsn = hb.ReplayedLsn
 	s.Stores[hb.UUID] = storeInfo
 }
 

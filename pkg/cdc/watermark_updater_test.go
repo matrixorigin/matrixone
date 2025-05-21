@@ -40,22 +40,22 @@ func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
 		mp: make(map[string]string),
 		// matches[1] = db_name, matches[2] = table_name, matches[3] = watermark
-		insertRe: regexp.MustCompile(`^insert .* values \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
-		updateRe: regexp.MustCompile(`^update .* set watermark\=\'(.*)\' where .* and db_name \= '(.*)' and table_name \= '(.*)'$`),
-		selectRe: regexp.MustCompile(`^select .* and db_name \= '(.*)' and table_name \= '(.*)'$`),
+		insertRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
+		updateRe: regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
+		selectRe: regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
 	}
 }
 
 func (m *wmMockSQLExecutor) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
-	if strings.HasPrefix(sql, "insert") {
+	if strings.HasPrefix(sql, "INSERT") {
 		matches := m.insertRe.FindStringSubmatch(sql)
 		m.mp[GenDbTblKey(matches[1], matches[2])] = matches[3]
-	} else if strings.HasPrefix(sql, "update mo_catalog.mo_cdc_watermark set err_msg") {
+	} else if strings.HasPrefix(sql, "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg") {
 		// do nothing
-	} else if strings.HasPrefix(sql, "update") {
+	} else if strings.HasPrefix(sql, "UPDATE") {
 		matches := m.updateRe.FindStringSubmatch(sql)
 		m.mp[GenDbTblKey(matches[2], matches[3])] = matches[1]
-	} else if strings.HasPrefix(sql, "delete") {
+	} else if strings.HasPrefix(sql, "DELETE") {
 		if strings.Contains(sql, "table_id") {
 			delete(m.mp, "db1.t1")
 		} else {
@@ -117,7 +117,7 @@ func (res *internalExecResult) GetString(ctx context.Context, i uint64, j uint64
 }
 
 func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
-	if strings.HasPrefix(sql, "select") {
+	if strings.HasPrefix(sql, "SELECT") {
 		matches := m.selectRe.FindStringSubmatch(sql)
 		return &internalExecResult{
 			affectedRows: 1,
@@ -141,7 +141,7 @@ func TestNewWatermarkUpdater(t *testing.T) {
 	require.NoError(t, err)
 
 	type args struct {
-		accountId uint32
+		accountId uint64
 		taskId    string
 		ie        ie.InternalExecutor
 	}
@@ -159,7 +159,7 @@ func TestNewWatermarkUpdater(t *testing.T) {
 			},
 			want: &WatermarkUpdater{
 				accountId:    1,
-				taskId:       taskId,
+				taskId:       taskId.String(),
 				ie:           nil,
 				watermarkMap: &sync.Map{},
 			},
@@ -167,15 +167,20 @@ func TestNewWatermarkUpdater(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, NewWatermarkUpdater(tt.args.accountId, tt.args.taskId, tt.args.ie), "NewWatermarkUpdater(%v, %v, %v)", tt.args.accountId, tt.args.taskId, tt.args.ie)
+			assert.Equalf(t, tt.want, NewWatermarkUpdater(
+				tt.args.accountId,
+				tt.args.taskId,
+				tt.args.ie,
+			), "NewWatermarkUpdater(%v, %v, %v)", tt.args.accountId, tt.args.taskId, tt.args.ie)
 		})
 	}
 }
 
 func TestWatermarkUpdater_MemOps(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           nil,
 		watermarkMap: &sync.Map{},
 	}
@@ -191,9 +196,10 @@ func TestWatermarkUpdater_MemOps(t *testing.T) {
 }
 
 func TestWatermarkUpdater_DbOps(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}
@@ -238,15 +244,15 @@ func TestWatermarkUpdater_DbOps(t *testing.T) {
 	err = u.InsertIntoDb(info3, t1)
 	assert.NoError(t, err)
 
-	// ---------- delete all
-	err = u.DeleteAllFromDb()
+	err = u.SaveErrMsg("db1", "t1", "test")
 	assert.NoError(t, err)
 }
 
 func TestWatermarkUpdater_Run(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}
@@ -258,9 +264,10 @@ func TestWatermarkUpdater_Run(t *testing.T) {
 }
 
 func TestWatermarkUpdater_flushAll(t *testing.T) {
+	taskId := NewTaskId()
 	u := &WatermarkUpdater{
 		accountId:    1,
-		taskId:       uuid.New(),
+		taskId:       taskId.String(),
 		ie:           newWmMockSQLExecutor(),
 		watermarkMap: &sync.Map{},
 	}

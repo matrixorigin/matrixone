@@ -63,7 +63,6 @@ type Property = plan.Property
 type TableDef_DefType_Properties = plan.TableDef_DefType_Properties
 type PropertiesDef = plan.PropertiesDef
 type ViewDef = plan.ViewDef
-type PartitionByDef = plan.PartitionByDef
 type ClusterByDef = plan.ClusterByDef
 type OrderBySpec = plan.OrderBySpec
 type FkColName = plan.FkColName
@@ -217,12 +216,37 @@ type OptimizerHints struct {
 }
 
 type CTERef struct {
-	defaultDatabase string
-	isRecursive     bool
-	ast             *tree.CTE
-	maskedCTEs      map[string]bool
-	snapshot        *Snapshot
+	isRecursive bool
+	ast         *tree.CTE
+	maskedCTEs  map[string]bool
+	snapshot    *Snapshot
 }
+
+type CteBindState struct {
+	cte           *CTERef
+	cteBindType   int
+	recScanNodeId int32
+}
+
+func (state CteBindState) masked(name string) bool {
+	if state.cte == nil {
+		return false
+	} else {
+		_, ok := state.cte.maskedCTEs[name]
+		return ok
+	}
+}
+
+const (
+	// does not bind cte currently
+	CteBindTypeNone = 0
+	// bind initial select stmt of recursive cte currently
+	CteBindTypeInitStmt = 1
+	// bind recursive parts of recursive cte currently
+	CteBindTypeRecurStmt = 2
+	// bind non recursive cte currently
+	CteBindTypeNonRecur = 3
+)
 
 type aliasItem struct {
 	idx     int32
@@ -232,24 +256,23 @@ type aliasItem struct {
 type BindContext struct {
 	binder Binder
 
-	cteByName              map[string]*CTERef
-	maskedCTEs             map[string]bool
-	normalCTE              bool
-	initSelect             bool
-	recSelect              bool
-	finalSelect            bool
-	unionSelect            bool
-	isTryBindingCTE        bool
-	sliding                bool
-	isDistinct             bool
-	isCorrelated           bool
-	hasSingleRow           bool
-	forceWindows           bool
-	isGroupingSet          bool
-	recRecursiveScanNodeId int32
+	//cteByName saves all cte definitions in the current stmt
+	cteByName map[string]*CTERef
+	//cteState records state of binding cte
+	cteState      CteBindState
+	sliding       bool
+	isDistinct    bool
+	isCorrelated  bool
+	hasSingleRow  bool
+	forceWindows  bool
+	isGroupingSet bool
 
-	cteName  string
-	headings []string
+	//cteName denotes the alias of this BindContext.
+	//it may be from view name, cte name or subquery name
+	cteName string
+	//cte in binding or bound already
+	boundCtes map[string]*CTERef
+	headings  []string
 
 	groupTag     int32
 	aggregateTag int32
@@ -289,9 +312,7 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
-	parent     *BindContext
-	leftChild  *BindContext
-	rightChild *BindContext
+	parent *BindContext
 
 	defaultDatabase string
 
@@ -303,6 +324,8 @@ type BindContext struct {
 	snapshot *Snapshot
 	// all view keys(dbName#viewName)
 	views []string
+	//view in binding or already bound
+	boundViews map[[2]string]*tree.CreateView
 
 	// lower is sys var lower_case_table_names
 	lower int64
@@ -414,7 +437,6 @@ var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
-var _ Binder = (*PartitionBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
 

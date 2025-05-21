@@ -26,9 +26,10 @@ import (
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 )
 
 const (
@@ -59,6 +60,17 @@ const (
 	PanicUseMoErr = 1
 )
 
+// Domain is the business domain of injection
+// !!!It always less than DomainMax
+type Domain int
+
+const (
+	DomainDefault  Domain = 0
+	DomainTest     Domain = 1
+	DomainFrontend Domain = 2
+	DomainMax      Domain = 4096
+)
+
 // faultEntry describes how we shall fail
 type faultEntry struct {
 	cmd              int     // command
@@ -74,21 +86,25 @@ type faultEntry struct {
 	nWaiters int
 	mutex    sync.Mutex
 	cond     *sync.Cond
+	scope    Domain
 }
 
 type faultMap struct {
 	faultPoints map[string]*faultEntry
 	chIn        chan *faultEntry
 	chOut       chan *faultEntry
+	closeCh     chan struct{}
+	domain      Domain
 }
 
-var enabled atomic.Pointer[faultMap]
+var enabled [DomainMax]atomic.Pointer[faultMap]
 
 func (fm *faultMap) run() {
 	for {
 		e := <-fm.chIn
 		switch e.cmd {
 		case STOP:
+			close(fm.closeCh)
 			return
 		case ADD:
 			if v, ok := fm.faultPoints[e.name]; ok && (v.constant || e.constant) {
@@ -139,7 +155,7 @@ func (e *faultEntry) do() (int64, string) {
 	case SLEEP:
 		time.Sleep(time.Duration(e.iarg) * time.Second)
 	case GETCOUNT:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			return int64(ee.cnt), ""
 		}
 	case WAIT:
@@ -149,18 +165,18 @@ func (e *faultEntry) do() (int64, string) {
 		e.nWaiters -= 1
 		e.mutex.Unlock()
 	case GETWAITERS:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			ee.mutex.Lock()
 			nw := ee.nWaiters
 			ee.mutex.Unlock()
 			return int64(nw), ""
 		}
 	case NOTIFY:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			ee.cond.Signal()
 		}
 	case NOTIFYALL:
-		if ee := lookup(e.sarg); ee != nil {
+		if ee := lookup(e.scope, e.sarg); ee != nil {
 			ee.cond.Broadcast()
 		}
 	case PANIC:
@@ -176,16 +192,18 @@ func (e *faultEntry) do() (int64, string) {
 	return 0, ""
 }
 
-func startFaultMap() bool {
-	if enabled.Load() != nil {
+func startFaultMap(domain Domain) bool {
+	if enabled[domain].Load() != nil {
 		return false
 	}
 	fm := new(faultMap)
 	fm.faultPoints = make(map[string]*faultEntry)
 	fm.chIn = make(chan *faultEntry)
 	fm.chOut = make(chan *faultEntry)
+	fm.closeCh = make(chan struct{})
+	fm.domain = domain
 	go fm.run()
-	if !enabled.CompareAndSwap(nil, fm) {
+	if !enabled[domain].CompareAndSwap(nil, fm) {
 		var msg faultEntry
 		msg.cmd = STOP
 		fm.chIn <- &msg
@@ -194,12 +212,12 @@ func startFaultMap() bool {
 	return true
 }
 
-func stopFaultMap() bool {
-	fm := enabled.Load()
+func stopFaultMap(domain Domain) bool {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return false
 	}
-	if !enabled.CompareAndSwap(fm, nil) {
+	if !enabled[domain].CompareAndSwap(fm, nil) {
 		return false
 	}
 
@@ -211,7 +229,11 @@ func stopFaultMap() bool {
 
 // Enable fault injection
 func Enable() bool {
-	changeStatus := startFaultMap()
+	return EnableDomain(DomainDefault)
+}
+
+func EnableDomain(domain Domain) bool {
+	changeStatus := startFaultMap(domain)
 	status := "enabled"
 	if changeStatus {
 		status = "disabled"
@@ -225,7 +247,11 @@ func Enable() bool {
 
 // Disable fault injection
 func Disable() bool {
-	changeStatus := stopFaultMap()
+	return DisableDomain(DomainDefault)
+}
+
+func DisableDomain(domain Domain) bool {
+	changeStatus := stopFaultMap(domain)
 	status := "enabled"
 	if !changeStatus {
 		status = "disabled"
@@ -238,19 +264,32 @@ func Disable() bool {
 }
 
 func Status() bool {
-	return enabled.Load() != nil
+	return StatusOfDomain(DomainDefault)
+}
+
+func StatusOfDomain(domain Domain) bool {
+	return enabled[domain].Load() != nil
 }
 
 // Trigger a fault point.
 func TriggerFault(name string) (iret int64, sret string, exist bool) {
-	fm := enabled.Load()
+	return TriggerFaultInDomain(DomainDefault, name)
+}
+
+func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, exist bool) {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return
 	}
 	var msg faultEntry
 	msg.cmd = TRIGGER
 	msg.name = name
-	fm.chIn <- &msg
+
+	select {
+	case fm.chIn <- &msg:
+	case <-fm.closeCh:
+		return
+	}
 	out := <-fm.chOut
 
 	if out == nil {
@@ -262,7 +301,11 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 }
 
 func AddFaultPoint(ctx context.Context, name string, freq string, action string, iarg int64, sarg string, constant bool) error {
-	fm := enabled.Load()
+	return AddFaultPointInDomain(ctx, DomainDefault, name, freq, action, iarg, sarg, constant)
+}
+
+func AddFaultPointInDomain(ctx context.Context, domain Domain, name string, freq string, action string, iarg int64, sarg string, constant bool) error {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return moerr.NewInternalError(ctx, "add fault point not enabled")
 	}
@@ -273,6 +316,7 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 	var msg faultEntry
 	msg.cmd = ADD
 	msg.name = name
+	msg.scope = domain
 
 	// freq is start:end:skip:prob
 	sesp := strings.Split(freq, ":")
@@ -357,7 +401,11 @@ func AddFaultPoint(ctx context.Context, name string, freq string, action string,
 }
 
 func RemoveFaultPoint(ctx context.Context, name string) (bool, error) {
-	fm := enabled.Load()
+	return RemoveFaultPointFromDomain(ctx, DomainDefault, name)
+}
+
+func RemoveFaultPointFromDomain(ctx context.Context, domain Domain, name string) (bool, error) {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return false, moerr.NewInternalError(ctx, "fault injection not enabled.")
 	}
@@ -373,8 +421,8 @@ func RemoveFaultPoint(ctx context.Context, name string) (bool, error) {
 	return true, nil
 }
 
-func lookup(name string) *faultEntry {
-	fm := enabled.Load()
+func lookup(domain Domain, name string) *faultEntry {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return nil
 	}
@@ -396,7 +444,11 @@ type Point struct {
 }
 
 func ListAllFaultPoints() string {
-	fm := enabled.Load()
+	return ListAllFaultPointsInDomain(DomainDefault)
+}
+
+func ListAllFaultPointsInDomain(domain Domain) string {
+	fm := enabled[domain].Load()
 	if fm == nil {
 		return "list fault points not enabled"
 	}

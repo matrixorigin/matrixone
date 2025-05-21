@@ -21,7 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -168,6 +170,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 				return err
 			}
 			appender = space.tableHandle.SetAppender(objH.Fingerprint())
+			logutil.Info("CreateObject", zap.String("objH", appender.GetID().ObjectString()), zap.String("txn", node.GetTxn().String()))
 			objH.Close()
 		}
 		if !appender.IsSameColumns(space.table.GetLocalSchema(space.isTombstone)) {
@@ -183,6 +186,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			appender.UnlockFreeze()
 			// Unref the appender, otherwise it can't be PrepareCompact(ed) successfully
 			appender.Close()
+			logutil.Info("LockFreeze", zap.String("appender", appender.PPString()))
 			continue
 		}
 
@@ -206,7 +210,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
-			blkID,
+			&blkID,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
 			col.GetAllocator(),
@@ -224,7 +228,9 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			count:  toAppend,
 		}
 		if created {
-			space.table.store.IncreateWriteCnt()
+			if err = space.table.store.IncreateWriteCnt("prepare apply anode"); err != nil {
+				return err
+			}
 			space.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()
@@ -257,6 +263,10 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewObj() {
+		// another site to SetLevel is in committing merge task
+		if stats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+			stats.SetLevel(1)
+		}
 		space.nobj, err = space.table.CreateNonAppendableObject(
 			&objectio.CreateObjOpt{Stats: &stats, IsTombstone: space.isTombstone})
 		if err != nil {

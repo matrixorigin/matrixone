@@ -1341,7 +1341,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if needCheckHost {
-		ses.Infof(tenantCtx, "check client address %s", ses.clientAddr)
+		ses.Debugf(tenantCtx, "check client address %s", ses.clientAddr)
 		err = whetherValidIpInInvitedNodes(tenantCtx, ses, ses.clientAddr)
 		if err != nil {
 			return nil, err
@@ -1352,34 +1352,37 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	if err != nil {
 		return nil, err
 	}
-	if needCheckLock {
-		// get user status, login_attempts, lock_time
-		userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
-		userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
-		if err != nil {
-			return nil, err
-		}
-		userStatus, err = userRsset[0].GetString(tenantCtx, 0, 0)
-		if err != nil {
-			return nil, err
-		}
 
-		loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, 1)
-		if err != nil {
-			return nil, err
-		}
-
-		lockTime, err = userRsset[0].GetString(tenantCtx, 0, 2)
-		if err != nil {
-			return nil, err
-		}
+	userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
+	statusColIdx := uint64(0)
+	loginAttemptsColIdx := uint64(1)
+	lockTimeColIdx := uint64(2)
+	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
+	if err != nil {
+		return nil, err
+	}
+	userStatus, err = userRsset[0].GetString(tenantCtx, 0, statusColIdx)
+	if err != nil {
+		return nil, err
 	}
 
-	/*
-		if user lock status is locked
-		check if the lock_time is not expired
-	*/
-	if needCheckLock && userStatus == userStatusLock {
+	loginAttempts, err = userRsset[0].GetUint64(tenantCtx, 0, loginAttemptsColIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	lockTime, err = userRsset[0].GetString(tenantCtx, 0, lockTimeColIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	if userStatus == userStatusLockForever {
+		return nil, moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock")
+	} else if userStatus == userStatusLock {
+		/*
+			if user lock status is locked
+			check if the lock_time is not expired
+		*/
 		if lockTimeExpired, err = checkLockTimeExpired(tenantCtx, ses, lockTime); err != nil {
 			return nil, err
 		}
@@ -1473,7 +1476,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRoutine(tenantID, ses.getRoutine(), accountVersion)
-	ses.Info(ctx, tenant.String())
+	ses.Debug(ctx, tenant.String())
 	ses.SetCreateVersion(createVersion)
 
 	return GetPassWord(pwd)
@@ -1837,7 +1840,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ctx, ses); err != nil {
-		return moerr.AttachCause(ctx, err)
+		ses.Warnf(ctx, "the database %s may have been deleted, "+
+			"so continue to mirgrate session, conn ID: %d, err: %v",
+			req.DB, req.ConnID, err)
 	}
 
 	var maxStmtID uint32

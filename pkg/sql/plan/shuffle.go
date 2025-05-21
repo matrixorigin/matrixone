@@ -19,18 +19,15 @@ import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -103,37 +100,37 @@ func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
 
-func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint64 {
+func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
 	if !rsp.Init {
 		rsp.Init = true
 		switch zm.GetType() {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
 	var shuffleIDX uint64
-	if rsp.ShuffleRangeUint64 != nil {
+	if len(rsp.ShuffleRangeUint64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForZMUnsignedSlice(rsp.ShuffleRangeUint64, zm)
-	} else if rsp.ShuffleRangeInt64 != nil {
+	} else if len(rsp.ShuffleRangeInt64) > 0 {
 		shuffleIDX = GetRangeShuffleIndexForZMSignedSlice(rsp.ShuffleRangeInt64, zm)
 	} else {
-		shuffleIDX = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT))
+		shuffleIDX = GetRangeShuffleIndexForZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum))
 	}
 	return shuffleIDX
 }
 
-func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap) uint64 {
+func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
 	t := types.T(rsp.Node.Stats.HashmapStats.ShuffleColIdx) // actually this is specially used for sort key column type
 	if !rsp.Init {
 		rsp.Init = true
 		switch t {
 		case types.T_int64, types.T_int32, types.T_int16:
-			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeInt64 = ShuffleRangeReEvalSigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit, types.T_datalink:
-			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, int(rsp.CNCNT), rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
+			rsp.ShuffleRangeUint64 = ShuffleRangeReEvalUnsigned(rsp.Node.Stats.HashmapStats.Ranges, bucketNum, rsp.Node.Stats.HashmapStats.Nullcnt, int64(rsp.Node.Stats.TableCnt))
 		}
 	}
 
@@ -143,9 +140,22 @@ func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objec
 	} else if rsp.ShuffleRangeInt64 != nil {
 		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(rsp.ShuffleRangeInt64, zm, t)
 	} else {
-		shuffleIDX = GetRangeShuffleIndexForExtractedZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(rsp.CNCNT), t)
+		shuffleIDX = GetRangeShuffleIndexForExtractedZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum), t)
 	}
 	return shuffleIDX
+}
+
+func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats, bucketNum int) uint64 {
+	zm := objstats.SortKeyZoneMap()
+	if !zm.IsInited() {
+		// an object with all null will send to shuffleIDX 0
+		return 0
+	}
+	if len(rsp.Node.TableDef.Pkey.Names) == 1 {
+		return shuffleByZonemap(rsp, zm, bucketNum)
+	} else {
+		return shuffleByValueExtractedFromZonemap(rsp, zm, bucketNum)
+	}
 }
 
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
@@ -157,24 +167,12 @@ func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.O
 		return !rsp.IsLocalCN
 	}
 	if rsp.Node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
-		zm := objstats.SortKeyZoneMap()
-		if !zm.IsInited() {
-			// an object with all null will send to first CN
-			return rsp.CNIDX != 0
-		}
-		if len(rsp.Node.TableDef.Pkey.Names) == 1 {
-			shuffleIDX := shuffleByZonemap(rsp, zm)
-			return shuffleIDX != uint64(rsp.CNIDX)
-		} else {
-			shuffleIDX := shuffleByValueExtractedFromZonemap(rsp, zm)
-			return shuffleIDX != uint64(rsp.CNIDX)
-		}
+		//shuffle by range
+		return CalcRangeShuffleIDXForObj(rsp, objstats, int(rsp.CNCNT)) != uint64(rsp.CNIDX)
 	}
-
 	//shuffle by hash
 	objID := objstats.ObjectLocation().ObjectId()
-	index := SimpleCharHashToRange(objID[:], uint64(rsp.CNCNT))
-	return index != uint64(rsp.CNIDX)
+	return SimpleCharHashToRange(objID[:], uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
 }
 
 func GetCenterValueForZMSigned(zm objectio.ZoneMap) int64 {
@@ -400,26 +398,24 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 	tableDef, ok := builder.tag2Table[col.RelPos]
 
 	if !ok {
-		//todo: disable shuffle reuse for now
-		/*
-			child := builder.qry.Nodes[node.Children[0]]
-			if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
-				col = child.GroupBy[col.ColPos].GetCol()
-				if col == nil {
-					return
-				}
-				_, ok = builder.tag2Table[col.RelPos]
-				if !ok {
-					return
-				}
-				node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-				node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-				node.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
-				node.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
-				node.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
-				node.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
-				node.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
-			}*/
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_AGG && child.Stats.HashmapStats.Shuffle && col.RelPos == child.BindingTags[0] {
+			col = child.GroupBy[col.ColPos].GetCol()
+			if col == nil {
+				return
+			}
+			_, ok = builder.tag2Table[col.RelPos]
+			if !ok {
+				return
+			}
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			node.Stats.HashmapStats.HashmapSize = child.Stats.HashmapStats.HashmapSize
+			node.Stats.HashmapStats.ShuffleColMin = child.Stats.HashmapStats.ShuffleColMin
+			node.Stats.HashmapStats.ShuffleColMax = child.Stats.HashmapStats.ShuffleColMax
+			node.Stats.HashmapStats.Ranges = child.Stats.HashmapStats.Ranges
+			node.Stats.HashmapStats.Nullcnt = child.Stats.HashmapStats.Nullcnt
+		}
 		return
 	}
 
@@ -449,20 +445,20 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 		}
 	}
 
-	s := builder.getStatsInfoByTableID(tableDef.TblId)
-	if s == nil {
+	w := builder.getStatsInfoByTableID(tableDef.TblId)
+	if w == nil {
 		return
 	}
 	if node.NodeType == plan.Node_AGG {
-		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+		if shouldUseHashShuffle(w.Stats.ShuffleRangeMap[colName]) {
 			return
 		}
 	}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-	node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
-	node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
-	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
+	node.Stats.HashmapStats.ShuffleColMin = int64(w.Stats.MinValMap[colName])
+	node.Stats.HashmapStats.ShuffleColMax = int64(w.Stats.MaxValMap[colName])
+	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(w.Stats.ShuffleRangeMap[colName], colName)
+	node.Stats.HashmapStats.Nullcnt = int64(w.Stats.NullCntMap[colName])
 }
 
 // to determine if join need to go shuffle
@@ -474,6 +470,10 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 	switch n.JoinType {
 	case plan.Node_DEDUP:
+		if n.OnDuplicateAction == plan.Node_FAIL && len(n.GetDedupJoinCtx().GetOldColList()) > 0 {
+			return
+		}
+
 		rightchild := builder.qry.Nodes[n.Children[1]]
 		if rightchild.Stats.Outcnt > 320000 {
 			//dedup join always go hash shuffle, optimize this in the future
@@ -484,6 +484,7 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		return
 
 	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT:
+
 	default:
 		return
 	}
@@ -655,14 +656,11 @@ func determineShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 
 }
 
-func GetShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
+func getShuffleDop(ncpu int, lencn int, hashmapSize float64) (dop int) {
 	if ncpu <= 4 {
 		ncpu = 4
 	}
 	maxret := ncpu * 4
-	if maxret > 64 {
-		maxret = 64 // to avoid a hang bug, fix this in the future
-	}
 	// these magic number comes from hashmap resize factor. see hashtable/common.go, in maxElemCnt function
 	ret1 := int(hashmapSize/float64(lencn)/12800000) + 1
 	if ret1 >= maxret {
@@ -704,8 +702,8 @@ func determineShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 2 { // always go hashshuffle for scan
 		return
 	}
-	s := builder.getStatsInfoByTableID(n.TableDef.TblId)
-	if s == nil {
+	w := builder.getStatsInfoByTableID(n.TableDef.TblId)
+	if w == nil {
 		return
 	}
 
@@ -718,7 +716,7 @@ func determineShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		firstSortColName = n.TableDef.Pkey.Names[0]
 	}
 
-	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
+	if w.Stats.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
 	firstSortColID, ok := n.TableDef.Name2ColIndex[firstSortColName]
@@ -726,13 +724,14 @@ func determineShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	switch types.T(n.TableDef.Cols[firstSortColID].Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64,
+		types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		n.Stats.HashmapStats.ShuffleColIdx = n.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
-		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
-		n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
-		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
-		n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
+		n.Stats.HashmapStats.ShuffleColMin = int64(w.Stats.MinValMap[firstSortColName])
+		n.Stats.HashmapStats.ShuffleColMax = int64(w.Stats.MaxValMap[firstSortColName])
+		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(w.Stats.ShuffleRangeMap[firstSortColName], firstSortColName)
+		n.Stats.HashmapStats.Nullcnt = int64(w.Stats.NullCntMap[firstSortColName])
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -105,7 +105,8 @@ func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, err
 func (c *tableCache) insertAutoValues(
 	ctx context.Context,
 	tableID uint64,
-	bat *batch.Batch,
+	vecs []*vector.Vector,
+	rows int,
 	estimate int64,
 ) (uint64, error) {
 	lastInsert := uint64(0)
@@ -120,8 +121,7 @@ func (c *tableCache) insertAutoValues(
 			cc.preAllocate(ctx, tableID, int(estimate), txnOp)
 		}
 
-		rows := bat.RowCount()
-		vec := bat.GetVector(int32(col.ColIndex))
+		vec := vecs[col.ColIndex]
 		if v, err := cc.insertAutoValues(ctx, tableID, vec, rows, txnOp); err != nil {
 			return 0, err
 		} else {

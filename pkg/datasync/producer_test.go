@@ -173,6 +173,7 @@ func TestProducer_Start(t *testing.T) {
 			withProducerStarted(t, rt, c, true, true, func(ctx context.Context, p Producer) {
 				var wg sync.WaitGroup
 				rec := c.GetLogRecord(16)
+				dataWithValidVersion(rec.Data)
 				w := newWrappedData(rec.Data, 0, &wg)
 				wg.Add(1)
 				p.Enqueue(ctx, w)
@@ -202,6 +203,7 @@ func TestProducer_Start(t *testing.T) {
 			withProducerStarted(t, rt, c, true, false, func(ctx context.Context, p Producer) {
 				var wg sync.WaitGroup
 				rec := c.GetLogRecord(16)
+				dataWithValidVersion(rec.Data)
 				w := newWrappedData(rec.Data, 2, &wg)
 				wg.Add(1)
 				p.Enqueue(ctx, w)

@@ -290,13 +290,15 @@ type StatsInfo struct {
 
 	// Planning Phase Statistics
 	PlanStage struct {
-		PlanDuration       time.Duration `json:"PlanDuration"`
-		PlanStartTime      time.Time     `json:"PlanStartTime"`
-		BuildPlanS3Request S3Request     `json:"BuildPlanS3Request"`
-		BuildPlanStatsS3   S3Request     `json:"BuildPlanStatsS3"`
+		PlanDuration                time.Duration `json:"PlanDuration"`
+		PlanStartTime               time.Time     `json:"PlanStartTime"`
+		BuildPlanS3Request          S3Request     `json:"BuildPlanS3Request"`
+		BuildPlanStatsIOConsumption int64         `json:"BuildPlanStatsIOConsumption"` // unit: ns
 		// The following attributes belong to independent statistics during the `buildPlan` stage, only for analysis reference.
-		BuildPlanStatsDuration      int64 `json:"BuildPlanStatsDuration"`      // unit: ns
-		BuildPlanResolveVarDuration int64 `json:"BuildPlanResolveVarDuration"` // unit: ns
+		BuildPlanStatsS3              S3Request `json:"BuildPlanStatsS3"`
+		BuildPlanStatsDuration        int64     `json:"BuildPlanStatsDuration"`        // unit: ns
+		BuildPlanStatsInCacheDuration int64     `json:"BuildPlanStatsInCacheDuration"` // unit: ns
+		BuildPlanResolveVarDuration   int64     `json:"BuildPlanResolveVarDuration"`   // unit: ns
 	}
 
 	// Compile phase statistics
@@ -336,6 +338,9 @@ type StatsInfo struct {
 	OtherStage struct {
 		TxnIncrStatementS3 S3Request `json:"TxnIncrStatementS3"`
 	}
+	// stats: [5,241837539,5622976.000,0,0,149,0,1,8.4507,0,0]
+	// stats: [5,241837539,5622976.000,0,0,149,0,1,8.4507,0,0]
+	PermissionAuth StatsArray `json:"PermissionAuth"`
 
 	// FileService(S3 or localFS) Read Data time Consumption
 	IOAccessTimeConsumption int64
@@ -367,6 +372,12 @@ func (s S3Request) CountLIST() int64   { return s.List }
 func (s S3Request) CountPUT() int64    { return s.Put }
 func (s S3Request) CountGET() int64    { return s.Head + s.Get }
 func (s S3Request) CountDELETE() int64 { return s.Delete + s.DeleteMul }
+
+func NewStatsInfo() *StatsInfo {
+	s := new(StatsInfo)
+	s.PermissionAuth.Reset()
+	return s
+}
 
 func (stats *StatsInfo) CompileStart() {
 	if stats == nil {
@@ -514,6 +525,20 @@ func (stats *StatsInfo) AddBuildPlanStatsConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsDuration, int64(d))
 }
 
+func (stats *StatsInfo) AddBuildPlanStatsIOConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsIOConsumption, int64(d))
+}
+
+func (stats *StatsInfo) AddStatsStatsInCacheDuration(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.PlanStage.BuildPlanStatsInCacheDuration, int64(d))
+}
+
 func (stats *StatsInfo) AddBuildPlanResolveVarConsumption(d time.Duration) {
 	if stats == nil {
 		return
@@ -638,6 +663,7 @@ func (stats *StatsInfo) Reset() {
 		return
 	}
 	*stats = StatsInfo{}
+	stats.PermissionAuth.Reset()
 }
 
 func ContextWithStatsInfo(requestCtx context.Context, stats *StatsInfo) context.Context {

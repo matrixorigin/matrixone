@@ -65,7 +65,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
@@ -77,7 +77,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
-		err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		_, err = authenticateUserCanExecutePrepareOrExecute(execCtx.reqCtx, ses, execCtx.prepareStmt.PrepareStmt, execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 		if err != nil {
 			ses.RemovePrepareStmt(execCtx.prepareStmt.Name)
 			return
@@ -454,6 +454,12 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		//TODO: invalidate privilege cache
 		stats, err = handleRestorePitr(ses, execCtx, st)
 		if err != nil {
+			return
+		}
+	case *tree.ShowRecoveryWindow:
+		ses.EnterFPrint(FPShowRecoveryWindow)
+		defer ses.ExitFPrint(FPShowRecoveryWindow)
+		if err = handleShowRecoveryWindow(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.SetConnectionID:

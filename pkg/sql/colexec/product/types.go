@@ -46,7 +46,6 @@ type Product struct {
 	JoinMapTag int32
 
 	vm.OperatorBase
-	colexec.Projection
 }
 
 func (product *Product) GetOperatorBase() *vm.OperatorBase {
@@ -88,28 +87,16 @@ func (product *Product) Reset(proc *process.Process, pipelineFailed bool, err er
 		product.ctr.rbat.CleanOnlyData()
 	}
 	product.ctr.inBat = nil
-	if product.ProjectList != nil {
-		if product.OpAnalyzer != nil {
-			product.OpAnalyzer.Alloc(product.ProjectAllocSize)
-		}
-		product.ResetProjection(proc)
-	}
 	product.ctr.state = Build
 	product.ctr.probeIdx = 0
 }
 
 func (product *Product) Free(proc *process.Process, pipelineFailed bool, err error) {
 	product.ctr.cleanBatch(proc.Mp())
-	product.FreeProjection(proc)
 }
 
 func (product *Product) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	batch := input
-	var err error
-	if product.ProjectList != nil {
-		batch, err = product.EvalProjection(input, proc)
-	}
-	return batch, err
+	return input, nil
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {

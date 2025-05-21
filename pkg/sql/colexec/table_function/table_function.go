@@ -34,6 +34,10 @@ const (
 	FULLTEXT_INDEX_TOKENIZE = "fulltext_index_tokenize"
 )
 
+func (tableFunction *TableFunction) isTbFuncSourceOp() bool {
+	return tableFunction.NumChildren() == 0
+}
+
 func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := tableFunction.OpAnalyzer
 
@@ -42,23 +46,42 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 		return vm.CancelResult, moerr.NewInternalErrorf(proc.Ctx, "table function %s state is nil", tableFunction.FuncName)
 	}
 
+	var err error
+
 	// loop
 	for {
 		if tableFunction.ctr.inputBatch.IsDone() || tableFunction.ctr.nextRow >= tableFunction.ctr.inputBatch.RowCount() {
 			// get to next input batch
-			input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, analyzer)
-			if err != nil {
-				return input, err
-			}
-
-			tableFunction.ctr.inputBatch = input.Batch
-			if input.Batch.IsDone() {
-				return input, nil
+			if tableFunction.isTbFuncSourceOp() {
+				if tableFunction.ctr.isDone {
+					// End of Input
+					err := tableFunction.ctr.state.end(tableFunction, proc)
+					if err != nil {
+						return vm.CancelResult, err
+					}
+					return vm.NewCallResult(), nil
+				}
+				tableFunction.ctr.inputBatch = batch.EmptyForConstFoldBatch
+				tableFunction.ctr.isDone = true
+			} else {
+				input, err := vm.ChildrenCall(tableFunction.GetChildren(0), proc, analyzer)
+				if err != nil {
+					return input, err
+				}
+				tableFunction.ctr.inputBatch = input.Batch
+				if input.Batch.IsDone() {
+					// End of Input
+					err := tableFunction.ctr.state.end(tableFunction, proc)
+					if err != nil {
+						return input, err
+					}
+					return input, nil
+				}
 			}
 
 			// Got a valid batch, eval tbf args
 			for i := range tableFunction.ctr.executorsForArgs {
-				tableFunction.ctr.argVecs[i], err = tableFunction.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{input.Batch}, nil)
+				tableFunction.ctr.argVecs[i], err = tableFunction.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{tableFunction.ctr.inputBatch}, nil)
 				if err != nil {
 					return vm.CancelResult, err
 				}
@@ -120,7 +143,9 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 	case "unnest":
 		tblArg.ctr.state, err = unnestPrepare(proc, tblArg)
 	case "generate_series":
-		tblArg.ctr.state, err = generateSeriesPrepare(proc, tblArg)
+		if !tblArg.CanOpt {
+			tblArg.ctr.state, err = generateSeriesPrepare(proc, tblArg)
+		}
 	case "meta_scan":
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
@@ -143,6 +168,16 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
+	case "moplugin_table":
+		tblArg.ctr.state, err = pluginPrepare(proc, tblArg)
+	case "hnsw_create":
+		tblArg.ctr.state, err = hnswCreatePrepare(proc, tblArg)
+	case "hnsw_search":
+		tblArg.ctr.state, err = hnswSearchPrepare(proc, tblArg)
+	case "ivf_create":
+		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
+	case "ivf_search":
+		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))
@@ -181,4 +216,17 @@ func (tableFunction *TableFunction) ApplyStart(nthRow int, proc *process.Process
 
 func (tableFunction *TableFunction) ApplyCall(proc *process.Process) (vm.CallResult, error) {
 	return tableFunction.ctr.state.call(tableFunction, proc)
+}
+
+func (tableFunction *TableFunction) ApplyEnd(proc *process.Process) error {
+	return tableFunction.ctr.state.end(tableFunction, proc)
+}
+
+func (tableFunction *TableFunction) GenerateSeriesCtrNumState(start, end, step, next int64) {
+	tableFunction.ctr.state = &generateSeriesArg{i64State: genNumState[int64]{start: start, end: end, step: step, next: next}}
+}
+
+func (tableFunction *TableFunction) GetGenerateSeriesCtrNumStateStep() int64 {
+	arg := tableFunction.ctr.state.(*generateSeriesArg)
+	return arg.i64State.step
 }

@@ -65,15 +65,18 @@ func init() {
 }
 
 type MultiUpdate struct {
+	delegated      bool
+	input          vm.CallResult
 	ctr            container
 	MultiUpdateCtx []*MultiUpdateCtx
 
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
+	IsRemote               bool
 
 	Engine engine.Engine
 
-	SegmentMap map[string]int32
+	// SegmentMap map[string]int32
 
 	vm.OperatorBase
 }
@@ -89,7 +92,7 @@ type container struct {
 	affectedRows uint64
 	action       actionType
 
-	s3Writer       *s3Writer
+	s3Writer       *s3WriterDelegate
 	updateCtxInfos map[string]*updateCtxInfo
 
 	insertBuf []*batch.Batch
@@ -97,19 +100,10 @@ type container struct {
 }
 
 type MultiUpdateCtx struct {
-	ObjRef   *plan.ObjectRef
-	TableDef *plan.TableDef
-
+	ObjRef     *plan.ObjectRef
+	TableDef   *plan.TableDef
 	InsertCols []int
 	DeleteCols []int
-
-	PartitionTableIDs   []uint64 // Align array index with the partition number
-	PartitionTableNames []string // Align array index with the partition number
-	OldPartitionIdx     int      // The array index position of the partition expression column for delete
-	NewPartitionIdx     int      // The array index position of the partition expression column for insert
-
-	// Source           engine.Relation
-	// PartitionSources []engine.Relation // Align array index with the partition number
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -145,9 +139,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
-	for _, info := range update.ctr.updateCtxInfos {
-		info.Sources = nil
-	}
+
 	update.ctr.state = vm.Build
 }
 

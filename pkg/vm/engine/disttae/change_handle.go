@@ -25,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 const DefaultLoadParallism = 20
@@ -51,6 +51,7 @@ func (tbl *txnTable) CollectChanges(
 		state,
 		from, to,
 		objectio.BlockMaxRows,
+		tbl.primarySeqnum,
 		mp,
 		tbl.getTxn().engine.fs,
 	)
@@ -96,7 +97,7 @@ func (h *CheckpointChangesHandle) prefetch() {
 			return
 		}
 		blk := h.blockList.Get(h.prefetchIdx)
-		err := blockio.Prefetch(h.sid, h.fs, blk.MetaLoc[:])
+		err := ioutil.Prefetch(h.sid, h.fs, blk.MetaLoc[:])
 		if err != nil {
 			logutil.Warnf("ChangesHandle: prefetch failed: %v", err)
 		}
@@ -187,7 +188,7 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	}
 
 	var blockList objectio.BlockInfoSlice
-	if _, err = engine_util.TryFastFilterBlocks(
+	if _, err = readutil.TryFastFilterBlocks(
 		ctx,
 		h.end.ToTimestamp(),
 		tblDef,
@@ -201,7 +202,9 @@ func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {
 	); err != nil {
 		return
 	}
-	relData := engine_util.NewBlockListRelationData(1)
+	relData := readutil.NewBlockListRelationData(
+		1,
+		readutil.WithPartitionState(part))
 	h.blockList = blockList
 	for i, end := 0, blockList.Len(); i < end; i++ {
 		relData.AppendBlockInfo(blockList.Get(i))

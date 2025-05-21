@@ -16,7 +16,6 @@ package cdc
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -30,24 +29,8 @@ import (
 )
 
 var (
-	scanner *TableScanner
-	once    sync.Once
-
-	scanSql = fmt.Sprintf("select "+
-		"  rel_id, "+
-		"  relname, "+
-		"  reldatabase_id, "+
-		"  reldatabase, "+
-		"  rel_createsql, "+
-		"  account_id "+
-		"from "+
-		"  mo_catalog.mo_tables "+
-		"where "+
-		"  relkind = '%s'"+
-		"  and reldatabase not in (%s)",
-		catalog.SystemOrdinaryRel,                    // only scan ordinary tables
-		AddSingleQuotesJoin(catalog.SystemDatabases), // skip system databases
-	)
+	detector *TableDetector
+	once     sync.Once
 )
 
 var getSqlExecutor = func(cnUUID string) executor.SQLExecutor {
@@ -55,22 +38,21 @@ var getSqlExecutor = func(cnUUID string) executor.SQLExecutor {
 	return v.(executor.SQLExecutor)
 }
 
-var GetTableScanner = func(cnUUID string) *TableScanner {
+var GetTableDetector = func(cnUUID string) *TableDetector {
 	once.Do(func() {
-		scanner = &TableScanner{
-			Mutex:     sync.Mutex{},
+		detector = &TableDetector{
 			Mp:        make(map[uint32]TblMap),
 			Callbacks: make(map[string]func(map[uint32]TblMap)),
+			exec:      getSqlExecutor(cnUUID),
 		}
-		scanner.exec = getSqlExecutor(cnUUID)
 	})
-	return scanner
+	return detector
 }
 
 // TblMap key is dbName.tableName, e.g. db1.t1
 type TblMap map[string]*DbTableInfo
 
-type TableScanner struct {
+type TableDetector struct {
 	sync.Mutex
 
 	Mp        map[uint32]TblMap
@@ -79,19 +61,24 @@ type TableScanner struct {
 	cancel    context.CancelFunc
 }
 
-func (s *TableScanner) Register(id string, cb func(map[uint32]TblMap)) {
+func (s *TableDetector) Register(id string, cb func(map[uint32]TblMap)) {
 	s.Lock()
 	defer s.Unlock()
 
 	if len(s.Callbacks) == 0 {
-		ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		ctx, cancel := context.WithCancel(
+			defines.AttachAccountId(
+				context.Background(),
+				catalog.System_Account,
+			),
+		)
 		s.cancel = cancel
 		go s.scanTableLoop(ctx)
 	}
 	s.Callbacks[id] = cb
 }
 
-func (s *TableScanner) UnRegister(id string) {
+func (s *TableDetector) UnRegister(id string) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -102,7 +89,7 @@ func (s *TableScanner) UnRegister(id string) {
 	}
 }
 
-func (s *TableScanner) scanTableLoop(ctx context.Context) {
+func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	logutil.Infof("cdc TableScanner.scanTableLoop: start")
 	defer func() {
 		logutil.Infof("cdc TableScanner.scanTableLoop: end")
@@ -125,11 +112,15 @@ func (s *TableScanner) scanTableLoop(ctx context.Context) {
 	}
 }
 
-func (s *TableScanner) scanTable() {
+func (s *TableDetector) scanTable() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result, err := s.exec.Exec(ctx, scanSql, executor.Options{})
+	result, err := s.exec.Exec(
+		ctx,
+		CDCSQLBuilder.CollectTableInfoSQL(),
+		executor.Options{},
+	)
 	if err != nil {
 		return
 	}

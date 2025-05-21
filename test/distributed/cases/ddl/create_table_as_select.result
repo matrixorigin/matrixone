@@ -348,7 +348,10 @@ col1    col2    col3
 drop table if exists cast04;
 create table cast04(col1 char(10), col2 char(10), col3 char(10)) as select * from cast03;
 select * from cast04;
-
+col1    col2    col3
+321424    213412.23    -100.313
+-1241    2314321    0
+0    0    0
 drop table cast03;
 drop table cast04;
 drop table if exists cast05;
@@ -730,9 +733,13 @@ drop table if exists time05;
 create table time05 as select unix_timestamp(col1) from time01;
 
 show create table time05;
-
+Table    Create Table
+time05    CREATE TABLE `time05` (\n  `unix_timestamp(col1)` bigint DEFAULT NULL\n)
 select * from time05;
-
+unix_timestamp(col1)
+1602374400
+null
+null
 drop table time05;
 
 drop table if exists time06;
@@ -1543,7 +1550,7 @@ test01    CREATE TABLE `test01` (\n  `col1` tinyint DEFAULT NULL,\n  `col2` smal
 create publication publication01 database test account all;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    test    *    *        2024-10-28 17:46:53    null    
+publication01    test    *    *        2024-10-28 17:46:53    null
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1565,7 +1572,7 @@ a    b    c    d
 3    4    c    324243243
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-sys_pub_1    test    *    *        2024-10-28 17:46:53    null    
+sys_pub_1    test    *    *        2024-10-28 17:46:53    null
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all
@@ -1822,3 +1829,17 @@ avgcol    sumcol    countcol    maxcol    mincol
 drop table agg01;
 drop table math01;
 drop database db8;
+drop database if exists db9;
+create database db9;
+use db9;
+CREATE TABLE tx1 (
+category INT NOT NULL,
+id INT NOT NULL,
+name VARCHAR(20) NOT NULL,
+price DECIMAL,
+PRIMARY KEY (category, id)
+);
+create dynamic table dt_test as select * from tx1;
+lack of option type
+drop table tx1;
+drop database db9;

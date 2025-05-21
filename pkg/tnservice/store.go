@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -44,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -163,7 +163,7 @@ func NewService(
 	}
 
 	// start I/O pipeline
-	blockio.Start(cfg.UUID)
+	ioutil.Start(cfg.UUID)
 
 	s := &store{
 		cfg:                 cfg,
@@ -260,7 +260,7 @@ func (s *store) Close() error {
 		err = errors.Join(err, ts.Close())
 	}
 	// stop I/O pipeline
-	blockio.Stop(s.cfg.UUID)
+	ioutil.Stop(s.cfg.UUID)
 	return err
 }
 

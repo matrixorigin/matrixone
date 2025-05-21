@@ -63,11 +63,15 @@ func (x *heapSlice[T]) Swap(i, j int) { x.s[i], x.s[j] = x.s[j], x.s[i] }
 func (x *heapSlice[T]) Len() int      { return len(x.s) }
 
 type mergeStats struct {
-	totalRowCnt, rowSize, targetObjSize uint32
-	blkPerObj                           uint16
+	targetObjSize uint32
+	blkPerObj     uint16
 
-	blkRowCnt, objRowCnt, objBlkCnt int
-	mergedRowCnt, objCnt            int
+	totalSize    uint64
+	mergedSize   uint64
+	writtenBytes uint32 // object written bytes
+
+	blkRowCnt, objRowCnt, objBlkCnt, objCnt int
+	mergedRowCnt                            int
 }
 
 func (s *mergeStats) needNewObject() bool {
@@ -78,8 +82,11 @@ func (s *mergeStats) needNewObject() bool {
 		return s.objBlkCnt == int(s.blkPerObj)
 	}
 
-	if uint32(s.objRowCnt)*s.rowSize > s.targetObjSize {
-		return (s.totalRowCnt-uint32(s.mergedRowCnt))*s.rowSize > s.targetObjSize
+	if s.writtenBytes > s.targetObjSize {
+		// if the left size is greater than the target size, it is ok to create a new object
+		// otherwise, keep the left data in the current object
+		// Note: Considering the tombstone, the left size is smaller than the expected size, so it is possible to form a new object less than the target size
+		return s.totalSize-s.mergedSize > uint64(s.targetObjSize)
 	}
 	return false
 }

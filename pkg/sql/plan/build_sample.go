@@ -107,16 +107,14 @@ func (s *SampleFuncCtx) SetStartOffset(start, offset int) {
 }
 
 func validSample(ctx *BindContext, builder *QueryBuilder) error {
-	if ctx.sampleFunc.hasSampleFunc {
-		if len(ctx.aggregates) > 0 {
-			return moerr.NewSyntaxError(builder.GetContext(), "cannot fixed non-scalar function and scalar function in the same query")
-		}
-		if ctx.recSelect || builder.isForUpdate {
-			return moerr.NewInternalError(builder.GetContext(), "not support sample function recursive cte or for update")
-		}
-		if len(ctx.windows) > 0 {
-			return moerr.NewNYI(builder.GetContext(), "sample for window function not support now")
-		}
+	if len(ctx.aggregates) > 0 {
+		return moerr.NewSyntaxError(builder.GetContext(), "cannot fixed non-scalar function and scalar function in the same query")
+	}
+	if ctx.bindingRecurStmt() || builder.isForUpdate {
+		return moerr.NewInternalError(builder.GetContext(), "not support sample function recursive cte or for update")
+	}
+	if len(ctx.windows) > 0 {
+		return moerr.NewNYI(builder.GetContext(), "sample for window function not support now")
 	}
 	return nil
 }

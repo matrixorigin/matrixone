@@ -138,6 +138,7 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 		defer object.Close()
 		s = fmt.Sprintf("%s\n%s", s, object.String())
 	}
+	s = fmt.Sprintf("%s\n--Data End--\n", s)
 	it = h.MakeObjectIt(true)
 	for it.Next() {
 		object := it.GetObject()
@@ -185,8 +186,9 @@ func (h *txnRelation) CreateObject(isTombstone bool) (obj handle.Object, err err
 
 func (h *txnRelation) CreateNonAppendableObject(isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	if opt == nil {
+		noid := objectio.NewObjectid()
 		opt = &objectio.CreateObjOpt{
-			Stats: objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, false, false),
+			Stats: objectio.NewObjectStatsWithObjectID(&noid, false, false, false),
 		}
 	}
 	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone, opt)
@@ -199,7 +201,7 @@ func (h *txnRelation) SoftDeleteObject(id *types.Objectid, isTombstone bool) (er
 }
 
 func (h *txnRelation) MakeObjectItOnSnap(isTombstone bool) handle.ObjectIt {
-	return newObjectItOnSnap(h.table, isTombstone, false)
+	return newObjectItOnSnap(h.table, isTombstone)
 }
 
 func (h *txnRelation) MakeObjectIt(isTombstone bool) handle.ObjectIt {

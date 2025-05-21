@@ -15,9 +15,8 @@
 package compile
 
 import (
+	"context"
 	"fmt"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
+
+func convertDBEOB(ctx context.Context, e error, name string) error {
+	if moerr.IsMoErrCode(e, moerr.OkExpectedEOB) {
+		return moerr.NewBadDB(ctx, name)
+	}
+	return e
+}
 
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
@@ -35,13 +42,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		dbName = c.db
 	}
 	tblName := qry.GetTableDef().GetName()
-
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-		return err
-	}
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
-		return moerr.NewBadDB(c.proc.Ctx, dbName)
+		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
@@ -51,34 +54,51 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
+		// 0. lock origin database metadata in catalog
+		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return err
+		}
+
 		// 1. lock origin table metadata in catalog
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
 			}
-			retryErr = err
+			// The changes recorded in the data dictionary table imply a change in the structure of the corresponding entity table,
+			// therefore it is necessary to rebuild the logical plan and redirect err to ErrTxnNeedRetryWithDefChanged
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
 		// 2. lock origin table
-		var partitionTableNames []string
-		tableDef := qry.GetTableDef()
-		if tableDef.Partition != nil {
-			partitionTableNames = tableDef.Partition.PartitionTableNames
-		}
-		if err = lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, partitionTableNames, true); err != nil {
+		if err = lockTable(c.proc.Ctx, c.e, c.proc, originRel, dbName, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+				c.proc.Error(c.proc.Ctx, "lock origin table for alter table",
+					zap.String("databaseName", c.db),
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.Error(err))
 				return err
 			}
-			retryErr = err
+			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
 		if qry.TableDef.Indexes != nil {
 			for _, indexdef := range qry.TableDef.Indexes {
 				if indexdef.TableExist {
 					if err = lockIndexTable(c.proc.Ctx, dbSource, c.e, c.proc, indexdef.IndexTableName, true); err != nil {
-						return err
+						if !moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+							c.proc.Error(c.proc.Ctx, "lock index table for alter table",
+								zap.String("databaseName", c.db),
+								zap.String("origin tableName", qry.GetTableDef().Name),
+								zap.String("index name", indexdef.IndexName),
+								zap.String("index tableName", indexdef.IndexTableName),
+								zap.Error(err))
+							return err
+						}
+						retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 					}
 				}
 			}
@@ -192,7 +212,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
 
 		for _, indexDef := range newTableDef.Indexes {
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -206,6 +227,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+			case catalog.MoIndexHnswAlgo.ToString():
+				err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",

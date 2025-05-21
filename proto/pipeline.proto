@@ -135,10 +135,7 @@ message Insert{
 message MultiUpdate {
   uint64 affected_rows = 1;
   uint32 Action = 2;
-  uint32 IBucket = 3;
-  uint32 NBucket = 4;
-  map<string,int32> SegmentMap = 5;
-  repeated plan.UpdateCtx update_ctx_list = 6;
+  repeated plan.UpdateCtx update_ctx_list = 3;
 }
 
 message Array{
@@ -173,10 +170,12 @@ message PreInsert {
   repeated int32 idx         = 3;
   repeated string attrs      = 4;
   bool has_auto_col          = 5;
-  bool is_update             = 6;
+  int32 col_offset           = 6;
   int64 estimated_row_count  = 7;
   plan.Expr comp_pkey_expr   = 8;
   plan.Expr cluster_by_expr  = 9;
+  bool is_old_update         = 10;
+  bool is_new_update         = 11;
 }
 
 message PostDml {
@@ -202,6 +201,7 @@ message LockTarget {
   lock.LockMode Mode         = 8;
   plan.Expr lock_rows = 9;
   bool lock_table_at_the_end = 10;
+  plan.ObjectRef obj_ref = 11;
 }
 
 message LockOp {
@@ -371,6 +371,7 @@ message DedupJoin {
   repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
 	repeated int32 update_col_idx_list = 14;
 	repeated plan.Expr update_col_expr_list = 15;
+  int32 del_col_idx = 16;
 }
 
 message Product {
@@ -385,6 +386,7 @@ message ProductL2 {
   repeated int32 col_list = 2;
   plan.Expr  expr = 3;
   int32 join_map_tag = 4;
+  string vector_op_type = 5;
 }
 
 message IndexJoin {
@@ -398,6 +400,7 @@ message TableFunction {
   repeated plan.Expr args = 3;
   bytes params = 4;
   string name = 5;
+  bool is_single = 6;
 }
 
 message ExternalName2ColIndex {
@@ -453,6 +456,7 @@ message HashBuild {
   plan.Node.OnDuplicateAction on_duplicate_action = 10;
   string dedup_col_name = 11;
   repeated plan.Type dedup_col_types = 12 [(gogoproto.nullable) = false];
+  int32 del_col_idx = 13;
 }
 
 message Shufflebuild {
@@ -467,6 +471,7 @@ message Shufflebuild {
   plan.Node.OnDuplicateAction on_duplicate_action = 9;
   string dedup_col_name = 10;
   repeated plan.Type dedup_col_types = 11 [(gogoproto.nullable) = false];
+  int32 del_col_idx = 12;
 }
 
 message Indexbuild {
@@ -564,14 +569,16 @@ message Source {
   timestamp.Timestamp timestamp = 10;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
+  repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
 }
 
 message NodeInfo {
   int32 mcpu = 1;
   string id = 2;
   string addr = 3;
-  int32 cn_cnt = 4;
-  int32 cn_idx = 5;
+  string payload = 4;
+  int32 cn_cnt = 5;
+  int32 cn_idx = 6;
 }
 
 message ProcessLimitation {

@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -79,6 +79,11 @@ func WithDisttaeEngineCommitWorkspaceThreshold(v uint64) TestDisttaeEngineOption
 func WithDisttaeEngineWriteWorkspaceThreshold(v uint64) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
 		e.writeWorkspaceThreshold = v
+	}
+}
+func WithDisttaeEngineQuota(v uint64) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.quota = v
 	}
 }
 
@@ -123,7 +128,7 @@ func CreateEngines(
 	taeEngine, err = NewTestTAEEngine(ctx, taeDir, t, rpcAgent, opts.TaeEngineOptions)
 	require.Nil(t, err)
 
-	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs.Service, rpcAgent, taeEngine, funcOpts...)
+	disttaeEngine, err = NewTestDisttaeEngine(ctx, taeEngine.GetDB().Runtime.Fs, rpcAgent, taeEngine, funcOpts...)
 	require.Nil(t, err)
 
 	mp = disttaeEngine.mp
@@ -236,7 +241,7 @@ func NewDefaultTableReader(
 		return nil, err
 	}
 
-	return engine_util.NewReader(
+	return readutil.NewReader(
 		ctx,
 		mp,
 		e.PackerPool(),
@@ -245,7 +250,7 @@ func NewDefaultTableReader(
 		snapshotTS,
 		expr,
 		source,
-		engine_util.GetThresholdForReader(1),
+		readutil.GetThresholdForReader(1),
 		engine.FilterHint{Must: true},
 	)
 }
@@ -264,16 +269,19 @@ func InitEnginePack(opts TestOptions, t *testing.T) *EnginePack {
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
 	pack := &EnginePack{
-		t:       t,
-		cancelF: cancel,
+		t: t,
 	}
 	pack.D, pack.T, pack.R, pack.Mp = CreateEngines(ctx, opts, t, opts.DisttaeOptions...)
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	ctx, _ = context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
+	ctx, c := context.WithTimeoutCause(ctx, timeout, moerr.CauseInitEnginePack)
 	pack.Ctx = ctx
+	pack.cancelF = func() {
+		c()
+		cancel()
+	}
 	return pack
 }
 

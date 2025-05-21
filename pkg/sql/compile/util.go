@@ -17,6 +17,7 @@ package compile
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -98,13 +99,11 @@ var (
 )
 
 var (
-	deleteMoTablePartitionsWithDatabaseIdFormat = `delete from mo_catalog.mo_table_partitions where database_id = %v;`
-	deleteMoTablePartitionsWithTableIdFormat    = `delete from mo_catalog.mo_table_partitions where table_id = %v;`
-	//deleteMoTablePartitionsWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_table_partitions where table_id = %v and name = '%s';`
+	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
 )
 
 var (
-	insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
+	insertIntoHnswIndexTableFormat = "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY hnsw_create('%s', '%s', %s, %s) AS f;"
 )
 
 // genInsertIndexTableSql: Generate an insert statement for inserting data into the index table
@@ -370,31 +369,6 @@ func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseI
 	return insertMoIndexesSql, nil
 }
 
-func makeInsertTablePartitionsSQL(ctx context.Context, dbSource engine.Database, relation engine.Relation) (string, error) {
-	if dbSource == nil || relation == nil {
-		return "", nil
-	}
-	databaseId := dbSource.GetDatabaseId(ctx)
-	tableId := relation.GetTableID(ctx)
-	tableDefs, err := relation.TableDefs(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	for _, def := range tableDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			partitionByDef := &plan2.PartitionByDef{}
-			if err = partitionByDef.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition)); err != nil {
-				return "", nil
-			}
-
-			insertMoTablePartitionSql := genInsertMoTablePartitionsSql(databaseId, tableId, partitionByDef, partitionByDef.Partitions)
-			return insertMoTablePartitionSql, nil
-		}
-	}
-	return "", nil
-}
-
 // makeInsertMultiIndexSQL :Synchronize the index metadata information of the table to the index metadata table
 func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *process.Process, dbSource engine.Database, relation engine.Relation) (string, error) {
 	if dbSource == nil || relation == nil {
@@ -465,53 +439,7 @@ func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
 	return false
 }
 
-// genInsertMoTablePartitionsSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_table_partitions`
-func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionByDef *plan2.PartitionByDef, partitions []*plan.PartitionItem) string {
-	buffer := bytes.NewBuffer(make([]byte, 0, 2048))
-	buffer.WriteString("insert into mo_catalog.mo_table_partitions values")
-
-	isFirst := true
-	for _, partition := range partitions {
-		// 1. tableId
-		if isFirst {
-			fmt.Fprintf(buffer, "(%d, ", tableId)
-			isFirst = false
-		} else {
-			fmt.Fprintf(buffer, ", (%d, ", tableId)
-		}
-
-		// 2. database_id
-		fmt.Fprintf(buffer, "%s, ", databaseId)
-
-		// 3. partition number
-		fmt.Fprintf(buffer, "%d, ", partition.OrdinalPosition)
-
-		// 4. partition name
-		fmt.Fprintf(buffer, "'%s', ", partition.PartitionName)
-
-		// 5. partition type
-		fmt.Fprintf(buffer, "'%s', ", partitionByDef.Type.String())
-
-		// 6. partition expression
-		fmt.Fprintf(buffer, "'%s', ", partitionByDef.GenPartitionExprString())
-
-		// 7. description_utf8
-		fmt.Fprintf(buffer, "'%s', ", partition.Description)
-
-		// 8. partition item comment
-		fmt.Fprintf(buffer, "'%s', ", partition.Comment)
-
-		// 9. partition item options
-		fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
-
-		// 10. partition_table_name
-		fmt.Fprintf(buffer, "'%s')", partition.PartitionTableName)
-	}
-	buffer.WriteString(";")
-	return buffer.String()
-}
-
-func GetConstraintDef(ctx context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+var GetConstraintDef = func(ctx context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
 	defs, err := rel.TableDefs(ctx)
 	if err != nil {
 		return nil, err
@@ -557,4 +485,78 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		concat)
 
 	return []string{sql}
+}
+
+func genDeleteHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+	}
+
+	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
+	}
+
+	sqls := make([]string, 0, 2)
+
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_meta.IndexTableName)
+	sqls = append(sqls, sql)
+	sql = fmt.Sprintf("DELETE FROM `%s`.`%s`", qryDatabase, idxdef_index.IndexTableName)
+	sqls = append(sqls, sql)
+
+	return sqls, nil
+
+}
+
+func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+	var cfg vectorindex.IndexTableConfig
+	src_alias := "src"
+	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
+
+	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+	}
+	cfg.MetadataTable = idxdef_meta.IndexTableName
+
+	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
+	}
+	cfg.IndexTable = idxdef_index.IndexTableName
+	cfg.DbName = qryDatabase
+	cfg.SrcTable = originalTableDef.Name
+	cfg.PKey = pkColName
+	cfg.KeyPart = idxdef_index.Parts[0]
+	val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ThreadsBuild = val.(int64)
+
+	idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.IndexCapacity = idxcap.(int64)
+
+	params := idxdef_index.IndexAlgoParams
+
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	part := src_alias + "." + idxdef_index.Parts[0]
+
+	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
+		qryDatabase, originalTableDef.Name,
+		src_alias,
+		params,
+		string(cfgbytes),
+		pkColName,
+		part)
+
+	return []string{sql}, nil
 }

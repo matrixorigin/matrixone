@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -149,8 +149,8 @@ func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
 	x := obj.appendMVCC.GetLatestAppendPrepareTSLocked()
 	return x.GT(&startts)
 }
-func (obj *baseObject) GetFs() *objectio.ObjectFS { return obj.rt.Fs }
-func (obj *baseObject) GetID() *common.ID         { return obj.meta.Load().AsCommonID() }
+func (obj *baseObject) GetFs() fileservice.FileService { return obj.rt.Fs }
+func (obj *baseObject) GetID() *common.ID              { return obj.meta.Load().AsCommonID() }
 
 func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) {
 	if !obj.meta.Load().ObjectPersisted() {
@@ -173,11 +173,11 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	}
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
-	vectors, _, err := blockio.LoadColumns2(
+	vectors, _, err := ioutil.LoadColumns2(
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		obj.rt.Fs.Service,
+		obj.rt.Fs,
 		location,
 		fileservice.Policy(0),
 		true,
@@ -223,7 +223,7 @@ func (obj *baseObject) Prefetch(blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return blockio.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
+		return ioutil.Prefetch(obj.rt.SID(), obj.rt.Fs, key)
 	}
 }
 
@@ -563,7 +563,7 @@ func (obj *baseObject) GetValue(
 		var bat *containers.Batch
 		blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 		err = HybridScanByBlock(
-			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, blkID, mp)
+			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, &blkID, mp)
 		if err != nil {
 			return
 		}

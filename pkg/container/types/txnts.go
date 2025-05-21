@@ -130,7 +130,11 @@ func (ts TS) Prev() TS {
 func (ts *TS) Next() TS {
 	p, l := DecodeInt64(ts[4:12]), DecodeUint32(ts[:4])
 	if l == math.MaxUint32 {
-		p += 1
+		if p == math.MaxInt64 {
+			return maxTS
+		} else {
+			p += 1
+		}
 	} else {
 		l += 1
 	}
@@ -139,6 +143,16 @@ func (ts *TS) Next() TS {
 
 func (ts TS) ToString() string {
 	return fmt.Sprintf("%d-%d", ts.Physical(), ts.Logical())
+}
+
+func (ts TS) Valid() bool {
+	return ts.Physical() >= 0
+}
+
+func TSSubDuration(ts *TS, d time.Duration) TS {
+	p, l := ts.Physical(), ts.Logical()
+	p -= int64(d)
+	return BuildTS(p, l)
 }
 
 func StringToTS(s string) (ts TS) {

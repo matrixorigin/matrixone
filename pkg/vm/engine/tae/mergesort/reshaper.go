@@ -19,8 +19,8 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 func reshape(ctx context.Context, host MergeTaskHost) error {
@@ -32,19 +32,17 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		}
 		host.InitTransferMaps(totalBlkCnt)
 	}
-	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	stats := mergeStats{
-		totalRowCnt:   host.GetTotalRowCnt(),
-		rowSize:       uint32(rowSizeU64),
 		targetObjSize: host.GetTargetObjSize(),
 		blkPerObj:     host.GetObjectMaxBlocks(),
+		totalSize:     host.GetTotalSize(),
 	}
 	originalObjCnt := host.GetObjectCnt()
 	maxRowCnt := host.GetBlockMaxRows()
 	accObjBlkCnts := host.GetAccBlkCnts()
 	transferMaps := host.GetTransferMaps()
 
-	var writer *blockio.BlockWriter
+	var writer *ioutil.BlockWriter
 	var buffer *batch.Batch
 	var releaseF func()
 	defer func() {
@@ -53,9 +51,10 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		}
 	}()
 
+	var nextBatch *batch.Batch
 	for i := 0; i < originalObjCnt; i++ {
 		loadedBlkCnt := 0
-		nextBatch, del, nextReleaseF, err := host.LoadNextBatch(ctx, uint32(i))
+		nextBatch, del, nextReleaseF, err := host.LoadNextBatch(ctx, uint32(i), nextBatch)
 		for err == nil {
 			if buffer == nil {
 				buffer, releaseF = getSimilarBatch(nextBatch, int(maxRowCnt), host)
@@ -93,7 +92,8 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					if _, err := writer.WriteBatch(buffer); err != nil {
 						return err
 					}
-
+					stats.writtenBytes = writer.GetWrittenOriginalSize()
+					stats.mergedSize += uint64(stats.writtenBytes)
 					stats.blkRowCnt = 0
 					stats.objBlkCnt++
 
@@ -113,7 +113,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 			}
 
 			nextReleaseF()
-			nextBatch, del, nextReleaseF, err = host.LoadNextBatch(ctx, uint32(i))
+			nextBatch, del, nextReleaseF, err = host.LoadNextBatch(ctx, uint32(i), nextBatch)
 		}
 		if !errors.Is(err, ErrNoMoreBlocks) {
 			return err
@@ -141,7 +141,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	return nil
 }
 
-func syncObject(ctx context.Context, writer *blockio.BlockWriter, commitEntry *api.MergeCommitEntry) error {
+func syncObject(ctx context.Context, writer *ioutil.BlockWriter, commitEntry *api.MergeCommitEntry) error {
 	if _, _, err := writer.Sync(ctx); err != nil {
 		return err
 	}

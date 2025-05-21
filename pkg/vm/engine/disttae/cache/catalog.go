@@ -121,7 +121,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		deletedCpkey := make([]*TableItem, 0, 16)
 		deletedItems := make([]*TableItem, 0, 16)
 		seenLargest := false
-		// TODO(aptend)gc stale deleted items
 		cc.tables.data.Scan(func(item *TableItem) bool {
 			if item.DatabaseId != prevDbId {
 				prevDbId = item.DatabaseId
@@ -158,7 +157,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			cc.tables.cpkeyIndex.Delete(item)
 		}
 
-		// TODO(aptend): Add Metric
 	}
 	{ // database cache gc
 		var prevName string
@@ -682,7 +680,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	var properties []*plan.Property
 	var TableType string
 	var Createsql string
-	var partitionInfo *plan.PartitionByDef
 	var viewSql *plan.ViewDef
 	var foreignKeys []*plan.ForeignKeyDef
 	var primarykey *plan.PrimaryKeyDef
@@ -734,23 +731,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		})
 
 		tableDef = append(tableDef, &engine.CommentDef{Comment: tblItem.Comment})
-	}
-
-	if tblItem.Partitioned > 0 {
-		p := &plan.PartitionByDef{}
-		err := p.UnMarshalPartitionInfo(([]byte)(tblItem.Partition))
-		if err != nil {
-			logutil.Errorf(
-				"catalog-cache error: unmarshal partition metadata information: %v-%v-%v, err: %v",
-				tblItem.AccountId, tblItem.Id, tblItem.Name, err)
-			return nil, nil
-		}
-		partitionInfo = p
-
-		tableDef = append(tableDef, &engine.PartitionDef{
-			Partitioned: tblItem.Partitioned,
-			Partition:   tblItem.Partition,
-		})
 	}
 
 	if tblItem.ViewDef != "" {
@@ -846,7 +826,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Createsql:     Createsql,
 		Pkey:          primarykey,
 		ViewSql:       viewSql,
-		Partition:     partitionInfo,
 		Fkeys:         foreignKeys,
 		RefChildTbls:  refChildTbls,
 		ClusterBy:     clusterByDef,

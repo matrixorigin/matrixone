@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -93,6 +94,11 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 		func(txn executor.TxnExecutor) error {
 			final := s.getFinalVersionHandle().Metadata()
 
+			s.logger.Info("start doCheckUpgrade",
+				zap.String("final-version", final.Version),
+				zap.String("txn-id", hex.EncodeToString(txn.Txn().Txn().ID)),
+			)
+
 			// Deploy mo first time without 1.2.0, init framework first.
 			// And upgrade to current version.
 			created, err := versions.IsFrameworkTablesCreated(txn)
@@ -133,12 +139,19 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			}
 
 			// lock version table
+			startTime := time.Now()
 			if err := txn.LockTable(catalog.MOVersionTable); err != nil {
 				s.logger.Error("failed to lock table",
 					zap.String("table", catalog.MOVersionTable),
+					zap.String("txn-id", hex.EncodeToString(txn.Txn().Txn().ID)),
+					zap.Duration("lock_duration", time.Since(startTime)),
 					zap.Error(err))
 				return err
 			}
+			s.logger.Info("lock table successfully",
+				zap.String("table", catalog.MOVersionTable),
+				zap.String("txn-id", hex.EncodeToString(txn.Txn().Txn().ID)),
+				zap.Duration("lock_duration", time.Since(startTime)))
 
 			v, err := versions.GetLatestVersion(txn)
 			if err != nil {
@@ -156,11 +169,11 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// cluster is upgrading to v1, only v1's cn can start up.
 			if !v.IsReady() {
 				if v.Version != final.Version {
-					panic(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
+					s.logger.Fatal(fmt.Sprintf("cannot upgrade to version %s, because version %s is in upgrading",
 						final.Version,
 						v.Version))
 				} else if v.VersionOffset != final.VersionOffset {
-					panic(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
+					s.logger.Fatal(fmt.Sprintf("cannot upgrade to version %s with versionOffset[%d], because version %s with versionOffset[%d] is in upgrading",
 						final.Version,
 						final.VersionOffset,
 						v.Version,
@@ -170,7 +183,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 			// cluster is running at v1, cannot startup a old version to join cluster.
 			if v.IsReady() && versions.Compare(final.Version, v.Version) < 0 {
-				panic(fmt.Sprintf("cannot startup a old version %s to join cluster, current version is %s",
+				s.logger.Fatal(fmt.Sprintf("cannot startup a old version %s to join cluster, current version is %s",
 					final.Version,
 					v.Version))
 			}
@@ -383,7 +396,7 @@ func (s *service) performUpgrade(
 				zap.String("final", final.Version))
 			return false, nil
 		default:
-			panic(fmt.Sprintf("BUG: invalid state %d", state))
+			s.logger.Fatal(fmt.Sprintf("BUG: invalid state %d", state))
 		}
 	}
 

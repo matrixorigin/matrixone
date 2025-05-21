@@ -157,6 +157,8 @@ const (
 	MO_PITR_ACCOUNT_ID    = "account_id"
 	MO_PITR_DB_NAME       = "database_name"
 	MO_PITR_TABLE_NAME    = "table_name"
+	MO_PITR_STATUS        = "pitr_status"
+	MO_PITR_CHANGED_TIME  = "pitr_status_changed_time"
 
 	MO_RETENTION = "mo_retention"
 
@@ -166,6 +168,8 @@ const (
 	MO_DATA_KEY = "mo_data_key"
 
 	MO_TABLE_STATS = "mo_table_stats_alpha"
+
+	MO_ACCOUNT_LOCK = "__mo_account_lock"
 )
 
 func IsSystemTable(id uint64) bool {
@@ -303,18 +307,23 @@ const (
 	SystemColNoConstraint = "n"
 
 	SystemDBTypeSubscription = "subscription"
+
+	MOPartitionMetadata = "mo_partition_metadata"
+	MOPartitionTables   = "mo_partition_tables"
 )
 
 // Key/Index related constants
 const (
 	UniqueIndexSuffix             = "unique_"
 	FullTextIndexSuffix           = "fulltext_"
+	HnswIndexSuffix               = "hnsw_"
 	SecondaryIndexSuffix          = "secondary_"
 	PrefixIndexTableName          = "__mo_index_"
 	IndexTableNamePrefix          = PrefixIndexTableName
 	UniqueIndexTableNamePrefix    = PrefixIndexTableName + UniqueIndexSuffix
 	SecondaryIndexTableNamePrefix = PrefixIndexTableName + SecondaryIndexSuffix
 	FullTextIndexTableNamePrefix  = PrefixIndexTableName + FullTextIndexSuffix
+	HnswIndexTableNamePrefix      = PrefixIndexTableName + HnswIndexSuffix
 
 	/************ 0. Regular Secondary Index ************/
 
@@ -360,6 +369,25 @@ const (
 	FullTextIndex_TabCol_Word     = "word"
 	FullTextIndex_TabCol_Id       = "doc_id"
 	FullTextIndex_TabCol_Position = "pos"
+
+	/************ 4. HNSW Index *************/
+
+	// HNSW Table Types
+	// NOTE: avoid duplicate TblType name with IVFFLAT or other index
+	Hnsw_TblType_Metadata = "hnsw_meta"
+	Hnsw_TblType_Storage  = "hnsw_index"
+
+	// HNSW Storage - Column names
+	Hnsw_TblCol_Storage_Index_Id = "index_id"
+	Hnsw_TblCol_Storage_Chunk_Id = "chunk_id"
+	Hnsw_TblCol_Storage_Data     = "data"
+	Hnsw_TblCol_Storage_Tag      = "tag"
+
+	// HNSW Metadata - Column names
+	Hnsw_TblCol_Metadata_Index_Id  = "index_id"
+	Hnsw_TblCol_Metadata_Timestamp = "timestamp"
+	Hnsw_TblCol_Metadata_Checksum  = "checksum"
+	Hnsw_TblCol_Metadata_Filesize  = "filesize"
 )
 
 const (
@@ -842,4 +870,12 @@ var SystemDatabases = []string{
 	"mysql",
 	"system",
 	"system_metrics",
+}
+
+func IsUniqueIndexTable(name string) bool {
+	return strings.HasPrefix(name, UniqueIndexTableNamePrefix)
+}
+
+func IsSecondaryIndexTable(name string) bool {
+	return strings.HasPrefix(name, SecondaryIndexTableNamePrefix)
 }

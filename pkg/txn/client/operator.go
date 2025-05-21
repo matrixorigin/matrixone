@@ -24,8 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -38,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 var (
@@ -1304,15 +1303,6 @@ func (tc *txnOperator) RemoveWaitLock(key uint64) {
 	defer tc.mu.Unlock()
 
 	delete(tc.mu.waitLocks, key)
-}
-
-func (tc *txnOperator) LockTableCount() int32 {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
-		panic("lock in optimistic mode")
-	}
-	return int32(len(tc.mu.lockTables))
 }
 
 func (tc *txnOperator) GetOverview() TxnOverview {

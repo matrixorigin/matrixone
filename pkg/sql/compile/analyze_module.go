@@ -48,9 +48,12 @@ type AnalyzeModule struct {
 }
 
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
-func (anal *AnalyzeModule) Reset() {
+func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 	if anal != nil {
-		anal.phyPlan = nil
+		if !isPrepare {
+			anal.phyPlan = nil
+		}
+
 		anal.remotePhyPlans = nil
 		anal.explainPhyBuffer = nil
 		anal.retryTimes = 0
@@ -278,6 +281,24 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 	return phyScope
 }
 
+func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) bool {
+	res := UpdatePreparePhyOperator(scope.RootOp, phyScope.RootOperator)
+	if !res {
+		return false
+	}
+	if scope.ScopeAnalyzer != nil {
+		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
+	}
+
+	for i, preScope := range scope.PreScopes {
+		res = UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
+		if !res {
+			return res
+		}
+	}
+	return true
+}
+
 func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []models.PhyReceiver {
 	receivers := make([]models.PhyReceiver, 0)
 	for i := range rs {
@@ -334,6 +355,28 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 
 	phyOp.Children = phyChildren
 	return phyOp
+}
+
+func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
+	if op == nil {
+		return true
+	}
+
+	if op.GetOperatorBase().OpAnalyzer != nil {
+		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	}
+
+	children := op.GetOperatorBase().Children
+	if len(children) != len(phyOp.Children) {
+		return false
+	}
+	for i, child := range children {
+		res := UpdatePreparePhyOperator(child, phyOp.Children[i])
+		if !res {
+			return res
+		}
+	}
+	return true
 }
 
 // getDestReceiver returns the DestReceiver of the current Operator
@@ -393,6 +436,23 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 		RelationName: source.RelationName,
 		Attributes:   source.Attributes,
 	}
+}
+
+// true means update success, if return false, GenPhyPlan
+func (c *Compile) UpdatePreparePhyPlan(runC *Compile) bool {
+	//------------------------------------------------------------------------------------------------------
+	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
+	c.anal.curNodeIdx = runC.anal.curNodeIdx
+
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			res := UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
+			if !res {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (c *Compile) GenPhyPlan(runC *Compile) {
@@ -511,25 +571,27 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
 				int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
 				statsInfo.PrepareRunStage.ScopePrepareDuration + statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
-				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock - statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
 			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
-			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d)\n",
+			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
 				statsInfo.ParseStage.ParseDuration,
 				statsInfo.PlanStage.PlanDuration,
 				statsInfo.CompileStage.CompileDuration,
 				gblStats.OperatorTimeConsumed,
 				gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
+				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 				statsInfo.IOAccessTimeConsumption,
 				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
+			buffer.WriteString(fmt.Sprintf("\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth))
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.PlanStage.PlanDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption))
 				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanS3Request.List,
 					statsInfo.PlanStage.BuildPlanS3Request.Head,
@@ -538,7 +600,18 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 					statsInfo.PlanStage.BuildPlanS3Request.Delete,
 					statsInfo.PlanStage.BuildPlanS3Request.DeleteMul,
 				))
+				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration)))
 				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsInCacheDuration))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption))
+				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+					statsInfo.PlanStage.BuildPlanStatsS3.List,
+					statsInfo.PlanStage.BuildPlanStatsS3.Head,
+					statsInfo.PlanStage.BuildPlanStatsS3.Put,
+					statsInfo.PlanStage.BuildPlanStatsS3.Get,
+					statsInfo.PlanStage.BuildPlanStatsS3.Delete,
+					statsInfo.PlanStage.BuildPlanStatsS3.DeleteMul,
+				))
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")

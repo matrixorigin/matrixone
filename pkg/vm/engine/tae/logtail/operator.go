@@ -15,74 +15,87 @@
 package logtail
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/tidwall/btree"
 )
 
-// BoundTableOperator holds a read only reader, knows how to iterate catalog entries.
 type BoundTableOperator struct {
-	catalog *catalog.Catalog
-	reader  *Reader
-	visitor catalog.Processor
-	dbID    uint64
-	tableID uint64
+	from, to types.TS
+	tbl      *catalog.TableEntry
+	visitor  *TableLogtailRespBuilder
+
+	dAScanCnt, dSScanCnt int
+	tAScanCnt, tSScanCnt int
 }
 
-func NewBoundTableOperator(catalog *catalog.Catalog,
-	reader *Reader,
-	dbID, tableID uint64,
-	visitor catalog.Processor) *BoundTableOperator {
-	return &BoundTableOperator{
-		catalog: catalog,
-		reader:  reader,
-		visitor: visitor,
-		tableID: tableID,
-		dbID:    dbID,
+func (c *BoundTableOperator) Report() string {
+	return fmt.Sprintf("dAScanCnt: %d, dSScanCnt: %d, tAScanCnt: %d, tSScanCnt: %d", c.dAScanCnt, c.dSScanCnt, c.tAScanCnt, c.tSScanCnt)
+}
+
+func (c *BoundTableOperator) recordReport(isTombstone bool, appendable bool) {
+	if isTombstone {
+		if appendable {
+			c.tAScanCnt++
+		} else {
+			c.tSScanCnt++
+		}
+	} else {
+		if appendable {
+			c.dAScanCnt++
+		} else {
+			c.dSScanCnt++
+		}
 	}
 }
 
-// Run takes a RespBuilder to visit every table/Object/block touched by all txn
-// in the Reader. During the visiting, RespBuiler will fetch information to return logtail entry
+// iterObject is allowed to yield false positive results, because ForeachMVCCNodeInRange will check the accuracy of the result.
+func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) error {
+	var it btree.IterG[*catalog.ObjectEntry]
+	if isTombstone {
+		it = c.tbl.MakeTombstoneObjectIt()
+	} else {
+		it = c.tbl.MakeDataObjectIt()
+	}
+	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: to.Next()}}
+	var ok bool
+	if ok = it.Seek(key); !ok {
+		ok = it.Last()
+	}
+
+	// after seeking, the first object could be out of the range, but false positive is allowed.
+	earlybreak := false
+	for ; ok; ok = it.Prev() {
+		if earlybreak {
+			break
+		}
+		obj := it.Item()
+		c.recordReport(isTombstone, obj.GetAppendable())
+		if obj.IsAppendable() && obj.IsCEntry() && obj.CreatedAt.LT(&from) {
+			earlybreak = true
+		}
+
+		if next := obj.GetNextVersion(); obj.IsCEntry() && next != nil && next.DeletedAt.LE(&to) {
+			continue
+		}
+
+		if err := c.visitor.VisitObj(obj); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *BoundTableOperator) Run() error {
-	return c.processTableData()
-}
-
-// For normal user table, pick out all dirty blocks and call OnBlock
-func (c *BoundTableOperator) processTableData() error {
-	db, err := c.catalog.GetDatabaseByID(c.dbID)
-	if err != nil {
+	c.tbl.WaitDataObjectCommitted(c.to)
+	if err := c.iterObject(c.from, c.to, false); err != nil {
 		return err
 	}
-	tbl, err := db.GetTableEntryByID(c.tableID)
-	if err != nil {
+	c.tbl.WaitTombstoneObjectCommitted(c.to)
+	if err := c.iterObject(c.from, c.to, true); err != nil {
 		return err
-	}
-	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
-	for _, dirtyObj := range dirty.Objs {
-		obj, err := tbl.GetObjectByID(dirtyObj.ID, false)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				continue
-			}
-			return err
-		}
-		if err = c.visitor.OnObject(obj); err != nil {
-			return err
-		}
-
-	}
-	for _, dirtyObj := range dirty.Tombstones {
-		obj, err := tbl.GetObjectByID(dirtyObj.ID, true)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-				continue
-			}
-			return err
-		}
-		if err = c.visitor.OnTombstone(obj); err != nil {
-			return err
-		}
-
 	}
 	return nil
 }

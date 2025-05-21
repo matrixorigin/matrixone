@@ -17,6 +17,7 @@ package lockop
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -104,6 +105,7 @@ func (lockOp *LockOp) Release() {
 
 type lockTarget struct {
 	tableID                      uint64
+	objRef                       *plan.ObjectRef
 	primaryColumnIndexInBatch    int32
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
@@ -125,7 +127,8 @@ type hasNewVersionInRangeFunc func(
 	analyzer process.Analyzer,
 	tableID uint64,
 	eng engine.Engine,
-	vec *vector.Vector,
+	bat *batch.Batch,
+	idx int32,
 	from, to timestamp.Timestamp) (bool, error)
 
 type state struct {
@@ -133,6 +136,7 @@ type state struct {
 	retryError           error
 	defChanged           bool
 	fetchers             []FetchLockRowsFunc
+	relations            []engine.Relation
 	hasNewVersionInRange hasNewVersionInRangeFunc
 	lockCount            int64
 }

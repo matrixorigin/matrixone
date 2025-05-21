@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -76,13 +77,14 @@ type container struct {
 	pool           *BatchPool
 	// debug_len      uint32
 
-	state            vm.CtrState
-	resBat           *batch.Batch
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
-	affectedRows     uint64
+	state        vm.CtrState
+	resBat       *batch.Batch
+	source       engine.Relation
+	affectedRows uint64
 }
 type Deletion struct {
+	delegated bool
+	input     vm.CallResult
 	ctr       container
 	DeleteCtx *DeleteCtx
 
@@ -128,13 +130,8 @@ func (deletion *Deletion) Release() {
 }
 
 type DeleteCtx struct {
-	CanTruncate           bool
-	RowIdIdx              int      // The array index position of the rowid column
-	PartitionTableIDs     []uint64 // Align array index with the partition number
-	PartitionTableNames   []string // Align array index with the partition number
-	PartitionIndexInBatch int      // The array index position of the partition expression column
-	// PartitionSources      []engine.Relation // Align array index with the partition number
-	// Source                engine.Relation
+	CanTruncate     bool
+	RowIdIdx        int // The array index position of the rowid column
 	Ref             *plan.ObjectRef
 	AddAffectedRows bool // for hidden table, should not update affect Rows
 	PrimaryKeyIdx   int
@@ -181,9 +178,6 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 		ctr.resBat.CleanOnlyData()
 	}
 
-	ctr.partitionSources = nil
-	ctr.source = nil
-
 	ctr.batch_size = 0
 	ctr.deleted_length = 0
 }
@@ -205,7 +199,6 @@ func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.resBat = nil
 	}
 
-	ctr.partitionSources = nil
 	ctr.source = nil
 }
 
@@ -219,28 +212,7 @@ func (deletion *Deletion) GetAffectedRows() uint64 {
 
 func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch, analyzer process.Analyzer) error {
 	delCtx := deletion.DeleteCtx
-	// If the target table is a partition table, group and split the batch data
-	if len(deletion.ctr.partitionSources) != 0 {
-		pkTyp := srcBat.Vecs[delCtx.PrimaryKeyIdx].GetType()
-		deletion.ctr.resBat.SetVector(0, vector.NewVec(types.T_Rowid.ToType()))
-		deletion.ctr.resBat.SetVector(1, vector.NewVec(*pkTyp))
-		var err error
-
-		for partIdx := range len(delCtx.PartitionTableIDs) {
-			deletion.ctr.resBat.CleanOnlyData()
-			expect := int32(partIdx)
-			err = colexec.FillPartitionBatchForDelete(proc, srcBat, deletion.ctr.resBat, expect, delCtx.RowIdIdx, delCtx.PartitionIndexInBatch, delCtx.PrimaryKeyIdx)
-			if err != nil {
-				deletion.ctr.resBat.Clean(proc.Mp())
-				return err
-			}
-
-			collectBatchInfo(proc, deletion, deletion.ctr.resBat, 0, partIdx, 1)
-		}
-		deletion.ctr.resBat.CleanOnlyData()
-	} else {
-		collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
-	}
+	collectBatchInfo(proc, deletion, srcBat, deletion.DeleteCtx.RowIdIdx, 0, delCtx.PrimaryKeyIdx)
 	// we will flush all
 	if deletion.ctr.batch_size >= uint32(flushThreshold) {
 		size, err := deletion.ctr.flush(proc, analyzer)
@@ -253,53 +225,82 @@ func (deletion *Deletion) SplitBatch(proc *process.Process, srcBat *batch.Batch,
 }
 
 func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (uint32, error) {
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	if err != nil {
+		return 0, err
+	}
+
 	resSize := uint32(0)
 	for pidx, blockId_rowIdBatch := range ctr.partitionId_blockId_rowIdBatch {
-		s3writer, err := colexec.NewS3TombstoneWriter()
-		if err != nil {
-			return 0, err
-		}
 		blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
 		for blkid := range blockId_rowIdBatch {
 			//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
-			if ctr.blockId_type[blkid] != RawRowIdBatch {
+			if ctr.blockId_type[blkid] == DeletionOnTxnUnCommit {
 				continue
 			}
 			blkids = append(blkids, blkid)
 		}
+
+		var (
+			err       error
+			statsList []objectio.ObjectStats
+			s3writer  *colexec.CNS3Writer
+		)
+
+		defer func() {
+			if s3writer != nil {
+				s3writer.Close(proc.GetMPool())
+			}
+		}()
+
 		slices.SortFunc(blkids, func(a, b types.Blockid) int {
 			return a.Compare(&b)
 		})
 		for _, blkid := range blkids {
 			bat := blockId_rowIdBatch[blkid]
 
-			s3writer.StashBatch(proc, bat)
+			if s3writer == nil {
+				pkType := *bat.Vecs[1].GetType()
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType)
+			}
+
+			if err = s3writer.Write(proc.Ctx, proc.Mp(), bat); err != nil {
+				return 0, err
+			}
+
 			resSize += uint32(bat.Size())
 			bat.CleanOnlyData()
 			ctr.pool.put(bat)
 			delete(blockId_rowIdBatch, blkid)
 		}
 
+		if s3writer == nil {
+			continue
+		}
+
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		_, stats, err := s3writer.SortAndSync(newCtx, proc)
-		if err != nil {
+		if statsList, err = s3writer.Sync(newCtx, proc.Mp()); err != nil {
 			return 0, err
 		}
+
 		analyzer.AddS3RequestCount(crs)
 		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
-		bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-		bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
-		if err = vector.AppendBytes(
-			bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
-			return 0, err
-		}
+		for _, stats := range statsList {
+			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
+			bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+			if err = vector.AppendBytes(
+				bat.GetVector(0), stats.Marshal(), false, proc.GetMPool()); err != nil {
+				return 0, err
+			}
 
-		bat.SetRowCount(bat.Vecs[0].Length())
-		ctr.partitionId_tombstoneObjectStatsBats[pidx] =
-			append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
+			bat.SetRowCount(bat.Vecs[0].Length())
+			ctr.partitionId_tombstoneObjectStatsBats[pidx] =
+				append(ctr.partitionId_tombstoneObjectStatsBats[pidx], bat)
+		}
 	}
 	return resSize, nil
 }
@@ -328,12 +329,10 @@ func collectBatchInfo(proc *process.Process, deletion *Deletion, destBatch *batc
 
 		deletion.ctr.deleted_length += 1
 
-		if deletion.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
-			deletion.ctr.blockId_type[blkid] = RawBatchOffset
-		} else if deletion.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
-			deletion.ctr.blockId_type[blkid] = CNBlockOffset
+		if colexec.IsDeletionOnTxnUnCommit(deletion.SegmentMap, &segid) {
+			deletion.ctr.blockId_type[blkid] = DeletionOnTxnUnCommit
 		} else {
-			deletion.ctr.blockId_type[blkid] = RawRowIdBatch
+			deletion.ctr.blockId_type[blkid] = DeletionOnCommitted
 		}
 
 		if _, ok := deletion.ctr.partitionId_blockId_rowIdBatch[pIdx]; !ok {

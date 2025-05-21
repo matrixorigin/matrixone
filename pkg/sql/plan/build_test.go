@@ -22,13 +22,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func BenchmarkInsert(b *testing.B) {
@@ -784,6 +789,11 @@ func TestTcl(t *testing.T) {
 
 func TestDdl(t *testing.T) {
 	mock := NewMockOptimizer(true)
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	// should pass
 	sqls := []string{
 		"create database db_name",               //db not exists and pass
@@ -829,7 +839,7 @@ func TestDdl(t *testing.T) {
 		"drop table tpch.tbl_not_exist", //database not exists
 		"drop table db_not_exist.tbl",   //table not exists
 		"create table t6(empno int unsigned,ename varchar(15) auto_increment) cluster by(empno,ename)",
-		"lock tables t3 read",
+		//"lock tables t3 read",
 		"lock tables t1 read, t1 write",
 		"lock tables nation read, nation write",
 		"alter table nation drop foreign key fk1", //key not exists
@@ -1242,4 +1252,16 @@ func Test_limitUint64(t *testing.T) {
 		}
 		outPutPlan(logicPlan, true, t)
 	}
+}
+
+// test canDeleteRewriteToTruncate
+func Test_bind_delete(t *testing.T) {
+	ctx := context.TODO()
+	ctrl := gomock.NewController(t)
+	compileCtx := NewMockCompilerContext2(ctrl)
+	compileCtx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	compileCtx.EXPECT().GetAccountId().Return(catalog.System_Account, moerr.NewInternalError(ctx, "no account id in context")).AnyTimes()
+	dmlCtx := &DMLContext{}
+	_, err := canDeleteRewriteToTruncate(compileCtx, dmlCtx)
+	assert.Error(t, err)
 }

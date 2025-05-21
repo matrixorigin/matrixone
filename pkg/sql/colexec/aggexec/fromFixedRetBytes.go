@@ -341,12 +341,11 @@ func (exec *aggregatorFromFixedToBytes[from]) BulkFill(
 	}
 
 	exec.arg.prepare(vectors[0])
-	bs := exec.ret.getEmptyListOnX(x)
 	if exec.arg.w.WithAnyNullValue() {
 		for i, j := uint64(0), uint64(length); i < j; i++ {
 			v, null := exec.arg.w.GetValue(i)
 			if !null {
-				if err := exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+				if err := exec.fill(groupContext, commonContext, v, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 					return err
 				}
 				exec.ret.setGroupNotEmpty(x, y)
@@ -357,7 +356,7 @@ func (exec *aggregatorFromFixedToBytes[from]) BulkFill(
 
 	vs := exec.arg.w.UnSafeGetAllValue()
 	for _, v := range vs {
-		if err := exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+		if err := exec.fill(groupContext, commonContext, v, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 			return err
 		}
 		exec.ret.setGroupNotEmpty(x, y)
@@ -388,13 +387,12 @@ func (exec *aggregatorFromFixedToBytes[from]) distinctBulkFill(
 		return err
 	}
 
-	bs := exec.ret.getEmptyListOnX(x)
 	if exec.arg.w.WithAnyNullValue() {
 		for i, j := uint64(0), uint64(length); i < j; i++ {
 			if needs[i] {
 				v, null := exec.arg.w.GetValue(i)
 				if !null {
-					if err = exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+					if err = exec.fill(groupContext, commonContext, v, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 						return err
 					}
 					exec.ret.setGroupNotEmpty(x, y)
@@ -407,7 +405,7 @@ func (exec *aggregatorFromFixedToBytes[from]) distinctBulkFill(
 	vs := exec.arg.w.UnSafeGetAllValue()
 	for i, v := range vs {
 		if needs[i] {
-			if err = exec.fill(groupContext, commonContext, v, bs[y], getter, setter); err != nil {
+			if err = exec.fill(groupContext, commonContext, v, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 				return err
 			}
 			exec.ret.setGroupNotEmpty(x, y)
@@ -429,7 +427,6 @@ func (exec *aggregatorFromFixedToBytes[from]) BatchFill(
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
-	bs := exec.ret.getEmptyList()
 
 	if vectors[0].IsConst() {
 		value := vector.MustFixedColWithTypeCheck[from](vectors[0])[0]
@@ -438,7 +435,7 @@ func (exec *aggregatorFromFixedToBytes[from]) BatchFill(
 				idx := int(group - 1)
 				x, y := exec.ret.updateNextAccessIdx(idx)
 				if err := exec.fill(
-					exec.execContext.getGroupContext(idx), commonContext, value, bs[x][y], getter, setter); err != nil {
+					exec.execContext.getGroupContext(idx), commonContext, value, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 					return err
 				}
 				exec.ret.setGroupNotEmpty(x, y)
@@ -456,7 +453,7 @@ func (exec *aggregatorFromFixedToBytes[from]) BatchFill(
 					groupIdx := int(groups[idx] - 1)
 					x, y := exec.ret.updateNextAccessIdx(groupIdx)
 					if err := exec.fill(
-						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
+						exec.execContext.getGroupContext(groupIdx), commonContext, v, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 						return err
 					}
 					exec.ret.setGroupNotEmpty(x, y)
@@ -473,7 +470,7 @@ func (exec *aggregatorFromFixedToBytes[from]) BatchFill(
 			groupIdx := int(groups[idx] - 1)
 			x, y := exec.ret.updateNextAccessIdx(groupIdx)
 			if err := exec.fill(
-				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], bs[x][y], getter, setter); err != nil {
+				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 				return err
 			}
 			exec.ret.setGroupNotEmpty(x, y)
@@ -488,7 +485,6 @@ func (exec *aggregatorFromFixedToBytes[from]) distinctBatchFill(
 	getter := exec.ret.get
 	setter := exec.ret.set
 	commonContext := exec.execContext.getCommonContext()
-	bs := exec.ret.getEmptyList()
 
 	needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
 	if err != nil {
@@ -502,7 +498,7 @@ func (exec *aggregatorFromFixedToBytes[from]) distinctBatchFill(
 				idx := int(group - 1)
 				x, y := exec.ret.updateNextAccessIdx(idx)
 				if err = exec.fill(
-					exec.execContext.getGroupContext(idx), commonContext, value, bs[x][y], getter, setter); err != nil {
+					exec.execContext.getGroupContext(idx), commonContext, value, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 					return err
 				}
 				exec.ret.setGroupNotEmpty(x, y)
@@ -520,7 +516,7 @@ func (exec *aggregatorFromFixedToBytes[from]) distinctBatchFill(
 					groupIdx := int(groups[idx] - 1)
 					x, y := exec.ret.updateNextAccessIdx(groupIdx)
 					if err = exec.fill(
-						exec.execContext.getGroupContext(groupIdx), commonContext, v, bs[x][y], getter, setter); err != nil {
+						exec.execContext.getGroupContext(groupIdx), commonContext, v, exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 						return err
 					}
 					exec.ret.setGroupNotEmpty(x, y)
@@ -537,7 +533,7 @@ func (exec *aggregatorFromFixedToBytes[from]) distinctBatchFill(
 			groupIdx := int(groups[idx] - 1)
 			x, y := exec.ret.updateNextAccessIdx(groupIdx)
 			if err = exec.fill(
-				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], bs[x][y], getter, setter); err != nil {
+				exec.execContext.getGroupContext(groupIdx), commonContext, vs[i], exec.ret.bsFromEmptyList[x][y], getter, setter); err != nil {
 				return err
 			}
 			exec.ret.setGroupNotEmpty(x, y)

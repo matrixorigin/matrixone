@@ -185,14 +185,21 @@ func TestCheckpointCatalog2(t *testing.T) {
 	}
 	wg.Wait()
 	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(ts, false)
+	err = tae.BGCheckpointRunner.ForceICKP(ctx, &ts)
 	assert.NoError(t, err)
 	lsn := tae.BGCheckpointRunner.MaxLSNInRange(ts)
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		if tae.Wal.GetPenddingCnt() != 0 {
+			return false
+		}
+		ckp := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+		if ckp == nil {
+			return true
+		}
+		return ckp.IsFinished()
 	})
 	assert.Equal(t, tae.BGCheckpointRunner.MaxLSN(), tae.Runtime.Scheduler.GetCheckpointedLSN())
 }

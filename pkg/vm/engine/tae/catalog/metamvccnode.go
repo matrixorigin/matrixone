@@ -20,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -171,11 +172,10 @@ func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batc
 	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
 }
 
-func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
-	buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(row).([]byte)
-	e = &ObjectMVCCNode{
-		ObjectStats: (objectio.ObjectStats)(buf),
-	}
+func ReadObjectInfoTuple(objs *vector.Vector, row int) (e *ObjectMVCCNode) {
+	objBuf := objs.GetBytesAt(row)
+	e = new(ObjectMVCCNode)
+	e.ObjectStats.UnMarshal(objBuf)
 	return
 }
 
@@ -186,7 +186,9 @@ type ObjectNode struct {
 	// for tombstone
 	IsTombstone bool
 
-	forcePNode bool // not persisted, a flag to force ckp-replayed aobject to be created as a pnode
+	forcePNode  bool // not persisted, a flag to force ckp-replayed aobject to be created as a pnode
+	nextVersion *ObjectEntry
+	prevVersion *ObjectEntry
 }
 
 const (

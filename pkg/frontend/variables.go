@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext"
 )
 
 var (
@@ -955,12 +957,20 @@ type GlobalSysVarsMgr struct {
 	accountsGlobalSysVarsMap map[uint32]*SystemVariables
 }
 
+func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
+	sysVarsMp["version_comment"] = CNServiceConfig.VersionComment
+	sysVarsMp["version"] = CNServiceConfig.ServerVersionPrefix + CNServiceConfig.MoVersion
+}
+
 // Get return sys vars of accountId
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
+
+	CNServiceConfig := getPu(ses.service).SV
+	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
 
 	m.Lock()
 	defer m.Unlock()
@@ -1040,7 +1050,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 67108864, false),
+		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
 		Default:           int64(67108864),
 	},
 	"version_comment": {
@@ -1147,6 +1157,24 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("character_set_results"),
 		Default:           "utf8mb4",
 	},
+
+	"cl_host": {
+		Name:              "cl_host",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_host"),
+		Default:           "CGO",
+	},
+	"cl_runtime": {
+		Name:              "cl_runtime",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_runtime"),
+		Default:           "C",
+	},
+
 	"collation_connection": {
 		Name:              "collation_connection",
 		Scope:             ScopeBoth,
@@ -1725,6 +1753,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("delayed_queue_size", 1, math.MaxInt64, false),
 		Default:           int64(1000),
+	},
+	"delete_opt_to_truncate": {
+		Name:              "delete_opt_to_truncate",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("delete_opt_to_truncate"),
+		Default:           int64(1),
 	},
 	"disabled_storage_engines": {
 		Name:              "disabled_storage_engines",
@@ -2413,6 +2449,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("min_examined_row_limit", 0, 4294967295, false),
 		Default:           int64(0),
+	},
+	"moplugin_allowed_hosts": {
+		Name:              "moplugin_allowed_hosts",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("moplugin_allowed_hosts"),
+		Default:           "localhost",
 	},
 	"myisam_data_pointer_size": {
 		Name:              "myisam_data_pointer_size",
@@ -3494,6 +3538,46 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int64(0),
 	},
+	"ivf_threads_build": {
+		Name:              "ivf_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"ivf_threads_search": {
+		Name:              "ivf_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivf_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"probe_limit": {
+		Name:              "probe_limit",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("probe_limit", 1, 1024, false),
+		Default:           int64(5),
+	},
+	"kmeans_train_percent": {
+		Name:              "kmeans_train_percent",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("kmeans_train_percent", 1, 100, false),
+		Default:           int64(10),
+	},
+	"kmeans_max_iteration": {
+		Name:              "kmeans_max_iteration",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("kmeans_max_iteration", 10, 500, false),
+		Default:           int64(20),
+	},
 	"disable_agg_statement": {
 		Name:              "disable_agg_statement",
 		Scope:             ScopeSession,
@@ -3509,6 +3593,46 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("experimental_fulltext_index"),
 		Default:           int64(0),
+	},
+	"ft_relevancy_algorithm": {
+		Name:              fulltext.FulltextRelevancyAlgo,
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(fulltext.FulltextRelevancyAlgo),
+		Default:           fulltext.FulltextRelevancyAlgo_tfidf,
+	},
+	"experimental_hnsw_index": {
+		Name:              "experimental_hnsw_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_hnsw_index"),
+		Default:           int64(0),
+	},
+	"hnsw_threads_build": {
+		Name:              "hnsw_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"hnsw_threads_search": {
+		Name:              "hnsw_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"hnsw_max_index_capacity": {
+		Name:              "hnsw_max_index_capacity",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
+		Default:           int64(1000000),
 	},
 	"validate_password": {
 		Name:              "validate_password",

@@ -317,7 +317,7 @@ func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID 
 func (txn *activeTxn) fetchWhoWaitingMe(
 	serviceID string,
 	txnID []byte,
-	waiters func(pb.WaitTxn) bool,
+	waiters func(pb.WaitTxn, string) bool,
 	lockTableFunc func(uint32, uint64) (lockTable, error)) bool {
 	txn.RLock()
 	// txn already closed
@@ -368,13 +368,14 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 
 		locks := lockKeys[idx]
 		hasDeadLock := false
+		waiterAddress := l.getBind().ServiceID
 		locks.iter(func(lockKey []byte) bool {
 			l.getLock(
 				lockKey,
 				wt,
 				func(lock Lock) {
 					lock.waiters.iter(func(w *waiter) bool {
-						hasDeadLock = !waiters(w.txn)
+						hasDeadLock = !waiters(w.txn, waiterAddress)
 						return !hasDeadLock
 					})
 				})

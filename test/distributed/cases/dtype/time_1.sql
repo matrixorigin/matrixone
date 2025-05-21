@@ -47,7 +47,9 @@ select count(t1),t2 from time_01 group by t2 order by t2;
 select min(t1),max(t2) from time_01;
 drop table time_02;
 -- primary key default and compk
+-- @bvt:issue#16438
 create table time_02 (t1 int,t2 time primary key,t3 varchar(25))partition by hash(t2)partitions 4;
+-- @bvt:issue
 create table time_03 (t1 int,t2 time primary key,t3 varchar(25));
 insert into time_03 values (30,"101412","yellow");
 -- @pattern

@@ -16,17 +16,18 @@ package merge
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"math"
 	"os"
 	"path"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestResourceController(t *testing.T) {
@@ -40,6 +41,13 @@ func TestResourceController(t *testing.T) {
 	require.Equal(t, int64(1), rc.availableMem())
 
 	require.Panics(t, func() { rc.setMemLimit(0) })
+
+	objs := []*catalog.ObjectEntry{
+		newTestObjectEntry(t, 0, false),
+		newTestVarcharObjectEntry(t, "", "", 2),
+	}
+	rc.reserveResources(int64(mergesort.EstimateMergeSize(IterEntryAsStats(objs))))
+	require.Greater(t, rc.reserved, int64(120))
 }
 
 func Test_CleanUpUselessFiles(t *testing.T) {
@@ -71,28 +79,6 @@ func Test_CleanUpUselessFiles(t *testing.T) {
 	CleanUpUselessFiles(ent, fs)
 }
 
-func TestScore(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 3, 1)
-	o2 := newSortedTestObjectEntry(t, 1, 4, 2)
-	o3 := newSortedTestObjectEntry(t, 1, 5, 4)
-	o4 := newSortedTestObjectEntry(t, 1, 100, 4)
-	o5 := newSortedTestObjectEntry(t, 5, 10, math.MaxInt32)
-
-	// should merge
-	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o1}))
-	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o2}))
-	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o1, o3}))
-	// should not merge
-	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o4}))
-	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o2, o4}))
-	require.Greater(t, 1.1, score([]*catalog.ObjectEntry{o1, o5}))
-
-	o6 := newTestVarcharObjectEntry(t, "a", "z", 1)
-	o7 := newTestVarcharObjectEntry(t, "b", "y", 1)
-
-	require.Less(t, 1.1, score([]*catalog.ObjectEntry{o6, o7}))
-}
-
 func TestRemoveOversize(t *testing.T) {
 	o1 := newSortedTestObjectEntry(t, 0, 0, 1)
 	o2 := newSortedTestObjectEntry(t, 0, 0, 2)
@@ -102,30 +88,19 @@ func TestRemoveOversize(t *testing.T) {
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o1, o2}))
 	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o5, o1, o2}))
 	require.ElementsMatch(t, nil, removeOversize([]*catalog.ObjectEntry{o1, o3}))
-}
 
-func TestDiff(t *testing.T) {
-	require.Equal(t, uint64(0), diff(false, false, types.T_bool))
-	require.Equal(t, uint64(1), diff(false, true, types.T_bool))
-	require.Equal(t, uint64(10), diff(int8(1), int8(11), types.T_int8))
-	require.Equal(t, uint64(10), diff(uint8(1), uint8(11), types.T_uint8))
-	require.Equal(t, uint64(10), diff(int16(1), int16(11), types.T_int16))
-	require.Equal(t, uint64(10), diff(uint16(1), uint16(11), types.T_uint16))
-	require.Equal(t, uint64(10), diff(int32(1), int32(11), types.T_int32))
-	require.Equal(t, uint64(10), diff(uint32(1), uint32(11), types.T_uint32))
-	require.Equal(t, uint64(10), diff(int64(1), int64(11), types.T_int64))
-	require.Equal(t, uint64(10), diff(uint64(1), uint64(11), types.T_uint64))
-	require.Equal(t, uint64(10), diff(int8(1), int8(11), types.T_int8))
-	require.Equal(t, uint64(10), diff(int8(1), int8(11), types.T_int8))
-	require.Equal(t, uint64(10), diff(float32(1), float32(11), types.T_float32))
-	require.Equal(t, uint64(10), diff(float64(1), float64(11), types.T_float64))
-	require.Equal(t, uint64(10), diff(types.Date(1), types.Date(11), types.T_date))
-	require.Equal(t, uint64(10), diff(types.Datetime(1), types.Datetime(11), types.T_datetime))
-	require.Equal(t, uint64(10), diff(types.Time(1), types.Time(11), types.T_time))
-	require.Equal(t, uint64(10), diff(types.Timestamp(1), types.Timestamp(11), types.T_timestamp))
-	require.Equal(t, uint64(10), diff(types.Enum(1), types.Enum(11), types.T_enum))
-	require.Equal(t, uint64(10), diff(types.Decimal64(1), types.Decimal64(11), types.T_decimal64))
-	require.Equal(t, uint64(math.MaxUint64), diff(types.Decimal128{}, types.Decimal128{}, types.T_decimal128))
+	os := []*catalog.ObjectEntry{}
+	sizes := []uint32{}
+	for i := 0; i < 100; i++ {
+		sizes = append(sizes, uint32(i+1000))
+	}
+	sizes[0] = 1
+	sizes[1] = 10
+	sizes[2] = 100
+	for i := 0; i < 100; i++ {
+		os = append(os, newSortedTestObjectEntry(t, 0, 0, sizes[i]))
+	}
+	require.ElementsMatch(t, []*catalog.ObjectEntry{os[0], os[1]}, removeOversize(os))
 }
 
 func BenchmarkRemoveOversize(b *testing.B) {

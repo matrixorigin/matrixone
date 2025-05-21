@@ -25,6 +25,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,8 +55,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
 )
 
 const (
@@ -134,6 +135,7 @@ const (
 const (
 	CommitWorkspaceThreshold       uint64 = 1 * mpool.MB
 	WriteWorkspaceThreshold        uint64 = 5 * mpool.MB
+	ExtraWorkspaceThreshold        uint64 = 500 * mpool.MB
 	InsertEntryThreshold                  = 5000
 	GCBatchOfFileCount             int    = 1000
 	GCPoolSize                     int    = 5
@@ -144,7 +146,9 @@ var (
 	_ client.Workspace = (*Transaction)(nil)
 )
 
-var GcCycle = 10 * time.Second
+var (
+	GcCycle = 10 * time.Second
+)
 
 type DNStore = metadata.TNService
 
@@ -165,6 +169,12 @@ func WithCommitWorkspaceThreshold(th uint64) EngineOptions {
 func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 	return func(e *Engine) {
 		e.config.writeWorkspaceThreshold = th
+	}
+}
+
+func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.quota.Store(quota)
 	}
 }
 
@@ -215,6 +225,8 @@ type Engine struct {
 		insertEntryMaxCount      int
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64
+		extraWorkspaceThreshold  uint64
+		quota                    atomic.Uint64
 
 		cnTransferTxnLifespanThreshold time.Duration
 
@@ -224,7 +236,7 @@ type Engine struct {
 	}
 
 	//latest catalog will be loaded from TN when engine is initialized.
-	catalog *cache.CatalogCache
+	catalog atomic.Pointer[cache.CatalogCache]
 	//latest partitions which be protected by e.Lock().
 	partitions map[[2]uint64]*logtailreplay.Partition
 	//snapshot partitions
@@ -301,18 +313,14 @@ type Transaction struct {
 
 	idGen IDGenerator
 
-	// interim incremental rowid
-	rowId [6]uint32
-	segId types.Uuid
+	currentRowId types.Rowid
+
 	// use to cache opened snapshot tables by current txn.
 	tableCache *sync.Map
-	// use to cache databases created by current txn.
-	databaseMap *sync.Map
-	// Used to record deleted databases in transactions.
-	deletedDatabaseMap *sync.Map
 
 	// used to keep updated tables in the current txn
 	tableOps            *tableOpsChain
+	databaseOps         *dbOpsChain
 	restoreTxnTableFunc []func()
 
 	// record the table dropped in the txn,
@@ -346,9 +354,9 @@ type Transaction struct {
 		lastTransferred types.TS
 		timestamps      []timestamp.Timestamp
 		pendingTransfer bool
-
-		//workerPool *ants.Pool
 	}
+
+	compactWorker *ants.Pool
 
 	//the start time of first statement in a txn.
 	start time.Time
@@ -364,8 +372,9 @@ type Transaction struct {
 
 	haveDDL atomic.Bool
 
-	writeWorkspaceThreshold  uint64
-	commitWorkspaceThreshold uint64
+	writeWorkspaceThreshold      uint64
+	commitWorkspaceThreshold     uint64
+	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
 }
 
 type Pos struct {
@@ -393,7 +402,7 @@ func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64
 	b.offsets[*blockID] = append(b.offsets[*blockID], offsets...)
 }
 
-func (b *deletedBlocks) getDeletedRowIDs(appendTo func(row *types.Rowid)) {
+func (b *deletedBlocks) getDeletedRowIDs(appendTo func(row types.Rowid)) {
 	b.RLock()
 	defer b.RUnlock()
 	for bid, offsets := range b.offsets {
@@ -421,27 +430,15 @@ func (b *deletedBlocks) iter(fn func(*types.Blockid, []int64) bool) {
 }
 
 func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
-	id := objectio.NewSegmentid()
-	bytes := types.EncodeUuid(id)
 	txn := &Transaction{
-		proc:               proc,
-		engine:             eng,
-		idGen:              eng.idGen,
-		tnStores:           eng.GetTNServices(),
-		tableCache:         new(sync.Map),
-		databaseMap:        new(sync.Map),
-		deletedDatabaseMap: new(sync.Map),
-		tableOps:           newTableOps(),
-		tablesInVain:       make(map[uint64]int),
-		rowId: [6]uint32{
-			types.DecodeUint32(bytes[0:4]),
-			types.DecodeUint32(bytes[4:8]),
-			types.DecodeUint32(bytes[8:12]),
-			types.DecodeUint32(bytes[12:16]),
-			0,
-			0,
-		},
-		segId: *id,
+		proc:         proc,
+		engine:       eng,
+		idGen:        eng.idGen,
+		tnStores:     eng.GetTNServices(),
+		tableCache:   new(sync.Map),
+		databaseOps:  newDbOps(),
+		tableOps:     newTableOps(),
+		tablesInVain: make(map[uint64]int),
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
@@ -454,11 +451,9 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		writeWorkspaceThreshold:  eng.config.writeWorkspaceThreshold,
 	}
 
-	//txn.transfer.workerPool, _ = ants.NewPool(min(runtime.NumCPU(), 4))
-
 	txn.readOnly.Store(true)
-	// transaction's local segment for raw batch.
-	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
+	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
 	return txn
 }
 
@@ -808,13 +803,6 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	txn.incrStatementCalled = false
 	return nil
 }
-func (txn *Transaction) resetSnapshot() error {
-	txn.tableCache.Range(func(key, value interface{}) bool {
-		value.(*txnTableDelegate).origin.resetSnapshot()
-		return true
-	})
-	return nil
-}
 
 func (txn *Transaction) IncrSQLCount() {
 	n := txn.sqlCount.Add(1)
@@ -837,8 +825,7 @@ func (txn *Transaction) advanceSnapshot(
 		return err
 	}
 
-	// reset to get the latest partitionstate
-	return txn.resetSnapshot()
+	return nil
 }
 
 // For RC isolation, update the snapshot TS of transaction for each statement.
@@ -941,12 +928,25 @@ type tableOp struct {
 
 type tableOpsChain struct {
 	sync.RWMutex
-	names map[tableKey][]tableOp
+	names       map[tableKey][]tableOp
+	creatdInTxn map[uint64]int // tableId -> statementId
+}
+
+type dbOp struct {
+	kind        int
+	databaseId  uint64
+	statementId int
+	payload     *txnDatabase
 }
 
 type databaseKey struct {
 	accountId uint32
 	name      string
+}
+
+type dbOpsChain struct {
+	sync.RWMutex
+	names map[databaseKey][]dbOp
 }
 
 // txnTable represents an opened table in a transaction
@@ -963,7 +963,6 @@ type txnTable struct {
 	tableDef      *plan.TableDef
 	seqnums       []uint16
 	typs          []types.Type
-	_partState    atomic.Pointer[logtailreplay.PartitionState]
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
 	clusterByIdx  int // -1 means no clusterBy key
@@ -988,6 +987,8 @@ type txnTable struct {
 	remoteWorkspace bool
 	createdInTxn    bool
 	eng             engine.Engine
+
+	fake bool
 }
 
 // FIXME: no pointer here

@@ -350,11 +350,23 @@ func tryGetSizeFromMTS(
 		de = eng.(*engine.EntireEngine).Engine.(*disttae.Engine)
 	}
 
-	vals, accs, err, ok = de.QueryTableStatsByAccounts(
+	// if len(account id) == 1 and is not sys account
+	//
+	// case 1:
+	//   show accounts for new account
+	//
+	// case 2:
+	//	show accounts like "xxx"
+	forceUpdate := false
+	if len(accs) == 1 && accs[0] != uint64(sysAccountID) {
+		forceUpdate = true
+	}
+
+	vals, accs, ok, err = de.QueryTableStatsByAccounts(
 		ctx,
 		[]int{disttae.TableStatsTableSize},
 		accs,
-		false,
+		forceUpdate,
 		false,
 	)
 

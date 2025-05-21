@@ -145,6 +145,11 @@ insert into t1 values(null, '2');
 insert into t1 values(null, '2');
 -- @bvt:issue
 
+drop table if exists t1;
+create table t1(a int, b int, c int, primary key(a,b));
+insert into t1 select result,result,result from generate_series(200000) g;
+update t1 set c= 10 where a < 6000;
+
 drop table if exists flush_logtail;
 create table flush_logtail(a int, b int);
 insert into flush_logtail values(1, 1);

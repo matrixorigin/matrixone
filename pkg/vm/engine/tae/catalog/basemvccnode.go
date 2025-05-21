@@ -64,15 +64,8 @@ func (un EntryMVCCNode) IsCreating() bool {
 	return un.CreatedAt.Equal(&txnif.UncommitTS)
 }
 
-func (un EntryMVCCNode) Clone() *EntryMVCCNode {
-	return &EntryMVCCNode{
-		CreatedAt: un.CreatedAt,
-		DeletedAt: un.DeletedAt,
-	}
-}
-
-func (un EntryMVCCNode) CloneData() *EntryMVCCNode {
-	return &EntryMVCCNode{
+func (un EntryMVCCNode) Clone() EntryMVCCNode {
+	return EntryMVCCNode{
 		CreatedAt: un.CreatedAt,
 		DeletedAt: un.DeletedAt,
 	}
@@ -112,22 +105,6 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 		un.DeletedAt = ts
 	}
 	return nil
-}
-
-func (un EntryMVCCNode) AppendTuple(bat *containers.Batch) {
-	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
-	vector.AppendFixed(
-		startTSVec.GetDownstreamVector(),
-		un.CreatedAt,
-		false,
-		startTSVec.GetAllocator(),
-	)
-	vector.AppendFixed(
-		bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
-		un.DeletedAt,
-		false,
-		startTSVec.GetAllocator(),
-	)
 }
 
 func (un EntryMVCCNode) AppendObjectTuple(bat *containers.Batch, create bool) {
@@ -179,10 +156,10 @@ func (un EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.
 	)
 }
 
-func ReadEntryNodeTuple(bat *containers.Batch, row int) (un *EntryMVCCNode) {
+func ReadEntryNodeTuple(createAt, deleteAt types.TS) (un *EntryMVCCNode) {
 	un = &EntryMVCCNode{
-		CreatedAt: bat.GetVectorByName(EntryNode_CreateAt).Get(row).(types.TS),
-		DeletedAt: bat.GetVectorByName(EntryNode_DeleteAt).Get(row).(types.TS),
+		CreatedAt: createAt,
+		DeletedAt: deleteAt,
 	}
 	return
 }
@@ -197,23 +174,22 @@ type BaseNode[T any] interface {
 }
 
 type MVCCNode[T BaseNode[T]] struct {
-	*EntryMVCCNode
-	*txnbase.TxnMVCCNode
-	BaseNode T
+	EntryMVCCNode
+	txnbase.TxnMVCCNode
+	BaseNode         T
+	CommitSideEffect func(id string, commitTs types.TS) // used for object replay, no need to persist
 }
 
 func NewEmptyMVCCNodeFactory[T BaseNode[T]](factory func() T) func() *MVCCNode[T] {
 	return func() *MVCCNode[T] {
 		return &MVCCNode[T]{
-			EntryMVCCNode: &EntryMVCCNode{},
-			TxnMVCCNode:   &txnbase.TxnMVCCNode{},
-			BaseNode:      factory(),
+			BaseNode: factory(),
 		}
 	}
 }
 
 func CompareBaseNode[T BaseNode[T]](e, o *MVCCNode[T]) int {
-	return e.Compare(o.TxnMVCCNode)
+	return e.Compare(&o.TxnMVCCNode)
 }
 
 func (e *MVCCNode[T]) CloneAll() *MVCCNode[T] {
@@ -230,8 +206,8 @@ func (e *MVCCNode[T]) CloneAll() *MVCCNode[T] {
 
 func (e *MVCCNode[T]) CloneData() *MVCCNode[T] {
 	return &MVCCNode[T]{
-		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
+		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   txnbase.TxnMVCCNode{},
 		BaseNode:      e.BaseNode.CloneData(),
 	}
 }
@@ -260,6 +236,9 @@ func (e *MVCCNode[T]) ApplyCommit(id string) (err error) {
 		return
 	}
 	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	if e.CommitSideEffect != nil {
+		e.CommitSideEffect(id, commitTS)
+	}
 	return err
 }
 func (e *MVCCNode[T]) PrepareRollback() (err error) {

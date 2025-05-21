@@ -134,7 +134,7 @@ type TxnAsyncer interface {
 }
 
 type TxnTest interface {
-	MockIncWriteCnt() int
+	MockIncWriteCnt() error
 	MockStartTS(types.TS)
 	SetFreezeFn(func(AsyncTxn) error)
 	SetPrepareCommitFn(func(AsyncTxn) error)
@@ -257,7 +257,7 @@ type TxnStore interface {
 	Txn2PC
 	TxnUnsafe
 	WaitPrepared(ctx context.Context) error
-	BindTxn(AsyncTxn)
+	BindTxn(AsyncTxn, bool)
 	GetLSN() uint64
 	GetContext() context.Context
 	SetContext(context.Context)
@@ -300,7 +300,7 @@ type TxnStore interface {
 	CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (handle.Object, error)
 	SoftDeleteObject(isTombstone bool, id *common.ID) error
 
-	AddTxnEntry(TxnEntryType, TxnEntry)
+	AddTxnEntry(TxnEntry)
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
 	LogTxnState(sync bool) (entry.Entry, error)
@@ -308,26 +308,20 @@ type TxnStore interface {
 	AddWaitEvent(cnt int)
 
 	IsReadonly() bool
-	IncreateWriteCnt() int
+	// Offline txn is created when TxnMgr is in Recovery mode
+	// Offline txn is not writable and all offline txns are ReadOnly
+	IsOffline() bool
+	IncreateWriteCnt(string) error
 	ObserveTxn(
 		visitDatabase func(db any),
 		visitTable func(tbl any),
 		rotateTable func(aid uint32, dbName, tblName string, dbid, tid uint64, pkSeqnum uint16),
 		visitObject func(obj any),
 		visitAppend func(bat any, isTombstone bool))
-	GetTransactionType() TxnType
+	IsHeartbeat() bool
 	UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error
 	FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error
 }
-
-type TxnType int8
-
-const (
-	TxnType_Normal = iota
-	TxnType_Heartbeat
-)
-
-type TxnEntryType int16
 
 type TxnEntry interface {
 	PrepareCommit() error

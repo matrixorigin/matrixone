@@ -289,3 +289,13 @@ show tables;
 drop database db2;
 -- @session
 drop account if exists acc1;
+
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1(a int primary key);
+create table t2(a int primary key, b int);
+alter table t2 add constraint fk_t2_t1 foreign key(b) references t1(a), add constraint fk_t2_t1 foreign key(b) references t1(a);
+alter table t2 add constraint fk_t2_t1 foreign key(b) references t1(a);
+alter table t2 add constraint fk_t2_t1 foreign key(b) references t1(a);
+drop database db1;

@@ -66,10 +66,6 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 			return err
 		}
 	}
-
-	if loopJoin.ProjectList != nil && loopJoin.ProjectExecutors == nil {
-		err = loopJoin.PrepareProjection(proc)
-	}
 	return err
 }
 
@@ -98,15 +94,14 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
-				ctr.inbat = input.Batch
-				if ctr.inbat == nil {
+				if input.Batch == nil {
 					ctr.state = End
 					continue
 				}
-				if ctr.inbat.IsEmpty() {
-					ctr.inbat = nil
+				if input.Batch.IsEmpty() {
 					continue
 				}
+				ctr.inbat = input.Batch
 				ctr.probeIdx = 0
 				ctr.batIdx = 0
 			}

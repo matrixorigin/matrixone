@@ -23,8 +23,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 )
 
 type ObjectStorageArguments struct {
@@ -53,6 +51,15 @@ type ObjectStorageArguments struct {
 	RoleSessionName string `json:"-" toml:"role-session-name"`
 	SecurityToken   string `json:"-" toml:"security-token"`
 	SessionToken    string `json:"-" toml:"session-token"`
+
+	// HDFS
+	IsHDFS                       bool   `toml:"is-hdfs"`
+	User                         string `toml:"user"`
+	KerberosServicePrincipleName string `toml:"kerberos-service-principle-name"`
+	KerberosUsername             string `toml:"kerberos-username"`
+	KerberosRealm                string `toml:"kerberos-realm"`
+	KerberosPassword             string `json:"-" toml:"kerberos-password"`
+	KerberosKeytabPath           string `toml:"kerberos-keytab-path"`
 }
 
 func (o ObjectStorageArguments) String() string {
@@ -124,6 +131,22 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 		case "token", "session-token":
 			o.SessionToken = value
 
+		case "user":
+			o.User = value
+		case "is-hdfs":
+			o.IsHDFS = value != "false" && value != "0"
+
+		case "kerberos-service-principle-name":
+			o.KerberosServicePrincipleName = value
+		case "kerberos-username":
+			o.KerberosUsername = value
+		case "kerberos-realm":
+			o.KerberosRealm = value
+		case "kerberos-password":
+			o.KerberosPassword = value
+		case "kerberos-keytab-path":
+			o.KerberosKeytabPath = value
+
 		default:
 			return moerr.NewInvalidInputNoCtxf("invalid S3 argument: %s", pair)
 		}
@@ -153,23 +176,23 @@ func (o *ObjectStorageArguments) validate() error {
 	// region
 	if o.Region == "" {
 
-		// 腾讯云
 		if o.Endpoint != "" && strings.Contains(o.Endpoint, "myqcloud.com") {
+			// 腾讯云
 			matches := qcloudEndpointPattern.FindStringSubmatch(o.Endpoint)
 			if len(matches) > 0 {
 				o.Region = matches[1]
 			}
 
-		} else {
+		} else if o.Endpoint != "" && strings.Contains(o.Endpoint, "amazonaws.com") {
+			// AWS
 			// try to get region from bucket
-			// only works for AWS S3
 			resp, err := http.Head("https://" + o.Bucket + ".s3.amazonaws.com")
 			if err == nil {
 				if value := resp.Header.Get("x-amz-bucket-region"); value != "" {
 					o.Region = value
 				}
 			} else {
-				logutil.Debug("error", zap.Error(err))
+				return err
 			}
 		}
 

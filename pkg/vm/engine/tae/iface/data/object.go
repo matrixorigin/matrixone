@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -48,6 +49,7 @@ type ObjectAppender interface {
 	ReplayAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn) (int, error)
 	Close()
+	PPString() string
 }
 
 type ObjectReplayer interface {
@@ -94,11 +96,11 @@ type Object interface {
 	) (err error)
 	GetValue(ctx context.Context, txn txnif.AsyncTxn, readSchema any, blkID uint16, row, col int, skipCheckDelete bool, mp *mpool.MPool) (any, bool, error)
 	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
-	EstimateMemSize() (int, int)
+	EstimateMemSize() int
 	GetRuntime() *dbutils.Runtime
 
 	Init() error
-	GetFs() *objectio.ObjectFS
+	GetFs() fileservice.FileService
 	FreezeAppend()
 
 	Contains(

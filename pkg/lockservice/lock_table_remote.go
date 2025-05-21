@@ -17,6 +17,10 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"net"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -116,7 +120,9 @@ func (l *remoteLockTable) lock(
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
-	_ = l.handleError(err, true)
+	if e := l.handleError(err, true); e != nil {
+		err = e
+	}
 	cb(pb.Result{}, err)
 }
 
@@ -248,6 +254,9 @@ func (l *remoteLockTable) handleError(
 	err error,
 	mustHandleLockBindChangedErr bool,
 ) error {
+	if retryRemoteLockError(err) {
+		err = moerr.NewBackendCannotConnectNoCtx(err.Error())
+	}
 	oldError := err
 	// ErrLockTableBindChanged error must already handled. Skip
 	if !mustHandleLockBindChangedErr && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
@@ -275,6 +284,20 @@ func (l *remoteLockTable) handleError(
 		return nil
 	}
 	return oldError
+}
+
+func retryRemoteLockError(err error) bool {
+	if e, ok := err.(net.Error); ok && e.Timeout() {
+		return true
+	}
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
+		return true
+	}
+	return false
 }
 
 func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {

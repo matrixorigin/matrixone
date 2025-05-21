@@ -17,6 +17,7 @@ package tasks
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -186,6 +187,7 @@ func (ctl *CancelableJob) Start() {
 											"Panic-In-CronJob",
 											zap.String("name", ctl.name),
 											zap.Any("reason", r),
+											zap.String("stack", string(debug.Stack())),
 										)
 									}
 								}()

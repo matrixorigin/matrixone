@@ -44,6 +44,7 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 }
 
 const TableScan = "Table Scan"
+const IndexTableScan = "Index Table Scan"
 const ExternalScan = "External Scan"
 
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -58,6 +59,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
 		pname = TableScan
+		if ndesc.Node.IndexScanInfo.IsIndexScan {
+			pname = IndexTableScan
+		}
 	case plan.Node_EXTERNAL_SCAN:
 		pname = ExternalScan
 	case plan.Node_SOURCE_SCAN:
@@ -132,8 +136,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert UniqueKey"
 	case plan.Node_PRE_INSERT_SK:
 		pname = "PreInsert SecondaryKey"
-	case plan.Node_PRE_DELETE:
-		pname = "PreDelete"
 	case plan.Node_ON_DUPLICATE_KEY:
 		pname = "On Duplicate Key"
 	case plan.Node_FUZZY_FILTER:
@@ -164,20 +166,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_SOURCE_SCAN:
 			buf.WriteString(" on ")
 			if ndesc.Node.ObjRef != nil {
-				if ndesc.Node.ParentObjRef == nil || options.CmpContext == nil { // original table
+				if ndesc.Node.IndexScanInfo.IsIndexScan {
+					buf.WriteString(ndesc.Node.IndexScanInfo.BelongToTable + "." + ndesc.Node.IndexScanInfo.IndexName)
+				} else {
 					buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
-				} else { // index table, need to get index table name
-					scanSnapshot := ndesc.Node.ScanSnapshot
-					if scanSnapshot == nil {
-						scanSnapshot = &plan.Snapshot{}
-					}
-					_, origTableDef := options.CmpContext.Resolve(ndesc.Node.ParentObjRef.GetSchemaName(), ndesc.Node.ParentObjRef.GetObjName(), scanSnapshot)
-					for i := range origTableDef.Indexes {
-						if origTableDef.Indexes[i].IndexTableName == ndesc.Node.ObjRef.GetObjName() {
-							buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + origTableDef.Indexes[i].IndexName + "(index)")
-							break
-						}
-					}
 				}
 			} else if ndesc.Node.TableDef != nil {
 				buf.WriteString(ndesc.Node.TableDef.GetName())
@@ -204,13 +196,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 				} else if ndesc.Node.PreInsertCtx.TableDef != nil {
 					buf.WriteString(ndesc.Node.TableDef.GetName())
 				}
-			}
-		case plan.Node_PRE_DELETE:
-			buf.WriteString(" on ")
-			if ndesc.Node.ObjRef != nil {
-				buf.WriteString(ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName())
-			} else if ndesc.Node.TableDef != nil {
-				buf.WriteString(ndesc.Node.TableDef.GetName())
 			}
 		case plan.Node_POSTDML:
 			buf.WriteString(" on ")
@@ -278,15 +263,6 @@ func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *Explain
 
 func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
-
-	// Get partition prune information
-	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN && ndesc.Node.TableDef.Partition != nil {
-		partPruneInfo, err := ndesc.GetPartitionPruneInfo(ctx, options)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, partPruneInfo)
-	}
 
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
@@ -448,7 +424,24 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 	}
 
+	if ndesc.Node.NodeType == plan.Node_FUNCTION_SCAN {
+		msg, err := ndesc.GetFullTextSql(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		if len(msg) > 0 {
+			lines = append(lines, msg)
+		}
+	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *ExplainOptions) (string, error) {
+	if options.Verbose && len(ndesc.Node.GetStats().Sql) > 0 {
+		result := "Sql: " + ndesc.Node.GetStats().Sql
+		return result, nil
+	}
+	return "", nil
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -521,30 +514,6 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(ctx context.Context, options
 		}
 	}
 
-	return buf.String(), nil
-}
-
-func (ndesc *NodeDescribeImpl) GetPartitionPruneInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 300))
-	buf.WriteString("Hit Partition: ")
-	if options.Format == EXPLAIN_FORMAT_TEXT {
-		if ndesc.Node.PartitionPrune != nil {
-			first := true
-			for _, v := range ndesc.Node.PartitionPrune.SelectedPartitions {
-				if !first {
-					buf.WriteString(", ")
-				}
-				first = false
-				buf.WriteString(v.PartitionName)
-			}
-		} else {
-			buf.WriteString("all partitions")
-		}
-	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return "", moerr.NewNYI(ctx, "explain format json")
-	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return "", moerr.NewNYI(ctx, "explain format dot")
-	}
 	return buf.String(), nil
 }
 
@@ -744,7 +713,7 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 				buf.WriteString(", ")
 			}
 			first = false
-			describeMessage(v, buf)
+			describeMessage(&v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -768,7 +737,7 @@ func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *
 				buf.WriteString(", ")
 			}
 			first = false
-			describeMessage(v, buf)
+			describeMessage(&v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -1137,6 +1106,7 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
 			" selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 4, 64) +
+			" dop=" + strconv.FormatInt(int64(c.Stats.Dop), 10) +
 			blockNumStr + hashmapSizeStr + ")")
 	}
 	return nil

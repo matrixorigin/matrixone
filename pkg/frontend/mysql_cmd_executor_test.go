@@ -1559,16 +1559,35 @@ func Benchmark_RecordStatement_IsTrue(b *testing.B) {
 	})
 }
 
+func Test_unsupportedCommand(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	execCtx := &ExecCtx{
+		ses: ses,
+	}
+	req := &Request{
+		cmd: COM_SLEEP,
+	}
+
+	resp, err := ExecRequest(ses, execCtx, req)
+	assert.Nil(t, err)
+	assert.NotNil(t, resp)
+	respErr := resp.GetData().(*moerr.Error)
+	assert.Equal(t, "internal error: unsupported command. 0x0", respErr.Error())
+}
+
 func Test_panic(t *testing.T) {
-	fault.Enable()
-	defer fault.Disable()
+	fault.EnableDomain(fault.DomainFrontend)
+	defer fault.DisableDomain(fault.DomainFrontend)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	runPanic := func(panicChoice int64) {
-		fault.AddFaultPoint(context.Background(), "exec_request_panic", ":::", "panic", panicChoice, "has panic", false)
-		defer fault.RemoveFaultPoint(context.Background(), "exec_request_panic")
+		fault.AddFaultPointInDomain(context.Background(), fault.DomainFrontend, "exec_request_panic", ":::", "panic", panicChoice, "has panic", false)
+		defer fault.RemoveFaultPointFromDomain(context.Background(), fault.DomainFrontend, "exec_request_panic")
 
 		ses := newTestSession(t, ctrl)
 		execCtx := &ExecCtx{
@@ -1588,15 +1607,15 @@ func Test_panic(t *testing.T) {
 }
 
 func Test_run_panic(t *testing.T) {
-	fault.Enable()
-	defer fault.Disable()
+	fault.EnableDomain(fault.DomainFrontend)
+	defer fault.DisableDomain(fault.DomainFrontend)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	runPanic := func(panicChoice int64) {
-		fault.AddFaultPoint(context.Background(), "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic", false)
-		defer fault.RemoveFaultPoint(context.Background(), "executeStmtWithWorkspace_panic")
+		fault.AddFaultPointInDomain(context.Background(), fault.DomainFrontend, "executeStmtWithWorkspace_panic", ":::", "panic", panicChoice, "has panic", false)
+		defer fault.RemoveFaultPointFromDomain(context.Background(), fault.DomainFrontend, "executeStmtWithWorkspace_panic")
 
 		ses := newTestSession(t, ctrl)
 		execCtx := &ExecCtx{

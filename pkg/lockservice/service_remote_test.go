@@ -283,7 +283,7 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
 				l2)
 		},
 	)
@@ -441,7 +441,7 @@ func TestUnlockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version},
 				l2)
 		},
 	)
@@ -592,6 +592,8 @@ func runBindChangedTests(
 
 				// make l1 get bind again, but version is changed
 				waitBindChanged(t, old, l1)
+				// Wait for a period of time to ensure that all RPC requests are completed
+				time.Sleep(time.Millisecond * 100)
 			}
 
 			fn(ctx, alloc, l1, l2, table1)

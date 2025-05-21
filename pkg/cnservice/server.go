@@ -45,6 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -66,7 +68,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -276,7 +277,7 @@ func (s *service) Close() error {
 		return err
 	}
 	// stop I/O pipeline
-	blockio.Stop(s.cfg.UUID)
+	ioutil.Stop(s.cfg.UUID)
 
 	if s.gossipNode != nil {
 		if err := s.gossipNode.Leave(time.Second); err != nil {
@@ -614,7 +615,7 @@ func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
 				}
 			case txn.TxnMethod_Commit:
-				_, err = storage.Commit(ctx, req.Txn)
+				_, err = storage.Commit(ctx, req.Txn, nil, nil)
 				if err == nil {
 					resp.Txn.Status = txn.TxnStatus_Committed
 				}
@@ -799,6 +800,22 @@ func (s *service) initShardService() {
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
 		runtime.ShardService,
 		s.shardService,
+	)
+}
+
+func (s *service) initPartitionService() {
+	store := partitionservice.NewStorage(
+		s.cfg.UUID,
+		s.sqlExecutor,
+		s.storeEngine,
+	)
+	s.partitionService = partitionservice.NewService(
+		s.getPartitionServiceConfig(),
+		store,
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		runtime.PartitionService,
+		s.partitionService,
 	)
 }
 
@@ -1020,6 +1037,7 @@ func (s *service) initProcessCodecService() {
 			s._txnClient,
 			s.fileService,
 			s.lockService,
+			s.partitionService,
 			s.queryClient,
 			s._hakeeperClient,
 			s.udfService,

@@ -69,12 +69,12 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 
 // IsIndexTableName checks if the given table name is an index table name with a valid UUID.
 func IsIndexTableName(tableName string) bool {
-	if strings.HasPrefix(tableName, catalog.UniqueIndexTableNamePrefix) {
+	if catalog.IsUniqueIndexTable(tableName) {
 		// Strip the prefix and check if the remaining part is a valid UUID
 		uuidPart := strings.TrimPrefix(tableName, catalog.UniqueIndexTableNamePrefix)
 		_, err := uuid.Parse(uuidPart)
 		return err == nil
-	} else if strings.HasPrefix(tableName, catalog.SecondaryIndexTableNamePrefix) {
+	} else if catalog.IsSecondaryIndexTable(tableName) {
 		// Strip the prefix and check if the remaining part is a valid UUID
 		uuidPart := strings.TrimPrefix(tableName, catalog.SecondaryIndexTableNamePrefix)
 		_, err := uuid.Parse(uuidPart)
@@ -85,9 +85,20 @@ func IsIndexTableName(tableName string) bool {
 
 // BuildUniqueKeyBatch used in test to validate
 // serialWithCompacted(), compactSingleIndexCol() and compactPrimaryCol()
-func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, originTablePrimaryKey string, proc *process.Process, packers *PackerList) (*batch.Batch, int, error) {
-	var b *batch.Batch
-	var err error
+func BuildUniqueKeyBatch(
+	vecs []*vector.Vector,
+	attrs []string,
+	parts []string,
+	originTablePrimaryKey string,
+	proc *process.Process,
+	packers *PackerList,
+) (*batch.Batch, int, error) {
+	var (
+		b               *batch.Batch
+		err             error
+		isCompoundIndex bool
+		bitMap          *nulls.Nulls
+	)
 
 	if originTablePrimaryKey == "" {
 		b = &batch.Batch{
@@ -103,12 +114,9 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 		b.Attrs[0] = catalog.IndexTableIndexColName
 		b.Attrs[1] = catalog.IndexTablePrimaryColName
 	}
-	isCompoundIndex := false
 	if len(parts) > 1 {
 		isCompoundIndex = true
 	}
-	//bitMap := new(nulls.Nulls)
-	var bitMap *nulls.Nulls
 	if isCompoundIndex {
 		cIndexVecMap := make(map[string]*vector.Vector)
 		for num, attrName := range attrs {
@@ -164,7 +172,12 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3)]
 // result bitmap is [2]
-func serialWithCompacted(vs []*vector.Vector, vec *vector.Vector, proc *process.Process, packers *PackerList) (*nulls.Nulls, error) {
+func serialWithCompacted(
+	vs []*vector.Vector,
+	vec *vector.Vector,
+	proc *process.Process,
+	packers *PackerList,
+) (*nulls.Nulls, error) {
 	// resolve vs
 	length := vs[0].Length()
 	val := make([][]byte, 0, length)
@@ -510,7 +523,12 @@ func serialWithCompacted(vs []*vector.Vector, vec *vector.Vector, proc *process.
 // result bitmap is [] (empty)
 // Here we are keeping the same function signature of serialWithCompacted so that we can duplicate the same code of
 // `preinsertunique` in `preinsertsecondaryindex`
-func serialWithoutCompacted(vs []*vector.Vector, vec *vector.Vector, proc *process.Process, packers *PackerList) (*nulls.Nulls, error) {
+func serialWithoutCompacted(
+	vs []*vector.Vector,
+	vec *vector.Vector,
+	proc *process.Process,
+	packers *PackerList,
+) (*nulls.Nulls, error) {
 	if len(vs) == 0 {
 		// return empty bitmap
 		return new(nulls.Nulls), nil
@@ -551,7 +569,11 @@ func serialWithoutCompacted(vs []*vector.Vector, vec *vector.Vector, proc *proce
 	return new(nulls.Nulls), nil
 }
 
-func compactSingleIndexCol(v *vector.Vector, vec *vector.Vector, proc *process.Process) (*nulls.Nulls, error) {
+func compactSingleIndexCol(
+	v *vector.Vector,
+	vec *vector.Vector,
+	proc *process.Process,
+) (*nulls.Nulls, error) {
 	var err error
 
 	hasNull := v.HasNull()
@@ -749,7 +771,12 @@ func compactSingleIndexCol(v *vector.Vector, vec *vector.Vector, proc *process.P
 	return v.GetNulls(), err
 }
 
-func compactPrimaryCol(v *vector.Vector, vec *vector.Vector, bitMap *nulls.Nulls, proc *process.Process) error {
+func compactPrimaryCol(
+	v *vector.Vector,
+	vec *vector.Vector,
+	bitMap *nulls.Nulls,
+	proc *process.Process,
+) error {
 	var err error
 
 	if bitMap.IsEmpty() {

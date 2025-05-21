@@ -17,13 +17,15 @@ package gc
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -66,6 +68,7 @@ type CheckpointBasedGCJob struct {
 	pitr             *logtail.PitrInfo
 	ts               *types.TS
 	globalCkpLoc     objectio.Location
+	globalCkpVer     uint32
 
 	result struct {
 		filesToGC  []string
@@ -76,6 +79,7 @@ type CheckpointBasedGCJob struct {
 func NewCheckpointBasedGCJob(
 	ts *types.TS,
 	globalCkpLoc objectio.Location,
+	gckpVersion uint32,
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	accountSnapshots map[uint32][]types.TS,
@@ -93,6 +97,7 @@ func NewCheckpointBasedGCJob(
 		pitr:             pitr,
 		ts:               ts,
 		globalCkpLoc:     globalCkpLoc,
+		globalCkpVer:     gckpVersion,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -112,6 +117,7 @@ func (e *CheckpointBasedGCJob) Close() error {
 	e.pitr = nil
 	e.ts = nil
 	e.globalCkpLoc = nil
+	e.globalCkpVer = 0
 	e.result.filesToGC = nil
 	e.result.filesNotGC = nil
 	return e.GCExecutor.Close()
@@ -130,7 +136,7 @@ func (e *CheckpointBasedGCJob) fillDefaults() {
 }
 
 func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
-	attrs, attrTypes := logtail.GetDataSchema()
+	attrs, attrTypes := ckputil.DataScan_TableIDAtrrs, ckputil.DataScan_TableIDTypes
 	buffer := containers.NewOneSchemaBatchBuffer(
 		mpool.MB*16,
 		attrs,
@@ -144,6 +150,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.config.coarseProbility,
 		buffer,
 		e.globalCkpLoc,
+		e.globalCkpVer,
 		e.ts,
 		&transObjects,
 		e.mp,
@@ -197,6 +204,7 @@ func MakeBloomfilterCoarseFilter(
 	probability float64,
 	buffer containers.IBatchBuffer,
 	location objectio.Location,
+	ckpVersion uint32,
 	ts *types.TS,
 	transObjects *map[string]*ObjectEntry,
 	mp *mpool.MPool,
@@ -205,24 +213,23 @@ func MakeBloomfilterCoarseFilter(
 	FilterFn,
 	error,
 ) {
-	reader, err := logtail.MakeGlobalCheckpointDataReader(ctx, "", fs, location, 0)
-	if err != nil {
+	reader := logtail.NewCKPReader(ckpVersion, location, mp, fs)
+	var err error
+	if err = reader.ReadMeta(ctx); err != nil {
 		return nil, err
 	}
 	bf, err := BuildBloomfilter(
 		ctx,
 		rowCount,
 		probability,
-		2,
+		ckputil.TableObjectsAttr_ID_Idx,
 		reader.LoadBatchData,
 		buffer,
 		mp,
 	)
 	if err != nil {
-		reader.Close()
 		return nil, err
 	}
-	reader.Close()
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,

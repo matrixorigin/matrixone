@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -41,9 +40,10 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu  int
-	Id    string `json:"id"`
-	Addr  string `json:"address"`
+	Mcpu int
+	Id   string `json:"id"`
+	Addr string `json:"address"`
+	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
 	CNIDX int32 // cn index , starts from 0
@@ -587,9 +587,13 @@ const (
 type DataCollectPolicy uint64
 
 const (
-	Policy_CollectCommittedData = 1 << iota
-	Policy_CollectUncommittedData
-	Policy_CollectAllData = Policy_CollectCommittedData | Policy_CollectUncommittedData
+	Policy_CollectCommittedInmemData = 1 << iota
+	Policy_CollectUncommittedInmemData
+	Policy_CollectCommittedPersistedData
+	Policy_CollectUncommittedPersistedData
+	Policy_CollectCommittedData   = Policy_CollectCommittedInmemData | Policy_CollectCommittedPersistedData
+	Policy_CollectUncommittedData = Policy_CollectUncommittedInmemData | Policy_CollectUncommittedPersistedData
+	Policy_CollectAllData         = Policy_CollectCommittedData | Policy_CollectUncommittedData
 )
 
 type TombstoneCollectPolicy uint64
@@ -671,6 +675,7 @@ const (
 	RelDataEmpty RelDataType = iota
 	RelDataShardIDList
 	RelDataBlockList
+	RelDataObjList
 )
 
 type RelData interface {
@@ -684,8 +689,6 @@ type RelData interface {
 	GetTombstones() Tombstoner
 	DataSlice(begin, end int) RelData
 
-	// GroupByPartitionNum TODO::remove it after refactor of partition table.
-	GroupByPartitionNum() map[int16]RelData
 	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
@@ -698,6 +701,7 @@ type RelData interface {
 	AppendShardID(id uint64)
 
 	// for block info list
+	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
 	GetBlockInfo(i int) objectio.BlockInfo
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
@@ -834,18 +838,20 @@ type RangesShuffleParam struct {
 }
 
 type RangesParam struct {
-	BlockFilters   []*plan.Expr //Slice of expressions used to filter zonemap
-	PreAllocBlocks int          //estimated count of blocks
-	TxnOffset      int          //Transaction offset used to specify the starting position for reading data.
-	Policy         DataCollectPolicy
-	Rsp            *RangesShuffleParam
+	BlockFilters       []*plan.Expr //Slice of expressions used to filter zonemap
+	PreAllocBlocks     int          //estimated count of blocks
+	TxnOffset          int          //Transaction offset used to specify the starting position for reading data.
+	Policy             DataCollectPolicy
+	Rsp                *RangesShuffleParam
+	DontSupportRelData bool
 }
 
 var DefaultRangesParam RangesParam = RangesParam{
-	BlockFilters:   nil,
-	PreAllocBlocks: 2,
-	TxnOffset:      0,
-	Policy:         Policy_CollectAllData,
+	BlockFilters:       nil,
+	PreAllocBlocks:     2,
+	TxnOffset:          0,
+	Policy:             Policy_CollectAllData,
+	DontSupportRelData: true,
 }
 
 type Relation interface {
@@ -932,13 +938,16 @@ type Relation interface {
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
 	// If not sure, returns true
 	// Initially added for implementing locking rows by primary keys
-	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
-	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
 	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
 	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
+
+	// Reset resets the relation.
+	Reset(op client.TxnOperator) error
 }
 
 type BaseReader interface {
@@ -969,7 +978,7 @@ type Database interface {
 
 type LogtailEngine interface {
 	// TryToSubscribeTable tries to subscribe a table.
-	TryToSubscribeTable(context.Context, uint64, uint64) error
+	TryToSubscribeTable(context.Context, uint64, uint64, string, string) error
 	// UnsubscribeTable unsubscribes a table from logtail client.
 	UnsubscribeTable(context.Context, uint64, uint64) error
 }
@@ -1052,104 +1061,6 @@ type EntireEngine struct {
 
 func IsMemtable(tblRange []byte) bool {
 	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
-}
-
-type EmptyRelationData struct{}
-
-func BuildEmptyRelData() RelData {
-	return &EmptyRelationData{}
-}
-
-func (rd *EmptyRelationData) String() string {
-	return fmt.Sprintf("RelData[%d]", RelDataEmpty)
-}
-
-func (rd *EmptyRelationData) GetShardIDList() []uint64 {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetShardID(i int) uint64 {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendShardID(id uint64) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetBlockInfoSlice() objectio.BlockInfoSlice {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetBlockInfo(i int) objectio.BlockInfo {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendBlockInfo(blk *objectio.BlockInfo) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendBlockInfoSlice(objectio.BlockInfoSlice) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetType() RelDataType {
-	return RelDataEmpty
-}
-
-func (rd *EmptyRelationData) MarshalBinary() ([]byte, error) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) UnmarshalBinary(buf []byte) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) AttachTombstones(tombstones Tombstoner) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GetTombstones() Tombstoner {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) ForeachDataBlk(begin, end int, f func(blk any) error) error {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GetDataBlk(i int) any {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) SetDataBlk(i int, blk any) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) DataSlice(begin, end int) RelData {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) GroupByPartitionNum() map[int16]RelData {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) AppendDataBlk(blk any) {
-	panic("Not Supported")
-}
-
-func (rd *EmptyRelationData) BuildEmptyRelData(i int) RelData {
-	return &EmptyRelationData{}
-}
-
-func (rd *EmptyRelationData) DataCnt() int {
-	return 0
 }
 
 type forceBuildRemoteDSConfig struct {

@@ -17,11 +17,19 @@ package checkpoint
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+var ErrPendingCheckpoint = moerr.NewPrevCheckpointNotFinished()
+var ErrCheckpointDisabled = moerr.NewInternalErrorNoCtxf("checkpoint disabled")
+var ErrExecutorRestarted = moerr.NewInternalErrorNoCtxf("executor restarted")
+var ErrExecutorClosed = moerr.NewInternalErrorNoCtxf("executor closed")
+var ErrBadIntent = moerr.NewInternalErrorNoCtxf("bad intent")
+var ErrStopRunner = moerr.NewInternalErrorNoCtxf("runner stopped")
 
 type State int8
 
@@ -41,23 +49,27 @@ const (
 )
 
 type CheckpointScheduler interface {
-	TryScheduleCheckpoint(types.TS)
+	TryScheduleCheckpoint(types.TS, bool) (Intent, error)
+	RunnerReader
+}
+
+type ReplayClient interface {
+	AddCheckpointMetaFile(string)
+	ReplayCKPEntry(*CheckpointEntry) error
 }
 
 type Runner interface {
+	ReplayClient
 	CheckpointScheduler
 	TestRunner
+	RunnerWriter
 	RunnerReader
+
 	Start()
 	Stop()
-	String() string
-	Replay(catalog.DataFactory) *CkpReplayer
 
+	BuildReplayer(string) *CkpReplayer
 	GCByTS(ctx context.Context, ts types.TS) error
-
-	// for test, delete in next phase
-	GetAllCheckpoints() []*CheckpointEntry
-	GetAllCheckpointsForBackup(compact *CheckpointEntry) []*CheckpointEntry
 }
 
 type Observer interface {
@@ -79,13 +91,6 @@ func (os *observers) OnNewCheckpoint(ts types.TS) {
 }
 
 const (
-	PrefixIncremental = "incremental"
-	PrefixGlobal      = "global"
-	PrefixMetadata    = "meta"
-	CheckpointDir     = "ckp/"
-)
-
-const (
 	CheckpointAttr_StartTS       = "start_ts"
 	CheckpointAttr_EndTS         = "end_ts"
 	CheckpointAttr_MetaLocation  = "meta_location"
@@ -95,6 +100,16 @@ const (
 	CheckpointAttr_CheckpointLSN = "checkpoint_lsn"
 	CheckpointAttr_TruncateLSN   = "truncate_lsn"
 	CheckpointAttr_Type          = "type"
+
+	CheckpointAttr_StartTSIdx       = 0
+	CheckpointAttr_EndTSIdx         = 1
+	CheckpointAttr_MetaLocationIdx  = 2
+	CheckpointAttr_EntryTypeIdx     = 3
+	CheckpointAttr_VersionIdx       = 4
+	CheckpointAttr_AllLocationsIdx  = 5
+	CheckpointAttr_CheckpointLSNIdx = 6
+	CheckpointAttr_TruncateLSNIdx   = 7
+	CheckpointAttr_TypeIdx          = 8
 
 	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
 	CheckpointSchemaColumnCountV2 = 9

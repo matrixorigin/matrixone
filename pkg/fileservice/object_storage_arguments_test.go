@@ -162,8 +162,45 @@ func TestQCloudRegion(t *testing.T) {
 
 func TestAWSRegion(t *testing.T) {
 	args := ObjectStorageArguments{
+		Endpoint: "amazonaws.com",
+
 		Bucket: "aws", // hope it will not change its region
 	}
-	args.validate()
+	assert.Nil(t, args.validate())
 	assert.Equal(t, "us-east-1", args.Region)
+
+	args = ObjectStorageArguments{
+		Endpoint: "amazonaws.com",
+
+		Bucket: "fdsafdsafasdfsdafsadfsdafdsafewrewqrweqrewrwerwqrew", // invalid bucket
+	}
+	assert.Nil(t, args.validate())
+	assert.Equal(t, "", args.Region)
+
+	args = ObjectStorageArguments{
+		Endpoint: "amazonaws.com",
+
+		Bucket: "a/b/c", // invalid bucket
+	}
+	assert.NotNil(t, args.validate())
+}
+
+func TestParseHDFSArgs(t *testing.T) {
+	var args ObjectStorageArguments
+	if err := args.SetFromString([]string{
+		"user=user",
+		"kerberos-service-principle-name=principle-name",
+		"kerberos-username=username",
+		"kerberos-realm=realm",
+		"kerberos-password=password",
+		"kerberos-keytab-path=path",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "user", args.User)
+	assert.Equal(t, "principle-name", args.KerberosServicePrincipleName)
+	assert.Equal(t, "username", args.KerberosUsername)
+	assert.Equal(t, "realm", args.KerberosRealm)
+	assert.Equal(t, "password", args.KerberosPassword)
+	assert.Equal(t, "path", args.KerberosKeytabPath)
 }

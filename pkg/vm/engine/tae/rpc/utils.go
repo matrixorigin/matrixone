@@ -16,6 +16,8 @@ package rpc
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -23,10 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 )
@@ -79,7 +81,7 @@ func (h *Handle) prefetchDeleteRowID(
 	//start loading jobs asynchronously,should create a new root context.
 	for _, stats := range req.TombstoneStats {
 		location := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
-		err := blockio.Prefetch(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
+		err := ioutil.Prefetch(h.db.Opts.SID, h.db.Runtime.Fs, location)
 		if err != nil {
 			return err
 		}
@@ -102,7 +104,7 @@ func (h *Handle) prefetchMetadata(
 	//start loading jobs asynchronously,should create a new root context.
 	for _, stats := range req.DataObjectStats {
 		location := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
-		err := blockio.PrefetchMeta(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
+		err := ioutil.PrefetchMeta(h.db.Opts.SID, h.db.Runtime.Fs, location)
 		if err != nil {
 			return err
 		}
@@ -223,7 +225,7 @@ func traverseCatalogForNewAccounts(c *catalog.Catalog, memo *logtail.TNUsageMemo
 				continue
 			}
 
-			objIt := tblEntry.MakeTombstoneObjectIt()
+			objIt := tblEntry.MakeTombstoneVisibleObjectIt(txnbase.MockTxnReaderWithNow())
 			for objIt.Next() {
 				objEntry := objIt.Item()
 				// PXU TODO

@@ -195,8 +195,8 @@ var (
 		"if(true, NULL, 0) as SRS_ID "+
 		"from mo_catalog.mo_columns mc join mo_catalog.mo_tables mt ON mc.account_id = mt.account_id AND mc.att_database = mt.reldatabase AND mc.att_relname = mt.relname "+
 		"where mc.account_id = current_account_id() "+
-		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s'",
-		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard)
+		"and mc.att_relname!='%s' and mc.att_relname not like '%s' and mc.attname != '%s' and mc.att_relname not like '%s' and mc.att_relname != '%s'",
+		catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID, catalog.PartitionSubTableWildcard, catalog.MO_ACCOUNT_LOCK)
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +
@@ -300,7 +300,8 @@ var (
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM mo_catalog.mo_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s'", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel)
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relname != '%s' and tbl.relkind != '%s'",
+		catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		"SELECT " +
@@ -500,15 +501,16 @@ var (
 		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
 		")"
 
-	InformationSchemaTableConstraintsDDL = "CREATE TABLE information_schema.TABLE_CONSTRAINTS (" +
-		"CONSTRAINT_CATALOG varchar(64)," +
-		"CONSTRAINT_SCHEMA varchar(64)," +
-		"CONSTRAINT_NAME varchar(64)," +
-		"TABLE_SCHEMA varchar(64)," +
-		"TABLE_NAME varchar(64)," +
-		"CONSTRAINT_TYPE varchar(11) NOT NULL DEFAULT ''," +
-		"ENFORCED varchar(3) NOT NULL DEFAULT ''" +
-		")"
+	InformationSchemaTableConstraintsDDL = "CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT " +
+		"'def' AS CONSTRAINT_CATALOG, " +
+		"tbl.reldatabase AS CONSTRAINT_SCHEMA, " +
+		"idx.name AS CONSTRAINT_NAME, " +
+		"tbl.reldatabase AS TABLE_SCHEMA, " +
+		"tbl.relname AS TABLE_NAME, " +
+		"idx.type AS CONSTRAINT_TYPE, " +
+		"'YES' AS ENFORCED " +
+		"FROM mo_catalog.mo_indexes idx " +
+		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id"
 
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +

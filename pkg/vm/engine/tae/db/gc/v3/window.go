@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 
@@ -30,11 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/engine_util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,9 +51,9 @@ type ObjectEntry struct {
 
 type WindowOption func(*GCWindow)
 
-func WithMetaPrefix(prefix string) WindowOption {
+func WithWindowDir(dir string) WindowOption {
 	return func(table *GCWindow) {
-		table.metaDir = prefix
+		table.dir = dir
 	}
 }
 
@@ -70,16 +69,16 @@ func NewGCWindow(
 	for _, opt := range opts {
 		opt(&window)
 	}
-	if window.metaDir == "" {
-		window.metaDir = GCMetaDir
+	if window.dir == "" {
+		window.dir = ioutil.GetGCDir()
 	}
 	return &window
 }
 
 type GCWindow struct {
-	metaDir string
-	mp      *mpool.MPool
-	fs      fileservice.FileService
+	dir string
+	mp  *mpool.MPool
+	fs  fileservice.FileService
 
 	files []objectio.ObjectStats
 
@@ -104,12 +103,12 @@ func (w *GCWindow) MakeFilesReader(
 	ctx context.Context,
 	fs fileservice.FileService,
 ) engine.Reader {
-	return engine_util.SimpleMultiObjectsReader(
+	return readutil.SimpleMultiObjectsReader(
 		ctx,
 		fs,
 		w.files,
 		timestamp.Timestamp{},
-		engine_util.WithColumns(
+		readutil.WithColumns(
 			ObjectTableSeqnums,
 			ObjectTableTypes,
 		),
@@ -139,6 +138,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	job := NewCheckpointBasedGCJob(
 		&gcTS,
 		gCkp.GetLocation(),
+		gCkp.GetVersion(),
 		sourcer,
 		pitrs,
 		accountSnapshots,
@@ -174,8 +174,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 func (w *GCWindow) ScanCheckpoints(
 	ctx context.Context,
 	checkpointEntries []*checkpoint.CheckpointEntry,
-	collectCkpData func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CheckpointData, error),
-	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CheckpointData) error,
+	getCkpReader func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error),
+	processCkpData func(*checkpoint.CheckpointEntry, *logtail.CKPReader) error,
 	onScanDone func() error,
 	buffer *containers.OneSchemaBatchBuffer,
 ) (metaFile string, err error) {
@@ -193,18 +193,17 @@ func (w *GCWindow) ScanCheckpoints(
 		if len(checkpointEntries) == 0 {
 			return true, nil
 		}
-		data, err := collectCkpData(ctx, checkpointEntries[0])
+		ckpReader, err := getCkpReader(ctx, checkpointEntries[0])
 		if err != nil {
 			return false, err
 		}
-		defer data.Close()
 		if processCkpData != nil {
-			if err = processCkpData(checkpointEntries[0], data); err != nil {
+			if err = processCkpData(checkpointEntries[0], ckpReader); err != nil {
 				return false, err
 			}
 		}
 		objects := make(map[string]*ObjectEntry)
-		collectObjectsFromCheckpointData(data, objects)
+		collectObjectsFromCheckpointData(ctx, ckpReader, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -213,7 +212,7 @@ func (w *GCWindow) ScanCheckpoints(
 	}
 	sinker := w.getSinker(0, buffer)
 	defer sinker.Close()
-	if err = engine_util.StreamBatchProcess(
+	if err = readutil.StreamBatchProcess(
 		ctx,
 		getOneBatch,
 		w.sortOneBatch,
@@ -253,16 +252,16 @@ func (w *GCWindow) ScanCheckpoints(
 func (w *GCWindow) getSinker(
 	tailSize int,
 	buffer *containers.OneSchemaBatchBuffer,
-) *engine_util.Sinker {
-	return engine_util.NewSinker(
+) *ioutil.Sinker {
+	return ioutil.NewSinker(
 		ObjectTablePrimaryKeyIdx,
 		ObjectTableAttrs,
 		ObjectTableTypes,
 		FSinkerFactory,
 		w.mp,
 		w.fs,
-		engine_util.WithTailSizeCap(tailSize),
-		engine_util.WithBuffer(buffer, false),
+		ioutil.WithTailSizeCap(tailSize),
+		ioutil.WithBuffer(buffer, false),
 	)
 }
 
@@ -275,7 +274,7 @@ func (w *GCWindow) writeMetaForRemainings(
 		return "", context.Cause(ctx)
 	default:
 	}
-	name := blockio.EncodeGCMetadataFileName(PrefixGCMeta, w.tsRange.start, w.tsRange.end)
+	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
@@ -287,7 +286,11 @@ func (w *GCWindow) writeMetaForRemainings(
 			return "", err
 		}
 	}
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, w.metaDir+name, w.fs)
+	writer, err := objectio.NewObjectWriterSpecial(
+		objectio.WriterGC,
+		ioutil.MakeFullName(w.dir, name),
+		w.fs,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -317,48 +320,29 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(data *logtail.CheckpointData, objects map[string]*ObjectEntry) {
-	ins := data.GetObjectBatchs()
-	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	tableID := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-
-	for i := 0; i < ins.Length(); i++ {
-		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		stats := (objectio.ObjectStats)(buf)
-		name := stats.ObjectName().String()
-		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](insDeleteTSVec, i)
-		createTS := vector.GetFixedAtNoTypeCheck[types.TS](insCreateTSVec, i)
-		object := &ObjectEntry{
-			stats:    &stats,
-			createTS: createTS,
-			dropTS:   deleteTS,
-			db:       vector.GetFixedAtNoTypeCheck[uint64](dbid, i),
-			table:    vector.GetFixedAtNoTypeCheck[uint64](tableID, i),
-		}
-		objects[name] = object
-	}
-	del := data.GetTombstoneObjectBatchs()
-	delDeleteTSVec := del.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	delCreateTSVec := del.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	delDbid := del.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	delTableID := del.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-	for i := 0; i < del.Length(); i++ {
-		buf := del.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		stats := (objectio.ObjectStats)(buf)
-		name := stats.ObjectName().String()
-		deleteTS := vector.GetFixedAtNoTypeCheck[types.TS](delDeleteTSVec, i)
-		createTS := vector.GetFixedAtNoTypeCheck[types.TS](delCreateTSVec, i)
-		object := &ObjectEntry{
-			stats:    &stats,
-			createTS: createTS,
-			dropTS:   deleteTS,
-			db:       vector.GetFixedAtNoTypeCheck[uint64](delDbid, i),
-			table:    vector.GetFixedAtNoTypeCheck[uint64](delTableID, i),
-		}
-		objects[name] = object
-	}
+func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]*ObjectEntry) {
+	ckpReader.ForEachRow(
+		ctx,
+		func(
+			account uint32,
+			dbid, tid uint64,
+			objectType int8,
+			stats objectio.ObjectStats,
+			createTS, deleteTS types.TS,
+			rowID types.Rowid,
+		) error {
+			name := stats.ObjectName().String()
+			object := &ObjectEntry{
+				stats:    &stats,
+				createTS: createTS,
+				dropTS:   deleteTS,
+				db:       dbid,
+				table:    tid,
+			}
+			objects[name] = object
+			return nil
+		},
+	)
 }
 
 func (w *GCWindow) Close() {
@@ -389,7 +373,7 @@ func (w *GCWindow) sortOneBatch(
 	data *batch.Batch,
 	mp *mpool.MPool,
 ) error {
-	if err := mergesort.SortColumnsByIndex(
+	if err := mergeutil.SortColumnsByIndex(
 		data.Vecs,
 		ObjectTablePrimaryKeyIdx,
 		mp,
@@ -438,7 +422,7 @@ func loader(
 ) error {
 	for id := uint32(0); id < stats.BlkCnt(); id++ {
 		stats.ObjectLocation().SetID(uint16(id))
-		data, _, err := blockio.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
+		data, _, err := ioutil.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
 		if err != nil {
 			return err
 		}
@@ -459,7 +443,7 @@ func (w *GCWindow) rebuildTable(bat *batch.Batch) {
 func (w *GCWindow) replayData(
 	ctx context.Context,
 	bs []objectio.BlockObject,
-	reader *blockio.BlockReader) (*batch.Batch, func(), error) {
+	reader *ioutil.BlockReader) (*batch.Batch, func(), error) {
 	idxes := []uint16{0}
 	bat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), w.mp)
 	if err != nil {
@@ -483,10 +467,10 @@ func (w *GCWindow) ReadTable(ctx context.Context, name string, fs fileservice.Fi
 			release1()
 		}
 	}()
-	start, end, _ := blockio.DecodeGCMetadataFileName(name)
-	w.tsRange.start = start
-	w.tsRange.end = end
-	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	meta := ioutil.DecodeGCMetadataName(name)
+	w.tsRange.start = *meta.GetStart()
+	w.tsRange.end = *meta.GetEnd()
+	reader, err := ioutil.NewFileReaderNoCache(fs, name)
 	if err != nil {
 		return err
 	}

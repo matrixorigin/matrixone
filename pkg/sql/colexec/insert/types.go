@@ -15,15 +15,13 @@
 package insert
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -36,16 +34,17 @@ var _ vm.Operator = new(Insert)
 
 type container struct {
 	state              vm.CtrState
-	s3Writer           *colexec.S3Writer
-	partitionS3Writers []*colexec.S3Writer // The array is aligned with the partition number array
+	s3Writer           *colexec.CNS3Writer
+	partitionS3Writers []*colexec.CNS3Writer // The array is aligned with the partition number array
 	buf                *batch.Batch
 	affectedRows       uint64
 
-	source           engine.Relation
-	partitionSources []engine.Relation // Align array index with the partition number
+	source engine.Relation
 }
 
 type Insert struct {
+	delegated bool
+	input     vm.CallResult
 	ctr       container
 	ToWriteS3 bool // mark if this insert's target is S3 or not.
 	InsertCtx *InsertCtx
@@ -86,25 +85,22 @@ func (insert *Insert) Release() {
 
 type InsertCtx struct {
 	// insert data into Rel.
-	Engine                engine.Engine
-	Ref                   *plan.ObjectRef
-	AddAffectedRows       bool     // for hidden table, should not update affect Rows
-	Attrs                 []string // letter case: origin
-	PartitionTableIDs     []uint64 // Align array index with the partition number
-	PartitionTableNames   []string // Align array index with the partition number
-	PartitionIndexInBatch int      // The array index position of the partition expression column
-	TableDef              *plan.TableDef
+	Engine          engine.Engine
+	Ref             *plan.ObjectRef
+	AddAffectedRows bool     // for hidden table, should not update affect Rows
+	Attrs           []string // letter case: origin
+	TableDef        *plan.TableDef
 }
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	//@todo need add Reset method for s3Writer
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Free(proc.Mp())
+		insert.ctr.s3Writer.Close(proc.GetMPool())
 		insert.ctr.s3Writer = nil
 	}
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Free(proc.Mp())
+			writer.Close(proc.GetMPool())
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
@@ -119,14 +115,14 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if insert.ctr.s3Writer != nil {
-		insert.ctr.s3Writer.Free(proc.Mp())
+		insert.ctr.s3Writer.Close(proc.GetMPool())
 		insert.ctr.s3Writer = nil
 	}
 
 	// Free the partition table S3writer object resources
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Free(proc.Mp())
+			writer.Close(proc.GetMPool())
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
@@ -135,6 +131,7 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 		insert.ctr.buf.Clean(proc.Mp())
 		insert.ctr.buf = nil
 	}
+	insert.ctr.source = nil
 }
 
 func (insert *Insert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -146,10 +143,10 @@ func (insert *Insert) GetAffectedRows() uint64 {
 }
 
 func (insert *Insert) initBufForS3() {
-	attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-	insert.ctr.buf = batch.NewWithSize(len(attrs))
-	insert.ctr.buf.SetAttributes(attrs)
-	insert.ctr.buf.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-	insert.ctr.buf.Vecs[1] = vector.NewVec(types.T_text.ToType())
-	insert.ctr.buf.Vecs[2] = vector.NewVec(types.T_binary.ToType())
+	insert.ctr.buf = colexec.AllocCNS3ResultBat(false, insert.isMemoryTable())
+}
+
+func (insert *Insert) isMemoryTable() bool {
+	_, ok := insert.InsertCtx.Engine.(*memoryengine.BindedEngine)
+	return ok
 }

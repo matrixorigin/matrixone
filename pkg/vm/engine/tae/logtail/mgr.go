@@ -80,6 +80,8 @@ type Manager struct {
 	truncated types.TS
 	nowClock  func() types.TS // nowClock is from TxnManager
 
+	maxCommittedLSN atomic.Uint64
+
 	previousSaveTS      types.TS
 	logtailCallback     atomic.Pointer[callback]
 	collectLogtailQueue sm.Queue
@@ -91,7 +93,8 @@ type Manager struct {
 func NewManager(
 	rt *dbutils.Runtime,
 	blockSize int,
-	nowClock func() types.TS) *Manager {
+	nowClock func() types.TS,
+) *Manager {
 
 	mgr := &Manager{
 		rt: rt,
@@ -117,6 +120,16 @@ func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 	for _, item := range items {
 		txn := item.(txnif.AsyncTxn)
 		if txn.IsReplay() {
+			lsn := txn.GetLSN()
+			if lsn > mgr.maxCommittedLSN.Load() {
+				mgr.maxCommittedLSN.Store(lsn)
+			} else {
+				logutil.Warn(
+					"Logtail-Manager-Wrong-LSN",
+					zap.Uint64("lsn", lsn),
+					zap.Uint64("max-lsn", mgr.maxCommittedLSN.Load()),
+				)
+			}
 			continue
 		}
 		builder := NewTxnLogtailRespBuilder(mgr.rt)
@@ -140,6 +153,18 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 			}
 			continue
 		}
+		if !txn.txn.GetStore().IsHeartbeat() {
+			lsn := txn.txn.GetLSN()
+			if lsn > mgr.maxCommittedLSN.Load() {
+				mgr.maxCommittedLSN.Store(lsn)
+			} else {
+				logutil.Warn(
+					"Logtail-Manager-Wrong-LSN",
+					zap.Uint64("lsn", lsn),
+					zap.Uint64("max-lsn", mgr.maxCommittedLSN.Load()),
+				)
+			}
+		}
 		mgr.generateLogtailWithTxn(txn)
 	}
 }
@@ -148,9 +173,20 @@ func (mgr *Manager) Stop() {
 	mgr.collectLogtailQueue.Stop()
 	mgr.waitCommitQueue.Stop()
 }
+
 func (mgr *Manager) Start() {
 	mgr.waitCommitQueue.Start()
 	mgr.collectLogtailQueue.Start()
+}
+
+func (mgr *Manager) UpdateMaxCommittedLSN(lsn uint64) {
+	if lsn > mgr.maxCommittedLSN.Load() {
+		mgr.maxCommittedLSN.Store(lsn)
+	}
+}
+
+func (mgr *Manager) GetMaxCommittedLSN() uint64 {
+	return mgr.maxCommittedLSN.Load()
 }
 
 func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
@@ -178,7 +214,7 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 // OnEndPrePrepare is a listener for TxnManager. When a txn completes PrePrepare,
 // add it to the logtail manager
 func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
-	if txn.GetStore().GetTransactionType() == txnif.TxnType_Heartbeat {
+	if txn.GetStore().IsHeartbeat() {
 		return
 	}
 	mgr.table.AddTxn(txn)
@@ -197,13 +233,24 @@ func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 	}
 }
 
-func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) {
-	if ts.Equal(&mgr.truncated) {
+func (mgr *Manager) GetTruncateTS() types.TS {
+	return mgr.truncated
+}
+
+func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) (updated bool) {
+	if ts.LE(&mgr.truncated) {
 		return
 	}
+	updated = true
 	mgr.truncated = ts
 	cnt := mgr.table.TruncateByTimeStamp(ts)
-	logutil.Info("[logtail] GC", zap.String("ts", ts.ToString()), zap.Int("deleted-blk", cnt), zap.Int("remaining-blk", mgr.table.BlockCount()))
+	logutil.Info(
+		"GC-Logtail-Table",
+		zap.String("ts", ts.ToString()),
+		zap.Int("deleted-blk", cnt),
+		zap.Int("remaining-blk", mgr.table.BlockCount()),
+	)
+	return
 }
 
 func (mgr *Manager) TryCompactTable() {
@@ -212,18 +259,15 @@ func (mgr *Manager) TryCompactTable() {
 
 func (mgr *Manager) GetTableOperator(
 	from, to types.TS,
-	catalog *catalog.Catalog,
-	dbID, tableID uint64,
-	visitor catalog.Processor,
+	tableEntry *catalog.TableEntry,
+	visitor *TableLogtailRespBuilder,
 ) *BoundTableOperator {
-	reader := mgr.GetReader(from, to)
-	return NewBoundTableOperator(
-		catalog,
-		reader,
-		dbID,
-		tableID,
-		visitor,
-	)
+	return &BoundTableOperator{
+		tbl:     tableEntry,
+		visitor: visitor,
+		from:    from,
+		to:      to,
+	}
 }
 
 func (mgr *Manager) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) error {

@@ -29,6 +29,7 @@ import (
 )
 
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error) {
+	s.logger.Info("start manual bootstrap upgrade")
 	// Before manually upgrade, check if there are unready upgrade tasks in system upgrade environment
 	err := s.UpgradePreCheck(ctx)
 	if err != nil {
@@ -114,7 +115,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				return err
 			}
 			if latestVersion.Version != currentCN.Version {
-				panic("BUG: current cn's version(" +
+				s.logger.Fatal("BUG: current cn's version(" +
 					currentCN.Version +
 					") must equal cluster latest version(" +
 					latestVersion.Version +

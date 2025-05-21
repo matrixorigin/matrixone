@@ -34,6 +34,9 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,8 +74,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 func createDropDatabaseErrorInfo() string {
@@ -220,7 +221,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 
 	stm.ConnectionId = ses.GetConnectionID()
 	stm.Account = tenant.GetTenant()
-	stm.RoleId = proc.GetSessionInfo().RoleId
+	stm.RoleId = tenant.GetDefaultRoleID()
+	//stm.RoleId = proc.GetSessionInfo().RoleId
 	stm.User = tenant.GetUser()
 	stm.Host = ses.respr.GetStr(PEER)
 	stm.Database = ses.respr.GetStr(DBNAME)
@@ -1033,10 +1035,9 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 	if err != nil {
 		return err
 	}
-	es.CmpContext = ses.GetTxnCompileCtx()
 
 	//get query optimizer and execute Optimize
-	exPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	exPlan, err := buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1153,7 +1154,7 @@ func createPrepareStmt(
 	stmt tree.Statement,
 	saveStmt tree.Statement) (*PrepareStmt, error) {
 
-	preparePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
+	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1200,7 +1201,7 @@ func createPrepareStmt(
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlan(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
+	deallocatePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return err
 	}
@@ -1572,6 +1573,15 @@ func handleKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
 // handleShowAccounts lists the info of accounts
 func handleShowAccounts(ses FeSession, execCtx *ExecCtx, sa *tree.ShowAccounts) error {
 	err := doShowAccounts(execCtx.reqCtx, ses.(*Session), sa)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
+// handleShowRecoveryWindow lists the info of recovery window
+func handleShowRecoveryWindow(ses FeSession, execCtx *ExecCtx, srw *tree.ShowRecoveryWindow) error {
+	err := doShowRecoveryWindow(execCtx.reqCtx, ses.(*Session), srw)
 	if err != nil {
 		return err
 	}
@@ -2000,7 +2010,6 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	defer func() {
 		cost := time.Since(start)
-
 		if txnOp != nil {
 			txnTrace.GetService(ses.GetService()).AddTxnDurationAction(
 				txnOp,
@@ -2013,10 +2022,14 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
-	stats := statistic.StatsInfoFromContext(reqCtx)
+	// NOTE: The context used by buildPlan comes from the CompilerContext object
+	planContext := ctx.GetContext()
+	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
+
 	crs := new(perfcounter.CounterSet)
-	reqCtx = perfcounter.AttachBuildPlanMarkKey(reqCtx, crs)
+	planContext = perfcounter.AttachBuildPlanMarkKey(planContext, crs)
+	ctx.SetContext(planContext)
 	defer func() {
 		stats.AddBuildPlanS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
@@ -2031,17 +2044,18 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	isPrepareStmt := false
 	if ses != nil {
-		var accId uint32
-		accId, err = defines.GetAccountId(reqCtx)
+		accId, err := defines.GetAccountId(reqCtx)
 		if err != nil {
 			return nil, err
 		}
 		ses.SetAccountId(accId)
+
 		if len(ses.GetSql()) > 8 {
 			prefix := strings.ToLower(ses.GetSql()[:8])
 			isPrepareStmt = prefix == "execute " || prefix == "prepare "
 		}
 	}
+	// Handle specific statement types
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
 			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
@@ -2050,27 +2064,25 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 			}
 		}
 	}
+
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
-		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
-			if err != nil {
-				return nil, err
-			}
-		}
 		return ret, err
 	}
+
+	// Default handling of various statements
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 		*tree.Update, *tree.Delete, *tree.Insert,
-		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber, *tree.ShowTableNumber,
-		*tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+		*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
 		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt, isPrepareStmt)
 		if err != nil {
 			return nil, err
 		}
+
 		ret = &plan2.Plan{
 			Plan: &plan2.Plan_Query{
 				Query: optimized,
@@ -2079,16 +2091,35 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 	default:
 		ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 	}
+
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
-		if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
-			err = authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, ret)
-			if err != nil {
-				return nil, err
-			}
-		}
 	}
 	return ret, err
+}
+
+// buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
+// after the plan has been successfully built.
+var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	planContext := ctx.GetContext()
+	stats := statistic.StatsInfoFromContext(planContext)
+
+	// Step 1: Call buildPlan to construct the execution plan
+	plan, err := buildPlan(reqCtx, ses, ctx, stmt)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 2: Perform permission check after the plan is built
+	if ses != nil && ses.GetTenantInfo() != nil && !ses.IsBackgroundSession() {
+		authStats, err := authenticateCanExecuteStatementAndPlan(reqCtx, ses.(*Session), stmt, plan)
+		if err != nil {
+			return nil, err
+		}
+		// record permission statistics.
+		stats.PermissionAuth.Add(&authStats)
+	}
+	return plan, nil
 }
 
 func checkModify(plan0 *plan.Plan, ses FeSession) bool {
@@ -2222,91 +2253,105 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 }
 
 // authenticateUserCanExecuteStatement checks the user can execute the statement
-func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) error {
+func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, stmt tree.Statement) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	reqCtx, span := trace.Debug(reqCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
-		return nil
+		return stats, nil
 	}
 
 	if ses.skipAuthForSpecialUser() {
-		return nil
+		return stats, nil
 	}
-	var havePrivilege bool
-	var err error
 	if ses.GetTenantInfo() != nil {
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 
 		// can or not execute in retricted status
 		if ses.getRoutine() != nil && ses.getRoutine().isRestricted() && !ses.GetPrivilege().canExecInRestricted {
-			return moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
+			return stats, moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
 		}
 
 		// can or not execute in password expired status
 		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
-			return moerr.NewInternalError(reqCtx, "password has expired, please change the password")
+			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
 		}
 
-		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
+		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
 		if err != nil {
-			return err
+			return stats, err
 		}
+		stats.Add(&delta)
 
 		if !havePrivilege {
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
-			return err
+			return stats, err
 		}
 
-		havePrivilege, err = authenticateUserCanExecuteStatementWithObjectTypeNone(reqCtx, ses, stmt)
+		havePrivilege, delta, err = authenticateUserCanExecuteStatementWithObjectTypeNone(reqCtx, ses, stmt)
 		if err != nil {
-			return err
+			return stats, err
 		}
+		stats.Add(&delta)
 
 		if !havePrivilege {
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
-			return err
+			return stats, err
 		}
 	}
-	return err
+	return stats, nil
 }
 
 // authenticateCanExecuteStatementAndPlan checks the user can execute the statement and its plan
-func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+func authenticateCanExecuteStatementAndPlan(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateCanExecuteStatementAndPlan")
 	defer task.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
-		return nil
+		return stats, nil
 	}
 
 	if ses.skipAuthForSpecialUser() {
-		return nil
+		return stats, nil
 	}
-	yes, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
+	yes, delta, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(reqCtx, ses, stmt, p)
 	if err != nil {
-		return err
+		return stats, err
 	}
+	stats.Add(&delta)
+
 	if !yes {
-		return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+		return stats, moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 	}
-	return nil
+	return stats, nil
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
-func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) (statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+
 	_, task := gotrace.NewTask(reqCtx, "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
-		return nil
+		return stats, nil
 	}
-	err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
+	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
 	if err != nil {
-		return err
+		return stats, err
 	}
-	err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, stmt, p)
+	stats.Add(&delta)
+
+	delta, err = authenticateCanExecuteStatementAndPlan(reqCtx, ses, stmt, p)
 	if err != nil {
-		return err
+		return stats, err
 	}
-	return err
+	stats.Add(&delta)
+	return stats, err
 }
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
@@ -2992,24 +3037,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ses.CopySeqToProc(proc)
 	if ses.GetTenantInfo() != nil {
 		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.Base.SessionInfo.AccountId = ses.GetTenantInfo().GetTenantID()
 		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-		proc.Base.SessionInfo.RoleId = ses.GetTenantInfo().GetDefaultRoleID()
-		proc.Base.SessionInfo.UserId = ses.GetTenantInfo().GetUserID()
 
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
 		userNameOnly = ses.GetTenantInfo().GetUser()
-	} else {
-		var accountId uint32
-		accountId, retErr = defines.GetAccountId(execCtx.reqCtx)
-		if retErr != nil {
-			return retErr
-		}
-		proc.Base.SessionInfo.AccountId = accountId
-		proc.Base.SessionInfo.UserId = defines.GetUserId(execCtx.reqCtx)
-		proc.Base.SessionInfo.RoleId = defines.GetRoleId(execCtx.reqCtx)
 	}
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "doComQuery",
@@ -3019,7 +3052,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.Base.SessionInfo.User = userNameOnly
 	proc.Base.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
 
-	statsInfo := new(statistic.StatsInfo)
+	statsInfo := statistic.NewStatsInfo()
 	statsInfo.ParseStage.ParseStartTime = beginInstant
 
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
@@ -3104,11 +3137,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		tenant := ses.GetTenantNameWithStmt(stmt)
 		//skip PREPARE statement here
 		if ses.GetTenantInfo() != nil && !IsPrepareStatement(stmt) {
-			err = authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
+			authStats, err := authenticateUserCanExecuteStatement(execCtx.reqCtx, ses, stmt)
 			if err != nil {
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
 				return err
 			}
+			statsInfo.PermissionAuth.Add(&authStats)
 		}
 
 		/*
@@ -3209,7 +3243,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
 		}
 	}()
-	_, _, _ = fault.TriggerFault("exec_request_panic")
+	_, _, _ = fault.TriggerFaultInDomain(fault.DomainFrontend, "exec_request_panic")
 
 	ses.EnterFPrint(FPExecRequest)
 	defer ses.ExitFPrint(FPExecRequest)
@@ -3361,7 +3395,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
-		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", req.GetCmd()))
+		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil
 }
@@ -3756,12 +3790,14 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 			int64(statsInfo.PlanStage.PlanDuration) +
 			int64(statsInfo.CompileStage.CompileDuration) +
 			statsInfo.PrepareRunStage.ScopePrepareDuration +
-			statsInfo.PrepareRunStage.CompilePreRunOnceDuration - statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+			statsInfo.PrepareRunStage.CompilePreRunOnceDuration -
+			statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock -
+			statsInfo.PlanStage.BuildPlanStatsIOConsumption -
 			(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 		if totalTime < 0 {
 			if !h.isInternalSubStmt {
-				ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
+				ses.Infof(ctx, "negative cpu statement_id:%s, statement_type:%s, statsInfo:[Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d) = %d]",
 					uuid.UUID(h.stmt.StatementID).String(),
 					h.stmt.StatementType,
 					statsInfo.ParseStage.ParseDuration,
@@ -3770,6 +3806,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 					operatorTimeConsumed,
 					statsInfo.PrepareRunStage.ScopePrepareDuration+statsInfo.PrepareRunStage.CompilePreRunOnceDuration,
 					statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
+					statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 					statsInfo.IOAccessTimeConsumption,
 					statsInfo.S3FSPrefetchFileIOMergerTimeConsumption,
 					totalTime,
@@ -3804,6 +3841,9 @@ func (h *marshalPlanHandler) Stats(ctx context.Context, ses FeSession) (statsByt
 		statsByte.WithS3IOOutputCount(totalS3Output)
 		statsByte.WithS3IOListCount(totalS3List)
 		statsByte.WithS3IODeleteCount(totalS3Delete)
+
+		// Additional permission authentication SQL statistics
+		statsByte.Add(&statsInfo.PermissionAuth)
 	}
 	return
 }

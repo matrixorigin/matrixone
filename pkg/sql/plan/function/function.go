@@ -207,7 +207,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec, execFree := f.GetExecuteMethod()
+	exec, _, execFree := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
 		result.Free()
 		if execFree != nil {
@@ -344,6 +344,12 @@ type executeLogicOfOverload func(parameters []*vector.Vector,
 // in case we need it in the future.
 type executeFreeOfOverload func() error
 
+// executeResetOfOverload is used to reset the resources allocated by the execution logic.
+// It is mainly used in SERIAL and SERIAL_FULL.
+// NOTE: right now, we are not throwing an error when the reset logic failed. However, it is still included
+// in case we need it in the future.
+type executeResetOfOverload func() error
+
 type aggregationLogicOfOverload struct {
 	// agg related string for error message.
 	str string
@@ -375,7 +381,7 @@ type overload struct {
 
 	// the execution logic and free logic.
 	// NOTE: use either newOp or newOpWithFree.
-	newOpWithFree func() (executeLogicOfOverload, executeFreeOfOverload)
+	newOpWithFree func() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
@@ -412,14 +418,14 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeFreeOfOverload) {
+func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeResetOfOverload, executeFreeOfOverload) {
 	if ov.newOpWithFree != nil {
-		fn, fnFree := ov.newOpWithFree()
-		return fn, fnFree
+		fn, fnReset, fnFree := ov.newOpWithFree()
+		return fn, fnReset, fnFree
 	}
 
 	fn := ov.newOp()
-	return fn, nil
+	return fn, nil, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
@@ -510,3 +516,6 @@ func (selectList *FunctionSelectList) Contains(row uint64) bool {
 	}
 	return !selectList.SelectList[row]
 }
+
+var EncodeOverloadID = encodeOverloadID
+var GetFunctionIdByName = getFunctionIdByName

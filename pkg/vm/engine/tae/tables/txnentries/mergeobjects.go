@@ -131,7 +131,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			isTransient := !tblEntry.GetLastestSchema(false).HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
+			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
 			page.Train(m)
 
 			start = time.Now()
@@ -146,7 +146,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 		}
 
 		start = time.Now()
-		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		model.WriteTransferPage(ctx, entry.rt.LocalFs, pages, *ioVector)
 		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
@@ -176,12 +176,12 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	for objectID, blkMap := range entry.delTbls {
 		for blkOffset := range blkMap {
 			blkID := objectio.NewBlockidWithObjectID(&objectID, blkOffset)
-			entry.rt.TransferDelsMap.DeleteDelsForBlk(*blkID)
+			entry.rt.TransferDelsMap.DeleteDelsForBlk(blkID)
 		}
 	}
 	entry.pageIds = nil
 
-	fs := entry.rt.Fs.Service
+	fs := entry.rt.Fs
 	// for io task, dispatch by round robin, scope can be nil
 	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
 		// TODO: variable as timeout
@@ -298,7 +298,7 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		}
 		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][destpos.BlkIdx] = struct{}{}
 		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), destpos.BlkIdx)
-		entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
+		entry.rt.TransferDelsMap.SetDelsForBlk(blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 		var targetObj handle.Object
 		targetObj, err = entry.relation.GetObject(entry.createdObjs[destpos.ObjIdx].ID(), entry.isTombstone)
 		if err != nil {

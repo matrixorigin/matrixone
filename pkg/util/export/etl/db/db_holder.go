@@ -45,7 +45,7 @@ var (
 
 	dbMux sync.Mutex
 
-	DBConnErrCount atomic.Uint32
+	DBConnErrCount = NewReConnectionBackOff(time.Minute, DBConnRetryThreshold)
 )
 
 const MOLoggerUser = "mo_logger"
@@ -101,7 +101,11 @@ func CloseDBConn() {
 	}
 }
 
-func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+// GetOrInitDBConn get the target cn to do the load query.
+// if @forceNewConn is true, it will force close old db conn, and re-find new cn.
+// if @forceNewConn is false, it will normally fetch the current db connection. BUT in 1 cases, it will re-find the cn:
+//  1. DBRefreshTime interval, it will try to fetch the 'new' ob-sys cn.
+var GetOrInitDBConn = func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 	dbMux.Lock()
 	defer dbMux.Unlock()
 	initFunc := func() error {
@@ -121,7 +125,7 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 			return err
 		}
 		dsn :=
-			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=67108864&disable_txn_trace=1",
+			fmt.Sprintf("%s:%s@tcp(%s)/?readTimeout=10s&writeTimeout=15s&timeout=15s&maxAllowedPacket=0&disable_txn_trace=1",
 				dbUser.UserName,
 				dbUser.Password,
 				dbAddress)
@@ -161,13 +165,19 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 
 	var dbConn *sql.DB
 
-	if DBConnErrCount.Load() > DBConnRetryThreshold {
+	if !DBConnErrCount.Check() {
 		dbConn, err = GetOrInitDBConn(true, true)
-		DBConnErrCount.Store(0)
 	} else {
 		dbConn, err = GetOrInitDBConn(false, false)
 	}
 	if err != nil {
+		v2.TraceMOLoggerErrorConnDBCounter.Inc()
+		_ = DBConnErrCount.Count()
+		return 0, err
+	}
+	if dbConn.Ping() != nil {
+		v2.TraceMOLoggerErrorPingDBCounter.Inc()
+		_ = DBConnErrCount.Count()
 		return 0, err
 	}
 
@@ -177,7 +187,7 @@ func WriteRowRecords(records [][]string, tbl *table.Table, timeout time.Duration
 	err = bulkInsert(ctx, dbConn, records, tbl)
 	if err != nil {
 		err = moerr.AttachCause(ctx, err)
-		DBConnErrCount.Add(1)
+		_ = DBConnErrCount.Count()
 		return 0, err
 	}
 
@@ -316,21 +326,22 @@ func IsRecordExisted(ctx context.Context, record []string, tbl *table.Table, get
 
 	if tbl.Table == "statement_info" {
 		const stmtIDIndex = 0           // Replace with actual index for statement ID if different
+		const accountIndex = 3          // Replace with actual index for account
 		const statusIndex = 15          // Replace with actual index for status
 		const requestAtIndex = 12       // Replace with actual index for request_at
 		if len(record) <= statusIndex { // Use the largest index you will access
 			return false, nil
 		}
-		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex])
+		return isStatementExisted(ctx, dbConn, record[stmtIDIndex], record[statusIndex], record[requestAtIndex], record[accountIndex])
 	}
 
 	return false, nil
 }
 
-func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string, request_at string) (bool, error) {
+func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status string, request_at, account string) (bool, error) {
 	var exists bool
-	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ?)"
-	err := db.QueryRowContext(ctx, query, stmtId, status, request_at).Scan(&exists)
+	query := "SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ? AND account = ?)"
+	err := db.QueryRowContext(ctx, query, stmtId, status, request_at, account).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
@@ -357,4 +368,47 @@ func SetLabelSelector(labels map[string]string) {
 // - If you use labels{"account":"sys", "role":"ob"}, the Selector can match those pods, which have labels{"account":"*", "role":"ob"}
 func GetLabelSelector() map[string]string {
 	return gLabels
+}
+
+var _ table.BackOff = (*ReConnectionBackOff)(nil)
+
+type ReConnectionBackOff struct {
+	sync.Mutex
+	// setting
+	window    time.Duration
+	threshold int
+	// status
+	last  time.Time
+	count int
+}
+
+func NewReConnectionBackOff(window time.Duration, threshold int) *ReConnectionBackOff {
+	return &ReConnectionBackOff{
+		window:    window,
+		threshold: threshold,
+		last:      time.Now(),
+		count:     0,
+	}
+}
+
+// Count implement table.BackOff
+// return true, means not in backoff cycle. You can run your code.
+func (b *ReConnectionBackOff) Count() bool {
+	b.Lock()
+	defer b.Unlock()
+	if time.Since(b.last) > b.window {
+		b.count = 1
+		b.last = time.Now()
+		return true
+	}
+
+	b.count++
+	b.last = time.Now()
+	return b.count <= b.threshold
+}
+
+// Check return same as Count, but without changed.
+func (b *ReConnectionBackOff) Check() bool {
+	return b.count <= b.threshold ||
+		(time.Now().Before(b.last) || time.Since(b.last) > b.window)
 }

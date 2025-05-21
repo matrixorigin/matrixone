@@ -81,6 +81,13 @@ func NewS3FS(
 	var err error
 	switch {
 
+	case args.IsHDFS || strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+		// HDFS
+		fs.storage, err = NewHDFS(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
 	case args.IsMinio ||
 		// 天翼云，使用SignatureV2验证，其他SDK不再支持
 		strings.Contains(args.Endpoint, "ctyunapi.cn"):
@@ -531,9 +538,9 @@ read_memory_cache:
 				return
 			}
 			t0 := time.Now()
-			LogEvent(ctx, str_update_memory_cache_Caches_begin)
+			LogEvent(ctx, str_update_memory_cache_begin)
 			err = s.memCache.Update(ctx, vector, s.asyncUpdate)
-			LogEvent(ctx, str_update_memory_cache_Caches_end)
+			LogEvent(ctx, str_update_memory_cache_end)
 			metric.FSReadDurationUpdateMemoryCache.Observe(time.Since(t0).Seconds())
 		}()
 	}
