@@ -145,8 +145,7 @@ func aggBitAndOfBinaryFill(
 		return resultSetter(value)
 	}
 	v := resultGetter()
-	types.BitAnd(v, v, value)
-	return nil
+	return types.BitAnd(v, v, value)
 }
 func aggBitAndOfBinaryFills(
 	_ aggexec.AggGroupExecContext, _ aggexec.AggCommonExecContext,
@@ -167,6 +166,5 @@ func aggBitAndOfBinaryMerge(
 		return resultSetter(resultGetter2())
 	}
 	v1, v2 := resultGetter1(), resultGetter2()
-	types.BitAnd(v1, v1, v2)
-	return nil
+	return types.BitAnd(v1, v1, v2)
 }
