@@ -231,21 +231,20 @@ func (c *Cache[K, V]) Used() int64 {
 
 func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
 	var target int64
-	target = c.capacity() - capacityCut
+	target = c.capacity() - capacityCut - 1
 	if target <= 0 {
-		target = 1
+		target = 0
 	}
-	targetSmall := c.capSmall() - capacityCut
+	targetSmall := c.capSmall() - capacityCut - 1
 	if targetSmall <= 0 {
-		targetSmall = 1
+		targetSmall = 0
 	}
-	//targetMain := target - targetSmall
 
 	usedsmall := c.usedSmall.Load()
 	usedmain := c.usedMain.Load()
 
-	for usedmain+usedsmall >= target {
-		if usedsmall >= targetSmall {
+	for usedmain+usedsmall > target {
+		if usedsmall > targetSmall {
 			c.evictSmall(ctx)
 		} else {
 			c.evictMain(ctx)
@@ -254,7 +253,7 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 		usedmain = c.usedMain.Load()
 	}
 
-	return target
+	return target + 1
 }
 
 func (c *Cache[K, V]) evictSmall(ctx context.Context) {

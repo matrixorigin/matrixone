@@ -112,6 +112,10 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Equal(t, int64(size)-1, m.cache.Available())
 	assert.Equal(t, int64(1), m.cache.Used())
 
+	// check double free
+	// delete path will remove items from hashtable but items are still in queus and have reference counter 0.
+	m.DeletePaths(ctx, []string{"foo"})
+
 }
 
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
