@@ -168,7 +168,9 @@ func handleDataSource(source, col *vector.Vector) (string, string, string, strin
 	case 2:
 		dbname, tablename := parts[0], parts[1]
 		return dbname, tablename, "", col.GetStringAt(0), false, nil
-	// Newly supported source format: db_name.table_name.?index_name
+	// Newly supported source format:
+	// db_name.table_name.?index_name
+	// or db_name.table_name.#
 	case 3:
 		dbname, tablename, thirdPart := parts[0], parts[1], parts[2]
 		if len(thirdPart) == 1 && thirdPart[0] == '#' {
@@ -179,9 +181,19 @@ func handleDataSource(source, col *vector.Vector) (string, string, string, strin
 		}
 		indexName := thirdPart[1:]
 		return dbname, tablename, indexName, col.GetStringAt(0), false, nil
-
+	// db_name.table_name.?index_name.#
+	case 4:
+		dbname, tablename, indexPart, tombstonePart := parts[0], parts[1], parts[2], parts[3]
+		if len(tombstonePart) != 1 || tombstonePart[0] != '#' {
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("invalid tombstone identifier: must be #")
+		}
+		if len(indexPart) == 0 || indexPart[0] != '?' {
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("index name must start with ? and follow identifier rules")
+		}
+		indexName := indexPart[1:]
+		return dbname, tablename, indexName, col.GetStringAt(0), true, nil
 	default:
-		return "", "", "", "", false, moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.?index_name format")
+		return "", "", "", "", false, moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.?index_name or db_name.table_name.# or db_name.table_name.?index_name.# format")
 	}
 }
 

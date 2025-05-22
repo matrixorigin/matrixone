@@ -36,15 +36,16 @@ select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.
 internal error: check whether the index "idx_invalid" really exists
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.idx_invalid", "*")g;
 internal error: index name must start with ? and follow identifier rules
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_invalid.#", "*")g;
+internal error: check whether the index "idx_invalid" really exists
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_a.#", "*")g;
+col_name
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.#", "*")g;
 col_name
 delete from t where a = 1;
 select count(*) from t;
 count(*)
 4096
-select mo_ctl("dn", "flush", "table_func_metadata_scan_idx_tb.t");
-mo_ctl(dn, flush, table_func_metadata_scan_idx_tb.t)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.#", "*")g;
 col_name
 a
@@ -52,3 +53,7 @@ b
 c
 d
 e
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_a.#", "*")g;
+col_name
+__mo_index_idx_col
+__mo_index_pri_col
