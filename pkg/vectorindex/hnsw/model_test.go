@@ -100,17 +100,71 @@ func TestModel(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, found, false)
 
-	err = idx.Add(1000, v1000)
+	key := int64(1000)
+	v := v1000
+	full := false
+	empty := false
+
+	for i := 0; i < 10; i++ {
+		full, err = idx.Full()
+		require.Nil(t, err)
+		require.Equal(t, full, false)
+
+		empty, err = idx.Empty()
+		require.Nil(t, err)
+		require.Equal(t, empty, false)
+
+		err = idx.Add(int64(key), v)
+		require.Nil(t, err)
+
+		require.Equal(t, idx.Dirty, true)
+
+		err = idx.Unload()
+		require.Nil(t, err)
+
+		err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, false)
+		require.Nil(t, err)
+
+		doModelSearchTest(t, idx, uint64(key), v)
+
+		key += 1
+		v[0] += 1
+	}
+
+	// reset vector to [1000, 2000, 3000]
+	key = int64(1000)
+	v[0] = 1000
+
+	for i := 0; i < 10; i++ {
+		err = idx.Remove(key)
+		require.Nil(t, err)
+		key += 1
+	}
+
+	deletesqls, err := idx.ToDeleteSql(tblcfg)
 	require.Nil(t, err)
 
-	require.Equal(t, idx.Dirty, true)
+	fmt.Printf("%v\n", deletesqls)
 
+	// ToSql will release the index so index is nil
+	sqls, err := idx.ToSql(tblcfg)
+	require.Nil(t, err)
+	fmt.Printf("%v\n", sqls)
+
+	// unload with nil index will output error
 	err = idx.Unload()
-	require.Nil(t, err)
+	require.NotNil(t, err)
 
+	// load again
 	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, false)
 	require.Nil(t, err)
 
-	doModelSearchTest(t, idx, 1000, v1000)
+	key = int64(1000)
+	for i := 0; i < 10; i++ {
+		found, err = idx.Contains(key)
+		require.Nil(t, err)
+		require.Equal(t, found, false)
+		key += 1
+	}
 
 }
