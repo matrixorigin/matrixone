@@ -168,3 +168,39 @@ func TestModel(t *testing.T) {
 	}
 
 }
+
+func TestModelNil(t *testing.T) {
+
+	var err error
+	var tblcfg vectorindex.IndexTableConfig
+
+	idx := HnswModel{}
+	err = idx.SaveToFile()
+	require.Nil(t, err)
+
+	sqls, err := idx.ToSql(tblcfg)
+	require.Nil(t, err)
+	require.Equal(t, len(sqls), 0)
+
+	_, err = idx.Empty()
+	require.NotNil(t, err)
+
+	_, err = idx.Full()
+	require.NotNil(t, err)
+
+	err = idx.Add(0, nil)
+	require.NotNil(t, err)
+
+	err = idx.Remove(0)
+	require.NotNil(t, err)
+
+	_, err = idx.Contains(0)
+	require.NotNil(t, err)
+
+	err = idx.Unload()
+	require.NotNil(t, err)
+
+	_, _, err = idx.Search(nil, 0)
+	require.NotNil(t, err)
+
+}
