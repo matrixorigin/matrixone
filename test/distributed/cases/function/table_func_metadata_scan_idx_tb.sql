@@ -24,9 +24,11 @@ CREATE INDEX idx_c_d ON t(c, d);
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_c_d", "*")g;
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_invalid", "*")g;
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.idx_invalid", "*")g;
+
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_invalid.#", "*")g;
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_a.#", "*")g;
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.#", "*")g;
 delete from t where a = 1;
 select count(*) from t;
--- @ignore:0
-select mo_ctl("dn", "flush", "table_func_metadata_scan_idx_tb.t");
 select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.#", "*")g;
+select distinct(col_name) from metadata_scan("table_func_metadata_scan_idx_tb.t.?idx_a.#", "*")g;
