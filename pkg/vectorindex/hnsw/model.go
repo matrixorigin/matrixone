@@ -138,6 +138,13 @@ func (idx *HnswModel) SaveToFile() error {
 		return err
 	}
 
+	// get new checksum
+	chksum, err := vectorindex.CheckSum(f.Name())
+	if err != nil {
+		return err
+	}
+	idx.Checksum = chksum
+
 	// free memory
 	err = idx.Index.Destroy()
 	if err != nil {
@@ -145,6 +152,7 @@ func (idx *HnswModel) SaveToFile() error {
 	}
 	idx.Index = nil
 	idx.Path = f.Name()
+
 	return nil
 }
 
