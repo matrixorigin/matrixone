@@ -244,10 +244,11 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 			// brute force search with selected centroids
 			sql_closed := false
+			var err2 error
 			for !sql_closed {
-				sql_closed, err = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
-				if err != nil {
-					errs <- err
+				sql_closed, err2 = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
+				if err2 != nil {
+					errs <- err2
 					return
 				}
 			}
