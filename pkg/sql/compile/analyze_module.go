@@ -420,8 +420,6 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 				}
 			}
 		}
-	} else {
-		panic(fmt.Sprintf("unkonw operator type: %v", id))
 	}
 	return receivers
 }
