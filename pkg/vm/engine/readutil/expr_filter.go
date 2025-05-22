@@ -237,11 +237,11 @@ func CompileFilterExpr(
 		switch exprImpl.F.Func.ObjName {
 		case "or":
 			highSelectivityHint = true
-			fastOps := make([]FastFilterOp, len(exprImpl.F.Args))
-			loadOps := make([]LoadOp, len(exprImpl.F.Args))
-			objectOps := make([]ObjectFilterOp, len(exprImpl.F.Args))
-			blockOps := make([]BlockFilterOp, len(exprImpl.F.Args))
-			seekOps := make([]SeekFirstBlockOp, len(exprImpl.F.Args))
+			fastOps := make([]FastFilterOp, 0, len(exprImpl.F.Args))
+			loadOps := make([]LoadOp, 0, len(exprImpl.F.Args))
+			objectOps := make([]ObjectFilterOp, 0, len(exprImpl.F.Args))
+			blockOps := make([]BlockFilterOp, 0, len(exprImpl.F.Args))
+			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
 				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
@@ -330,11 +330,11 @@ func CompileFilterExpr(
 
 		case "and":
 			highSelectivityHint = true
-			fastOps := make([]FastFilterOp, len(exprImpl.F.Args))
-			loadOps := make([]LoadOp, len(exprImpl.F.Args))
-			objectOps := make([]ObjectFilterOp, len(exprImpl.F.Args))
-			blockOps := make([]BlockFilterOp, len(exprImpl.F.Args))
-			seekOps := make([]SeekFirstBlockOp, len(exprImpl.F.Args))
+			fastOps := make([]FastFilterOp, 0, len(exprImpl.F.Args))
+			loadOps := make([]LoadOp, 0, len(exprImpl.F.Args))
+			objectOps := make([]ObjectFilterOp, 0, len(exprImpl.F.Args))
+			blockOps := make([]BlockFilterOp, 0, len(exprImpl.F.Args))
+			seekOps := make([]SeekFirstBlockOp, 0, len(exprImpl.F.Args))
 
 			for idx := range exprImpl.F.Args {
 				op1, op2, op3, op4, op5, can, hsh := CompileFilterExpr(exprImpl.F.Args[idx], tableDef, fs)
