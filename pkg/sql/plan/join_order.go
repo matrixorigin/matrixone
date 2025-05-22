@@ -352,7 +352,13 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 func (builder *QueryBuilder) isIndexTableWithoutFilters(nodeId int32) bool {
 	node := builder.qry.Nodes[nodeId]
-	return node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) == 0 && strings.HasPrefix(node.TableDef.Name, catalog.PrefixIndexTableName)
+	if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
+		return false
+	}
+	if len(node.FilterList) > 0 {
+		return false
+	}
+	return strings.HasPrefix(node.TableDef.Name, catalog.PrefixIndexTableName)
 }
 
 func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
