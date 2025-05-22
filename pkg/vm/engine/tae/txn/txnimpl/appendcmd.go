@@ -179,7 +179,9 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 16
-	if _, err = r.Read(types.EncodeBool(&c.IsTombstone)); err != nil {
+	if _, err = r.Read(
+		types.EncodeBool(&c.IsTombstone),
+	); err != nil {
 		return
 	}
 	n += 1
