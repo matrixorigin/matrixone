@@ -96,3 +96,63 @@ func TestSyncDelete(t *testing.T) {
 	err := CdcSync(proc, "db", "src", 3, &cdc)
 	require.Nil(t, err)
 }
+
+// should delete items and add the same keys back to the model
+func TestSyncDeleteAndInsert(t *testing.T) {
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool("", m)
+
+	runSql = mock_runSql
+	runSql_streaming = mock_runSql_streaming
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 200)}
+
+	key := int64(0)
+
+	for i := 0; i < 100; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_DELETE, PKey: key}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	key = 0
+	v := []float32{0.1, 0.2, 0.3}
+	for i := 0; i < 100; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_INSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+
+	}
+
+	err := CdcSync(proc, "db", "src", 3, &cdc)
+	require.Nil(t, err)
+}
+
+// should delete items and add the same keys back to the model
+func TestSyncUpdate(t *testing.T) {
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool("", m)
+
+	runSql = mock_runSql
+	runSql_streaming = mock_runSql_streaming
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 100)}
+
+	key := int64(0)
+	v := []float32{0.1, 0.2, 0.3}
+
+	for i := 0; i < 100; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	err := CdcSync(proc, "db", "src", 3, &cdc)
+	require.Nil(t, err)
+}

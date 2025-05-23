@@ -451,6 +451,7 @@ func (s *HnswSync) ToSql(ts int64) ([]string, error) {
 			return nil, err
 		}
 
+		// skip when sqls is empty which means the index is empty
 		if len(indexsqls) == 0 {
 			continue
 		}
