@@ -29,3 +29,18 @@ select _wstart, _wend, max(temperature) from sensor_data where ts > "2023-08-01 
 select _wstart, _wend, max(temperature) from sensor_data interval(ts, 1, second);
 select _wstart, _wend, max(temperature) from sensor_data interval(ts, 2, hour);
 select _wstart, _wend, max(temperature) from sensor_data interval(ts, 3, day);
+
+--  invalid path
+SELECT _wstart, _wend, invalid_agg(temperature)
+FROM sensor_data
+    INTERVAL(ts, 10, MINUTE);
+
+SELECT _wstart, _wend, SUM(ts)
+FROM sensor_data
+    INTERVAL(ts, 10, MINUTE);
+
+SELECT _wstart, _wend, JSON_ARRAYAGG(temperature)
+FROM sensor_data
+    INTERVAL(ts, 10, MINUTE)
+SLIDING(5, MINUTE)
+FILL(NEXT);
