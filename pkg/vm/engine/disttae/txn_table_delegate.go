@@ -386,9 +386,10 @@ func (tbl *txnTableDelegate) CollectTombstones(
 func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 	ctx context.Context,
 	name string,
+	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
 	if tbl.partition.is {
-		return tbl.partition.tbl.GetColumMetadataScanInfo(ctx, name)
+		return tbl.partition.tbl.GetColumMetadataScanInfo(ctx, name, visitTombstone)
 	}
 
 	is, err := tbl.isLocal()
@@ -399,6 +400,7 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 		return tbl.origin.GetColumMetadataScanInfo(
 			ctx,
 			name,
+			visitTombstone,
 		)
 	}
 
