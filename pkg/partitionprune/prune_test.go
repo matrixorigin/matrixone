@@ -121,7 +121,7 @@ func TestPrunePartitionByExpr(t *testing.T) {
 			Expr: expr,
 		}
 
-		result, err := PrunePartitionByExpr(proc, bat, partition)
+		result, err := PrunePartitionByExpr(proc, bat, partition, -1)
 		require.NoError(t, err)
 		require.Equal(t, 1, result.RowCount())
 	})
@@ -305,7 +305,7 @@ func TestPrune(t *testing.T) {
 			},
 		}
 
-		result, err := Prune(proc, bat, metadata)
+		result, err := Prune(proc, bat, metadata, -1)
 		require.NoError(t, err)
 		require.Equal(t, 2, batchCount(result))
 	})
@@ -315,7 +315,7 @@ func TestPrune(t *testing.T) {
 			Partitions: []partition.Partition{},
 		}
 
-		result, err := Prune(proc, bat, metadata)
+		result, err := Prune(proc, bat, metadata, -1)
 		require.NoError(t, err)
 		require.Equal(t, 0, batchCount(result))
 	})
