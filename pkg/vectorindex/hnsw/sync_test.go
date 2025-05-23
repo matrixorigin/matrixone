@@ -309,3 +309,32 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 	err := CdcSync(proc, "db", "src", 3, &cdc)
 	require.Nil(t, err)
 }
+
+// should delete items and add the same keys back to the model
+func TestSyncUpdateShuffle2Files(t *testing.T) {
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool("", m)
+
+	runSql = mock_runSql_2files
+	runSql_streaming = mock_runSql_streaming_2files
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 100)}
+
+	key := int64(0)
+	v := []float32{0.1, 0.2, 0.3}
+
+	for i := 0; i < 200; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	rand.Seed(uint64(time.Now().UnixNano()))
+	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+
+	err := CdcSync(proc, "db", "src", 3, &cdc)
+	require.Nil(t, err)
+}
