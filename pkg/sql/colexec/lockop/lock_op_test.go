@@ -50,6 +50,7 @@ var testFunc = func(
 	eng engine.Engine,
 	bat *batch.Batch,
 	idx int32,
+	partitionIdx int32,
 	from, to timestamp.Timestamp) (bool, error) {
 	return false, nil
 }
@@ -342,6 +343,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 				eng engine.Engine,
 				bat *batch.Batch,
 				idx int32,
+				partitionIdx int32,
 				from, to timestamp.Timestamp) (bool, error) {
 				return true, nil
 			}
