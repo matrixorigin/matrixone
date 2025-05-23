@@ -248,7 +248,6 @@ func (s *HnswSync) run(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		newmodel.InsertMeta = true
 		s.indexes = append(s.indexes, newmodel)
 		last = newmodel
 	} else {
@@ -262,7 +261,6 @@ func (s *HnswSync) run(proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			newmodel.InsertMeta = true
 			s.indexes = append(s.indexes, newmodel)
 			last = newmodel
 
@@ -409,7 +407,6 @@ func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap u
 		if err != nil {
 			return nil, err
 		}
-		newmodel.InsertMeta = true
 		s.indexes = append(s.indexes, newmodel)
 		last = newmodel
 

@@ -46,10 +46,9 @@ type HnswModel struct {
 	Checksum  string
 
 	// for cdc update
-	Dirty      bool
-	View       bool
-	Len        uint
-	InsertMeta bool
+	Dirty bool
+	View  bool
+	Len   uint
 }
 
 // New HnswModel struct
@@ -242,11 +241,6 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 }
 
 func (idx *HnswModel) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
-	if idx.InsertMeta {
-		// this index is newly created and no DELETE sql required
-		return []string{}, nil
-	}
-
 	sqls := make([]string, 0, 2)
 
 	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.IndexTable, catalog.Hnsw_TblCol_Storage_Index_Id, idx.Id)
