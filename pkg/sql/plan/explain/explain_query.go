@@ -102,14 +102,34 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 }
 
 func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
-	nodes := e.QueryPlan.Nodes
+	return explainPlanTree(e.QueryPlan, ctx, buffer, options)
+}
+
+func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
+	err := explainSinglePlan(qry, ctx, buffer, options)
+	if err != nil {
+		return err
+	}
+
+	for _, bq := range qry.BackgroundQueries {
+		err = explainSinglePlan(bq, ctx, buffer, options)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func explainSinglePlan(qry *plan.Query, ctx context.Context, buffer *ExplainDataBuffer, options *ExplainOptions) error {
+	nodes := qry.Nodes
 
 	isForest := false
-	if len(e.QueryPlan.Steps) > 1 {
+	if len(qry.Steps) > 1 {
 		isForest = true
 	}
 
-	for index, rootNodeID := range e.QueryPlan.Steps {
+	for index, rootNodeID := range qry.Steps {
 		logutil.Debugf("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
@@ -126,35 +146,6 @@ func (e *ExplainQueryImpl) ExplainPlan(ctx context.Context, buffer *ExplainDataB
 		err := traversalPlan(ctx, nodes[rootNodeID], nodes, &settings, options)
 		if err != nil {
 			return err
-		}
-	}
-
-	for i, bq := range e.QueryPlan.BackgroundQueries {
-		nodes := bq.Nodes
-
-		isForest := false
-		if len(bq.Steps) > 1 {
-			isForest = true
-		}
-
-		for index, rootNodeID := range bq.Steps {
-			logutil.Debugf("------------------------------------Query Plan-%v_%v ---------------------------------------------", i, index)
-			settings := FormatSettings{
-				buffer: buffer,
-				offset: 0,
-				indent: 2,
-				level:  0,
-			}
-
-			if isForest {
-				title := fmt.Sprintf("Plan %v:", index)
-				settings.buffer.PushPlanTitle(title)
-			}
-
-			err := traversalPlan(ctx, nodes[rootNodeID], nodes, &settings, options)
-			if err != nil {
-				return err
-			}
 		}
 	}
 
