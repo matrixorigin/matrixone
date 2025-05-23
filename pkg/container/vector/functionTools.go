@@ -541,12 +541,19 @@ func (fr *FunctionResult[T]) PreExtendAndReset(targetSize int) error {
 	}
 
 	oldLength := fr.vec.Length()
-
-	if more := targetSize - oldLength; more > 0 {
-		if err := fr.vec.PreExtend(more, fr.mp); err != nil {
+	if fr.vec.IsConstNull() {
+		oldLength = 0
+		if err := fr.vec.PreExtendConstNull(targetSize, fr.mp); err != nil {
 			return err
 		}
+	} else {
+		if more := targetSize - oldLength; more > 0 {
+			if err := fr.vec.PreExtend(more, fr.mp); err != nil {
+				return err
+			}
+		}
 	}
+
 	fr.vec.ResetWithSameType()
 
 	if !fr.isVarlena {
