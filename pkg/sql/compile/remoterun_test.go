@@ -359,9 +359,9 @@ func Test_decodeBatch(t *testing.T) {
 		nil,
 		nil)
 	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0 := aggexec.MakeAgg(
+	agg0, err := aggexec.MakeAgg(
 		vp, 0, false, []types.Type{types.T_varchar.ToType()}...)
-
+	require.Nil(t, err)
 	bat := &batch.Batch{
 		Recursive:  0,
 		ShuffleIDX: 0,
