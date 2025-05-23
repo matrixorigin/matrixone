@@ -60,6 +60,12 @@ func WithRuntimeLocalFS(fs fileservice.FileService) RuntimeOption {
 	}
 }
 
+func WithRuntimeTmpFS(fs *fileservice.TmpFileService) RuntimeOption {
+	return func(r *Runtime) {
+		r.TmpFS = fs
+	}
+}
+
 func WithRuntimeTransferTable(tt *model.HashPageTable) RuntimeOption {
 	return func(r *Runtime) {
 		r.TransferTable = tt
@@ -264,6 +270,7 @@ type Runtime struct {
 
 	Fs      fileservice.FileService
 	LocalFs fileservice.FileService
+	TmpFS   *fileservice.TmpFileService
 
 	TransferTable   *model.HashPageTable
 	TransferDelsMap *model.TransDelsForBlks

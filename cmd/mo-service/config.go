@@ -386,6 +386,12 @@ func (c *Config) createFileService(
 		}
 	}
 
+	// ensure tmp exists and is TMP
+	_, err = fileservice.Get[fileservice.FileService](fs, defines.TmpFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	return fs, nil
 }
 
@@ -660,6 +666,22 @@ func (c *Config) setFileserviceDefaultValues() {
 			DataDir: c.defaultFileServiceDataDir(defines.ETLFileServiceName),
 		})
 	}
+	// default TMP fs
+	ok = false
+	for _, config := range c.FileServices {
+		if strings.EqualFold(config.Name, defines.TmpFileServiceName) {
+			ok = true
+			break
+		}
+	}
+	// default to local disk
+	if !ok {
+		c.FileServices = append(c.FileServices, fileservice.Config{
+			Name:    defines.TmpFileServiceName,
+			Backend: "DISK-TMP",
+			DataDir: c.defaultFileServiceDataDir(defines.TmpFileServiceName),
+		})
+	}
 
 	for i := 0; i < len(c.FileServices); i++ {
 		config := &c.FileServices[i]
@@ -691,7 +713,7 @@ func (c *Config) setFileserviceDefaultValues() {
 				config.Cache.DiskCapacity = &capacity
 			}
 
-		case defines.ETLFileServiceName:
+		case defines.ETLFileServiceName, defines.TmpFileServiceName:
 			// no caches
 
 		}
