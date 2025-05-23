@@ -740,8 +740,11 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		var udVar *UserDefinedVar
-		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil {
 			return nil, err
+		}
+		if udVar == nil {
+			return nil, moerr.NewInternalErrorf(ctx, "the variable %s is not defined", varName)
 		}
 
 		varValue = udVar.Value
