@@ -16,10 +16,11 @@ package vector
 
 import (
 	"fmt"
-	"golang.org/x/exp/rand"
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/exp/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -3170,4 +3171,27 @@ func TestProtoVector(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ProtoVectorToVector(vec2)
 	require.NoError(t, err)
+}
+
+func TestVector_PreExtendConstNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int32.ToType()
+
+	t.Run("not const null vector", func(t *testing.T) {
+		v := NewVec(typ)
+		defer v.Free(mp)
+
+		err := v.PreExtendConstNull(10, mp)
+		require.NoError(t, err)
+		require.Equal(t, 0, v.Length())
+	})
+
+	t.Run("const null vector - success", func(t *testing.T) {
+		v := NewConstNull(typ, 1, mp)
+		defer v.Free(mp)
+
+		err := v.PreExtendConstNull(10, mp)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+	})
 }
