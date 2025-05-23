@@ -463,10 +463,13 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	//t1 := time.Now()
 	go func() {
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
-		_, err := runWordStats(u, proc, u.sacc)
+		res, err := runWordStats(u, proc, u.sacc)
 		if err != nil {
 			u.errors <- err
 			return
+		}
+		if tableFunction.LogicalPlan != nil {
+			tableFunction.LogicalPlan.BackgroundQueries = append(tableFunction.LogicalPlan.BackgroundQueries, res.LogicalPlan)
 		}
 	}()
 
