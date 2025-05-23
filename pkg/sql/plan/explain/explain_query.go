@@ -112,7 +112,7 @@ func explainPlanTree(qry *plan.Query, ctx context.Context, buffer *ExplainDataBu
 	}
 
 	for _, bq := range qry.BackgroundQueries {
-		err = explainSinglePlan(bq, ctx, buffer, options)
+		err = explainPlanTree(bq, ctx, buffer, options)
 		if err != nil {
 			return err
 		}
