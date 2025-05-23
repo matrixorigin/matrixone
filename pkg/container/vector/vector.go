@@ -811,8 +811,24 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 func (v *Vector) ToConst() {
 	if v.nsp.Contains(0) {
 		v.data = v.data[:0]
+		v.capacity = 0
 	}
 	v.class = CONSTANT
+}
+
+// PreExtendConstNull use to expand the capacity of the const null vector
+func (v *Vector) PreExtendConstNull(rows int, mp *mpool.MPool) error {
+	if !v.IsConstNull() {
+		return nil
+	}
+
+	v.length = 0
+	err := extend(v, rows, mp)
+	if err != nil {
+		return err
+	}
+	v.length = 1
+	return nil
 }
 
 // PreExtend use to expand the capacity of the vector
