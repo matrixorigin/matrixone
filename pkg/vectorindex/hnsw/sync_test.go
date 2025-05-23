@@ -254,3 +254,28 @@ func TestSyncAddOneModel(t *testing.T) {
 	err := CdcSync(proc, "db", "src", 3, &cdc)
 	require.Nil(t, err)
 }
+
+// should delete all items
+func TestSyncDelete2Files(t *testing.T) {
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool("", m)
+
+	runSql = mock_runSql_2files
+	runSql_streaming = mock_runSql_streaming_2files
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 1000)}
+
+	key := int64(0)
+
+	for i := 0; i < 200; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_DELETE, PKey: key}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	err := CdcSync(proc, "db", "src", 3, &cdc)
+	require.Nil(t, err)
+}

@@ -15,7 +15,9 @@
 package hnsw
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +50,27 @@ func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
+	ch <- res
+	return executor.Result{}, nil
+}
+
+// give metadata [index_id, checksum, timestamp]
+func mock_runSql_2files(proc *process.Process, sql string) (executor.Result, error) {
+
+	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMetaBatch2Files(proc)}}, nil
+}
+
+// give blob
+func mock_runSql_streaming_2files(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+
+	fmt.Printf("SQL %s\n", sql)
+	idx := 0
+	if strings.Contains(sql, "abc-1") {
+		idx = 1
+	}
+
+	defer close(ch)
+	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch2Files(proc, idx)}}
 	ch <- res
 	return executor.Result{}, nil
 }
@@ -181,5 +204,56 @@ func makeMoIndexesBatch(proc *process.Process) *batch.Batch {
 	vector.AppendBytes(bat.Vecs[3], []byte("embed"), false, proc.Mp())
 
 	bat.SetRowCount(2)
+	return bat
+}
+
+func makeMetaBatch2Files(proc *process.Process) *batch.Batch {
+	indexfiles := []string{"resources/hnsw0.bin", "resources/hnsw1.bin"}
+	ids := []string{"abc-0", "abc-1"}
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))   // index_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 65536, 0)) // checksum
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_int64, 8, 0))       // timestamp
+
+	for i, indexfile := range indexfiles {
+
+		vector.AppendBytes(bat.Vecs[0], []byte(ids[i]), false, proc.Mp())
+		chksum, err := vectorindex.CheckSum(indexfile)
+		if err != nil {
+			panic("file checksum error")
+		}
+
+		finfo, err := os.Stat(indexfile)
+		if err != nil {
+			panic("file not found")
+		}
+
+		vector.AppendBytes(bat.Vecs[1], []byte(chksum), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[2], int64(0), false, proc.Mp())
+		vector.AppendFixed[int64](bat.Vecs[3], finfo.Size(), false, proc.Mp())
+
+	}
+
+	bat.SetRowCount(len(indexfiles))
+	return bat
+}
+
+func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
+	indexfiles := []string{"resources/hnsw0.bin", "resources/hnsw1.bin"}
+	indexfile := indexfiles[id]
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))    // chunk_id
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_blob, 65536, 0)) // data
+
+	dat, err := os.ReadFile(indexfile)
+	if err != nil {
+		panic("read file error")
+	}
+	vector.AppendFixed[int64](bat.Vecs[0], int64(0), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], dat, false, proc.Mp())
+	bat.SetRowCount(1)
 	return bat
 }
