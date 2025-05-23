@@ -19,7 +19,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,6 +40,10 @@ func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 }
 */
 
+func mock_runTxn(proc *process.Process, fn func(exec executor.TxnExecutor) error) error {
+	return nil
+}
+
 func TestSync(t *testing.T) {
 
 	m := mpool.MustNewZero()
@@ -46,8 +52,21 @@ func TestSync(t *testing.T) {
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
 
-	cdc := vectorindex.VectorIndexCdc[float32]{}
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 1000)}
+
+	key := int64(1000)
+	v := []float32{0.1, 0.2, 0.3}
+
+	for i := 0; i < 1000; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+		for i := range len(v) {
+			v[i] += 0.01
+		}
+	}
 
 	err := CdcSync(proc, "db", "src", 3, &cdc)
 	require.Nil(t, err)

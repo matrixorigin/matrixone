@@ -160,6 +160,8 @@ func TestFallocate(t *testing.T) {
 }
 
 func makeMoIndexesBatch(proc *process.Process) *batch.Batch {
+	//param := "{\"op_type\": \"vector_l2_ops\", \"m\":\"128\",\"ef_construction\":\"256\", \"ef_search\":\"100\"}"
+	param := "{\"op_type\": \"vector_l2_ops\"}"
 	bat := batch.NewWithSize(4)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // index_table_name
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // alog_table_type
@@ -169,13 +171,13 @@ func makeMoIndexesBatch(proc *process.Process) *batch.Batch {
 	// metadata
 	vector.AppendBytes(bat.Vecs[0], []byte("__meta"), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte(catalog.Hnsw_TblType_Metadata), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[2], []byte("{\"op_type\":\"vector_l2_ops\"}"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[2], []byte(param), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[3], []byte("embed"), false, proc.Mp())
 
 	// storage
 	vector.AppendBytes(bat.Vecs[0], []byte("__storage"), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[1], []byte(catalog.Hnsw_TblType_Storage), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[2], []byte("{\"op_type\":\"vector_l2_ops\"}"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[2], []byte(param), false, proc.Mp())
 	vector.AppendBytes(bat.Vecs[3], []byte("embed"), false, proc.Mp())
 
 	bat.SetRowCount(2)

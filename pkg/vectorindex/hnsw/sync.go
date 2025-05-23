@@ -94,7 +94,7 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 		if i == 0 {
 			paramstr := paramvec.UnsafeGetStringAt(i)
 			cname := colvec.UnsafeGetStringAt(i)
-			os.Stderr.WriteString(fmt.Sprintf("idxtbl %s, type %s, param %s, cname %s\n", idxtbl, algotyp, param, cname))
+			os.Stderr.WriteString(fmt.Sprintf("idxtbl %s, type %s, param %s, cname %s\n", idxtbl, algotyp, paramstr, cname))
 			idxtblcfg.KeyPart = cname
 			if len(paramstr) > 0 {
 				err := json.Unmarshal([]byte(paramstr), &param)
@@ -176,6 +176,7 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
 	ts := time.Now().Unix()
 	sync := &HnswSync{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, cdc: cdc, uid: uid, ts: ts}
+	defer sync.destroy()
 	return sync.run(proc)
 }
 
@@ -197,8 +198,6 @@ func (s *HnswSync) destroy() {
 
 func (s *HnswSync) run(proc *process.Process) error {
 	var err error
-
-	defer s.destroy()
 
 	maxcap := uint(s.tblcfg.IndexCapacity)
 
