@@ -267,6 +267,7 @@ func (idx *HnswModel) Empty() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	fmt.Printf("Check empty Size = %d\n", sz)
 	return (sz == 0), nil
 }
 
