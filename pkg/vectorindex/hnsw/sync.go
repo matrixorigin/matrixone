@@ -36,11 +36,12 @@ const (
 )
 
 var runTxn = sqlexec.RunTxn
+var runCatalogSql = sqlexec.RunSql
 
 func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc *vectorindex.VectorIndexCdc[float32]) error {
 
 	sql := fmt.Sprintf(catalogsql, tbl, db)
-	res, err := runSql(proc, sql)
+	res, err := runCatalogSql(proc, sql)
 	if err != nil {
 		return err
 	}

@@ -22,6 +22,7 @@ import (
 
 	fallocate "github.com/detailyang/go-fallocate"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,6 +50,12 @@ func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
 	ch <- res
 	return executor.Result{}, nil
+}
+
+// give moindexes metadata [index_table_name, algo_table_type, algo_params, column_name]
+func mock_runCatalogSql(proc *process.Process, sql string) (executor.Result, error) {
+
+	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMoIndexesBatch(proc)}}, nil
 }
 
 func TestHnsw(t *testing.T) {
@@ -150,4 +157,27 @@ func TestFallocate(t *testing.T) {
 	require.Nil(t, err)
 	fallocate.Fallocate(f, 0, 10000)
 	f.Close()
+}
+
+func makeMoIndexesBatch(proc *process.Process) *batch.Batch {
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // index_table_name
+	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // alog_table_type
+	bat.Vecs[2] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // algo_params
+	bat.Vecs[3] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // colname_name
+
+	// metadata
+	vector.AppendBytes(bat.Vecs[0], []byte("__meta"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], []byte(catalog.Hnsw_TblType_Metadata), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[2], []byte("{\"op_type\":\"vector_l2_ops\"}"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[3], []byte("embed"), false, proc.Mp())
+
+	// storage
+	vector.AppendBytes(bat.Vecs[0], []byte("__storage"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], []byte(catalog.Hnsw_TblType_Storage), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[2], []byte("{\"op_type\":\"vector_l2_ops\"}"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[3], []byte("embed"), false, proc.Mp())
+
+	bat.SetRowCount(2)
+	return bat
 }
