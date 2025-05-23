@@ -469,7 +469,7 @@ func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) 
 	return nil, nil, nil
 }
 
-func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	return nil, nil
 }
 
