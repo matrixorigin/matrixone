@@ -225,6 +225,10 @@ SELECT _wstart, _wend, SUM(ts)
 FROM sensor_data
 INTERVAL(ts, 10, MINUTE);
 invalid argument aggregate function sum, bad value [TIMESTAMP]
+SELECT _wstart, _wend, median(distinct temperature)
+FROM sensor_data
+INTERVAL(ts, 10, MINUTE);
+not supported: DISTINCT in time window
 SELECT _wstart, _wend, JSON_ARRAYAGG(temperature)
 FROM sensor_data
 INTERVAL(ts, 10, MINUTE)

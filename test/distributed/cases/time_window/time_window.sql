@@ -39,6 +39,10 @@ SELECT _wstart, _wend, SUM(ts)
 FROM sensor_data
     INTERVAL(ts, 10, MINUTE);
 
+SELECT _wstart, _wend, median(distinct temperature)
+FROM sensor_data
+    INTERVAL(ts, 10, MINUTE);
+
 SELECT _wstart, _wend, JSON_ARRAYAGG(temperature)
 FROM sensor_data
     INTERVAL(ts, 10, MINUTE)
