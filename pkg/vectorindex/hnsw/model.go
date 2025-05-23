@@ -126,6 +126,20 @@ func (idx *HnswModel) SaveToFile() error {
 	}
 	idx.Path = ""
 
+	empty, err := idx.Empty()
+	if err != nil {
+		return err
+	}
+	if empty {
+		// index empty, no file need to save
+		err = idx.Index.Destroy()
+		if err != nil {
+			return err
+		}
+		idx.Index = nil
+		return nil
+	}
+
 	// save to file
 	f, err := os.CreateTemp("", "hnsw")
 	if err != nil {
@@ -182,7 +196,7 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 
 	idx.FileSize = filesz
 
-	os.Stderr.WriteString(fmt.Sprintf("ToSQ: file %s size %d\n", idx.Path, idx.FileSize))
+	os.Stderr.WriteString(fmt.Sprintf("ToSQL: file %s size %d\n", idx.Path, idx.FileSize))
 	if idx.FileSize == 0 {
 		return []string{}, nil
 	}

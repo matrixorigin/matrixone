@@ -451,6 +451,10 @@ func (s *HnswSync) ToSql(ts int64) ([]string, error) {
 			return nil, err
 		}
 
+		if len(indexsqls) == 0 {
+			continue
+		}
+
 		sqls = append(sqls, indexsqls...)
 
 		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
