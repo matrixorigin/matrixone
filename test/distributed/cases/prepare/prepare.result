@@ -703,6 +703,15 @@ execute s1 using @a, @b;
 a    t1_a
 10    1
 20    2
+drop table if exists t1;
+create table t1(a int, b int);
+prepare s1 from insert into t1 values (?,?);
+set @a=1;
+set @b=null;
+execute s1 using @a, @b;
+select * from t1;
+a    b
+1    null
 drop database db1;
 create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
 create role prepare_role1;
