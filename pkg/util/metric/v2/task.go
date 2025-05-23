@@ -28,10 +28,9 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
-	TaskFlushTableTailDurationHistogram     = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
-	TaskCommitTableTailDurationHistogram    = taskShortDurationHistogram.WithLabelValues("commit_table_tail")
-	TaskCommitMergeObjectsDurationHistogram = taskShortDurationHistogram.WithLabelValues("commit_merge_objects")
-	GetObjectStatsDurationHistogram         = taskShortDurationHistogram.WithLabelValues("get_object_stats")
+	TaskFlushTableTailDurationHistogram  = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskCommitTableTailDurationHistogram = taskShortDurationHistogram.WithLabelValues("commit_table_tail")
+	GetObjectStatsDurationHistogram      = taskShortDurationHistogram.WithLabelValues("get_object_stats")
 
 	// storage usage / show accounts metrics
 	TaskGCkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")
@@ -71,34 +70,39 @@ var (
 		}, []string{"type"})
 
 	TaskCkpEntryPendingDurationHistogram = taskLongDurationHistogram.WithLabelValues("ckp_entry_pending")
-	TaskLoadMemDeletesPerBlockHistogram  = taskCountHistogram.WithLabelValues("load_mem_deletes_per_block")
-	TaskFlushDeletesCountHistogram       = taskCountHistogram.WithLabelValues("flush_deletes_count")
-	TaskFlushDeletesSizeHistogram        = taskBytesHistogram.WithLabelValues("flush_deletes_size")
 )
 
 var (
-	taskScheduledByCounter = prometheus.NewCounterVec(
+	taskDNMergeStuffCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "task",
-			Name:      "scheduled_by_total",
-			Help:      "Total number of task have been scheduled.",
-		}, []string{"type", "nodetype"})
+			Name:      "merge_stuff_total",
+			Help:      "Total number of stuff a merge task have generated",
+		}, []string{"type", "source"})
 
-	TaskDNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "dn")
-	TaskCNMergeScheduledByCounter = taskScheduledByCounter.WithLabelValues("merge", "cn")
+	TaskDataInputSizeCounter      = taskDNMergeStuffCounter.WithLabelValues("input_size", "data")
+	TaskTombstoneInputSizeCounter = taskDNMergeStuffCounter.WithLabelValues("input_size", "tombstone")
+	TaskDataMergeSizeCounter      = taskDNMergeStuffCounter.WithLabelValues("merged_size", "data")
+	TaskTombstoneMergeSizeCounter = taskDNMergeStuffCounter.WithLabelValues("merged_size", "tombstone")
 
-	taskGeneratedStuffCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
+	taskDNMergeDurationHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "task",
-			Name:      "execute_results_total",
-			Help:      "Total number of stuff a task have generated",
-		}, []string{"type", "nodetype"})
+			Name:      "merge_duration_seconds",
+			Help:      "Bucketed histogram of merge duration.",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type", "source"})
 
-	TaskDNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "dn")
-	TaskCNMergedSizeCounter = taskGeneratedStuffCounter.WithLabelValues("merged_size", "cn")
+	TaskCommitDataMergeDurationHistogram      = taskDNMergeDurationHistogram.WithLabelValues("commit_merge", "data")
+	TaskCommitTombstoneMergeDurationHistogram = taskDNMergeDurationHistogram.WithLabelValues("commit_merge", "tombstone")
+	TaskDataMergeDurationHistogram            = taskDNMergeDurationHistogram.WithLabelValues("merge", "data")
+	TaskTombstoneMergeDurationHistogram       = taskDNMergeDurationHistogram.WithLabelValues("merge", "tombstone")
+)
 
+// selectivity metrics
+var (
 	taskSelectivityCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
@@ -133,6 +137,7 @@ var (
 		})
 )
 
+// transfer page metrics
 var (
 	transferPageHitHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "mo",
@@ -142,19 +147,16 @@ var (
 	}, []string{"type"})
 
 	TransferPageTotalHitHistogram = transferPageHitHistogram.WithLabelValues("total")
-)
 
-var (
 	TransferPageRowHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "mo",
 		Subsystem: "task",
 		Name:      "transfer_page_row",
 		Help:      "The total number of transfer row.",
 	})
-)
 
-var (
 	transferDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+
 		Namespace: "mo",
 		Subsystem: "task",
 		Name:      "transfer_duration",

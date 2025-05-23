@@ -398,7 +398,11 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	inst := time.Now()
 	defer func() {
-		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
+		if entry.isTombstone {
+			v2.TaskCommitTombstoneMergeDurationHistogram.Observe(time.Since(inst).Seconds())
+		} else {
+			v2.TaskCommitDataMergeDurationHistogram.Observe(time.Since(inst).Seconds())
+		}
 	}()
 	if len(entry.createdObjs) == 0 || entry.skipTransfer {
 		logutil.Info(

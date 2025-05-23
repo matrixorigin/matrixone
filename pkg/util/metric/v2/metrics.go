@@ -77,8 +77,9 @@ func initTaskMetrics() {
 	registry.MustRegister(taskBytesHistogram)
 	registry.MustRegister(taskCountHistogram)
 
-	registry.MustRegister(taskScheduledByCounter)
-	registry.MustRegister(taskGeneratedStuffCounter)
+	registry.MustRegister(taskDNMergeStuffCounter)
+	registry.MustRegister(taskDNMergeDurationHistogram)
+
 	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(transferPageHitHistogram)

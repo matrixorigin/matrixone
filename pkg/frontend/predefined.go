@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 )
 
 var (
@@ -303,6 +304,21 @@ var (
 	MoCatalogMoAccountLockDDL = fmt.Sprintf(`create table mo_catalog.%s(
     			account_name varchar(300) primary key
 				)`, catalog.MO_ACCOUNT_LOCK)
+
+	MoCatalogMergeSettingsDDL = fmt.Sprintf(`create table mo_catalog.%s (
+		account_id int unsigned not null,
+		tid bigint unsigned not null,
+		version int unsigned not null,
+		settings json not null,
+		extra_info text,
+		primary key(account_id, tid)
+	)`, catalog.MO_MERGE_SETTINGS)
+
+	MoCatalogMergeSettingsInitData = fmt.Sprintf(`insert into mo_catalog.%s values (
+		0, 0, %d, '%s', '')`,
+		catalog.MO_MERGE_SETTINGS,
+		merge.MergeSettingsVersion_Curr,
+		merge.DefaultMergeSettings.String())
 )
 
 // `mo_catalog` database system tables

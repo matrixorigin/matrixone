@@ -113,3 +113,38 @@ func BenchmarkRemoveOversize(b *testing.B) {
 		removeOversize([]*catalog.ObjectEntry{o1, o2, o3})
 	}
 }
+
+func TestMergeSettings(t *testing.T) {
+	settings := DefaultMergeSettings.Clone()
+	settings.L0MaxCountDecayControl = []float64{0.1, 0.2, 0.3, 0.4}
+	t.Log(settings.String())
+	trigger, err := settings.Clone().ToMMsgTaskTrigger()
+	require.NoError(t, err)
+	require.Equal(t, [4]float64{0.1, 0.2, 0.3, 0.4}, trigger.l0.CPoints)
+
+	{
+		settings := DefaultMergeSettings.Clone()
+		settings.TombstoneL1Size = "100xx"
+		_, err = settings.ToMMsgTaskTrigger()
+		require.Error(t, err)
+		settings.TombstoneL1Size = "100b"
+		_, err = settings.ToMMsgTaskTrigger()
+		require.NoError(t, err)
+
+		settings.VacuumScoreDecayDuration = "bad2m1s"
+		_, err = settings.ToMMsgTaskTrigger()
+		require.Error(t, err)
+
+		settings.VacuumScoreDecayDuration = "2m1s"
+		_, err = settings.ToMMsgTaskTrigger()
+		require.NoError(t, err)
+
+		settings.L0MaxCountDecayDuration = "bad2m1s"
+		_, err = settings.ToMMsgTaskTrigger()
+		require.Error(t, err)
+
+		settings.L0MaxCountDecayDuration = "2m1s"
+		_, err = settings.ToMMsgTaskTrigger()
+		require.NoError(t, err)
+	}
+}

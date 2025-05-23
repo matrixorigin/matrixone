@@ -212,10 +212,12 @@ func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [
 	var fromObjsDescBuilder strings.Builder
 	fromSize, estSize := float64(0), float64(0)
 	rows, blkn := 0, 0
+	isTombstone := false
 	for _, o := range mergedObjs {
 		obj := objectio.ObjectStats(o)
 		zm := obj.SortKeyZoneMap()
 		if strings.Contains(name, "tombstone") {
+			isTombstone = true
 			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v),",
 				obj.ObjectName().ObjectId().ShortStringEx(),
 				obj.BlkCnt(),
@@ -261,11 +263,11 @@ func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [
 	)
 
 	if host == "TN" {
-		v2.TaskDNMergeScheduledByCounter.Inc()
-		v2.TaskDNMergedSizeCounter.Add(fromSize)
-	} else if host == "CN" {
-		v2.TaskCNMergeScheduledByCounter.Inc()
-		v2.TaskCNMergedSizeCounter.Add(fromSize)
+		if isTombstone {
+			v2.TaskTombstoneMergeSizeCounter.Add(fromSize)
+		} else {
+			v2.TaskDataMergeSizeCounter.Add(fromSize)
+		}
 	}
 }
 

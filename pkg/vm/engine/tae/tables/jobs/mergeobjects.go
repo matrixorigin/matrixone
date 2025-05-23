@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -417,6 +418,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 			)
 		}
 	}()
+	begin := time.Now()
 
 	if time.Since(task.createAt) > time.Second*10 {
 		logutil.Warn(
@@ -449,6 +451,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		task.isTombstone,
 	); err != nil {
 		return err
+	}
+
+	if task.isTombstone {
+		v2.TaskTombstoneMergeDurationHistogram.Observe(time.Since(begin).Seconds())
+	} else {
+		v2.TaskDataMergeDurationHistogram.Observe(time.Since(begin).Seconds())
 	}
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
