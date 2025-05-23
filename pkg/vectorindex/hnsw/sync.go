@@ -414,7 +414,7 @@ func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap u
 		last = newmodel
 
 	}
-	os.Stderr.WriteString(fmt.Sprintf("getlast model full %v id = %s\n", full, last.Id))
+	//os.Stderr.WriteString(fmt.Sprintf("getlast model full %v id = %s\n", full, last.Id))
 	return last, nil
 }
 

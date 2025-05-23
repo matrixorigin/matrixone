@@ -267,7 +267,7 @@ func (idx *HnswModel) Empty() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	os.Stderr.WriteString(fmt.Sprintf("Check empty Size = %d\n", sz))
+	os.Stderr.WriteString(fmt.Sprintf("Check empty Size = %d, cap = %d\n", sz, idx.MaxCapacity))
 	return (sz == 0), nil
 }
 
@@ -440,6 +440,7 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 	} else {
 		err = usearchidx.Load(idx.Path)
 		usearchidx.Reserve(uint(tblcfg.IndexCapacity))
+		fmt.Printf("LoadIndex Reserver %d\n", tblcfg.IndexCapacity)
 	}
 	if err != nil {
 		return err
@@ -456,6 +457,14 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 	if err != nil {
 		return err
 	}
+
+	if !view {
+		// sometimes Reserve() will give bigger capacity than requested
+		if idx.MaxCapacity > uint(tblcfg.IndexCapacity) {
+			idx.MaxCapacity = uint(tblcfg.IndexCapacity)
+		}
+	}
+	fmt.Printf("LoadIndex Check cap %d\n", idx.MaxCapacity)
 
 	return nil
 }
