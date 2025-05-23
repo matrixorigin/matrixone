@@ -73,6 +73,7 @@ func LockTableWithUniqueID(
 			eng engine.Engine,
 			vec *batch.Batch,
 			idx int32,
+			partitionIdx int32,
 			from, to timestamp.Timestamp) (bool, error) {
 			return false, nil
 		}).
@@ -87,6 +88,7 @@ func LockTableWithUniqueID(
 		nil,
 		0,
 		pkType,
+		-1,
 		opts)
 	return err
 }

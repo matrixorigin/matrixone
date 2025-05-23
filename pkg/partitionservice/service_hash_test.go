@@ -17,6 +17,7 @@ package partitionservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,16 +47,17 @@ func TestCreateHash(t *testing.T) {
 			func(
 				ctx context.Context,
 				txnOp client.TxnOperator,
-				s *service,
-				store *memStorage,
+				s *Service,
+				store PartitionStorage,
 			) {
-				def := newTestTableDefine(1, columns, []types.T{v})
-				store.addUncommittedTable(def)
+				def := newTestTablePartitionDefine(1, columns, []types.T{v}, num, partition.PartitionMethod_Hash)
+				memStore := store.(*memStorage)
+				memStore.addUncommittedTable(def)
 
 				stmt := newTestHashOption(t, columns[0], num)
 				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
-				v, ok := store.uncommitted[tableID]
+				v, ok := memStore.uncommitted[tableID]
 				assert.True(t, ok)
 				assert.Equal(t, columns[0], v.metadata.Description)
 				assert.Equal(t, 2, len(v.partitions))
@@ -72,8 +74,8 @@ func TestGetMetadataByHashType(t *testing.T) {
 		func(
 			ctx context.Context,
 			txnOp client.TxnOperator,
-			s *service,
-			store *memStorage,
+			s *Service,
+			store PartitionStorage,
 		) {
 			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
 			stmt := newTestHashOption(t, "c1", 1)

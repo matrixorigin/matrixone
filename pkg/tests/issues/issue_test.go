@@ -298,7 +298,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 
 					bat := batch.NewWithSize(1)
 					bat.SetVector(0, vec)
-					rel.PrimaryKeysMayBeModified(ctx, types.TS{}, types.MaxTs(), bat, 0)
+					rel.PrimaryKeysMayBeModified(ctx, types.TS{}, types.MaxTs(), bat, 0, -1)
 
 					vec.Free(proc.GetMPool())
 				}

@@ -71,6 +71,8 @@ func newTxnTableWithItem(
 		comment:       item.Comment,
 		createSql:     item.CreateSql,
 		constraint:    item.Constraint,
+		partitioned:   item.Partitioned,
+		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,
 		lastTS:        db.op.SnapshotTS(),
 		eng:           eng,
@@ -661,6 +663,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 	to types.TS,
 	bat *batch.Batch,
 	pkIndex int32,
+	partitionIndex int32,
 ) (bool, error) {
 	if tbl.partition.is {
 		return tbl.partition.tbl.PrimaryKeysMayBeModified(
@@ -669,6 +672,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 			to,
 			bat,
 			pkIndex,
+			partitionIndex,
 		)
 	}
 
@@ -683,6 +687,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 			to,
 			bat,
 			pkIndex,
+			partitionIndex,
 		)
 	}
 

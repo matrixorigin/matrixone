@@ -18,9 +18,6 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func MockProcessInfoWithPro(
