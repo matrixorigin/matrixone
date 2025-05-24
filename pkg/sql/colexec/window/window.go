@@ -123,7 +123,10 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(window.Aggs))
 			for i, ag := range window.Aggs {
-				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), window.Types[i])
+				ctr.bat.Aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), window.Types[i])
+				if err != nil {
+					return result, err
+				}
 				if config := ag.GetExtraConfig(); config != nil {
 					if err = ctr.bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err

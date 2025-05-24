@@ -91,8 +91,8 @@ func hackMakeAggToTest(cnt int) *hackAggExecToTest {
 	exec := &hackAggExecToTest{
 		toFlush: cnt,
 	}
-	makeAggExec = func(_ aggexec.AggMemoryManager, _ int64, _ bool, _ ...types.Type) aggexec.AggFuncExec {
-		return exec
+	makeAggExec = func(_ aggexec.AggMemoryManager, _ int64, _ bool, _ ...types.Type) (aggexec.AggFuncExec, error) {
+		return exec, nil
 	}
 	return exec
 }

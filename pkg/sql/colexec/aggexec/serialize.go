@@ -36,7 +36,10 @@ func UnmarshalAggFuncExec(
 
 	info := encoded.GetInfo()
 
-	exec := MakeAgg(mg, info.Id, info.IsDistinct, info.Args...)
+	exec, err := MakeAgg(mg, info.Id, info.IsDistinct, info.Args...)
+	if err != nil {
+		return nil, err
+	}
 
 	if encoded.Info.Id == aggIdOfGroupConcat {
 		if len(encoded.Groups) > 0 && len(encoded.Groups[0]) > 0 {

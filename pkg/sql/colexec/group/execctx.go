@@ -351,8 +351,11 @@ func (r *GroupResultNoneBlock) getResultBatch(
 
 	// set agg.
 	for i := range r.res.Aggs {
-		r.res.Aggs[i] = makeAggExec(
+		r.res.Aggs[i], err = makeAggExec(
 			proc, aExpressions[i].GetAggID(), aExpressions[i].IsDistinct(), aEval[i].Typ...)
+		if err != nil {
+			return nil, err
+		}
 
 		if config := aExpressions[i].GetExtraConfig(); config != nil {
 			if err = r.res.Aggs[i].SetExtraInformation(config, 0); err != nil {

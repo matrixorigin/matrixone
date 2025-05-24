@@ -187,9 +187,10 @@ func TestAvgTwCache(t *testing.T) {
 		emptyNull: false,
 	}
 	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor := aggexec.MakeAgg(
+	executor, err := aggexec.MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
+	require.Nil(t, err)
 
 	inputType := info.argType
 	inputs := make([]*vector.Vector, 5)
@@ -253,9 +254,10 @@ func TestAvgTwCacheDecimal64(t *testing.T) {
 		emptyNull: false,
 	}
 	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor := aggexec.MakeAgg(
+	executor, err := aggexec.MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
+	require.Nil(t, err)
 
 	inputs := make([]*vector.Vector, 3)
 	{
@@ -310,9 +312,10 @@ func TestAvgTwCacheDecimal128(t *testing.T) {
 		emptyNull: false,
 	}
 	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor := aggexec.MakeAgg(
+	executor, err := aggexec.MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
+	require.Nil(t, err)
 
 	inputs := make([]*vector.Vector, 3)
 	{
@@ -367,9 +370,10 @@ func TestAvgTwResult(t *testing.T) {
 		emptyNull: false,
 	}
 	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor := aggexec.MakeAgg(
+	executor, err := aggexec.MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
+	require.Nil(t, err)
 
 	inputType := info.argType
 	inputs := make([]*vector.Vector, 5)
@@ -433,9 +437,10 @@ func TestAvgTwResultDecimal(t *testing.T) {
 		emptyNull: false,
 	}
 	//registerTheTestingCount(info.aggID, info.emptyNull)
-	executor := aggexec.MakeAgg(
+	executor, err := aggexec.MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
+	require.Nil(t, err)
 
 	inputType := info.argType
 	inputs := make([]*vector.Vector, 5)

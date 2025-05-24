@@ -330,7 +330,10 @@ func (group *Group) generateAggExec(proc *process.Process) ([]aggexec.AggFuncExe
 	}()
 
 	for i, ag := range group.Aggs {
-		exec := makeAggExec(proc, ag.GetAggID(), ag.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+		exec, err := makeAggExec(proc, ag.GetAggID(), ag.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+		if err != nil {
+			return nil, err
+		}
 		execs = append(execs, exec)
 
 		if config := ag.GetExtraConfig(); config != nil {
