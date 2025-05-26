@@ -59,8 +59,7 @@ func (s *Service) getMetadataByRangeType(
 
 		columns = method.ColumnList[0]
 		validTypeFunc = func(t plan.Type) bool {
-			typ := types.T(t.Id)
-			return typ.IsInteger()
+			return types.T(t.Id).IsInteger() || types.T(t.Id) == types.T_date || types.T(t.Id) == types.T_datetime
 		}
 	}
 
