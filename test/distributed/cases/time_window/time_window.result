@@ -217,21 +217,3 @@ select _wstart, _wend, max(temperature) from sensor_data interval(ts, 3, day);
 _wstart    _wend    max(temperature)
 2023-07-29 00:00:00    2023-08-01 00:00:00    22.0
 2023-08-01 00:00:00    2023-08-04 00:00:00    38.0
-SELECT _wstart, _wend, invalid_agg(temperature)
-FROM sensor_data
-INTERVAL(ts, 10, MINUTE);
-not supported: function or operator 'invalid_agg'
-SELECT _wstart, _wend, SUM(ts)
-FROM sensor_data
-INTERVAL(ts, 10, MINUTE);
-invalid argument aggregate function sum, bad value [TIMESTAMP]
-SELECT _wstart, _wend, median(distinct temperature)
-FROM sensor_data
-INTERVAL(ts, 10, MINUTE);
-not supported: DISTINCT in time window
-SELECT _wstart, _wend, JSON_ARRAYAGG(temperature)
-FROM sensor_data
-INTERVAL(ts, 10, MINUTE)
-SLIDING(5, MINUTE)
-FILL(NEXT);
-not supported: function or operator 'json_arrayagg'

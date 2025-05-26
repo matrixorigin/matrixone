@@ -39,7 +39,8 @@ type timeWinTestCase struct {
 }
 
 var (
-	tcs []timeWinTestCase
+	tcs               []timeWinTestCase
+	tcs_prepare_error []timeWinTestCase
 )
 
 func init() {
@@ -96,12 +97,36 @@ func init() {
 			},
 		},
 	}
+	tcs_prepare_error = []timeWinTestCase{
+		{
+			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			arg: &TimeWin{
+				WStart: true,
+				WEnd:   true,
+				Types: []types.Type{
+					types.T_int32.ToType(),
+				},
+				Aggs: []aggexec.AggFuncExecExpression{
+					aggexec.MakeAggFunctionExpression(
+						-1,
+						false,
+						[]*plan.Expr{newExpression(1)},
+						nil,
+					),
+				},
+				TsType:   plan.Type{Id: int32(types.T_datetime)},
+				Ts:       newExpression(0),
+				EndExpr:  newExpression(0),
+				Interval: makeInterval(),
+			},
+		},
+	}
 }
 
-func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
-		tc.arg.String(buf)
+func TestPrepareError(t *testing.T) {
+	for _, tc := range tcs_prepare_error {
+		err := tc.arg.Prepare(tc.proc)
+		require.Error(t, err)
 	}
 }
 
@@ -109,6 +134,13 @@ func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
+	}
+}
+
+func TestString(t *testing.T) {
+	buf := new(bytes.Buffer)
+	for _, tc := range tcs {
+		tc.arg.String(buf)
 	}
 }
 
