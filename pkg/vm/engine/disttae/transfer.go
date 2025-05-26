@@ -242,6 +242,29 @@ func transferTombstones(
 		}
 	}()
 
+	entryPosMask := objectio.GetReusableBitmap()
+	defer func() {
+		if err != nil {
+			return
+		}
+
+		iter := entryPosMask.Bitmap().Iterator()
+		for iter.HasNext() {
+			idx := iter.Next()
+			entry := txnWrites[idx]
+
+			if !catalog.IsSystemTable(entry.tableId) &&
+				entry.bat != nil && entry.bat.RowCount() > 1 {
+				// attr: row_id, pk
+				if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, mp); err != nil {
+					return
+				}
+			}
+		}
+
+		entryPosMask.Release()
+	}()
+
 	// loop the transaction workspace to transfer all tombstones
 	for i, entry := range txnWrites {
 		// skip all entries not table-realted
@@ -263,6 +286,9 @@ func transferTombstones(
 			if _, deleted := deletedObjects[*objectio.ShortName(blockId)]; !deleted {
 				continue
 			}
+
+			entryPosMask.Add(uint64(i))
+
 			if transferIntents == nil {
 				transferIntents = vector.NewVec(types.T_Rowid.ToType())
 				targetRowids = vector.NewVec(types.T_Rowid.ToType())
@@ -348,6 +374,7 @@ func batchTransferToTombstones(
 	if err = targetRowids.PreExtend(transferIntents.Length(), mp); err != nil {
 		return
 	}
+
 	if err = mergeutil.SortColumnsByIndex(
 		[]*vector.Vector{searchPKColumn, searchEntryPos, searchBatPos},
 		0,
@@ -427,15 +454,9 @@ func batchTransferToTombstones(
 	batPositions := vector.MustFixedColWithTypeCheck[int32](searchBatPos)
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](targetRowids)
 
-	entryPosMask := objectio.GetReusableBitmap()
-	defer func() {
-		entryPosMask.Release()
-	}()
-
 	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
 		entryIdx := entryPositions[pos]
 		entry := txnWrites[entryIdx]
-		entryPosMask.Add(uint64(entryIdx))
 
 		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
 			entry.bat.GetVector(0),
@@ -443,23 +464,6 @@ func batchTransferToTombstones(
 			rowids[pos],
 		); err != nil {
 			return
-		}
-	}
-
-	iter := entryPosMask.Bitmap().Iterator()
-	for iter.HasNext() {
-		idx := iter.Next()
-		entry := txnWrites[idx]
-
-		if !catalog.IsSystemTable(entry.tableId) &&
-			entry.bat != nil && entry.bat.RowCount() > 1 {
-			// attr: row_id, pk
-			if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, mp); err != nil {
-				return err
-			}
-
-			entry.bat.Vecs[0].SetSorted(true)
-			entry.bat.Vecs[1].SetSorted(true)
 		}
 	}
 
