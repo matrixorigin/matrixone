@@ -304,12 +304,16 @@ func intersectSortedSlices(slice1, slice2 []int) []int {
 			if len(result) == 0 || result[len(result)-1] != slice1[i] {
 				result = append(result, slice1[i])
 			}
-			for i < len(slice1) && slice1[i] == slice1[i] {
+			// Skip duplicates in slice1
+			for i+1 < len(slice1) && slice1[i] == slice1[i+1] {
 				i++
 			}
-			for j < len(slice2) && slice2[j] == slice2[j] {
+			// Skip duplicates in slice2
+			for j+1 < len(slice2) && slice2[j] == slice2[j+1] {
 				j++
 			}
+			i++
+			j++
 		} else if slice1[i] < slice2[j] {
 			i++
 		} else {

@@ -43,7 +43,7 @@ func (s *Service) getMetadataByRangeType(
 		}
 
 		validTypeFunc = func(t plan.Type) bool {
-			return types.T(t.Id).IsInteger()
+			return types.T(t.Id).IsInteger() || types.T(t.Id) == types.T_date || types.T(t.Id) == types.T_datetime
 		}
 
 		ctx := tree.NewFmtCtx(
