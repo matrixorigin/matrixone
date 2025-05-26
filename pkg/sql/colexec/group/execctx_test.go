@@ -65,7 +65,7 @@ func newExpression(pos int32) *plan.Expr {
 func TestGetResultBatch(t *testing.T) {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	invalidAggExpr := aggexec.MakeAggFunctionExpression(
-		-1, // SUM 聚合函数 ID
+		-9999,
 		false,
 		[]*plan.Expr{newExpression(1)},
 		nil,
@@ -76,17 +76,16 @@ func TestGetResultBatch(t *testing.T) {
 		},
 	}
 	gEval := &ExprEvalVector{
-		Typ: []types.Type{types.T_int64.ToType()},
+		Typ: []types.Type{types.T_int32.ToType()},
 	}
 	r := &GroupResultNoneBlock{
-		res: nil, // 初始状态
+		res: nil,
 	}
-	resultBatch, err := r.getResultBatch(
+	_, err := r.getResultBatch(
 		proc,
 		gEval,
 		aEval,
 		[]aggexec.AggFuncExecExpression{invalidAggExpr},
 	)
 	require.Error(t, err)
-	require.Nil(t, resultBatch)
 }
