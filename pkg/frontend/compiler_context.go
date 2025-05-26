@@ -740,7 +740,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		var udVar *UserDefinedVar
-		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil {
 			return nil, err
 		}
 
