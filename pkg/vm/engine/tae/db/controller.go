@@ -690,7 +690,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 
 	db.MergeScheduler = merge.NewMergeScheduler(
 		db.Runtime.Options.CheckpointCfg.ScanInterval,
-		db.Catalog,
+		&merge.TNCatalogEventSource{Catalog: db.Catalog, TxnManager: db.TxnMgr},
 		merge.NewTNMergeExecutor(db.Runtime),
 	)
 	db.MergeScheduler.Start()
