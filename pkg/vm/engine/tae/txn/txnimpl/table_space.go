@@ -268,6 +268,23 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 		if stats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
 			stats.SetLevel(1)
 		}
+		name := space.table.GetLocalSchema(space.isTombstone).Name
+		if name == "statement_info" || name == "bmsql_stock" {
+			if space.isTombstone {
+				catalog.LogInputTombstoneObjectAsync(
+					space.table.entry,
+					&stats,
+					space.table.store.txn.GetStartTS(),
+					space.table.store.rt,
+				)
+			} else {
+				catalog.LogInputDataObject(
+					space.table.entry,
+					&stats,
+					space.table.store.txn.GetStartTS(),
+				)
+			}
+		}
 		space.nobj, err = space.table.CreateNonAppendableObject(
 			&objectio.CreateObjOpt{Stats: &stats, IsTombstone: space.isTombstone})
 		if err != nil {

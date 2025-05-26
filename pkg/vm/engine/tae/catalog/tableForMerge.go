@@ -16,15 +16,25 @@ package catalog
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"iter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+
+	"go.uber.org/zap"
 )
 
 type MergeNotifierOnCatalog interface {
@@ -201,4 +211,177 @@ func ObjectValid(objectEntry *ObjectEntry) bool {
 		return false
 	}
 	return true
+}
+
+type LevelDist struct {
+	Lv               int
+	ObjCnt           int     // hitted object count
+	ObjCntProportion float64 // hitted object count / total object count
+	DelAvg           float64 // average deleted row proportion of hitted objects
+	DelVar           float64 // variance of deleted row proportion of hitted objects
+}
+
+type levelRaw struct {
+	Hit   int
+	Total int
+	Props []float64
+}
+
+func LevelDistToZapFields(levelDist []LevelDist) []zap.Field {
+	fields := make([]zap.Field, 0, len(levelDist)*4)
+	for i, dist := range levelDist {
+		prefix := fmt.Sprintf("l%d", i)
+		fields = append(fields,
+			zap.Int(prefix+"ObjCnt", dist.ObjCnt),
+			zap.Float64(prefix+"ObjCntProportion", dist.ObjCntProportion),
+			zap.Float64(prefix+"DelAvg", dist.DelAvg),
+			zap.Float64(prefix+"DelVar", dist.DelVar),
+		)
+	}
+	return fields
+}
+
+func InputObjectZapFields(
+	tid uint64,
+	stats *objectio.ObjectStats,
+	createTime types.TS,
+	isTombstone bool,
+) []zap.Field {
+	fields := make([]zap.Field, 0, 4)
+	fields = append(fields, zap.Uint64("tid", tid))
+	fields = append(fields, zap.Bool("isTombstone", isTombstone))
+	fields = append(fields, zap.String("stats", base64.StdEncoding.EncodeToString(stats[:])))
+	fields = append(fields, zap.String("createTime", createTime.ToString()))
+	return fields
+}
+
+func LogInputDataObject(
+	table *TableEntry,
+	stats *objectio.ObjectStats,
+	createTime types.TS,
+) {
+	fields := InputObjectZapFields(table.ID, stats, createTime, false)
+	logutil.Info("InputObject", fields...)
+}
+
+func LogInputTombstoneObjectWithExistingBatches(
+	table *TableEntry,
+	stats *objectio.ObjectStats,
+	createTime types.TS,
+	existingBatches []*batch.Batch,
+) {
+	rowids := make(map[objectio.ObjectId]int)
+	for _, bat := range existingBatches {
+		rids := vector.MustFixedColNoTypeCheck[types.Rowid](bat.Vecs[0])
+		for i := range len(rids) {
+			rowids[*rids[i].BorrowObjectID()]++
+		}
+	}
+	dist := CalcTombstoneDist(table, rowids)
+	fields := InputObjectZapFields(table.ID, stats, createTime, true)
+	fields = append(fields, LevelDistToZapFields(dist)...)
+	logutil.Info("InputObject", fields...)
+}
+
+func LogInputTombstoneObjectAsync(
+	table *TableEntry,
+	stats *objectio.ObjectStats,
+	createTime types.TS,
+	rt *dbutils.Runtime,
+) {
+	job := func() error {
+		ctx := context.Background()
+		rowids := make(map[objectio.ObjectId]int)
+		for i := range stats.BlkCnt() {
+			loc := stats.BlockLocation(uint16(i), objectio.BlockMaxRows)
+			vectors, closeFunc, err := ioutil.LoadColumns2(
+				ctx,
+				[]uint16{uint16(0)},
+				nil,
+				rt.Fs,
+				loc,
+				fileservice.Policy(0),
+				false,
+				nil,
+			)
+			if err != nil {
+				continue
+			}
+			cnVec := vectors[0].GetDownstreamVector()
+			rids := vector.MustFixedColNoTypeCheck[types.Rowid](cnVec)
+			for j := range len(rids) {
+				rowids[*rids[j].BorrowObjectID()]++
+			}
+			closeFunc()
+		}
+		dist := CalcTombstoneDist(table, rowids)
+		fields := InputObjectZapFields(table.ID, stats, createTime, true)
+		fields = append(fields, LevelDistToZapFields(dist)...)
+		logutil.Info("InputObject", fields...)
+		return nil
+	}
+	rt.Scheduler.ScheduleFn(nil, tasks.IOTask, job)
+}
+
+func CalcTombstoneDist(
+	table *TableEntry,
+	rowids map[objectio.ObjectId]int,
+) []LevelDist {
+	levelDist := make([]LevelDist, 8)
+	levelRaw := make([]levelRaw, 8)
+
+	for id, cnt := range rowids {
+		meta, _ := table.GetObjectByID(&id, false)
+		if meta == nil || meta.IsAppendable() {
+			continue
+		}
+
+		lv := meta.GetLevel()
+		levelRaw[lv].Hit++
+		proportion := float64(cnt) / float64(meta.Rows())
+		levelRaw[lv].Props = append(levelRaw[lv].Props, proportion)
+	}
+
+	it := table.MakeDataVisibleObjectIt(txnbase.MockTxnReaderWithNow())
+	defer it.Release()
+	for it.Next() {
+		item := it.Item()
+		if !ObjectValid(item) {
+			continue
+		}
+		lv := item.GetLevel()
+		levelRaw[lv].Total++
+	}
+
+	for lv := range levelRaw {
+		levelDist[lv].Lv = lv
+		levelDist[lv].ObjCnt = levelRaw[lv].Hit
+		if levelRaw[lv].Total > 0 {
+			p := float64(levelRaw[lv].Hit) / float64(levelRaw[lv].Total)
+			levelDist[lv].ObjCntProportion = p
+		}
+
+		// Calculate average and variance of deleted row proportion
+		cnt := len(levelRaw[lv].Props)
+		if cnt > 0 {
+			// Calculate average
+			sum := 0.0
+			for _, prop := range levelRaw[lv].Props {
+				sum += prop
+			}
+			avg := sum / float64(cnt)
+			levelDist[lv].DelAvg = avg
+
+			// Calculate variance
+			if cnt > 1 {
+				varSum := 0.0
+				for _, prop := range levelRaw[lv].Props {
+					diff := prop - avg
+					varSum += diff * diff
+				}
+				levelDist[lv].DelVar = varSum / float64(cnt)
+			}
+		}
+	}
+	return levelDist
 }

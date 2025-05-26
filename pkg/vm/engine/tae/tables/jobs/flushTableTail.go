@@ -749,6 +749,25 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 		createdObjectHandle = task.createdObjHandles
 	}
+
+	if task.schema.Name == "statement_info" || task.schema.Name == "bmsql_stock" {
+		entry := task.rel.GetMeta().(*catalog.TableEntry)
+		if isTombstone {
+			catalog.LogInputTombstoneObjectWithExistingBatches(
+				entry,
+				stats,
+				task.txn.GetStartTS(),
+				writtenBatches,
+			)
+		} else {
+			catalog.LogInputDataObject(
+				entry,
+				stats,
+				task.txn.GetStartTS(),
+			)
+		}
+	}
+
 	err = createdObjectHandle.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
 	if err != nil {
 		return
