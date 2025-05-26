@@ -427,14 +427,39 @@ func batchTransferToTombstones(
 	batPositions := vector.MustFixedColWithTypeCheck[int32](searchBatPos)
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](targetRowids)
 
+	entryPosMask := objectio.GetReusableBitmap()
+	defer func() {
+		entryPosMask.Release()
+	}()
+
 	for pos, endPos := 0, searchPKColumn.Length(); pos < endPos; pos++ {
-		entry := txnWrites[entryPositions[pos]]
+		entryIdx := entryPositions[pos]
+		entry := txnWrites[entryIdx]
+		entryPosMask.Add(uint64(entryIdx))
+
 		if err = vector.SetFixedAtWithTypeCheck[types.Rowid](
 			entry.bat.GetVector(0),
 			int(batPositions[pos]),
 			rowids[pos],
 		); err != nil {
 			return
+		}
+	}
+
+	iter := entryPosMask.Bitmap().Iterator()
+	for iter.HasNext() {
+		idx := iter.Next()
+		entry := txnWrites[idx]
+
+		if !catalog.IsSystemTable(entry.tableId) &&
+			entry.bat != nil && entry.bat.RowCount() > 1 {
+			// attr: row_id, pk
+			if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, mp); err != nil {
+				return err
+			}
+
+			entry.bat.Vecs[0].SetSorted(true)
+			entry.bat.Vecs[1].SetSorted(true)
 		}
 	}
 

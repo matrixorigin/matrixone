@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 	"slices"
 	"sort"
 )
@@ -228,122 +227,91 @@ func FastApplyDeletesByRowIds(
 	leftRows *[]int64,
 	deletesMask *objectio.Bitmap,
 	deletedRowIds []objectio.Rowid,
-	IsDeletedRowIdsSorted bool,
+	isDeletedRowIdsSorted bool,
 ) {
+
+	if isDeletedRowIdsSorted {
+		panicIfRowIdsUnsortedIfRaceDetectorEnabled(deletedRowIds)
+	}
+
 	var (
 		ptr int
-		hit bool
 		cur types.Rowid
 	)
 
 	wayA := func() {
-		n := float64(len(deletedRowIds))
-		m := float64(len(*leftRows))
+		n := len(deletedRowIds)
+		m := len(*leftRows)
 
-		if m > n/(math.Log2(n)-1) {
-			updateOffset := func(idx int) {
-				if idx < int(m) {
-					cur.SetRowOffset(uint32((*leftRows)[idx]))
-				}
+		updateOffset := func(idx int) {
+			if idx < m {
+				cur.SetRowOffset(uint32((*leftRows)[idx]))
 			}
+		}
 
-			i, j := 0, 0
-			cur = types.NewRowid(checkBid, uint32((*leftRows)[0]))
+		i, j := 0, 0
+		cur = types.NewRowid(checkBid, uint32((*leftRows)[0]))
 
-			for i < int(m) && j < int(n) {
-				if cur.GT(&deletedRowIds[j]) {
-					j++
-					continue
-				}
-
-				if cur.LT(&deletedRowIds[j]) {
-					(*leftRows)[ptr] = (*leftRows)[i]
-					i++
-					ptr++
-					updateOffset(i)
-					continue
-				}
-
-				// equal
-				i++
+		for i < m && j < n {
+			if cur.GT(&deletedRowIds[j]) {
 				j++
-
-				updateOffset(i)
+				continue
 			}
 
-			for i < len(*leftRows) {
+			if cur.LT(&deletedRowIds[j]) {
 				(*leftRows)[ptr] = (*leftRows)[i]
 				i++
 				ptr++
+				updateOffset(i)
+				continue
 			}
 
-		} else {
-			cur = types.NewRowid(checkBid, 0)
+			// equal
+			i++
+			j++
 
-			for _, o := range *leftRows {
-				cur.SetRowOffset(uint32(o))
-				_, hit = sort.Find(len(deletedRowIds), func(i int) int { return cur.Compare(&deletedRowIds[i]) })
+			updateOffset(i)
+		}
 
-				if !hit {
-					(*leftRows)[ptr] = o
-					ptr++
-				}
-			}
+		for i < len(*leftRows) {
+			(*leftRows)[ptr] = (*leftRows)[i]
+			i++
+			ptr++
 		}
 
 		*leftRows = (*leftRows)[:ptr]
 	}
 
 	wayB := func() {
-		// unsorted and expected a few items to removal
-		if len(deletedRowIds) <= 32 {
-			for i := 0; i < len(deletedRowIds); i++ {
-				bid, o := deletedRowIds[i].Decode()
-				idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
+		for i := 0; i < len(deletedRowIds); i++ {
+			bid, o := deletedRowIds[i].Decode()
+			idx, found := sort.Find(len(*leftRows), func(x int) int { return int(int64(o) - (*leftRows)[x]) })
 
-				if found && bid.EQ(checkBid) {
-					copy((*leftRows)[idx:], (*leftRows)[idx+1:])
-					*leftRows = (*leftRows)[:len(*leftRows)-1]
-				}
-
-				if len(*leftRows) == 0 {
-					break
-				}
-			}
-		} else {
-			for _, o := range *leftRows {
-				hit = false
-
-				for i := 0; i < len(deletedRowIds); i++ {
-					b, offset := deletedRowIds[i].Decode()
-					if o == int64(offset) && b.EQ(checkBid) {
-						hit = true
-						break
-					}
-				}
-
-				if !hit {
-					(*leftRows)[ptr] = o
-					ptr++
-				}
+			if found && bid.EQ(checkBid) {
+				copy((*leftRows)[idx:], (*leftRows)[idx+1:])
+				*leftRows = (*leftRows)[:len(*leftRows)-1]
 			}
 
-			*leftRows = (*leftRows)[:ptr]
+			if len(*leftRows) == 0 {
+				break
+			}
 		}
 	}
 
 	if len(*leftRows) != 0 {
-		if IsDeletedRowIdsSorted {
+		if isDeletedRowIdsSorted {
 			wayA()
 		} else {
 			wayB()
 		}
 	} else if deletesMask != nil {
-		if IsDeletedRowIdsSorted {
+		if isDeletedRowIdsSorted {
 			s, e := ioutil.FindStartEndOfBlockFromSortedRowids(deletedRowIds, checkBid)
 			for i := s; i < e; i++ {
-				_, o := deletedRowIds[i].Decode()
-				deletesMask.Add(uint64(o))
+				bid, o := deletedRowIds[i].Decode()
+				if bid.EQ(checkBid) {
+					deletesMask.Add(uint64(o))
+				}
 			}
 		} else {
 			for i := 0; i < len(deletedRowIds); i++ {

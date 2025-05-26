@@ -52,6 +52,12 @@ func TestParseDatalink(t *testing.T) {
 			wantMoUrl:     "/a/b/c/1.txt",
 			wantUrlParams: []int64{0, 2},
 		},
+		{
+			name:          "Test5 - File",
+			data:          "hdfs://localhost:8888/a/b/c/1.txt?size=2",
+			wantMoUrl:     "hdfs,endpoint=localhost:8888\n:/a/b/c/1.txt",
+			wantUrlParams: []int64{0, 2},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

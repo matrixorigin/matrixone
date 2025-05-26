@@ -210,14 +210,10 @@ func (d *dirtyCollector) ScanInRange(from, to types.TS) (
 	return
 }
 
-// DirtyCount returns unflushed table, Object, block count
-func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt int) {
+// DirtyCount returns unflushed table count
+func (d *dirtyCollector) DirtyCount() int {
 	merged := d.GetAndRefreshMerged()
-	tblCnt = merged.tree.TableCount()
-	for _, tblTree := range merged.tree.Tables {
-		objCnt += tblTree.DataCnt
-	}
-	return
+	return merged.tree.TableCount()
 }
 
 func (d *dirtyCollector) String() string {
@@ -385,14 +381,6 @@ func (d *dirtyCollector) tryCompactTree(
 	)
 	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
-		if dirtyTable.Compact() {
-			if _, injected := objectio.PrintFlushEntryInjected(); injected {
-				logutil.Infof("tryCompactTree: remove table%v", id)
-			}
-			tree.Shrink(id)
-			continue
-		}
-
 		if db, err = d.catalog.GetDatabaseByID(dirtyTable.DbID); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				tree.Shrink(id)
@@ -417,10 +405,13 @@ func (d *dirtyCollector) tryCompactTree(
 		}
 
 		if flushed, _ := tbl.IsTableTailFlushed(entry.start, entry.end); flushed {
+			if _, injected := objectio.PrintFlushEntryInjected(); injected {
+				logutil.Infof("tryCompactTree: remove table %v, start %v, end %v",
+					id, entry.start.ToString(), entry.end.ToString())
+			}
 			tree.Shrink(id)
 			continue
 		}
 	}
-	tree.Compact()
 	return
 }

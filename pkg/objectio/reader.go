@@ -251,22 +251,6 @@ func (r *objectReaderV1) ReadOneBF(
 	return bf, size, nil
 }
 
-func (r *objectReaderV1) ReadAllBF(
-	ctx context.Context,
-) (bfs BloomFilter, size uint32, err error) {
-	var metaHeader ObjectMeta
-	var buf []byte
-	if metaHeader, err = r.ReadMeta(ctx, nil); err != nil {
-		return
-	}
-	meta := metaHeader.MustDataMeta()
-	extent := meta.BlockHeader().BFExtent()
-	if buf, err = ReadBloomFilter(ctx, r.name, &extent, r.dataReadPolicy, r.fs); err != nil {
-		return
-	}
-	return buf, extent.OriginSize(), nil
-}
-
 func (r *objectReaderV1) ReadExtent(
 	ctx context.Context,
 	extent Extent,
