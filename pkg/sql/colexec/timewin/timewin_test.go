@@ -108,7 +108,7 @@ func init() {
 				},
 				Aggs: []aggexec.AggFuncExecExpression{
 					aggexec.MakeAggFunctionExpression(
-						-1,
+						-9999,
 						false,
 						[]*plan.Expr{newExpression(1)},
 						nil,
