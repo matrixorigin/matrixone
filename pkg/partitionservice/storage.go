@@ -17,6 +17,7 @@ package partitionservice
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -370,6 +371,8 @@ func (s *Storage) createPartitionTable(
 	if err != nil {
 		return err
 	}
+	re := regexp.MustCompile(`\\([^'"\\0bnrtZ%_])`)
+	escapeExpr := re.ReplaceAllString(string(bs), "\\\\$1")
 
 	// add partition metadata to mo_catalog.mo_partitions
 	addPartitionMetadata := func() error {
@@ -403,7 +406,7 @@ func (s *Storage) createPartitionTable(
 			partition.Name,
 			partition.Position,
 			partition.ExprStr,
-			string(bs),
+			escapeExpr,
 		)
 
 		res, err := txn.Exec(
