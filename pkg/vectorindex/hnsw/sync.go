@@ -253,8 +253,9 @@ func (s *HnswSync) run(proc *process.Process) error {
 	} else {
 		last = s.indexes[len(s.indexes)-1]
 		// last model not load yet so check the last.Len instead of Full()
-		if last.Len >= last.MaxCapacity {
-			os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", last.Len, last.MaxCapacity))
+		idxlen := uint(last.Len.Load())
+		if idxlen >= last.MaxCapacity {
+			os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
 			id := s.getModelId()
 			// model is already full, create a new model for insert
 			newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
@@ -429,7 +430,7 @@ func (s *HnswSync) ToSql(ts int64) ([]string, error) {
 	metas := make([]string, 0, len(s.indexes))
 	for _, idx := range s.indexes {
 		// check Dirty.  Only update when Dirty is true
-		if !idx.Dirty {
+		if !idx.Dirty.Load() {
 			continue
 		}
 

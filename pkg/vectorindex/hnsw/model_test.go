@@ -81,7 +81,7 @@ func TestModel(t *testing.T) {
 
 	doModelSearchTest(t, idx, 0, fp32a)
 
-	require.Equal(t, idx.Dirty, false)
+	require.Equal(t, idx.Dirty.Load(), false)
 
 	err = idx.Unload()
 	require.Nil(t, err)
@@ -117,7 +117,7 @@ func TestModel(t *testing.T) {
 		err = idx.Add(int64(key), v)
 		require.Nil(t, err)
 
-		require.Equal(t, idx.Dirty, true)
+		require.Equal(t, idx.Dirty.Load(), true)
 
 		err = idx.Unload()
 		require.Nil(t, err)

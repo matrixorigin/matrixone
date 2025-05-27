@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -46,9 +47,9 @@ type HnswModel struct {
 	Checksum  string
 
 	// for cdc update
-	Dirty bool
+	Dirty atomic.Bool
 	View  bool
-	Len   uint
+	Len   atomic.Int64
 }
 
 // New HnswModel struct
@@ -107,7 +108,7 @@ func (idx *HnswModel) SaveToFile() error {
 		return nil
 	}
 
-	if !idx.Dirty {
+	if !idx.Dirty.Load() {
 		// nothing change. ignore
 		return nil
 	}
@@ -282,8 +283,8 @@ func (idx *HnswModel) Add(key int64, vec []float32) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
-	idx.Dirty = true
-	idx.Len++
+	idx.Dirty.Store(true)
+	idx.Len.Add(1)
 	return idx.Index.Add(uint64(key), vec)
 }
 
@@ -292,8 +293,8 @@ func (idx *HnswModel) Remove(key int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
-	idx.Dirty = true
-	idx.Len--
+	idx.Dirty.Store(true)
+	idx.Len.Add(-1)
 	return idx.Index.Remove(uint64(key))
 }
 
@@ -441,10 +442,11 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 
 	// always get the number of item and capacity when model loaded.
 	idx.Index = usearchidx
-	idx.Len, err = idx.Index.Len()
+	idxLen, err := idx.Index.Len()
 	if err != nil {
 		return err
 	}
+	idx.Len.Store(int64(idxLen))
 
 	idx.MaxCapacity, err = idx.Index.Capacity()
 	if err != nil {

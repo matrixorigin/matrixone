@@ -2891,7 +2891,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	})
 	defer stubGetTableDef.Reset()
 
-	stubSinker := gostub.Stub(&cdc.NewSinker, func(cdc.UriInfo, *cdc.DbTableInfo, cdc.IWatermarkUpdater,
+	stubSinker := gostub.Stub(&cdc.NewSinker, func(string, cdc.UriInfo, *cdc.DbTableInfo, cdc.IWatermarkUpdater,
 		*plan.TableDef, int, time.Duration, *cdc.ActiveRoutine, uint64, string) (cdc.Sinker, error) {
 		return &mockSinker{}, nil
 	})
