@@ -292,6 +292,7 @@ func BenchmarkObjectStatsRelatedUtils(b *testing.B) {
 
 func TestMarshalAndUnMarshal(t *testing.T) {
 	b := &BlockInfo{}
+	b.PartitionIdx = 1
 	b.ObjectFlags = 1
 
 	buf := bytes.NewBuffer(nil)
