@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	bigDataTaskCntThreshold   = 3
+	bigDataTaskCntThreshold   = 4
 	objectOpsTriggerThreshold = 5
 )
 
@@ -63,8 +63,6 @@ type MergeScheduler struct {
 	pq todoPQ
 	// record the status of tables, facilitate the control of table pq
 	supps map[uint64]*todoSupporter
-	// fallback to check the status of the priority queue
-	heartbeat *time.Ticker
 
 	// control flow
 	allPaused bool
@@ -93,8 +91,7 @@ func NewMergeScheduler(
 		baseInterval: baseInterval,
 		executor:     executor,
 
-		supps:     make(map[uint64]*todoSupporter),
-		heartbeat: time.NewTicker(time.Second * 10),
+		supps: make(map[uint64]*todoSupporter),
 
 		stopRecv: make(chan struct{}, 1),
 		msgChan:  make(chan *MMsg, 4096),
@@ -139,7 +136,6 @@ func (a *MergeScheduler) Start() {
 	if a.stopped.CompareAndSwap(true, false) {
 		ch := make(chan struct{})
 		a.stopCh.Store(&ch)
-		a.heartbeat.Reset(time.Second * 10)
 		go a.handleMainLoop()
 		go a.handleIOLoop()
 	}
@@ -598,6 +594,7 @@ type todoSupporter struct {
 	paused                 bool
 	nextDue                time.Duration
 	lastMergeTime          time.Time
+	lastVacuumCheckTime    time.Time
 	todo                   *todoItem
 	// runtime triggers
 	triggers []*MMsgTaskTrigger
@@ -640,6 +637,18 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 			NewMMsgTaskTrigger(msg.Table).
 				WithAssignedTasks(compactTasks),
 		)
+
+		// if the compact tasks is equal to the hollow top k,
+		// it means the table is full of hollow objects,
+		// so we need to trigger the vacuum check
+		if len(compactTasks) == msg.opts.HollowTopK {
+			time.AfterFunc(time.Second*10, func() {
+				a.SendTrigger(
+					NewMMsgTaskTrigger(msg.Table).
+						WithVacuumCheck(msg.opts),
+				)
+			})
+		}
 	}
 
 	if stats.DelVacuumPercent > 0.5 {
@@ -700,11 +709,38 @@ func (a *MergeScheduler) handleIOLoop() {
 	}
 }
 
+func (a *MergeScheduler) fallbackSchedVacuumCheck() {
+	for _, supp := range a.supps {
+		size := 0
+		for stat := range supp.todo.table.IterTombstoneItem() {
+			size += int(stat.GetObjectStats().OriginSize())
+		}
+		if size > 2*common.DefaultMaxOsizeObjBytes {
+			time.AfterFunc(time.Duration(rand.Intn(10))*time.Minute, func() {
+				a.ioChan <- &MMsg{
+					Kind: MMsgKindVacuumCheck,
+					Value: MMsgVacuumCheck{
+						Table: supp.todo.table,
+						opts:  DefaultVacuumOpts,
+					},
+				}
+			})
+		}
+	}
+}
+
 func (a *MergeScheduler) handleMainLoop() {
 	var nextReadyAtTimer = time.NewTimer(time.Hour * 24)
 	never := make(<-chan time.Time)
 
+	// fallback to check the status of the priority queue
+	heartbeat := time.NewTicker(time.Second * 10)
+
+	vacuumCheckTicker := time.NewTicker(time.Hour * 3)
+
 	stopCh := *a.stopCh.Load()
+
+	a.fallbackSchedVacuumCheck()
 
 	for {
 
@@ -755,15 +791,17 @@ func (a *MergeScheduler) handleMainLoop() {
 		select {
 		case <-stopCh:
 			// stop the loop
-			a.heartbeat.Stop()
+			heartbeat.Stop()
 			a.stopRecv <- struct{}{}
 			return
 		case <-nextReadyAt:
 			// continue the loop
-		case <-a.heartbeat.C:
+		case <-heartbeat.C:
 			a.rc.printMemUsage()
 			a.rc.refresh()
-			// continue the loop
+		// continue the loop
+		case <-vacuumCheckTicker.C:
+			a.fallbackSchedVacuumCheck()
 		case msg := <-a.msgChan:
 			a.dispatchMsg(msg)
 			drained := false
@@ -804,6 +842,8 @@ func (a *MergeScheduler) dispatchMsg(msg *MMsg) {
 }
 
 func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
+	supp := a.supps[msg.table.ID()]
+
 	if msg.vacuum != nil {
 		a.ioChan <- &MMsg{
 			Kind: MMsgKindVacuumCheck,
@@ -812,9 +852,9 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 				opts:  msg.vacuum,
 			},
 		}
+		supp.lastVacuumCheckTime = time.Now()
 	}
 
-	supp := a.supps[msg.table.ID()]
 	if supp == nil {
 		// TODO(aptend): Add table to the priority queue?
 		return
@@ -1043,7 +1083,7 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 				supp.totalDataMergeCnt++
 			}
 			supp.mergingTaskCnt++
-			if !task.isTombstone && task.oSize > 200*common.Const1MBytes {
+			if !task.isTombstone && task.oSize > common.DefaultMaxOsizeObjBytes {
 				supp.bigTaskCnt++
 			}
 			supp.lastMergeTime = afterGather
@@ -1052,14 +1092,22 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 
 	// Postprocess tasks: issue new vacuum task or adjust the next due time
 	if supp.bigTaskCnt >= bigDataTaskCntThreshold {
-		a.ioChan <- &MMsg{
-			Kind: MMsgKindVacuumCheck,
-			Value: MMsgVacuumCheck{
-				Table: todo.table,
-				opts:  DefaultVacuumOpts,
-			},
-		}
 		supp.bigTaskCnt = supp.bigTaskCnt % bigDataTaskCntThreshold
+		// 2-minute debouncer
+		if time.Since(supp.lastVacuumCheckTime) > 2*time.Minute {
+			vacuumOpts := DefaultVacuumOpts
+			if trigger.vacuum != nil {
+				vacuumOpts = trigger.vacuum
+			}
+			a.ioChan <- &MMsg{
+				Kind: MMsgKindVacuumCheck,
+				Value: MMsgVacuumCheck{
+					Table: todo.table,
+					opts:  vacuumOpts,
+				},
+			}
+			supp.lastVacuumCheckTime = afterGather
+		}
 	}
 
 	if len(tasks) == 0 {
