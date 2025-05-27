@@ -53,14 +53,9 @@ type hnswSyncSinker[T types.RealNumbers] struct {
 	err              atomic.Value
 
 	sqlBufSendCh chan []byte
-	// only contains user defined column types, no mo meta cols
-	upsertTypes []*types.Type
-	// only contains pk columns
-	deleteTypes []*types.Type
-	pkColNames  []string
-	pkcol       int32
-	veccol      int32
-	exec        executor.SQLExecutor
+	pkcol        int32
+	veccol       int32
+	exec         executor.SQLExecutor
 }
 
 var NewHnswSyncSinker = func(
@@ -452,9 +447,6 @@ func (s *hnswSyncSinker[T]) sinkUpsert(ctx context.Context, upsertIter *atomicBa
 	// get row from the batch
 	row := upsertIter.Item()
 	bat := row.Src
-	if err != nil {
-		return err
-	}
 
 	pkvec := bat.Vecs[s.pkcol]
 	vecvec := bat.Vecs[s.veccol]
@@ -483,9 +475,7 @@ func (s *hnswSyncSinker[T]) sinkDelete(ctx context.Context, deleteIter *atomicBa
 	// get row from the batch
 	row := deleteIter.Item()
 	bat := row.Src
-	if err != nil {
-		return err
-	}
+
 	pkvec := bat.Vecs[s.pkcol]
 	pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, row.Offset)
 
