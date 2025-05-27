@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -326,17 +325,15 @@ func (r *GroupResultNoneBlock) getResultBatch(
 	gEval *ExprEvalVector,
 	aEval []ExprEvalVector, aExpressions []aggexec.AggFuncExecExpression) (*batch.Batch, error) {
 	var err error
-	logutil.Info("[getResultBatch] start")
+
 	// prepare an OK result.
 	if r.res == nil {
-		logutil.Info("[getResultBatch] r.res == nil")
 		r.res = batch.NewOffHeapWithSize(len(gEval.Typ))
 		for i := range r.res.Vecs {
 			r.res.Vecs[i] = vector.NewOffHeapVecWithType(gEval.Typ[i])
 		}
 		r.res.Aggs = make([]aggexec.AggFuncExec, len(aExpressions))
 	} else {
-		logutil.Info("[getResultBatch] r.res != nil")
 		if cap(r.res.Aggs) >= len(aExpressions) {
 			r.res.Aggs = r.res.Aggs[:len(aExpressions)]
 			for i := range r.res.Aggs {
@@ -354,7 +351,6 @@ func (r *GroupResultNoneBlock) getResultBatch(
 
 	// set agg.
 	for i := range r.res.Aggs {
-		logutil.Info("[getResultBatch] call makeAggExec")
 		r.res.Aggs[i], err = makeAggExec(
 			proc, aExpressions[i].GetAggID(), aExpressions[i].IsDistinct(), aEval[i].Typ...)
 		if err != nil {
