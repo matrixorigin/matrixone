@@ -980,7 +980,7 @@ message Query {
 		UNKNOWN		= 0;
 		SELECT		= 1;
 		INSERT		= 2;
-		REPLACE   = 3;
+		REPLACE     = 3;
 		DELETE		= 4;
 		UPDATE		= 5;
 		MERGE		= 6;
@@ -1016,6 +1016,8 @@ message Query {
 
 	//detectSqls are sqls detect fk self refer constraint
 	repeated string detectSqls= 8;
+
+	repeated Query background_queries = 9;
 }
 
 message TransationControl {
