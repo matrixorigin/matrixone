@@ -516,5 +516,18 @@ func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, inde
 		}
 	}
 
+	// TODO: ERIC 4. register CDC update
+	sqls, err = genCdcHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	for _, sql := range sqls {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
