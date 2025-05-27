@@ -208,6 +208,7 @@ func TestScheduler(t *testing.T) {
 		}
 
 		opts2 := NewVacuumOpts()
+		opts2.HollowTopK = 1
 		opts2.testInject = &vacuumTestInject{
 			compactTask: []mergeTask{
 				{
@@ -272,7 +273,7 @@ func TestScheduler(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		require.Equal(t, answer.DataMergeCnt, t1002TaskCnt)
-		require.Equal(t, answer.BigDataAcc, 1)
+		require.Equal(t, answer.VaccumTrigCount, 1)
 
 		for i := 0; i < 100; i++ {
 			answer = sched.Query(tables[0])
