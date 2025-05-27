@@ -1342,9 +1342,6 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
 					return err
 				}
-
-				txn.writes[i].bat.Vecs[0].SetSorted(true)
-				txn.writes[i].bat.Vecs[1].SetSorted(true)
 			}
 		}
 	}
