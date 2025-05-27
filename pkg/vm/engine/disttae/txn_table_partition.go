@@ -473,12 +473,6 @@ func (r *PartitionedRelData) addPartition(
 		return err
 	}
 
-	blocks := data.GetBlockInfoSlice()
-	n := blocks.Len()
-	for i := 0; i < n; i++ {
-		blocks.Get(i).PartitionIdx = int32(idx)
-	}
-
 	id := table.GetTableID(ctx)
 	r.tables[id] = table
 	r.partitions[idx] = data

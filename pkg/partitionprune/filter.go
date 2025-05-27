@@ -30,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// Filter determines which partitions should be accessed based on the given filters and partition metadata.
+// It returns a slice of partition tables that match the filter conditions.
 func Filter(
 	proc *process.Process,
 	filters []*plan.Expr,
@@ -54,6 +56,8 @@ func Filter(
 	return nil, nil
 }
 
+// hashFilter handles partition pruning for hash-based partitioning.
+// It evaluates the filters against hash partition expressions and returns matching partition tables.
 func hashFilter(
 	proc *process.Process,
 	filters []*plan.Expr,
@@ -66,24 +70,28 @@ func hashFilter(
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			res := make([]int, len(metadata.Partitions))
-			for i, pt := range metadata.Partitions {
-				res[i] = int(pt.Position)
+		if ok {
+			for _, target := range targets {
+				tm[target] = struct{}{}
 			}
-			return res, nil
-		}
-		for _, target := range targets {
-			tm[target] = struct{}{}
 		}
 	}
-	res := make([]int, 0, len(tm))
-	for target := range tm {
-		res = append(res, target)
+	if len(tm) > 0 {
+		res := make([]int, 0, len(tm))
+		for target := range tm {
+			res = append(res, target)
+		}
+		return res, nil
+	}
+	res := make([]int, len(metadata.Partitions))
+	for i, pt := range metadata.Partitions {
+		res[i] = int(pt.Position)
 	}
 	return res, nil
 }
 
+// hashFilterExpr evaluates a single filter expression against hash partitions.
+// Returns the matching partition positions, whether the expression could be evaluated, and any error.
 func hashFilterExpr(
 	proc *process.Process,
 	colPosition int32,
@@ -92,12 +100,16 @@ func hashFilterExpr(
 ) ([]int, bool, error) {
 	exprs := make([]*plan.Expr, len(metadata.Partitions))
 	for i, pt := range metadata.Partitions {
+		// Deep copy partition expressions to avoid modifying the original expressions
+		// when replacing column references with actual filter values
 		exprs[i] = p.DeepCopyExpr(pt.Expr)
 	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "or":
+			// For OR operator, recursively evaluate both left and right expressions
+			// and merge their results to get all matching partitions
 			left, can, err := hashFilterExpr(proc, colPosition, exprImpl.F.Args[0], metadata)
 			if err != nil {
 				return nil, false, err
@@ -117,6 +129,8 @@ func hashFilterExpr(
 			return mergeSortedSlices(left, right), true, nil
 
 		case "and":
+			// For AND operator, recursively evaluate both left and right expressions
+			// and find the intersection of their results to get matching partitions
 			left, can, err := hashFilterExpr(proc, colPosition, exprImpl.F.Args[0], metadata)
 			if err != nil {
 				return nil, false, err
@@ -155,6 +169,8 @@ func hashFilterExpr(
 	return nil, false, nil
 }
 
+// rangeFilter handles partition pruning for range-based partitioning.
+// It evaluates the filters against range partition expressions and returns matching partition positions.
 func rangeFilter(
 	proc *process.Process,
 	filters []*plan.Expr,
@@ -167,24 +183,29 @@ func rangeFilter(
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			res := make([]int, len(metadata.Partitions))
-			for i, pt := range metadata.Partitions {
-				res[i] = int(pt.Position)
+		if ok {
+			for _, target := range targets {
+				tm[target] = struct{}{}
 			}
-			return res, nil
-		}
-		for _, target := range targets {
-			tm[target] = struct{}{}
 		}
 	}
-	res := make([]int, 0, len(tm))
-	for target := range tm {
-		res = append(res, target)
+	if len(tm) > 0 {
+		res := make([]int, 0, len(tm))
+		for target := range tm {
+			res = append(res, target)
+		}
+		return res, nil
+	}
+	res := make([]int, len(metadata.Partitions))
+	for i, pt := range metadata.Partitions {
+		res[i] = int(pt.Position)
 	}
 	return res, nil
+
 }
 
+// rangeFilterExpr evaluates a single filter expression against range partitions.
+// Returns the matching partition positions, whether the expression could be evaluated, and any error.
 func rangeFilterExpr(
 	proc *process.Process,
 	colPosition int32,
@@ -193,6 +214,8 @@ func rangeFilterExpr(
 ) ([]int, bool, error) {
 	exprs := make([]*plan.Expr, len(metadata.Partitions))
 	for i, pt := range metadata.Partitions {
+		// Deep copy partition expressions to avoid modifying the original expressions
+		// when replacing column references with actual filter values
 		exprs[i] = p.DeepCopyExpr(pt.Expr)
 	}
 	switch exprImpl := expr.Expr.(type) {
@@ -259,6 +282,8 @@ func rangeFilterExpr(
 	return nil, false, nil
 }
 
+// mergeSortedSlices merges two sorted integer slices while removing duplicates.
+// Returns a new sorted slice containing all unique elements from both input slices.
 func mergeSortedSlices(slice1, slice2 []int) []int {
 	i, j := 0, 0
 	result := make([]int, 0, len(slice1)+len(slice2))
@@ -296,6 +321,8 @@ func mergeSortedSlices(slice1, slice2 []int) []int {
 	return result
 }
 
+// intersectSortedSlices finds the intersection of two sorted integer slices while removing duplicates.
+// Returns a new sorted slice containing elements that appear in both input slices.
 func intersectSortedSlices(slice1, slice2 []int) []int {
 	i, j := 0, 0
 	result := []int{}
@@ -323,6 +350,8 @@ func intersectSortedSlices(slice1, slice2 []int) []int {
 	return result
 }
 
+// inPartition evaluates whether a given expression is true for a partition.
+// Returns true if the expression evaluates to true, false otherwise.
 func inPartition(proc *process.Process, expr *plan.Expr) (bool, error) {
 	exec, err := colexec.NewExpressionExecutor(proc, expr)
 	if err != nil {
@@ -336,6 +365,8 @@ func inPartition(proc *process.Process, expr *plan.Expr) (bool, error) {
 	return vector.MustFixedColNoTypeCheck[bool](vec)[0], nil
 }
 
+// filterResult evaluates partition expressions and returns positions of partitions that match.
+// It processes each partition expression and collects matching partition positions.
 func filterResult(
 	proc *process.Process,
 	exprs []*plan.Expr,
@@ -354,6 +385,8 @@ func filterResult(
 	return targets, nil
 }
 
+// mustReplaceCol replaces column references in an expression with a given value expression.
+// It recursively traverses the expression tree to find and replace column references.
 func mustReplaceCol(expr, value *plan.Expr) {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -369,6 +402,9 @@ func mustReplaceCol(expr, value *plan.Expr) {
 	}
 }
 
+// mustReplaceColPos recursively traverses the expression tree to find and replace
+// the column position with the specified position. This is used in list partitioning
+// to reset column positions when evaluating expressions against constructed batches.
 func mustReplaceColPos(expr *plan.Expr, pos int32) {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
@@ -384,6 +420,8 @@ func mustReplaceColPos(expr *plan.Expr, pos int32) {
 	}
 }
 
+// mustGetColPosition extracts the column position from an expression.
+// Returns the column position if found, -1 otherwise.
 func mustGetColPosition(expr *plan.Expr) int32 {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -399,6 +437,8 @@ func mustGetColPosition(expr *plan.Expr) int32 {
 	return -1
 }
 
+// listFilter handles partition pruning for list-based partitioning.
+// It evaluates the filters against list partition expressions and returns matching partition positions.
 func listFilter(
 	proc *process.Process,
 	filters []*plan.Expr,
@@ -411,24 +451,28 @@ func listFilter(
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			res := make([]int, len(metadata.Partitions))
-			for i, pt := range metadata.Partitions {
-				res[i] = int(pt.Position)
+		if ok {
+			for _, target := range targets {
+				tm[target] = struct{}{}
 			}
-			return res, nil
-		}
-		for _, target := range targets {
-			tm[target] = struct{}{}
 		}
 	}
-	res := make([]int, 0, len(tm))
-	for target := range tm {
-		res = append(res, target)
+	if len(tm) > 0 {
+		res := make([]int, 0, len(tm))
+		for target := range tm {
+			res = append(res, target)
+		}
+		return res, nil
+	}
+	res := make([]int, len(metadata.Partitions))
+	for i, pt := range metadata.Partitions {
+		res[i] = int(pt.Position)
 	}
 	return res, nil
 }
 
+// extractListValues extracts the list of values from a list expression.
+// Returns the list of expressions if the input is a valid list expression, nil otherwise.
 func extractListValues(expr *plan.Expr) ([]*plan.Expr, error) {
 	f, ok := expr.Expr.(*plan.Expr_F)
 	if !ok {
@@ -441,6 +485,8 @@ func extractListValues(expr *plan.Expr) ([]*plan.Expr, error) {
 	return list.List.List, nil
 }
 
+// constructVectorFromList creates a vector from a list of expressions.
+// It evaluates each expression and combines the results into a single vector.
 func constructVectorFromList(proc *process.Process, list []*plan.Expr) (*vector.Vector, error) {
 	if len(list) == 0 {
 		return nil, nil
@@ -479,6 +525,8 @@ func constructVectorFromList(proc *process.Process, list []*plan.Expr) (*vector.
 	return vec, nil
 }
 
+// listFilterExpr evaluates a single filter expression against list partitions.
+// Returns the matching partition positions, whether the expression could be evaluated, and any error.
 func listFilterExpr(
 	proc *process.Process,
 	colPosition int32,
@@ -581,16 +629,22 @@ func listFilterExpr(
 	return nil, false, nil
 }
 
+// makeTypeByPlan2Expr converts a plan expression type to a MatrixOne type.
+// Creates a new type based on the expression's type information.
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	oid := types.T(expr.Typ.Id)
 	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
 }
 
+// makeTypeByPlan2Type converts a plan type to a MatrixOne type.
+// Creates a new type based on the plan type information.
 func makeTypeByPlan2Type(typ plan.Type) types.Type {
 	oid := types.T(typ.Id)
 	return types.New(oid, typ.Width, typ.Scale)
 }
 
+// getFunctionObjRef creates a function object reference.
+// Returns a new ObjectRef with the given function ID and name.
 func getFunctionObjRef(funcID int64, name string) *plan.ObjectRef {
 	return &plan.ObjectRef{
 		Obj:     funcID,
@@ -598,6 +652,8 @@ func getFunctionObjRef(funcID int64, name string) *plan.ObjectRef {
 	}
 }
 
+// appendCastBeforeExpr adds a cast operation before an expression.
+// Creates a new expression that casts the input expression to the specified type.
 func appendCastBeforeExpr(ctx context.Context, expr *plan.Expr, typ plan.Type) (*plan.Expr, error) {
 	typ.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
@@ -627,6 +683,8 @@ func appendCastBeforeExpr(ctx context.Context, expr *plan.Expr, typ plan.Type) (
 	}, nil
 }
 
+// ConvertFoldExprToNormal converts a folded expression to its normal form.
+// Handles both constant and vector expressions, converting them to their literal representations.
 func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_Fold:
@@ -678,6 +736,8 @@ func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
 	}
 }
 
+// getConstantFromBytes extracts a constant value from binary data.
+// Converts the binary data to a literal value based on the specified type.
 func getConstantFromBytes(data []byte, typ plan.Type) (*plan.Literal, error) {
 	if len(data) == 0 {
 		return nil, nil
