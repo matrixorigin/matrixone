@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -241,6 +242,21 @@ func hasMoCtrl(p *plan2.Plan) bool {
 							return true
 						}
 					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isTargetMergeSettings(p *plan2.Plan) bool {
+	if p != nil && p.GetQuery() != nil {
+		q := p.GetQuery()
+		for _, node := range q.Nodes {
+			if node != nil && node.GetTableDef() != nil {
+				d := node.GetTableDef()
+				if d.DbName == catalog.MO_CATALOG && d.Name == catalog.MO_MERGE_SETTINGS {
+					return true
 				}
 			}
 		}

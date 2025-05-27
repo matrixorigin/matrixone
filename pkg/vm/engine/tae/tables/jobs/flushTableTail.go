@@ -444,6 +444,17 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		zap.Any("extra-info", task))
 	v2.TaskFlushTableTailDurationHistogram.Observe(duration.Seconds())
 
+	if o := task.createdObjHandles; o != nil {
+		v2.TaskDataInputSizeCounter.Add(
+			float64(o.GetMeta().(*catalog.ObjectEntry).OriginSize()),
+		)
+	}
+	if o := task.createdTombstoneHandles; o != nil {
+		v2.TaskTombstoneInputSizeCounter.Add(
+			float64(o.GetMeta().(*catalog.ObjectEntry).OriginSize()),
+		)
+	}
+
 	if time.Since(task.createAt) > SlowFlushTaskOverall {
 		logutil.Info(
 			"[FLUSH-SUMMARY]",

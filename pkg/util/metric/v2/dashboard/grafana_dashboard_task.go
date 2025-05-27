@@ -37,7 +37,6 @@ func (c *DashboardCreator) initTaskDashboard() error {
 			c.initTaskFlushTableTailRow(),
 			c.initTaskMergeRow(),
 			c.initTaskMergeTransferPageRow(),
-			c.initCommitTimeRow(),
 			c.initTaskCheckpointRow(),
 			c.initTaskSelectivityRow(),
 			c.initTaskStorageUsageRow(),
@@ -124,26 +123,6 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 	)
 }
 
-func (c *DashboardCreator) initCommitTimeRow() dashboard.Option {
-	return dashboard.Row(
-		"Commit Time",
-		c.getPercentHist(
-			"Flush Commit Time",
-			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="commit_table_tail"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(6),
-		),
-		c.getPercentHist(
-			"Merge Commit Time",
-			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="commit_merge_objects"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			SpanNulls(true),
-			timeseries.Span(6),
-		),
-	)
-}
-
 func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 	return dashboard.Row(
 		"Flush Table Tail",
@@ -154,31 +133,21 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 				c.getMetricWithFilter(`mo_task_short_duration_seconds_count`, `type="flush_table_tail"`),
 			)},
 			[]string{"Count"},
-			timeseries.Span(3),
+			timeseries.Span(4),
 		),
 		c.getPercentHist(
 			"Flush table tail Duration",
 			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="flush_table_tail"`),
 			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
-			timeseries.Span(3),
+			timeseries.Span(4),
 		),
 		c.getPercentHist(
-			"Flush table deletes count",
-			c.getMetricWithFilter(`mo_task_hist_total_bucket`, `type="flush_deletes_count"`),
-			[]float64{0.5, 0.7, 0.8, 0.9},
-			timeseries.Axis(tsaxis.Unit("")),
-			timeseries.Span(3),
+			"Flush table tail Commit Time",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="commit_table_tail"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
 			SpanNulls(true),
-		),
-
-		c.getPercentHist(
-			"Flush table deletes file size",
-			c.getMetricWithFilter(`mo_task_hist_bytes_bucket`, `type="flush_deletes_size"`),
-			[]float64{0.5, 0.7, 0.8, 0.9},
-			timeseries.Axis(tsaxis.Unit("decbytes")),
-			timeseries.Span(3),
-			SpanNulls(true),
+			timeseries.Span(4),
 		),
 	)
 }
@@ -186,29 +155,88 @@ func (c *DashboardCreator) initTaskFlushTableTailRow() dashboard.Option {
 func (c *DashboardCreator) initTaskMergeRow() dashboard.Option {
 	return dashboard.Row(
 		"Merge",
+
 		c.getTimeSeries(
 			"Merge Count",
 			[]string{
 				fmt.Sprintf(
 					"sum (increase(%s[$interval]))",
-					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge"`)),
-
+					c.getMetricWithFilter(`mo_task_merge_duration_seconds_count`, `type="merge",source="data"`)),
 				fmt.Sprintf(
 					"sum (increase(%s[$interval]))",
-					c.getMetricWithFilter(`mo_task_scheduled_by_total`, `type="merge",nodetype="cn"`)),
+					c.getMetricWithFilter(`mo_task_merge_duration_seconds_count`, `type="merge",source="tombstone"`)),
 			},
 			[]string{
-				"Schedule Count",
-				"CN Schedule Count",
+				"Data Count",
+				"Tombstone Count",
 			},
+			timeseries.Span(4),
 		),
+
+		c.getPercentHist(
+			"Merge Duration",
+			c.getMetricWithFilter(`mo_task_merge_duration_seconds_bucket`, `type="merge"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+
+		c.getPercentHist(
+			"Merge Commit Duration",
+			c.getMetricWithFilter(`mo_task_merge_duration_seconds_bucket`, `type="commit_merge"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(4),
+		),
+
+		// data size
 		c.getTimeSeries(
-			"Merge Batch Size",
-			[]string{fmt.Sprintf(
-				"sum by (increase(%s[$interval]))",
-				c.getMetricWithFilter(`mo_task_execute_results_total`, `type="merged_size"`))},
-			[]string{"Size"},
+			"Merge Data Size",
+			[]string{
+				fmt.Sprintf(
+					"sum (increase(%s[$interval]))",
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="merged_size",source="data"`)),
+				fmt.Sprintf(
+					"sum (increase(%s[$interval]))",
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="input_size",source="data"`)),
+			},
+			[]string{"Merged Size", "Input Size"},
 			timeseries.Axis(tsaxis.Unit("decbytes")),
+			timeseries.Span(6),
+		),
+
+		// tombstone size
+		c.getTimeSeries(
+			"Merge Tombstone Size",
+			[]string{
+				fmt.Sprintf(
+					"sum (increase(%s[$interval]))",
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="merged_size",source="tombstone"`)),
+				fmt.Sprintf(
+					"sum (increase(%s[$interval]))",
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="input_size",source="tombstone"`)),
+			},
+			[]string{"Merged Size", "Input Size"},
+			timeseries.Axis(tsaxis.Unit("decbytes")),
+			timeseries.Span(6),
+		),
+
+		c.getTimeSeries(
+			"Merge Ampilification",
+			[]string{
+				fmt.Sprintf(
+					"sum (increase(%s[$interval])) / sum (increase(%s[$interval]))",
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="merged_size",source="data"`),
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="input_size",source="data"`),
+				),
+				fmt.Sprintf(
+					"sum (increase(%s[$interval])) / sum (increase(%s[$interval]))",
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="merged_size",source="tombstone"`),
+					c.getMetricWithFilter(`mo_task_merge_stuff_total`, `type="input_size",source="tombstone"`),
+				),
+			},
+			[]string{"Data", "Tombstone"},
+			timeseries.Span(6),
 		),
 	)
 }
