@@ -561,3 +561,33 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 	_, err := signal.Action()
 	require.Error(t, err)
 }
+
+func TestScopeGetRelDataError(t *testing.T) {
+	// Create a new scope
+	s := newScope(Normal)
+	s.Proc = testutil.NewProcess()
+	s.NodeInfo = engine.Node{
+		Mcpu: 1,
+	}
+	s.DataSource = &Source{
+		node: &plan.Node{
+			Stats: &plan.Stats{},
+			ObjRef: &plan.ObjectRef{
+				SchemaName: "test_db",
+			},
+			TableDef: &plan.TableDef{
+				Name: "test_table",
+			},
+		},
+	}
+
+	// Create a mock compile with engine
+	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
+	c := NewMockCompile()
+	c.proc = s.Proc
+	c.e = e
+
+	// Test case: error when expanding ranges
+	err := s.getRelData(c, nil)
+	require.Error(t, err)
+}
