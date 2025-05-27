@@ -368,10 +368,16 @@ func (s *hnswSyncSinker[T]) sinkSnapshot(ctx context.Context, bat *batch.Batch) 
 	vecvec := bat.Vecs[s.veccol]
 	for i := 0; i < batchRowCount(bat); i++ {
 		pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, i)
-		v := vector.GetArrayAt[T](vecvec, i)
-		// TODO: check null
 
-		s.cdc.Upsert(pk, v)
+		// check null
+		if vecvec.IsNull(uint64(i)) {
+			// nil vector means delete
+			s.cdc.Delete(pk)
+		} else {
+			v := vector.GetArrayAt[T](vecvec, i)
+
+			s.cdc.Upsert(pk, v)
+		}
 
 		// check full
 		if s.cdc.Full() {
@@ -453,9 +459,16 @@ func (s *hnswSyncSinker[T]) sinkUpsert(ctx context.Context, upsertIter *atomicBa
 	pkvec := bat.Vecs[s.pkcol]
 	vecvec := bat.Vecs[s.veccol]
 	pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, row.Offset)
-	v := vector.GetArrayAt[T](vecvec, row.Offset)
 
-	s.cdc.Upsert(pk, v)
+	// check null
+	if vecvec.IsNull(uint64(row.Offset)) {
+		// nil vector means delete
+		s.cdc.Delete(pk)
+	} else {
+		v := vector.GetArrayAt[T](vecvec, row.Offset)
+
+		s.cdc.Upsert(pk, v)
+	}
 
 	if s.cdc.Full() {
 		// send SQL
