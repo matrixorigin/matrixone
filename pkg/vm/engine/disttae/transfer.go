@@ -168,7 +168,7 @@ func transferTombstoneObjects(
 func transferTombstones(
 	ctx context.Context,
 	table *txnTable,
-	state *logtailreplay.PartitionState,
+	pState *logtailreplay.PartitionState,
 	deletedObjects, createdObjects map[objectio.ObjectNameShort]struct{},
 	mp *mpool.MPool,
 	fs fileservice.FileService,
@@ -196,9 +196,10 @@ func transferTombstones(
 		}
 		v2.TransferTombstonesDurationHistogram.Observe(duration.Seconds())
 	}()
+
 	var objectList []objectio.ObjectStats
 	for name := range createdObjects {
-		if obj, ok := state.GetObject(name); ok {
+		if obj, ok := pState.GetObject(name); ok {
 			objectList = append(objectList, obj.ObjectStats)
 		}
 	}
@@ -219,51 +220,39 @@ func transferTombstones(
 		searchEntryPos  *vector.Vector
 		searchBatPos    *vector.Vector
 		readPKColumn    *vector.Vector
+
+		entryPosMask objectio.Bitmap
 	)
 
 	defer func() {
 		if transferIntents != nil {
 			transferIntents.Free(mp)
 		}
+
 		if targetRowids != nil {
 			targetRowids.Free(mp)
 		}
+
 		if searchPKColumn != nil {
 			searchPKColumn.Free(mp)
 		}
+
 		if searchEntryPos != nil {
 			searchEntryPos.Free(mp)
 		}
+
 		if searchBatPos != nil {
 			searchBatPos.Free(mp)
 		}
+
 		if readPKColumn != nil {
 			readPKColumn.Free(mp)
-		}
-	}()
-
-	entryPosMask := objectio.GetReusableBitmap()
-	defer func() {
-		if err != nil {
-			return
-		}
-
-		iter := entryPosMask.Bitmap().Iterator()
-		for iter.HasNext() {
-			idx := iter.Next()
-			entry := txnWrites[idx]
-
-			if !catalog.IsSystemTable(entry.tableId) &&
-				entry.bat != nil && entry.bat.RowCount() > 1 {
-				// attr: row_id, pk
-				if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, mp); err != nil {
-					return
-				}
-			}
 		}
 
 		entryPosMask.Release()
 	}()
+
+	entryPosMask = objectio.GetReusableBitmap()
 
 	// loop the transaction workspace to transfer all tombstones
 	for i, entry := range txnWrites {
@@ -277,11 +266,11 @@ func transferTombstones(
 
 		// column 0 is rowid, column 1 is pk
 		// fetch rowid and pk column data
-		rowids := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
+		rowIds := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
 		pkColumn := entry.bat.GetVector(1)
 
-		for j, rowid := range rowids {
-			blockId := rowid.BorrowBlockID()
+		for j, rowId := range rowIds {
+			blockId := rowId.BorrowBlockID()
 			// if the block of the rowid is not in the deleted objects, skip transfer
 			if _, deleted := deletedObjects[*objectio.ShortName(blockId)]; !deleted {
 				continue
@@ -297,15 +286,19 @@ func transferTombstones(
 				searchBatPos = vector.NewVec(types.T_int32.ToType())
 				readPKColumn = vector.NewVec(*pkColumn.GetType())
 			}
-			if err = vector.AppendFixed[types.Rowid](transferIntents, rowid, false, mp); err != nil {
+
+			if err = vector.AppendFixed[types.Rowid](transferIntents, rowId, false, mp); err != nil {
 				return
 			}
+
 			if err = vector.AppendFixed[int32](searchEntryPos, int32(i), false, mp); err != nil {
 				return
 			}
+
 			if err = vector.AppendFixed[int32](searchBatPos, int32(j), false, mp); err != nil {
 				return
 			}
+
 			if err = searchPKColumn.UnionOne(pkColumn, int64(j), mp); err != nil {
 				return
 			}
@@ -353,6 +346,20 @@ func transferTombstones(
 			return
 		}
 	}
+
+	iter := entryPosMask.Bitmap().Iterator()
+	for iter.HasNext() {
+		idx := iter.Next()
+		entry := txnWrites[idx]
+
+		if !catalog.IsSystemTable(entry.tableId) &&
+			entry.bat != nil && entry.bat.RowCount() > 1 {
+			if err = mergeutil.SortColumnsByIndex(entry.bat.Vecs, 0, mp); err != nil {
+				return
+			}
+		}
+	}
+
 	return nil
 }
 
