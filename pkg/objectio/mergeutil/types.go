@@ -167,11 +167,12 @@ func SortColumnsByIndex(
 		if err != nil {
 			return
 		}
-	}
 
-	cols[0].SetSorted(true)
-	for i := 1; i < len(cols); i++ {
-		cols[i].SetSorted(false)
+		if i == sortIdx {
+			cols[i].SetSorted(true)
+		} else {
+			cols[i].SetSorted(false)
+		}
 	}
 
 	return
