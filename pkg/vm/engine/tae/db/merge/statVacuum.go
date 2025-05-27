@@ -55,18 +55,18 @@ var (
 
 type TombstoneOpts struct {
 	OneShot bool
-	L1Size  uint32
+	L1Size  int
 	L1Count int
-	L2Size  uint32
+	L2Size  int
 	L2Count int
 }
 
 func (o *TombstoneOpts) String() string {
 	return fmt.Sprintf("TombstoneOpts{OneShot: %t, L1S: %s, L1C: %d, L2S: %s, L2C: %d}",
 		o.OneShot,
-		common.HumanReadableBytes(int(o.L1Size)),
+		common.HumanReadableBytes(o.L1Size),
 		o.L1Count,
-		common.HumanReadableBytes(int(o.L2Size)),
+		common.HumanReadableBytes(o.L2Size),
 		o.L2Count,
 	)
 }
@@ -85,7 +85,7 @@ func NewTombstoneOpts() *TombstoneOpts {
 	return DefaultTombstoneOpts.Clone()
 }
 
-func (o *TombstoneOpts) WithL1(size uint32, count int) *TombstoneOpts {
+func (o *TombstoneOpts) WithL1(size int, count int) *TombstoneOpts {
 	o.L1Size = size
 	o.L1Count = count
 	return o
@@ -121,9 +121,9 @@ func GatherTombstoneTasks(ctx context.Context,
 	small := make([]*objectio.ObjectStats, 0, opts.L1Count)
 	big := make([]*objectio.ObjectStats, 0, opts.L2Count)
 	for stat := range tombstoneStats {
-		if stat.OriginSize() < opts.L1Size {
+		if int(stat.OriginSize()) < opts.L1Size {
 			small = append(small, stat)
-		} else if stat.OriginSize() < opts.L2Size {
+		} else if int(stat.OriginSize()) < opts.L2Size {
 			big = append(big, stat)
 		}
 	}
