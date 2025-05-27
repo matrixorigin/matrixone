@@ -32,8 +32,6 @@ const (
 	IOET_WALTxnCommand_Composed uint16 = 3001
 	IOET_WALTxnCommand_TxnState uint16 = 3002
 
-	IOET_WALTxnEntry_V1            uint16 = 1
-	IOET_WALTxnEntry_V2            uint16 = 2
 	IOET_WALTxnEntry_V3            uint16 = 3
 	IOET_WALTxnEntry_V4            uint16 = 4
 	IOET_WALTxnEntry_V5            uint16 = 5
@@ -54,30 +52,6 @@ const (
 )
 
 func init() {
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnEntry,
-			Version: IOET_WALTxnEntry_V1,
-		},
-		nil,
-		func(b []byte) (any, error) {
-			txnEntry := NewEmptyTxnCmd()
-			err := txnEntry.UnmarshalBinaryWithVersion(b, IOET_WALTxnEntry_V1)
-			return txnEntry, err
-		},
-	)
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnEntry,
-			Version: IOET_WALTxnEntry_V2,
-		},
-		nil,
-		func(b []byte) (any, error) {
-			txnEntry := NewEmptyTxnCmd()
-			err := txnEntry.UnmarshalBinaryWithVersion(b, IOET_WALTxnEntry_V2)
-			return txnEntry, err
-		},
-	)
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALTxnEntry,
@@ -393,10 +367,7 @@ func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			n += 8
 		}
 	}
-	MemoVersion := model.MemoTreeVersion1
-	if ver >= IOET_WALTxnEntry_V2 {
-		MemoVersion = model.MemoTreeVersion2
-	}
+	MemoVersion := model.MemoTreeVersion2
 	if ver >= IOET_WALTxnEntry_V3 {
 		MemoVersion = model.MemoTreeVersion3
 	}

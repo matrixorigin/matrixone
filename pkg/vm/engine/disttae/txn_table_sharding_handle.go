@@ -461,6 +461,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 	infos, err := tbl.GetColumMetadataScanInfo(
 		ctx,
 		param.GetColumMetadataScanInfoParam.ColumnName,
+		false,
 	)
 	if err != nil {
 		return nil, err

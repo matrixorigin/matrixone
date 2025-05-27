@@ -998,6 +998,8 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType == plan.Node_TABLE_SCAN {
 		node.Stats.ForceOneCN = force
+	} else if node.NodeType == plan.Node_SINK_SCAN {
+		node.Stats.ForceOneCN = true
 	} else if node.NodeType == plan.Node_JOIN {
 		if node.JoinType == plan.Node_DEDUP && !node.Stats.HashmapStats.Shuffle {
 			force = true

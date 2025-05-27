@@ -601,21 +601,38 @@ func TestPushClient_PartitionStateGCTicker(t *testing.T) {
 	defer func() {
 		gcPartitionStateTicker = orig
 	}()
+
+	startPStateGCTicker := func(c *PushClient, ctx context.Context) {
+		var (
+			wait sync.WaitGroup
+		)
+
+		wait.Add(1)
+		go func() {
+			wait.Done()
+			c.partitionStateGCTicker(ctx, nil)
+		}()
+
+		wait.Wait()
+	}
+
 	t.Run("subscriber nil", func(t *testing.T) {
 		var c PushClient
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.partitionStateGCTicker(ctx, nil)
+		startPStateGCTicker(&c, ctx)
 		time.Sleep(time.Millisecond * 10)
+		cancel()
 	})
 
 	t.Run("context done", func(t *testing.T) {
 		var c PushClient
 		c.subscriber = &logTailSubscriber{}
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go c.partitionStateGCTicker(ctx, nil)
+
+		startPStateGCTicker(&c, ctx)
+
 		time.Sleep(time.Millisecond * 10)
+		cancel()
 	})
 }
 

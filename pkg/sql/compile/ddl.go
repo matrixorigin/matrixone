@@ -2197,6 +2197,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
@@ -2366,6 +2371,18 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	// update merge settings in mo_catalog.mo_merge_settings
+	updateMergeSettingsSql := fmt.Sprintf(updateMoMergeSettings, newId, accountId, oldId)
+	err = c.runSqlWithSystemTenant(updateMergeSettingsSql)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "update mo_catalog.mo_merge_settings for truncate table",
+			zap.Uint64("origin table id", oldId),
+			zap.Uint64("copy table id", newId),
+			zap.Error(err))
+		return err
+	}
+
 	c.addAffectedRows(uint64(affectedRows))
 	return nil
 }
@@ -2671,6 +2688,8 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 	}
+
+	c.runSqlWithSystemTenant(fmt.Sprintf("delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d", accountId, tblId))
 
 	return partitionservice.GetService(c.proc.GetService()).Delete(
 		c.proc.Ctx,

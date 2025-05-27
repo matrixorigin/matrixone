@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -53,6 +55,31 @@ func (c *dummyCatalogSource) InitSource() iter.Seq[catalog.MergeTable] {
 }
 
 func (c *dummyCatalogSource) SetMergeNotifier(catalog.MergeNotifierOnCatalog) {}
+
+func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func()) {
+	return func() (*batch.Batch, func()) {
+		bat := batch.New([]string{"account_id", "tid", "version", "settings"})
+		bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+		vector.AppendFixed[uint32](bat.Vecs[0], 0, false, common.MergeAllocator)
+		bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+		vector.AppendFixed[uint64](bat.Vecs[1], 1000, false, common.MergeAllocator)
+		bat.Vecs[2] = vector.NewVec(types.T_uint32.ToType())
+		vector.AppendFixed[uint32](bat.Vecs[2], 0, false, common.MergeAllocator)
+		bat.Vecs[3] = vector.NewVec(types.T_json.ToType())
+		json, _ := types.ParseStringToByteJson(`{"bad_settings": 100}`)
+		vector.AppendByteJson(bat.Vecs[3], json, false, common.MergeAllocator)
+
+		vector.AppendFixed[uint32](bat.Vecs[0], 0, false, common.MergeAllocator)
+		vector.AppendFixed[uint64](bat.Vecs[1], 1001, false, common.MergeAllocator)
+		vector.AppendFixed[uint32](bat.Vecs[2], 0, false, common.MergeAllocator)
+		json, _ = types.ParseStringToByteJson(DefaultMergeSettings.String())
+		vector.AppendByteJson(bat.Vecs[3], json, false, common.MergeAllocator)
+
+		bat.SetRowCount(2)
+
+		return bat, func() { bat.Clean(common.MergeAllocator) }
+	}
+}
 
 type droppedMergeTable struct {
 	catalog.MergeTable

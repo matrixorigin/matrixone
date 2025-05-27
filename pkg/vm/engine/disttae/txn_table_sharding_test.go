@@ -58,7 +58,7 @@ func TestGetColumMetadataScanInfoIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.GetColumMetadataScanInfo(context.Background(), "")
+			_, err := tbl.GetColumMetadataScanInfo(context.Background(), "", false)
 			require.Error(t, err)
 		},
 	)
