@@ -434,7 +434,6 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 	} else {
 		err = usearchidx.Load(idx.Path)
 		usearchidx.Reserve(uint(tblcfg.IndexCapacity))
-		fmt.Printf("LoadIndex Reserver %d\n", tblcfg.IndexCapacity)
 	}
 	if err != nil {
 		return err
@@ -458,7 +457,6 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 			idx.MaxCapacity = uint(tblcfg.IndexCapacity)
 		}
 	}
-	fmt.Printf("LoadIndex Check cap %d\n", idx.MaxCapacity)
 
 	return nil
 }
