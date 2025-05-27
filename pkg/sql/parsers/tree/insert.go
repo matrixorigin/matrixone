@@ -27,15 +27,10 @@ type Insert struct {
 	IsRestore         bool
 	IsRestoreByTs     bool
 	FromDataTenantID  uint32
-	IsCdc             bool
 }
 
 func (node *Insert) Format(ctx *FmtCtx) {
-	ctx.WriteString("insert ")
-	if node.IsCdc {
-		ctx.WriteString("cdc ")
-	}
-	ctx.WriteString("into ")
+	ctx.WriteString("insert into ")
 	node.Table.Format(ctx)
 
 	if node.PartitionNames != nil {

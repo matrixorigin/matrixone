@@ -4835,23 +4835,6 @@ delete_without_using_stmt:
             Limit: $11,
         }
     }
-|   DELETE CDC priority_opt quick_opt ignore_opt FROM table_name partition_clause_opt as_opt_id where_expression_opt order_by_opt limit_opt
-    {
-        // Single-Table Syntax
-        t := &tree.AliasedTableExpr {
-            Expr: $7,
-            As: tree.AliasClause{
-                Alias: tree.Identifier($9),
-            },
-        }
-        $$ = &tree.Delete{
-            Tables: tree.TableExprs{t},
-            Where: $10,
-            OrderBy: $11,
-            Limit: $12,
-            IsCdc: true,
-        }
-    }
 |    DELETE priority_opt quick_opt ignore_opt table_name_wild_list FROM table_references where_expression_opt
     {
         // Multiple-Table Syntax
@@ -4931,14 +4914,6 @@ replace_stmt:
     	rep.PartitionNames = $3
     	$$ = rep
     }
-|   REPLACE CDC into_table_name partition_clause_opt replace_data
-    {
-        rep := $5
-        rep.Table = $3
-        rep.PartitionNames = $4
-        rep.IsCdc = true
-        $$ = rep
-    }
 
 replace_data:
     VALUES values_list
@@ -5012,15 +4987,6 @@ insert_stmt:
         ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
         $$ = ins
     }
-|   INSERT CDC into_table_name partition_clause_opt insert_data on_duplicate_key_update_opt
-    {
-        ins := $5
-        ins.Table = $3
-        ins.PartitionNames = $4
-        ins.OnDuplicateUpdate = $6
-        ins.IsCdc = true
-        $$ = ins
-    } 
 
 accounts_list:
     account_name
