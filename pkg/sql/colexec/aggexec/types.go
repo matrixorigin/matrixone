@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -151,7 +152,7 @@ func MakeAgg(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param ...types.Type) (AggFuncExec, error) {
-
+	log.Printf("[MakeAgg] call makeSpecialAggExec")
 	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
 	if err != nil {
 		return nil, err
@@ -160,8 +161,10 @@ func MakeAgg(
 		return exec, nil
 	}
 	if _, ok = singleAgg[aggID]; ok && len(param) == 1 {
+		log.Printf("[MakeAgg] call makeSingleAgg")
 		return makeSingleAgg(mg, aggID, isDistinct, param[0]), nil
 	}
+	log.Printf("[MakeAgg] return error")
 	errmsg := fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param)
 	return nil, moerr.NewInternalErrorNoCtx(errmsg)
 }
@@ -217,6 +220,7 @@ func makeSpecialAggExec(
 	mg AggMemoryManager,
 	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
+		log.Printf("[makeSpecialAggExec] ok")
 		switch id {
 		case aggIdOfCountColumn:
 			return makeCount(mg, false, id, isDistinct, params[0]), true, nil
