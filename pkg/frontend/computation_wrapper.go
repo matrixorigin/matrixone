@@ -494,9 +494,6 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			if err != nil {
 				return nil, nil, nil, originSQL, err
 			}
-			if param == nil {
-				return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
-			}
 			err = util.AppendAnyToStringVector(cwft.proc, param, params)
 			if err != nil {
 				return nil, nil, nil, originSQL, err

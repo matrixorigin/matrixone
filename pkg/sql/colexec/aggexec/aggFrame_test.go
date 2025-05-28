@@ -412,10 +412,10 @@ func TestMakeInitialAggListFromList(t *testing.T) {
 
 	RegisterGroupConcatAgg(123, ",")
 	mg := NewSimpleAggMemoryManager(mp)
-	agg0 := MakeAgg(mg, 123, true, []types.Type{types.T_varchar.ToType()}...)
-
-	res := MakeInitialAggListFromList(mg, []AggFuncExec{agg0})
-
+	agg0, err := MakeAgg(mg, 123, true, []types.Type{types.T_varchar.ToType()}...)
+	require.Nil(t, err)
+	res, err := MakeInitialAggListFromList(mg, []AggFuncExec{agg0})
+	require.Nil(t, err)
 	require.Equal(t, 1, len(res))
 	require.Equal(t, int64(123), res[0].AggID())
 	require.Equal(t, true, res[0].IsDistinct())

@@ -1256,6 +1256,7 @@ SELECT 1e18 * CAST('1.2' as decimal(3,2));
 SELECT CAST(CAST('1.234221421' AS decimal(3,2)) AS signed);
 cast(cast(1.234221421 as decimal(3, 2)) as as)
 1
+set @v1=null;
 SELECT CAST(@v1 as decimal(22, 2));
 cast(@v1 as decimal(22, 2))
 null

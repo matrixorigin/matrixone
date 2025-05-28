@@ -64,26 +64,26 @@ null    null
 insert into t1 values (1,'1.1','1.1');
 select median(b),median(c) from t1;
 median(b)    median(c)
-1.10    1.1000000000
+1.100    1.10000000000
 insert into t1 values (1,'2.2','2.2');
 select median(b),median(c) from t1;
 median(b)    median(c)
-1.65    1.6500000000
+1.650    1.65000000000
 select median(b),median(c) from t1 group by a order by a;
 median(b)    median(c)
-1.65    1.6500000000
+1.650    1.65000000000
 insert into t1 values (2,'1.1','1.1'),('2','2.2','2.2'),('2','3.3','3.3'),('2','4.4','4.4');
 select median(b),median(c) from t1 group by a order by a;
 median(b)    median(c)
-1.65    1.6500000000
-2.75    2.7500000000
+1.650    1.65000000000
+2.750    2.75000000000
 insert into t1 values (2,null,null);
 select median(b),median(c) from t1 group by a order by a;
 median(b)    median(c)
-1.65    1.6500000000
-2.75    2.7500000000
+1.650    1.65000000000
+2.750    2.75000000000
 select median(distinct a) from t1;
-(?s)not supported: median in distinct mode.*
+not supported: median in distinct mode
 drop table if exists t1;
 create table t1 (a int,b varchar(10));
 select median(b) from t1;
@@ -93,15 +93,15 @@ median(1)
 1.0
 SELECT median(-6372.2);
 median(-6372.2)
--6372.2
+-6372.20
 SELECT median(NULL);
 median(null)
 null
 SELECT median(ABS(-99));
-median(abs(-99))
+median(ABS(-99))
 99.0
 SELECT median(COS(0) + 2);
-median(cos(0) + 2)
+median(COS(0) + 2)
 3.0
 SELECT median(1,2,3);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near ",2,3);";
@@ -157,21 +157,21 @@ SELECT median(d1) FROM median_01 WHERE id = ABS(-1) + TAN(45);
 median(d1)
 null
 SELECT ABS(median(d2)), FLOOR(median(id) * 3) from median_01;
-abs(median(d2))    floor(median(id) * 3)
+ABS(median(d2))    FLOOR(median(id) * 3)
 3782.0    9.0
 SELECT SIN(median(d1)), COS(median(d2)), TAN(median(d2)) FROM median_01;
-sin(median(d1))    cos(median(d2))    tan(median(d2))
+SIN(median(d1))    COS(median(d2))    TAN(median(d2))
 -0.4871745124605095    0.8881213562994406    -0.5175070078184374
 SELECT TAN(median(d2)), cot(median(d2) * 2), ACOS(median(d1)) FROM median_01;
 invalid argument acos, bad value 22.5
 SELECT ATAN(median(d2)), SINH(median(id)) FROM median_01;
-atan(median(d2))    sinh(median(id))
+ATAN(median(d2))    SINH(median(id))
 1.5705319164361722    10.017874927409903
 SELECT ROUND(median(id) / 2) from median_01;
-round(median(id) / 2)
+ROUND(median(id) / 2)
 2.0
 SELECT CEIL(median(d1)) FROM median_01 WHERE id = 1;
-ceil(median(d1))
+CEIL(median(d1))
 -128.0
 SELECT power(median(id),3) FROM median_01;
 power(median(id), 3)
@@ -180,7 +180,7 @@ SELECT LOG(median(id)) AS a,LN(median(id)) AS b FROM median_01;
 a    b
 1.0986122886681096    1.0986122886681096
 SELECT EXP(median(id)) FROM median_01;
-exp(median(id))
+EXP(median(id))
 20.085536923187668
 DROP TABLE IF EXISTS median_02;
 CREATE TABLE median_02(id int PRIMARY KEY, d1 FLOAT, d2 DOUBLE NOT NULL);
@@ -214,7 +214,7 @@ median(d1)
 SELECT ACOS(median(d2)) from median_02;
 invalid argument acos, bad value 65534.5554584122
 SELECT CEIL(median(d2)), FLOOR(median(d2)) from median_02;
-ceil(median(d2))    floor(median(d2))
+CEIL(median(d2))    FLOOR(median(d2))
 65535.0    65534.0
 SELECT power(median(d2),2) from median_02;
 power(median(d2), 2)
