@@ -1287,6 +1287,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
+			case api.AlterKind_ReplaceDef:
+				// Rollback for ReplaceDef is handled by restoring defs
+				break
 			}
 		}
 		tbl.defs = olddefs
@@ -1298,6 +1301,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	txn.Unlock()
 
 	// update tbl properties and reconstruct supplement TableDef
+	var hasReplaceDef bool
+	var replaceDefReq *api.AlterTableReq
+
 	for _, req := range reqs {
 		switch req.GetKind() {
 		case api.AlterKind_AddPartition:
@@ -1323,6 +1329,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			appendDef = append(appendDef, c)
 		case api.AlterKind_RenameTable:
 			tbl.tableName = req.GetRenameTable().NewName
+		case api.AlterKind_ReplaceDef:
+			hasReplaceDef = true
+			replaceDefReq = req
 		default:
 			panic("not supported")
 		}
@@ -1339,12 +1348,18 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 
 	// update TableDef
-	if len(reqs) == 1 && reqs[0].GetKind() == api.AlterKind_ReplaceDef {
-		replaceDef := reqs[0].GetReplaceDef()
+	if hasReplaceDef {
+		// When ReplaceDef exists, replace the entire table definition
+		replaceDef := replaceDefReq.GetReplaceDef()
 		defs, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
 		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 		tbl.defs = defs
 		tbl.tableDef = nil
+
+		// Apply other modifications on top of the replaced definition
+		if len(appendDef) > 0 {
+			tbl.defs = append(tbl.defs, appendDef...)
+		}
 	} else {
 		tbl.defs = append(tbl.defs, appendDef...)
 	}

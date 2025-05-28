@@ -314,7 +314,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
-	algorithm := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options)
+	algorithm := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
 	if algorithm == plan.AlterTable_COPY {
 		return buildAlterTableCopy(stmt, ctx)
 	} else {
@@ -322,7 +322,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 }
 
-func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.AlterTableOption) (algorithm plan.AlterTable_AlgorithmType) {
+func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.AlterTableOption, tableDef *TableDef) (algorithm plan.AlterTable_AlgorithmType) {
 	algorithm = plan.AlterTable_COPY
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
@@ -368,6 +368,9 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
+			if isVarcharLengthModified(ctx, option, tableDef) {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableRenameColumnClause:
@@ -386,6 +389,85 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		}
 	}
 	return algorithm
+}
+
+func isVarcharLengthModified(ctx context.Context, spec *tree.AlterTableModifyColumnClause, tableDef *TableDef) bool {
+	specNewColumn := spec.NewColumn
+	colName := specNewColumn.Name.ColName()
+
+	// Find the original column
+	oldCol := FindColumn(tableDef.Cols, colName)
+	if oldCol == nil || oldCol.Hidden {
+		return false
+	}
+
+	// Parse the new column type
+	newColType, err := getTypeFromAst(ctx, specNewColumn.Type)
+	if err != nil {
+		return false
+	}
+
+	// Check if both old and new are varchar types
+	oldIsVarchar := oldCol.Typ.Id == int32(types.T_varchar)
+	newIsVarchar := newColType.Id == int32(types.T_varchar)
+
+	if !oldIsVarchar || !newIsVarchar {
+		return false // Not a varchar type modification
+	}
+
+	// Check if only the width (length) is different
+	// All other properties should remain the same, including column name
+	if oldCol.Typ.Id == newColType.Id &&
+		oldCol.Typ.Scale == newColType.Scale &&
+		oldCol.Typ.AutoIncr == newColType.AutoIncr &&
+		oldCol.Typ.Width <= newColType.Width &&
+		strings.EqualFold(oldCol.Name, colName) {
+
+		// Additional strict check: ensure no other column attributes are being modified
+		// Check if any attributes are specified in the new column definition
+		if len(specNewColumn.Attributes) > 0 {
+			// If any attributes are specified, this is not a simple length modification
+			for _, attr := range specNewColumn.Attributes {
+				switch a := attr.(type) {
+				case *tree.AttributeNull:
+					// Check if NOT NULL/NULL constraint is consistent with original column
+					// a.Is == true means NULL, a.Is == false means NOT NULL
+					// oldCol.NotNull == true means NOT NULL, oldCol.NotNull == false means NULL
+					oldIsNotNull := oldCol.NotNull
+					newIsNotNull := !a.Is
+
+					if oldIsNotNull != newIsNotNull {
+						// NOT NULL/NULL constraint modification is not allowed
+						return false
+					}
+					// If constraints are consistent, continue checking other attributes
+				case *tree.AttributeDefault:
+					// Default value modification is not allowed
+					return false
+				case *tree.AttributeAutoIncrement:
+					// Auto increment modification is not allowed
+					return false
+				case *tree.AttributeComment:
+					// Comment modification is not allowed
+					return false
+				case *tree.AttributePrimaryKey, *tree.AttributeUniqueKey, *tree.AttributeUnique, *tree.AttributeKey:
+					// Key constraint modifications are not allowed
+					return false
+				case *tree.AttributeCollate:
+					// Collation modification is not allowed
+					return false
+				default:
+					// Any other attribute modification is not allowed
+					return false
+				}
+			}
+		}
+
+		// This is a simple varchar length modification
+		return true
+	}
+
+	return false
 }
 
 func buildNotNullColumnVal(col *ColDef) string {

@@ -1394,6 +1394,12 @@ message AlterDropColumn {
 	uint32 seq = 2;
 }
 
+message AlterVarcharLength {
+	string column_name = 1;
+	int32 new_length = 2;
+	int32 old_length = 3;
+}
+
 message RenameTable {
 	repeated AlterTable alter_tables = 1;
 }
@@ -1417,6 +1423,7 @@ message AlterTable {
 			AlterDropColumn drop_column = 8;
 			AlterTableAlterReIndex alter_reindex = 9;
 			AlterTableAddPartition addPartition = 10;
+			AlterVarcharLength alter_varchar_length = 11;
 		};
 	}
 	string database			      = 1;

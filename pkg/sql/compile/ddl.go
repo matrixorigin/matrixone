@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -553,6 +554,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
+		case *plan.AlterTable_Action_AlterVarcharLength:
+			alterKinds = append(alterKinds, api.AlterKind_ReplaceDef)
+			for i, col := range tableDef.Cols {
+				if col.Name == act.AlterVarcharLength.ColumnName {
+					tableDef.Cols[i].Typ.Width = act.AlterVarcharLength.NewLength
+				}
+			}
 		case *plan.AlterTable_Action_Drop:
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
@@ -927,7 +935,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case api.AlterKind_AddPartition:
 			req = api.NewAddPartitionReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), changePartitionDef)
 		case api.AlterKind_ReplaceDef:
-			// TODO: req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)
+			req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)
 		default:
 		}
 		reqs = append(reqs, req)
@@ -1848,6 +1856,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
 			// 3. Master index
 			err = s.handleMasterIndexTable(c, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
+		} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexAlgo) {
+			// 3. FullText index
+			err = s.handleFullTextIndexTable(c, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexAlgo) {
 			// 4. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {

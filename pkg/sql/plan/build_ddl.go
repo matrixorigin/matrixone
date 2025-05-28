@@ -3762,6 +3762,30 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
+		case *tree.AlterTableModifyColumnClause:
+			if isVarcharLengthModified(ctx.GetContext(), opt, tableDef) {
+				colName := opt.NewColumn.Name.ColName()
+				oldCol := FindColumn(tableDef.Cols, colName)
+				if oldCol == nil {
+					return nil, moerr.NewBadFieldError(ctx.GetContext(), opt.NewColumn.Name.ColNameOrigin(), tableDef.Name)
+				}
+
+				newColType, err := getTypeFromAst(ctx.GetContext(), opt.NewColumn.Type)
+				if err != nil {
+					return nil, err
+				}
+
+				alterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterVarcharLength{
+						AlterVarcharLength: &plan.AlterVarcharLength{
+							ColumnName: colName,
+							NewLength:  newColType.Width,
+							OldLength:  oldCol.Typ.Width,
+						},
+					},
+				}
+			}
+
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
 		}
