@@ -16,10 +16,12 @@ package partitionprune
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -120,26 +122,45 @@ func TestFilter(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			// a = 0 or a = 5
-			// a < 1
-			// 1 <= a < 2
-			// 2 <= a < 3
-			name: "range filter - or condition",
+			// a = 1 or a = 2
+			// a in (1, 2)
+			name: "list filter - or condition",
 			filters: []*plan.Expr{
 				makeOrExpr(
-					makeEqualExpr(0, 0),
-					makeEqualExpr(0, 5),
+					makeEqualExprInt32(0, 1),
+					makeEqualExprInt32(0, 2),
 				),
 			},
 			metadata: partition.PartitionMetadata{
-				Method: partition.PartitionMethod_Range,
+				Method: partition.PartitionMethod_List,
 				Partitions: []partition.Partition{
-					{Position: 0, Expr: newTestRangeExpr("a", 0)},
-					{Position: 1, Expr: newTestRangeExpr("a", 1)},
-					{Position: 2, Expr: newTestRangeExpr("a", 2)},
+					{Position: 0, Expr: newTestValuesInExpr("a")},
+					{Position: 1, Expr: newTestValuesInExpr("a")},
+					{Position: 2, Expr: newTestValuesInExpr("a")},
 				},
 			},
-			want:    []int{0},
+			want:    []int{0, 1, 2},
+			wantErr: false,
+		},
+		{
+			// a = 1 and a = 2
+			// a in (1, 2)
+			name: "list filter - and condition",
+			filters: []*plan.Expr{
+				makeAndExpr(
+					makeEqualExprInt32(0, 1),
+					makeEqualExprInt32(0, 2),
+				),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_List,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestValuesInExpr("a")},
+					{Position: 1, Expr: newTestValuesInExpr("a")},
+					{Position: 2, Expr: newTestValuesInExpr("a")},
+				},
+			},
+			want:    []int{0, 1, 2},
 			wantErr: false,
 		},
 		{
@@ -161,6 +182,48 @@ func TestFilter(t *testing.T) {
 			want:    []int{0, 1, 2},
 			wantErr: false,
 		},
+		{
+			// a = 5 or a = 8
+			// a % 3
+			name: "hash filter - or condition",
+			filters: []*plan.Expr{
+				makeOrExpr(
+					makeEqualExpr(0, 5),
+					makeEqualExpr(0, 8),
+				),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_Hash,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestHashExpr("a", 0)},
+					{Position: 1, Expr: newTestHashExpr("a", 1)},
+					{Position: 2, Expr: newTestHashExpr("a", 2)},
+				},
+			},
+			want:    []int{2},
+			wantErr: false,
+		},
+		{
+			// a = 5 and a = 8
+			// a % 3
+			name: "hash filter - and condition",
+			filters: []*plan.Expr{
+				makeAndExpr(
+					makeEqualExpr(0, 5),
+					makeEqualExpr(0, 8),
+				),
+			},
+			metadata: partition.PartitionMetadata{
+				Method: partition.PartitionMethod_Hash,
+				Partitions: []partition.Partition{
+					{Position: 0, Expr: newTestHashExpr("a", 0)},
+					{Position: 1, Expr: newTestHashExpr("a", 1)},
+					{Position: 2, Expr: newTestHashExpr("a", 2)},
+				},
+			},
+			want:    []int{2},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -179,6 +242,7 @@ func TestFilter(t *testing.T) {
 // Helper functions to create test expressions
 func makeEqualExpr(colPos int32, value int64) *plan.Expr {
 	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -186,6 +250,7 @@ func makeEqualExpr(colPos int32, value int64) *plan.Expr {
 				},
 				Args: []*plan.Expr{
 					{
+						Typ: plan.Type{Id: int32(types.T_int64)},
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								ColPos: colPos,
@@ -203,6 +268,42 @@ func makeEqualExpr(colPos int32, value int64) *plan.Expr {
 						},
 						Typ: plan.Type{
 							Id: int32(types.T_int64),
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func makeEqualExprInt32(colPos int32, value int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "=",
+				},
+				Args: []*plan.Expr{
+					{
+						Typ: plan.Type{Id: int32(types.T_int32)},
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								ColPos: colPos,
+							},
+						},
+					},
+					{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Isnull: false,
+								Value: &plan.Literal_I32Val{
+									I32Val: value,
+								},
+							},
+						},
+						Typ: plan.Type{
+							Id: int32(types.T_int32),
 						},
 					},
 				},
@@ -563,6 +664,7 @@ func newTestValuesInExpr(col string) *plan.Expr {
 
 func makeOrExpr(left, right *plan.Expr) *plan.Expr {
 	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -576,6 +678,7 @@ func makeOrExpr(left, right *plan.Expr) *plan.Expr {
 
 func makeAndExpr(left, right *plan.Expr) *plan.Expr {
 	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -793,6 +896,40 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "vector fold expression",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Fold{
+					Fold: &plan.FoldVal{
+						IsConst: false,
+						Data: func() []byte {
+							mp := mpool.MustNewZeroNoFixed()
+							vec := vector.NewVec(types.T_int64.ToType())
+							_ = vector.AppendFixed[int64](vec, int64(1), false, mp)
+							data, _ := vec.MarshalBinary()
+							return data
+						}(),
+					},
+				},
+			},
+			want: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Vec{
+					Vec: &plan.LiteralVec{
+						Len: 1,
+						Data: func() []byte {
+							mp := mpool.MustNewZeroNoFixed()
+							vec := vector.NewVec(types.T_int64.ToType())
+							_ = vector.AppendFixed[int64](vec, int64(1), false, mp)
+							data, _ := vec.MarshalBinary()
+							return data
+						}(),
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -811,84 +948,202 @@ func TestConvertFoldExprToNormal(t *testing.T) {
 }
 
 func TestGetConstantFromBytes(t *testing.T) {
-	boolVal := true
-	int32Val := int32(42)
-	int64Val := int64(42)
-	float32Val := float32(42.5)
-	float64Val := 42.5
-
 	tests := []struct {
-		name    string
-		data    []byte
-		typ     plan.Type
-		want    *plan.Literal
-		wantErr bool
+		name     string
+		data     []byte
+		typ      plan.Type
+		expected *plan.Literal
 	}{
 		{
 			name: "bool type",
-			data: types.EncodeBool(&boolVal),
-			typ:  plan.Type{Id: int32(types.T_bool)},
-			want: &plan.Literal{
+			data: types.EncodeBool(&[]bool{true}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_bool),
+			},
+			expected: &plan.Literal{
 				Value: &plan.Literal_Bval{Bval: true},
 			},
-			wantErr: false,
+		},
+		{
+			name: "int8 type",
+			data: types.EncodeInt8(&[]int8{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_int8),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_I32Val{I32Val: 42},
+			},
+		},
+		{
+			name: "int16 type",
+			data: types.EncodeInt16(&[]int16{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_int16),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_I32Val{I32Val: 42},
+			},
 		},
 		{
 			name: "int32 type",
-			data: types.EncodeInt32(&int32Val),
-			typ:  plan.Type{Id: int32(types.T_int32)},
-			want: &plan.Literal{
+			data: types.EncodeInt32(&[]int32{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_int32),
+			},
+			expected: &plan.Literal{
 				Value: &plan.Literal_I32Val{I32Val: 42},
 			},
-			wantErr: false,
 		},
 		{
 			name: "int64 type",
-			data: types.EncodeInt64(&int64Val),
-			typ:  plan.Type{Id: int32(types.T_int64)},
-			want: &plan.Literal{
+			data: types.EncodeInt64(&[]int64{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_int64),
+			},
+			expected: &plan.Literal{
 				Value: &plan.Literal_I64Val{I64Val: 42},
 			},
-			wantErr: false,
+		},
+		{
+			name: "uint8 type",
+			data: types.EncodeUint8(&[]uint8{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_uint8),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_U32Val{U32Val: 42},
+			},
+		},
+		{
+			name: "uint16 type",
+			data: types.EncodeUint16(&[]uint16{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_uint16),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_U32Val{U32Val: 42},
+			},
+		},
+		{
+			name: "uint32 type",
+			data: types.EncodeUint32(&[]uint32{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_uint32),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_U32Val{U32Val: 42},
+			},
+		},
+		{
+			name: "uint64 type",
+			data: types.EncodeUint64(&[]uint64{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_uint64),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_U64Val{U64Val: 42},
+			},
 		},
 		{
 			name: "float32 type",
-			data: types.EncodeFloat32(&float32Val),
-			typ:  plan.Type{Id: int32(types.T_float32)},
-			want: &plan.Literal{
+			data: types.EncodeFloat32(&[]float32{42.5}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_float32),
+			},
+			expected: &plan.Literal{
 				Value: &plan.Literal_Fval{Fval: 42.5},
 			},
-			wantErr: false,
 		},
 		{
 			name: "float64 type",
-			data: types.EncodeFloat64(&float64Val),
-			typ:  plan.Type{Id: int32(types.T_float64)},
-			want: &plan.Literal{
+			data: types.EncodeFloat64(&[]float64{42.5}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_float64),
+			},
+			expected: &plan.Literal{
 				Value: &plan.Literal_Dval{Dval: 42.5},
 			},
-			wantErr: false,
+		},
+		{
+			name: "date type",
+			data: types.EncodeDate(&[]types.Date{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_date),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Dateval{Dateval: 42},
+			},
+		},
+		{
+			name: "datetime type",
+			data: types.EncodeDatetime(&[]types.Datetime{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_datetime),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Datetimeval{Datetimeval: 42},
+			},
+		},
+		{
+			name: "timestamp type",
+			data: types.EncodeTimestamp(&[]types.Timestamp{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_timestamp),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Timestampval{Timestampval: 42},
+			},
+		},
+		{
+			name: "decimal64 type",
+			data: types.EncodeDecimal64(&[]types.Decimal64{42}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_decimal64),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: 42}},
+			},
+		},
+		{
+			name: "decimal128 type",
+			data: types.EncodeDecimal128(&[]types.Decimal128{{B0_63: 42, B64_127: 0}}[0]),
+			typ: plan.Type{
+				Id: int32(types.T_decimal128),
+			},
+			expected: &plan.Literal{
+				Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: 42, B: 0}},
+			},
 		},
 		{
 			name: "varchar type",
 			data: []byte("test"),
-			typ:  plan.Type{Id: int32(types.T_varchar)},
-			want: &plan.Literal{
+			typ: plan.Type{
+				Id: int32(types.T_varchar),
+			},
+			expected: &plan.Literal{
 				Value: &plan.Literal_Sval{Sval: "test"},
 			},
-			wantErr: false,
+		},
+		{
+			name: "empty data",
+			data: []byte{},
+			typ: plan.Type{
+				Id: int32(types.T_int64),
+			},
+			expected: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := getConstantFromBytes(tt.data, tt.typ)
-			if tt.wantErr {
-				require.Error(t, err)
+			result, err := getConstantFromBytes(tt.data, tt.typ)
+			if err != nil {
+				t.Errorf("getConstantFromBytes() error = %v", err)
 				return
 			}
-			require.NoError(t, err)
-			require.Equal(t, tt.want, got)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("getConstantFromBytes() = %v, want %v", result, tt.expected)
+			}
 		})
 	}
 }
