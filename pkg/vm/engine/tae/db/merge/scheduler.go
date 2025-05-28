@@ -254,7 +254,8 @@ type QueryAnswer struct {
 	DataMergeCnt      int
 	TombstoneMergeCnt int
 	PendingMergeCnt   int
-	BigDataAcc        int
+	VaccumTrigCount   int
+	LastVaccumCheck   time.Duration
 	Triggers          string
 	BaseTrigger       string
 
@@ -587,7 +588,7 @@ func (pq *todoPQ) Update(item *todoItem, ready time.Time) {
 
 type todoSupporter struct {
 	mergingTaskCnt         int
-	bigTaskCnt             int
+	vaccumTrigCount        int
 	objectOperations       int
 	totalDataMergeCnt      int
 	totalTombstoneMergeCnt int
@@ -642,12 +643,8 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 		// it means the table is full of hollow objects,
 		// so we need to trigger the vacuum check
 		if len(compactTasks) == msg.opts.HollowTopK {
-			time.AfterFunc(time.Second*10, func() {
-				a.SendTrigger(
-					NewMMsgTaskTrigger(msg.Table).
-						WithVacuumCheck(msg.opts),
-				)
-			})
+			f := func() { a.SendTrigger(NewMMsgTaskTrigger(msg.Table).WithVacuumCheck(msg.opts)) }
+			time.AfterFunc(time.Second*10, f)
 		}
 	}
 
@@ -874,10 +871,12 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 		// this is a policy patch
 		if len(supp.triggers) == 0 {
 			base := defaultTrigger.Clone().Merge(msg)
+			base.table = msg.table
 			supp.triggers = append(supp.triggers, base)
 		} else if supp.triggers[0].expire.IsZero() {
 			// have a disposable trigger to do, put the new trigger in front of it
 			base := defaultTrigger.Clone().Merge(msg)
+			base.table = msg.table
 			supp.triggers = append([]*MMsgTaskTrigger{base}, supp.triggers...)
 		} else {
 			// there is patch already, merge it in place
@@ -942,7 +941,8 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 			answer.DataMergeCnt = supp.totalDataMergeCnt
 			answer.TombstoneMergeCnt = supp.totalTombstoneMergeCnt
 			answer.PendingMergeCnt = supp.mergingTaskCnt
-			answer.BigDataAcc = supp.bigTaskCnt
+			answer.VaccumTrigCount = supp.vaccumTrigCount
+			answer.LastVaccumCheck = time.Since(supp.lastVacuumCheckTime)
 			if len(supp.triggers) > 0 {
 				answer.Triggers = fmt.Sprintf("%v", supp.triggers)
 			}
@@ -1084,15 +1084,15 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 			}
 			supp.mergingTaskCnt++
 			if !task.isTombstone && task.oSize > common.DefaultMaxOsizeObjBytes {
-				supp.bigTaskCnt++
+				supp.vaccumTrigCount++
 			}
 			supp.lastMergeTime = afterGather
 		}
 	}
 
 	// Postprocess tasks: issue new vacuum task or adjust the next due time
-	if supp.bigTaskCnt >= bigDataTaskCntThreshold {
-		supp.bigTaskCnt = supp.bigTaskCnt % bigDataTaskCntThreshold
+	if supp.vaccumTrigCount >= bigDataTaskCntThreshold {
+		supp.vaccumTrigCount = supp.vaccumTrigCount % bigDataTaskCntThreshold
 		// 2-minute debouncer
 		if time.Since(supp.lastVacuumCheckTime) > 2*time.Minute {
 			vacuumOpts := DefaultVacuumOpts
