@@ -1144,7 +1144,7 @@ func (i *StatsBlkIter) Entry() BlockInfo {
 
 	var blk BlockInfo
 	BuildLocationTo(i.name, i.extent, i.curBlkRows, uint16(i.cur), blk.MetaLoc[:])
-	BuildObjectBlockidTo(i.name, uint16(i.cur), blk.BlockID[:])
+	FillBlockidWithNameAndSeq(i.name, uint16(i.cur), blk.BlockID[:])
 
 	return blk
 }
