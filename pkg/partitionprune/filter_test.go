@@ -654,3 +654,329 @@ func makeLessEqualExpr(colPos int32, value int64) *plan.Expr {
 		},
 	}
 }
+
+func TestConvertFoldExprToNormal(t *testing.T) {
+	tests := []struct {
+		name    string
+		expr    *plan.Expr
+		want    *plan.Expr
+		wantErr bool
+	}{
+		{
+			name: "constant fold expression - int64",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Fold{
+					Fold: &plan.FoldVal{
+						IsConst: true,
+						Data:    types.EncodeInt64(&[]int64{42}[0]),
+					},
+				},
+			},
+			want: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_I64Val{I64Val: 42},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "constant fold expression - int32",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_Fold{
+					Fold: &plan.FoldVal{
+						IsConst: true,
+						Data:    types.EncodeInt32(&[]int32{42}[0]),
+					},
+				},
+			},
+			want: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_I32Val{I32Val: 42},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "constant fold expression - float64",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Fold{
+					Fold: &plan.FoldVal{
+						IsConst: true,
+						Data:    types.EncodeFloat64(&[]float64{42.5}[0]),
+					},
+				},
+			},
+			want: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_Dval{Dval: 42.5},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "constant fold expression - bool",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Fold{
+					Fold: &plan.FoldVal{
+						IsConst: true,
+						Data:    types.EncodeBool(&[]bool{true}[0]),
+					},
+				},
+			},
+			want: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_Bval{Bval: true},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "constant fold expression - varchar",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Fold{
+					Fold: &plan.FoldVal{
+						IsConst: true,
+						Data:    []byte("test"),
+					},
+				},
+			},
+			want: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_Sval{Sval: "test"},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "function expression",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "="},
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{ColPos: 0},
+								},
+							},
+							{
+								Expr: &plan.Expr_Lit{
+									Lit: &plan.Literal{
+										Value: &plan.Literal_I64Val{I64Val: 42},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ConvertFoldExprToNormal(tt.expr)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if tt.want != nil {
+				require.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+func TestGetConstantFromBytes(t *testing.T) {
+	boolVal := true
+	int32Val := int32(42)
+	int64Val := int64(42)
+	float32Val := float32(42.5)
+	float64Val := 42.5
+
+	tests := []struct {
+		name    string
+		data    []byte
+		typ     plan.Type
+		want    *plan.Literal
+		wantErr bool
+	}{
+		{
+			name: "bool type",
+			data: types.EncodeBool(&boolVal),
+			typ:  plan.Type{Id: int32(types.T_bool)},
+			want: &plan.Literal{
+				Value: &plan.Literal_Bval{Bval: true},
+			},
+			wantErr: false,
+		},
+		{
+			name: "int32 type",
+			data: types.EncodeInt32(&int32Val),
+			typ:  plan.Type{Id: int32(types.T_int32)},
+			want: &plan.Literal{
+				Value: &plan.Literal_I32Val{I32Val: 42},
+			},
+			wantErr: false,
+		},
+		{
+			name: "int64 type",
+			data: types.EncodeInt64(&int64Val),
+			typ:  plan.Type{Id: int32(types.T_int64)},
+			want: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 42},
+			},
+			wantErr: false,
+		},
+		{
+			name: "float32 type",
+			data: types.EncodeFloat32(&float32Val),
+			typ:  plan.Type{Id: int32(types.T_float32)},
+			want: &plan.Literal{
+				Value: &plan.Literal_Fval{Fval: 42.5},
+			},
+			wantErr: false,
+		},
+		{
+			name: "float64 type",
+			data: types.EncodeFloat64(&float64Val),
+			typ:  plan.Type{Id: int32(types.T_float64)},
+			want: &plan.Literal{
+				Value: &plan.Literal_Dval{Dval: 42.5},
+			},
+			wantErr: false,
+		},
+		{
+			name: "varchar type",
+			data: []byte("test"),
+			typ:  plan.Type{Id: int32(types.T_varchar)},
+			want: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: "test"},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getConstantFromBytes(tt.data, tt.typ)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMergeSortedSlices(t *testing.T) {
+	tests := []struct {
+		name   string
+		slice1 []int
+		slice2 []int
+		want   []int
+	}{
+		{
+			name:   "empty slices",
+			slice1: []int{},
+			slice2: []int{},
+			want:   []int{},
+		},
+		{
+			name:   "one empty slice",
+			slice1: []int{1, 2, 3},
+			slice2: []int{},
+			want:   []int{1, 2, 3},
+		},
+		{
+			name:   "no duplicates",
+			slice1: []int{1, 3, 5},
+			slice2: []int{2, 4, 6},
+			want:   []int{1, 2, 3, 4, 5, 6},
+		},
+		{
+			name:   "with duplicates",
+			slice1: []int{1, 2, 3},
+			slice2: []int{2, 3, 4},
+			want:   []int{1, 2, 3, 4},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeSortedSlices(tt.slice1, tt.slice2)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIntersectSortedSlices(t *testing.T) {
+	tests := []struct {
+		name   string
+		slice1 []int
+		slice2 []int
+		want   []int
+	}{
+		{
+			name:   "empty slices",
+			slice1: []int{},
+			slice2: []int{},
+			want:   []int{},
+		},
+		{
+			name:   "one empty slice",
+			slice1: []int{1, 2, 3},
+			slice2: []int{},
+			want:   []int{},
+		},
+		{
+			name:   "no intersection",
+			slice1: []int{1, 3, 5},
+			slice2: []int{2, 4, 6},
+			want:   []int{},
+		},
+		{
+			name:   "with intersection",
+			slice1: []int{1, 2, 3},
+			slice2: []int{2, 3, 4},
+			want:   []int{2, 3},
+		},
+		{
+			name:   "with duplicates",
+			slice1: []int{1, 2, 2, 3},
+			slice2: []int{2, 2, 3, 4},
+			want:   []int{2, 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := intersectSortedSlices(tt.slice1, tt.slice2)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
