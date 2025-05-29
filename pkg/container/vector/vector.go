@@ -594,10 +594,8 @@ func (v *Vector) IsConstNull() bool {
 	if len(v.data) == 0 {
 		return true
 	}
-	if v.nsp.Count() > 0 && v.nsp.Contains(0) {
-		return true
-	}
-	return false
+
+	return v.nsp.Count() > 0 && v.nsp.Contains(0)
 }
 
 func (v *Vector) GetArea() []byte {
