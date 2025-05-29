@@ -103,7 +103,7 @@ func transferTombstoneObjects(
 		true,
 		func(tbl *txnTable) error {
 			now := time.Now()
-			if flow, _, logs, err = ConstructCNTombstoneObjectsTransferFlow(
+			if flow, logs, err = ConstructCNTombstoneObjectsTransferFlow(
 				ctx, start, end, tbl, txn, txn.proc.Mp(), fs); err != nil {
 				return err
 			} else if flow == nil {
