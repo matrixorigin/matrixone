@@ -818,9 +818,6 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ToConst() {
-	// if v.nsp.Contains(0) {
-	// 	v.data = v.data[:0]
-	// }
 	v.class = CONSTANT
 }
 
