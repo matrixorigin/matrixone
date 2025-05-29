@@ -119,25 +119,35 @@ func transferTombstoneObjects(
 				return err
 			}
 
-			statsList, tail := flow.GetResult()
+			slist, tail := flow.GetResult()
 			if len(tail) > 0 {
 				logutil.Fatal("tombstone sinker tail size is not zero",
 					zap.Int("tail", len(tail)))
 			}
 
-			obj := make([]string, 0, len(statsList))
-			for i := range statsList {
-				fileName := statsList[i].ObjectLocation().String()
-				obj = append(obj, statsList[i].ObjectName().ObjectId().ShortStringEx())
-				bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})
-				bat.SetVector(0, vector.NewVec(types.T_text.ToType()))
+			bat := colexec.AllocCNS3ResultBat(true, false)
+			if err = bat.PreExtend(txn.proc.Mp(), len(slist)); err != nil {
+				return err
+			}
+
+			obj := make([]string, 0, len(slist))
+			for i := range slist {
+				obj = append(obj, slist[i].ObjectName().ObjectId().ShortStringEx())
+
 				if err = vector.AppendBytes(
-					bat.GetVector(0), statsList[i].Marshal(), false, tbl.proc.Load().GetMPool()); err != nil {
+					bat.GetVector(0),
+					slist[i].Marshal(),
+					false,
+					txn.proc.Mp(),
+				); err != nil {
 					return err
 				}
 
 				bat.SetRowCount(bat.Vecs[0].Length())
+			}
 
+			if bat.RowCount() > 0 {
+				fileName := slist[0].ObjectName().String()
 				if err = txn.WriteFileLocked(
 					DELETE,
 					tbl.accountId, tbl.db.databaseId, tbl.tableId,
