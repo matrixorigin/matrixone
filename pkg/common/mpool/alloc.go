@@ -37,7 +37,7 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool, offHeap bool) []byte {
 	pHdr := (*memHdr)(hdr)
 	pHdr.poolId = mp.id
 	pHdr.fixedPoolIdx = NumFixedPool
-	pHdr.allocSz = int64(sz)
+	pHdr.allocSz = int32(sz)
 	pHdr.SetGuard()
 	if mp.details != nil {
 		mp.details.recordAlloc(int64(pHdr.allocSz))
