@@ -468,7 +468,6 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec.typ = typ
 	vec.class = CONSTANT
 	vec.length = length
-	vec.nsp.AddRange(0, uint64(length))
 
 	return vec
 }
