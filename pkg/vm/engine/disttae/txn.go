@@ -971,6 +971,15 @@ func (txn *Transaction) WriteFileLocked(
 	}
 	txn.readOnly.Store(false)
 	txn.workspaceSize += uint64(bat2.Size())
+
+	if typ == DELETE {
+		col, area := vector.MustVarlenaRawData(bat2.Vecs[0])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			txn.StashFlushedTombstones(stats)
+		}
+	}
+
 	entry := Entry{
 		typ:          typ,
 		accountId:    accountId,
