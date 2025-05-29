@@ -49,12 +49,12 @@ func ConstructCNTombstoneObjectsTransferFlow(
 	txn *Transaction,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (*TransferFlow, []objectio.ObjectStats, []zap.Field, error) {
+) (*TransferFlow, []zap.Field, error) {
 
 	//ctx := table.proc.Load().Ctx
 	state, err := table.getPartitionState(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	isObjectDeletedFn := func(objId *objectio.ObjectId) bool {
@@ -70,7 +70,7 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		zap.Int("deletedObjects", len(deletedObjects)))
 
 	if len(newDataObjects) == 0 || len(deletedObjects) == 0 {
-		return nil, nil, logs, nil
+		return nil, logs, nil
 	}
 
 	deletedObjectsIter := func() *types.Objectid {
@@ -102,9 +102,9 @@ func ConstructCNTombstoneObjectsTransferFlow(
 
 	if tombstoneObjects, err = ioutil.CoarseFilterTombstoneObject(
 		ctx, deletedObjectsIter, tombstoneObjects, fs); err != nil {
-		return nil, nil, logs, err
+		return nil, logs, err
 	} else if len(tombstoneObjects) == 0 {
-		return nil, nil, logs, nil
+		return nil, logs, nil
 	}
 
 	logs = append(logs, zap.Int("coarse-tombstoneObjects", len(tombstoneObjects)))
@@ -121,14 +121,14 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		),
 	)
 
-	return ConstructTransferFlow(
+	flow := ConstructTransferFlow(
 		table,
 		objectio.HiddenColumnSelection_None,
-		r,
-		isObjectDeletedFn,
-		newDataObjects,
-		mp,
-		fs), tombstoneObjects, logs, nil
+		r, isObjectDeletedFn, newDataObjects,
+		mp, fs,
+	)
+
+	return flow, logs, nil
 }
 
 func ConstructTransferFlow(
