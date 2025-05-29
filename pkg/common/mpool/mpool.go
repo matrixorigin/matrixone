@@ -543,12 +543,12 @@ func sizeToIdx(size int) int {
 	return NumFixedPool
 }
 
-var CapLimit = 2 * GB
+var CapLimit = math.MaxInt32 // 2GB - 1
 
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
 
-	if sz < 0 || sz > CapLimit || sz > math.MaxInt32 {
+	if sz < 0 || sz > CapLimit {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
