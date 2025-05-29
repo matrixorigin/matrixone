@@ -137,7 +137,7 @@ var PoolElemSize = [NumFixedPool]int32{64, 128, 256, 512, 1024}
 // Memory header, kMemHdrSz bytes.
 type memHdr struct {
 	poolId       int64
-	allocSz      int32
+	allocSz      int64
 	fixedPoolIdx int8
 	guard        [3]uint8
 	offHeap      bool
@@ -210,7 +210,7 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 		ret := (unsafe.Pointer)(&buf[0])
 		pHdr := (*memHdr)(ret)
 		pHdr.poolId = fp.poolId
-		pHdr.allocSz = sz
+		pHdr.allocSz = int64(sz)
 		pHdr.fixedPoolIdx = fp.fpIdx
 		pHdr.SetGuard()
 
@@ -231,7 +231,7 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 		ret := fp.flist
 		fp.flist = fp.nextPtr(fp.flist)
 		pHdr := (*memHdr)(ret)
-		pHdr.allocSz = sz
+		pHdr.allocSz = int64(sz)
 		// Zero slice.  Go requires slice to be zeroed.
 		bs := unsafe.Slice((*byte)(unsafe.Add(ret, kMemHdrSz)), fp.eleSz)
 		// the compiler will optimize this loop to memclr
@@ -244,7 +244,7 @@ func (fp *fixedPool) alloc(sz int32) *memHdr {
 
 func (fp *fixedPool) free(hdr *memHdr) {
 	if hdr.poolId != fp.poolId || hdr.fixedPoolIdx != fp.fpIdx ||
-		hdr.allocSz < 0 || hdr.allocSz > fp.eleSz ||
+		hdr.allocSz < 0 || hdr.allocSz > int64(fp.eleSz) ||
 		!hdr.CheckGuard() {
 		panic(moerr.NewInternalErrorNoCtx("mpool fixed pool hdr corruption.   Possible double free"))
 	}
@@ -626,7 +626,7 @@ func (mp *MPool) Free(bs []byte) {
 	atomic.AddInt32(&mp.inUseCount, 1)
 	defer atomic.AddInt32(&mp.inUseCount, -1)
 	// double free check
-	if atomic.LoadInt32(&pHdr.allocSz) == -1 {
+	if atomic.LoadInt64(&pHdr.allocSz) == -1 {
 		panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 	}
 
@@ -642,7 +642,7 @@ func (mp *MPool) Free(bs []byte) {
 		mp.pools[pHdr.fixedPoolIdx].free(pHdr)
 	} else {
 		// non fixed pool just mark it freed
-		if !atomic.CompareAndSwapInt32(&pHdr.allocSz, pHdr.allocSz, -1) {
+		if !atomic.CompareAndSwapInt64(&pHdr.allocSz, pHdr.allocSz, -1) {
 			panic(moerr.NewInternalErrorNoCtx("free size -1, possible double free"))
 		}
 		if pHdr.offHeap {
