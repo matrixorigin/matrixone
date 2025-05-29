@@ -16,6 +16,7 @@ package mpool
 
 import (
 	"fmt"
+	"math"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -546,7 +547,8 @@ var CapLimit = 2 * GB
 
 func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
-	if sz < 0 || sz > CapLimit {
+
+	if sz < 0 || sz > CapLimit || sz > math.MaxInt32 {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
