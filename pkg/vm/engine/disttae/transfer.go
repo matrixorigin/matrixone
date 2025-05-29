@@ -138,6 +138,8 @@ func transferTombstoneObjects(
 				); err != nil {
 					return err
 				}
+
+				tbl.getTxn().StashFlushedTombstones(statsList[i])
 			}
 
 			logs = append(logs,
