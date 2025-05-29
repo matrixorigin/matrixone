@@ -13,6 +13,7 @@ import (
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	client "github.com/matrixorigin/matrixone/pkg/txn/client"
 	rpc "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
@@ -1238,15 +1239,15 @@ func (mr *MockWorkspaceMockRecorder) SetHaveDDL(flag interface{}) *gomock.Call {
 }
 
 // StartStatement mocks base method.
-func (m *MockWorkspace) StartStatement() {
+func (m *MockWorkspace) StartStatement(arg0 tree.Statement) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "StartStatement")
+	m.ctrl.Call(m, "StartStatement", arg0)
 }
 
 // StartStatement indicates an expected call of StartStatement.
-func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
+func (mr *MockWorkspaceMockRecorder) StartStatement(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement), arg0)
 }
 
 // UpdateSnapshotWriteOffset mocks base method.

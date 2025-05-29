@@ -74,9 +74,13 @@ func newTestWorkspace() *testWorkspace {
 	return &testWorkspace{}
 }
 
-func (txn *testWorkspace) StartStatement() {
+func (txn *testWorkspace) StartStatement(stmt tree.Statement) {
 	if txn.start {
-		panic("BUG: StartStatement called twice")
+		var sql string
+		if stmt != nil {
+			sql = stmt.String()
+		}
+		panic(fmt.Sprintf("BUG: StartStatement called twice, sql: %s", sql))
 	}
 	txn.start = true
 	txn.incr = false
@@ -177,7 +181,7 @@ func TestWorkspace(t *testing.T) {
 		convey.So(
 			func() {
 				wsp := newTestWorkspace()
-				wsp.StartStatement()
+				wsp.StartStatement(nil)
 				wsp.EndStatement()
 			},
 			convey.ShouldNotPanic,
@@ -196,8 +200,8 @@ func TestWorkspace(t *testing.T) {
 		convey.So(
 			func() {
 				wsp := newTestWorkspace()
-				wsp.StartStatement()
-				wsp.StartStatement()
+				wsp.StartStatement(nil)
+				wsp.StartStatement(nil)
 			},
 			convey.ShouldPanic,
 		)
@@ -217,7 +221,7 @@ func TestWorkspace(t *testing.T) {
 		convey.So(
 			func() {
 				wsp := newTestWorkspace()
-				wsp.StartStatement()
+				wsp.StartStatement(nil)
 				err := wsp.IncrStatementID(context.TODO(), false)
 				convey.So(err, convey.ShouldBeNil)
 				//incr twice
@@ -231,7 +235,7 @@ func TestWorkspace(t *testing.T) {
 		convey.So(
 			func() {
 				wsp := newTestWorkspace()
-				wsp.StartStatement()
+				wsp.StartStatement(nil)
 				err := wsp.RollbackLastStatement(context.TODO())
 				convey.So(err, convey.ShouldBeNil)
 			},
@@ -242,7 +246,7 @@ func TestWorkspace(t *testing.T) {
 		convey.So(
 			func() {
 				wsp := newTestWorkspace()
-				wsp.StartStatement()
+				wsp.StartStatement(nil)
 				err := wsp.IncrStatementID(context.TODO(), false)
 				convey.So(err, convey.ShouldBeNil)
 				err = wsp.RollbackLastStatement(context.TODO())
@@ -484,7 +488,7 @@ func Test_rollbackStatement(t *testing.T) {
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
-		txnOp.GetWorkspace().StartStatement()
+		txnOp.GetWorkspace().StartStatement(nil)
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
 		ec.stmt = &tree.Insert{}
@@ -514,7 +518,7 @@ func Test_rollbackStatement(t *testing.T) {
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
-		txnOp.GetWorkspace().StartStatement()
+		txnOp.GetWorkspace().StartStatement(nil)
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
 		ec.stmt = &tree.Insert{}
@@ -671,7 +675,7 @@ func Test_rollbackStatement5(t *testing.T) {
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
-		txnOp.GetWorkspace().StartStatement()
+		txnOp.GetWorkspace().StartStatement(nil)
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
 		ec.stmt = &tree.Insert{}
@@ -710,7 +714,7 @@ func Test_rollbackStatement6(t *testing.T) {
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
-		txnOp.GetWorkspace().StartStatement()
+		txnOp.GetWorkspace().StartStatement(nil)
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
 		ec.stmt = &tree.Insert{}
@@ -745,7 +749,7 @@ func Test_rollbackStatement6(t *testing.T) {
 			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
 		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
 		//called incrStatement
-		txnOp.GetWorkspace().StartStatement()
+		txnOp.GetWorkspace().StartStatement(nil)
 		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
 		convey.So(err, convey.ShouldBeNil)
 		ec.stmt = &tree.Insert{}

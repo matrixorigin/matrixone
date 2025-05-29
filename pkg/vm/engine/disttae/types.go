@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"math"
 	"strconv"
@@ -44,6 +45,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -527,9 +530,22 @@ func (txn *Transaction) PPString() string {
 		stringifySlice(txn.transfer.timestamps, func(a any) string { t := a.(timestamp.Timestamp); return t.DebugString() }))
 }
 
-func (txn *Transaction) StartStatement() {
+func (txn *Transaction) StartStatement(stmt tree.Statement) {
 	if txn.startStatementCalled {
-		logutil.Fatal("BUG: StartStatement called twice", zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)))
+		var sql string
+		if stmt != nil {
+			fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+			stmt.Format(fmtCtx)
+			sql = fmtCtx.String()
+		}
+		log := logutil.Fatal
+		if flag.Lookup("test.v") != nil {
+			log = logutil.Error
+		}
+		log("BUG: StartStatement called twice",
+			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+			zap.String("SQL", sql),
+		)
 	}
 	txn.startStatementCalled = true
 	txn.incrStatementCalled = false

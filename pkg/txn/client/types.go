@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
@@ -250,7 +251,7 @@ type Workspace interface {
 	Readonly() bool
 
 	// StartStatement tag a statement is running
-	StartStatement()
+	StartStatement(tree.Statement)
 	// EndStatement tag end a statement is completed
 	EndStatement()
 

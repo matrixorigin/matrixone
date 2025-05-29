@@ -136,10 +136,10 @@ func (w *Ws) Adjust(_ uint64) error {
 	return nil
 }
 
-func (w *Ws) StartStatement()     {}
-func (w *Ws) EndStatement()       {}
-func (w *Ws) IncrSQLCount()       {}
-func (w *Ws) GetSQLCount() uint64 { return 0 }
+func (w *Ws) StartStatement(statement tree.Statement) {}
+func (w *Ws) EndStatement()                           {}
+func (w *Ws) IncrSQLCount()                           {}
+func (w *Ws) GetSQLCount() uint64                     { return 0 }
 
 func (w *Ws) CloneSnapshotWS() client.Workspace {
 	return nil
