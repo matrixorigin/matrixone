@@ -103,6 +103,9 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 func (expr *FunctionExpressionExecutor) getFoldedVector(requiredLength int) *vector.Vector {
 	rv := expr.resultVector.GetResultVector()
 	if rv.IsConst() {
+		if rv.GetNulls().Contains(0) {
+			rv.GetNulls().AddRange(0, uint64(requiredLength))
+		}
 		rv.SetLength(requiredLength)
 	}
 	return rv
