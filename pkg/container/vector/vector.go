@@ -589,13 +589,14 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 //
 //	a + Null, and the vector of right part will return true
 func (v *Vector) IsConstNull() bool {
-	if v.IsConst() {
-		if len(v.data) == 0 {
-			return true
-		}
-		if v.nsp.Count() == v.length {
-			return true
-		}
+	if !v.IsConst() {
+		return false
+	}
+	if len(v.data) == 0 {
+		return true
+	}
+	if v.nsp.Count() > 0 && v.nsp.Contains(0) {
+		return true
 	}
 	return false
 }
