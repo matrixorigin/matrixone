@@ -7793,12 +7793,10 @@ func TestFastGC(t *testing.T) {
 	opts.GCCfg.GCTTL = 1 * time.Hour
 	opts.GCCfg.ScanGCInterval = 1 * time.Hour
 	options.WithDisableGCCheckpoint()(opts)
-	merge.StopMerge.Store(true)
-	defer merge.StopMerge.Store(false)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-
+	db.MergeScheduler.PauseAll()
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.Extra.BlockMaxRows = 10
 	schema1.Extra.ObjectMaxBlocks = 2
