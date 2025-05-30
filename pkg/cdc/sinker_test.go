@@ -119,7 +119,7 @@ func TestNewSinker(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, CDCDefaultTaskExtra_MaxSQLLen, CDCDefaultSendSqlTimeout)
+			got, err := NewSinker("", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, CDCDefaultTaskExtra_MaxSQLLen, CDCDefaultSendSqlTimeout)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}

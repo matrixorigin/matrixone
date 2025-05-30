@@ -391,7 +391,9 @@ var predefinedFunids = map[int]int{
 	L2_DISTANCE_XC:    341,
 	L2_DISTANCE_SQ_XC: 342,
 
-	FUNCTION_END_NUMBER: 343,
+	HNSW_CDC_UPDATE: 343,
+
+	FUNCTION_END_NUMBER: 344,
 }
 
 func Test_funids(t *testing.T) {
