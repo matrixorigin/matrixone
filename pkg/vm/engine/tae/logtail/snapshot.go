@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"sort"
 	"sync"
 	"time"
@@ -168,6 +171,10 @@ type tableInfo struct {
 	createAt  types.TS
 	deleteAt  types.TS
 	pk        string
+}
+
+func (t *tableInfo) IsDrop() bool {
+	return !t.deleteAt.IsEmpty()
 }
 
 type PitrInfo struct {
@@ -331,6 +338,49 @@ func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
 
+func (sm *SnapshotMeta) GetSnapshotTableIDs() map[uint64]struct{} {
+	return sm.snapshotTableIDs
+}
+func (sm *SnapshotMeta) GetTableIDs() map[uint64]*tableInfo {
+	sm.RLock()
+	defer sm.RUnlock()
+	tables := make(map[uint64]*tableInfo)
+	for id, table := range sm.tableIDIndex {
+		tables[id] = table
+	}
+	return tables
+}
+
+func (sm *SnapshotMeta) GetTablesWithSQL(
+	ctx context.Context,
+	sid string,
+	tables map[uint64]*tableInfo,
+) (map[uint64]struct{}, error) {
+	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		return nil, moerr.NewNotSupported(ctx, "no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}
+	sql := "select rel_id,account_id from mo_catalog.mo_tables"
+	res, err := exec.Exec(ctx, sql, opts)
+	if err != nil {
+		return nil, err
+	}
+	tidMap := make(map[uint64]struct{})
+	for _, bat := range res.Batches {
+		tidVec := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
+		//accountVec := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[1])
+		for i := 0; i < len(tidVec); i++ {
+			if tables[tidVec[i]] == nil {
+				tidMap[tidVec[i]] = struct{}{}
+			}
+		}
+	}
+	res.Close()
+	return tidMap, nil
+}
+
 type tombstone struct {
 	rowid types.Rowid
 	pk    types.Tuple
@@ -364,7 +414,6 @@ func (sm *SnapshotMeta) updateTableInfo(
 		}
 		id := stats.ObjectName().SegmentId()
 		moTable := (*objects)[tid]
-
 		// dropped object will overwrite the created object, updating the deleteAt
 		obj := moTable[id]
 		if obj == nil {
