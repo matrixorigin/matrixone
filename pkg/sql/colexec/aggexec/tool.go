@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+	io "io"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -115,4 +117,307 @@ func SyncAggregatorsToChunkSize(as []AggFuncExec, syncLimit int) {
 	for _, a := range as {
 		modifyChunkSizeOfAggregator(a, syncLimit)
 	}
+}
+
+type Vectors[T numeric | types.Decimal64 | types.Decimal128] []*vector.Vector
+
+const (
+	MaxVectorLength = 262144
+)
+
+func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) Vectors[T] {
+	vec := vector.NewVec(typ)
+	return Vectors[T]{vec}
+}
+
+func (vs Vectors[T]) MarshalBinary() ([]byte, error) {
+	var bbuf bytes.Buffer
+	length := int64(len(vs))
+	if _, err := bbuf.Write(types.EncodeInt64(&length)); err != nil {
+		return nil, err
+	}
+	for _, v := range vs {
+		var buf []byte
+		var err error
+		if buf, err = v.MarshalBinary(); err != nil {
+			return nil, err
+		}
+		if _, err := WriteBytes(buf, &bbuf); err != nil {
+			return nil, err
+		}
+	}
+	return bbuf.Bytes(), nil
+}
+
+func (vs Vectors[T]) Length() int {
+	length := 0
+	for _, v := range vs {
+		length += v.Length()
+	}
+	return length
+}
+
+func (vs Vectors[T]) getAppendableVector() *vector.Vector {
+	vec := vs[len(vs)-1]
+	if vec.Length() >= MaxVectorLength {
+		vec = vector.NewVec(*vec.GetType())
+		vs = append(vs, vec)
+	}
+	return vec
+}
+
+// clone other
+func (vs Vectors[T]) Union(other Vectors[T], mp *mpool.MPool) error {
+	if len(other) == 0 {
+		return nil
+	}
+	vec := vs.getAppendableVector()
+	if vec.Length()+other.Length() < MaxVectorLength {
+		for _, vec := range other {
+			vs := vector.MustFixedColWithTypeCheck[T](vec)
+			vector.AppendMultiFixed(vec, vs, false, vec.Length(), mp)
+		}
+		return nil
+	}
+	for _, vec := range other {
+		var clonedVec *vector.Vector
+		var err error
+		if clonedVec, err = vec.CloneWindow(0, vec.Length(), mp); err != nil {
+			return err
+		}
+		other = append(other, clonedVec)
+	}
+	return nil
+}
+
+func (vs Vectors[T]) Free(mp *mpool.MPool) {
+	for _, vec := range vs {
+		vec.Free(mp)
+	}
+}
+
+func GetMedianIndex(length int) int {
+	if length&1 == 1 {
+		return length >> 1
+	} else {
+		return (length >> 1) - 1
+	}
+}
+
+func MedianDecimal64[T numeric | types.Decimal64 | types.Decimal128](vs Vectors[T]) (types.Decimal128, error) {
+	vals := make([]types.Decimal64, 0)
+	for _, vec := range vs {
+		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal64](vec)...)
+	}
+	numericSlice := generateSortableSlice2(vals)
+	rows := len(vals)
+	if rows&1 == 1 {
+		val := quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1,
+		)
+		return FromD64ToD128(val).Scale(1)
+	} else {
+		decimal1 := quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1-1,
+		)
+		decimal2 := quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1,
+		)
+
+		v1, v2 := FromD64ToD128(decimal1), FromD64ToD128(decimal2)
+		var ret types.Decimal128
+		var err error
+		if ret, err = v1.Add128(v2); err != nil {
+			return types.Decimal128{}, err
+		}
+		if ret.Sign() {
+			// scale(1) here because we set the result scale to be arg.Scale+1
+			if ret, err = ret.Minus().Scale(1); err != nil {
+				return types.Decimal128{}, err
+			}
+			ret = ret.Right(1).Minus()
+		} else {
+			if ret, err = ret.Scale(1); err != nil {
+				return types.Decimal128{}, err
+			}
+			ret = ret.Right(1)
+		}
+		return ret, nil
+	}
+}
+
+func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs Vectors[T]) (types.Decimal128, error) {
+	vals := make([]types.Decimal128, 0)
+	for _, vec := range vs {
+		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)...)
+	}
+	numericSlice := generateSortableSlice2(vals)
+	rows := len(vals)
+	if rows&1 == 1 {
+		return quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1,
+		), nil
+	} else {
+		v1 := quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1-1,
+		)
+		v2 := quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1,
+		)
+		var ret types.Decimal128
+		var err error
+		if ret, err = v1.Add128(v2); err != nil {
+			return types.Decimal128{}, err
+		}
+		if ret.Sign() {
+			// scale(1) here because we set the result scale to be arg.Scale+1
+			if ret, err = ret.Minus().Scale(1); err != nil {
+				return types.Decimal128{}, err
+			}
+			ret = ret.Right(1).Minus()
+		} else {
+			if ret, err = ret.Scale(1); err != nil {
+				return types.Decimal128{}, err
+			}
+			ret = ret.Right(1)
+		}
+		return ret, nil
+	}
+}
+
+func MedianNumeric[T numeric](vs Vectors[T]) (float64, error) {
+	vals := make([]T, 0)
+	for _, vec := range vs {
+		vals = append(vals, vector.MustFixedColWithTypeCheck[T](vec)...)
+	}
+	numericSlice := generateSortableSlice(vals)
+	rows := len(vals)
+	if rows&1 == 1 {
+		return float64(quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1,
+		)), nil
+	} else {
+		v1 := quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1-1,
+		)
+		v2 := quickSelect(
+			vals,
+			numericSlice.Less,
+			rows>>1,
+		)
+		return float64(v1+v2) / 2, nil
+	}
+}
+
+func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessFn func(a, b int) bool, k int) T {
+	if len(nums) == 1 {
+		return nums[0]
+	}
+	pivotIndex := len(nums) / 2
+	lows := []T{}
+	highs := []T{}
+	pivots := []T{}
+	for i, v := range nums {
+		switch {
+		case lessFn(i, pivotIndex):
+			lows = append(lows, v)
+		case lessFn(pivotIndex, i):
+			highs = append(highs, v)
+		default:
+			pivots = append(pivots, v)
+		}
+	}
+	switch {
+	case k < len(lows):
+		return quickSelect[T](lows, lessFn, k)
+	case k < len(lows)+len(pivots):
+		return pivots[0]
+	default:
+		return quickSelect(highs, lessFn, k-len(lows)-len(pivots))
+	}
+}
+
+// vectorAppendWildly is a more efficient version of vector.AppendFixed.
+// It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
+func vectorsAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v Vectors[T], mp *mpool.MPool, value T) error {
+	vec := v.getAppendableVector()
+	return vectorAppendWildly(vec, mp, value)
+}
+
+func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
+	leftRow := cnt
+	for {
+		vec := vecs.getAppendableVector()
+		appendCnt := MaxVectorLength - vec.Length()
+		if appendCnt > leftRow {
+			appendCnt = leftRow
+		}
+		if err := vector.AppendMultiFixed(vec, vals, isNull, appendCnt, mp); err != nil {
+			return err
+		}
+		leftRow -= appendCnt
+		if leftRow == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+func vectorsUnmarshal[T numeric | types.Decimal64 | types.Decimal128](data []byte, typ types.Type, mp *mpool.MPool) (Vectors[T], error) {
+	bbuf := bytes.NewBuffer(data)
+	length := int64(0)
+	if _, err := bbuf.Read(types.EncodeInt64(&length)); err != nil {
+		return nil, err
+	}
+	vs := make(Vectors[T], 0, length)
+	for i := int64(0); i < length; i++ {
+		var buf []byte
+		var err error
+		if buf, _, err = ReadBytes(bbuf); err != nil {
+			return nil, err
+		}
+		vec := vector.NewVec(typ)
+		if err := vectorUnmarshal(vec, buf, mp); err != nil {
+			return nil, err
+		}
+		vs = append(vs, vec)
+	}
+	return vs, nil
+}
+
+func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
+	size := uint32(len(b))
+	if _, err = w.Write(types.EncodeUint32(&size)); err != nil {
+		return
+	}
+	wn, err := w.Write(b)
+	return int64(wn + 4), err
+}
+func ReadBytes(r io.Reader) (buf []byte, n int64, err error) {
+	strLen := uint32(0)
+	if _, err = io.ReadFull(r, types.EncodeUint32(&strLen)); err != nil {
+		return
+	}
+	buf = make([]byte, strLen)
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return
+	}
+	n = 4 + int64(strLen)
+	return
 }
