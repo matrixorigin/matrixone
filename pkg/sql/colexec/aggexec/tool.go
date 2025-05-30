@@ -173,9 +173,9 @@ func (vs Vectors[T]) Union(other Vectors[T], mp *mpool.MPool) error {
 	}
 	vec := vs.getAppendableVector()
 	if vec.Length()+other.Length() < MaxVectorLength {
-		for _, vec := range other {
-			vs := vector.MustFixedColWithTypeCheck[T](vec)
-			vector.AppendMultiFixed(vec, vs, false, vec.Length(), mp)
+		for _, otherVec := range other {
+			vs := vector.MustFixedColWithTypeCheck[T](otherVec)
+			vector.AppendFixedList(vec, vs, nil, mp)
 		}
 		return nil
 	}
@@ -193,14 +193,6 @@ func (vs Vectors[T]) Union(other Vectors[T], mp *mpool.MPool) error {
 func (vs Vectors[T]) Free(mp *mpool.MPool) {
 	for _, vec := range vs {
 		vec.Free(mp)
-	}
-}
-
-func GetMedianIndex(length int) int {
-	if length&1 == 1 {
-		return length >> 1
-	} else {
-		return (length >> 1) - 1
 	}
 }
 
