@@ -871,12 +871,8 @@ type Relation interface {
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
-	GetHideKeys(context.Context) ([]*Attribute, error)
-
 	// Note: Write Will access Fileservice
 	Write(context.Context, *batch.Batch) error
-
-	Update(context.Context, *batch.Batch) error
 
 	// Delete(context.Context, *vector.Vector, string) error
 	Delete(context.Context, *batch.Batch, string) error
@@ -933,7 +929,7 @@ type Relation interface {
 	GetProcess() any
 
 	// Note: GetColumMetadataScanInfo Will access Fileservice
-	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+	GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
 
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
 	// If not sure, returns true

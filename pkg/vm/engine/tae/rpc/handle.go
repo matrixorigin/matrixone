@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -219,14 +220,14 @@ func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (rele
 			return nil, err
 		}
 
-		err = h.db.MergeScheduler.StopMerge(relation.GetMeta().(*catalog.TableEntry), true)
+		err = h.db.MergeScheduler.StopMerge(relation.GetMeta().(*catalog.TableEntry), true, h.db.Runtime)
 		if err != nil {
 			return nil, err
 		}
 		logutil.Info("LockMerge Bulk Delete",
 			zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
 		release := func() {
-			err = h.db.MergeScheduler.StartMerge(id, true)
+			err = h.db.MergeScheduler.StartMerge(h.db.Runtime, id, true)
 			if err != nil {
 				return
 			}
@@ -335,6 +336,7 @@ func (h *Handle) handleRequests(
 		persistedMemoryInsertRows int
 		inMemoryTombstoneRows     int
 		persistedTombstoneRows    int
+		postFuncs                 []func()
 	)
 
 	if iter = h.newTxnCommitRequestsIter(commitRequests, txnMeta); iter == nil {
@@ -389,7 +391,9 @@ func (h *Handle) handleRequests(
 			}
 
 			var r1, r2, r3, r4 int
-			r1, r2, r3, r4, err = h.HandleWrite(ctx, txn, wr)
+			var postFs []func()
+			r1, r2, r3, r4, postFs, err = h.HandleWrite(ctx, txn, wr)
+			postFuncs = append(postFuncs, postFs...)
 			if err == nil {
 				inMemoryInsertRows += r1
 				persistedMemoryInsertRows += r2
@@ -416,6 +420,21 @@ func (h *Handle) handleRequests(
 			zap.Int("persisted-tombstones", persistedTombstoneRows),
 			zap.String("txn", txn.String()),
 		)
+	}
+	if len(postFuncs) > 0 {
+		if hasDDL {
+			// the target table of merge settings might not put into scheduler yet,
+			// so we need to delay the post func execution
+			time.AfterFunc(5*time.Second, func() {
+				for _, f := range postFuncs {
+					f()
+				}
+			})
+		} else {
+			for _, f := range postFuncs {
+				f()
+			}
+		}
 	}
 	return
 }
@@ -844,6 +863,7 @@ func (h *Handle) HandleWrite(
 	persistedMemoryInsertRows int,
 	inMemoryTombstoneRows int,
 	persistedTombstoneRows int,
+	postFunc []func(),
 	err error,
 ) {
 	defer func() {
@@ -960,6 +980,9 @@ func (h *Handle) HandleWrite(
 		//
 		//}
 		//Appends a batch of data into table.
+		if req.DatabaseId == pkgcatalog.MO_CATALOG_ID && req.TableName == pkgcatalog.MO_MERGE_SETTINGS {
+			postFunc = append(postFunc, parse_merge_settings_set(req.Batch, h.db.MergeScheduler))
+		}
 		err = AppendDataToTable(ctx, tb, req.Batch)
 		return
 	}
@@ -1027,6 +1050,9 @@ func (h *Handle) HandleWrite(
 	}
 	rowIDVec := containers.ToTNVector(req.Batch.GetVector(0), common.WorkspaceAllocator)
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
+	if req.DatabaseId == pkgcatalog.MO_CATALOG_ID && req.TableName == pkgcatalog.MO_MERGE_SETTINGS {
+		postFunc = append(postFunc, parse_merge_settings_unset(pkVec, h.db.MergeScheduler))
+	}
 	inMemoryTombstoneRows += rowIDVec.Length()
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
@@ -1060,6 +1086,49 @@ func (h *Handle) HandleWrite(
 	//}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 	return
+}
+
+func parse_merge_settings_set(bat *batch.Batch, scheduler *merge.MergeScheduler) func() {
+	settings := make([]*merge.MergeSettings, 0, 1)
+	tids := make([]uint64, 0, 1)
+	merge.DecodeMergeSettingsBatchAnd(bat, func(tid uint64, setting *merge.MergeSettings) {
+		settings = append(settings, setting)
+		tids = append(tids, tid)
+	})
+	return func() {
+		for i, tid := range tids {
+			err := scheduler.SendConfig(tid, settings[i])
+			if err != nil {
+				logutil.Error("MergeExecutorEvent",
+					zap.String("event", "send config"),
+					zap.Uint64("table-id", tid),
+					zap.Error(err),
+					zap.String("settings", settings[i].String()),
+				)
+			}
+		}
+	}
+}
+
+func parse_merge_settings_unset(pkVec containers.Vector, scheduler *merge.MergeScheduler) func() {
+	tids := make([]uint64, 0, 1)
+	for i := 0; i < pkVec.Length(); i++ {
+		bs := pkVec.Get(i).([]byte)
+		tuple, _, _, err := types.DecodeTuple(bs)
+		if err != nil {
+			logutil.Error("MergeExecutorEvent",
+				zap.String("event", "unmarshal settings pk tuple"),
+				zap.Int("idx", i),
+				zap.Error(err),
+			)
+		}
+		tids = append(tids, tuple[1].(uint64))
+	}
+	return func() {
+		for _, tid := range tids {
+			scheduler.SendConfig(tid, nil)
+		}
+	}
 }
 
 func (h *Handle) HandleAlterTable(

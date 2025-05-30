@@ -691,7 +691,14 @@ func DowncastError(e error) *Error {
 // ConvertPanicError converts a runtime panic to internal error.
 func ConvertPanicError(ctx context.Context, v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
-		return e
+		err := &Error{
+			code:      e.code,
+			mysqlCode: e.mysqlCode,
+			message:   e.message,
+			sqlState:  e.sqlState,
+			detail:    fmt.Sprintf("%s\n%+v", e.detail, stack.Callers(3)),
+		}
+		return err
 	}
 	return newError(ctx, ErrInternal, fmt.Sprintf("panic %v: %+v", v, stack.Callers(3)))
 }

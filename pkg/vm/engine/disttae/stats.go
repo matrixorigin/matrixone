@@ -377,6 +377,19 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 		TableName:  tail.Table.GetTbName(),
 		DbName:     tail.Table.GetDbName(),
 	}
+	tableName := make([]byte, len(key.TableName))
+	copy(tableName, key.TableName)
+
+	dbName := make([]byte, len(key.DbName))
+	copy(dbName, key.DbName)
+
+	defer func() {
+		if r := recover(); r != nil {
+			logutil.Error("Panic-In-ConsumeLogtail1", zap.String("table", string(tableName)), zap.String("db", string(dbName)))
+			logutil.Error("Panic-In-ConsumeLogtail2", zap.String("db", key.DbName), zap.String("table", key.TableName))
+			panic(r)
+		}
+	}()
 
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
@@ -726,6 +739,7 @@ func updateInfoFromZoneMap(
 		req.ts,
 		onObjFn,
 		executor,
+		false,
 	); err != nil {
 		return err
 	}

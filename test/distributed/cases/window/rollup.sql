@@ -59,7 +59,6 @@ insert into sales (year, quarter, product, amount) values
 (2023, 'Q1', 'Product B', 3500.00),
 (2023, 'Q2', 'Product B', 4000.00),
 (2023, 'Q2', 'Product C', 4500.00);
--- @bvt:issue#19985
 select
     year,
     quarter,
@@ -82,9 +81,7 @@ group by
     year,
     quarter,
     product with rollup;
--- @bvt:issue
 
--- @bvt:issue#19984
 select
     year,
     quarter,
@@ -113,7 +110,6 @@ group by
     product with rollup
 having
      (product = 'Product A') or (product = 'Product B');
--- @bvt:issue
 drop table sales;
 
 
@@ -285,7 +281,6 @@ insert into uint_64 values (3824, 13289392, 123213.99898);
 insert into uint_64 values (2438294, 1, 2);
 insert into uint_64 values (3824, 13289392, 1);
 select * from uint_64;
--- @bvt:issue#19985
 select
     i, j, sum(k) as total
 from
@@ -299,9 +294,7 @@ from
     uint_64
 group by
     j, i with rollup;
--- @bvt:issue
 
--- @bvt:issue#19984
 select
     i, j, sum(k) as total
 from
@@ -310,7 +303,6 @@ group by
     j, i with rollup
 having
     (i is not null and j is not null);
--- @bvt:issue
 drop table uint_64;
 
 
@@ -350,7 +342,6 @@ order by
     total_sales desc;
 
 -- using having to distinguish summary rows and general rows
--- @bvt:issue#19985
 select
     if(grouping(year), 'Total', cast(year as char)) as year,
     if(grouping(quarter), 'Total', cast(quarter as char)) as quarter,
@@ -362,9 +353,7 @@ group by
     year,
     quarter,
     region with rollup;
--- @bvt:issue
 
--- @bvt:issue#19985
 select
     grouping(year) as year,
     grouping(quarter) as quarter,
@@ -414,7 +403,6 @@ group by
     year,
     quarter,
     region with rollup;
--- @bvt:issue
 
 -- multi-level aggregation and sorting
 select

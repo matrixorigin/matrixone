@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -263,10 +264,19 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewObj() {
+		// another site to SetLevel is in committing merge task
+		if stats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+			stats.SetLevel(1)
+		}
 		space.nobj, err = space.table.CreateNonAppendableObject(
 			&objectio.CreateObjOpt{Stats: &stats, IsTombstone: space.isTombstone})
 		if err != nil {
 			return
+		}
+		if space.isTombstone {
+			v2.TaskTombstoneInputSizeCounter.Add(float64(stats.OriginSize()))
+		} else {
+			v2.TaskDataInputSizeCounter.Add(float64(stats.OriginSize()))
 		}
 	}
 

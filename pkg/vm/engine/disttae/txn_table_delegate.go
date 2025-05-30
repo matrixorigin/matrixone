@@ -386,9 +386,10 @@ func (tbl *txnTableDelegate) CollectTombstones(
 func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 	ctx context.Context,
 	name string,
+	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
 	if tbl.partition.is {
-		return tbl.partition.tbl.GetColumMetadataScanInfo(ctx, name)
+		return tbl.partition.tbl.GetColumMetadataScanInfo(ctx, name, visitTombstone)
 	}
 
 	is, err := tbl.isLocal()
@@ -399,6 +400,7 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 		return tbl.origin.GetColumMetadataScanInfo(
 			ctx,
 			name,
+			visitTombstone,
 		)
 	}
 
@@ -903,15 +905,6 @@ func (tbl *txnTableDelegate) GetPrimaryKeys(
 	return tbl.origin.GetPrimaryKeys(ctx)
 }
 
-func (tbl *txnTableDelegate) GetHideKeys(
-	ctx context.Context,
-) ([]*engine.Attribute, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetHideKeys(ctx)
-	}
-	return tbl.origin.GetHideKeys(ctx)
-}
-
 func (tbl *txnTableDelegate) Write(
 	ctx context.Context,
 	bat *batch.Batch,
@@ -920,16 +913,6 @@ func (tbl *txnTableDelegate) Write(
 		return tbl.partition.tbl.Write(ctx, bat)
 	}
 	return tbl.origin.Write(ctx, bat)
-}
-
-func (tbl *txnTableDelegate) Update(
-	ctx context.Context,
-	bat *batch.Batch,
-) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Update(ctx, bat)
-	}
-	return tbl.origin.Update(ctx, bat)
 }
 
 func (tbl *txnTableDelegate) Delete(

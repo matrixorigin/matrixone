@@ -87,6 +87,8 @@ func errorSystemVariableIsGlobal() string { return "the system variable is globa
 
 func errorSystemVariableIsReadOnly() string { return "the system variable is read only" }
 
+func errorUserVariableDoesNotExist() string { return "the user variable %s does not exist" }
+
 type Scope int
 
 const (
@@ -1157,6 +1159,24 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("character_set_results"),
 		Default:           "utf8mb4",
 	},
+
+	"cl_host": {
+		Name:              "cl_host",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_host"),
+		Default:           "CGO",
+	},
+	"cl_runtime": {
+		Name:              "cl_runtime",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("cl_runtime"),
+		Default:           "C",
+	},
+
 	"collation_connection": {
 		Name:              "collation_connection",
 		Scope:             ScopeBoth,

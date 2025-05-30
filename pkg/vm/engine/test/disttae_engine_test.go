@@ -254,8 +254,7 @@ func TestLogtailBasic(t *testing.T) {
 	// at first, we can see nothing
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
 	reader := logMgr.GetReader(minTs, maxTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(1000, 1000).Objs))
-
+	require.False(t, reader.IsDirtyOnTable(1000, 1000))
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
 	schema.Extra.BlockMaxRows = 10
@@ -330,7 +329,7 @@ func TestLogtailBasic(t *testing.T) {
 		go func() {
 			for i := 0; i < 10; i++ {
 				reader := logMgr.GetReader(minTs, maxTs)
-				_ = reader.GetDirtyByTable(dbID, tableID)
+				_ = reader.IsDirtyOnTable(dbID, tableID)
 			}
 			wg.Done()
 		}()
@@ -341,12 +340,11 @@ func TestLogtailBasic(t *testing.T) {
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
 	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Objs))
+	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Objs))
+	require.False(t, reader.IsDirtyOnTable(dbID, tableID-1))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 10, len(dirties.Objs))
+	require.True(t, reader.IsDirtyOnTable(dbID, tableID))
 
 	fixedColCnt := 2 // __rowid + commit_time, the columns for a delBatch
 	// check Bat rows count consistency

@@ -121,6 +121,7 @@ func NewReplayTableEntry() *TableEntry {
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 		TableNode:        &TableNode{},
+		Stats:            common.NewTableCompactStatWithRandomMergeTime(),
 	}
 	return e
 }
@@ -234,6 +235,51 @@ func (entry *TableEntry) WaitDataObjectCommitted(ts types.TS) {
 	entry.dataObjects.WaitUntilCommitted(ts)
 }
 
+func (entry *TableEntry) IsTableTailFlushed(start, end types.TS) (bool, *ObjectEntry) {
+	ready, notFlushed := IsTableTailFlushed(entry, start, end, false)
+	if !ready {
+		return false, notFlushed
+	}
+	return IsTableTailFlushed(entry, start, end, true)
+}
+
+func IsTableTailFlushed(table *TableEntry, start, end types.TS, isTombstone bool) (bool, *ObjectEntry) {
+	var it btree.IterG[*ObjectEntry]
+	if isTombstone {
+		table.WaitTombstoneObjectCommitted(end)
+		it = table.MakeTombstoneObjectIt()
+	} else {
+		table.WaitDataObjectCommitted(end)
+		it = table.MakeDataObjectIt()
+	}
+	earlybreak := false
+	// some entries shared the same timestamp with end, so we need to seek to the next one
+	key := &ObjectEntry{EntryMVCCNode: EntryMVCCNode{DeletedAt: end.Next()}}
+	var ok bool
+	if ok = it.Seek(key); !ok {
+		ok = it.Last()
+	}
+	for ; ok; ok = it.Prev() {
+		if earlybreak {
+			break
+		}
+		obj := it.Item()
+		if !obj.IsAppendable() || obj.IsDEntry() || obj.CreatedAt.GT(&end) {
+			continue
+		}
+		// check only appendable C entries
+		if obj.CreatedAt.LT(&start) {
+			earlybreak = true
+		}
+		// the C entry has no counterpart D entry or the D entry is not committed yet
+		if next := obj.GetNextVersion(); next == nil || !next.IsCommitted() {
+			return false, obj
+		}
+	}
+
+	return true, nil
+}
+
 func (entry *TableEntry) CreateObject(
 	txn txnif.AsyncTxn,
 	opts *objectio.CreateObjOpt,
@@ -242,6 +288,9 @@ func (entry *TableEntry) CreateObject(
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewObjectEntry(entry, txn, *opts.Stats, dataFactory, opts.IsTombstone)
+	if entry.GetCatalog().mergeNotifier != nil && !opts.Stats.GetAppendable() {
+		entry.GetCatalog().mergeNotifier.OnCreateNonAppendObject(ToMergeTable(entry))
+	}
 	entry.AddEntryLocked(created)
 	return
 }
@@ -327,6 +376,10 @@ func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
 
 func (entry *TableEntry) GetColDefs() []*ColDef {
 	return entry.GetLastestSchemaLocked(false).ColDefs
+}
+
+func (entry *TableEntry) GetNameDesc() string {
+	return fmt.Sprintf("%d-%s", entry.ID, entry.GetLastestSchema(false).Name)
 }
 
 func (entry *TableEntry) GetFullName() string {
@@ -697,10 +750,17 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 		entry.FreezeAppend()
 	}
 	entry.RLock()
-	schema := entry.GetLatestNodeLocked().BaseNode.Schema
+	lastestNode := entry.GetLatestNodeLocked()
+	schema := lastestNode.BaseNode.Schema
 	entry.RUnlock()
 	// update the shortcut to the lastest schema
 	entry.TableNode.schema.Store(schema)
+
+	// create table commit
+	if lastestNode.DeletedAt.IsEmpty() && entry.GetCatalog().mergeNotifier != nil {
+		entry.GetCatalog().mergeNotifier.OnCreateTableCommit(ToMergeTable(entry))
+	}
+
 	return
 }
 

@@ -930,6 +930,7 @@ var (
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
+		catalog.MO_MERGE_SETTINGS:     0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -972,6 +973,7 @@ var (
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_ACCOUNT_LOCK:       0,
+		catalog.MO_MERGE_SETTINGS:     0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1011,6 +1013,8 @@ var (
 		MoCatalogMoDataKeyDDL,
 		MoCatalogMoTableStatsDDL,
 		MoCatalogMoAccountLockDDL,
+		MoCatalogMergeSettingsDDL,
+		MoCatalogMergeSettingsInitData,
 	}
 
 	//drop tables for the tenant
@@ -6821,6 +6825,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 			}
 		}
+		if isTargetMergeSettings(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+			return true, stats, nil
+		}
 		arr := extractPrivilegeTipsFromPlan(p)
 		if len(arr) == 0 {
 			return true, stats, nil
@@ -7666,6 +7673,12 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("insert into mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {

@@ -298,6 +298,7 @@ func (t *partitionTxnTable) GetNonAppendableObjectStats(ctx context.Context) ([]
 func (t *partitionTxnTable) GetColumMetadataScanInfo(
 	ctx context.Context,
 	name string,
+	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
 	var values []*plan.MetadataScanInfo
 	for idx := range t.metadata.Partitions {
@@ -305,7 +306,7 @@ func (t *partitionTxnTable) GetColumMetadataScanInfo(
 		if err != nil {
 			return nil, err
 		}
-		v, err := p.GetColumMetadataScanInfo(ctx, name)
+		v, err := p.GetColumMetadataScanInfo(ctx, name, visitTombstone)
 		if err != nil {
 			return nil, err
 		}
@@ -344,10 +345,6 @@ func (t *partitionTxnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
 
 func (t *partitionTxnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 	return t.primary.GetPrimaryKeys(ctx)
-}
-
-func (t *partitionTxnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	return t.primary.GetHideKeys(ctx)
 }
 
 func (t *partitionTxnTable) AddTableDef(context.Context, engine.TableDef) error {
@@ -430,10 +427,6 @@ func (t *partitionTxnTable) PrimaryKeysMayBeModified(
 
 func (t *partitionTxnTable) Write(context.Context, *batch.Batch) error {
 	panic("BUG: cannot write data to partition primary table")
-}
-
-func (t *partitionTxnTable) Update(context.Context, *batch.Batch) error {
-	panic("BUG: cannot update data to partition primary table")
 }
 
 func (t *partitionTxnTable) Delete(context.Context, *batch.Batch, string) error {

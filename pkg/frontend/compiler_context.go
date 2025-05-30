@@ -740,7 +740,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		var udVar *UserDefinedVar
-		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil {
 			return nil, err
 		}
 
@@ -906,27 +906,25 @@ func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, 
 		statser.AddStatsStatsInCacheDuration(time.Since(start))
 	}()
 
-	s := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
-	if s == nil {
+	w := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
+	if w == nil {
 		return nil, false
 	}
 
-	second := time.Now().Unix()
-	var diff int64 = 3
-	if s.ApproxObjectNumber > 0 && second-s.TimeSecond < diff {
+	var limit int64 = 3
+	if w.Stats.AccurateObjectNumber > 0 && w.IsRecentlyVisitIn(limit) {
 		// do not call ApproxObjectsNum within a short time limit
-		return s, false
+		return w.Stats, true
 	}
-	s.TimeSecond = second
 
 	approxNumObjects := table.ApproxObjectsNum(ctx)
 	if approxNumObjects == 0 {
 		return nil, false
 	}
-	if s.NeedUpdate(int64(approxNumObjects)) {
-		return s, true
+	if w.Stats.NeedUpdate(int64(approxNumObjects)) {
+		return w.Stats, true
 	}
-	return s, false
+	return w.Stats, false
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {

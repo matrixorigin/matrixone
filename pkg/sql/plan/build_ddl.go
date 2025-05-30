@@ -1049,6 +1049,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 						return moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
 					}
 				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
+					if colType.GetId() == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", colNameOrigin))
+
+					}
 					uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
 						KeyParts: []*tree.KeyPart{{ColName: def.Name}},
 						Name:     colName,
@@ -1122,6 +1126,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if _, ok := pksMap[name]; ok {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate column name '%s' in primary key", key.ColName.ColNameOrigin())
 				}
+
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in primary key", name))
+					}
+				}
+
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
 				indexs = append(indexs, name)
@@ -1135,6 +1146,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			secondaryIndexInfos = append(secondaryIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
+
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in secondary index", name))
+					}
+				}
+
 				indexs = append(indexs, name)
 			}
 		case *tree.UniqueIndex:
@@ -1146,6 +1164,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			uniqueIndexInfos = append(uniqueIndexInfos, def)
 			for _, key := range def.KeyParts {
 				name := key.ColName.ColName()
+
+				if col, ok := colMap[name]; ok {
+					if col.Typ.Id == int32(types.T_enum) {
+						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("ENUM column '%s' cannot be in unique index", name))
+					}
+				}
+
 				indexs = append(indexs, name)
 			}
 		case *tree.FullTextIndex:
@@ -1530,6 +1555,16 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 }
 
 // buildFullTextIndexTable create a secondary table with schema (doc_id, word, pos) cluster by (word)
+//
+// with the following schema
+// create __mo_secondary_xxx (
+//
+//	doc_id src_pk_type,
+//	word varchar,
+//	pos int,
+//	cluster by (word)
+//
+// )
 func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
@@ -1900,6 +1935,15 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 	return nil
 }
 
+// buildMasterSecondaryIndexDef will create hidden internal table with schema.
+//
+// create table __mo_index_secondary_xxx (
+//
+//	__mo_index_idx_col varchar,
+//	__mo_index_pri_col src_pk_type,
+//	primary key __mo_index_idx_col,
+//
+// )
 func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
@@ -2016,6 +2060,27 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
+// buildRegularSecondingIndexDef will create a hidden index table with schema
+//
+// when number of primary key == 1
+//
+// create table __mo_index_secondary_xxx (
+//
+//	__mo_index_idx_col src_pk_type,
+//	__mo_index_pri_col src_pk_type,
+//	primary key __mo_index_idx_col,
+//
+// )
+//
+// when number of primary key > 1
+//
+// create table __mo_index_secondary_xxx (
+//
+//	__mo_index_idx_col varchar,
+//	__mo_index_pri_col src_pk_type,
+//	primary key __mo_index_idx_col,
+//
+// )
 func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	// 1. indexDef init
@@ -2177,6 +2242,30 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	}
 	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
+
+// buildIvfFlatSecondIndexDef create three internal tables
+//
+// with the following schemas,
+//
+// create __mo_secondary_metadata (
+//	__mo_index_key varchar,
+//	__mo_index_val varhcar,
+// 	primary key __mo_index_key,
+//)
+//
+// create __mo_secondary_centroids (
+//	__mo_index_centroid_version bigint,
+//	__mo_index_centroid_id bigint,
+//	__mo_index_centroid vecf32 or vecf64,
+//	primary key (__mo_index_centroid_version, __mo_index_centroid_id),
+// )
+// create __mo_seconary_entries (
+//	__mo_index_centroid_fk_version bigint,
+//	__mo_index_centroid_fk_id bigint,
+//	__mo_index_pri_col src_pk_type,
+//	__mo_index_centroid_fk_entry vecf32 or vecf64,
+//	primary key (__mo_index_centriod_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col)
+// )
 
 func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
@@ -2482,6 +2571,29 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 
 	return indexDefs, tableDefs, nil
 }
+
+// buildHnswSecondaryIndexDef will create two internal tables
+//
+// with the following schemas:
+//
+// create __mo_secondary_metadata (
+//
+//	index_id varchar,
+//	checksum varchar,
+//	timestamp int64,
+//	filesize int64,
+//	primary key index_id
+//
+// )
+//
+// create __mo_secondary_index (
+//
+//	index_id varchar,
+//	chunk_id int64,
+// 	data blob,
+//	tag int64,
+//	primary key (index_id, chunk_id)
+// )
 
 func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 

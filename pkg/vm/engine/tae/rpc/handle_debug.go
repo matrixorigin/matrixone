@@ -329,7 +329,7 @@ func getChangedListFromDirtyTree(
 	tree, _ := reader.GetDirty()
 
 	for _, v := range tree.Tables {
-		if v == nil || v.IsEmpty() {
+		if v == nil {
 			continue
 		}
 

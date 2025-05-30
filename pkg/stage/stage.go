@@ -27,6 +27,7 @@ import (
 const STAGE_PROTOCOL = "stage"
 const S3_PROTOCOL = "s3"
 const FILE_PROTOCOL = "file"
+const HDFS_PROTOCOL = "hdfs"
 
 const PARAMKEY_AWS_KEY_ID = "aws_key_id"
 const PARAMKEY_AWS_SECRET_KEY = "aws_secret_key"
@@ -106,13 +107,26 @@ func (s StageDef) ToPath() (mopath string, query string, err error) {
 
 		buf := new(strings.Builder)
 		w := csv.NewWriter(buf)
-		opts := []string{service, endpoint, aws_region, bucket, aws_key_id, aws_secret_key, ""}
+		opts := []string{"s3-opts", "endpoint=" + endpoint, "region=" + aws_region, "bucket=" + bucket, "key=" + aws_key_id, "secret=" + aws_secret_key}
+		if service == MINIO_SERVICE {
+			opts = append(opts, "is-minio=true")
+		}
 
 		if err = w.Write(opts); err != nil {
 			return "", "", err
 		}
 		w.Flush()
 		return fileservice.JoinPath(buf.String(), prefix), query, nil
+	} else if s.Url.Scheme == HDFS_PROTOCOL {
+		buf := new(strings.Builder)
+		w := csv.NewWriter(buf)
+		opts := []string{"hdfs", "endpoint=" + s.Url.Host}
+
+		if err = w.Write(opts); err != nil {
+			return "", "", err
+		}
+		w.Flush()
+		return fileservice.JoinPath(buf.String(), s.Url.Path), s.Url.RawQuery, nil
 	} else if s.Url.Scheme == FILE_PROTOCOL {
 		return s.Url.Path, s.Url.RawQuery, nil
 	}

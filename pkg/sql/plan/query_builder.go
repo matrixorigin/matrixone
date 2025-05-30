@@ -1861,7 +1861,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
-		builder.forceJoinOnOneCN(rootID, false)
+		builder.forceJoinOnOneCN(rootID, i > 0)
 		// after this ,never call ReCalcNodeStats again !!!
 
 		if builder.isForUpdate {
@@ -2638,6 +2638,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	var notCacheable bool
 	var helpFunc *helpFunc
 	var boundTimeWindowGroupBy *plan.Expr
+	var rollupFilter bool
 
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
@@ -2731,6 +2732,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
 					for i, list := range selectClause.GroupBy.GroupByExprsList {
+						if selectClause.Having != nil {
+							selectClause.Having.RollupHaving = true
+						}
 						selectStmts[i] = &tree.SelectClause{
 							Distinct: selectClause.Distinct,
 							Exprs:    selectClause.Exprs,
@@ -2768,6 +2772,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			isRoot,
 		); err != nil {
 			return
+		}
+		if selectClause.Having != nil {
+			rollupFilter = selectClause.Having.RollupHaving
 		}
 	case *tree.UnionClause:
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
@@ -2874,7 +2881,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	} else if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
-		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList); err != nil {
+		if nodeID, err = builder.appendAggNode(ctx, nodeID, boundHavingList, rollupFilter); err != nil {
 			return
 		}
 	}
@@ -3545,6 +3552,7 @@ func (builder *QueryBuilder) appendAggNode(
 	ctx *BindContext,
 	nodeID int32,
 	boundHavingList []*plan.Expr,
+	rollupFilter bool,
 ) (newNodeID int32, err error) {
 	if ctx.bindingRecurStmt() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
@@ -3579,9 +3587,10 @@ func (builder *QueryBuilder) appendAggNode(
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{nodeID},
-			FilterList: newFilterList,
+			NodeType:     plan.Node_FILTER,
+			Children:     []int32{nodeID},
+			FilterList:   newFilterList,
+			RollupFilter: rollupFilter,
 		}, ctx)
 	}
 

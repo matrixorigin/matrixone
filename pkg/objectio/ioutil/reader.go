@@ -288,20 +288,6 @@ func (r *BlockReader) LoadOneBF(
 	return r.reader.ReadOneBF(ctx, blk)
 }
 
-func (r *BlockReader) LoadAllBF(
-	ctx context.Context,
-) (objectio.BloomFilter, uint32, error) {
-	return r.reader.ReadAllBF(ctx)
-}
-
-func (r *BlockReader) GetObjectName() *objectio.ObjectName {
-	return r.reader.GetObjectName()
-}
-
 func (r *BlockReader) GetName() string {
 	return r.reader.GetName()
-}
-
-func (r *BlockReader) GetObjectReader() *objectio.ObjectReader {
-	return r.reader
 }

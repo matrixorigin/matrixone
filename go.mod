@@ -1,7 +1,7 @@
 module github.com/matrixorigin/matrixone
 
 // Minimum Go version required
-go 1.23.0
+go 1.24.3
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -62,6 +62,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.78
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/ncruces/go-dns v1.2.5
+	github.com/openacid/slimarray v0.1.3
 	github.com/panjf2000/ants/v2 v2.7.4
 	github.com/parquet-go/parquet-go v0.23.0
 	github.com/petermattis/goid v0.0.0-20241025130422-66cb2e6d7274
@@ -222,7 +223,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240814211410-ddb44dafa142 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-
 )
 
 // required until memberlist issue 272 is resolved

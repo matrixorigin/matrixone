@@ -495,22 +495,12 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	}
 
 	var (
-		skipMask objectio.Bitmap
-		packer   *types.Packer
-
-		enableFilter bool
-
-		offsets []int64
-		release func()
-
+		skipMask       objectio.Bitmap
+		packer         *types.Packer
+		enableFilter   bool
+		offsets        []int64
 		retainedRowIds []objectio.Rowid
 	)
-
-	defer func() {
-		if release != nil {
-			release()
-		}
-	}()
 
 	if ls.memPKFilter.Valid() && ls.wsCursor < ls.txnOffset {
 		enableFilter = true
@@ -584,11 +574,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put.Put()
 		}
 
-		if release != nil {
-			release()
-		}
-
-		offsets, release = readutil.RowIdsToOffset(retainedRowIds, skipMask)
+		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
 		skipMask.Release()
 
 		if len(offsets) == 0 {
@@ -1102,13 +1088,19 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 		return leftRows
 	}
 
+	defer func() {
+		delIter.Close()
+	}()
+
 	var (
 		deletedOffsets []int64
 	)
 
-	if len(leftRows) <= 100 {
+	const stepCnt = 100
+
+	if len(leftRows) <= stepCnt {
 		// stack allocation
-		deletedOffsets = make([]int64, 0, 100)
+		deletedOffsets = make([]int64, 0, stepCnt)
 	} else {
 		deletedOffsets = common.DefaultAllocator.GetSels()
 		defer func() {
@@ -1123,17 +1115,19 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 		o := rowid.GetRowOffset()
 
 		deletedOffsets = append(deletedOffsets, int64(o))
-		if len(deletedOffsets) >= cap(deletedOffsets) {
+		if len(deletedOffsets) >= stepCnt {
 			readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deletedOffsets)
 			deletedOffsets = deletedOffsets[:0]
+		}
+
+		if leftRows != nil && len(leftRows) == 0 {
+			break
 		}
 	}
 
 	if len(deletedOffsets) > 0 {
 		readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deletedOffsets)
 	}
-
-	delIter.Close()
 
 	return leftRows
 }
