@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (s *service) getMetadataByHashType(
+func (s *Service) getMetadataByHashType(
 	option *tree.PartitionOption,
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
@@ -80,6 +80,7 @@ func (s *service) getMetadataByHashType(
 				Name:               name,
 				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, name),
 				Position:           uint32(i),
+				Expr:               def.Partition.PartitionDefs[i].Def,
 			},
 		)
 	}

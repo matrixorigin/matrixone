@@ -1077,6 +1077,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var indexes []*plan.IndexDef
 		var refChildTbls []uint64
 		var hasRowId bool
+		var partition *plan.Partition
 
 		i := int32(0)
 		name2index := make(map[string]int32)
@@ -1122,6 +1123,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: tbl.comment,
 			})
+		}
+
+		if tbl.partitioned > 0 {
+			partition = &plan.Partition{}
+			err := partition.Unmarshal(([]byte)(tbl.partition))
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				return nil
+			}
 		}
 
 		if tbl.viewdef != "" {
@@ -1205,6 +1215,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Indexes:       indexes,
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
+			Partition:     partition,
 		}
 	}
 	return tbl.tableDef
@@ -1800,8 +1811,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		}
 
 		ranges := relData.GetBlockInfoSlice()
-		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
+		skipReadMem := !ranges.Get(0).IsMemBlk()
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -2214,6 +2224,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	to types.TS,
 	batch *batch.Batch,
 	pkIndex int32,
+	_ int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)

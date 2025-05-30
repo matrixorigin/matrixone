@@ -16,8 +16,8 @@ package deletion
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -30,6 +30,7 @@ type PartitionDelete struct {
 
 	raw     *Deletion
 	tableID uint64
+	meta    partition.PartitionMetadata
 }
 
 func NewPartitionDelete(
@@ -62,12 +63,17 @@ func (op *PartitionDelete) OpType() vm.OpType {
 func (op *PartitionDelete) Prepare(
 	proc *process.Process,
 ) error {
+	var err error
 	if op.OpAnalyzer == nil {
 		op.OpAnalyzer = process.NewAnalyzer(op.GetIdx(), op.IsFirst, op.IsLast, "partition_delete")
 	} else {
 		op.OpAnalyzer.Reset()
 	}
 
+	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(proc.Ctx, op.tableID, proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
 	op.raw.OperatorBase = op.OperatorBase
 	return op.raw.Prepare(proc)
 }
@@ -93,14 +99,7 @@ func (op *PartitionDelete) Call(
 	op.raw.delegated = true
 	op.raw.input = input
 
-	ps := proc.GetPartitionService()
-
-	res, err := ps.Prune(
-		proc.Ctx,
-		op.tableID,
-		input.Batch,
-		proc.GetTxnOperator(),
-	)
+	res, err := partitionprune.Prune(proc, input.Batch, op.meta, -1)
 	if err != nil {
 		return vm.CallResult{}, err
 	}
@@ -133,6 +132,7 @@ func (op *PartitionDelete) Call(
 				return false
 			}
 			op.raw.ctr.source = rel
+			op.raw.input = vm.CallResult{Batch: bat}
 			_, e := op.raw.Call(proc)
 			if e != nil {
 				err = e

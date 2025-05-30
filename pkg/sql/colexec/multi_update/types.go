@@ -100,10 +100,11 @@ type container struct {
 }
 
 type MultiUpdateCtx struct {
-	ObjRef     *plan.ObjectRef
-	TableDef   *plan.TableDef
-	InsertCols []int
-	DeleteCols []int
+	ObjRef        *plan.ObjectRef
+	TableDef      *plan.TableDef
+	InsertCols    []int
+	DeleteCols    []int
+	PartitionCols []int
 }
 
 func (update MultiUpdate) TypeName() string {

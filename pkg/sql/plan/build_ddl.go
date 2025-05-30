@@ -957,6 +957,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if err != nil {
 			return nil, err
 		}
+
+		partitionBinder := NewPartitionBinder(builder, bindContext)
+		createTable.TableDef.Partition, err = partitionBinder.buildPartitionDefs(ctx.GetContext(), stmt.PartitionOption)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{

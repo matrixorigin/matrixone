@@ -473,7 +473,7 @@ func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string, visit
 	return nil, nil
 }
 
-func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx int32) (bool, error) {
+func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx, _ int32) (bool, error) {
 	return true, nil
 }
 
