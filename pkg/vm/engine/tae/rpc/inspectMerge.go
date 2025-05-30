@@ -185,7 +185,10 @@ func (arg *mergeShowArg) Run() error {
 			"\n\tmerge tasks in queue: %d", answer.PendingMergeCnt,
 		))
 		out.WriteString(fmt.Sprintf(
-			"\n\tbig data merge counter: %v", answer.BigDataAcc,
+			"\n\tvaccum trig count: %v", answer.VaccumTrigCount,
+		))
+		out.WriteString(fmt.Sprintf(
+			"\n\tlast vaccum check: %s ago", answer.LastVaccumCheck.Round(time.Second),
 		))
 		if len(answer.Triggers) > 0 {
 			out.WriteString(fmt.Sprintf("\n\ttriggers: %s", answer.Triggers))

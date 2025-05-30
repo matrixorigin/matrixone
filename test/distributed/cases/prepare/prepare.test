@@ -542,8 +542,15 @@ drop table if exists t1;
 create table t1(a int, b int);
 prepare s1 from insert into t1 values (?,?);
 set @a=1;
-set @b=null;
-execute s1 using @a, @b;
+set @b=2;
+set @c=3;
+set @d=4;
+set @e=30;
+set @f=null;
+execute s1 using @a, @a;
+execute s1 using @b, @f;
+execute s1 using @c, @e;
+execute s1 using @d, @f;
 select * from t1;
 drop database db1;
 
@@ -563,4 +570,3 @@ drop role prepare_role1;
 -- @session
 
 drop account prepare_account_01;
-
