@@ -356,7 +356,7 @@ func (sm *SnapshotMeta) GetTablesWithSQL(
 	sid string,
 	tables map[uint64]*tableInfo,
 ) (map[uint64]struct{}, error) {
-	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
+	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
 		return nil, moerr.NewNotSupported(ctx, "no implement sqlExecutor")
 	}
