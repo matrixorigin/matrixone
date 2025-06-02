@@ -16,7 +16,6 @@ package cdc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -546,11 +545,11 @@ func TestHnswSyncSinker_ErrorHandling(t *testing.T) {
 
 	require.Nil(t, s.Error())
 
-	testErr := errors.New("test error")
+	testErr := moerr.NewInternalErrorNoCtx("test error")
 	s.SetError(testErr)
 	err := s.Error()
 	require.Error(t, err)
-	require.Equal(t, "internal error: convert go error to mo error test error", err.Error())
+	require.Equal(t, "internal error: test error", err.Error())
 
 	// Test with moerr
 	moTestErr := moerr.NewInternalErrorNoCtx("mo test error")
