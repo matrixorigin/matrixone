@@ -227,7 +227,6 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 				//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
 				if bytes.Equal(sqlBuf, begin) {
 					txnbegin = true
-					break
 				}
 			}
 		}
@@ -272,8 +271,6 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 							}
 						}
 					}
-
-					return nil
 
 				},
 				opts)

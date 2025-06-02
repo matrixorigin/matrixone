@@ -134,6 +134,7 @@ func (exec *MockErrorTxnExecutor) Txn() client.TxnOperator {
 	return nil
 }
 
+/*
 func (exec *MockErrorTxnExecutor) commit() error {
 	return nil
 }
@@ -145,6 +146,7 @@ func (exec *MockErrorTxnExecutor) getDatabase() string {
 func (exec *MockErrorTxnExecutor) rollback(err error) error {
 	return nil
 }
+*/
 
 var _ executor.TxnExecutor = new(MockErrorTxnExecutor)
 
