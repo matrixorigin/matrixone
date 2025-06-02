@@ -405,7 +405,7 @@ func TestHnswSyncSinker_Sink(t *testing.T) {
 		bat := testutil.NewBatchWithVectors(
 			[]*vector.Vector{
 				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
-				testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{[]float32{0.1, 0.2}, []float32{0.3, 0.4}}),
+				testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
 			}, nil)
 
 		defer bat.Clean(testutil.TestUtilMp)
