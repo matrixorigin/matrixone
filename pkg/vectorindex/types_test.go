@@ -58,5 +58,6 @@ func TestCdc(t *testing.T) {
 	cdc.Reset()
 
 	js, err = cdc.ToJson()
+	require.NoError(t, err)
 	require.Equal(t, js, `{"start":"","end":"","cdc":[]}`)
 }
