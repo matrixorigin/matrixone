@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -177,7 +178,15 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 	ts := time.Now().Unix()
 	sync := &HnswSync{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, cdc: cdc, uid: uid, ts: ts}
 	defer sync.destroy()
-	return sync.run(proc)
+	err = sync.run(proc)
+	if err != nil {
+		return err
+	}
+
+	// clear the cache (it only work in standalone mode though)
+	veccache.Cache.Remove(idxtblcfg.IndexTable)
+
+	return nil
 }
 
 type HnswSync struct {
