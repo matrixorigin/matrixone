@@ -42,6 +42,8 @@ import (
 
 var _ Sinker = &hnswSyncSinker[float32]{}
 
+var sqlExecutorFactory = _sqlExecutorFactory
+
 type hnswSyncSinker[T types.RealNumbers] struct {
 	cnUUID           string
 	dbTblInfo        *DbTableInfo
@@ -58,6 +60,17 @@ type hnswSyncSinker[T types.RealNumbers] struct {
 	exec         executor.SQLExecutor
 }
 
+func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
+	// sql executor
+	v, ok := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
+	if !ok {
+		os.Stderr.WriteString(fmt.Sprintf("sql executor create failed. cnUUID = %s\n", cnUUID))
+		return nil, moerr.NewNotSupportedNoCtx("no implement sqlExecutor")
+	}
+	exec := v.(executor.SQLExecutor)
+	return exec, nil
+}
+
 var NewHnswSyncSinker = func(
 	cnUUID string,
 	sinkUri UriInfo,
@@ -72,12 +85,10 @@ var NewHnswSyncSinker = func(
 ) (Sinker, error) {
 
 	// sql executor
-	v, ok := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		os.Stderr.WriteString(fmt.Sprintf("sql executor create failed. cnUUID = %s\n", cnUUID))
-		return nil, moerr.NewNotSupportedNoCtx("no implement sqlExecutor")
+	exec, err := sqlExecutorFactory(cnUUID)
+	if err != nil {
+		return nil, err
 	}
-	exec := v.(executor.SQLExecutor)
 
 	// check the tabledef and indexdef
 	if len(tableDef.Pkey.Names) != 1 {
@@ -200,11 +211,22 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 
 	for {
 
+		txnbegin := false
 		// make sure there is a BEGIN before start transaction
-		for sqlBuf := range s.sqlBufSendCh {
-			//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
-			if bytes.Equal(sqlBuf, begin) {
-				break
+		for !txnbegin {
+
+			select {
+			case <-ctx.Done():
+				return
+			case sqlBuf, ok := <-s.sqlBufSendCh:
+				if !ok {
+					return
+				}
+				//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
+				if bytes.Equal(sqlBuf, begin) {
+					txnbegin = true
+					break
+				}
 			}
 		}
 
@@ -215,26 +237,36 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 			err := s.exec.ExecTxn(newctx,
 				func(exec executor.TxnExecutor) error {
 
-					for sqlBuf := range s.sqlBufSendCh {
-						if bytes.Equal(sqlBuf, dummy) {
-
-						} else if bytes.Equal(sqlBuf, begin) {
-							// BEGIN
-						} else if bytes.Equal(sqlBuf, commit) {
-							// COMMIT - end of data
-							return nil
-						} else if bytes.Equal(sqlBuf, rollback) {
-							// ROLLBACK
-							return moerr.NewQueryInterrupted(ctx)
-						} else {
-							res, err := exec.Exec(string(sqlBuf), opts.StatementOption())
-							if err != nil {
-								logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
-								os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
-								os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
-								return err
+					for {
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case sqlBuf, ok := <-s.sqlBufSendCh:
+							if !ok {
+								// channel closed
+								return nil
 							}
-							res.Close()
+
+							if bytes.Equal(sqlBuf, dummy) {
+
+							} else if bytes.Equal(sqlBuf, begin) {
+								// BEGIN
+							} else if bytes.Equal(sqlBuf, commit) {
+								// COMMIT - end of data
+								return nil
+							} else if bytes.Equal(sqlBuf, rollback) {
+								// ROLLBACK
+								return moerr.NewQueryInterrupted(ctx)
+							} else {
+								res, err := exec.Exec(string(sqlBuf), opts.StatementOption())
+								if err != nil {
+									logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+									os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
+									os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
+									return err
+								}
+								res.Close()
+							}
 						}
 					}
 
@@ -327,13 +359,15 @@ func (s *hnswSyncSinker[T]) SendDummy() {
 func (s *hnswSyncSinker[T]) Error() error {
 	if ptr := s.err.Load(); ptr != nil {
 		errPtr := ptr.(*error)
-		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
-			return moerr.ConvertGoError(context.Background(), *errPtr)
-		} else {
-			if moErr == nil {
-				return nil
+		if errPtr != nil {
+			if moErr, ok := (*errPtr).(*moerr.Error); !ok {
+				return moerr.ConvertGoError(context.Background(), *errPtr)
+			} else {
+				if moErr == nil {
+					return nil
+				}
+				return moErr
 			}
-			return moErr
 		}
 	}
 	return nil
