@@ -209,7 +209,8 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 		logutil.Infof("cdc hnswSyncSinker(%v).Run: end", s.dbTblInfo)
 	}()
 
-	for {
+	closed := false
+	for !closed {
 
 		txnbegin := false
 		// make sure there is a BEGIN before start transaction
@@ -220,6 +221,7 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 				return
 			case sqlBuf, ok := <-s.sqlBufSendCh:
 				if !ok {
+					closed = true
 					return
 				}
 				//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
@@ -244,6 +246,7 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 						case sqlBuf, ok := <-s.sqlBufSendCh:
 							if !ok {
 								// channel closed
+								closed = true
 								return nil
 							}
 
