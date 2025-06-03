@@ -430,7 +430,7 @@ func isVarcharLengthModified(ctx context.Context, spec *tree.AlterTableModifyCol
 	typeIdMatch := oldCol.Typ.Id == newColType.Id
 	scaleMatch := oldCol.Typ.Scale == newColType.Scale
 	autoIncrMatch := oldCol.Typ.AutoIncr == newColType.AutoIncr
-	widthIncrease := oldCol.Typ.Width <= newColType.Width
+	widthIncrease := oldCol.Typ.Width < newColType.Width
 	nameMatch := strings.EqualFold(oldCol.Name, colName)
 
 	logutil.Infof("DEBUG isVarcharLengthModified: Type ID match: %t (%d == %d)", typeIdMatch, oldCol.Typ.Id, newColType.Id)
