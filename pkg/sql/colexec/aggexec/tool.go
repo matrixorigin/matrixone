@@ -187,7 +187,7 @@ func (vs *Vectors[T]) Union(other *Vectors[T], mp *mpool.MPool) error {
 		if clonedVec, err = vec.CloneWindow(0, vec.Length(), mp); err != nil {
 			return err
 		}
-		other.vecs = append(other.vecs, clonedVec)
+		vs.vecs = append(vs.vecs, clonedVec)
 	}
 	return nil
 }
