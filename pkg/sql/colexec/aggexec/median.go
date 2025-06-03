@@ -47,7 +47,7 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 
 	// groups stores the values of the column for each group.
 	// todo: it has a problem that same as the `clusterCentersExec.groupData` in `cluster_centers.go`
-	groups []Vectors[T]
+	groups []*Vectors[T]
 }
 
 func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
@@ -80,7 +80,7 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 
 func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(groups) > 0 {
-		exec.groups = make([]Vectors[T], len(groups))
+		exec.groups = make([]*Vectors[T], len(groups))
 		for i := range exec.groups {
 			exec.groups[i] = NewVectors[T](exec.singleAggInfo.argType)
 			var err error
@@ -115,7 +115,7 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	if cap(exec.groups) >= oldLength+more {
 		exec.groups = exec.groups[:oldLength+more]
 	} else {
-		exec.groups = append(exec.groups, make([]Vectors[T], more)...)
+		exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
 	}
 
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
@@ -126,10 +126,10 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 
 func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 	if len(exec.groups) == 0 {
-		exec.groups = make([]Vectors[T], 0, more)
+		exec.groups = make([]*Vectors[T], 0, more)
 	} else {
 		oldLength := len(exec.groups)
-		exec.groups = append(exec.groups, make([]Vectors[T], more)...)
+		exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
 		exec.groups = exec.groups[:oldLength]
 	}
 

@@ -119,24 +119,26 @@ func SyncAggregatorsToChunkSize(as []AggFuncExec, syncLimit int) {
 	}
 }
 
-type Vectors[T numeric | types.Decimal64 | types.Decimal128] []*vector.Vector
+type Vectors[T numeric | types.Decimal64 | types.Decimal128] struct {
+	vecs []*vector.Vector
+}
 
 const (
 	MaxVectorLength = 262144
 )
 
-func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) Vectors[T] {
+func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) *Vectors[T] {
 	vec := vector.NewVec(typ)
-	return Vectors[T]{vec}
+	return &Vectors[T]{vecs: []*vector.Vector{vec}}
 }
 
-func (vs Vectors[T]) MarshalBinary() ([]byte, error) {
+func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
 	var bbuf bytes.Buffer
-	length := int64(len(vs))
+	length := int64(len(vs.vecs))
 	if _, err := bbuf.Write(types.EncodeInt64(&length)); err != nil {
 		return nil, err
 	}
-	for _, v := range vs {
+	for _, v := range vs.vecs {
 		var buf []byte
 		var err error
 		if buf, err = v.MarshalBinary(); err != nil {
@@ -149,56 +151,56 @@ func (vs Vectors[T]) MarshalBinary() ([]byte, error) {
 	return bbuf.Bytes(), nil
 }
 
-func (vs Vectors[T]) Length() int {
+func (vs *Vectors[T]) Length() int {
 	length := 0
-	for _, v := range vs {
+	for _, v := range vs.vecs {
 		length += v.Length()
 	}
 	return length
 }
 
 func (vs *Vectors[T]) getAppendableVector() *vector.Vector {
-	vec := (*vs)[len(*vs)-1]
+	vec := vs.vecs[len(vs.vecs)-1]
 	if vec.Length() >= MaxVectorLength {
 		vec = vector.NewVec(*vec.GetType())
-		*vs = append(*vs, vec)
+		vs.vecs = append(vs.vecs, vec)
 	}
 	return vec
 }
 
 // clone other
-func (vs Vectors[T]) Union(other Vectors[T], mp *mpool.MPool) error {
-	if len(other) == 0 {
+func (vs *Vectors[T]) Union(other *Vectors[T], mp *mpool.MPool) error {
+	if len(other.vecs) == 0 {
 		return nil
 	}
 	vec := vs.getAppendableVector()
 	if vec.Length()+other.Length() < MaxVectorLength {
-		for _, otherVec := range other {
+		for _, otherVec := range other.vecs {
 			vs := vector.MustFixedColWithTypeCheck[T](otherVec)
 			vector.AppendFixedList(vec, vs, nil, mp)
 		}
 		return nil
 	}
-	for _, vec := range other {
+	for _, vec := range other.vecs {
 		var clonedVec *vector.Vector
 		var err error
 		if clonedVec, err = vec.CloneWindow(0, vec.Length(), mp); err != nil {
 			return err
 		}
-		other = append(other, clonedVec)
+		other.vecs = append(other.vecs, clonedVec)
 	}
 	return nil
 }
 
-func (vs Vectors[T]) Free(mp *mpool.MPool) {
-	for _, vec := range vs {
+func (vs *Vectors[T]) Free(mp *mpool.MPool) {
+	for _, vec := range vs.vecs {
 		vec.Free(mp)
 	}
 }
 
-func MedianDecimal64[T numeric | types.Decimal64 | types.Decimal128](vs Vectors[T]) (types.Decimal128, error) {
+func MedianDecimal64[T numeric | types.Decimal64 | types.Decimal128](vs *Vectors[T]) (types.Decimal128, error) {
 	vals := make([]types.Decimal64, 0)
-	for _, vec := range vs {
+	for _, vec := range vs.vecs {
 		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal64](vec)...)
 	}
 	lessFnFactory := func(nums []types.Decimal64) func(a, b int) bool {
@@ -248,9 +250,9 @@ func MedianDecimal64[T numeric | types.Decimal64 | types.Decimal128](vs Vectors[
 	}
 }
 
-func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs Vectors[T]) (types.Decimal128, error) {
+func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs *Vectors[T]) (types.Decimal128, error) {
 	vals := make([]types.Decimal128, 0)
-	for _, vec := range vs {
+	for _, vec := range vs.vecs {
 		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)...)
 	}
 
@@ -303,9 +305,9 @@ func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs Vectors
 	}
 }
 
-func MedianNumeric[T numeric](vs Vectors[T]) (float64, error) {
+func MedianNumeric[T numeric](vs *Vectors[T]) (float64, error) {
 	vals := make([]T, 0)
-	for _, vec := range vs {
+	for _, vec := range vs.vecs {
 		vals = append(vals, vector.MustFixedColWithTypeCheck[T](vec)...)
 	}
 	lessFnFactory := func(nums []T) func(a, b int) bool {
@@ -366,12 +368,12 @@ func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessF
 
 // vectorAppendWildly is a more efficient version of vector.AppendFixed.
 // It ignores the const and null flags check, and uses a wilder way to append (avoiding the overhead of appending one by one).
-func vectorsAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v Vectors[T], mp *mpool.MPool, value T) error {
+func vectorsAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *Vectors[T], mp *mpool.MPool, value T) error {
 	vec := v.getAppendableVector()
 	return vectorAppendWildly(vec, mp, value)
 }
 
-func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
+func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vectors[T], vals T, isNull bool, cnt int, mp *mpool.MPool) error {
 	leftRow := cnt
 	for {
 		vec := vecs.getAppendableVector()
@@ -390,13 +392,13 @@ func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs Vecto
 	return nil
 }
 
-func vectorsUnmarshal[T numeric | types.Decimal64 | types.Decimal128](data []byte, typ types.Type, mp *mpool.MPool) (Vectors[T], error) {
+func vectorsUnmarshal[T numeric | types.Decimal64 | types.Decimal128](data []byte, typ types.Type, mp *mpool.MPool) (*Vectors[T], error) {
 	bbuf := bytes.NewBuffer(data)
 	length := int64(0)
 	if _, err := bbuf.Read(types.EncodeInt64(&length)); err != nil {
 		return nil, err
 	}
-	vs := make(Vectors[T], 0, length)
+	vs := Vectors[T]{vecs: make([]*vector.Vector, 0, length)}
 	for i := int64(0); i < length; i++ {
 		var buf []byte
 		var err error
@@ -407,9 +409,9 @@ func vectorsUnmarshal[T numeric | types.Decimal64 | types.Decimal128](data []byt
 		if err := vectorUnmarshal(vec, buf, mp); err != nil {
 			return nil, err
 		}
-		vs = append(vs, vec)
+		vs.vecs = append(vs.vecs, vec)
 	}
-	return vs, nil
+	return &vs, nil
 }
 
 func WriteBytes(b []byte, w io.Writer) (n int64, err error) {
