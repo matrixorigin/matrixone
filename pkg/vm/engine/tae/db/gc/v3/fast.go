@@ -94,8 +94,13 @@ func makeSoftDeleteFilterCoarseFilter(
 		if getErr != nil {
 			return true
 		}
-		_, getErr = dbEntry.GetTableEntryByID(tid)
+		dbEntry.GetDeleteAtLocked()
+		tableEntry, getErr := dbEntry.GetTableEntryByID(tid)
 		if getErr != nil {
+			return true
+		}
+		dropTS := tableEntry.GetDeleteAtLocked()
+		if dropTS.IsEmpty() {
 			return true
 		}
 		return false
