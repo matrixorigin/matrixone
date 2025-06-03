@@ -535,7 +535,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				if col.Name == act.AlterVarcharLength.ColumnName {
 					tableDef.Cols[i].Typ.Width = act.AlterVarcharLength.NewLength
 				}
-			}	
+			}
 		case *plan.AlterTable_Action_Drop:
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
@@ -891,7 +891,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
 		case api.AlterKind_ReplaceDef:
-			req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)	
+			req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)
 		default:
 		}
 		reqs = append(reqs, req)

@@ -318,7 +318,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 }
 
-func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.AlterTableOption, tableDef *TableDef) (algorithm plan.AlterTable_AlgorithmType) {	
+func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.AlterTableOption, tableDef *TableDef) (algorithm plan.AlterTable_AlgorithmType) {
 	algorithm = plan.AlterTable_COPY
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {

@@ -1331,7 +1331,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			tbl.tableName = req.GetRenameTable().NewName
 		case api.AlterKind_ReplaceDef:
 			hasReplaceDef = true
-			replaceDefReq = req	
+			replaceDefReq = req
 		default:
 			panic("not supported")
 		}
