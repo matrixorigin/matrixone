@@ -2733,15 +2733,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	var (
 		sql        string
 		vr         *verifiedRole
-		erArray    []ExecResult
 		encryption string
 		needValid  bool
 		userName   string
 	)
 	doLockOrUnlock := noneLockOrUnlockUser
-
-	account := ses.GetTenantInfo()
-	currentUser := account.GetUser()
 
 	//1.authenticate the actions
 	if au.Role != nil {
@@ -2811,29 +2807,6 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	//if the user is admin user with the role moadmin or accountadmin,
-	//the user can be altered
-	//otherwise only general user can alter itself
-	if account.IsSysTenant() {
-		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
-	} else {
-		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, accountAdminRoleID)
-	}
-	if err != nil {
-		return err
-	}
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-
 	if doLockOrUnlock == noneLockOrUnlockUser {
 		password := user.IdentStr
 		// check password
@@ -2860,7 +2833,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			return err
 		}
 
-		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+		if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 			if err != nil {
 				return err
@@ -2870,9 +2843,6 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
-			if currentUser != userName {
-				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
-			}
 			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 			if err != nil {
 				return err
@@ -2889,15 +2859,12 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
 		}
 
-		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+		if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
 			}
 		} else {
-			if currentUser != userName {
-				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
-			}
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
