@@ -2731,13 +2731,17 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	)
 
 	var (
-		sql        string
-		vr         *verifiedRole
-		encryption string
-		needValid  bool
-		userName   string
+		sql              string
+		vr               *verifiedRole
+		currentUserArray []ExecResult
+		userArray        []ExecResult
+		encryption       string
+		needValid        bool
+		userName         string
 	)
 	doLockOrUnlock := noneLockOrUnlockUser
+	account := ses.GetTenantInfo()
+	currentUser := account.GetUser()
 
 	//1.authenticate the actions
 	if au.Role != nil {
@@ -2807,6 +2811,45 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
+	//
+	if account.IsSysTenant() {
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
+	} else {
+		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, accountAdminRoleID)
+	}
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	currentUserArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	currentUserIsAdmin := execResultArrayHasData(currentUserArray)
+
+	if account.IsSysTenant() {
+		sql, err = getSqlForCheckUserHasRole(ctx, userName, moAdminRoleID)
+	} else {
+		sql, err = getSqlForCheckUserHasRole(ctx, userName, accountAdminRoleID)
+	}
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	userArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	targetUserIsAdmin := execResultArrayHasData(userArray)
+
 	if doLockOrUnlock == noneLockOrUnlockUser {
 		password := user.IdentStr
 		// check password
@@ -2843,6 +2886,9 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
+				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			}
 			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 			if err != nil {
 				return err
@@ -2865,6 +2911,9 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
+				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
+			}
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
