@@ -28,7 +28,7 @@ func TestCreateAndDeleteListBased(t *testing.T) {
 		"create table %s (c int comment 'abc') partition by list (c) (partition p1 values in (1) engine = innodb, partition p2 values in (2) engine = innodb)",
 		partition.PartitionMethod_List,
 		func(idx int, p partition.Partition) {
-			require.Equal(t, fmt.Sprintf("values in (%d)", idx+1), p.Expression)
+			require.Equal(t, fmt.Sprintf("values in (%d)", idx+1), p.ExprStr)
 		},
 	)
 }
@@ -39,7 +39,7 @@ func TestCreateAndDeleteListColumnsBased(t *testing.T) {
 		"create table %s (c DATETIME) partition by list columns (c) (partition p1 values in ('2024-01-21 00:00:00'), partition p2 values in ('2024-01-22 00:00:00'))",
 		partition.PartitionMethod_List,
 		func(idx int, p partition.Partition) {
-			require.Equal(t, fmt.Sprintf("values in ('2024-01-2%d 00:00:00')", idx+1), p.Expression)
+			require.Equal(t, fmt.Sprintf("values in ('2024-01-2%d 00:00:00')", idx+1), p.ExprStr)
 		},
 	)
 }
