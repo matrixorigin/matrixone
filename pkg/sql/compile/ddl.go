@@ -529,6 +529,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
+		case *plan.AlterTable_Action_AlterVarcharLength:
+			alterKinds = append(alterKinds, api.AlterKind_ReplaceDef)
+			for i, col := range tableDef.Cols {
+				if col.Name == act.AlterVarcharLength.ColumnName {
+					tableDef.Cols[i].Typ.Width = act.AlterVarcharLength.NewLength
+				}
+			}	
 		case *plan.AlterTable_Action_Drop:
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
@@ -884,7 +891,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
 		case api.AlterKind_ReplaceDef:
-			// TODO: req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)
+			req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)	
 		default:
 		}
 		reqs = append(reqs, req)
