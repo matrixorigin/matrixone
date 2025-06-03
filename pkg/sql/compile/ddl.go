@@ -17,11 +17,10 @@ package compile
 import (
 	"context"
 	"fmt"
-	"math"
-	"strings"
-
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
+	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1444,7 +1443,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if qry.IsPartition {
+	if qry.GetTableDef().GetPartition() != nil {
 		// cannot has err.
 		stmt, _ := parsers.ParseOne(
 			c.proc.Ctx,
@@ -2735,6 +2734,17 @@ var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, error)
 	if tableDef.Pkey != nil {
 		c.Cts = append(c.Cts, &engine.PrimaryKeyDef{
 			Pkey: tableDef.Pkey,
+		})
+	}
+
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		exeDefs = append(exeDefs, &engine.PartitionDef{
+			Partitioned: 1,
+			Partition:   string(bytes),
 		})
 	}
 

@@ -63,9 +63,7 @@ func NewLocalDataSource(
 	source.tombstonePolicy = policy
 
 	if rangesSlice != nil && rangesSlice.Len() > 0 {
-		if bytes.Equal(
-			objectio.EncodeBlockInfo(rangesSlice.Get(0)),
-			objectio.EmptyBlockInfoBytes) {
+		if rangesSlice.Get(0).IsMemBlk() {
 			rangesSlice = rangesSlice.Slice(1, rangesSlice.Len())
 		}
 

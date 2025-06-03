@@ -21,15 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
-	"github.com/matrixorigin/matrixone/pkg/stage"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
-
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
 	"github.com/hayageek/threadsafe"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,12 +37,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
