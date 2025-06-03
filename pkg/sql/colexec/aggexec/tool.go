@@ -252,11 +252,16 @@ func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs Vectors
 	numericSlice := generateSortableSlice2(vals)
 	rows := len(vals)
 	if rows&1 == 1 {
-		return quickSelect(
+		ret := quickSelect(
 			vals,
 			numericSlice.Less,
 			rows>>1,
-		), nil
+		)
+		var err error
+		if ret, err = ret.Scale(1); err != nil {
+			return types.Decimal128{}, err
+		}
+		return ret, nil
 	} else {
 		v1 := quickSelect(
 			vals,
