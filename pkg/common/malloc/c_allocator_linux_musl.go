@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,28 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+//go:build cgo && musl
 
-import (
-	"os"
+package malloc
 
-	_ "github.com/hashicorp/go-retryablehttp"
-	debug "github.com/matrixorigin/matrixone/cmd/mo-debug"
-	inspect "github.com/matrixorigin/matrixone/cmd/mo-inspect"
-	"github.com/spf13/cobra"
-)
-
-func main() {
-	var rootCmd = &cobra.Command{
-		Use:   "mo-tool",
-		Short: "Mo tool",
-		Long:  "Mo tool is a multifunctional development tool",
-	}
-
-	rootCmd.AddCommand(debug.PrepareCommand())
-	rootCmd.AddCommand(inspect.PrepareCommand())
-
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+func returnMallocMemoryToOS() {
+	// not supported by musl
 }
