@@ -18,9 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"sort"
 	"sync"
 	"time"
@@ -349,36 +346,6 @@ func (sm *SnapshotMeta) GetTableIDs() map[uint64]*tableInfo {
 		tables[id] = table
 	}
 	return tables
-}
-
-func (sm *SnapshotMeta) GetTablesWithSQL(
-	ctx context.Context,
-	sid string,
-	tables map[uint64]*tableInfo,
-) (map[uint64]struct{}, error) {
-	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		return nil, moerr.NewNotSupported(ctx, "no implement sqlExecutor")
-	}
-	exec := v.(executor.SQLExecutor)
-	opts := executor.Options{}
-	sql := "select rel_id,account_id from mo_catalog.mo_tables"
-	res, err := exec.Exec(ctx, sql, opts)
-	if err != nil {
-		return nil, err
-	}
-	tidMap := make(map[uint64]struct{})
-	for _, bat := range res.Batches {
-		tidVec := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
-		//accountVec := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[1])
-		for i := 0; i < len(tidVec); i++ {
-			if tables[tidVec[i]] == nil {
-				tidMap[tidVec[i]] = struct{}{}
-			}
-		}
-	}
-	res.Close()
-	return tidMap, nil
 }
 
 type tombstone struct {

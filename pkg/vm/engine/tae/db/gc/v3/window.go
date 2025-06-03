@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -170,6 +170,7 @@ func (w *GCWindow) ExecuteFastBasedGC(
 	cacheSize int,
 	estimateRows int,
 	probility float64,
+	catalog *catalog2.Catalog,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) ([]string, string, error) {
@@ -184,6 +185,7 @@ func (w *GCWindow) ExecuteFastBasedGC(
 		snapshotMeta,
 		buffer,
 		false,
+		catalog,
 		mp,
 		fs,
 		WithGCJobCoarseConfig(estimateRows, probility, cacheSize),

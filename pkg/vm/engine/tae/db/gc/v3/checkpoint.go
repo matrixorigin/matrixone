@@ -1666,6 +1666,7 @@ func (c *checkpointCleaner) doGCAgainstFastLocked(
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
 		c.config.probility,
+		c.checkpointCli.GetCatalog(),
 		c.mp,
 		c.fs,
 	); err != nil {

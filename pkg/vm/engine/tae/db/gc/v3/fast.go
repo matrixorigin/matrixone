@@ -26,12 +26,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
 type CheckpointFastGCJob struct {
 	BaseCheckpointGCJob
+	catalog *catalog2.Catalog
 }
 
 func NewCheckpointFastGCJob(
@@ -42,6 +44,7 @@ func NewCheckpointFastGCJob(
 	snapshotMeta *logtail.SnapshotMeta,
 	buffer *containers.OneSchemaBatchBuffer,
 	isOwner bool,
+	catalog *catalog2.Catalog,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	opts ...GCJobExecutorOption,
@@ -62,6 +65,7 @@ func NewCheckpointFastGCJob(
 	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
 	job := &CheckpointFastGCJob{
 		BaseCheckpointGCJob: *e,
+		catalog:             catalog,
 	}
 	job.filterProvider = job
 	return job
@@ -71,21 +75,30 @@ func (e *CheckpointFastGCJob) CoarseFilter(_ context.Context) (FilterFn, error) 
 	return makeSoftDeleteFilterCoarseFilter(
 		e.transObjects,
 		e.snapshotMeta,
+		e.catalog,
 	)
 }
 
 func makeSoftDeleteFilterCoarseFilter(
 	transObjects map[string]*ObjectEntry,
 	meta *logtail.SnapshotMeta,
+	c *catalog2.Catalog,
 ) (
 	FilterFn,
 	error,
 ) {
 	filterTable := meta.GetSnapshotTableIDs()
 	tables := meta.GetTableIDs()
-	tidMap, err := meta.GetTablesWithSQL(context.Background(), "", tables)
-	if err != nil {
-		return nil, err
+	tableIsDrop := func(db, tid uint64) bool {
+		dbEntry, getErr := c.GetDatabaseByID(db)
+		if getErr != nil {
+			return true
+		}
+		_, getErr = dbEntry.GetTableEntryByID(tid)
+		if getErr != nil {
+			return true
+		}
+		return false
 	}
 	logutil.Infof("GetTableIDs count is %d", len(tables))
 	return func(
@@ -121,7 +134,7 @@ func makeSoftDeleteFilterCoarseFilter(
 				}
 
 				if table == nil {
-					if _, ok := tidMap[tableIDs[i]]; ok {
+					if !tableIsDrop(dbs[i], tableIDs[i]) {
 						continue
 					}
 				}
