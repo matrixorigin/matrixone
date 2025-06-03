@@ -1650,11 +1650,6 @@ func (tbl *txnTable) Delete(
 			return err
 		}
 
-		for i := range bat.Vecs[0].Length() {
-			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
-			tbl.getTxn().StashFlushedTombstones(ss)
-		}
-
 		return nil
 
 	default:
