@@ -4410,7 +4410,8 @@ func strToArray[T types.RealNumbers](
 				return err
 			}
 
-			if int(toType.Width) != len(arr) {
+			// bypass the dimension check if width is max dimension
+			if int(toType.Width) != types.MaxArrayDimension && int(toType.Width) != len(arr) {
 				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
 			}
 
