@@ -201,24 +201,28 @@ func MedianDecimal64[T numeric | types.Decimal64 | types.Decimal128](vs Vectors[
 	for _, vec := range vs {
 		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal64](vec)...)
 	}
-	numericSlice := generateSortableSlice2(vals)
+	lessFnFactory := func(nums []types.Decimal64) func(a, b int) bool {
+		return func(i, j int) bool {
+			return nums[i].Compare(nums[j]) < 0
+		}
+	}
 	rows := len(vals)
 	if rows&1 == 1 {
 		val := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1,
 		)
 		return FromD64ToD128(val).Scale(1)
 	} else {
 		decimal1 := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1-1,
 		)
 		decimal2 := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1,
 		)
 
@@ -249,12 +253,17 @@ func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs Vectors
 	for _, vec := range vs {
 		vals = append(vals, vector.MustFixedColWithTypeCheck[types.Decimal128](vec)...)
 	}
-	numericSlice := generateSortableSlice2(vals)
+
+	lessFnFactory := func(nums []types.Decimal128) func(a, b int) bool {
+		return func(i, j int) bool {
+			return nums[i].Compare(nums[j]) < 0
+		}
+	}
 	rows := len(vals)
 	if rows&1 == 1 {
 		ret := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1,
 		)
 		var err error
@@ -265,12 +274,12 @@ func MedianDecimal128[T numeric | types.Decimal64 | types.Decimal128](vs Vectors
 	} else {
 		v1 := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1-1,
 		)
 		v2 := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1,
 		)
 		var ret types.Decimal128
@@ -299,30 +308,34 @@ func MedianNumeric[T numeric](vs Vectors[T]) (float64, error) {
 	for _, vec := range vs {
 		vals = append(vals, vector.MustFixedColWithTypeCheck[T](vec)...)
 	}
-	numericSlice := generateSortableSlice(vals)
+	lessFnFactory := func(nums []T) func(a, b int) bool {
+		return func(i, j int) bool {
+			return nums[i] < nums[j]
+		}
+	}
 	rows := len(vals)
 	if rows&1 == 1 {
 		return float64(quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1,
 		)), nil
 	} else {
 		v1 := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1-1,
 		)
 		v2 := quickSelect(
 			vals,
-			numericSlice.Less,
+			lessFnFactory,
 			rows>>1,
 		)
 		return float64(v1+v2) / 2, nil
 	}
 }
 
-func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessFn func(a, b int) bool, k int) T {
+func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessFnFactory func([]T) func(a, b int) bool, k int) T {
 	if len(nums) == 1 {
 		return nums[0]
 	}
@@ -330,6 +343,7 @@ func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessF
 	lows := []T{}
 	highs := []T{}
 	pivots := []T{}
+	lessFn := lessFnFactory(nums)
 	for i, v := range nums {
 		switch {
 		case lessFn(i, pivotIndex):
@@ -342,11 +356,11 @@ func quickSelect[T numeric | types.Decimal64 | types.Decimal128](nums []T, lessF
 	}
 	switch {
 	case k < len(lows):
-		return quickSelect[T](lows, lessFn, k)
+		return quickSelect[T](lows, lessFnFactory, k)
 	case k < len(lows)+len(pivots):
 		return pivots[0]
 	default:
-		return quickSelect(highs, lessFn, k-len(lows)-len(pivots))
+		return quickSelect(highs, lessFnFactory, k-len(lows)-len(pivots))
 	}
 }
 
