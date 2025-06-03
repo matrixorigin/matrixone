@@ -100,10 +100,7 @@ func makeSoftDeleteFilterCoarseFilter(
 			return true
 		}
 		dropTS := tableEntry.GetDeleteAtLocked()
-		if dropTS.IsEmpty() {
-			return true
-		}
-		return false
+		return !dropTS.IsEmpty()
 	}
 	logutil.Infof("GetTableIDs count is %d", len(tables))
 	return func(
