@@ -15,8 +15,6 @@
 package aggexec
 
 import (
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -512,46 +510,4 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 	}
 
 	return exec.ret.flushAll(), nil
-}
-
-type numericSlice[T numeric] []T
-
-func (s numericSlice[T]) Len() int {
-	return len(s)
-}
-func (s numericSlice[T]) Less(i, j int) bool {
-	return s[i] < s[j]
-}
-func (s numericSlice[T]) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-type decimal64Slice []types.Decimal64
-type decimal128Slice []types.Decimal128
-
-func (s decimal64Slice) Len() int { return len(s) }
-func (s decimal64Slice) Less(i, j int) bool {
-	return s[i].Compare(s[j]) < 0
-}
-func (s decimal64Slice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-func (s decimal128Slice) Len() int { return len(s) }
-func (s decimal128Slice) Less(i, j int) bool {
-	return s[i].Compare(s[j]) < 0
-}
-func (s decimal128Slice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-func generateSortableSlice[T numeric](vs []T) sort.Interface {
-	return numericSlice[T](vs)
-}
-
-func generateSortableSlice2[T types.Decimal64 | types.Decimal128](vs []T) sort.Interface {
-	temp := any(vs)
-	if d64, ok := temp.([]types.Decimal64); ok {
-		return decimal64Slice(d64)
-	}
-	if d128, ok := temp.([]types.Decimal128); ok {
-		return decimal128Slice(d128)
-	}
-	panic("unsupported type")
 }

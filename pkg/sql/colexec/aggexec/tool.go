@@ -157,11 +157,11 @@ func (vs Vectors[T]) Length() int {
 	return length
 }
 
-func (vs Vectors[T]) getAppendableVector() *vector.Vector {
-	vec := vs[len(vs)-1]
+func (vs *Vectors[T]) getAppendableVector() *vector.Vector {
+	vec := (*vs)[len(*vs)-1]
 	if vec.Length() >= MaxVectorLength {
 		vec = vector.NewVec(*vec.GetType())
-		vs = append(vs, vec)
+		*vs = append(*vs, vec)
 	}
 	return vec
 }
