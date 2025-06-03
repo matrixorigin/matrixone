@@ -438,6 +438,7 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 			if rows == 0 {
 				continue
 			}
+			exec.ret.setGroupNotEmpty(x, j)
 			var err error
 			if vs[x][j], err = MedianNumeric(exec.groups[s]); err != nil {
 				return nil, err
@@ -479,7 +480,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 				if rows == 0 {
 					continue
 				}
-
+				exec.ret.setGroupNotEmpty(x, j)
 				if vs[x][j], err = MedianDecimal128(exec.groups[s]); err != nil {
 					return nil, err
 				}
@@ -500,7 +501,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 				if rows == 0 {
 					continue
 				}
-
+				exec.ret.setGroupNotEmpty(x, j)
 				if vs[x][j], err = MedianDecimal64(exec.groups[s]); err != nil {
 					return nil, err
 				}
