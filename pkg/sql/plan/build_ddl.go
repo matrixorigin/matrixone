@@ -4098,6 +4098,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
+			} else {
+				// Currently only varchar length modification is supported for INPLACE algorithm
+				// Other column modifications will use COPY algorithm
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Currently only varchar length modification is supported for INPLACE algorithm")
 			}
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
