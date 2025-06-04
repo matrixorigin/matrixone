@@ -51,4 +51,24 @@ drop user if exists hjk;
 drop user if exists opp;
 drop role if exists role1;
 alter user root identified by '111';
+create account test_alter_drop_user ADMIN_NAME 'admin' IDENTIFIED BY '123';
+-- @session:id=6&user=test_alter_drop_user:admin&password=123
+create user if not exists user1 identified by '123';
+create user if not exists user2 identified by '123';
+create role if not exists role1;
+grant CONNECT,create user,alter user, drop user on account * to role1;
+grant role1 to user1;
+alter user user1 identified by '123456';
+alter user `admin` identified by '123456';
+-- @session
+-- @session:id=7&user=test_alter_drop_user:user1:role1&password=123456
+alter user user2 identified by '123456';
+alter user `admin` identified by '123';
+-- @session
+-- @session:id=8&user=test_alter_drop_user:admin&password=123456
+drop user user1;
+drop user user2;
+drop role role1;
+-- @session
+drop account test_alter_drop_user;
 set global enable_privilege_cache = on;
