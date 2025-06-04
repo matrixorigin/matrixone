@@ -16,11 +16,13 @@ package aggexec
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func fromValueListToVector(
@@ -215,6 +217,7 @@ func TestCount(t *testing.T) {
 func TestMedian(t *testing.T) {
 	m := hackAggMemoryManager()
 	info := singleAggInfo{
+		aggID:     1,
 		distinct:  false,
 		argType:   types.T_int64.ToType(),
 		retType:   types.T_float64.ToType(),
@@ -222,8 +225,30 @@ func TestMedian(t *testing.T) {
 	}
 	a := newMedianColumnNumericExec[int64](m, info)
 
+	a.PreAllocateGroups(1)
+
 	doAggTest[int64, float64](
 		t, a,
+		m.Mp(), types.T_int64.ToType(),
+		[]int64{1, 2, 3}, nil, float64(2), false,
+		[]int64{1, 2, 3}, nil, float64(2), false)
+
+	_, err := MarshalAggFuncExec(a)
+	assert.NoError(t, err)
+
+	a.Merge(a, 0, 1)
+
+	info2 := singleAggInfo{
+		aggID:     1,
+		distinct:  true,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_float64.ToType(),
+		emptyNull: true,
+	}
+	b := newMedianColumnNumericExec[int64](m, info2)
+
+	doAggTest[int64, float64](
+		t, b,
 		m.Mp(), types.T_int64.ToType(),
 		[]int64{1, 2, 3}, nil, float64(2), false,
 		[]int64{1, 2, 3}, nil, float64(2), false)
