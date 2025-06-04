@@ -76,14 +76,6 @@ func (t *partitionTxnTable) Ranges(
 		return nil, err
 	}
 
-	if len(targets) == 1 {
-		rel, err := t.getRelation(ctx, targets[0])
-		if err != nil {
-			return nil, err
-		}
-		return rel.Ranges(ctx, param)
-	}
-
 	pd := newPartitionedRelData()
 	for _, idx := range targets {
 		rel, err := t.getRelation(ctx, idx)

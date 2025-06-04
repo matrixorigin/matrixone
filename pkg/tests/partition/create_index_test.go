@@ -103,7 +103,7 @@ func TestPartitionIndexCanWorkWithCreateIndex(t *testing.T) {
 
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
-		"create table %s (c int primary key, b int) partition by list (c) (partition p0 values in (1), partition p1 values in (2))",
+		"create table %s (c int primary key, b int) partition by list (c) (partition p0 values in (1, 3), partition p1 values in (2, 4))",
 		partition.PartitionMethod_List,
 		func(idx int, p partition.Partition) {
 
@@ -159,7 +159,7 @@ func TestPartitionIndexCanWorkWithCreateIndex(t *testing.T) {
 
 						txn.Use(db)
 						rs, err := txn.Exec(
-							fmt.Sprintf("select count(1) from %s", index.GetTableName()),
+							fmt.Sprintf("select count(1) from `%s`", index.GetTableName()),
 							executor.StatementOption{},
 						)
 						require.NoError(t, err)
