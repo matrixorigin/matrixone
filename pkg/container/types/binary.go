@@ -16,14 +16,16 @@ package types
 
 import "github.com/matrixorigin/matrixone/pkg/common/moerr"
 
-func BitAnd(result, v1, v2 []byte) {
+func BitAnd(result, v1, v2 []byte) error {
 	if len(v1) != len(v2) {
-		panic(moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length"))
+		return moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
 	}
 
 	for i := range v1 {
 		result[i] = v1[i] & v2[i]
 	}
+
+	return nil
 }
 
 func BitOr(result, v1, v2 []byte) {
