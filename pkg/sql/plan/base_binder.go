@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 
@@ -1750,10 +1751,14 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "=", "<", "<=", ">", ">=", "<>":
 		// if constant's type higher than column's type
 		// and constant's value in range of column's type, then no cast was needed
+		logutil.Infof("*[BindFuncExprImplByPlanExpr] switch name case = < <= > >= <>")
 		switch args[0].Expr.(type) {
 		case *plan.Expr_Lit:
+			logutil.Infof("*[BindFuncExprImplByPlanExpr] switch args[0].Expr.(type) case *plan.Expr_Lit")
 			if args[1].GetCol() != nil {
+				logutil.Infof("*[BindFuncExprImplByPlanExpr] args[1].GetCol() != nil")
 				if checkNoNeedCast(argsType[0], argsType[1], args[0]) {
+					logutil.Infof("*[BindFuncExprImplByPlanExpr] checkNoNeedCast(argsType[0], argsType[1], args[0])")
 					argsCastType = []types.Type{argsType[1], argsType[1]}
 					// need to update function id
 					fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
@@ -1764,7 +1769,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		case *plan.Expr_Col:
+			logutil.Infof("*[BindFuncExprImplByPlanExpr] switch args[0].Expr.(type) case *plan.Expr_Col")
 			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
+				logutil.Infof("*[BindFuncExprImplByPlanExpr] checkNoNeedCast(argsType[1], argsType[0], args[1])")
 				argsCastType = []types.Type{argsType[0], argsType[0]}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 				if err != nil {
@@ -1828,6 +1835,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					continue
 				}
 				typ := makePlan2Type(&castType)
+				logutil.Infof("*[BindFuncExprImplByPlanExpr] appendCastBeforeExpr")
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
 				if err != nil {
 					return nil, err

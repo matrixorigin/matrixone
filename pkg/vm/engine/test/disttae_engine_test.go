@@ -1612,3 +1612,21 @@ func Test_SubUnsubTable(t *testing.T) {
 	)
 	require.NotNil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName, false))
 }
+
+func TestMetadataScan(t *testing.T) {
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	v, _ := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
+	exec := v.(executor.SQLExecutor)
+
+	txnop := p.StartCNTxn()
+	query := `
+		SELECT * FROM (
+			SELECT * FROM metadata_scan("mo_catalog.mo_version", "*")g
+		) WHERE delete_ts = 0-0
+	`
+	_, err := exec.Exec(p.Ctx, query, executor.Options{}.WithTxn(txnop))
+	require.NoError(t, err)
+	require.NoError(t, txnop.Commit(p.Ctx))
+}
