@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
 )
 
 func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
@@ -406,6 +408,7 @@ func TestHnswSyncSinker_Sink(t *testing.T) {
 			[]*vector.Vector{
 				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
 				testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+				testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
 			}, nil)
 
 		defer bat.Clean(testutil.TestUtilMp)
@@ -563,4 +566,93 @@ func TestHnswSyncSinker_ErrorHandling(t *testing.T) {
 
 	s.ClearError()
 	require.Nil(t, s.Error())
+}
+
+func TestHnswSyncSinker_Sink_AtomicBatch(t *testing.T) {
+
+	proc := testutil.NewProcess()
+
+	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
+	defer sqlexecstub.Reset()
+
+	watermarkUpdater := &WatermarkUpdater{
+		watermarkMap: &sync.Map{},
+	}
+	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	sinker, _ := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
+	s := sinker.(*hnswSyncSinker[float32])
+	defer s.Close() // Closes sqlBufSendCh
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+			testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int64{1, 2}),
+		}, nil)
+	defer bat.Clean(testutil.TestUtilMp)
+
+	fromTs := types.BuildTS(1, 0)
+	insertAtomicBat := &AtomicBatch{
+		Mp:      nil,
+		Batches: []*batch.Batch{bat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	insertAtomicBat.Rows.Set(AtomicBatchRow{Ts: fromTs, Pk: []byte{1}, Offset: 0, Src: bat})
+	insertAtomicBat.Rows.Set(AtomicBatchRow{Ts: fromTs, Pk: []byte{2}, Offset: 1, Src: bat})
+
+	delbat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+			testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int64{1, 2}),
+		}, nil)
+
+	defer delbat.Clean(testutil.TestUtilMp)
+
+	delfromTs := types.BuildTS(2, 0)
+	delAtomicBat := &AtomicBatch{
+		Mp:      nil,
+		Batches: []*batch.Batch{delbat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	delAtomicBat.Rows.Set(AtomicBatchRow{Ts: delfromTs, Pk: []byte{1}, Offset: 0, Src: bat})
+	delAtomicBat.Rows.Set(AtomicBatchRow{Ts: delfromTs, Pk: []byte{2}, Offset: 1, Src: bat})
+
+	dout := &DecoderOutput{
+		fromTs:         types.BuildTS(1, 0),
+		toTs:           types.BuildTS(2, 0),
+		outputTyp:      OutputTypeTail,
+		insertAtmBatch: insertAtomicBat,
+		deleteAtmBatch: delAtomicBat,
+	}
+
+	var receivedSql []byte
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		receivedSql = <-s.sqlBufSendCh
+		require.NotNil(t, receivedSql)
+	}()
+
+	s.Sink(context.Background(), dout)
+
+	wg.Wait() // Wait for the goroutine to receive the SQL
+	sqlStr := string(receivedSql)
+
+	cdcForJson := vectorindex.NewVectorIndexCdc[float32]()
+	cdcForJson.Upsert(int64(1), []float32{0.1, 0.2})
+	cdcForJson.Upsert(int64(2), []float32{0.3, 0.4})
+	cdcForJson.Delete(int64(1))
+	cdcForJson.Delete(int64(2))
+	cdcForJson.Start = "1-0"
+	cdcForJson.End = "2-0"
+	expectedJsonBytes, _ := cdcForJson.ToJson()
+
+	expectedSql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', %d, '%s');",
+		strings.Repeat(" ", sqlBufReserved),
+		s.param.DbName, s.param.Table, s.param.Dimension, string(expectedJsonBytes))
+	require.Equal(t, expectedSql, sqlStr)
+	require.True(t, s.cdc.Empty(), "CDC should be reset after sending SQL")
+
 }
