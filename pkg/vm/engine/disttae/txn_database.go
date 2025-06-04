@@ -363,7 +363,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	}
 
 	txn.tableOps.addCreatedInTxn(newId, txn.statementID)
-	if err := db.createWithID(ctx, name, newId, defs, false); err != nil {
+	if err := db.createWithID(ctx, name, newId, defs, false, nil); err != nil {
 		return 0, err
 	}
 
@@ -388,12 +388,16 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		}
 	}
 	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
-	return db.createWithID(ctx, name, tableId, defs, false)
+	return db.createWithID(ctx, name, tableId, defs, false, nil)
 }
 
 func (db *txnDatabase) createWithID(
 	ctx context.Context,
-	name string, tableId uint64, defs []engine.TableDef, useAlterNote bool,
+	name string,
+	tableId uint64,
+	defs []engine.TableDef,
+	useAlterNote bool,
+	extra *api.SchemaExtra,
 ) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
@@ -419,7 +423,12 @@ func (db *txnDatabase) createWithID(
 		tbl.tableName = name
 		tbl.tableId = tableId
 		tbl.accountId = accountId
-		tbl.extraInfo = &api.SchemaExtra{}
+		tbl.extraInfo = extra
+
+		if tbl.extraInfo == nil {
+			tbl.extraInfo = &api.SchemaExtra{}
+		}
+
 		for _, def := range defs {
 			switch defVal := def.(type) {
 			case *engine.PropertiesDef:
@@ -436,7 +445,9 @@ func (db *txnDatabase) createWithID(
 					case catalog.SystemRelAttr_CreateSQL:
 						tbl.createSql = property.Value
 					case catalog.PropSchemaExtra:
-						tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
+						if extra == nil {
+							tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
+						}
 					default:
 					}
 				}

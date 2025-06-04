@@ -210,6 +210,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		// 8. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
+		extra := newRel.GetExtraInfo()
+		id := newRel.GetTableID(c.proc.Ctx)
 
 		for _, indexDef := range newTableDef.Indexes {
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
@@ -226,9 +228,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		for _, multiTableIndex := range multiTableIndexes {
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorIvfFlatIndex(c, id, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorHnswIndex(c, id, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",

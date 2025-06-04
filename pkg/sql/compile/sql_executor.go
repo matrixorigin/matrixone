@@ -137,7 +137,12 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		logutil.Error("internal sql executor error", zap.Error(err), zap.String("sql", opts.SQL()), zap.String("txn", exec.Txn().Txn().DebugString()))
+		logutil.Error("internal sql executor error",
+			zap.Error(err),
+			zap.String("sql", opts.SQL()),
+			zap.String("txn", exec.Txn().Txn().DebugString()),
+			zap.Stack("stack"),
+		)
 		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
