@@ -30,7 +30,6 @@ func TestMedianMarshal(t *testing.T) {
 	assert.Equal(t, vs.Length(), 262145)
 	assert.Equal(t, len(vs.vecs), 2)
 
-	
 	vs2 := NewVectors[int64](types.T_int64.ToType())
 	defer vs2.Free(m.mp)
 	AppendMultiFixed(vs2, 1, false, 262145, m.mp)
