@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -94,6 +95,92 @@ func TestCreatePartitionIndexes(t *testing.T) {
 				},
 				executor.Options{},
 			)
+		},
+	)
+}
+
+func TestPartitionIndexCanWorkWithCreateIndex(t *testing.T) {
+
+	runPartitionTableCreateAndDeleteTestsWithAware(
+		t,
+		"create table %s (c int primary key, b int) partition by list (c) (partition p0 values in (1), partition p1 values in (2))",
+		partition.PartitionMethod_List,
+		func(idx int, p partition.Partition) {
+
+		},
+		func(db string, table string, cn embed.ServiceOperator, pm partition.PartitionMetadata) {
+			testutils.ExecSQL(
+				t,
+				db,
+				cn,
+				fmt.Sprintf("insert into %s values (1,1)", table),
+			)
+
+			testutils.ExecSQL(
+				t,
+				db,
+				cn,
+				fmt.Sprintf("insert into %s values (2,2)", table),
+			)
+
+			testutils.ExecSQLWithReadResult(
+				t,
+				db,
+				cn,
+				func(i int, s string, r executor.Result) {
+
+				},
+				fmt.Sprintf("create index id_01 on %s(b); ", t.Name()),
+			)
+
+			cs := cn.RawService().(cnservice.Service)
+			exec := cs.GetSQLExecutor()
+			eng := cs.GetEngine()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					for _, p := range pm.Partitions {
+						_, _, r, err := eng.GetRelationById(
+							defines.AttachAccountId(ctx, 0),
+							txn.Txn(),
+							p.PartitionID,
+						)
+						require.NoError(t, err)
+
+						_, _, index, err := eng.GetRelationById(
+							defines.AttachAccountId(ctx, 0),
+							txn.Txn(),
+							r.GetExtraInfo().IndexTables[0],
+						)
+						require.NoError(t, err)
+
+						txn.Use(db)
+						rs, err := txn.Exec(
+							fmt.Sprintf("select count(1) from %s", index.GetTableName()),
+							executor.StatementOption{},
+						)
+						require.NoError(t, err)
+
+						n := int64(0)
+						rs.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								n += executor.GetFixedRows[int64](cols[0])[0]
+								return true
+							},
+						)
+						require.Equal(t, int64(1), n)
+					}
+
+					return nil
+				},
+				executor.Options{},
+			)
+		},
+		func(cn embed.ServiceOperator, pm partition.PartitionMetadata) {
+
 		},
 	)
 }
