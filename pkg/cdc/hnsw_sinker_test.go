@@ -331,9 +331,9 @@ func TestHnswSyncSinker_Run(t *testing.T) {
 		s.ClearError()
 		//var executedSqls []string
 
-		s.sqlBufSendCh <- begin
+		s.SendBegin()
 		s.sqlBufSendCh <- []byte("SELECT 1")
-		s.sqlBufSendCh <- commit
+		s.SendCommit()
 
 		// Wait for processing or timeout
 		time.Sleep(100 * time.Millisecond)
@@ -370,9 +370,9 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 
 	t.Run("exec error", func(t *testing.T) {
 		s.ClearError()
-		s.sqlBufSendCh <- begin
+		s.SendBegin()
 		s.sqlBufSendCh <- []byte("FAILSQL")
-		s.sqlBufSendCh <- commit // This commit might not be reached if error handling is strict
+		s.SendCommit() // This commit might not be reached if error handling is strict
 
 		time.Sleep(100 * time.Millisecond)
 		err := s.Error()
@@ -381,9 +381,9 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 
 	t.Run("multi-error no rollback error", func(t *testing.T) {
 		s.ClearError()
-		s.sqlBufSendCh <- begin
+		s.SendBegin()
 		s.sqlBufSendCh <- []byte("MULTI_ERROR_NO_ROLLBACK")
-		s.sqlBufSendCh <- commit // This commit might not be reached if error handling is strict
+		s.SendCommit() // This commit might not be reached if error handling is strict
 
 		time.Sleep(100 * time.Millisecond)
 		err := s.Error()
@@ -392,9 +392,9 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 
 	t.Run("multi-error with rollback error", func(t *testing.T) {
 		s.ClearError()
-		s.sqlBufSendCh <- begin
+		s.SendBegin()
 		s.sqlBufSendCh <- []byte("MULTI_ERROR_ROLLBACK")
-		s.sqlBufSendCh <- commit // This commit might not be reached if error handling is strict
+		s.SendCommit() // This commit might not be reached if error handling is strict
 
 		time.Sleep(100 * time.Millisecond)
 		err := s.Error()
@@ -403,8 +403,8 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 
 	t.Run("rollback", func(t *testing.T) {
 		s.ClearError()
-		s.sqlBufSendCh <- begin
-		s.sqlBufSendCh <- rollback
+		s.SendBegin()
+		s.SendRollback()
 
 		time.Sleep(100 * time.Millisecond)
 		require.NoError(t, s.Error())
