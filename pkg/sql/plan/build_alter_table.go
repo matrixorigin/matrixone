@@ -455,7 +455,7 @@ func isVarcharLengthModified(ctx context.Context, spec *tree.AlterTableModifyCol
 					logutil.Infof("DEBUG isVarcharLengthModified: AttributeNull - old NotNull: %t, new NotNull: %t (a.Is: %t)",
 						oldIsNotNull, newIsNotNull, a.Is)
 
-					// 注释掉原来的严格检查，保留代码以备将来使用
+					// Comment out the original strict check, keep code for future use
 					// if oldIsNotNull != newIsNotNull {
 					//     logutil.Infof("DEBUG isVarcharLengthModified: NOT NULL/NULL constraint modification detected, returning false")
 					//     // NOT NULL/NULL constraint modification is not allowed
