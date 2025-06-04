@@ -18,7 +18,7 @@ select sleep(30);
 
 insert into vector_index_01 values (0, "[1,2,3]", 1);
 
-select sleep(1);
+select sleep(4);
 
 select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
 
@@ -29,14 +29,14 @@ select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
 
 DELETE FROM vector_index_01 WHERE a=0;
 -- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"D", "pk":0}]}');
-select sleep(1);
+select sleep(4);
 
 select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
 
 insert into vector_index_01 values (1, "[2,3,4]", 1);
 -- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"I", "pk":1, "v":[2,3,4]}]}');
 
-select sleep(1);
+select sleep(4);
 
 select * from vector_index_01 order by  L2_DISTANCE(b,"[2,3,4]") ASC LIMIT 10;
 
