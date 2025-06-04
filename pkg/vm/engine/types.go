@@ -96,6 +96,17 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, error) {
 		})
 	}
 
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		exeDefs = append(exeDefs, &PartitionDef{
+			Partitioned: 1,
+			Partition:   string(bytes),
+		})
+	}
+
 	if len(tableDef.RefChildTbls) > 0 {
 		c.Cts = append(c.Cts, &RefChildTableDef{
 			Tables: tableDef.RefChildTbls,
