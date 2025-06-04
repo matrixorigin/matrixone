@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -111,6 +112,7 @@ func (exec MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn execu
 
 type MockErrorTxnExecutor struct {
 	database string
+	ctx      context.Context
 }
 
 func (exec *MockErrorTxnExecutor) Use(db string) {
@@ -123,6 +125,16 @@ func (exec *MockErrorTxnExecutor) Exec(
 ) (executor.Result, error) {
 	if strings.Contains(sql, "FAILSQL") {
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("db error")
+	} else if strings.Contains(sql, "MULTI_ERROR_NO_ROLLBACK") {
+		var errs error
+		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error"))
+		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error 2"))
+		return executor.Result{}, errs
+	} else if strings.Contains(sql, "MULTI_ERROR_ROLLBACK") {
+		var errs error
+		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error"))
+		errs = errors.Join(errs, moerr.NewQueryInterrupted(exec.ctx))
+		return executor.Result{}, errs
 	}
 
 	return executor.Result{}, nil
@@ -169,7 +181,7 @@ func (exec MockErrorSQLExecutor) Exec(ctx context.Context, sql string, opts exec
 // TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
 func (exec MockErrorSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
 
-	txnexec := &MockErrorTxnExecutor{}
+	txnexec := &MockErrorTxnExecutor{ctx: ctx}
 	err := execFunc(txnexec)
 	if moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) {
 		fmt.Printf("ROLLBACK...\n")
@@ -365,6 +377,28 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		err := s.Error()
 		require.Error(t, err)
+	})
+
+	t.Run("multi-error no rollback error", func(t *testing.T) {
+		s.ClearError()
+		s.sqlBufSendCh <- begin
+		s.sqlBufSendCh <- []byte("MULTI_ERROR_NO_ROLLBACK")
+		s.sqlBufSendCh <- commit // This commit might not be reached if error handling is strict
+
+		time.Sleep(100 * time.Millisecond)
+		err := s.Error()
+		require.Error(t, err)
+	})
+
+	t.Run("multi-error with rollback error", func(t *testing.T) {
+		s.ClearError()
+		s.sqlBufSendCh <- begin
+		s.sqlBufSendCh <- []byte("MULTI_ERROR_ROLLBACK")
+		s.sqlBufSendCh <- commit // This commit might not be reached if error handling is strict
+
+		time.Sleep(100 * time.Millisecond)
+		err := s.Error()
+		require.NoError(t, err)
 	})
 
 	t.Run("rollback", func(t *testing.T) {
