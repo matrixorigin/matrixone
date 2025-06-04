@@ -132,6 +132,10 @@ func NewVectors[T numeric | types.Decimal64 | types.Decimal128](typ types.Type) 
 	return &Vectors[T]{vecs: []*vector.Vector{vec}}
 }
 
+func NewEmptyVectors[T numeric | types.Decimal64 | types.Decimal128]() *Vectors[T] {
+	return &Vectors[T]{vecs: make([]*vector.Vector, 0)}
+}
+
 func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
 	var bbuf bytes.Buffer
 	length := int64(len(vs.vecs))
@@ -149,6 +153,27 @@ func (vs *Vectors[T]) MarshalBinary() ([]byte, error) {
 		}
 	}
 	return bbuf.Bytes(), nil
+}
+
+func (vs *Vectors[T]) Unmarshal(data []byte, typ types.Type, mp *mpool.MPool) error {
+	bbuf := bytes.NewBuffer(data)
+	length := int64(0)
+	if _, err := bbuf.Read(types.EncodeInt64(&length)); err != nil {
+		return err
+	}
+	for i := int64(0); i < length; i++ {
+		var buf []byte
+		var err error
+		if buf, _, err = ReadBytes(bbuf); err != nil {
+			return err
+		}
+		vec := vector.NewVec(typ)
+		if err := vectorUnmarshal(vec, buf, mp); err != nil {
+			return err
+		}
+		vs.vecs = append(vs.vecs, vec)
+	}
+	return nil
 }
 
 func (vs *Vectors[T]) Length() int {
@@ -173,22 +198,27 @@ func (vs *Vectors[T]) Union(other *Vectors[T], mp *mpool.MPool) error {
 	if len(other.vecs) == 0 {
 		return nil
 	}
-	vec := vs.getAppendableVector()
-	if vec.Length()+other.Length() < MaxVectorLength {
-		for _, otherVec := range other.vecs {
-			vs := vector.MustFixedColWithTypeCheck[T](otherVec)
-			vector.AppendFixedList(vec, vs, nil, mp)
-		}
-		return nil
-	}
 	for _, vec := range other.vecs {
-		var clonedVec *vector.Vector
-		var err error
-		if clonedVec, err = vec.CloneWindow(0, vec.Length(), mp); err != nil {
-			return err
+		vals := vector.MustFixedColWithTypeCheck[T](vec)
+		left := len(vals)
+		for {
+			vec := vs.getAppendableVector()
+			appendableCount := MaxVectorLength - vec.Length()
+			if appendableCount > left {
+				appendableCount = left
+			}
+
+			if err := vector.AppendFixedList(vec, vals[:appendableCount], nil, mp); err != nil {
+				return err
+			}
+			left -= appendableCount
+			vals = vals[appendableCount:]
+			if left == 0 {
+				break
+			}
 		}
-		vs.vecs = append(vs.vecs, clonedVec)
 	}
+
 	return nil
 }
 
@@ -390,28 +420,6 @@ func AppendMultiFixed[T numeric | types.Decimal64 | types.Decimal128](vecs *Vect
 		}
 	}
 	return nil
-}
-
-func vectorsUnmarshal[T numeric | types.Decimal64 | types.Decimal128](data []byte, typ types.Type, mp *mpool.MPool) (*Vectors[T], error) {
-	bbuf := bytes.NewBuffer(data)
-	length := int64(0)
-	if _, err := bbuf.Read(types.EncodeInt64(&length)); err != nil {
-		return nil, err
-	}
-	vs := Vectors[T]{vecs: make([]*vector.Vector, 0, length)}
-	for i := int64(0); i < length; i++ {
-		var buf []byte
-		var err error
-		if buf, _, err = ReadBytes(bbuf); err != nil {
-			return nil, err
-		}
-		vec := vector.NewVec(typ)
-		if err := vectorUnmarshal(vec, buf, mp); err != nil {
-			return nil, err
-		}
-		vs.vecs = append(vs.vecs, vec)
-	}
-	return &vs, nil
 }
 
 func WriteBytes(b []byte, w io.Writer) (n int64, err error) {

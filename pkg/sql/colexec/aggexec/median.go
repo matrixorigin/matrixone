@@ -82,9 +82,9 @@ func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empti
 	if len(groups) > 0 {
 		exec.groups = make([]*Vectors[T], len(groups))
 		for i := range exec.groups {
-			exec.groups[i] = NewVectors[T](exec.singleAggInfo.argType)
+			exec.groups[i] = NewEmptyVectors[T]()
 			var err error
-			if exec.groups[i], err = vectorsUnmarshal[T](groups[i], exec.singleAggInfo.argType, mp); err != nil {
+			if err = exec.groups[i].Unmarshal(groups[i], exec.singleAggInfo.argType, mp); err != nil {
 				return err
 			}
 		}
