@@ -224,13 +224,14 @@ func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [
 				units.BytesSize(float64(obj.OriginSize())),
 				obj.Rows()))
 		} else {
+			isStatement := strings.Contains(name, "statement_info")
 			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v)[%v, %v],",
 				obj.ObjectName().ObjectId().ShortStringEx(),
 				obj.BlkCnt(),
 				units.BytesSize(float64(obj.OriginSize())),
 				obj.Rows(),
-				cutIfByteSlice(zm.GetMin()),
-				cutIfByteSlice(zm.GetMax())))
+				cutIfByteSlice(zm.GetMin(), isStatement),
+				cutIfByteSlice(zm.GetMax(), isStatement)))
 		}
 
 		fromSize += float64(obj.OriginSize())
@@ -274,6 +275,7 @@ func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [
 func logMergeEnd(name string, start time.Time, objs [][]byte) {
 	toObjsDesc := ""
 	toSize := float64(0)
+	isStatement := strings.Contains(name, "statement_info")
 	for _, o := range objs {
 		obj := objectio.ObjectStats(o)
 		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
@@ -281,6 +283,11 @@ func logMergeEnd(name string, start time.Time, objs [][]byte) {
 			obj.BlkCnt(),
 			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
+		if isStatement {
+			toObjsDesc += fmt.Sprintf("[%v, %v],",
+				cutIfByteSlice(obj.SortKeyZoneMap().GetMin(), isStatement),
+				cutIfByteSlice(obj.SortKeyZoneMap().GetMax(), isStatement))
+		}
 		toSize += float64(obj.OriginSize())
 	}
 
@@ -293,10 +300,15 @@ func logMergeEnd(name string, start time.Time, objs [][]byte) {
 	)
 }
 
-func cutIfByteSlice(value any) any {
-	switch value.(type) {
+func cutIfByteSlice(value any, forCompose bool) any {
+	switch v := value.(type) {
 	case []byte:
-		return "-"
+		if !forCompose {
+			return "-"
+		} else {
+			t, _, _, _ := types.DecodeTuple(v)
+			return t.ErrString(nil)
+		}
 	default:
 	}
 	return value
