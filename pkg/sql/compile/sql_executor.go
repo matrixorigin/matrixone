@@ -141,7 +141,6 @@ func (s *sqlExecutor) ExecTxn(
 			zap.Error(err),
 			zap.String("sql", opts.SQL()),
 			zap.String("txn", exec.Txn().Txn().DebugString()),
-			zap.Stack("stack"),
 		)
 		return exec.rollback(err)
 	}
