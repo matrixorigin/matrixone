@@ -212,6 +212,23 @@ func TestCount(t *testing.T) {
 		[]int64{1, 2, 3}, nil, 3, false)
 }
 
+func TestMedian(t *testing.T) {
+	m := hackAggMemoryManager()
+	info := singleAggInfo{
+		distinct:  false,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_float64.ToType(),
+		emptyNull: true,
+	}
+	a := newMedianColumnNumericExec[int64](m, info)
+
+	doAggTest[int64, float64](
+		t, a,
+		m.Mp(), types.T_int64.ToType(),
+		[]int64{1, 2, 3}, nil, float64(2), false,
+		[]int64{1, 2, 3}, nil, float64(2), false)
+}
+
 func TestBytesToBytesFrameWork(t *testing.T) {
 	m := hackAggMemoryManager()
 	info := singleAggInfo{
