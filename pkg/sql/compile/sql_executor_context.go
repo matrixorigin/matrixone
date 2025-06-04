@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -402,160 +400,4 @@ func (c *compilerContext) getRelation(
 		return nil, nil, err
 	}
 	return ctx, table, nil
-}
-
-func (c *compilerContext) getTableDef(
-	ctx context.Context,
-	table engine.Relation,
-	dbName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
-	tableId := table.GetTableID(ctx)
-	engineDefs, err := table.TableDefs(ctx)
-	if err != nil {
-		return nil, nil
-	}
-
-	var clusterByDef *plan.ClusterByDef
-	var cols []*plan.ColDef
-	var schemaVersion uint32
-	var defs []*plan.TableDefType
-	var properties []*plan.Property
-	var TableType, Createsql string
-	var viewSql *plan.ViewDef
-	var foreignKeys []*plan.ForeignKeyDef
-	var primarykey *plan.PrimaryKeyDef
-	var indexes []*plan.IndexDef
-	var refChildTbls []uint64
-	var subscriptionName string
-	var partition *planpb.Partition
-
-	for _, def := range engineDefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			col := &plan.ColDef{
-				ColId:      attr.Attr.ID,
-				Name:       strings.ToLower(attr.Attr.Name),
-				OriginName: attr.Attr.Name,
-				Typ: plan.Type{
-					Id:          int32(attr.Attr.Type.Oid),
-					Width:       attr.Attr.Type.Width,
-					Scale:       attr.Attr.Type.Scale,
-					AutoIncr:    attr.Attr.AutoIncrement,
-					Table:       tableName,
-					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:  attr.Attr.EnumVlaues,
-				},
-				Primary:   attr.Attr.Primary,
-				Default:   attr.Attr.Default,
-				OnUpdate:  attr.Attr.OnUpdate,
-				Comment:   attr.Attr.Comment,
-				ClusterBy: attr.Attr.ClusterBy,
-				Hidden:    attr.Attr.IsHidden,
-				Seqnum:    uint32(attr.Attr.Seqnum),
-			}
-			// Is it a composite primary key
-			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
-			//	continue
-			//}
-			if attr.Attr.ClusterBy {
-				clusterByDef = &plan.ClusterByDef{
-					Name: strings.ToLower(attr.Attr.Name),
-				}
-				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-				//	continue
-				//}
-			}
-			cols = append(cols, col)
-		} else if pro, ok := def.(*engine.PropertiesDef); ok {
-			for _, p := range pro.Properties {
-				switch p.Key {
-				case catalog.SystemRelAttr_Kind:
-					TableType = p.Value
-				case catalog.SystemRelAttr_CreateSQL:
-					Createsql = p.Value
-				default:
-				}
-				properties = append(properties, &plan.Property{
-					Key:   p.Key,
-					Value: p.Value,
-				})
-			}
-		} else if viewDef, ok := def.(*engine.ViewDef); ok {
-			viewSql = &plan.ViewDef{
-				View: viewDef.View,
-			}
-		} else if c, ok := def.(*engine.ConstraintDef); ok {
-			for _, ct := range c.Cts {
-				switch k := ct.(type) {
-				case *engine.IndexDef:
-					indexes = k.Indexes
-				case *engine.ForeignKeyDef:
-					foreignKeys = k.Fkeys
-				case *engine.RefChildTableDef:
-					refChildTbls = k.Tables
-				case *engine.PrimaryKeyDef:
-					primarykey = k.Pkey
-				}
-			}
-		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
-			properties = append(properties, &plan.Property{
-				Key:   catalog.SystemRelAttr_Comment,
-				Value: commnetDef.Comment,
-			})
-		} else if v, ok := def.(*engine.VersionDef); ok {
-			schemaVersion = v.Version
-		} else if p, ok := def.(*engine.PartitionDef); ok {
-			if p.Partitioned == 1 {
-				bytes := []byte(p.Partition)
-				partition = &planpb.Partition{}
-				if err := partition.Unmarshal(bytes); err != nil {
-					return nil, nil
-				}
-			}
-		}
-	}
-	if len(properties) > 0 {
-		defs = append(defs, &plan.TableDefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			},
-		})
-	}
-
-	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		//cols = append(cols, plan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
-		primarykey.CompPkeyCol = plan.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
-	}
-	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		//cols = append(cols, plan.MakeHiddenColDefByName(clusterByDef.Name))
-		clusterByDef.CompCbkeyCol = plan.GetColDefFromTable(cols, clusterByDef.Name)
-	}
-	rowIdCol := plan.MakeRowIdColDef()
-	cols = append(cols, rowIdCol)
-
-	//convert
-	obj := &plan.ObjectRef{
-		SchemaName:       dbName,
-		ObjName:          tableName,
-		SubscriptionName: subscriptionName,
-	}
-
-	tableDef := &plan.TableDef{
-		TblId:        tableId,
-		Name:         tableName,
-		Cols:         cols,
-		Defs:         defs,
-		TableType:    TableType,
-		Createsql:    Createsql,
-		Pkey:         primarykey,
-		ViewSql:      viewSql,
-		Fkeys:        foreignKeys,
-		RefChildTbls: refChildTbls,
-		ClusterBy:    clusterByDef,
-		Indexes:      indexes,
-		Version:      schemaVersion,
-		DbName:       dbName,
-		Partition:    partition,
-	}
-	return obj, tableDef
 }
