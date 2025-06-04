@@ -402,7 +402,7 @@ func isVarcharLengthModified(ctx context.Context, spec *tree.AlterTableModifyCol
 	}
 
 	logutil.Infof("DEBUG isVarcharLengthModified: Found old column %s - Type ID: %d, Width: %d, Scale: %d, AutoIncr: %t, NotNull: %t",
-		colName, oldCol.Typ.Id, oldCol.Typ.Width, oldCol.Typ.Scale, oldCol.Typ.AutoIncr, oldCol.NotNull)
+		colName, oldCol.Typ.Id, oldCol.Typ.Width, oldCol.Typ.Scale, oldCol.Typ.AutoIncr, oldCol.Default != nil && !oldCol.Default.NullAbility)
 
 	// Parse the new column type
 	newColType, err := getTypeFromAst(ctx, specNewColumn.Type)
@@ -448,24 +448,21 @@ func isVarcharLengthModified(ctx context.Context, spec *tree.AlterTableModifyCol
 				logutil.Infof("DEBUG isVarcharLengthModified: Checking attribute %d: %T", i, attr)
 				switch a := attr.(type) {
 				case *tree.AttributeNull:
-					// Allow NOT NULL/NULL constraint modifications for varchar length changes
-					oldIsNotNull := oldCol.NotNull
+					// Strict check for NOT NULL/NULL constraint modifications
+					oldIsNotNull := oldCol.Default != nil && !oldCol.Default.NullAbility
 					newIsNotNull := !a.Is
 
 					logutil.Infof("DEBUG isVarcharLengthModified: AttributeNull - old NotNull: %t, new NotNull: %t (a.Is: %t)",
 						oldIsNotNull, newIsNotNull, a.Is)
 
-					// Comment out the original strict check, keep code for future use
-					// if oldIsNotNull != newIsNotNull {
-					//     logutil.Infof("DEBUG isVarcharLengthModified: NOT NULL/NULL constraint modification detected, returning false")
-					//     // NOT NULL/NULL constraint modification is not allowed
-					//     return false
-					// }
-					// // If constraints are consistent, this is acceptable for varchar length modification
-					// logutil.Infof("DEBUG isVarcharLengthModified: NOT NULL constraint is consistent, continuing")
-
-					// Be lenient with NULL/NOT NULL constraints for varchar length modifications
-					logutil.Infof("DEBUG isVarcharLengthModified: Allowing NOT NULL constraint change with varchar length modification")
+					// Restore the strict check for NULL attributes
+					if oldIsNotNull != newIsNotNull {
+						logutil.Infof("DEBUG isVarcharLengthModified: NOT NULL/NULL constraint modification detected, returning false")
+						// NOT NULL/NULL constraint modification is not allowed
+						return false
+					}
+					// If constraints are consistent, this is acceptable for varchar length modification
+					logutil.Infof("DEBUG isVarcharLengthModified: NOT NULL constraint is consistent, continuing")
 				case *tree.AttributeDefault:
 					logutil.Infof("DEBUG isVarcharLengthModified: AttributeDefault detected, returning false")
 					// Default value modification is not allowed
