@@ -837,8 +837,12 @@ func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
+		partitionColPos := int32(-1)
+		if target.HasPartitionCol {
+			partitionColPos = target.PartitionColIdxInBat
+		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range n.LockTargets {
 		if target.LockTable {
@@ -871,11 +875,17 @@ func constructMultiUpdate(
 			deleteCols[j] = int(col.ColPos)
 		}
 
+		partitionCols := make([]int, len(updateCtx.PartitionCols))
+		for j, col := range updateCtx.PartitionCols {
+			partitionCols[j] = int(col.ColPos)
+		}
+
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-			ObjRef:     updateCtx.ObjRef,
-			TableDef:   updateCtx.TableDef,
-			InsertCols: insertCols,
-			DeleteCols: deleteCols,
+			ObjRef:        updateCtx.ObjRef,
+			TableDef:      updateCtx.TableDef,
+			InsertCols:    insertCols,
+			DeleteCols:    deleteCols,
+			PartitionCols: partitionCols,
 		}
 	}
 	arg.Action = action
@@ -974,7 +984,7 @@ func constructStream(n *plan.Node, p [2]int64) *source.Source {
 	return arg
 }
 
-func constructTableFunction(n *plan.Node) *table_function.TableFunction {
+func constructTableFunction(n *plan.Node, qry *plan.Query) *table_function.TableFunction {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.GetOriginCaseName()
@@ -987,6 +997,7 @@ func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	arg.Params = n.TableDef.TblFunc.Param
 	arg.IsSingle = n.TableDef.TblFunc.IsSingle
 	arg.Limit = n.Limit
+	arg.LogicalPlan = qry
 	return arg
 }
 
@@ -2148,7 +2159,7 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right)
+	arg.TableFunction = constructTableFunction(right, nil)
 	return arg
 }
 

@@ -271,8 +271,9 @@ func ForeachVisibleDataObject(
 	ts types.TS,
 	fn func(obj objectio.ObjectEntry) error,
 	executor ConcurrentExecutor,
+	visitTombstone bool,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts, true, false)
+	iter, err := state.NewObjectsIter(ts, true, visitTombstone)
 	if err != nil {
 		return err
 	}
@@ -367,6 +368,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
 		nil,
+		false,
 	); err != nil {
 		return nil, nil, err
 	}
@@ -382,7 +384,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	return tableVal, tableTypes, nil
 }
 
-func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
@@ -482,6 +484,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
 		nil,
+		visitTombstone,
 	); err != nil {
 		return nil, err
 	}
@@ -686,22 +689,22 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			step = uint64(1)
 		} else if rangesLen < 10 {
 			step = uint64(5)
-		} else if rangesLen < 20 {
+		} else if rangesLen < 30 {
 			step = uint64(10)
 		} else {
 			slowStep = uint64(1)
 		}
 		tbl.enableLogFilterExpr.Store(false)
-		if traceFilterExprInterval.Add(step) >= 500000 {
+		if traceFilterExprInterval.Add(step) >= 1000000 {
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 50 {
+		if traceFilterExprInterval2.Add(slowStep) >= 60 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if rangesLen >= 60 {
+		if rangesLen >= 80 {
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
@@ -1007,68 +1010,6 @@ func (tbl *txnTable) collectUnCommittedDataObjs(txnOffset int) ([]objectio.Objec
 	return unCommittedObjects, unCommittedObjNames
 }
 
-//func (tbl *txnTable) collectDirtyBlocks(
-//	state *logtailreplay.PartitionState,
-//	uncommittedObjects []objectio.ObjectStats,
-//	txnOffset int, // Transaction writes offset used to specify the starting position for reading data.
-//) map[types.Blockid]struct{} {
-//	dirtyBlks := make(map[types.Blockid]struct{})
-//	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
-//	{
-//		iter := state.NewDirtyBlocksIter()
-//		for iter.Next() {
-//			entry := iter.Entry()
-//			//lazy load deletes for block.
-//			dirtyBlks[entry] = struct{}{}
-//		}
-//		iter.Close()
-//
-//	}
-//
-//	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
-//	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
-//		dirtyBlks[bid] = struct{}{}
-//	}
-//
-//	if tbl.getTxn().hasDeletesOnUncommitedObject() {
-//		ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-//			if tbl.getTxn().hasUncommittedDeletesOnBlock(&blk.BlockID) {
-//				dirtyBlks[blk.BlockID] = struct{}{}
-//			}
-//			return true
-//		}, uncommittedObjects...)
-//	}
-//
-//	if tbl.db.op.IsSnapOp() {
-//		txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
-//	}
-//
-//	tbl.getTxn().ForEachTableWrites(
-//		tbl.db.databaseId,
-//		tbl.tableId,
-//		txnOffset,
-//		func(entry Entry) {
-//			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
-//			// TODO Adjustments will be made here in the future
-//			if entry.typ == DELETE || entry.typ == DELETE_TXN {
-//				if entry.IsGeneratedByTruncate() {
-//					return
-//				}
-//				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-//				if entry.fileName == "" &&
-//					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-//					vs := vector.MustFixedColWithTypeCheck[types.Rowid](entry.bat.GetVector(0))
-//					for _, v := range vs {
-//						id, _ := v.Decode()
-//						dirtyBlks[id] = struct{}{}
-//					}
-//				}
-//			}
-//		})
-//
-//	return dirtyBlks
-//}
-
 // the return defs has no rowid column
 func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	//return tbl.defs, nil
@@ -1137,6 +1078,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var indexes []*plan.IndexDef
 		var refChildTbls []uint64
 		var hasRowId bool
+		var partition *plan.Partition
 
 		i := int32(0)
 		name2index := make(map[string]int32)
@@ -1182,6 +1124,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: tbl.comment,
 			})
+		}
+
+		if tbl.partitioned > 0 {
+			partition = &plan.Partition{}
+			err := partition.Unmarshal(([]byte)(tbl.partition))
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				return nil
+			}
 		}
 
 		if tbl.viewdef != "" {
@@ -1265,6 +1216,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Indexes:       indexes,
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
+			Partition:     partition,
 		}
 		if tbl.extraInfo != nil {
 			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
@@ -1497,18 +1449,6 @@ func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, e
 	return attrs, nil
 }
 
-func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	attrs := make([]*engine.Attribute, 0, 1)
-	attrs = append(attrs, &engine.Attribute{
-		IsHidden: true,
-		IsRowId:  true,
-		Name:     objectio.PhysicalAddr_Attr,
-		Type:     types.New(types.T_Rowid, 0, 0),
-		Primary:  true,
-	})
-	return attrs, nil
-}
-
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")
@@ -1553,13 +1493,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	return tbl.getTxn().dumpBatch(ctx, tbl.getTxn().GetSnapshotWriteOffset())
 }
 
-func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
-	if tbl.db.op.IsSnapOp() {
-		return moerr.NewInternalErrorNoCtx("update operation is not allowed in snapshot transaction")
-	}
-	return nil
-}
-
 func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	if tbl.seqnums != nil && tbl.typs != nil {
 		return
@@ -1579,7 +1512,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
-	deletes map[objectio.Blockid][]int64,
+	blockDeletes map[objectio.Blockid][]int64,
 ) (*batch.Batch, string, error) {
 
 	proc := tbl.proc.Load()
@@ -1603,20 +1536,33 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		fileName string
 	)
 
-	objectio.ForeachBlkInObjStatsList(true, nil,
-		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+	defer func() {
+		if bat != nil {
+			bat.Clean(proc.Mp())
+		}
+	}()
 
-			del := deletes[blk.BlockID]
-			slices.Sort(del)
-			if bat, err = blockio.BlockCompactionRead(
+	objectio.ForeachBlkInObjStatsList(
+		true,
+		nil,
+		func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			deletes := blockDeletes[blk.BlockID]
+			slices.Sort(deletes)
+			if bat == nil {
+				bat = batch.NewWithSize(len(tbl.seqnums))
+			}
+			bat.CleanOnlyData()
+
+			if err = blockio.CopyBlockData(
 				tbl.getTxn().proc.Ctx,
 				blk.MetaLoc[:],
-				del,
+				deletes,
 				tbl.seqnums,
 				tbl.typs,
+				bat,
 				tbl.getTxn().engine.fs,
-				tbl.getTxn().proc.GetMPool()); err != nil {
-
+				tbl.getTxn().proc.GetMPool(),
+			); err != nil {
 				return false
 			}
 
@@ -1628,11 +1574,10 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				return false
 			}
 
-			bat.Clean(tbl.getTxn().proc.GetMPool())
-
 			return true
-
-		}, obj)
+		},
+		obj,
+	)
 
 	if err != nil {
 		return nil, fileName, err
@@ -1707,11 +1652,6 @@ func (tbl *txnTable) Delete(
 		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
 			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
 			return err
-		}
-
-		for i := range bat.Vecs[0].Length() {
-			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
-			tbl.getTxn().StashFlushedTombstones(ss)
 		}
 
 		return nil
@@ -1875,8 +1815,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		}
 
 		ranges := relData.GetBlockInfoSlice()
-		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
+		skipReadMem := !ranges.Get(0).IsMemBlk()
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -2289,6 +2228,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	to types.TS,
 	batch *batch.Batch,
 	pkIndex int32,
+	_ int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
@@ -2412,7 +2352,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 		}
 		objStats = append(objStats, obj.ObjectStats)
 		return nil
-	}, nil)
+	}, nil, false)
 	if err != nil {
 		return nil, err
 	}

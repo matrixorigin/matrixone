@@ -367,6 +367,15 @@ message CheckDef {
 	Expr check	= 2;
 }
 
+
+message Partition {
+	repeated PartitionDef PartitionDefs = 1;
+}
+
+message PartitionDef {
+	Expr def	= 1;
+}
+
 message ClusterByDef {
 	// XXX: Deprecated and to be removed soon. letter case: lower ?
 	string name = 1;
@@ -433,7 +442,9 @@ message TableDef {
 	string db_name = 32;
 	uint64 db_id = 33;
 
-	uint64 FeatureFlag = 34;
+	Partition partition = 34;
+
+	uint64 FeatureFlag = 35;
 }
 
 message TableFunction{
@@ -587,6 +598,7 @@ message UpdateCtx {
 
 	repeated ColRef insert_cols	= 7 [(gogoproto.nullable) = false];
 	repeated ColRef delete_cols	= 8 [(gogoproto.nullable) = false];
+	repeated ColRef partition_cols	= 9 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {
@@ -910,8 +922,10 @@ message LockTarget {
 	int32 primary_col_rel_pos  = 11;
 	int32 filter_col_rel_pos  = 12;
 	Expr lock_rows = 13;
-    bool lock_table_at_the_end = 14;
-    ObjectRef obj_ref = 15;
+	bool lock_table_at_the_end = 14;
+	ObjectRef obj_ref = 15;
+	int32 partition_col_idx_in_bat = 16;
+	bool has_partition_col = 17;
 }
 
 message PreInsertUkCtx {
@@ -982,7 +996,7 @@ message Query {
 		UNKNOWN		= 0;
 		SELECT		= 1;
 		INSERT		= 2;
-		REPLACE   = 3;
+		REPLACE     = 3;
 		DELETE		= 4;
 		UPDATE		= 5;
 		MERGE		= 6;
@@ -1018,6 +1032,8 @@ message Query {
 
 	//detectSqls are sqls detect fk self refer constraint
 	repeated string detectSqls= 8;
+
+	repeated Query background_queries = 9;
 }
 
 message TransationControl {

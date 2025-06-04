@@ -425,6 +425,7 @@ func (exec *txnExecutor) Exec(
 	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
+	result.LogicalPlan = pn.GetQuery()
 	return result, nil
 }
 

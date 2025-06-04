@@ -1145,18 +1145,18 @@ func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock
 }
 
 // GetColumMetadataScanInfo mocks base method.
-func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx, name)
+	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx, name, visitTombstone)
 	ret0, _ := ret[0].([]*plan.MetadataScanInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetColumMetadataScanInfo indicates an expected call of GetColumMetadataScanInfo.
-func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx, name interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx, name, visitTombstone interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx, name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx, name, visitTombstone)
 }
 
 // GetDBID mocks base method.
@@ -1201,22 +1201,6 @@ func (mr *MockRelationMockRecorder) GetExtraInfo() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExtraInfo", reflect.TypeOf((*MockRelation)(nil).GetExtraInfo))
 }
 
-// GetHideKeys mocks base method.
-func (m *MockRelation) GetHideKeys(arg0 context.Context) ([]*engine.Attribute, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetHideKeys", arg0)
-	ret0, _ := ret[0].([]*engine.Attribute)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetHideKeys indicates an expected call of GetHideKeys.
-func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
-}
-
-// GetNonAppendableObjectStats mocks base method.
 func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
@@ -1334,7 +1318,7 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize in
 }
 
 // PrimaryKeysMayBeModified mocks base method.
-func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error) {
+func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex, _ int32) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PrimaryKeysMayBeModified", ctx, from, to, batch, pkIndex)
 	ret0, _ := ret[0].(bool)
@@ -1479,20 +1463,6 @@ func (m *MockRelation) TableRenameInTxn(ctx context.Context, constraint [][]byte
 func (mr *MockRelationMockRecorder) TableRenameInTxn(ctx, constraint interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableRenameInTxn", reflect.TypeOf((*MockRelation)(nil).TableRenameInTxn), ctx, constraint)
-}
-
-// Update mocks base method.
-func (m *MockRelation) Update(arg0 context.Context, arg1 *batch.Batch) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Update", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Update indicates an expected call of Update.
-func (mr *MockRelationMockRecorder) Update(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockRelation)(nil).Update), arg0, arg1)
 }
 
 // UpdateConstraint mocks base method.

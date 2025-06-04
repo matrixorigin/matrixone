@@ -81,7 +81,6 @@ func TestCalculateStorageUsage(t *testing.T) {
 	table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-	table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 	table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 	db := mock_frontend.NewMockDatabase(ctrl)

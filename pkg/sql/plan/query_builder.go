@@ -1388,7 +1388,25 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		var pkExprs []*plan.Expr
 		var oldPkPos [][2]int32
+		var partitionExprs []*plan.Expr
+		var oldPartitionPos [][2]int32
 		for _, lockTarget := range node.LockTargets {
+			if lockTarget.HasPartitionCol {
+				partitionExpr := &plan.Expr{
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: lockTarget.PrimaryColRelPos,
+							ColPos: lockTarget.PartitionColIdxInBat,
+						},
+					},
+				}
+				increaseRefCnt(partitionExpr, 1, colRefCnt)
+				partitionExprs = append(partitionExprs, partitionExpr)
+				oldPartitionPos = append(oldPartitionPos, [2]int32{lockTarget.PrimaryColRelPos, lockTarget.PartitionColIdxInBat})
+			} else {
+				partitionExprs = append(partitionExprs, nil)
+				oldPartitionPos = append(oldPartitionPos, [2]int32{})
+			}
 			pkExpr := &plan.Expr{
 				// Typ: node.LockTargets[0].GetPrimaryColTyp(),
 				Expr: &plan.Expr_Col{
@@ -1408,12 +1426,18 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		for oldPkIdx, lockTarget := range node.LockTargets {
-			if newPos, ok := childRemapping.globalToLocal[oldPkPos[oldPkIdx]]; ok {
+		for idx, lockTarget := range node.LockTargets {
+			if lockTarget.HasPartitionCol {
+				if newPos, ok := childRemapping.globalToLocal[oldPartitionPos[idx]]; ok {
+					lockTarget.PartitionColIdxInBat = newPos[1]
+				}
+				increaseRefCnt(partitionExprs[idx], -1, colRefCnt)
+			}
+			if newPos, ok := childRemapping.globalToLocal[oldPkPos[idx]]; ok {
 				lockTarget.PrimaryColRelPos = newPos[0]
 				lockTarget.PrimaryColIdxInBat = newPos[1]
 			}
-			increaseRefCnt(pkExprs[oldPkIdx], -1, colRefCnt)
+			increaseRefCnt(pkExprs[idx], -1, colRefCnt)
 		}
 
 		for i, globalRef := range childRemapping.localToGlobal {
@@ -1552,6 +1576,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for _, col := range updateCtx.DeleteCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
 			}
+
+			for _, col := range updateCtx.PartitionCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]++
+			}
 		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
@@ -1573,6 +1601,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			for i, col := range updateCtx.DeleteCols {
 				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
 				err := builder.remapSingleColRef(&updateCtx.DeleteCols[i], childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			for i, col := range updateCtx.PartitionCols {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}]--
+				err := builder.remapSingleColRef(&updateCtx.PartitionCols[i], childRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
@@ -1861,7 +1897,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
-		builder.forceJoinOnOneCN(rootID, false)
+		builder.forceJoinOnOneCN(rootID, i > 0)
 		// after this ,never call ReCalcNodeStats again !!!
 
 		if builder.isForUpdate {

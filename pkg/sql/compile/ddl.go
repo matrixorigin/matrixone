@@ -20,6 +20,9 @@ import (
 	"math"
 	"strings"
 
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -45,8 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -2294,6 +2295,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	tqry := s.Plan.GetDdl().GetTruncateTable()
 	dbName := tqry.GetDatabase()
 	tblName := tqry.GetTable()
@@ -2463,6 +2469,18 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	// update merge settings in mo_catalog.mo_merge_settings
+	updateMergeSettingsSql := fmt.Sprintf(updateMoMergeSettings, newId, accountId, oldId)
+	err = c.runSqlWithSystemTenant(updateMergeSettingsSql)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "update mo_catalog.mo_merge_settings for truncate table",
+			zap.Uint64("origin table id", oldId),
+			zap.Uint64("copy table id", newId),
+			zap.Error(err))
+		return err
+	}
+
 	c.addAffectedRows(uint64(affectedRows))
 	return nil
 }
@@ -2767,6 +2785,8 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
+	c.runSqlWithSystemTenant(fmt.Sprintf("delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d", accountId, tblId))
+
 	return partitionservice.GetService(c.proc.GetService()).Delete(
 		c.proc.Ctx,
 		tblId,
@@ -2835,6 +2855,17 @@ var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, *api.S
 	if tableDef.Pkey != nil {
 		c.Cts = append(c.Cts, &engine.PrimaryKeyDef{
 			Pkey: tableDef.Pkey,
+		})
+	}
+
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		exeDefs = append(exeDefs, &engine.PartitionDef{
+			Partitioned: 1,
+			Partition:   string(bytes),
 		})
 	}
 
