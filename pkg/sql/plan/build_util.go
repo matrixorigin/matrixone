@@ -373,6 +373,7 @@ func isNullAstExpr(expr tree.Expr) bool {
 }
 
 func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
+	logutil.Info("*[convertValueIntoBool] start")
 	if !isLogic && (len(args) != 2 || (args[0].Typ.Id != int32(types.T_bool) && args[1].Typ.Id != int32(types.T_bool))) {
 		return nil
 	}

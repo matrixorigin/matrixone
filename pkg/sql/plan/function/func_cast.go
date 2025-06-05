@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"math"
 	"slices"
 	"strconv"
@@ -299,6 +301,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
 		types.T_datalink,
+		types.T_TS,
 	},
 
 	types.T_binary: {
@@ -392,6 +395,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_TS: {
 		types.T_TS,
+		types.T_varchar,
 	},
 
 	types.T_Rowid: {
@@ -413,10 +417,12 @@ var supportedTypeCast = map[types.T][]types.T{
 }
 
 func IfTypeCastSupported(sourceType, targetType types.T) bool {
+	logutil.Info("*[IfTypeCastSupported] start", zap.String("sourceType", sourceType.String()), zap.String("targetType", targetType.String()))
 	supportList, ok := supportedTypeCast[sourceType]
 	if ok {
 		for _, t := range supportList {
 			if t == targetType {
+				logutil.Info("*[IfTypeCastSupported] return true")
 				return true
 			}
 		}
@@ -1743,9 +1749,13 @@ func uuidToOthers(ctx context.Context,
 func tsToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.TS],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
-	if toType.Oid == types.T_TS {
+	switch toType.Oid {
+	case types.T_TS:
 		rs := vector.MustFunctionResult[types.TS](result)
 		return rs.DupFromParameter(source, length)
+	case types.T_varchar:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return tsToStr(ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
 }
@@ -4541,6 +4551,42 @@ func uuidToStr(
 	return nil
 }
 
+func tsToStr(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.TS],
+	to *vector.FunctionResult[types.Varlena],
+	length int,
+	toType types.Type) error {
+
+	for i := 0; i < length; i++ {
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		str := tsVal.ToString()
+		result := []byte(str)
+
+		logutil.Info("*[tsToStr]",
+			zap.String("tsVal", str),
+			zap.String("result", string(result)),
+			zap.Int("row", i))
+
+		if int32(len(result)) > toType.Width {
+			return moerr.NewDataTruncated(ctx, "TS",
+				fmt.Sprintf("value '%s' exceeds varchar(%d) limit",
+					result, toType.Width))
+		}
+
+		if err := to.AppendBytes(result, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 func jsonToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],

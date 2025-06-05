@@ -2624,6 +2624,7 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	logutil.Info("*[bindSelect] start")
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
 		return
@@ -2699,6 +2700,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
+		logutil.Info("*[bindAndOptimizeSelectQuery] *tree.SelectClause")
 		if selectClause.GroupBy != nil {
 			if selectClause.GroupBy.Rollup {
 				for i := len(selectClause.GroupBy.GroupByExprsList[0]) - 1; i > 0; i-- {
@@ -2963,6 +2965,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	logutil.Info("*[bindSelectClause] start")
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return
@@ -3034,6 +3037,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	builder.rewriteRightJoinToLeftJoin(nodeID)
 	if clause.Where != nil {
 		var boundFilterList []*plan.Expr
+		logutil.Info("*[bindSelectClause] enter bindWhere")
 		if nodeID, boundFilterList, notCacheable, err = builder.bindWhere(ctx, clause.Where, nodeID); err != nil {
 			return
 		}
@@ -3093,11 +3097,13 @@ func (builder *QueryBuilder) bindWhere(
 	clause *tree.Where,
 	nodeID int32,
 ) (newNodeID int32, boundFilterList []*plan.Expr, notCacheable bool, err error) {
+	logutil.Info("*[buildWhere] start")
 	whereList, err := splitAndBindCondition(clause.Expr, NoAlias, ctx)
 	if err != nil {
+		logutil.Info("*[buildWhere] fail to splitAndBindCondition")
 		return
 	}
-
+	logutil.Info("*[buildWhere] successfully splitAndBindCondition")
 	var expr *plan.Expr
 	for _, cond := range whereList {
 		if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
@@ -4067,6 +4073,7 @@ func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
 }
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext, isRoot bool) (int32, error) {
+	logutil.Info("*[buildFrom] start")
 	if len(stmt) == 1 {
 		return builder.buildTable(stmt[0], ctx, -1, nil)
 	}
@@ -4263,8 +4270,10 @@ func (builder *QueryBuilder) bindView(
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, preNodeId int32, leftCtx *BindContext) (nodeID int32, err error) {
+	logutil.Info("*[buildTable] start")
 	switch tbl := stmt.(type) {
 	case *tree.Select:
+		logutil.Info("*[buildTable] *tree.Select")
 		if builder.isForUpdate {
 			return 0, moerr.NewInternalError(builder.GetContext(), "not support select from derived table for update")
 		}

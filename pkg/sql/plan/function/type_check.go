@@ -15,6 +15,8 @@
 package function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,10 +28,11 @@ import (
 // 3. >= > < <=
 // 4. Mod
 func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	logutil.Info("*[fixedTypeCastRule1] start", zap.String("s1.type:", s1.String()), zap.String("s2.type:", s2.String()))
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
-
+		logutil.Info("*[fixedTypeCastRule1] check.cast", zap.String("t1:", t1.String()), zap.String("t2:", t2.String()))
 		// special case: null + type, null + null, type + null
 		if s1.Oid == types.T_any && s2.Oid == types.T_any {
 			return true, t1, t2
@@ -1051,6 +1054,10 @@ func initFixed1() {
 		{types.T_varbinary, types.T_bit, types.T_uint64, types.T_uint64},
 		{types.T_blob, types.T_bit, types.T_uint64, types.T_uint64},
 		{types.T_text, types.T_bit, types.T_uint64, types.T_uint64},
+		// T_TS -> xx
+		{types.T_TS, types.T_varchar, types.T_varchar, types.T_varchar},
+		// xx -> T_TS
+		{types.T_varchar, types.T_TS, types.T_varchar, types.T_varchar},
 	}
 
 	for _, r := range ru {

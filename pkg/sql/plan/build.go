@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	gotrace "runtime/trace"
 	"time"
 
@@ -28,29 +30,37 @@ import (
 )
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
+	logutil.Info("*[bindAndOptimizeSelectQuery] start")
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	logutil.Info("*[bindAndOptimizeSelectQuery] successful NewQueryBuilder")
 	bindCtx := NewBindContext(builder, nil)
+	logutil.Info("*[bindAndOptimizeSelectQuery] successful NewBindContext")
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
+		// err here
+		logutil.Info("*[bindAndOptimizeSelectQuery] fail bindSelect", zap.String("err", err.Error()))
 		return nil, err
 	}
+	logutil.Info("*[bindAndOptimizeSelectQuery] successful bindSelect")
 	ctx.SetViews(bindCtx.views)
 
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	builder.skipStats = skipStats
 	query, err := builder.createQuery()
 	if err != nil {
+		logutil.Info("*[bindAndOptimizeSelectQuery] fail createQuery", zap.String("err", err.Error()))
 		return nil, err
 	}
+	logutil.Info("*[bindAndOptimizeSelectQuery] successful createQuery")
 	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
@@ -279,6 +289,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	defer task.End()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
+
+		logutil.Info("*[BuildPlan] case *tree.Select")
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)

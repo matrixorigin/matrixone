@@ -16,6 +16,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -31,6 +32,7 @@ func NewWhereBinder(builder *QueryBuilder, ctx *BindContext) *WhereBinder {
 }
 
 func (b *WhereBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	logutil.Info("*[BindExpr] start and enter baseBindExpr")
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 

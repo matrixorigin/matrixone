@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var allSupportedFunctions [1000]FuncNew
@@ -134,10 +135,12 @@ func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 }
 
 func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r FuncGetResult, err error) {
+	logutil.Info("*[GetFunctionByName] start", zap.String("name:", name))
 	r.fid, err = getFunctionIdByName(ctx, name)
 	if err != nil {
 		return r, err
 	}
+	logutil.Info("*[GetFunctionByName] start", zap.Int("FunctionID:", int(r.fid)))
 	f := allSupportedFunctions[r.fid]
 	if len(f.Overloads) == 0 || f.checkFn == nil {
 		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)

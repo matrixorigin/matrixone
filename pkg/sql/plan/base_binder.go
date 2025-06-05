@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -37,6 +38,7 @@ import (
 )
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
+	logutil.Info("*[baseBindExpr] start")
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
 		if d, ok := b.impl.(*DefaultBinder); ok {
@@ -80,6 +82,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindBinaryExpr(exprImpl, depth, isRoot)
 
 	case *tree.ComparisonExpr:
+		logutil.Info("*[baseBindExpr] case *tree.ComparisonExpr")
 		expr, err = b.bindComparisonExpr(exprImpl, depth, isRoot)
 
 	case *tree.FuncExpr:
@@ -564,15 +567,19 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
+	logutil.Info("*[bindComparisonExpr] start")
 	var op string
 
 	switch astExpr.Op {
 	case tree.EQUAL:
+		logutil.Info("*[bindComparisonExpr] astExpr.Op case tree.EQUAL")
 		op = "="
 		switch leftexpr := astExpr.Left.(type) {
 		case *tree.Tuple:
+			logutil.Info("*[bindComparisonExpr] leftexpr case *tree.Tuple")
 			switch rightexpr := astExpr.Right.(type) {
 			case *tree.Tuple:
+				logutil.Info("*[bindComparisonExpr] rightexpr case *tree.Tuple")
 				if len(leftexpr.Exprs) == len(rightexpr.Exprs) {
 					var expr1, expr2 *plan.Expr
 					var err error
@@ -900,6 +907,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	}
 
 	if astExpr.SubOp >= tree.ANY {
+		logutil.Info("*[bindComparisonExpr] astExpr.SubOp >= tree.ANY")
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
 			return nil, err
@@ -988,6 +996,7 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	logutil.Info("*[bindFuncExprImplByAstExpr] start")
 	// rewrite some ast Exprs before binding
 	switch name {
 	case "nullif":
@@ -1101,18 +1110,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// 4. return [serialExpr, idxExpr, typeExpr]. Used in list_builtIn.go
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
+		logutil.Info("*[bindFuncExprImplByAstExpr] op normal")
 		args = make([]*Expr, len(astArgs))
 		for idx, arg := range astArgs {
 			expr, err := b.impl.BindExpr(arg, depth, false)
 			if err != nil {
+				logutil.Info("*[bindFuncExprImplByAstExpr] fail to b.impl.BindExpr", zap.String("err", err.Error()))
 				return nil, err
 			}
-
+			logutil.Info("*[bindFuncExprImplByAstExpr] successful b.impl.BindExpr")
 			args[idx] = expr
 		}
 	}
 
 	if b.builder != nil {
+		logutil.Info("*[bindFuncExprImplByAstExpr] b.builder != nil")
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
 			return e, nil
@@ -1121,6 +1133,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	} else {
+		logutil.Info("*[bindFuncExprImplByAstExpr] b.builder == nil")
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
 		builtinExpr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
@@ -1225,11 +1238,13 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
+	logutil.Info("*[bindFuncExprAndConstFold] start")
 	retExpr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 	if err != nil {
+		logutil.Info("*[bindFuncExprAndConstFold] fail to BindFuncExprImplByPlanExpr", zap.String("err", err.Error()))
 		return nil, err
 	}
-
+	logutil.Info("*[bindFuncExprAndConstFold] successful BindFuncExprImplByPlanExpr")
 	switch retExpr.GetF().GetFunc().GetObjName() {
 	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
@@ -1309,6 +1324,7 @@ between_fallback:
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
+	logutil.Info("*[BindFuncExprImplByPlanExpr] start")
 	var err error
 
 	// deal with some special function
@@ -1355,10 +1371,13 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			return nil, err
 		}
 	case "=", "<", "<=", ">", ">=", "<>":
+		logutil.Info("*[BindFuncExprImplByPlanExpr] = < <= > >= <>")
 		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
+			logutil.Info("*[BindFuncExprImplByPlanExpr] fail to convertValueIntoBool", zap.String("err", err.Error()))
 			return nil, err
 		}
+		logutil.Info("*[BindFuncExprImplByPlanExpr] successful convertValueIntoBool")
 	case "date_add", "date_sub":
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
@@ -1694,6 +1713,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
+
+	// err here
 	fGet, err := function.GetFunctionByName(ctx, name, argsType)
 	if err != nil {
 		if name == "between" {
@@ -1709,13 +1730,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			return BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
 		}
-
+		logutil.Info("*[BindFuncExprImplByPlanExpr] fail to GetFunctionByName", zap.String("err", err.Error()))
 		return nil, err
 	}
+	logutil.Info("*[BindFuncExprImplByPlanExpr] successful GetFunctionByName")
 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	logutil.Info("*[BindFuncExprImplByPlanExpr] successful ShouldDoImplicitTypeCast")
 
 	if name == "round" || name == "ceil" || name == "ceiling" || name == "floor" && argsType[0].IsDecimal() {
 		if len(argsType) == 1 {
@@ -1754,6 +1777,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		logutil.Infof("*[BindFuncExprImplByPlanExpr] switch name case = < <= > >= <>")
 		switch args[0].Expr.(type) {
 		case *plan.Expr_Lit:
+			// '0-0' = delete_ts
 			logutil.Infof("*[BindFuncExprImplByPlanExpr] switch args[0].Expr.(type) case *plan.Expr_Lit")
 			if args[1].GetCol() != nil {
 				logutil.Infof("*[BindFuncExprImplByPlanExpr] args[1].GetCol() != nil")
@@ -1769,6 +1793,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		case *plan.Expr_Col:
+			// delete_ts = '0-0'
 			logutil.Infof("*[BindFuncExprImplByPlanExpr] switch args[0].Expr.(type) case *plan.Expr_Col")
 			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				logutil.Infof("*[BindFuncExprImplByPlanExpr] checkNoNeedCast(argsType[1], argsType[0], args[1])")
@@ -1838,8 +1863,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				logutil.Infof("*[BindFuncExprImplByPlanExpr] appendCastBeforeExpr")
 				args[idx], err = appendCastBeforeExpr(ctx, args[idx], typ)
 				if err != nil {
+					logutil.Info("*[BindFuncExprImplByPlanExpr] fail to appendCastBeforeExpr", zap.String("err", err.Error()))
 					return nil, err
 				}
+				logutil.Infof("*[BindFuncExprImplByPlanExpr] successful appendCastBeforeExpr")
 			}
 		}
 	}
@@ -2012,6 +2039,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
+	logutil.Info("*[appendCastBeforeExpr] start", zap.String("argsType[0]", argsType[0].String()), zap.String("argsType[1]", argsType[1].String()))
 	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {
 		return nil, err

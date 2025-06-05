@@ -1620,11 +1620,21 @@ func TestMetadataScan(t *testing.T) {
 	v, _ := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
 	exec := v.(executor.SQLExecutor)
 
+	var (
+		dbName = "db"
+		tName  = "mo_account"
+	)
+	schema := catalog2.MockSchemaAll(5, 1)
+	schema.Name = tName
 	txnop := p.StartCNTxn()
+	_, _ = p.CreateDBAndTable(txnop, dbName, schema)
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
 	query := `
 		SELECT * FROM (
-			SELECT * FROM metadata_scan("mo_catalog.mo_version", "*")g
-		) WHERE delete_ts = 0-0
+			SELECT * FROM metadata_scan("db.mo_account", "*")g
+		) WHERE delete_ts = '0-0'
 	`
 	_, err := exec.Exec(p.Ctx, query, executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
