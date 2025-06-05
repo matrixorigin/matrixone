@@ -281,7 +281,7 @@ func OutputVacuumStats(
 	tbl catalog.MergeTable,
 	opts *merge.VacuumOpts,
 ) {
-	stats, err := merge.CalculateVacuumStats(context.Background(), tbl, opts)
+	stats, err := merge.CalculateVacuumStats(context.Background(), tbl, opts, time.Now())
 	if err != nil {
 		out.WriteString(fmt.Sprintf("\nvacuum stats: %s", err))
 		return

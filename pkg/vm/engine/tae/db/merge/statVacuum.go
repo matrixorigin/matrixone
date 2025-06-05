@@ -319,6 +319,7 @@ func GatherCompactTasks(
 func CalculateVacuumStats(ctx context.Context,
 	tbl catalog.MergeTable,
 	opts *VacuumOpts,
+	now time.Time,
 ) (*VacuumStats, error) {
 	if opts.testInject != nil {
 		if opts.testInject.err != nil {
@@ -358,7 +359,7 @@ func CalculateVacuumStats(ctx context.Context,
 		ret.TotalSize += uint64(oSize)
 		ret.TotalRows += uint64(stat.Rows())
 		ret.HistoSize[sizeLevel(oSize, len(ret.HistoSize)-1)]++
-		createAgo := time.Since(item.GetCreatedAt().ToTimestamp().ToStdTime())
+		createAgo := now.Sub(item.GetCreatedAt().ToTimestamp().ToStdTime())
 		ret.HistoCreateAt[timeLevelSince(createAgo)]++
 		if createAgo > ret.MaxCreateAgo {
 			ret.MaxCreateAgo = createAgo
