@@ -269,7 +269,7 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 			stats.SetLevel(1)
 		}
 		name := space.table.GetLocalSchema(space.isTombstone).Name
-		if name == "statement_info" || name == "bmsql_stock" {
+		if name == "statement_info" {
 			if space.isTombstone {
 				catalog.LogInputTombstoneObjectAsync(
 					space.table.entry,
