@@ -377,19 +377,6 @@ func (gs *GlobalStats) consumeLogtail(ctx context.Context, tail *logtail.TableLo
 		TableName:  tail.Table.GetTbName(),
 		DbName:     tail.Table.GetDbName(),
 	}
-	tableName := make([]byte, len(key.TableName))
-	copy(tableName, key.TableName)
-
-	dbName := make([]byte, len(key.DbName))
-	copy(dbName, key.DbName)
-
-	defer func() {
-		if r := recover(); r != nil {
-			logutil.Error("Panic-In-ConsumeLogtail1", zap.String("table", string(tableName)), zap.String("db", string(dbName)))
-			logutil.Error("Panic-In-ConsumeLogtail2", zap.String("db", key.DbName), zap.String("table", key.TableName))
-			panic(r)
-		}
-	}()
 
 	wrapkey := pb.StatsInfoKeyWithContext{
 		Ctx: ctx,
@@ -775,7 +762,7 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 		if req.statsInfo.MaxValMap[colName] < req.statsInfo.MinValMap[colName] {
 			logutil.Errorf("error happended in stats!")
 		}
-		logutil.Infof("debug: table %v tablecnt %v  col %v max %v min %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v",
+		logutil.Debugf("debug: table %v tablecnt %v  col %v max %v min %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v",
 			baseTableDef.Name, info.TableCnt, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
 			req.statsInfo.NdvMap[colName], overlap, info.MaxNDVs[i], info.MaxOBJSize, info.NDVinMaxOBJ[i], info.MinOBJSize, info.NDVinMinOBJ[i])
 	}
