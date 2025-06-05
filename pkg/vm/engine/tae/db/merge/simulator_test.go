@@ -247,7 +247,7 @@ func ExtractFromLokiExport(
 }
 
 func TestSimulatorOnLocalTpcc100(t *testing.T) {
-	// t.Skip("turn on if experiment is needed")
+	t.Skip("turn on if experiment is needed")
 	player := NewSimPlayer()
 	player.ResetPace(10*time.Millisecond, 4*time.Second)
 	// player.sexec.SetLogEnabled(true)
