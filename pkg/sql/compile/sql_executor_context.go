@@ -81,7 +81,7 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -291,7 +291,7 @@ func (c *compilerContext) SetContext(ctx context.Context) {
 	c.proc.ReplaceTopCtx(ctx)
 }
 
-func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef, err error) {
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
@@ -303,18 +303,21 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 		}
 	}
 
-	dbName, tableName, _ := c.engine.GetNameById(ctx, txnOpt, tableId)
+	dbName, tableName, e := c.engine.GetNameById(ctx, txnOpt, tableId)
+	if e != nil {
+		return nil, nil, e
+	}
 	if dbName == "" || tableName == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
 		dbName = strings.ToLower(dbName)
@@ -323,14 +326,15 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
-	return c.getTableDef(ctx, table, dbName, tableName)
+	ref, def := c.getTableDef(ctx, table, dbName, tableName)
+	return ref, def, nil
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {

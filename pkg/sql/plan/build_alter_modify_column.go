@@ -129,7 +129,10 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 		for i, colId := range fkInfo.Cols {
 			if colId == originalCol.ColId {
 				// Check if the parent table of the foreign key exists
-				_, referTableDef := ctx.ResolveById(fkInfo.ForeignTbl, nil)
+				_, referTableDef, err := ctx.ResolveById(fkInfo.ForeignTbl, nil)
+				if err != nil {
+					return err
+				}
 				if referTableDef == nil {
 					continue
 				}
@@ -151,7 +154,10 @@ func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		refObjRef, refTableDef := ctx.ResolveById(referredTblId, nil)
+		refObjRef, refTableDef, err := ctx.ResolveById(referredTblId, nil)
+		if err != nil {
+			return err
+		}
 		if refTableDef == nil {
 			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}

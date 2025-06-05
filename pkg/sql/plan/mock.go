@@ -72,12 +72,12 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 	panic("implement me")
 }
 
-func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	return m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
 }
 
-func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
-	return nil, nil
+func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef, error) {
+	return nil, nil, nil
 }
 
 func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
@@ -1186,7 +1186,7 @@ func (m *MockCompilerContext) GetUserName() string {
 	return "root"
 }
 
-func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := strings.ToLower(tableName)
 	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
@@ -1208,10 +1208,10 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	if tableDef != nil {
 		tableDef.DbName = dbName
 	}
-	return m.objects[name], tableDef
+	return m.objects[name], tableDef, nil
 }
 
-func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := m.id2name[tableId]
 	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
@@ -1222,7 +1222,7 @@ func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*
 			}
 		}
 	}
-	return m.objects[name], tableDef
+	return m.objects[name], tableDef, nil
 }
 
 func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *Snapshot) []*ColDef {

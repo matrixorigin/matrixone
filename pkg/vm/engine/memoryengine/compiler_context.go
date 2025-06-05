@@ -73,7 +73,7 @@ func (c *CompilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 	panic("implement me")
 }
 
-func (c *CompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+func (c *CompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -232,19 +232,19 @@ func (c *CompilerContext) SetContext(ctx context.Context) {
 	c.ctx = ctx
 }
 
-func (c *CompilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *CompilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef, err error) {
 	dbName, tableName, _ := c.engine.GetNameById(c.ctx, c.txnOp, tableId)
 	if dbName == "" || tableName == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *CompilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *CompilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
 }
 
-func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef, err error) {
 	if schemaName == "" {
 		schemaName = c.defaultDB
 	}
@@ -261,7 +261,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string, snapshot 
 
 	attrs, err := c.getTableAttrs(schemaName, tableName, snapshot)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 
 	for i, attr := range attrs {

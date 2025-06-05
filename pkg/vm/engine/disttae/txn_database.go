@@ -166,7 +166,8 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, err
 	}
 	if rel == nil {
-		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
+		return nil, moerr.NewNoSuchTable(ctx, db.databaseName, name)
+		// return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
 	}
 	return rel, nil
 }
