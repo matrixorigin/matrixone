@@ -46,9 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
