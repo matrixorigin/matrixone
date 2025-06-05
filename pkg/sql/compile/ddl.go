@@ -20,12 +20,8 @@ import (
 	"math"
 	"strings"
 
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -312,10 +310,10 @@ func (s *Scope) AlterView(c *Compile) error {
 	// Create view table.
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	exeCols := planColsToExeCols(planCols)
+	exeCols := engine.PlanColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
@@ -528,6 +526,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	// drop foreign key
 	for _, action := range qry.Actions {
 		switch act := action.Action.(type) {
+		case *plan.AlterTable_Action_AlterVarcharLength:
+			alterKinds = append(alterKinds, api.AlterKind_ReplaceDef)
+			for i, col := range tableDef.Cols {
+				if col.Name == act.AlterVarcharLength.ColumnName {
+					tableDef.Cols[i].Typ.Width = act.AlterVarcharLength.NewLength
+				}
+			}
 		case *plan.AlterTable_Action_Drop:
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
@@ -882,6 +887,8 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		case api.AlterKind_DropColumn:
 			req = api.NewRemoveColumnReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), dropCol[dropColIdx].Idx, dropCol[dropColIdx].Seq)
 			dropColIdx++
+		case api.AlterKind_ReplaceDef:
+			req = api.NewReplaceDefReq(rel.GetDBID(c.proc.Ctx), rel.GetTableID(c.proc.Ctx), tableDef)
 		default:
 		}
 		reqs = append(reqs, req)
@@ -945,10 +952,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	exeCols := planColsToExeCols(planCols)
+	exeCols := engine.PlanColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, extra, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, extra, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
@@ -1319,8 +1326,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	for i, def := range qry.IndexTables {
 		planCols = def.GetCols()
-		exeCols = planColsToExeCols(planCols)
-		exeDefs, indexExtra, err := planDefsToExeDefs(def)
+		exeCols = engine.PlanColsToExeCols(planCols)
+		exeDefs, indexExtra, err = engine.PlanDefsToExeDefs(def)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
 				zap.String("databaseName", c.db),
@@ -1525,10 +1532,10 @@ func (s *Scope) CreateView(c *Compile) error {
 
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	exeCols := planColsToExeCols(planCols)
+	exeCols := engine.PlanColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
@@ -1644,10 +1651,10 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	exeCols := planColsToExeCols(planCols)
+	exeCols := engine.PlanColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
@@ -1692,8 +1699,8 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	// build index table
 	for _, def := range qry.IndexTables {
 		planCols = def.GetCols()
-		exeCols = planColsToExeCols(planCols)
-		exeDefs, _, err = planDefsToExeDefs(def)
+		exeCols = engine.PlanColsToExeCols(planCols)
+		exeDefs, _, err = engine.PlanDefsToExeDefs(def)
 		if err != nil {
 			return err
 		}
@@ -1867,7 +1874,7 @@ func (s *Scope) doCreateIndex(
 	}
 
 	// build and update constraint def (no need to handle IVF related logic here)
-	defs, _, err := planDefsToExeDefs(indexTableDef)
+	defs, _, err := engine.PlanDefsToExeDefs(indexTableDef)
 	if err != nil {
 		return err
 	}
@@ -1918,8 +1925,8 @@ func indexTableBuild(
 	dbSource engine.Database,
 ) error {
 	planCols := def.GetCols()
-	exeCols := planColsToExeCols(planCols)
-	exeDefs, extra, err := planDefsToExeDefs(def)
+	exeCols := engine.PlanColsToExeCols(planCols)
+	exeDefs, extra, err := engine.PlanDefsToExeDefs(def)
 	if err != nil {
 		c.proc.Info(c.proc.Ctx, "createTable",
 			zap.String("databaseName", c.db),
@@ -2553,7 +2560,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	tblId := qry.GetTableId()
+	tblID := qry.GetTableId()
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -2628,7 +2635,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 
-		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
+		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblID)
 		if err != nil {
 			return err
 		}
@@ -2643,7 +2650,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = s.removeParentTblIdFromChildTable(c, childRelation, tblId)
+		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)
 		if err != nil {
 			return err
 		}
@@ -2754,7 +2761,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	if dbName == catalog.MO_CATALOG {
 		return nil
 	}
-	deleteRetentionSQL := fmt.Sprintf(deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
+	deleteRetentionSQL := fmt.Sprintf(
+		deleteMoRetentionWithDatabaseNameAndTableNameFormat,
+		dbName, tblName,
+	)
 	err = c.runSql(deleteRetentionSQL)
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
@@ -2764,19 +2774,20 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
 
 	if !needSkipDbs[dbName] {
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
+		updatePitrSql := fmt.Sprintf(
+			"update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
-			catalog.MO_PITR_ACCOUNT_ID, accountId,
+			catalog.MO_PITR_ACCOUNT_ID, accountID,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_TABLE_NAME, tblName,
 			catalog.MO_PITR_STATUS, 1,
-			catalog.MO_PITR_OBJECT_ID, tblId,
+			catalog.MO_PITR_OBJECT_ID, tblID,
 		)
 
 		err = c.runSqlWithSystemTenant(updatePitrSql)
@@ -2785,139 +2796,21 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	c.runSqlWithSystemTenant(fmt.Sprintf("delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d", accountId, tblId))
+	sql := fmt.Sprintf(
+		"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
+		accountID, tblID,
+	)
+	err = c.runSqlWithSystemTenant(sql)
+	if err != nil {
+		return err
+	}
 
 	return partitionservice.GetService(c.proc.GetService()).Delete(
 		c.proc.Ctx,
-		tblId,
+		tblID,
 		c.proc.GetTxnOperator(),
 	)
 }
-
-var planDefsToExeDefs = func(tableDef *plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
-	planDefs := tableDef.GetDefs()
-	var exeDefs []engine.TableDef
-	var propDef *engine.PropertiesDef
-	c := new(engine.ConstraintDef)
-	for _, def := range planDefs {
-		switch defVal := def.GetDef().(type) {
-		case *plan.TableDef_DefType_Properties:
-			properties := make([]engine.Property, len(defVal.Properties.GetProperties()))
-			for i, p := range defVal.Properties.GetProperties() {
-				properties[i] = engine.Property{
-					Key:   p.GetKey(),
-					Value: p.GetValue(),
-				}
-			}
-			propDef = &engine.PropertiesDef{Properties: properties}
-			exeDefs = append(exeDefs, propDef)
-			c.Cts = append(c.Cts, &engine.StreamConfigsDef{
-				Configs: defVal.Properties.GetProperties(),
-			})
-		}
-	}
-
-	if propDef == nil {
-		propDef = &engine.PropertiesDef{Properties: make([]engine.Property, 0)}
-		exeDefs = append(exeDefs, propDef)
-	}
-	extra := &api.SchemaExtra{
-		FeatureFlag: tableDef.FeatureFlag,
-	}
-	propDef.Properties = append(
-		propDef.Properties,
-		engine.Property{
-			Key: catalog.PropSchemaExtra,
-			ValueFactory: func() string {
-				return string(api.MustMarshalTblExtra(extra))
-			},
-		},
-	)
-
-	if tableDef.Indexes != nil {
-		c.Cts = append(c.Cts, &engine.IndexDef{
-			Indexes: tableDef.Indexes,
-		})
-	}
-
-	if tableDef.ViewSql != nil {
-		exeDefs = append(exeDefs, &engine.ViewDef{
-			View: tableDef.ViewSql.View,
-		})
-	}
-
-	if len(tableDef.Fkeys) > 0 {
-		c.Cts = append(c.Cts, &engine.ForeignKeyDef{
-			Fkeys: tableDef.Fkeys,
-		})
-	}
-
-	if tableDef.Pkey != nil {
-		c.Cts = append(c.Cts, &engine.PrimaryKeyDef{
-			Pkey: tableDef.Pkey,
-		})
-	}
-
-	if tableDef.Partition != nil {
-		bytes, err := tableDef.Partition.Marshal()
-		if err != nil {
-			return nil, nil, err
-		}
-		exeDefs = append(exeDefs, &engine.PartitionDef{
-			Partitioned: 1,
-			Partition:   string(bytes),
-		})
-	}
-
-	if len(tableDef.RefChildTbls) > 0 {
-		c.Cts = append(c.Cts, &engine.RefChildTableDef{
-			Tables: tableDef.RefChildTbls,
-		})
-	}
-
-	if len(c.Cts) > 0 {
-		exeDefs = append(exeDefs, c)
-	}
-
-	if tableDef.ClusterBy != nil {
-		exeDefs = append(exeDefs, &engine.ClusterByDef{
-			Name: tableDef.ClusterBy.Name,
-		})
-	}
-	return exeDefs, extra, nil
-}
-
-func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
-	exeCols := make([]engine.TableDef, len(planCols))
-	for i, col := range planCols {
-		var alg compress.T
-		switch col.Alg {
-		case plan.CompressType_None:
-			alg = compress.None
-		case plan.CompressType_Lz4:
-			alg = compress.Lz4
-		}
-		colTyp := col.GetTyp()
-		exeCols[i] = &engine.AttributeDef{
-			Attr: engine.Attribute{
-				Name:          col.GetOriginCaseName(),
-				Alg:           alg,
-				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
-				Default:       planCols[i].GetDefault(),
-				OnUpdate:      planCols[i].GetOnUpdate(),
-				Primary:       col.GetPrimary(),
-				Comment:       col.GetComment(),
-				ClusterBy:     col.ClusterBy,
-				AutoIncrement: col.Typ.GetAutoIncr(),
-				IsHidden:      col.Hidden,
-				Seqnum:        uint16(col.Seqnum),
-				EnumVlaues:    colTyp.GetEnumvalues(),
-			},
-		}
-	}
-	return exeCols
-}
-
 func (s *Scope) CreateSequence(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -2928,10 +2821,10 @@ func (s *Scope) CreateSequence(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	exeCols := planColsToExeCols(planCols)
+	exeCols := engine.PlanColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
@@ -2999,10 +2892,10 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterSequence()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
-	exeCols := planColsToExeCols(planCols)
+	exeCols := engine.PlanColsToExeCols(planCols)
 
 	// convert the plan's defs to the execution's defs
-	exeDefs, _, err := planDefsToExeDefs(qry.GetTableDef())
+	exeDefs, _, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
 		return err
 	}
