@@ -82,8 +82,6 @@ var oneGoodOneBad = func() (*batch.Batch, func()) {
 	return bat, func() { bat.Clean(common.MergeAllocator) }
 }
 
-var noDefaultSettings = func() (*batch.Batch, func()) { return nil, nil }
-
 func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func()) {
 	return c.settingsFn
 }
