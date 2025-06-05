@@ -32,7 +32,7 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
-// Hnsw Build index implementation
+// HnswModel struct - This structure shares with Search, Build and Sync
 type HnswModel struct {
 	Id       string
 	Index    *usearch.Index

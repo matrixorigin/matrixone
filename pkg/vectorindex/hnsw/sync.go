@@ -32,6 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// CdcSync is the main function to update hnsw index via CDC.  SQL function hnsw_cdc_update() will call this function.
+
 const (
 	catalogsql = "select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s') and algo='hnsw';"
 )
@@ -41,6 +43,7 @@ var runCatalogSql = sqlexec.RunSql
 
 func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc *vectorindex.VectorIndexCdc[float32]) error {
 
+	// get index catalog
 	sql := fmt.Sprintf(catalogsql, tbl, db)
 	res, err := runCatalogSql(proc, sql)
 	if err != nil {

@@ -14,8 +14,11 @@
 
 package cdc
 
-// to retrieve the index table from mo_catalog
-// select * from mo_catalog.mo_indexes where table_id = (select rel_id from mo_tables where relname = "tbl" and reldatabase = "db");
+// hnswSyncSinker is to update HNSW index via CDC.
+// It will read CDC changes and create JSON as input to function hnsw_cdc_update(dbname, tablename, vector_dimenion, json)
+// You can refer the JSON format from vectorindex.VectorIndexCdc
+// Single batch will split into multiple json objects and each json has maximum 8192 records (see vectorindex.VectorIndexCdc).
+// Transaction function ExecTxn() used to make sure single batch (multiple json objects) can be updated in single transaction.
 
 import (
 	"bytes"

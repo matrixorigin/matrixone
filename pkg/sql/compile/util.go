@@ -594,7 +594,8 @@ func genCdcHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef,
 	sqls = append(sqls, sql)
 
 	//os.Stderr.WriteString(fmt.Sprintf("%v\n", sqls))
+	// TODO: HNSWCDC remove the line below to run the above SQLs
+	sqls = sqls[:0]
 
-	// return emtpy for now.
-	return []string{}, nil
+	return sqls, nil
 }
