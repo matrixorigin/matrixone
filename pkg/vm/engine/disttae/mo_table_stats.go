@@ -1089,7 +1089,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 		}
 
 	} else {
-		to = types.BuildTS(time.Now().UnixNano(), 0)
+		to = types.TimestampToTS(d.de.LatestLogtailAppliedTime())
 
 		for i := range tbls {
 			tbl, ok := buildTablePairFromCache(d.de, accs[i], dbs[i], tbls[i], to, false)
@@ -1460,7 +1460,7 @@ func buildTablePairFromCache(
 	onlyUpdateTS bool,
 ) (tbl tablePair, ok bool) {
 
-	item := eng.(*Engine).GetLatestCatalogCache().GetTableById(uint32(accId), dbId, tblId)
+	item := eng.(*Engine).GetLatestCatalogCache().GetTableByIdAndTime(uint32(accId), dbId, tblId, snapshot.ToTimestamp())
 	if item == nil || item.IsDeleted() {
 		// account, db, tbl may delete already
 		// the `update_time` not change anymore
@@ -2057,8 +2057,8 @@ func (d *dynamicCtx) gamaInsertNewTables(
 
 		accId, dbId, tblId uint64
 
-		values = make([]string, 0, sqlRet.RowCount())
-		now    = types.BuildTS(time.Now().UnixNano(), 0)
+		values   = make([]string, 0, sqlRet.RowCount())
+		snapshot = eng.LatestLogtailAppliedTime()
 	)
 
 	defer func() {
@@ -2097,7 +2097,8 @@ func (d *dynamicCtx) gamaInsertNewTables(
 		tblId = val.(uint64)
 
 		if tp, ok := buildTablePairFromCache(
-			eng, accId, dbId, tblId, now, false); !ok {
+			eng, accId, dbId, tblId,
+			types.TimestampToTS(snapshot), false); !ok {
 			continue
 		} else {
 			pairs = append(pairs, tp)
@@ -2252,7 +2253,7 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 			tblIds []uint64
 		)
 
-		to := types.BuildTS(time.Now().UnixNano(), 0)
+		snapshot := de.LatestLogtailAppliedTime()
 
 		sql = fmt.Sprintf(getNullStatsSQL, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, limit)
 
@@ -2260,7 +2261,7 @@ func (d *dynamicCtx) gamaUpdateForgotten(
 			return err
 		}
 
-		tbls = idsToPairs(accIds, dbIds, tblIds, to)
+		tbls = idsToPairs(accIds, dbIds, tblIds, types.TimestampToTS(snapshot))
 
 		nullStatsCnt = len(tbls)
 
@@ -2885,11 +2886,12 @@ func getChangedTableList(
 	}
 
 	resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
-	if resp.Newest == nil {
-		*to = types.BuildTS(time.Now().UnixNano(), 0)
-	} else {
-		*to = types.TimestampToTS(*resp.Newest)
-	}
+	//if resp.Newest == nil {
+	//	*to = types.BuildTS(time.Now().UnixNano(), 0)
+	//} else {
+	//	*to = types.TimestampToTS(*resp.Newest)
+	//}
+	*to = types.TimestampToTS(txnOperator.SnapshotTS())
 
 	if err = correctAccountForCatalogTables(ctx, eng.(*Engine), resp); err != nil {
 		return
