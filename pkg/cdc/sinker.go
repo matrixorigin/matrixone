@@ -539,25 +539,6 @@ func (s *mysqlSinker) sinkTail(ctx context.Context, insertBatch, deleteBatch *At
 
 	// output sql until one iterator reach the end
 	insertIterHasNext, deleteIterHasNext := insertIter.Next(), deleteIter.Next()
-	for insertIterHasNext && deleteIterHasNext {
-		insertItem, deleteItem := insertIter.Item(), deleteIter.Item()
-		// compare ts, ignore pk
-		if insertItem.Ts.LT(&deleteItem.Ts) {
-			if err = s.sinkInsert(ctx, insertIter); err != nil {
-				s.SetError(err)
-				return
-			}
-			// get next item
-			insertIterHasNext = insertIter.Next()
-		} else {
-			if err = s.sinkDelete(ctx, deleteIter); err != nil {
-				s.SetError(err)
-				return
-			}
-			// get next item
-			deleteIterHasNext = deleteIter.Next()
-		}
-	}
 
 	// output the rest of insert iterator
 	for insertIterHasNext {
