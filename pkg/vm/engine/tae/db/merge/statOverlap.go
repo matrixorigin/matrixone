@@ -224,10 +224,10 @@ func IsConstantZM(zm index.ZM) bool {
 	// for those non-string types, or string without any truncation,
 	// if the min and max are the same,
 	// it is a constant object and not a good candidate for merge
-	return 0 == compute.Compare(
+	return compute.Compare(
 		zm.GetMinBuf(), zm.GetMaxBuf(),
 		zm.GetType(), zm.GetScale(), zm.GetScale(),
-	)
+	) == 0
 }
 
 type OverlapOpts struct {

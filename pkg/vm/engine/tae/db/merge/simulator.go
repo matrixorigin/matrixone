@@ -839,11 +839,6 @@ func (o *STombstone) MakeBufferBatch() (any, func()) {
 
 // region: SimPalyer
 
-type playerSettings struct {
-	tickInterval time.Duration `json:"tick_interval"`
-	tickStride   time.Duration `json:"tick_stride"`
-}
-
 type SimPlayer struct {
 	sclock *fakeClock
 	scata  *SCatalog
@@ -859,7 +854,6 @@ type SimPlayer struct {
 	sourceExhaustedCh chan struct{}
 
 	cancel func()
-	ticker *time.Ticker // std ticker to drive the simulation
 
 	tickInRealTime time.Duration
 	tickInSimTime  time.Duration
@@ -957,6 +951,7 @@ func (p *SimPlayer) runTicker(trueInterval, simInterval time.Duration) func() {
 		for {
 			select {
 			case <-ctx.Done():
+				ticker.Stop()
 				return
 			case <-ticker.C:
 				p.fillData()

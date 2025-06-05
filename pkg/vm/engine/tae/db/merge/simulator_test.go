@@ -41,7 +41,6 @@ func TestBasicSimulator(t *testing.T) {
 	player.ResetPace(100*time.Millisecond, 120*time.Second)
 
 	player.Start()
-	defer player.Stop()
 
 	const K = 1024
 	sid := objectio.NewSegmentid
@@ -109,6 +108,7 @@ func TestBasicSimulator(t *testing.T) {
 	}
 
 	time.Sleep(3 * time.Second)
+	player.Stop()
 	t.Logf("report: %v", player.ReportString())
 
 }
