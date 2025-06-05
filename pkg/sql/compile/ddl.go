@@ -17,8 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
 	"math"
 	"strings"
 
@@ -46,6 +44,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -2449,7 +2450,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	tblId := qry.GetTableId()
+	tblID := qry.GetTableId()
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		if qry.GetIfExists() {
@@ -2524,7 +2525,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 
-		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
+		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblID)
 		if err != nil {
 			return err
 		}
@@ -2539,7 +2540,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		err = s.removeParentTblIdFromChildTable(c, childRelation, tblId)
+		err = s.removeParentTblIdFromChildTable(c, childRelation, tblID)
 		if err != nil {
 			return err
 		}
@@ -2650,7 +2651,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	if dbName == catalog.MO_CATALOG {
 		return nil
 	}
-	deleteRetentionSQL := fmt.Sprintf(deleteMoRetentionWithDatabaseNameAndTableNameFormat, dbName, tblName)
+	deleteRetentionSQL := fmt.Sprintf(
+		deleteMoRetentionWithDatabaseNameAndTableNameFormat,
+		dbName, tblName,
+	)
 	err = c.runSql(deleteRetentionSQL)
 	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 		return nil
@@ -2660,19 +2664,20 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
 
 	if !needSkipDbs[dbName] {
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
+		updatePitrSql := fmt.Sprintf(
+			"update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
 			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
-			catalog.MO_PITR_ACCOUNT_ID, accountId,
+			catalog.MO_PITR_ACCOUNT_ID, accountID,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_TABLE_NAME, tblName,
 			catalog.MO_PITR_STATUS, 1,
-			catalog.MO_PITR_OBJECT_ID, tblId,
+			catalog.MO_PITR_OBJECT_ID, tblID,
 		)
 
 		err = c.runSqlWithSystemTenant(updatePitrSql)
@@ -2681,11 +2686,18 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	c.runSqlWithSystemTenant(fmt.Sprintf("delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d", accountId, tblId))
+	sql := fmt.Sprintf(
+		"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
+		accountID, tblID,
+	)
+	err = c.runSqlWithSystemTenant(sql)
+	if err != nil {
+		return err
+	}
 
 	return partitionservice.GetService(c.proc.GetService()).Delete(
 		c.proc.Ctx,
-		tblId,
+		tblID,
 		c.proc.GetTxnOperator(),
 	)
 }
