@@ -1192,14 +1192,6 @@ func Test_Replayer11(t *testing.T) {
 	err = lastEntry.WaitDone()
 	assert.NoError(t, err)
 
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			return consumer.GetDSN() == uint64(appendCnt)
-		},
-	)
-	dsn := consumer.GetDSN()
-	t.Logf("dsn: %d", dsn)
 	mode.Store(int32(storeDriver.ReplayMode_ReplayForWrite))
 
 	<-consumer.ReplayWaitC()
@@ -1241,14 +1233,6 @@ func Test_Replayer11(t *testing.T) {
 	err = lastEntry.WaitDone()
 	assert.NoError(t, err)
 
-	testutils.WaitExpect(
-		4000,
-		func() bool {
-			return consumer.GetDSN() == uint64(appendCnt*2)
-		},
-	)
-	dsn = consumer.GetDSN()
-	t.Logf("dsn: %d", dsn)
 	mode.Store(int32(storeDriver.ReplayMode_ReplayForRead))
 
 	<-consumer.ReplayWaitC()
