@@ -477,8 +477,14 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	}
 
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
-	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoDB) {
+			return nil, nil, nil
+		}
 		return nil, nil, err
+	}
+	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
+		return nil, nil, nil
 	}
 
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
