@@ -67,7 +67,7 @@ func (b *BlockInfo) SetFlagByObjStats(stats *ObjectStats) {
 }
 
 func (b *BlockInfo) ConstructBlockID(name ObjectName, sequence uint16) {
-	BuildObjectBlockidTo(name, sequence, b.BlockID[:])
+	FillBlockidWithNameAndSeq(name, sequence, b.BlockID[:])
 }
 
 func (b *BlockInfo) IsAppendable() bool {
