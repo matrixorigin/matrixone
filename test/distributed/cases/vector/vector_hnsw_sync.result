@@ -11,32 +11,21 @@ select sleep(30);
 sleep(30)
 0
 insert into vector_index_01 values (0, "[1,2,3]", 1);
-select sleep(4);
-sleep(4)
+UPDATE vector_index_01 set b = '[4,5,6]' where a = 0;
+insert into vector_index_01 values (1, "[2,3,4]", 1);
+DELETE FROM vector_index_01 WHERE a=1;
+select sleep(10);
+sleep(10)
 0
 select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
 a    b    c
-0    [1, 2, 3]    1
-UPDATE vector_index_01 set b = '[4,5,6]' where a = 0;
-select sleep(4);
-sleep(4)
-0
+0    [4, 5, 6]    1
 select * from vector_index_01 order by  L2_DISTANCE(b,"[4,5,6]") ASC LIMIT 10;
 a    b    c
 0    [4, 5, 6]    1
-DELETE FROM vector_index_01 WHERE a=0;
-select sleep(4);
-sleep(4)
-0
-select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
-a    b    c
-insert into vector_index_01 values (1, "[2,3,4]", 1);
-select sleep(4);
-sleep(4)
-0
 select * from vector_index_01 order by  L2_DISTANCE(b,"[2,3,4]") ASC LIMIT 10;
 a    b    c
-1    [2, 3, 4]    1
+0    [4, 5, 6]    1
 drop cdc task `__mo_cdc_hnsw_idx01`;
 drop pitr if exists `__mo_table_pitr_hnsw`;
 drop table vector_index_01;

@@ -19,29 +19,25 @@ select sleep(30);
 insert into vector_index_01 values (0, "[1,2,3]", 1);
 -- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"U", "pk":0, "v":[1,2,3]}]}');
 
-select sleep(4);
-
-select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
-
 UPDATE vector_index_01 set b = '[4,5,6]' where a = 0;
 -- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"U", "pk":0, "v":[4,5,6]}]}');
-
-select sleep(4);
-
-select * from vector_index_01 order by  L2_DISTANCE(b,"[4,5,6]") ASC LIMIT 10;
-
-
-DELETE FROM vector_index_01 WHERE a=0;
--- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"D", "pk":0}]}');
-select sleep(4);
-
-select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
 
 insert into vector_index_01 values (1, "[2,3,4]", 1);
 -- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"I", "pk":1, "v":[2,3,4]}]}');
 
-select sleep(4);
+DELETE FROM vector_index_01 WHERE a=1;
+-- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"D", "pk":0}]}');
 
+select sleep(10);
+
+-- test with multi-cn is tricky.  since model is cached in memory, model may not be updated after CDC sync'd.  The only way to test is to all INSERT/DELETE/UPDATE before SELECT.
+-- already update to [4,5,6], result is [4,5,6]
+select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
+
+-- should return a=0
+select * from vector_index_01 order by  L2_DISTANCE(b,"[4,5,6]") ASC LIMIT 10;
+
+-- a=1 deleted. result is [4,5,6]
 select * from vector_index_01 order by  L2_DISTANCE(b,"[2,3,4]") ASC LIMIT 10;
 
 drop cdc task `__mo_cdc_hnsw_idx01`;

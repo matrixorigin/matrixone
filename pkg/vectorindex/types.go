@@ -107,7 +107,7 @@ type VectorIndexCdc[T types.RealNumbers] struct {
 
 func NewVectorIndexCdc[T types.RealNumbers]() *VectorIndexCdc[T] {
 	return &VectorIndexCdc[T]{
-		Data: make([]VectorIndexCdcEntry[T], 0, 100),
+		Data: make([]VectorIndexCdcEntry[T], 0, 8192),
 	}
 }
 
