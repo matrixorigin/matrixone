@@ -344,7 +344,7 @@ func TestOverlapStats(t *testing.T) {
 func TestCalculateOverlapStats(t *testing.T) {
 	t.Skip("used to processing file")
 	// Path to the zout file
-	zoutFilePath := "/root/matrixone/zmtest/dev-statement.out"
+	zoutFilePath := "/root/matrixone/zmtest/statement2.2-2.out"
 
 	reader, closer, err := makeFileReader(zoutFilePath)
 	if err != nil {
@@ -359,7 +359,11 @@ func TestCalculateOverlapStats(t *testing.T) {
 
 	// Log the extracted entries
 	t.Logf("Extracted %d entries from zout file", len(statsList))
-	leveledObjects := [][]*objectio.ObjectStats{statsList}
+	leveledObjects := [8][]*objectio.ObjectStats{}
+	for _, stat := range statsList {
+		lv := stat.GetLevel()
+		leveledObjects[lv] = append(leveledObjects[lv], stat)
+	}
 
 	for i, objects := range leveledObjects {
 		if len(objects) < 2 {
@@ -750,12 +754,12 @@ func TestVacuumOpts(t *testing.T) {
 	t.Logf("VacuumOpts: %s", opts.String())
 
 	mTable := catalog.ToMergeTable(tbl)
-	stats, err := CalculateVacuumStats(ctx, mTable, opts.Clone().WithEnableDetail(false))
+	stats, err := CalculateVacuumStats(ctx, mTable, opts.Clone().WithEnableDetail(false), time.Now())
 	require.NoError(t, err)
 	mergeTasks := GatherCompactTasks(ctx, stats)
 	require.Equal(t, 0, len(mergeTasks))
 
-	stats, err = CalculateVacuumStats(ctx, mTable, opts.Clone().WithCheckBigOnly(false))
+	stats, err = CalculateVacuumStats(ctx, mTable, opts.Clone().WithCheckBigOnly(false), time.Now())
 	require.NoError(t, err)
 	t.Logf("stats: %s", stats.String())
 
@@ -765,7 +769,7 @@ func TestVacuumOpts(t *testing.T) {
 			WithEndScore(1).
 			WithDuration(1 * time.Minute).
 			WithHollowTopK(2)
-		stats, err = CalculateVacuumStats(ctx, mTable, opts)
+		stats, err = CalculateVacuumStats(ctx, mTable, opts, time.Now())
 		require.NoError(t, err)
 		mergeTasks := GatherCompactTasks(ctx, stats)
 		require.Equal(t, 2, len(mergeTasks))
