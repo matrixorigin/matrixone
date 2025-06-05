@@ -16,8 +16,6 @@ package function
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -65,7 +63,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is not json object")
 		}
 		// hnsw sync
-		os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
+		//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
 		err = hnsw.CdcSync(proc, string(dbname), string(tblname), dim, &cdc)
 		if err != nil {
 			return err

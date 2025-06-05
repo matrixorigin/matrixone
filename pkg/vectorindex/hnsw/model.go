@@ -196,7 +196,6 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 
 	idx.FileSize = filesz
 
-	os.Stderr.WriteString(fmt.Sprintf("ToSQL: file %s size %d\n", idx.Path, idx.FileSize))
 	if idx.FileSize == 0 {
 		return []string{}, nil
 	}
@@ -262,7 +261,6 @@ func (idx *HnswModel) Empty() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	os.Stderr.WriteString(fmt.Sprintf("Check empty Size = %d, cap = %d\n", sz, idx.MaxCapacity))
 	return (sz == 0), nil
 }
 
@@ -352,7 +350,6 @@ func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor
 // 5. check the checksum to verify the correctness of the file
 func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64, view bool) error {
 
-	os.Stderr.WriteString(fmt.Sprintf("LoadIndex %s\n", idx.Id))
 	if idx.Index != nil {
 		// index already loaded. ignore
 		return nil
@@ -465,7 +462,6 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 
 // unload
 func (idx *HnswModel) Unload() error {
-	os.Stderr.WriteString(fmt.Sprintf("Unload index %s\n", idx.Id))
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}

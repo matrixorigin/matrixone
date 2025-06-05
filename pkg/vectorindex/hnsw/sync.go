@@ -48,8 +48,7 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 	}
 	defer res.Close()
 
-	os.Stderr.WriteString(sql)
-	os.Stderr.WriteString(fmt.Sprintf("\nnumber of batch = %d\n", len(res.Batches)))
+	//os.Stderr.WriteString(sql)
 
 	if len(res.Batches) == 0 {
 		return nil
@@ -95,7 +94,7 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 		if i == 0 {
 			paramstr := paramvec.UnsafeGetStringAt(i)
 			cname := colvec.UnsafeGetStringAt(i)
-			os.Stderr.WriteString(fmt.Sprintf("idxtbl %s, type %s, param %s, cname %s\n", idxtbl, algotyp, paramstr, cname))
+			//os.Stderr.WriteString(fmt.Sprintf("idxtbl %s, type %s, param %s, cname %s\n", idxtbl, algotyp, paramstr, cname))
 			idxtblcfg.KeyPart = cname
 			if len(paramstr) > 0 {
 				err := json.Unmarshal([]byte(paramstr), &param)
@@ -159,17 +158,13 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 		idxcfg.Usearch.ExpansionSearch = uint(val)
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("idxtblcfg: %v\n", idxtblcfg))
-	os.Stderr.WriteString(fmt.Sprintf("idxcfg: %v\n", idxcfg))
+	//os.Stderr.WriteString(fmt.Sprintf("idxtblcfg: %v\n", idxtblcfg))
+	//os.Stderr.WriteString(fmt.Sprintf("idxcfg: %v\n", idxcfg))
 
 	// load metadata
 	indexes, err := LoadMetadata(proc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
 	if err != nil {
 		return err
-	}
-
-	for i, idxx := range indexes {
-		os.Stderr.WriteString(fmt.Sprintf("meta: %d id=%s\n", i, idxx.Id))
 	}
 
 	// assume CDC run in single thread
@@ -238,7 +233,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 						return err
 					}
 					if found {
-						os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
+						//os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
 						midx[j] = i
 					}
 				}
@@ -264,7 +259,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 		// last model not load yet so check the last.Len instead of Full()
 		idxlen := uint(last.Len.Load())
 		if idxlen >= last.MaxCapacity {
-			os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
+			//os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
 			id := s.getModelId()
 			// model is already full, create a new model for insert
 			newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
@@ -275,7 +270,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 			last = newmodel
 
 		} else {
-			os.Stderr.WriteString(fmt.Sprintf("load model with index %d\n", len(s.indexes)-1))
+			//os.Stderr.WriteString(fmt.Sprintf("load model with index %d\n", len(s.indexes)-1))
 			// load last
 			last.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 
@@ -320,7 +315,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 		case vectorindex.CDC_DELETE:
 			if midx[i] == -1 {
 				// cannot find key from existing models. ignore it
-				os.Stderr.WriteString("DELETE NOT FOUND\n")
+				//os.Stderr.WriteString("DELETE NOT FOUND\n")
 				continue
 			}
 
@@ -364,9 +359,11 @@ func (s *HnswSync) run(proc *process.Process) error {
 }
 
 func (s *HnswSync) runSqls(proc *process.Process, sqls []string) error {
-	for _, s := range sqls {
-		os.Stderr.WriteString(fmt.Sprintf("sql : %s\n", s))
-	}
+	/*
+		for _, s := range sqls {
+			os.Stderr.WriteString(fmt.Sprintf("sql : %s\n", s))
+		}
+	*/
 	opts := executor.Options{}
 	err := runTxn(proc, func(exec executor.TxnExecutor) error {
 		for _, sql := range sqls {

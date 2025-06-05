@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -563,11 +562,11 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	return []string{sql}, nil
 }
 
-// TODO: ERIC 4. register CDC update
-// DROP PITR IF EXISTS `__mo_table_pitr_${srctable}`
-// CREATE PITR __mo_table_pitr_${srctable} for table ${db} ${srctable) range 2 'h';
-// CREATE CDC __mo_cdc_${srctable}_${indexInfo.IndexName} 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' '${db}.${srctable}' {'Level'='table'}'
-// DROP CDC TASK __mo_cdc_${srctable}_${indexInfo.IndexName}
+// TODO: HNSWCDC 4. register CDC update
+// DROP PITR IF EXISTS `__mo_table_pitr_${db}_${srctable}`
+// DROP CDC IF EXISTS TASK __mo_cdc_${db}_${srctable}_${indexInfo.IndexName} NOTE: IF EXISTS is not valid SQL for DROP CDC
+// CREATE PITR __mo_table_pitr_${db}_${srctable} for table ${db} ${srctable) range 2 'h';
+// CREATE CDC __mo_cdc_${db}_${srctable}_${indexInfo.IndexName} 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' '${db}.${srctable}' {'Level'='table'}'
 func genCdcHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
 
 	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
@@ -594,7 +593,8 @@ func genCdcHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef,
 	sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'hnswsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
 	sqls = append(sqls, sql)
 
-	os.Stderr.WriteString(fmt.Sprintf("%v\n", sqls))
+	//os.Stderr.WriteString(fmt.Sprintf("%v\n", sqls))
 
+	// return emtpy for now.
 	return []string{}, nil
 }
