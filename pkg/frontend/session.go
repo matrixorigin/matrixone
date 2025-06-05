@@ -1005,7 +1005,7 @@ func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
 	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
 	if !ok {
-		return nil, nil
+		return nil, moerr.NewInternalErrorNoCtxf(errorUserVariableDoesNotExist(), name)
 	}
 	return val, nil
 }

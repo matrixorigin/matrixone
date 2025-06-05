@@ -2359,12 +2359,24 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
 	for i, val := range paramVals {
-		pc := &plan.Literal{}
-		pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
-		params[i] = &plan.Expr{
-			Expr: &plan.Expr_Lit{
-				Lit: pc,
-			},
+		if val == nil {
+			pc := &plan.Literal{
+				Isnull: true,
+				Value:  &plan.Literal_Sval{Sval: ""},
+			}
+			params[i] = &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: pc,
+				},
+			}
+		} else {
+			pc := &plan.Literal{}
+			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
+			params[i] = &plan.Expr{
+				Expr: &plan.Expr_Lit{
+					Lit: pc,
+				},
+			}
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)

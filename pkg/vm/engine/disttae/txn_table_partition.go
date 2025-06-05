@@ -298,6 +298,7 @@ func (t *partitionTxnTable) GetNonAppendableObjectStats(ctx context.Context) ([]
 func (t *partitionTxnTable) GetColumMetadataScanInfo(
 	ctx context.Context,
 	name string,
+	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
 	var values []*plan.MetadataScanInfo
 	for idx := range t.metadata.Partitions {
@@ -305,7 +306,7 @@ func (t *partitionTxnTable) GetColumMetadataScanInfo(
 		if err != nil {
 			return nil, err
 		}
-		v, err := p.GetColumMetadataScanInfo(ctx, name)
+		v, err := p.GetColumMetadataScanInfo(ctx, name, visitTombstone)
 		if err != nil {
 			return nil, err
 		}

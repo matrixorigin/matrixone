@@ -45,7 +45,7 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 
 	size := int64(128)
-	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "", false)
+	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
 	defer m.Close(ctx)
 
 	newReadVec := func() *IOVector {
@@ -118,7 +118,7 @@ func TestMemCacheLeak(t *testing.T) {
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
 	ctx := context.Background()
-	m := NewMemCache(fscache.ConstCapacity(2), nil, nil, "", false)
+	m := NewMemCache(fscache.ConstCapacity(2), nil, nil, "")
 	defer m.Close(ctx)
 
 	n := 10
@@ -165,7 +165,6 @@ func BenchmarkMemoryCacheUpdate(b *testing.B) {
 		nil,
 		nil,
 		"",
-		false,
 	)
 	defer cache.Flush(ctx)
 
@@ -200,7 +199,6 @@ func BenchmarkMemoryCacheRead(b *testing.B) {
 		nil,
 		nil,
 		"",
-		false,
 	)
 	defer cache.Flush(ctx)
 
@@ -249,7 +247,6 @@ func TestMemoryCacheGlobalSizeHint(t *testing.T) {
 		nil,
 		nil,
 		"test",
-		false,
 	)
 	defer cache.Close(ctx)
 
