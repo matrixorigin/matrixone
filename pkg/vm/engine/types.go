@@ -49,6 +49,113 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
+var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, error) {
+	planDefs := tableDef.GetDefs()
+	var exeDefs []TableDef
+	c := new(ConstraintDef)
+	for _, def := range planDefs {
+		switch defVal := def.GetDef().(type) {
+		case *plan.TableDef_DefType_Properties:
+			properties := make([]Property, len(defVal.Properties.GetProperties()))
+			for i, p := range defVal.Properties.GetProperties() {
+				properties[i] = Property{
+					Key:   p.GetKey(),
+					Value: p.GetValue(),
+				}
+			}
+			exeDefs = append(exeDefs, &PropertiesDef{
+				Properties: properties,
+			})
+			c.Cts = append(c.Cts, &StreamConfigsDef{
+				Configs: defVal.Properties.GetProperties(),
+			})
+		}
+	}
+
+	if tableDef.Indexes != nil {
+		c.Cts = append(c.Cts, &IndexDef{
+			Indexes: tableDef.Indexes,
+		})
+	}
+
+	if tableDef.ViewSql != nil {
+		exeDefs = append(exeDefs, &ViewDef{
+			View: tableDef.ViewSql.View,
+		})
+	}
+
+	if len(tableDef.Fkeys) > 0 {
+		c.Cts = append(c.Cts, &ForeignKeyDef{
+			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if tableDef.Pkey != nil {
+		c.Cts = append(c.Cts, &PrimaryKeyDef{
+			Pkey: tableDef.Pkey,
+		})
+	}
+
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		exeDefs = append(exeDefs, &PartitionDef{
+			Partitioned: 1,
+			Partition:   string(bytes),
+		})
+	}
+
+	if len(tableDef.RefChildTbls) > 0 {
+		c.Cts = append(c.Cts, &RefChildTableDef{
+			Tables: tableDef.RefChildTbls,
+		})
+	}
+
+	if len(c.Cts) > 0 {
+		exeDefs = append(exeDefs, c)
+	}
+
+	if tableDef.ClusterBy != nil {
+		exeDefs = append(exeDefs, &ClusterByDef{
+			Name: tableDef.ClusterBy.Name,
+		})
+	}
+	return exeDefs, nil
+}
+
+func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
+	exeCols := make([]TableDef, len(planCols))
+	for i, col := range planCols {
+		var alg compress.T
+		switch col.Alg {
+		case plan.CompressType_None:
+			alg = compress.None
+		case plan.CompressType_Lz4:
+			alg = compress.Lz4
+		}
+		colTyp := col.GetTyp()
+		exeCols[i] = &AttributeDef{
+			Attr: Attribute{
+				Name:          col.GetOriginCaseName(),
+				Alg:           alg,
+				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
+				Default:       planCols[i].GetDefault(),
+				OnUpdate:      planCols[i].GetOnUpdate(),
+				Primary:       col.GetPrimary(),
+				Comment:       col.GetComment(),
+				ClusterBy:     col.ClusterBy,
+				AutoIncrement: col.Typ.GetAutoIncr(),
+				IsHidden:      col.Hidden,
+				Seqnum:        uint16(col.Seqnum),
+				EnumVlaues:    colTyp.GetEnumvalues(),
+			},
+		}
+	}
+	return exeCols
+}
+
 // Attribute is a column
 type Attribute struct {
 	// IsHide whether the attribute is hidden or not
@@ -934,7 +1041,7 @@ type Relation interface {
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
 	// If not sure, returns true
 	// Initially added for implementing locking rows by primary keys
-	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex, partitionIndex int32) (bool, error)
 
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
@@ -1053,10 +1160,6 @@ type Hints struct {
 type EntireEngine struct {
 	Engine     Engine // original engine
 	TempEngine Engine // new engine for temporarily table
-}
-
-func IsMemtable(tblRange []byte) bool {
-	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
 }
 
 type forceBuildRemoteDSConfig struct {

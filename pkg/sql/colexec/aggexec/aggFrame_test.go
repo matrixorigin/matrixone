@@ -16,11 +16,13 @@ package aggexec
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func fromValueListToVector(
@@ -210,6 +212,46 @@ func TestCount(t *testing.T) {
 		m.Mp(), types.T_int64.ToType(),
 		[]int64{1, 2, 3}, []int{0}, 2, false,
 		[]int64{1, 2, 3}, nil, 3, false)
+}
+
+func TestMedian(t *testing.T) {
+	m := hackAggMemoryManager()
+	info := singleAggInfo{
+		aggID:     1,
+		distinct:  false,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_float64.ToType(),
+		emptyNull: true,
+	}
+	a := newMedianColumnNumericExec[int64](m, info)
+
+	a.PreAllocateGroups(1)
+
+	doAggTest[int64, float64](
+		t, a,
+		m.Mp(), types.T_int64.ToType(),
+		[]int64{1, 2, 3}, nil, float64(2), false,
+		[]int64{1, 2, 3}, nil, float64(2), false)
+
+	_, err := MarshalAggFuncExec(a)
+	assert.NoError(t, err)
+
+	a.Merge(a, 0, 1)
+
+	info2 := singleAggInfo{
+		aggID:     1,
+		distinct:  true,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_float64.ToType(),
+		emptyNull: true,
+	}
+	b := newMedianColumnNumericExec[int64](m, info2)
+
+	doAggTest[int64, float64](
+		t, b,
+		m.Mp(), types.T_int64.ToType(),
+		[]int64{1, 2, 3}, nil, float64(2), false,
+		[]int64{1, 2, 3}, nil, float64(2), false)
 }
 
 func TestBytesToBytesFrameWork(t *testing.T) {
@@ -412,10 +454,10 @@ func TestMakeInitialAggListFromList(t *testing.T) {
 
 	RegisterGroupConcatAgg(123, ",")
 	mg := NewSimpleAggMemoryManager(mp)
-	agg0 := MakeAgg(mg, 123, true, []types.Type{types.T_varchar.ToType()}...)
-
-	res := MakeInitialAggListFromList(mg, []AggFuncExec{agg0})
-
+	agg0, err := MakeAgg(mg, 123, true, []types.Type{types.T_varchar.ToType()}...)
+	require.Nil(t, err)
+	res, err := MakeInitialAggListFromList(mg, []AggFuncExec{agg0})
+	require.Nil(t, err)
 	require.Equal(t, 1, len(res))
 	require.Equal(t, int64(123), res[0].AggID())
 	require.Equal(t, true, res[0].IsDistinct())

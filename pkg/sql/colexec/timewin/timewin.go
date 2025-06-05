@@ -61,7 +61,10 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 		}
 		ctr.aggs = make([]aggexec.AggFuncExec, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
-			ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+			ctr.aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+			if err != nil {
+				return err
+			}
 			if config := ag.GetExtraConfig(); config != nil {
 				if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 					return err
@@ -241,7 +244,10 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.status = nextWindow
 				for i, ag := range timeWin.Aggs {
-					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+					ctr.aggs[i], err = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), timeWin.Types[i])
+					if err != nil {
+						return result, err
+					}
 					if config := ag.GetExtraConfig(); config != nil {
 						if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 							return result, err

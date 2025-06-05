@@ -202,6 +202,7 @@ message LockTarget {
   plan.Expr lock_rows = 9;
   bool lock_table_at_the_end = 10;
   plan.ObjectRef obj_ref = 11;
+  int32 partition_col_idx_in_bat = 12;
 }
 
 message LockOp {

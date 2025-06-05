@@ -416,6 +416,7 @@ func (c *compilerContext) getTableDef(
 	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
 	var subscriptionName string
+	var partition *planpb.Partition
 
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -491,6 +492,14 @@ func (c *compilerContext) getTableDef(
 			})
 		} else if v, ok := def.(*engine.VersionDef); ok {
 			schemaVersion = v.Version
+		} else if p, ok := def.(*engine.PartitionDef); ok {
+			if p.Partitioned == 1 {
+				bytes := []byte(p.Partition)
+				partition = &planpb.Partition{}
+				if err := partition.Unmarshal(bytes); err != nil {
+					return nil, nil
+				}
+			}
 		}
 	}
 	if len(properties) > 0 {
@@ -536,6 +545,7 @@ func (c *compilerContext) getTableDef(
 		Indexes:      indexes,
 		Version:      schemaVersion,
 		DbName:       dbName,
+		Partition:    partition,
 	}
 	return obj, tableDef
 }
