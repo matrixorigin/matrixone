@@ -215,4 +215,17 @@ drop database if exists v;
 
 drop role if exists r1;
 drop user if exists u1;
+
+create account `test_create_user` ADMIN_NAME "admin" IDENTIFIED BY "123";
+-- @session:id=4&user=test_create_user:admin&password=123
+create user if not exists user1 identified by '123';
+create role if not exists role1;
+grant CONNECT,create user,alter user, drop user on account * to role1;
+grant role1 to user1;
+-- @session
+-- @session:id=5&user=test_create_user:user1:role1&password=123
+create user user2 identified by '123' default role role1;
+create user user2 identified by '123' default role role1;
+-- @session
+drop account `test_create_user`;
 set global enable_privilege_cache = on;
