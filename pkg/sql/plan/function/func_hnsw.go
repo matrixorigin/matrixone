@@ -16,6 +16,7 @@ package function
 
 import (
 	"encoding/json"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,6 +31,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		return moerr.NewInvalidInput(proc.Ctx, "number of arguments != 4")
 	}
 
+	os.Stderr.WriteString("hnsCdcUpdate START\n")
 	dbVec := vector.GenerateFunctionStrParameter(ivecs[0])
 	tblVec := vector.GenerateFunctionStrParameter(ivecs[1])
 	dimVec := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
@@ -70,5 +72,6 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		}
 	}
 
+	os.Stderr.WriteString("hnsCdcUpdate END\n")
 	return nil
 }

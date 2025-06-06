@@ -159,6 +159,11 @@ func (idx *HnswModel) SaveToFile() error {
 	}
 	idx.Checksum = chksum
 
+	idxlen, err := idx.Index.Len()
+	if err != nil {
+		return err
+	}
+	os.Stderr.WriteString(fmt.Sprintf("hnsw save to idx %s, len = %d\n", idx.Id, idxlen))
 	// free memory
 	err = idx.Index.Destroy()
 	if err != nil {

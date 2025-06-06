@@ -227,9 +227,30 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 					closed = true
 					return
 				}
-				//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
 				if bytes.Equal(sqlBuf, begin) {
 					txnbegin = true
+				} else if bytes.Equal(sqlBuf, commit) {
+					os.Stderr.WriteString("Run: wait for begin but commit\n")
+				} else if bytes.Equal(sqlBuf, rollback) {
+					os.Stderr.WriteString("Run: wait for begin but rollback\n")
+				} else if bytes.Equal(sqlBuf, dummy) {
+					// pass
+				} else {
+					func() {
+						newctx, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
+						defer cancel()
+						//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
+						os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN but sql. execute anyway\n"))
+						opts := executor.Options{}
+						res, err := s.exec.Exec(newctx, string(sqlBuf), opts)
+						if err != nil {
+							logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+							os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
+							os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
+							s.SetError(err)
+						}
+						res.Close()
+					}()
 				}
 			}
 		}
@@ -313,6 +334,7 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
 	if data.toTs.LE(&watermark) {
+		os.Stderr.WriteString("unexpected watermark\n")
 		logutil.Errorf("cdc hnswSyncSinker(%v): unexpected watermark: %s, current watermark: %s",
 			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
 		return
@@ -321,6 +343,14 @@ func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
 	s.cdc.End = data.toTs.ToString()
 
 	if data.noMoreData {
+
+		os.Stderr.WriteString("no more data\n")
+		if data.checkpointBat != nil {
+			os.Stderr.WriteString(fmt.Sprintf("no more data sinkSnapshot batlen %d\n", batchRowCount(data.checkpointBat)))
+		}
+		if data.insertAtmBatch != nil {
+			os.Stderr.WriteString(fmt.Sprintf("no more data sinkTail insertBat %d, deletBat = %d\n", data.insertAtmBatch.RowCount(), data.deleteAtmBatch.RowCount()))
+		}
 		// complete sql statement
 		err := s.sendSql()
 		if err != nil {
@@ -335,8 +365,10 @@ func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
 	}()
 
 	if data.outputTyp == OutputTypeSnapshot {
+		os.Stderr.WriteString(fmt.Sprintf("sinkSnapshot batlen %d\n", batchRowCount(data.checkpointBat)))
 		s.sinkSnapshot(ctx, data.checkpointBat)
 	} else if data.outputTyp == OutputTypeTail {
+		os.Stderr.WriteString(fmt.Sprintf("sinkTail insertBat %d, deletBat = %d\n", data.insertAtmBatch.RowCount(), data.deleteAtmBatch.RowCount()))
 		s.sinkTail(ctx, data.insertAtmBatch, data.deleteAtmBatch)
 	} else {
 		s.SetError(moerr.NewInternalError(ctx, fmt.Sprintf("cdc hnswSyncSinker unexpected output type: %v", data.outputTyp)))
