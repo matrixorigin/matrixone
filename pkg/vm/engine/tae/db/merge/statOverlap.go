@@ -421,18 +421,20 @@ func splitTasksOnSpan(
 	level int8,
 ) (tasks []mergeTask) {
 	records := overlapStats.StatsRecords
+
+	// sort by overlap ratio descending
 	sort.Slice(candidatesIdx, func(i, j int) bool {
 		r1, r2 := records[candidatesIdx[i]], records[candidatesIdx[j]]
 		overlapRatio1 := float64(r1.overlap) / float64(r1.depth)
 		overlapRatio2 := float64(r2.overlap) / float64(r2.depth)
-		return overlapRatio1 < overlapRatio2
+		return overlapRatio1 > overlapRatio2
 	})
 
-	pushToRation := func(idx int, ration float64) int {
+	pushToRationLessThan := func(idx int, ration float64) int {
 		for ; idx < len(candidatesIdx); idx++ {
 			record := records[candidatesIdx[idx]]
 			spanRatio := float64(record.overlap) / float64(record.depth)
-			if spanRatio > ration {
+			if spanRatio < ration {
 				break
 			}
 		}
@@ -445,8 +447,8 @@ func splitTasksOnSpan(
 	}
 	start := 0
 	pos := 0
-	for i, ration := range []float64{2.0, 10.0, 1e30} {
-		pos = pushToRation(pos, ration)
+	for i, ration := range []float64{10.0, 2.0, -1.0} {
+		pos = pushToRationLessThan(pos, ration)
 		if cnt := pos - start; cnt >= opts.MinPointDepthPerCluster {
 			stats := make([]*objectio.ObjectStats, 0, cnt)
 			for k := start; k < pos; k++ {
@@ -459,7 +461,7 @@ func splitTasksOnSpan(
 
 			lv := level
 			// for medium & wide span, try to keep them in the current lv
-			if i > 0 && lv >= 2 {
+			if i < 2 && lv >= 2 {
 				lv -= 1
 				note += "(keep in current level)"
 			}
@@ -470,6 +472,9 @@ func splitTasksOnSpan(
 				kind:        taskHostDN,
 				isTombstone: false,
 			})
+			// wider span take higher priority to be merged,
+			// because they are about to produce thinner span.
+			break
 		}
 		start = pos
 	}

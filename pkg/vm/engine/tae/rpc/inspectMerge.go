@@ -48,6 +48,9 @@ func (c *mergeArg) PrepareCommand() *cobra.Command {
 
 	mergeTriggerArg := &mergeTriggerArg{}
 	cmd.AddCommand(mergeTriggerArg.PrepareCommand())
+
+	mergeTraceArg := &mergeTraceArg{}
+	cmd.AddCommand(mergeTraceArg.PrepareCommand())
 	return cmd
 }
 
@@ -56,6 +59,70 @@ func (c *mergeArg) String() string                       { return "merge" }
 func (c *mergeArg) Run() error                           { return nil }
 
 // endregion: merge root
+
+// region: merge trace
+
+type mergeTraceArg struct {
+	ctx    *inspectContext
+	tbl    *catalog.TableEntry
+	enable bool
+}
+
+func (arg *mergeTraceArg) Run() error {
+	if arg.enable {
+		catalog.AddMergeTrace(arg.tbl.ID)
+	} else {
+		catalog.RemoveMergeTrace(arg.tbl.ID)
+	}
+	return nil
+}
+
+func (arg *mergeTraceArg) String() string {
+	action := "off"
+	if arg.enable {
+		action = "on"
+	}
+	return fmt.Sprintf("turn %s trace for %s", action, arg.tbl.GetNameDesc())
+}
+
+func (arg *mergeTraceArg) FromCommand(cmd *cobra.Command) (err error) {
+	arg.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	arg.enable = cmd.Flags().Args()[0] == "on"
+
+	address, err := cmd.Flags().GetString("target")
+	if err != nil {
+		return err
+	}
+	arg.tbl, err = parseTableTarget(address, arg.ctx.acinfo, arg.ctx.db)
+	if arg.tbl == nil {
+		return moerr.NewInvalidInputNoCtxf("table should be specified")
+	}
+	return nil
+}
+
+func (arg *mergeTraceArg) PrepareCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use: "trace [on|off]",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return moerr.NewInvalidInputNoCtxf(
+					"accepts 1 arg(s), received %d", len(args),
+				)
+			}
+			if args[0] != "on" && args[0] != "off" {
+				return moerr.NewInvalidInputNoCtxf(
+					"invalid action %s, should be on or off", args[0],
+				)
+			}
+			return nil
+		},
+		Short: "log input non-appendable objects of a table",
+		Run:   RunFactory(arg),
+	}
+	return cmd
+}
+
+// endregion: merge trace
 
 // region: merge switch
 
