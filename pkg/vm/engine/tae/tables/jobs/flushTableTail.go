@@ -750,7 +750,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		createdObjectHandle = task.createdObjHandles
 	}
 
-	if task.schema.Name == "statement_info" {
+	if catalog.CheckMergeTrace(task.rel.ID()) {
 		entry := task.rel.GetMeta().(*catalog.TableEntry)
 		if isTombstone {
 			catalog.LogInputTombstoneObjectWithExistingBatches(

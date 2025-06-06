@@ -208,6 +208,15 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 	}
 }
 
+func iterStatsBs(bss [][]byte) iter.Seq[*objectio.ObjectStats] {
+	return func(yield func(*objectio.ObjectStats) bool) {
+		for _, bs := range bss {
+			stat := objectio.ObjectStats(bs)
+			yield(&stat)
+		}
+	}
+}
+
 func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [][]byte, level int8) {
 	var fromObjsDescBuilder strings.Builder
 	fromSize, estSize := float64(0), float64(0)
@@ -235,17 +244,11 @@ func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [
 		}
 
 		fromSize += float64(obj.OriginSize())
-		estSize += float64(obj.Rows() * 30)
-		rowcnt := 8192
-		if obj.Rows() < 8192 {
-			rowcnt = int(obj.Rows())
-		}
-		estSize += float64(rowcnt * int(obj.OriginSize()/obj.Rows()) * 3 / 2)
-		estSize += float64(obj.Rows()) * 30  // transfer page
-		estSize += float64(obj.OriginSize()) // objectio write buffer
 		rows += int(obj.Rows())
 		blkn += int(obj.BlkCnt())
 	}
+
+	estSize = float64(EstimateMergeSize(iterStatsBs(mergedObjs)))
 
 	logutil.Info(
 		"[MERGE-START]",
@@ -324,8 +327,10 @@ func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
 		} else if r < 8192 {
 			blkRowCnt = int(r)
 		}
-		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2 // read one block, x 2 factor
-		estSize += int(obj.Rows()) * 30                             // transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
+		// read one block, x 2 factor
+		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2
+		// transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
+		estSize += int(obj.Rows()) * 30
 		totalSize += int(obj.OriginSize()) / 2
 	}
 	estSize += totalSize / 3 * 2 // leave some margin for gc
