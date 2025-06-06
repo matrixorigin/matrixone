@@ -91,22 +91,23 @@ func newTxnTable(
 	}
 	tbl.isLocal = tbl.isLocalFunc
 
-	ps := process.GetPartitionService()
-	if ps != nil && db.databaseId != catalog.MO_CATALOG_ID {
-
-		is, metadata, err := ps.Is(ctx, item.Id, txn.op)
-		if err != nil {
-			return nil, err
-		}
-		if is {
-			p, err := newPartitionTxnTable(
-				tbl.origin,
-				metadata,
-				ps,
+	if db.databaseId != catalog.MO_CATALOG_ID {
+		ps := process.GetPartitionService()
+		if ps.Enabled() && item.IsPartitionTable() {
+			metadata, err := ps.GetPartitionMetadata(
+				ctx,
+				item.Id,
+				process.GetTxnOperator(),
 			)
 			if err != nil {
 				return nil, err
 			}
+
+			p := newPartitionTxnTable(
+				tbl.origin,
+				metadata,
+				ps,
+			)
 			tbl.partition.tbl = p
 			tbl.partition.is = true
 			tbl.partition.service = ps
@@ -1217,6 +1218,9 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			DbId:          tbl.GetDBID(ctx),
 			Partition:     partition,
 		}
+		if tbl.extraInfo != nil {
+			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
+		}
 	}
 	return tbl.tableDef
 }
@@ -1351,7 +1355,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if hasReplaceDef {
 		// When ReplaceDef exists, replace the entire table definition
 		replaceDef := replaceDefReq.GetReplaceDef()
-		defs, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
+		defs, _, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
 		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 		tbl.defs = defs
 		tbl.tableDef = nil
@@ -1403,7 +1407,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
-	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn); err != nil {
+	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn, tbl.extraInfo); err != nil {
 		return err
 	}
 	if createdInTxn {
@@ -2626,4 +2630,8 @@ func (tbl *txnTable) getCommittedRows(
 		return rows, nil
 	}
 	return uint64(s.TableCnt) + rows, nil
+}
+
+func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
+	return tbl.extraInfo
 }

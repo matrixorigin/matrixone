@@ -443,6 +443,8 @@ message TableDef {
 	uint64 db_id = 33;
 
 	Partition partition = 34;
+
+	uint64 FeatureFlag = 35;
 }
 
 message TableFunction{
@@ -1259,7 +1261,6 @@ message CreateTable {
 
 	int64 retention_deadline = 14;
 	string RawSQL            = 15;
-	bool   IsPartition       = 16;
 }
 
 message AlterTableDrop {

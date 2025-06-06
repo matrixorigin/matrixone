@@ -1039,6 +1039,10 @@ func (tbl *txnTableDelegate) GetProcess() any {
 	return tbl.origin.GetProcess()
 }
 
+func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
+	return tbl.origin.extraInfo
+}
+
 func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
 	if tbl.partition.is {
 		return tbl.partition.tbl.Reset(op)
