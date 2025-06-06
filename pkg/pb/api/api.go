@@ -141,6 +141,20 @@ func NewRenameColumnReq(did, tid uint64, oldname, newname string, seqnum uint32)
 		},
 	}
 }
+
+func NewReplaceDefReq(did, tid uint64, planDef *plan.TableDef) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_ReplaceDef,
+		Operation: &AlterTableReq_ReplaceDef{
+			&AlterTableReplaceDef{
+				Def: planDef,
+			},
+		},
+	}
+}
+
 func (m *SyncLogTailReq) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }

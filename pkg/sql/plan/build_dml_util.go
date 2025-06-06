@@ -4472,7 +4472,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		// create sink scan and join with index table JOIN LEFT ON (sink.pkcol = index.docid) and project with (docid, row_id)
 		// see appendDeleteMasterTablePlan
 
-		rfTag := builder.genNewTag()
+		//rfTag := builder.genNewTag()
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
 
@@ -4500,24 +4500,24 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			}
 		}
 
-		probeExpr := &plan.Expr{
-			Typ: indexTableDef.Cols[idxDocidPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: idxDocidPos,
-					Name:   "doc_id",
-				},
-			},
-		}
+		//probeExpr := &plan.Expr{
+		//	Typ: indexTableDef.Cols[idxDocidPos].Typ,
+		//	Expr: &plan.Expr_Col{
+		//		Col: &plan.ColRef{
+		//			RelPos: 0,
+		//			ColPos: idxDocidPos,
+		//			Name:   "doc_id",
+		//		},
+		//	},
+		//}
 
 		idxScanId := builder.appendNode(&plan.Node{
-			NodeType:               plan.Node_TABLE_SCAN,
-			Stats:                  &plan.Stats{},
-			ObjRef:                 indexObjRef,
-			TableDef:               indexTableDef,
-			ProjectList:            scanNodeProject,
-			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
+			NodeType:    plan.Node_TABLE_SCAN,
+			Stats:       &plan.Stats{},
+			ObjRef:      indexObjRef,
+			TableDef:    indexTableDef,
+			ProjectList: scanNodeProject,
+			//RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 		}, bindCtx)
 
 		var leftExpr = &plan.Expr{
@@ -4578,24 +4578,24 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		},
 		)
 
-		rfBuildExpr := &plan.Expr{
-			Typ: orgPkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: 0,
-				},
-			},
-		}
+		//rfBuildExpr := &plan.Expr{
+		//	Typ: orgPkType,
+		//	Expr: &plan.Expr_Col{
+		//		Col: &plan.ColRef{
+		//			RelPos: 0,
+		//			ColPos: 0,
+		//		},
+		//	},
+		//}
 
-		sid := builder.compCtx.GetProcess().GetService()
+		//sid := builder.compCtx.GetProcess().GetService()
 		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:               plan.Node_JOIN,
-			JoinType:               plan.Node_RIGHT,
-			Children:               []int32{idxScanId, lastNodeId},
-			OnList:                 []*Expr{joinCond},
-			ProjectList:            projectList,
-			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr)},
+			NodeType:    plan.Node_JOIN,
+			JoinType:    plan.Node_RIGHT,
+			Children:    []int32{idxScanId, lastNodeId},
+			OnList:      []*Expr{joinCond},
+			ProjectList: projectList,
+			//RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr)},
 		}, bindCtx)
 
 		deleteIdx := 0

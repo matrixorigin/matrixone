@@ -292,6 +292,7 @@ enum AlterKind {
     UpdatePolicy     = 6;
     AddPartition     = 7;
     RenameColumn     = 8;
+    ReplaceDef       = 9;
 }
 
 message AlterTablePolicy {
@@ -327,6 +328,10 @@ message AlterTableAddColumn {
                                 // the column will be added to the last
 }
 
+message AlterTableReplaceDef {
+    plan.TableDef def    = 1;
+}
+
 message AlterTableDropColumn {
     uint32 logical_idx  = 1;
     uint32 sequence_num = 2;  // used to double check
@@ -345,6 +350,7 @@ message AlterTableReq {
         AlterTableConstraint update_cstr     = 8;
         AlterTablePolicy update_policy       = 9;
         AlterTableRenameCol rename_col       = 11;
+        AlterTableReplaceDef replace_def     = 12;
     }
 }
 
@@ -371,6 +377,9 @@ message SchemaExtra {
     uint64 min_cn_merge_size = 9;
     uint32 block_max_rows = 10;
     uint32 object_max_blocks = 11;
+    uint64 FeatureFlag = 12;
+    repeated uint64 IndexTables = 13;
+    uint64 ParentTableID = 14;
 }
 
 // Int64Map mainly used in unit test

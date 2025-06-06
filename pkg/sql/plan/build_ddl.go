@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -747,19 +748,17 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
 	}
 
-	rawSQL := ""
-	if stmt.PartitionOption != nil {
-		rawSQL = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
-	}
-
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
 			Name: string(stmt.Table.ObjectName),
 		},
-		RawSQL:      rawSQL,
-		IsPartition: stmt.PartitionOption != nil,
+	}
+
+	if stmt.PartitionOption != nil {
+		createTable.RawSQL = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
 	// get database name
@@ -4117,6 +4116,33 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						NewComment: comment,
 					},
 				},
+			}
+		case *tree.AlterTableModifyColumnClause:
+			if isVarcharLengthModified(ctx.GetContext(), opt, tableDef) {
+				colName := opt.NewColumn.Name.ColName()
+				oldCol := FindColumn(tableDef.Cols, colName)
+				if oldCol == nil {
+					return nil, moerr.NewBadFieldError(ctx.GetContext(), opt.NewColumn.Name.ColNameOrigin(), tableDef.Name)
+				}
+
+				newColType, err := getTypeFromAst(ctx.GetContext(), opt.NewColumn.Type)
+				if err != nil {
+					return nil, err
+				}
+
+				alterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterVarcharLength{
+						AlterVarcharLength: &plan.AlterVarcharLength{
+							ColumnName: colName,
+							NewLength:  newColType.Width,
+							OldLength:  oldCol.Typ.Width,
+						},
+					},
+				}
+			} else {
+				// Currently only varchar length modification is supported for INPLACE algorithm
+				// Other column modifications will use COPY algorithm
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Currently only varchar length modification is supported for INPLACE algorithm")
 			}
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
