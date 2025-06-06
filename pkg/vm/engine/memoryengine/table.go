@@ -496,3 +496,7 @@ func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.Obj
 func (t *Table) Reset(op client.TxnOperator) error {
 	return nil
 }
+
+func (t *Table) GetExtraInfo() *api.SchemaExtra {
+	return nil
+}

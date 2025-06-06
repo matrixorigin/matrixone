@@ -17,6 +17,7 @@ package partitionservice
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -54,12 +55,6 @@ var (
 
 // PartitionService is used to maintaining the metadata of the partition table.
 type PartitionService interface {
-	Is(
-		ctx context.Context,
-		tableID uint64,
-		txnOp client.TxnOperator,
-	) (bool, partition.PartitionMetadata, error)
-
 	// Create creates metadata of the partition table.
 	Create(
 		ctx context.Context,
@@ -74,7 +69,15 @@ type PartitionService interface {
 		txnOp client.TxnOperator,
 	) error
 
+	GetPartitionMetadata(
+		ctx context.Context,
+		tableID uint64,
+		txnOp client.TxnOperator,
+	) (partition.PartitionMetadata, error)
+
 	GetStorage() PartitionStorage
+
+	Enabled() bool
 }
 
 type PartitionStorage interface {
