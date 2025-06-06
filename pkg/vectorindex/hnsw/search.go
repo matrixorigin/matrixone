@@ -17,162 +17,29 @@ package hnsw
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"sync"
 	"sync/atomic"
 
-	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
-// Hnsw search index struct to hold the usearch index
-type HnswSearchIndex struct {
-	Id        string
-	Path      string
-	Index     *usearch.Index
-	Timestamp int64
-	Checksum  string
-	Filesize  int64
-}
-
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
 type HnswSearch struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*HnswSearchIndex
+	Indexes       []*HnswModel
 	Concurrency   atomic.Int64
 	Mutex         sync.Mutex
 	Cond          *sync.Cond
 	ThreadsSearch int64
-}
-
-// load chunk from database
-func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
-	var res executor.Result
-	var ok bool
-
-	select {
-	case res, ok = <-stream_chan:
-		if !ok {
-			return true, nil
-		}
-	case err = <-error_chan:
-		return false, err
-	case <-proc.Ctx.Done():
-		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
-	}
-
-	bat := res.Batches[0]
-	defer res.Close()
-
-	for i := 0; i < bat.RowCount(); i++ {
-		chunk_id := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], i)
-		data := bat.Vecs[1].GetRawBytesAt(i)
-
-		offset := chunk_id * vectorindex.MaxChunkSize
-		_, err = fp.Seek(offset, io.SeekStart)
-		if err != nil {
-			return false, err
-		}
-
-		_, err = fp.Write(data)
-		if err != nil {
-			return false, err
-		}
-	}
-	return false, nil
-}
-
-// load index from database
-// TODO: loading file is tricky.
-// 1. we need to know the size of the file.
-// 2. Write Zero to file to have a pre-allocated size
-// 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
-// 4. according to the chunk_id, seek to the offset and write the chunk
-// 5. check the checksum to verify the correctness of the file
-func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
-
-	stream_chan := make(chan executor.Result, 2)
-	error_chan := make(chan error)
-
-	// create tempfile for writing
-	fp, err := os.CreateTemp("", "hnswindx")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(fp.Name())
-
-	err = fallocate.Fallocate(fp, 0, idx.Filesize)
-	if err != nil {
-		return err
-	}
-
-	// run streaming sql
-	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
-	go func() {
-		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-		if err != nil {
-			error_chan <- err
-			return
-		}
-	}()
-
-	// incremental load from database
-	sql_closed := false
-	for !sql_closed {
-		sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp)
-		if err != nil {
-			return err
-		}
-	}
-
-	// load index to memory
-	fp.Close()
-
-	// check checksum
-	chksum, err := vectorindex.CheckSum(fp.Name())
-	if err != nil {
-		return err
-	}
-	if chksum != idx.Checksum {
-		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
-	}
-
-	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
-	if err != nil {
-		return err
-	}
-
-	err = usearchidx.ChangeThreadsSearch(uint(nthread))
-	if err != nil {
-		return err
-	}
-
-	err = usearchidx.Load(fp.Name())
-	if err != nil {
-		return err
-	}
-
-	idx.Index = usearchidx
-
-	return nil
-}
-
-// Call usearch.Search
-func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
-	return idx.Index.Search(query, limit)
 }
 
 func NewHnswSearch(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch {
@@ -300,9 +167,9 @@ func (s *HnswSearch) Destroy() {
 }
 
 // load metadata from database
-func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, error) {
+func LoadMetadata(proc *process.Process, dbname string, metatbl string) ([]*HnswModel, error) {
 
-	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s`", s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
 	res, err := runSql(proc, sql)
 	if err != nil {
 		return nil, err
@@ -314,7 +181,7 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 		total += bat.RowCount()
 	}
 
-	indexes := make([]*HnswSearchIndex, 0, total)
+	indexes := make([]*HnswModel, 0, total)
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		chksumVec := bat.Vecs[1]
@@ -326,7 +193,7 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 
-			idx := &HnswSearchIndex{Id: id, Checksum: chksum, Timestamp: ts, Filesize: fs}
+			idx := &HnswModel{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
 			indexes = append(indexes, idx)
 		}
 	}
@@ -335,10 +202,10 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 }
 
 // load index from database
-func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex) ([]*HnswSearchIndex, error) {
+func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswModel) ([]*HnswModel, error) {
 
 	for _, idx := range indexes {
-		err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
+		err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
 		if err != nil {
 			return nil, err
 		}
@@ -349,7 +216,7 @@ func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex
 // load index from database (implement VectorIndexSearch.LoadFromDatabase)
 func (s *HnswSearch) Load(proc *process.Process) error {
 	// load metadata
-	indexes, err := s.LoadMetadata(proc)
+	indexes, err := LoadMetadata(proc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
