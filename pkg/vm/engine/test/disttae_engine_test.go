@@ -1631,11 +1631,7 @@ func TestMetadataScan(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	txnop = p.StartCNTxn()
-	query := `
-		SELECT * FROM (
-			SELECT * FROM metadata_scan("db.mo_account", "*")g
-		) WHERE delete_ts = '0-0'
-	`
+	query := `SELECT * FROM metadata_scan("db.mo_account", "*")g WHERE create_ts <= NOW()`
 	_, err := exec.Exec(p.Ctx, query, executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))

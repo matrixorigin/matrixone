@@ -396,6 +396,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_TS: {
 		types.T_TS,
 		types.T_varchar,
+		types.T_timestamp,
 	},
 
 	types.T_Rowid: {
@@ -507,7 +508,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = uuidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		err = tsToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = tsToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
 		err = rowidToOthers(proc.Ctx, s, *toType, result, length, selectList)
@@ -1746,7 +1747,7 @@ func uuidToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uuid to %s", toType))
 }
 
-func tsToOthers(ctx context.Context,
+func tsToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.TS],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch toType.Oid {
@@ -1755,9 +1756,12 @@ func tsToOthers(ctx context.Context,
 		return rs.DupFromParameter(source, length)
 	case types.T_varchar:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return tsToStr(ctx, source, rs, length, toType)
+		return tsToStr(proc.Ctx, source, rs, length, toType)
+	case types.T_timestamp:
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return tsToTimestamp(proc, source, rs, length, toType)
 	}
-	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
+	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
 }
 
 func rowidToOthers(ctx context.Context,
@@ -4551,6 +4555,53 @@ func uuidToStr(
 	return nil
 }
 
+func tsToTimestamp(
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.TS],
+	to *vector.FunctionResult[types.Timestamp],
+	length int,
+	toType types.Type) error {
+
+	for i := 0; i < length; i++ {
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		physical := tsVal.Physical()
+		seconds := int64(physical / 1e9)
+		nanos := int64(physical % 1e9)
+		t := time.Unix(seconds, nanos).UTC()
+		timeStr := t.Format("2006-01-02 15:04:05.999999")
+
+		zone := time.Local
+		if proc != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		val, err := types.ParseTimestamp(zone, timeStr, toType.Scale)
+		logutil.Info("*[tsToTimestamp]",
+			zap.String("timeStr", timeStr),
+			zap.String("timezone", zone.String()),
+			zap.Int("toType.Scale", int(toType.Scale)),
+			zap.String("val", val.String()),
+			zap.Int("row", i))
+
+		if err != nil {
+			return err
+		}
+
+		if err = to.Append(val, false); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+}
+
 func tsToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.TS],
@@ -4587,6 +4638,7 @@ func tsToStr(
 
 	return nil
 }
+
 func jsonToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
