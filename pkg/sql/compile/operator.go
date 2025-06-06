@@ -90,6 +90,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -670,7 +671,11 @@ func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
 	return op
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (vm.Operator, error) {
+func constructDeletion(
+	proc *process.Process,
+	n *plan.Node,
+	eg engine.Engine,
+) (vm.Operator, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		Ref:             oldCtx.Ref,
@@ -685,19 +690,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (v
 	op.DeleteCtx = delCtx
 
 	ps := proc.GetPartitionService()
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		oldCtx.TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return op, nil
 	}
-
 	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
 }
 
@@ -896,16 +891,7 @@ func constructMultiUpdate(
 	arg.Action = action
 
 	ps := proc.GetPartitionService()
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		n.UpdateCtxList[0].TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(n.UpdateCtxList[0].TableDef.FeatureFlag) {
 		return arg, nil
 	}
 
@@ -940,20 +926,7 @@ func constructInsert(
 	arg.ToWriteS3 = toS3
 
 	ps := proc.GetPartitionService()
-	if ps == nil {
-		return arg, nil
-	}
-
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		oldCtx.TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return arg, nil
 	}
 

@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -43,13 +44,12 @@ func newPartitionTxnTable(
 	primary *txnTable,
 	metadata partition.PartitionMetadata,
 	ps partitionservice.PartitionService,
-) (*partitionTxnTable, error) {
-	tbl := &partitionTxnTable{
+) *partitionTxnTable {
+	return &partitionTxnTable{
 		primary:  primary,
 		metadata: metadata,
 		ps:       ps,
 	}
-	return tbl, nil
 }
 
 func (t *partitionTxnTable) getRelation(
@@ -74,14 +74,6 @@ func (t *partitionTxnTable) Ranges(
 	)
 	if err != nil {
 		return nil, err
-	}
-
-	if len(targets) == 1 {
-		rel, err := t.getRelation(ctx, targets[0])
-		if err != nil {
-			return nil, err
-		}
-		return rel.Ranges(ctx, param)
 	}
 
 	pd := newPartitionedRelData()
@@ -443,6 +435,10 @@ func (t *partitionTxnTable) PrimaryKeysMayBeUpserted(
 
 func (t *partitionTxnTable) Reset(op client.TxnOperator) error {
 	return t.primary.Reset(op)
+}
+
+func (t *partitionTxnTable) GetExtraInfo() *api.SchemaExtra {
+	return t.primary.extraInfo
 }
 
 type PartitionedRelData struct {

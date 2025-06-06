@@ -382,6 +382,9 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 
 // AllocateIDByKey implements the basicHAKeeperClient interface.
 func (c *managedHAKeeperClient) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	if key == "" {
+		return c.AllocateID(ctx)
+	}
 	return c.AllocateIDByKeyWithBatch(ctx, key, c.cfg.AllocateIDBatch)
 }
 
