@@ -268,8 +268,7 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 		if stats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
 			stats.SetLevel(1)
 		}
-		name := space.table.GetLocalSchema(space.isTombstone).Name
-		if name == "statement_info" {
+		if catalog.CheckMergeTrace(space.table.entry.ID) {
 			if space.isTombstone {
 				catalog.LogInputTombstoneObjectAsync(
 					space.table.entry,

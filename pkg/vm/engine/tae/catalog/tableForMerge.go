@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"iter"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -384,4 +385,36 @@ func CalcTombstoneDist(
 		}
 	}
 	return levelDist
+}
+
+type traceTables struct {
+	sync.RWMutex
+	m map[uint64]struct{}
+}
+
+func AddMergeTrace(id uint64) {
+	tarceTablesGlobal.Lock()
+	defer tarceTablesGlobal.Unlock()
+	tarceTablesGlobal.m[id] = struct{}{}
+}
+
+func RemoveMergeTrace(id uint64) {
+	tarceTablesGlobal.Lock()
+	defer tarceTablesGlobal.Unlock()
+	delete(tarceTablesGlobal.m, id)
+}
+
+func CheckMergeTrace(id uint64) (in bool) {
+	tarceTablesGlobal.RLock()
+	defer tarceTablesGlobal.RUnlock()
+	_, ok := tarceTablesGlobal.m[id]
+	return ok
+}
+
+var tarceTablesGlobal *traceTables
+
+func init() {
+	tarceTablesGlobal = &traceTables{
+		m: make(map[uint64]struct{}),
+	}
 }
