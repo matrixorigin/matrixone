@@ -1324,6 +1324,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	var indexExtra *api.SchemaExtra
 	for i, def := range qry.IndexTables {
 		planCols = def.GetCols()
 		exeCols = engine.PlanColsToExeCols(planCols)

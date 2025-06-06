@@ -1355,7 +1355,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if hasReplaceDef {
 		// When ReplaceDef exists, replace the entire table definition
 		replaceDef := replaceDefReq.GetReplaceDef()
-		defs, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
+		defs, _, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
 		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 		tbl.defs = defs
 		tbl.tableDef = nil
