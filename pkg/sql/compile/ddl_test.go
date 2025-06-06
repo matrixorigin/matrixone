@@ -285,7 +285,7 @@ func TestScope_CreateTable(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
-		planDef2ExecDef := gostub.Stub(&planDefsToExeDefs, func(_ *plan.TableDef) ([]engine.TableDef, error) {
+		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(_ *plan.TableDef) ([]engine.TableDef, error) {
 			return nil, moerr.NewInternalErrorNoCtx("test error")
 		})
 		defer planDef2ExecDef.Reset()
@@ -405,7 +405,7 @@ func TestScope_CreateTable(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
-		planDef2ExecDef := gostub.Stub(&planDefsToExeDefs, func(tbl *plan.TableDef) ([]engine.TableDef, error) {
+		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(tbl *plan.TableDef) ([]engine.TableDef, error) {
 			if tbl.Name == "dept" {
 				return nil, nil
 			} else if tbl.Name == "%!%p0%!%dept" || tbl.Name == "%!%p1%!%dept" {
