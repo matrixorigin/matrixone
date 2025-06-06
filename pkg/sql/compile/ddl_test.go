@@ -286,8 +286,8 @@ func TestScope_CreateTable(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
-		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(_ *plan.TableDef) ([]engine.TableDef, error) {
-			return nil, moerr.NewInternalErrorNoCtx("test error")
+		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(_ *plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+			return nil, nil, moerr.NewInternalErrorNoCtx("test error")
 		})
 		defer planDef2ExecDef.Reset()
 
