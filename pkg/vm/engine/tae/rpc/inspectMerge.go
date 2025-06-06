@@ -94,6 +94,9 @@ func (arg *mergeTraceArg) FromCommand(cmd *cobra.Command) (err error) {
 		return err
 	}
 	arg.tbl, err = parseTableTarget(address, arg.ctx.acinfo, arg.ctx.db)
+	if err != nil {
+		return err
+	}
 	if arg.tbl == nil {
 		return moerr.NewInvalidInputNoCtxf("table should be specified")
 	}
