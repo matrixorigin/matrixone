@@ -829,6 +829,9 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 	if err != nil {
 		return nil
 	}
+	if relation == nil {
+		return nil
+	}
 
 	priKeys, err := relation.GetPrimaryKeys(ctx)
 	if err != nil {
@@ -884,6 +887,9 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if table == nil {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
 	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
 	if cached == nil {

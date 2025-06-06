@@ -135,6 +135,9 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	if err != nil {
 		return nil, err
 	}
+	if table == nil {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
+	}
 
 	newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
 	statsInfo, err := table.Stats(newCtx, true)
@@ -240,6 +243,9 @@ func (c *compilerContext) GetPrimaryKeyDef(
 	if err != nil {
 		return nil
 	}
+	if relation == nil {
+		return nil
+	}
 
 	priKeys, err := relation.GetPrimaryKeys(ctx)
 	if err != nil {
@@ -326,6 +332,9 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoDB) {
+			return nil, nil, nil
+		}
 		return nil, nil, err
 	}
 
@@ -333,6 +342,10 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	if err != nil {
 		return nil, nil, err
 	}
+	if table == nil {
+		return nil, nil, nil
+	}
+
 	ref, def := c.getTableDef(ctx, table, dbName, tableName)
 	return ref, def, nil
 }
@@ -393,6 +406,9 @@ func (c *compilerContext) getRelation(
 
 	table, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, nil, nil
+		}
 		return nil, nil, err
 	}
 	return ctx, table, nil
