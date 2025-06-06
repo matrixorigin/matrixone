@@ -240,7 +240,7 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 						newctx, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
 						defer cancel()
 						//os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN.... %s\n", string(sqlBuf)))
-						os.Stderr.WriteString(fmt.Sprintf("Wait for BEGIN but sql. execute anyway\n"))
+						os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
 						opts := executor.Options{}
 						res, err := s.exec.Exec(newctx, string(sqlBuf), opts)
 						if err != nil {
