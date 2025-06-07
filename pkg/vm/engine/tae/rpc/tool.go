@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -329,38 +328,23 @@ func (c *moObjStatArg) Run() (err error) {
 	return
 }
 
-func (c *moObjStatArg) initFs(ctx context.Context, local bool) (err error) {
-	if local {
-		cfg := fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: c.dir,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
-		return
-	}
-
-	arg := fileservice.ObjectStorageArguments{
-		Name:     defines.SharedFileServiceName,
-		Endpoint: "DISK",
-		Bucket:   c.dir,
-	}
-	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
+func (c *moObjStatArg) initFs(
+	ctx context.Context, local bool,
+) (err error) {
+	fromS3 := !local
+	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, fromS3)
 	return
 }
 
 func (c *moObjStatArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		err = c.initFs(ctx, c.local)
-		if err != nil {
-			return err
+		if err = c.initFs(ctx, c.local); err != nil {
+			return
 		}
 	}
 
 	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
-
-	return err
+	return
 }
 
 func (c *moObjStatArg) checkInputs() error {
@@ -699,38 +683,24 @@ func (c *objGetArg) Run() (err error) {
 	return
 }
 
-func (c *objGetArg) initFs(ctx context.Context, local bool) (err error) {
-	if local {
-		cfg := fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: c.dir,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
-		return
-	}
-
-	arg := fileservice.ObjectStorageArguments{
-		Name:     defines.SharedFileServiceName,
-		Endpoint: "DISK",
-		Bucket:   c.dir,
-	}
-	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
+func (c *objGetArg) initFs(
+	ctx context.Context, local bool,
+) (err error) {
+	fromS3 := !local
+	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, fromS3)
 	return
 }
 
 func (c *objGetArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		err = c.initFs(ctx, c.local)
-		if err != nil {
-			return err
+		if err = c.initFs(ctx, c.local); err != nil {
+			return
 		}
 	}
 
 	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
 
-	return err
+	return
 }
 
 func (c *objGetArg) checkInputs() error {
