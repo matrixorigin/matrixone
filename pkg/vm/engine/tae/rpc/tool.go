@@ -143,8 +143,8 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	table := TableArg{}
 	moInspectCmd.AddCommand(table.PrepareCommand())
 
-	ckp := CheckpointArg{}
-	moInspectCmd.AddCommand(ckp.PrepareCommand())
+	onlineCkp := OnlineCkpArg{}
+	moInspectCmd.AddCommand(onlineCkp.PrepareCommand())
 
 	gc := gcRemoveArg{}
 	moInspectCmd.AddCommand(gc.PrepareCommand())
@@ -163,6 +163,7 @@ func (c *MoInspectArg) String() string {
 func (c *MoInspectArg) Usage() (res string) {
 	res += "Offline Commands:\n"
 	res += fmt.Sprintf("  %-8v show object information in the offline mode\n", "object")
+	res += fmt.Sprintf("  %-8v show checkpoint information in the offline mode\n", "offline-ckp")
 
 	res += "\n"
 	res += "Online Commands:\n"
@@ -953,10 +954,10 @@ func (c *tableStatArg) Run() (err error) {
 	return
 }
 
-type CheckpointArg struct {
+type OnlineCkpArg struct {
 }
 
-func (c *CheckpointArg) PrepareCommand() *cobra.Command {
+func (c *OnlineCkpArg) PrepareCommand() *cobra.Command {
 	checkpointCmd := &cobra.Command{
 		Use:   "online-ckp",
 		Short: "online checkpoint",
@@ -966,43 +967,43 @@ func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 
 	checkpointCmd.SetUsageTemplate(c.Usage())
 
-	stat := ckpStatArg{}
+	stat := onlineCkpStatArg{}
 	checkpointCmd.AddCommand(stat.PrepareCommand())
 
-	list := ckpListArg{}
+	list := onlineCkpListArg{}
 	checkpointCmd.AddCommand(list.PrepareCommand())
 
 	return checkpointCmd
 }
 
-func (c *CheckpointArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *OnlineCkpArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *CheckpointArg) String() string {
-	return "table"
+func (c *OnlineCkpArg) String() string {
+	return "online-ckp"
 }
 
-func (c *CheckpointArg) Usage() (res string) {
+func (c *OnlineCkpArg) Usage() (res string) {
 	res += "Available Commands:\n"
 	res += fmt.Sprintf("  %-5v show table information\n", "stat")
 	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
 
 	res += "\n"
 	res += "Usage:\n"
-	res += "inspect table [flags] [options]\n"
+	res += "inspect online-ckp [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect online-ckp <command> --help\" for more information about a given command.\n"
 
 	return
 }
 
-func (c *CheckpointArg) Run() error {
+func (c *OnlineCkpArg) Run() error {
 	return nil
 }
 
-type ckpStatArg struct {
+type onlineCkpStatArg struct {
 	ctx   *inspectContext
 	cid   uint64
 	tid   uint64
@@ -1011,7 +1012,7 @@ type ckpStatArg struct {
 	res   string
 }
 
-func (c *ckpStatArg) PrepareCommand() *cobra.Command {
+func (c *onlineCkpStatArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
 		Use:   "stat",
 		Short: "checkpoint stat",
@@ -1029,7 +1030,7 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 	return ckpStatCmd
 }
 
-func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *onlineCkpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	id, _ := cmd.Flags().GetInt("cid")
 	c.cid = uint64(id)
 	id, _ = cmd.Flags().GetInt("tid")
@@ -1042,11 +1043,11 @@ func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *ckpStatArg) String() string {
+func (c *onlineCkpStatArg) String() string {
 	return c.res
 }
 
-func (c *ckpStatArg) Usage() (res string) {
+func (c *onlineCkpStatArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display all table information for the given checkpoint\n"
 	res += "  inspect checkpoint stat -c ckp_lsn\n"
@@ -1067,7 +1068,7 @@ func (c *ckpStatArg) Usage() (res string) {
 	return
 }
 
-func (c *ckpStatArg) Run() (err error) {
+func (c *onlineCkpStatArg) Run() (err error) {
 	if c.ctx == nil {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
@@ -1112,14 +1113,14 @@ type CkpEntries struct {
 	Checkpoints []CkpEntry `json:"checkpoints"`
 }
 
-type ckpListArg struct {
+type onlineCkpListArg struct {
 	ctx   *inspectContext
 	cid   uint64
 	limit int
 	res   string
 }
 
-func (c *ckpListArg) PrepareCommand() *cobra.Command {
+func (c *onlineCkpListArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
 		Use:   "list",
 		Short: "checkpoint list",
@@ -1134,7 +1135,7 @@ func (c *ckpListArg) PrepareCommand() *cobra.Command {
 	return ckpStatCmd
 }
 
-func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *onlineCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
@@ -1144,11 +1145,11 @@ func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *ckpListArg) String() string {
+func (c *onlineCkpListArg) String() string {
 	return c.res
 }
 
-func (c *ckpListArg) Usage() (res string) {
+func (c *onlineCkpListArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display all checkpoints in memory\n"
 	res += "  inspect checkpoint list\n"
@@ -1164,7 +1165,7 @@ func (c *ckpListArg) Usage() (res string) {
 	return
 }
 
-func (c *ckpListArg) Run() (err error) {
+func (c *onlineCkpListArg) Run() (err error) {
 	if c.ctx == nil {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
@@ -1178,7 +1179,7 @@ func (c *ckpListArg) Run() (err error) {
 	return
 }
 
-func (c *ckpListArg) getCkpList() (res string, err error) {
+func (c *onlineCkpListArg) getCkpList() (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	ckpEntries := make([]CkpEntry, 0, len(entries))
 	for i, entry := range entries {
@@ -1211,7 +1212,7 @@ type TableIds struct {
 	Ids      []uint64 `json:"tables"`
 }
 
-func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
+func (c *onlineCkpListArg) getTableList(ctx context.Context) (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	var ids []uint64
 	for _, entry := range entries {
