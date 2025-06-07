@@ -2147,11 +2147,8 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 					return true, nil
 				}
 				flag, err := checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def.Name, def.TblId, def.Version)
-				if err != nil {
+				if err != nil || flag {
 					return true, err
-				}
-				if flag {
-					return true, nil
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
@@ -2159,11 +2156,8 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 					return true, nil
 				}
 				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
-				if err != nil {
+				if err != nil || flag {
 					return true, err
-				}
-				if flag {
-					return true, nil
 				}
 			}
 			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
@@ -2171,11 +2165,8 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 					return true, nil
 				}
 				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
-				if err != nil {
+				if err != nil || flag {
 					return true, err
-				}
-				if flag {
-					return true, nil
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
@@ -2183,11 +2174,8 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 					return true, nil
 				}
 				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
-				if err != nil {
+				if err != nil || flag {
 					return true, err
-				}
-				if flag {
-					return true, nil
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
@@ -2195,11 +2183,8 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 					return true, nil
 				}
 				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
-				if err != nil {
+				if err != nil || flag {
 					return true, err
-				}
-				if flag {
-					return true, nil
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
@@ -2207,11 +2192,8 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 					return true, nil
 				}
 				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
-				if err != nil {
+				if err != nil || flag {
 					return true, err
-				}
-				if flag {
-					return true, nil
 				}
 			}
 			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
@@ -2219,11 +2201,8 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 					return true, nil
 				}
 				flag, err := checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableName, ctx.TableId, ctx.TableVersion)
-				if err != nil {
+				if err != nil || flag {
 					return true, err
-				}
-				if flag {
-					return true, nil
 				}
 			}
 		}
