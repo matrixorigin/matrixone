@@ -613,6 +613,12 @@ func (h *Handle) HandleDiskCleaner(
 				return !end.GE(&ts)
 			}, cmd_util.CheckerKeyMinTS)
 		return
+	case cmd_util.StopGC:
+		h.db.DiskCleaner.Stop()
+		return
+	case cmd_util.StartGC:
+		h.db.DiskCleaner.Start()
+		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
 	}
