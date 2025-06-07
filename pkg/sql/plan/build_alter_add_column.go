@@ -458,7 +458,10 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		_, refTableDef := ctx.ResolveById(referredTblId, nil)
+		_, refTableDef, err := ctx.ResolveById(referredTblId, nil)
+		if err != nil {
+			return err
+		}
 		if refTableDef == nil {
 			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}

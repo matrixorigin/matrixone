@@ -202,7 +202,10 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		dbName = ctx.DefaultDatabase()
 	}
 
-	objRef, tableDef := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return err
+	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -217,7 +220,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
-	var err error
 	checkFK := true
 	if respectFKCheck {
 		checkFK, err = IsForeignKeyChecksEnabled(ctx)

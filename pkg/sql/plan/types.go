@@ -81,11 +81,11 @@ type CompilerContext interface {
 	// check if database exist
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
-	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef)
+	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get index table definition by an ObjectRef, will skip unnecessary subscription check
-	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef)
+	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get table definition by table id
-	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef)
+	ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	// get the list of the account id
@@ -123,7 +123,7 @@ type CompilerContext interface {
 	GetQueryingSubscription() *SubscriptionMeta
 	IsPublishing(dbName string) (bool, error)
 	BuildTableDefByMoColumns(dbName, table string) (*TableDef, error)
-	ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef)
+	ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef, error)
 
 	ResolveSnapshotWithSnapshotName(snapshotName string) (*Snapshot, error)
 	CheckTimeStampValid(ts int64) (bool, error)

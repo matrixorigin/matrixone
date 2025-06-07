@@ -380,7 +380,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		_, _, err := tcc.getRelation("abc", "t1", nil, &plan2.Snapshot{TS: ts})
 		convey.So(err, convey.ShouldBeNil)
 
-		object, tableRef := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ := tcc.Resolve("abc", "t1", &plan2.Snapshot{TS: ts})
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
@@ -390,7 +390,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 				TenantId: 0,
 			},
 		}
-		object, tableRef = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
+		object, tableRef, _ = tcc.ResolveIndexTableByRef(ref, "indexTable", &plan2.Snapshot{TS: ts})
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 

@@ -265,7 +265,7 @@ insert into atomic_table_16 values (6,"a"),(7,"b");
 drop table atomic_table_16;
 use transaction_enhance;
 drop table atomic_table_16;
-SQL parser error: table "atomic_table_16" does not exist
+no such table transaction_enhance.atomic_table_16
 commit;
 select * from atomic_table_16;
 SQL parser error: table "atomic_table_16" does not exist
@@ -293,10 +293,10 @@ create sequence seq_01 as int start 30;
 internal error: Only CREATE of DDL is supported in transactions
 use transaction_enhance;
 select nextval('seq_01');
-SQL parser error: table "seq_01" does not exist
+no such table transaction_enhance.seq_01
 commit;
 select nextval('seq_01');
-SQL parser error: table "seq_01" does not exist
+no such table transaction_enhance.seq_01
 drop table if exists atomic_table_11;
 drop account if exists trans_acc1;
 create account trans_acc1 admin_name "admin" identified by "111";
@@ -343,7 +343,7 @@ set autocommit=0;
 drop table atomic_table_18;
 use transaction_enhance;
 drop table atomic_table_18;
-SQL parser error: table "atomic_table_18" does not exist
+no such table transaction_enhance.atomic_table_18
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 commit;

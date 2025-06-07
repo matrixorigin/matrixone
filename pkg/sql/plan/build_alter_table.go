@@ -39,7 +39,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	}
 
 	var snapshot *Snapshot
-	_, tableDef := ctx.Resolve(schemaName, tableName, snapshot)
+	_, tableDef, err := ctx.Resolve(schemaName, tableName, snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -280,7 +283,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}

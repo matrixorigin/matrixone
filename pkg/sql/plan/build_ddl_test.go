@@ -101,12 +101,12 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
 			x := store[schemaName+"."+tableName]
-			return x.obj, x.table
+			return x.obj, x.table, nil
 		}).AnyTimes()
 	ctx.EXPECT().SetBuildingAlterView(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
@@ -116,7 +116,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
-	ctx.EXPECT().ResolveById(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().ResolveById(gomock.Any(), gomock.Any()).Return(nil, nil, nil).AnyTimes()
 	ctx.EXPECT().GetStatsCache().Return(nil).AnyTimes()
 	ctx.EXPECT().GetSnapshot().Return(nil).AnyTimes()
 	ctx.EXPECT().SetViews(gomock.Any()).AnyTimes()
@@ -194,12 +194,12 @@ func TestBuildLockTables(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
 			x := store[schemaName+"."+tableName]
-			return x.obj, x.table
+			return x.obj, x.table, nil
 		}).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
 	ctx.EXPECT().GetAccountId().Return(catalog.System_Account, nil).AnyTimes()

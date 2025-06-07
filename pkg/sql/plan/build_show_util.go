@@ -271,9 +271,12 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 			fkTableDef = tableDef
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
-				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
+				_, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
+				_, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot)
+			}
+			if err != nil {
+				return "", nil, err
 			}
 		}
 

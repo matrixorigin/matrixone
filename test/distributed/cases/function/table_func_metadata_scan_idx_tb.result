@@ -1,5 +1,5 @@
 select * from metadata_scan('table_func_metadata_scan_idx_tb.no_exist_table', '*') g;
-SQL parser error: table "no_exist_table" does not exist
+no such table table_func_metadata_scan_idx_tb.no_exist_table
 drop table if exists t;
 create table t(a int, b varchar, c float, d decimal(10, 8), e float(5, 2));
 insert into t values(1, null, 1.1, 1, 1.11);
