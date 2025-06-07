@@ -2122,7 +2122,7 @@ var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx
 	return plan, nil
 }
 
-func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
+func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
 	if plan0 == nil {
 		return true, nil
 	}
@@ -2131,7 +2131,7 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 		if ref == nil || def == nil {
 			return true, nil
 		}
-		_, tableDef, err := ses.GetTxnCompileCtx().Resolve(ref.SchemaName, def.Name, nil)
+		_, tableDef, err := resolveFn(ref.SchemaName, def.Name, nil)
 		if err != nil {
 			return true, err
 		}
@@ -2165,12 +2165,6 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				flag, err := checkFn(ctx.Ref, ctx.TableDef)
-				if err != nil || flag {
-					return true, err
-				}
-			}
-			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
 				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
 					return true, err
@@ -2792,7 +2786,7 @@ func dispatchStmt(ses FeSession,
 	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
-		flag, err := checkModify(execCtx.cw.Plan(), ses)
+		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().Resolve)
 		if err != nil {
 			return err
 		}

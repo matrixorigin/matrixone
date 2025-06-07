@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1691,4 +1692,94 @@ func Test_handleShowTableStatus(t *testing.T) {
 		ec = newTestExecCtx(context.Background(), ctrl)
 		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
 	})
+}
+
+type mockCompilerContext struct {
+}
+
+func (m *mockCompilerContext) Resolve(schemaName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	return nil, nil, nil
+}
+
+func Test_checkModify(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := &mockCompilerContext{}
+
+	tests := []struct {
+		node          *plan.Node
+		expected_flag bool
+		expected_err  bool
+	}{
+		{
+			node:          &plan.Node{},
+			expected_flag: false,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				TableDef: &plan.TableDef{
+					Name:    "test",
+					TblId:   1,
+					Version: 1,
+				},
+				ObjRef: &plan.ObjectRef{
+					SchemaName: "test_db",
+				},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				InsertCtx: &plan0.InsertCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				ReplaceCtx: &plan0.ReplaceCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				DeleteCtx: &plan0.DeleteCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				PreInsertCtx: &plan0.PreInsertCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				OnDuplicateKey: &plan0.OnDuplicateKeyCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+	}
+
+	for _, test := range tests {
+		flag, err := checkModify(&plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: &plan.Query{
+					Nodes: []*plan.Node{
+						test.node,
+					},
+				},
+			},
+		}, ctx.Resolve)
+		assert.Equal(t, test.expected_flag, flag)
+		if !test.expected_err {
+			assert.Nil(t, err)
+		}
+	}
 }

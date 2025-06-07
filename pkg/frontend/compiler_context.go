@@ -425,16 +425,18 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		}
 	}
 
-	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(tempCtx, txn, tableId)
+	eng := tcc.GetTxnHandler().GetStorage()
+	dbName, tableName, table, err := eng.GetRelationById(tempCtx, txn, tableId)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// convert
+	returnTableID := int64(tableId)
 	obj := &plan2.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
-		Obj:        int64(tableId),
+		Obj:        returnTableID,
 	}
 	tableDef := table.CopyTableDef(tempCtx)
 	return obj, tableDef, nil
@@ -448,16 +450,18 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		pubContext = context.WithValue(pubContext, defines.TenantIDKey{}, uint32(subMeta.AccountId))
 	}
 
-	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
+	eng := tcc.GetTxnHandler().GetStorage()
+	dbName, tableName, table, err := eng.GetRelationById(pubContext, txn, tableId)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// convert
+	returnTableID := int64(tableId)
 	obj := &plan2.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
-		Obj:        int64(tableId),
+		Obj:        returnTableID,
 	}
 	tableDef := table.CopyTableDef(pubContext)
 	return obj, tableDef, nil
@@ -513,10 +517,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		dbName = sub.DbName
 	}
 
+	tableID := int64(table.GetTableID(ctx))
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
-		Obj:              int64(table.GetTableID(ctx)),
+		Obj:              tableID,
 		SubscriptionName: subscriptionName,
 	}
 	if pubAccountId != -1 {
@@ -553,10 +558,11 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		return nil, nil, err
 	}
 
+	tableID := int64(table.GetTableID(ctx))
 	obj := &plan2.ObjectRef{
 		SchemaName:       ref.SchemaName,
 		ObjName:          tblName,
-		Obj:              int64(table.GetTableID(ctx)),
+		Obj:              tableID,
 		SubscriptionName: ref.SubscriptionName,
 		PubInfo:          ref.PubInfo,
 	}
