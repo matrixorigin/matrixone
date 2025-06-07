@@ -162,11 +162,12 @@ func (c *MoInspectArg) String() string {
 
 func (c *MoInspectArg) Usage() (res string) {
 	res += "Offline Commands:\n"
-	res += fmt.Sprintf("  %-8v show object information\n", "object")
+	res += fmt.Sprintf("  %-8v show object information in the offline mode\n", "object")
 
 	res += "\n"
 	res += "Online Commands:\n"
-	res += fmt.Sprintf("  %-8v show table information\n", "table")
+	res += fmt.Sprintf("  %-8v show table information in the online mode\n", "table")
+	res += fmt.Sprintf("  %-8v show checkpoint information in the online mode\n", "online-ckp")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -957,9 +958,9 @@ type CheckpointArg struct {
 
 func (c *CheckpointArg) PrepareCommand() *cobra.Command {
 	checkpointCmd := &cobra.Command{
-		Use:   "checkpoint",
-		Short: "checkpoint",
-		Long:  "Display information about a given checkpoint",
+		Use:   "online-ckp",
+		Short: "online checkpoint",
+		Long:  "Display information about a given checkpoint in online mode",
 		Run:   RunFactory(c),
 	}
 
