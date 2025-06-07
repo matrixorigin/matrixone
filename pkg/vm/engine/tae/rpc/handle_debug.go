@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"slices"
 	"strconv"
 	"strings"
@@ -614,10 +615,17 @@ func (h *Handle) HandleDiskCleaner(
 			}, cmd_util.CheckerKeyMinTS)
 		return
 	case cmd_util.StopGC:
-		h.db.DiskCleaner.Stop()
+		h.db.CronJobs.RemoveJob(db.CronJobs_Name_GCDisk)
 		return
 	case cmd_util.StartGC:
-		h.db.DiskCleaner.Start()
+		err = h.db.CronJobs.AddJob(
+			db.CronJobs_Name_GCDisk,
+			h.db.Opts.GCCfg.ScanGCInterval,
+			func(ctx context.Context) {
+				h.db.DiskCleaner.GC(ctx)
+			},
+			1,
+		)
 		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
