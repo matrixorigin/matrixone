@@ -344,31 +344,32 @@ func (cleaner *DiskCleaner) CancelRunning(cause error) {
 }
 
 func (cleaner *DiskCleaner) Start() {
-	cleaner.onceStart.Do(func() {
-		cleaner.processQueue.Start()
-		step := cleaner.step.Load()
-		switch step {
-		case StateStep_Write:
-			if err := cleaner.forceScheduleJob(JT_GCReplayAndExecute); err != nil {
-				panic(err)
-			}
-		case StateStep_Replay:
-			if err := cleaner.forceScheduleJob(JT_GCReplay); err != nil {
-				panic(err)
-			}
-		default:
-			panic(fmt.Sprintf("Bad cleaner state: %d", step))
+	cleaner.processQueue.Start()
+	step := cleaner.step.Load()
+	switch step {
+	case StateStep_Write:
+		if err := cleaner.forceScheduleJob(JT_GCReplayAndExecute); err != nil {
+			panic(err)
 		}
-	})
+	case StateStep_Replay:
+		if err := cleaner.forceScheduleJob(JT_GCReplay); err != nil {
+			panic(err)
+		}
+	default:
+		panic(fmt.Sprintf("Bad cleaner state: %d", step))
+	}
+	logutil.Info(
+		"GC-DiskCleaner-Started",
+		zap.Uint32("step", cleaner.step.Load()),
+	)
 }
 
 func (cleaner *DiskCleaner) Stop() {
-	cleaner.onceStop.Do(func() {
-		cleaner.processQueue.Stop()
-		cleaner.cleaner.Stop()
-		logutil.Info(
-			"GC-DiskCleaner-Started",
-			zap.Uint32("step", cleaner.step.Load()),
-		)
-	})
+	cleaner.processQueue.Stop()
+	cleaner.cleaner.Stop()
+	logutil.Info(
+		"GC-DiskCleaner-Stopped",
+		zap.Uint32("step", cleaner.step.Load()),
+	)
+
 }
