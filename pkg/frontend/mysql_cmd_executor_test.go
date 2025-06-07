@@ -1694,18 +1694,13 @@ func Test_handleShowTableStatus(t *testing.T) {
 	})
 }
 
-type mockCompilerContext struct {
-}
-
-func (m *mockCompilerContext) Resolve(schemaName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	return nil, nil, nil
-}
-
 func Test_checkModify(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	ctx := &mockCompilerContext{}
 
+	resolveFn := func(schemaName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		return nil, nil, nil
+	}
 	tests := []struct {
 		node          *plan.Node
 		expected_flag bool
@@ -1776,7 +1771,7 @@ func Test_checkModify(t *testing.T) {
 					},
 				},
 			},
-		}, ctx.Resolve)
+		}, resolveFn)
 		assert.Equal(t, test.expected_flag, flag)
 		if !test.expected_err {
 			assert.Nil(t, err)
