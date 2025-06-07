@@ -1,4 +1,4 @@
-// Copyright 2021 - 2025 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree" 
+	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	function "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
