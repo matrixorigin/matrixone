@@ -42,8 +42,8 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 	case cmd_util.CheckerKeyTTL:
 	case cmd_util.CheckerKeyMinTS:
 		break
-	case cmd_util.StopGC:
 	case cmd_util.StartGC:
+	case cmd_util.StopGC:
 		return &cmd_util.DiskCleaner{
 			Op:  op,
 			Key: key,
