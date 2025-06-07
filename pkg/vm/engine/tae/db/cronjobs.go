@@ -147,7 +147,6 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			},
 			1,
 		)
-		db.CronJobs.RemoveJob(CronJobs_Name_GCDisk)
 		return
 	case CronJobs_Name_GCCheckpoint:
 		err = db.CronJobs.AddJob(
