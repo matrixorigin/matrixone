@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -47,6 +48,8 @@ const (
 	standard = 1
 	detailed = 2
 )
+
+var PrettyJson = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type ColumnJson struct {
 	Index       uint16 `json:"col_index"`
@@ -420,7 +423,6 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 	ext := c.reader.GetMetaExtent()
 	size := c.GetObjSize(&data)
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := ObjectJson{
 		Name:        c.name,
 		Rows:        header.Rows(),
@@ -432,7 +434,7 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 		OriDataSize: size[1],
 	}
 
-	data, err = json.MarshalIndent(o, "", "  ")
+	data, err = PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -449,8 +451,6 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	header := data.BlockHeader()
-
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 	colCnt := header.ColumnCount()
 	if c.col != invalidId && c.col >= int(colCnt) {
@@ -489,7 +489,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 		Columns:     cols,
 	}
 
-	data, err = json.MarshalIndent(o, "", "  ")
+	data, err = PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -552,7 +552,6 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	header := data.BlockHeader()
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	colCnt := header.ColumnCount()
 	cols := make([]ColumnJson, colCnt)
 	for i := range colCnt {
@@ -581,7 +580,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 		Columns:     cols,
 	}
 
-	data, err = json.MarshalIndent(o, "", "  ")
+	data, err = PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -798,13 +797,12 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 		cols = append(cols, col)
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := BlockJson{
 		Index:   blk.GetID(),
 		Cols:    blk.GetColumnCount(),
 		Columns: cols,
 	}
-	data, err := json.MarshalIndent(o, "", "  ")
+	data, err := PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -936,7 +934,6 @@ func (c *tableStatArg) Run() (err error) {
 		c.cnt++
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := tableStatJson{
 		Name:         c.name,
 		ObjectCount:  c.cnt,
@@ -944,7 +941,7 @@ func (c *tableStatArg) Run() (err error) {
 		OriginalSize: formatBytes(uint32(c.ori)),
 	}
 
-	data, err := json.MarshalIndent(o, "", "  ")
+	data, err := PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -1091,8 +1088,7 @@ func (c *onlineCkpStatArg) Run() (err error) {
 		}
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
-	jsonData, err := json.MarshalIndent(checkpointJson, "", "  ")
+	jsonData, err := PrettyJson.MarshalIndent(checkpointJson, "", "  ")
 	if err != nil {
 		return
 	}
@@ -1102,15 +1098,14 @@ func (c *onlineCkpStatArg) Run() (err error) {
 }
 
 type CkpEntry struct {
-	Index  int      `json:"index"`
-	LSN    string   `json:"lsn"`
-	Detail string   `json:"detail"`
-	Table  []uint64 `json:"table,omitempty"`
+	*checkpoint.CheckpointEntry
+	Index int      `json:"index"`
+	Table []uint64 `json:"table,omitempty"`
 }
 
 type CkpEntries struct {
-	Count       int        `json:"count"`
-	Checkpoints []CkpEntry `json:"checkpoints"`
+	Count   int        `json:"count"`
+	Entries []CkpEntry `json:"entries"`
 }
 
 type onlineCkpListArg struct {
@@ -1187,18 +1182,16 @@ func (c *onlineCkpListArg) getCkpList() (res string, err error) {
 			break
 		}
 		ckpEntries = append(ckpEntries, CkpEntry{
-			Index:  i,
-			LSN:    entry.LSNString(),
-			Detail: entry.String(),
+			Index:           i,
+			CheckpointEntry: entry,
 		})
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	ckpEntriesJson := CkpEntries{
-		Count:       len(ckpEntries),
-		Checkpoints: ckpEntries,
+		Count:   len(ckpEntries),
+		Entries: ckpEntries,
 	}
-	jsonData, err := json.MarshalIndent(ckpEntriesJson, "", "  ")
+	jsonData, err := PrettyJson.MarshalIndent(ckpEntriesJson, "", "  ")
 	if err != nil {
 		return
 	}
@@ -1230,12 +1223,11 @@ func (c *onlineCkpListArg) getTableList(ctx context.Context) (res string, err er
 	if c.limit < len(ids) {
 		ids = ids[:c.limit]
 	}
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	tables := TableIds{
 		TableCnt: len(ids),
 		Ids:      ids,
 	}
-	jsonData, err := json.MarshalIndent(tables, "", "  ")
+	jsonData, err := PrettyJson.MarshalIndent(tables, "", "  ")
 	if err != nil {
 		return
 	}
