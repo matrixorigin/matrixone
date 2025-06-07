@@ -26,13 +26,16 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -146,8 +149,11 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	table := TableArg{}
 	moInspectCmd.AddCommand(table.PrepareCommand())
 
-	onlineCkp := OnlineCkpArg{}
-	moInspectCmd.AddCommand(onlineCkp.PrepareCommand())
+	inmemoryCkp := inmemoryCkpArg{}
+	moInspectCmd.AddCommand(inmemoryCkp.PrepareCommand())
+
+	storageCkp := storageCkpArg{}
+	moInspectCmd.AddCommand(storageCkp.PrepareCommand())
 
 	gc := gcRemoveArg{}
 	moInspectCmd.AddCommand(gc.PrepareCommand())
@@ -166,12 +172,12 @@ func (c *MoInspectArg) String() string {
 func (c *MoInspectArg) Usage() (res string) {
 	res += "Offline Commands:\n"
 	res += fmt.Sprintf("  %-8v show object information in the offline mode\n", "object")
-	res += fmt.Sprintf("  %-8v show checkpoint information in the offline mode\n", "offline-ckp")
+	res += fmt.Sprintf("  %-8v show checkpoint information in the offline mode\n", "storage-ckp")
 
 	res += "\n"
 	res += "Online Commands:\n"
 	res += fmt.Sprintf("  %-8v show table information in the online mode\n", "table")
-	res += fmt.Sprintf("  %-8v show checkpoint information in the online mode\n", "online-ckp")
+	res += fmt.Sprintf("  %-8v show checkpoint information in the online mode\n", "inmemory-ckp")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -951,56 +957,219 @@ func (c *tableStatArg) Run() (err error) {
 	return
 }
 
-type OnlineCkpArg struct {
-}
+type inmemoryCkpArg struct{}
 
-func (c *OnlineCkpArg) PrepareCommand() *cobra.Command {
+func (c *inmemoryCkpArg) PrepareCommand() *cobra.Command {
 	checkpointCmd := &cobra.Command{
-		Use:   "online-ckp",
-		Short: "online checkpoint",
-		Long:  "Display information about a given checkpoint in online mode",
+		Use:   "inmemory-ckp",
+		Short: "inmemory checkpoint",
+		Long:  "Display information about a given checkpoint in inmemory mode",
 		Run:   RunFactory(c),
 	}
 
 	checkpointCmd.SetUsageTemplate(c.Usage())
 
-	stat := onlineCkpStatArg{}
+	stat := inmemoryCkpStatArg{}
 	checkpointCmd.AddCommand(stat.PrepareCommand())
 
-	list := onlineCkpListArg{}
+	list := inmemoryCkpListArg{}
 	checkpointCmd.AddCommand(list.PrepareCommand())
 
 	return checkpointCmd
 }
 
-func (c *OnlineCkpArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *inmemoryCkpArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *OnlineCkpArg) String() string {
-	return "online-ckp"
+func (c *inmemoryCkpArg) String() string {
+	return "inmemory-ckp"
 }
 
-func (c *OnlineCkpArg) Usage() (res string) {
+func (c *inmemoryCkpArg) Usage() (res string) {
 	res += "Available Commands:\n"
 	res += fmt.Sprintf("  %-5v show table information\n", "stat")
 	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
 
 	res += "\n"
 	res += "Usage:\n"
-	res += "inspect online-ckp [flags] [options]\n"
+	res += "inspect inmemory-ckp [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"mo-tool inspect online-ckp <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect inmemory-ckp <command> --help\" for more information about a given command.\n"
 
 	return
 }
 
-func (c *OnlineCkpArg) Run() error {
+func (c *inmemoryCkpArg) Run() error {
 	return nil
 }
 
-type onlineCkpStatArg struct {
+type storageCkpArg struct{}
+
+func (c *storageCkpArg) PrepareCommand() *cobra.Command {
+	storageCkpCmd := &cobra.Command{
+		Use:   "storage-ckp",
+		Short: "storage checkpoint",
+		Long:  "Display information about a given checkpoint in storage mode",
+		Run:   RunFactory(c),
+	}
+
+	storageCkpCmd.SetUsageTemplate(c.Usage())
+
+	list := storageCkpListArg{}
+	storageCkpCmd.AddCommand(list.PrepareCommand())
+
+	return storageCkpCmd
+}
+
+func (c *storageCkpArg) FromCommand(cmd *cobra.Command) (err error) {
+	return nil
+}
+
+func (c *storageCkpArg) String() string {
+	return "storage-ckp"
+}
+
+func (c *storageCkpArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect storage-ckp [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"mo-tool inspect storage-ckp <command> --help\" for more information about a given command.\n"
+
+	return
+}
+
+func (c *storageCkpArg) Run() error {
+	return nil
+}
+
+type storageCkpListArg struct {
+	ctx       *inspectContext
+	fromS3    bool
+	dir, name string
+	res       string
+	fs        fileservice.FileService
+}
+
+func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
+	ckpStatCmd := &cobra.Command{
+		Use:   "list",
+		Short: "checkpoint list",
+		Long:  "Display all checkpoints from storage",
+		Run:   RunFactory(c),
+	}
+
+	ckpStatCmd.SetUsageTemplate(c.Usage())
+
+	ckpStatCmd.Flags().StringP("name", "n", "", "name")
+	ckpStatCmd.Flags().BoolP("s3", "", false, "from s3")
+
+	return ckpStatCmd
+}
+
+func (c *storageCkpListArg) Usage() (res string) {
+	res += "Examples(Note: no need to specify dir if in the online mode):\n"
+	res += "  # Display all information for the given checkpoint meta from storage\n"
+	res += "  inspect storage-ckp list -n dir/meta_0-0_1749279217089645000-1.ckp\n"
+	res += "  # Display information for the given checkpoint data from storage\n"
+	res += "  inspect storage-ckp list -n dir/019749d5-8f7c-733c-8b4c-4dae7731ae5b_00000\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -n, --name=invalidPath:\n"
+	res += "    The name of checkpoint\n"
+	res += "  -s, --s3=false:\n"
+	res += "    From s3\n"
+
+	return
+}
+
+func (c *storageCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	c.fromS3, _ = cmd.Flags().GetBool("s3")
+	path, _ := cmd.Flags().GetString("name")
+	c.dir, c.name = filepath.Split(path)
+	// TODO: from s3 dir
+	return nil
+}
+
+func (c *storageCkpListArg) String() string {
+	return c.res
+}
+
+func (c *storageCkpListArg) Run() (err error) {
+	if c.ctx == nil {
+		return c.runOffline()
+	}
+	return c.runOnline()
+}
+
+func (c *storageCkpListArg) runOffline() (err error) {
+	ctx := context.Background()
+	if c.fs, err = objectio.NewOfflineFS(
+		ctx, c.dir, c.fromS3,
+	); err != nil {
+		return
+	}
+
+	var entries []*checkpoint.CheckpointEntry
+
+	// handle checkpoint meta file
+	if ioutil.IsMetadataName(c.name) {
+		if entries, err = checkpoint.ReadEntriesFromMeta(
+			ctx,
+			"",
+			"",
+			c.name,
+			0,
+			nil,
+			common.CheckpointAllocator,
+			c.fs,
+		); err != nil {
+			logutil.Error(
+				"Command-Storage-Ckp-List-Failed",
+				zap.String("dir", c.dir),
+				zap.String("name", c.name),
+				zap.Error(err),
+			)
+			return
+		}
+	} else {
+		// handle checkpoint data file
+		// TODO
+	}
+	if len(entries) == 0 {
+		return
+	}
+
+	ckpEntries := NewCkpEntries(len(entries))
+	for _, entry := range entries {
+		ckpEntries.Add(entry)
+	}
+
+	data, err := ckpEntries.ToJson()
+	if err != nil {
+		return
+	}
+	c.res = string(data)
+
+	return
+}
+
+func (c *storageCkpListArg) runOnline() (err error) {
+	c.res = "online mode is not implemented"
+	return nil
+}
+
+type inmemoryCkpStatArg struct {
 	ctx   *inspectContext
 	cid   uint64
 	tid   uint64
@@ -1009,11 +1178,11 @@ type onlineCkpStatArg struct {
 	res   string
 }
 
-func (c *onlineCkpStatArg) PrepareCommand() *cobra.Command {
+func (c *inmemoryCkpStatArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
 		Use:   "stat",
-		Short: "checkpoint stat",
-		Long:  "Display information about a given checkpoint",
+		Short: "inmemory checkpoint stat",
+		Long:  "Display information about a given checkpoint in memory, only in the online mode",
 		Run:   RunFactory(c),
 	}
 
@@ -1027,7 +1196,7 @@ func (c *onlineCkpStatArg) PrepareCommand() *cobra.Command {
 	return ckpStatCmd
 }
 
-func (c *onlineCkpStatArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *inmemoryCkpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	id, _ := cmd.Flags().GetInt("cid")
 	c.cid = uint64(id)
 	id, _ = cmd.Flags().GetInt("tid")
@@ -1040,11 +1209,11 @@ func (c *onlineCkpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *onlineCkpStatArg) String() string {
+func (c *inmemoryCkpStatArg) String() string {
 	return c.res
 }
 
-func (c *onlineCkpStatArg) Usage() (res string) {
+func (c *inmemoryCkpStatArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display all table information for the given checkpoint\n"
 	res += "  inspect checkpoint stat -c ckp_lsn\n"
@@ -1065,7 +1234,7 @@ func (c *onlineCkpStatArg) Usage() (res string) {
 	return
 }
 
-func (c *onlineCkpStatArg) Run() (err error) {
+func (c *inmemoryCkpStatArg) Run() (err error) {
 	if c.ctx == nil {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
@@ -1108,18 +1277,43 @@ type CkpEntries struct {
 	Entries []CkpEntry `json:"entries"`
 }
 
-type onlineCkpListArg struct {
+func NewCkpEntries(
+	capacity int,
+) *CkpEntries {
+	return &CkpEntries{
+		Count:   0,
+		Entries: make([]CkpEntry, 0, capacity),
+	}
+}
+
+func (c *CkpEntries) Add(entry *checkpoint.CheckpointEntry) {
+	c.Entries = append(c.Entries, CkpEntry{
+		Index:           c.Count,
+		CheckpointEntry: entry,
+	})
+	c.Count++
+}
+
+func (c *CkpEntries) ToJson() (string, error) {
+	jsonData, err := PrettyJson.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(jsonData), nil
+}
+
+type inmemoryCkpListArg struct {
 	ctx   *inspectContext
 	cid   uint64
 	limit int
 	res   string
 }
 
-func (c *onlineCkpListArg) PrepareCommand() *cobra.Command {
+func (c *inmemoryCkpListArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
 		Use:   "list",
 		Short: "checkpoint list",
-		Long:  "Display all checkpoints",
+		Long:  "Display all checkpoints in memory",
 		Run:   RunFactory(c),
 	}
 
@@ -1130,7 +1324,7 @@ func (c *onlineCkpListArg) PrepareCommand() *cobra.Command {
 	return ckpStatCmd
 }
 
-func (c *onlineCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *inmemoryCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
@@ -1140,11 +1334,11 @@ func (c *onlineCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *onlineCkpListArg) String() string {
+func (c *inmemoryCkpListArg) String() string {
 	return c.res
 }
 
-func (c *onlineCkpListArg) Usage() (res string) {
+func (c *inmemoryCkpListArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display all checkpoints in memory\n"
 	res += "  inspect checkpoint list\n"
@@ -1160,7 +1354,7 @@ func (c *onlineCkpListArg) Usage() (res string) {
 	return
 }
 
-func (c *onlineCkpListArg) Run() (err error) {
+func (c *inmemoryCkpListArg) Run() (err error) {
 	if c.ctx == nil {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
@@ -1174,28 +1368,21 @@ func (c *onlineCkpListArg) Run() (err error) {
 	return
 }
 
-func (c *onlineCkpListArg) getCkpList() (res string, err error) {
+func (c *inmemoryCkpListArg) getCkpList() (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
-	ckpEntries := make([]CkpEntry, 0, len(entries))
+	ckpEntries := NewCkpEntries(len(entries))
 	for i, entry := range entries {
 		if i >= c.limit {
 			break
 		}
-		ckpEntries = append(ckpEntries, CkpEntry{
-			Index:           i,
-			CheckpointEntry: entry,
-		})
+		ckpEntries.Add(entry)
 	}
 
-	ckpEntriesJson := CkpEntries{
-		Count:   len(ckpEntries),
-		Entries: ckpEntries,
-	}
-	jsonData, err := PrettyJson.MarshalIndent(ckpEntriesJson, "", "  ")
+	data, err := ckpEntries.ToJson()
 	if err != nil {
 		return
 	}
-	res = string(jsonData)
+	res = data
 
 	return
 }
@@ -1205,7 +1392,7 @@ type TableIds struct {
 	Ids      []uint64 `json:"tables"`
 }
 
-func (c *onlineCkpListArg) getTableList(ctx context.Context) (res string, err error) {
+func (c *inmemoryCkpListArg) getTableList(ctx context.Context) (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	var ids []uint64
 	for _, entry := range entries {
