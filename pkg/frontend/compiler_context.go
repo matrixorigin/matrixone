@@ -352,7 +352,8 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	table, err := db.Relation(tempCtx, tableName, nil)
 	if err != nil {
 		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			tmpTable, e := tcc.getTmpRelation(tempCtx, engine.GetTempTableName(dbName, tableName))
+			tmpTableName := engine.GetTempTableName(dbName, tableName)
+			tmpTable, e := tcc.getTmpRelation(tempCtx, tmpTableName)
 			if e != nil {
 				ses.Error(tempCtx,
 					"Failed to get table",
@@ -483,8 +484,12 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 		return nil, nil, err
 	}
-	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return nil, nil, nil
+
+	if sub != nil {
+		isSubMetaTable := pubsub.InSubMetaTables(sub, tableName)
+		if !isSubMetaTable {
+			return nil, nil, nil
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
@@ -822,7 +827,10 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *plan2.Snapshot) []*plan2.ColDef {
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
-	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
+	if err != nil {
+		return nil
+	}
+	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
 		return nil
 	}
 	ctx, relation, err := tcc.getRelation(dbName, tableName, sub, snapshot)
@@ -843,8 +851,9 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string,
 
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
+		tableName := strings.ToLower(key.Name)
 		priDefs = append(priDefs, &plan2.ColDef{
-			Name:       strings.ToLower(key.Name),
+			Name:       tableName,
 			OriginName: key.Name,
 			Typ: plan2.Type{
 				Id:    int32(key.Type.Oid),

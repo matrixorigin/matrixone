@@ -2126,15 +2126,19 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 	if plan0 == nil {
 		return true, nil
 	}
-	checkFn := func(db string, tableName string, tableId uint64, version uint32) (bool, error) {
-		_, tableDef, err := ses.GetTxnCompileCtx().Resolve(db, tableName, nil)
+
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+		if ref == nil || def == nil {
+			return true, nil
+		}
+		_, tableDef, err := ses.GetTxnCompileCtx().Resolve(ref.SchemaName, def.Name, nil)
 		if err != nil {
 			return true, err
 		}
 		if tableDef == nil {
 			return true, nil
 		}
-		if tableDef.Version != version || tableDef.TblId != tableId {
+		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
 			return true, nil
 		}
 		return false, nil
@@ -2143,64 +2147,47 @@ func checkModify(plan0 *plan.Plan, ses FeSession) (bool, error) {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
-				if p.Query.Nodes[i].ObjRef == nil {
-					return true, nil
-				}
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def.Name, def.TblId, def.Version)
+				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
-				if ctx.Ref == nil {
-					return true, nil
-				}
-				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
-				if ctx.Ref == nil {
-					return true, nil
-				}
-				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				if ctx.Ref == nil {
-					return true, nil
-				}
-				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil {
-					return true, nil
-				}
-				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil {
-					return true, nil
-				}
-				flag, err := checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version)
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
 				if err != nil || flag {
 					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				if p.Query.Nodes[i].ObjRef == nil {
-					return true, nil
-				}
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableName, ctx.TableId, ctx.TableVersion)
+				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
+					Name:    ctx.TableName,
+					TblId:   ctx.TableId,
+					Version: ctx.TableVersion,
+				})
 				if err != nil || flag {
 					return true, err
 				}

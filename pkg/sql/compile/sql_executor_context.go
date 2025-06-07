@@ -348,10 +348,11 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
+	tableID := int64(table.GetTableID(ctx))
 	obj := &plan.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
-		Obj:        int64(table.GetTableID(ctx)),
+		Obj:        tableID,
 	}
 	return obj, tableDef, nil
 }

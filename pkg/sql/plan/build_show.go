@@ -818,7 +818,8 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	var snapshot *Snapshot
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName), ctx, snapshot)
+	tmpDbName := getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName)
+	dbName, err := databaseIsValid(tmpDbName, ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
