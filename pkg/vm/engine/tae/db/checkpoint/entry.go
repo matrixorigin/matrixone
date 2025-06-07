@@ -128,18 +128,18 @@ func (e *CheckpointEntry) MarshalJSON() ([]byte, error) {
 	e.RLock()
 	defer e.RUnlock()
 	return json.Marshal(&struct {
-		Start       string    `json:"start"`
-		End         string    `json:"end"`
-		State       State     `json:"state"`
-		EntryType   EntryType `json:"entry_type"`
-		Location    string    `json:"location"`
-		CKPLSN      uint64    `json:"ckp_lsn"`
-		TruncateLSN uint64    `json:"truncate_lsn"`
+		Start       string `json:"start"`
+		End         string `json:"end"`
+		State       State  `json:"state"`
+		EntryType   string `json:"entry_type"`
+		Location    string `json:"location"`
+		CKPLSN      uint64 `json:"ckp_lsn"`
+		TruncateLSN uint64 `json:"truncate_lsn"`
 	}{
 		Start:       e.start.ToString(),
 		End:         e.end.ToString(),
 		State:       e.state,
-		EntryType:   e.entryType,
+		EntryType:   e.entryType.String(),
 		Location:    e.cnLocation.String(),
 		CKPLSN:      e.ckpLSN,
 		TruncateLSN: e.truncateLSN,
@@ -404,10 +404,7 @@ func (e *CheckpointEntry) String() string {
 	if e == nil {
 		return "nil"
 	}
-	t := "I"
-	if !e.IsIncremental() {
-		t = "G"
-	}
+	t := e.GetType().String()
 	state := e.GetState()
 	return fmt.Sprintf(
 		"CKP[%s][%v][%v:%v][%s](%s->%s)",
