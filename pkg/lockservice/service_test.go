@@ -3647,13 +3647,13 @@ func TestIssue5543(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err = l1.Lock(
+				_, err1 := l1.Lock(
 					ctx,
 					0,
 					[][]byte{{2}},
 					[]byte("txn3"),
 					option)
-				require.NoError(t, err)
+				require.NoError(t, err1)
 			}()
 
 			waitWaiters(t, l1, 0, []byte{2}, 1)
