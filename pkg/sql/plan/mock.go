@@ -1225,14 +1225,6 @@ func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*
 	return m.objects[name], tableDef, nil
 }
 
-func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *Snapshot) []*ColDef {
-	defs := make([]*ColDef, 0, 2)
-	for _, pk := range m.pks[tableName] {
-		defs = append(defs, m.tables[tableName].Cols[pk])
-	}
-	return defs
-}
-
 func (m *MockCompilerContext) Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error) {
 	return nil, nil
 }

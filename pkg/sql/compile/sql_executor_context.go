@@ -229,46 +229,6 @@ func (c *compilerContext) DefaultDatabase() string {
 	return strings.ToLower(c.defaultDB)
 }
 
-func (c *compilerContext) GetPrimaryKeyDef(
-	dbName string,
-	tableName string,
-	snapshot *plan.Snapshot) []*plan.ColDef {
-	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
-	if err != nil {
-		return nil
-	}
-	ctx, relation, err := c.getRelation(dbName, tableName, snapshot)
-	if err != nil {
-		return nil
-	}
-	if relation == nil {
-		return nil
-	}
-
-	priKeys, err := relation.GetPrimaryKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(priKeys) == 0 {
-		return nil
-	}
-
-	priDefs := make([]*plan.ColDef, 0, len(priKeys))
-	for _, key := range priKeys {
-		priDefs = append(priDefs, &plan.ColDef{
-			Name:       strings.ToLower(key.Name),
-			OriginName: key.Name,
-			Typ: plan.Type{
-				Id:    int32(key.Type.Oid),
-				Width: key.Type.Width,
-				Scale: key.Type.Scale,
-			},
-			Primary: key.Primary,
-		})
-	}
-	return priDefs
-}
-
 func (c *compilerContext) GetRootSql() string {
 	return c.sql
 }

@@ -831,47 +831,6 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 	return accountIds, err
 }
 
-func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *plan2.Snapshot) []*plan2.ColDef {
-	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
-	if err != nil {
-		return nil
-	}
-	if sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return nil
-	}
-	ctx, relation, err := tcc.getRelation(dbName, tableName, sub, snapshot)
-	if err != nil {
-		return nil
-	}
-	if relation == nil {
-		return nil
-	}
-
-	priKeys, err := relation.GetPrimaryKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(priKeys) == 0 {
-		return nil
-	}
-
-	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
-	for _, key := range priKeys {
-		tableName := strings.ToLower(key.Name)
-		priDefs = append(priDefs, &plan2.ColDef{
-			Name:       tableName,
-			OriginName: key.Name,
-			Typ: plan2.Type{
-				Id:    int32(key.Type.Oid),
-				Width: key.Type.Width,
-				Scale: key.Type.Scale,
-			},
-			Primary: key.Primary,
-		})
-	}
-	return priDefs
-}
-
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
 	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()

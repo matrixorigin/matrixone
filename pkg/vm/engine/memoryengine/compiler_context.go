@@ -198,20 +198,6 @@ func (c *CompilerContext) DefaultDatabase() string {
 	return c.defaultDB
 }
 
-func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *plan.Snapshot) (defs []*plan.ColDef) {
-	attrs, err := c.getTableAttrs(dbName, tableName, snapshot)
-	if err != nil {
-		panic(err)
-	}
-	for i, attr := range attrs {
-		if !attr.Primary {
-			continue
-		}
-		defs = append(defs, engineAttrToPlanColDef(i, attr))
-	}
-	return
-}
-
 func (*CompilerContext) GetRootSql() string {
 	return ""
 }
