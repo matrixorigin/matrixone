@@ -154,4 +154,11 @@ func TestMergeCommand(t *testing.T) {
 	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0 --l0-oneshot --patch-expire 1h")
 	require.NoError(t, err)
 
+	// checkpoint related
+	_, err = handle.runInspectCmd("inspect inmemory-ckp list")
+	require.NoError(t, err)
+
+	resp, err = handle.runInspectCmd("inspect storage-ckp list -name xxx")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "online mode is not implemented")
 }
