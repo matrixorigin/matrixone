@@ -344,13 +344,7 @@ func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
 
 	if data.noMoreData {
 
-		os.Stderr.WriteString("no more data\n")
-		if data.checkpointBat != nil {
-			os.Stderr.WriteString(fmt.Sprintf("no more data sinkSnapshot batlen %d\n", batchRowCount(data.checkpointBat)))
-		}
-		if data.insertAtmBatch != nil {
-			os.Stderr.WriteString(fmt.Sprintf("no more data sinkTail insertBat %d, deletBat = %d\n", data.insertAtmBatch.RowCount(), data.deleteAtmBatch.RowCount()))
-		}
+		//os.Stderr.WriteString("no more data\n")
 		// complete sql statement
 		err := s.sendSql()
 		if err != nil {
