@@ -18,8 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"math"
 	"slices"
 	"strconv"
@@ -419,12 +417,10 @@ var supportedTypeCast = map[types.T][]types.T{
 }
 
 func IfTypeCastSupported(sourceType, targetType types.T) bool {
-	logutil.Info("*[IfTypeCastSupported] start", zap.String("sourceType", sourceType.String()), zap.String("targetType", targetType.String()))
 	supportList, ok := supportedTypeCast[sourceType]
 	if ok {
 		for _, t := range supportList {
 			if t == targetType {
-				logutil.Info("*[IfTypeCastSupported] return true")
 				return true
 			}
 		}
@@ -4577,11 +4573,6 @@ func tsToStr(
 		str := tsVal.ToString()
 		result := []byte(str)
 
-		logutil.Info("*[tsToStr]",
-			zap.String("tsVal", str),
-			zap.String("result", string(result)),
-			zap.Int("row", i))
-
 		if int32(len(result)) > toType.Width {
 			return moerr.NewDataTruncated(ctx, "TS",
 				fmt.Sprintf("value '%s' exceeds varchar(%d) limit",
@@ -4622,12 +4613,6 @@ func tsToTimestamp(
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		val, err := types.ParseTimestamp(zone, timeStr, toType.Scale)
-		logutil.Info("*[tsToTimestamp]",
-			zap.String("timeStr", timeStr),
-			zap.String("timezone", zone.String()),
-			zap.Int("toType.Scale", int(toType.Scale)),
-			zap.String("val", val.String()),
-			zap.Int("row", i))
 
 		if err != nil {
 			return err

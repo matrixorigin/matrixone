@@ -21,8 +21,6 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
@@ -732,7 +730,6 @@ func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
-	logutil.Info("*[TSToTimestamp]", zap.Int32("scale", scale))
 	for i := 0; i < length; i++ {
 		tsVal, null := from.GetValue(uint64(i))
 		if null {
@@ -753,12 +750,6 @@ func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		val, err := types.ParseTimestamp(zone, timeStr, scale)
-		logutil.Info("*[TSToTimestamp]",
-			zap.String("timeStr", timeStr),
-			zap.String("timezone", zone.String()),
-			zap.Int32("Scale", scale),
-			zap.String("val", val.String()),
-			zap.Int("row", i))
 		if err != nil {
 			return err
 		}

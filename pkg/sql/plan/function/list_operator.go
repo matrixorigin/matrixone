@@ -16,9 +16,7 @@ package function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"go.uber.org/zap"
 )
 
 var supportedOperators = []FuncNew{
@@ -29,7 +27,6 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			logutil.Info("*[checkFn] = start", zap.Int("len(inputs)", len(inputs)))
 			if len(inputs) == 2 {
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
@@ -58,7 +55,6 @@ var supportedOperators = []FuncNew{
 					}
 				}
 			}
-			logutil.Info("*[checkFn] return newCheckResultWithFailure(failedFunctionParametersWrong)")
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},
 
@@ -2476,7 +2472,6 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			logutil.Info("*[checkFn] CAST start", zap.Int("len(inputs)", len(inputs)))
 			// cast-operator should check param types strictly
 			if len(inputs) == 2 {
 				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {

@@ -109,7 +109,6 @@ func (s *sqlExecutor) Exec(
 	sql string,
 	opts executor.Options,
 ) (executor.Result, error) {
-	logutil.Info("*[sqlExecutor Exec] start", zap.String("sql", sql))
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	var res executor.Result
 	err := s.ExecTxn(
@@ -131,7 +130,6 @@ func (s *sqlExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
-	logutil.Info("*[sqlExecutor ExecTxn] start", zap.String("sql", opts.SQL()))
 	ctx = perfcounter.AttachTxnExecutorKey(ctx)
 	exec, err := newTxnExecutor(ctx, s, opts)
 	if err != nil {
@@ -246,7 +244,6 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
-	logutil.Info("*[txnExecutor Exec] start", zap.String("sql", sql))
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
 	var originCtx context.Context
@@ -284,7 +281,6 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
-	logutil.Info("*[txnExecutor Exec] successfully parsed", zap.String("sql", sql), zap.Int("len(stmts)", len(stmts)))
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
 	// maybe we should fix it.
@@ -337,10 +333,8 @@ func (exec *txnExecutor) Exec(
 
 	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
 	if err != nil {
-		logutil.Info("*[txnExecutor Exec] plan failed to be built", zap.String("sql", sql), zap.String("err", err.Error()))
 		return executor.Result{}, err
 	}
-	logutil.Info("*[txnExecutor Exec] plan successfully built", zap.String("sql", sql))
 
 	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.s.eng, proc, stmts[0], false, nil, receiveAt)
 	c.SetOriginSQL(sql)

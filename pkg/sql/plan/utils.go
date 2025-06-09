@@ -303,33 +303,25 @@ func replaceColRefsForSet(expr *plan.Expr, projects []*plan.Expr) *plan.Expr {
 }
 
 func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *BindContext) ([]*plan.Expr, error) {
-	logutil.Info("*[splitAndBindCondition] start")
 	conds := splitAstConjunction(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
-	logutil.Info("*[splitAndBindCondition]", zap.Int("len(conds", len(conds)))
 	for i, cond := range conds {
 		cond, err := ctx.qualifyColumnNames(cond, expandAlias)
 		if err != nil {
-			logutil.Info("*[splitAndBindCondition] fail to qualifyColumnNames", zap.String("err", err.Error()))
 			return nil, err
 		}
-		logutil.Info("*[splitAndBindCondition] sucessful qualifyColumnNames")
 
 		expr, err := ctx.binder.BindExpr(cond, 0, true)
 		if err != nil {
-			logutil.Info("*[splitAndBindCondition] fail to BindExpr", zap.String("err", err.Error()))
 			return nil, err
 		}
-		logutil.Info("*[splitAndBindCondition] sucessful BindExpr")
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
 		if expr.GetSub() == nil {
 			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
-				logutil.Info("*[splitAndBindCondition] fail to makePlan2CastExpr", zap.String("err", err.Error()))
 				return nil, err
 			}
-			logutil.Info("*[splitAndBindCondition] sucessful makePlan2CastExpr")
 		}
 		exprs[i] = expr
 	}
