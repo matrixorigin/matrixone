@@ -25,7 +25,7 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree" 
 	function "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -197,20 +197,6 @@ func (m *MockCompilerContext2) GetLowerCaseTableNames() int64 {
 func (mr *MockCompilerContext2MockRecorder) GetLowerCaseTableNames() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLowerCaseTableNames", reflect.TypeOf((*MockCompilerContext2)(nil).GetLowerCaseTableNames))
-}
-
-// GetPrimaryKeyDef mocks base method.
-func (m *MockCompilerContext2) GetPrimaryKeyDef(dbName, tableName string, snapshot *Snapshot) []*ColDef {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetPrimaryKeyDef", dbName, tableName, snapshot)
-	ret0, _ := ret[0].([]*ColDef)
-	return ret0
-}
-
-// GetPrimaryKeyDef indicates an expected call of GetPrimaryKeyDef.
-func (mr *MockCompilerContext2MockRecorder) GetPrimaryKeyDef(dbName, tableName, snapshot interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPrimaryKeyDef", reflect.TypeOf((*MockCompilerContext2)(nil).GetPrimaryKeyDef), dbName, tableName, snapshot)
 }
 
 // GetProcess mocks base method.
