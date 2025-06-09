@@ -21,6 +21,8 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
@@ -719,6 +721,54 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 			return err
 		}
 	}
+	return nil
+}
+
+func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	from := vector.GenerateFunctionFixedTypeParameter[types.TS](ivecs[0])
+	scale := int32(6)
+	if len(ivecs) == 2 && !ivecs[1].IsConstNull() {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	logutil.Info("*[TSToTimestamp]", zap.Int32("scale", scale))
+	for i := 0; i < length; i++ {
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		physical := tsVal.Physical()
+		seconds := int64(physical / 1e9)
+		nanos := int64(physical % 1e9)
+		t := time.Unix(seconds, nanos).UTC()
+		timeStr := t.Format("2006-01-02 15:04:05.999999")
+
+		zone := time.Local
+		if proc != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		val, err := types.ParseTimestamp(zone, timeStr, scale)
+		logutil.Info("*[TSToTimestamp]",
+			zap.String("timeStr", timeStr),
+			zap.String("timezone", zone.String()),
+			zap.Int32("Scale", scale),
+			zap.String("val", val.String()),
+			zap.Int("row", i))
+		if err != nil {
+			return err
+		}
+
+		if err = rs.Append(val, false); err != nil {
+			return err
+		}
+
+	}
+
 	return nil
 }
 

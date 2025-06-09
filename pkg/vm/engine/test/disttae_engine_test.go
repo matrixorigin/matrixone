@@ -1631,7 +1631,7 @@ func TestMetadataScan(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	txnop = p.StartCNTxn()
-	query := `SELECT * FROM metadata_scan("db.mo_account", "*")g WHERE create_ts <= 174`
+	query := `SELECT ts_to_time(create_ts) FROM metadata_scan("db.mo_account", "*")g where create_ts <= NOW();`
 	_, err := exec.Exec(p.Ctx, query, executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))
