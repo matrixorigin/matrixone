@@ -371,7 +371,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
-			if isVarcharLengthModified(ctx, option, tableDef) {
+			if isVarcharLenModified(ctx, option, tableDef) {
 				algorithm = plan.AlterTable_INPLACE
 			}
 		case *tree.AlterTableChangeColumnClause:
@@ -394,7 +394,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 	return algorithm
 }
 
-func isVarcharLengthModified(ctx context.Context, spec *tree.AlterTableModifyColumnClause, tableDef *TableDef) bool {
+func isVarcharLenModified(ctx context.Context, spec *tree.AlterTableModifyColumnClause, tableDef *TableDef) bool {
 	specNewColumn := spec.NewColumn
 	colName := specNewColumn.Name.ColName()
 

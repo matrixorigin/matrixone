@@ -74,7 +74,7 @@ func init() {
 	constTextType = makePlan2Type(&typ)
 }
 
-func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
+func transAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
 	switch t := expr.(type) {
 	case *tree.TableName:
 		dbName := string(t.SchemaName)
@@ -87,10 +87,10 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 		}
 	case *tree.AliasedTableExpr:
 		alias := string(t.As.Alias)
-		getAliasToName(ctx, t.Expr, alias, aliasMap)
+		transAliasToName(ctx, t.Expr, alias, aliasMap)
 	case *tree.JoinTableExpr:
-		getAliasToName(ctx, t.Left, alias, aliasMap)
-		getAliasToName(ctx, t.Right, alias, aliasMap)
+		transAliasToName(ctx, t.Left, alias, aliasMap)
+		transAliasToName(ctx, t.Right, alias, aliasMap)
 	}
 }
 

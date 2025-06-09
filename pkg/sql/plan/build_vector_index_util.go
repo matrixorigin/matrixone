@@ -75,7 +75,8 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	metaProjection := getProjectionListByLastNode(builder, metaTableScanId)
 	metaProjectValueCol := DeepCopyExpr(metaProjection[1])
 	metaProjectValueCol.Expr.(*plan.Expr_Col).Col.RelPos = 1
-	prevMetaScanCastValAsBigInt, err := makePlan2CastExpr(builder.GetContext(), metaProjectValueCol, makePlan2Type(&bigIntType))
+	targetType := makePlan2Type(&bigIntType)
+	prevMetaScanCastValAsBigInt, err := makePlan2CastExpr(builder.GetContext(), metaProjectValueCol, targetType)
 	if err != nil {
 		return -1, err
 	}
@@ -91,23 +92,26 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		return -1, err
 	}
 
+	thisChildren := []int32{centroidsScanId, metaTableScanId}
+	thisOnList := []*Expr{whereCentroidVersionEqCurrVersion}
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
 		JoinType:    plan.Node_INNER,
-		Children:    []int32{centroidsScanId, metaTableScanId},
+		Children:    thisChildren,
 		ProjectList: prevCentroidScanProjection,
-		OnList:      []*Expr{whereCentroidVersionEqCurrVersion},
+		OnList:      thisOnList,
 	}, bindCtx)
 
 	return joinMetaAndCentroidsId, nil
 }
 
 func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, currVersionCentroids int32, typeOriginPk Type, posOriginPk int, typeOriginVecColumn Type, posOriginVecColumn int, optype string) int32 {
+	thisChildren := []int32{lastNodeId, currVersionCentroids}
 	joinTblAndCentroidsUsingCrossL2Join := builder.appendNode(&plan.Node{
 		NodeType:     plan.Node_JOIN,
 		JoinType:     plan.Node_L2,
 		ExtraOptions: optype,
-		Children:     []int32{lastNodeId, currVersionCentroids},
+		Children:     thisChildren,
 		ProjectList: []*Expr{
 			{ // centroids.version
 				Typ: makePlan2TypeValue(&bigIntType),
@@ -183,20 +187,26 @@ func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCen
 	centroidsId := DeepCopyExpr(finalProjections[1])
 	tblPk := DeepCopyExpr(finalProjections[2])
 	tblEmbedding := DeepCopyExpr(finalProjections[3])
+
+	exprChild0 := DeepCopyExpr(finalProjections[0])
+	exprChild1 := DeepCopyExpr(finalProjections[1])
+	exprChild2 := DeepCopyExpr(finalProjections[2])
 	cpKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{
-		DeepCopyExpr(finalProjections[0]),
-		DeepCopyExpr(finalProjections[1]),
-		DeepCopyExpr(finalProjections[2]),
+		exprChild0,
+		exprChild1,
+		exprChild2,
 	})
 	if err != nil {
 		return -1, err
 	}
 
+	thisChildren := []int32{joinTblAndCentroidsUsingCrossL2Join}
+	thisProjectList := []*Expr{centroidsVersion, centroidsId, tblPk, tblEmbedding, cpKey}
 	projectWithCpKey := builder.appendNode(
 		&plan.Node{
 			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{joinTblAndCentroidsUsingCrossL2Join},
-			ProjectList: []*Expr{centroidsVersion, centroidsId, tblPk, tblEmbedding, cpKey},
+			Children:    thisChildren,
+			ProjectList: thisProjectList,
 		},
 		bindCtx)
 	return projectWithCpKey, nil
