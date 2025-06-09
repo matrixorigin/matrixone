@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -161,4 +162,20 @@ func TestMergeCommand(t *testing.T) {
 	resp, err = handle.runInspectCmd("inspect storage-ckp list -name xxx")
 	require.NoError(t, err)
 	require.Contains(t, resp.Message, "online mode is not implemented")
+}
+
+func Test_CkpEntries(t *testing.T) {
+	entries := NewCkpEntries(2)
+	var (
+		e1, e2 checkpoint.CheckpointEntry
+	)
+	entries.Add(&e1)
+	entries.Add(&e2)
+
+	require.Equal(t, 2, len(entries.Entries))
+	require.Equal(t, 2, entries.Count)
+
+	jsonStr, err := entries.ToJson()
+	require.NoError(t, err)
+	t.Logf("entries: %s", jsonStr)
 }
