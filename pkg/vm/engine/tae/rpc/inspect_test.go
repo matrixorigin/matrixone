@@ -218,8 +218,15 @@ func Test_storageCkpListArg(t *testing.T) {
 	t.Logf("resp.msg: %s", arg.String())
 }
 
-func Test_moObjStatArg(t *testing.T) {
+func Test_inspectArgs(t *testing.T) {
 	arg := new(moObjStatArg)
 	err := arg.InitReader(context.Background(), "xxx")
+	require.NoError(t, err)
+
+	arg2 := new(storageCkpArg)
+	t.Logf("arg2: %s", arg2.String())
+	err = arg2.FromCommand(nil)
+	require.NoError(t, err)
+	err = arg2.Run()
 	require.NoError(t, err)
 }

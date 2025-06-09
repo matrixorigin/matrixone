@@ -425,14 +425,13 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 		return
 	}
 
-	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
 	size := c.GetObjSize(&data)
 
 	o := ObjectJson{
 		Name:        c.name,
-		Rows:        header.Rows(),
-		Cols:        header.ColumnCount(),
+		Rows:        data.BlockHeader().Rows(),
+		Cols:        data.BlockHeader().ColumnCount(),
 		BlkCnt:      data.BlockCount(),
 		MetaSize:    formatBytes(ext.Length()),
 		OriMetaSize: formatBytes(ext.OriginSize()),
@@ -440,8 +439,7 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 		OriDataSize: size[1],
 	}
 
-	data, err = PrettyJson.MarshalIndent(o, "", "  ")
-	if err != nil {
+	if data, err = PrettyJson.MarshalIndent(o, "", "  "); err != nil {
 		return
 	}
 
@@ -495,8 +493,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 		Columns:     cols,
 	}
 
-	data, err = PrettyJson.MarshalIndent(o, "", "  ")
-	if err != nil {
+	if data, err = PrettyJson.MarshalIndent(o, "", "  "); err != nil {
 		return
 	}
 
