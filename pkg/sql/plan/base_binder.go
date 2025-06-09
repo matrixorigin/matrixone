@@ -1106,6 +1106,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			if err != nil {
 				return nil, err
 			}
+
 			args[idx] = expr
 		}
 	}
@@ -1227,6 +1228,7 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	if err != nil {
 		return nil, err
 	}
+
 	switch retExpr.GetF().GetFunc().GetObjName() {
 	case "+", "-", "*", "/", "unary_minus", "unary_plus", "unary_tilde", "cast", "serial", "serial_full":
 		if proc != nil {
@@ -1691,8 +1693,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	var argsCastType []types.Type
 
 	// get function definition
-
-	// err here
 	fGet, err := function.GetFunctionByName(ctx, name, argsType)
 	if err != nil {
 		if name == "between" {
@@ -1708,6 +1708,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			return BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{leftFn, rightFn})
 		}
+
 		return nil, err
 	}
 
@@ -1751,7 +1752,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		// and constant's value in range of column's type, then no cast was needed
 		switch args[0].Expr.(type) {
 		case *plan.Expr_Lit:
-			// '0-0' = delete_ts
 			if args[1].GetCol() != nil {
 				if checkNoNeedCast(argsType[0], argsType[1], args[0]) {
 					argsCastType = []types.Type{argsType[1], argsType[1]}
@@ -1764,7 +1764,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				}
 			}
 		case *plan.Expr_Col:
-			// delete_ts = '0-0'
 			if checkNoNeedCast(argsType[1], argsType[0], args[1]) {
 				argsCastType = []types.Type{argsType[0], argsType[0]}
 				fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
