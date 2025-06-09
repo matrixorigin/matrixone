@@ -187,6 +187,7 @@ func Test_storageCkpListArg(t *testing.T) {
 	cmd := new(cobra.Command)
 	arg := new(storageCkpListArg)
 	err := arg.FromCommand(cmd)
+	require.NoError(t, err)
 	arg.dir = "ckp/"
 	arg.name = "xxx"
 	err = arg.Run()
@@ -215,4 +216,10 @@ func Test_storageCkpListArg(t *testing.T) {
 	err = arg.Run()
 	require.NoError(t, err)
 	t.Logf("resp.msg: %s", arg.String())
+}
+
+func Test_moObjStatArg(t *testing.T) {
+	arg := new(moObjStatArg)
+	err := arg.InitReader(context.Background(), "xxx")
+	require.NoError(t, err)
 }
