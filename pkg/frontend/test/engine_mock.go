@@ -1187,6 +1187,20 @@ func (mr *MockRelationMockRecorder) GetEngineType() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEngineType", reflect.TypeOf((*MockRelation)(nil).GetEngineType))
 }
 
+// GetExtraInfo mocks base method.
+func (m *MockRelation) GetExtraInfo() *api.SchemaExtra {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetExtraInfo")
+	ret0, _ := ret[0].(*api.SchemaExtra)
+	return ret0
+}
+
+// GetExtraInfo indicates an expected call of GetExtraInfo.
+func (mr *MockRelationMockRecorder) GetExtraInfo() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExtraInfo", reflect.TypeOf((*MockRelation)(nil).GetExtraInfo))
+}
+
 func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
@@ -1304,7 +1318,7 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize in
 }
 
 // PrimaryKeysMayBeModified mocks base method.
-func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error) {
+func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex, _ int32) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PrimaryKeysMayBeModified", ctx, from, to, batch, pkIndex)
 	ret0, _ := ret[0].(bool)

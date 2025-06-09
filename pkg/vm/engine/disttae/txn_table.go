@@ -91,22 +91,23 @@ func newTxnTable(
 	}
 	tbl.isLocal = tbl.isLocalFunc
 
-	ps := process.GetPartitionService()
-	if ps != nil && db.databaseId != catalog.MO_CATALOG_ID {
-
-		is, metadata, err := ps.Is(ctx, item.Id, txn.op)
-		if err != nil {
-			return nil, err
-		}
-		if is {
-			p, err := newPartitionTxnTable(
-				tbl.origin,
-				metadata,
-				ps,
+	if db.databaseId != catalog.MO_CATALOG_ID {
+		ps := process.GetPartitionService()
+		if ps.Enabled() && item.IsPartitionTable() {
+			metadata, err := ps.GetPartitionMetadata(
+				ctx,
+				item.Id,
+				process.GetTxnOperator(),
 			)
 			if err != nil {
 				return nil, err
 			}
+
+			p := newPartitionTxnTable(
+				tbl.origin,
+				metadata,
+				ps,
+			)
 			tbl.partition.tbl = p
 			tbl.partition.is = true
 			tbl.partition.service = ps
@@ -1077,6 +1078,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var indexes []*plan.IndexDef
 		var refChildTbls []uint64
 		var hasRowId bool
+		var partition *plan.Partition
 
 		i := int32(0)
 		name2index := make(map[string]int32)
@@ -1122,6 +1124,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: tbl.comment,
 			})
+		}
+
+		if tbl.partitioned > 0 {
+			partition = &plan.Partition{}
+			err := partition.Unmarshal(([]byte)(tbl.partition))
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				return nil
+			}
 		}
 
 		if tbl.viewdef != "" {
@@ -1205,6 +1216,10 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Indexes:       indexes,
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
+			Partition:     partition,
+		}
+		if tbl.extraInfo != nil {
+			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
 		}
 	}
 	return tbl.tableDef
@@ -1287,6 +1302,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
+			case api.AlterKind_ReplaceDef:
+				// Rollback for ReplaceDef is handled by restoring defs
 			}
 		}
 		tbl.defs = olddefs
@@ -1298,6 +1315,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	txn.Unlock()
 
 	// update tbl properties and reconstruct supplement TableDef
+	var hasReplaceDef bool
+	var replaceDefReq *api.AlterTableReq
 	for _, req := range reqs {
 		switch req.GetKind() {
 		case api.AlterKind_AddPartition:
@@ -1314,6 +1333,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			appendDef = append(appendDef, c)
 		case api.AlterKind_RenameTable:
 			tbl.tableName = req.GetRenameTable().NewName
+		case api.AlterKind_ReplaceDef:
+			hasReplaceDef = true
+			replaceDefReq = req
 		default:
 			panic("not supported")
 		}
@@ -1330,7 +1352,21 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 
 	// update TableDef
-	tbl.defs = append(tbl.defs, appendDef...)
+	if hasReplaceDef {
+		// When ReplaceDef exists, replace the entire table definition
+		replaceDef := replaceDefReq.GetReplaceDef()
+		defs, _, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
+		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
+		tbl.defs = defs
+		tbl.tableDef = nil
+
+		// Apply other modifications on top of the replaced definition
+		if len(appendDef) > 0 {
+			tbl.defs = append(tbl.defs, appendDef...)
+		}
+	} else {
+		tbl.defs = append(tbl.defs, appendDef...)
+	}
 	tbl.tableDef = nil
 	tbl.GetTableDef(ctx)
 
@@ -1371,7 +1407,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
-	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn); err != nil {
+	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn, tbl.extraInfo); err != nil {
 		return err
 	}
 	if createdInTxn {
@@ -1639,11 +1675,6 @@ func (tbl *txnTable) Delete(
 			return err
 		}
 
-		for i := range bat.Vecs[0].Length() {
-			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
-			tbl.getTxn().StashFlushedTombstones(ss)
-		}
-
 		return nil
 
 	default:
@@ -1805,8 +1836,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		}
 
 		ranges := relData.GetBlockInfoSlice()
-		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
+		skipReadMem := !ranges.Get(0).IsMemBlk()
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -2219,6 +2249,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	to types.TS,
 	batch *batch.Batch,
 	pkIndex int32,
+	_ int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
@@ -2599,4 +2630,8 @@ func (tbl *txnTable) getCommittedRows(
 		return rows, nil
 	}
 	return uint64(s.TableCnt) + rows, nil
+}
+
+func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
+	return tbl.extraInfo
 }

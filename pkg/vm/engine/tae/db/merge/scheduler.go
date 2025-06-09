@@ -36,7 +36,7 @@ import (
 )
 
 const (
-	bigDataTaskCntThreshold   = 3
+	bigDataTaskCntThreshold   = 4
 	objectOpsTriggerThreshold = 5
 )
 
@@ -63,8 +63,6 @@ type MergeScheduler struct {
 	pq todoPQ
 	// record the status of tables, facilitate the control of table pq
 	supps map[uint64]*todoSupporter
-	// fallback to check the status of the priority queue
-	heartbeat *time.Ticker
 
 	// control flow
 	allPaused bool
@@ -93,8 +91,7 @@ func NewMergeScheduler(
 		baseInterval: baseInterval,
 		executor:     executor,
 
-		supps:     make(map[uint64]*todoSupporter),
-		heartbeat: time.NewTicker(time.Second * 10),
+		supps: make(map[uint64]*todoSupporter),
 
 		stopRecv: make(chan struct{}, 1),
 		msgChan:  make(chan *MMsg, 4096),
@@ -139,7 +136,6 @@ func (a *MergeScheduler) Start() {
 	if a.stopped.CompareAndSwap(true, false) {
 		ch := make(chan struct{})
 		a.stopCh.Store(&ch)
-		a.heartbeat.Reset(time.Second * 10)
 		go a.handleMainLoop()
 		go a.handleIOLoop()
 	}
@@ -258,7 +254,8 @@ type QueryAnswer struct {
 	DataMergeCnt      int
 	TombstoneMergeCnt int
 	PendingMergeCnt   int
-	BigDataAcc        int
+	VaccumTrigCount   int
+	LastVaccumCheck   time.Duration
 	Triggers          string
 	BaseTrigger       string
 
@@ -591,13 +588,14 @@ func (pq *todoPQ) Update(item *todoItem, ready time.Time) {
 
 type todoSupporter struct {
 	mergingTaskCnt         int
-	bigTaskCnt             int
+	vaccumTrigCount        int
 	objectOperations       int
 	totalDataMergeCnt      int
 	totalTombstoneMergeCnt int
 	paused                 bool
 	nextDue                time.Duration
 	lastMergeTime          time.Time
+	lastVacuumCheckTime    time.Time
 	todo                   *todoItem
 	// runtime triggers
 	triggers []*MMsgTaskTrigger
@@ -640,6 +638,14 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 			NewMMsgTaskTrigger(msg.Table).
 				WithAssignedTasks(compactTasks),
 		)
+
+		// if the compact tasks is equal to the hollow top k,
+		// it means the table is full of hollow objects,
+		// so we need to trigger the vacuum check
+		if len(compactTasks) == msg.opts.HollowTopK {
+			f := func() { a.SendTrigger(NewMMsgTaskTrigger(msg.Table).WithVacuumCheck(msg.opts)) }
+			time.AfterFunc(time.Second*10, f)
+		}
 	}
 
 	if stats.DelVacuumPercent > 0.5 {
@@ -700,11 +706,38 @@ func (a *MergeScheduler) handleIOLoop() {
 	}
 }
 
+func (a *MergeScheduler) fallbackSchedVacuumCheck() {
+	for _, supp := range a.supps {
+		size := 0
+		for stat := range supp.todo.table.IterTombstoneItem() {
+			size += int(stat.GetObjectStats().OriginSize())
+		}
+		if size > 2*common.DefaultMaxOsizeObjBytes {
+			time.AfterFunc(time.Duration(rand.Intn(10))*time.Minute, func() {
+				a.ioChan <- &MMsg{
+					Kind: MMsgKindVacuumCheck,
+					Value: MMsgVacuumCheck{
+						Table: supp.todo.table,
+						opts:  DefaultVacuumOpts,
+					},
+				}
+			})
+		}
+	}
+}
+
 func (a *MergeScheduler) handleMainLoop() {
 	var nextReadyAtTimer = time.NewTimer(time.Hour * 24)
 	never := make(<-chan time.Time)
 
+	// fallback to check the status of the priority queue
+	heartbeat := time.NewTicker(time.Second * 10)
+
+	vacuumCheckTicker := time.NewTicker(time.Hour * 3)
+
 	stopCh := *a.stopCh.Load()
+
+	a.fallbackSchedVacuumCheck()
 
 	for {
 
@@ -755,15 +788,17 @@ func (a *MergeScheduler) handleMainLoop() {
 		select {
 		case <-stopCh:
 			// stop the loop
-			a.heartbeat.Stop()
+			heartbeat.Stop()
 			a.stopRecv <- struct{}{}
 			return
 		case <-nextReadyAt:
 			// continue the loop
-		case <-a.heartbeat.C:
+		case <-heartbeat.C:
 			a.rc.printMemUsage()
 			a.rc.refresh()
-			// continue the loop
+		// continue the loop
+		case <-vacuumCheckTicker.C:
+			a.fallbackSchedVacuumCheck()
 		case msg := <-a.msgChan:
 			a.dispatchMsg(msg)
 			drained := false
@@ -804,6 +839,8 @@ func (a *MergeScheduler) dispatchMsg(msg *MMsg) {
 }
 
 func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
+	supp := a.supps[msg.table.ID()]
+
 	if msg.vacuum != nil {
 		a.ioChan <- &MMsg{
 			Kind: MMsgKindVacuumCheck,
@@ -812,9 +849,9 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 				opts:  msg.vacuum,
 			},
 		}
+		supp.lastVacuumCheckTime = time.Now()
 	}
 
-	supp := a.supps[msg.table.ID()]
 	if supp == nil {
 		// TODO(aptend): Add table to the priority queue?
 		return
@@ -834,10 +871,12 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 		// this is a policy patch
 		if len(supp.triggers) == 0 {
 			base := defaultTrigger.Clone().Merge(msg)
+			base.table = msg.table
 			supp.triggers = append(supp.triggers, base)
 		} else if supp.triggers[0].expire.IsZero() {
 			// have a disposable trigger to do, put the new trigger in front of it
 			base := defaultTrigger.Clone().Merge(msg)
+			base.table = msg.table
 			supp.triggers = append([]*MMsgTaskTrigger{base}, supp.triggers...)
 		} else {
 			// there is patch already, merge it in place
@@ -902,7 +941,8 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 			answer.DataMergeCnt = supp.totalDataMergeCnt
 			answer.TombstoneMergeCnt = supp.totalTombstoneMergeCnt
 			answer.PendingMergeCnt = supp.mergingTaskCnt
-			answer.BigDataAcc = supp.bigTaskCnt
+			answer.VaccumTrigCount = supp.vaccumTrigCount
+			answer.LastVaccumCheck = time.Since(supp.lastVacuumCheckTime)
 			if len(supp.triggers) > 0 {
 				answer.Triggers = fmt.Sprintf("%v", supp.triggers)
 			}
@@ -1043,23 +1083,31 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 				supp.totalDataMergeCnt++
 			}
 			supp.mergingTaskCnt++
-			if !task.isTombstone && task.oSize > 200*common.Const1MBytes {
-				supp.bigTaskCnt++
+			if !task.isTombstone && task.oSize > common.DefaultMaxOsizeObjBytes {
+				supp.vaccumTrigCount++
 			}
 			supp.lastMergeTime = afterGather
 		}
 	}
 
 	// Postprocess tasks: issue new vacuum task or adjust the next due time
-	if supp.bigTaskCnt >= bigDataTaskCntThreshold {
-		a.ioChan <- &MMsg{
-			Kind: MMsgKindVacuumCheck,
-			Value: MMsgVacuumCheck{
-				Table: todo.table,
-				opts:  DefaultVacuumOpts,
-			},
+	if supp.vaccumTrigCount >= bigDataTaskCntThreshold {
+		supp.vaccumTrigCount = supp.vaccumTrigCount % bigDataTaskCntThreshold
+		// 2-minute debouncer
+		if time.Since(supp.lastVacuumCheckTime) > 2*time.Minute {
+			vacuumOpts := DefaultVacuumOpts
+			if trigger.vacuum != nil {
+				vacuumOpts = trigger.vacuum
+			}
+			a.ioChan <- &MMsg{
+				Kind: MMsgKindVacuumCheck,
+				Value: MMsgVacuumCheck{
+					Table: todo.table,
+					opts:  vacuumOpts,
+				},
+			}
+			supp.lastVacuumCheckTime = afterGather
 		}
-		supp.bigTaskCnt = supp.bigTaskCnt % bigDataTaskCntThreshold
 	}
 
 	if len(tasks) == 0 {

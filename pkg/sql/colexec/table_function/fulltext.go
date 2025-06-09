@@ -17,6 +17,7 @@ package table_function
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -461,13 +462,29 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 	}
 
 	//t1 := time.Now()
+
+	// we should wait the goroutine exit completely here,
+	// even the SQL stream is done inside the `runWordStats`.
+	// or will be resulting in data race on the tableFunction.
+	waiter := sync.WaitGroup{}
+	waiter.Add(1)
+
+	defer func() {
+		waiter.Wait()
+	}()
+
 	go func() {
+		defer func() {
+			waiter.Done()
+		}()
+
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
 		res, err := runWordStats(u, proc, u.sacc)
 		if err != nil {
 			u.errors <- err
 			return
 		}
+
 		if tableFunction.LogicalPlan != nil {
 			tableFunction.LogicalPlan.BackgroundQueries = append(tableFunction.LogicalPlan.BackgroundQueries, res.LogicalPlan)
 		}
