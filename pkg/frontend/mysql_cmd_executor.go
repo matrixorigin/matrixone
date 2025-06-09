@@ -2177,7 +2177,8 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 				}
 			}
 			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
+				ref := p.Query.Nodes[i].ObjRef
+				flag, err := checkFn(ref, &plan.TableDef{
 					Name:    ctx.TableName,
 					TblId:   ctx.TableId,
 					Version: ctx.TableVersion,

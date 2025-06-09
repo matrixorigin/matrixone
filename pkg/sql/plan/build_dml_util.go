@@ -3463,16 +3463,16 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 			//idxRefs[0], idxTableDefs[0] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
-
-			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
+			indexDefs := multiTableIndex.IndexDefs
+			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(objRef, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
+			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(objRef, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(objRef, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
 			if err != nil {
 				return err
 			}
@@ -3537,23 +3537,23 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 			//idxRefs[0], idxTableDefs[0] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[1], idxTableDefs[1] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[2], idxTableDefs[2] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
-
-			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
+			indexDefs := multiTableIndex.IndexDefs
+			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(delCtx.objRef, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
+			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(delCtx.objRef, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
 			if err != nil {
 				return err
 			}
-			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(delCtx.objRef, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
 			if err != nil {
 				return err
 			}
 
 			entriesObjRef, entriesTableDef := idxRefs[2], idxTableDefs[2]
 			if entriesTableDef == nil {
-				return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexName)
+				return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexName)
 			}
 
 			var lastNodeId int32

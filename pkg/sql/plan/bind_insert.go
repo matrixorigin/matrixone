@@ -403,11 +403,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				idxOnDupAction = plan.Node_FAIL
 			}
 
+			thisChildren := []int32{idxTableNodeID, lastNodeID}
+			thisOnList := []*plan.Expr{joinCond}
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:          plan.Node_JOIN,
-				Children:          []int32{idxTableNodeID, lastNodeID},
+				Children:          thisChildren,
 				JoinType:          plan.Node_DEDUP,
-				OnList:            []*plan.Expr{joinCond},
+				OnList:            thisOnList,
 				OnDuplicateAction: idxOnDupAction,
 				DedupColName:      dedupColName,
 				DedupColTypes:     dedupColTypes,
