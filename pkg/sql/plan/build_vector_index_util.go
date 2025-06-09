@@ -72,7 +72,7 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, metaTableScanId int32) (int32, error) {
 	centroidsScanId, _ := makeIvfFlatIndexTblScan(builder, bindCtx, indexTableDefs, idxRefs, 1)
 
-	metaProjection := getProjectionByLastNode(builder, metaTableScanId)
+	metaProjection := getProjectionListByLastNode(builder, metaTableScanId)
 	metaProjectValueCol := DeepCopyExpr(metaProjection[1])
 	metaProjectValueCol.Expr.(*plan.Expr_Col).Col.RelPos = 1
 	prevMetaScanCastValAsBigInt, err := makePlan2CastExpr(builder.GetContext(), metaProjectValueCol, makePlan2Type(&bigIntType))
@@ -82,7 +82,7 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 	// 0: centroids.version
 	// 1: centroids.centroid_id
 	// 2: centroids.centroid
-	prevCentroidScanProjection := getProjectionByLastNode(builder, centroidsScanId)[:3]
+	prevCentroidScanProjection := getProjectionListByLastNode(builder, centroidsScanId)[:3]
 	whereCentroidVersionEqCurrVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		prevCentroidScanProjection[0],
 		prevMetaScanCastValAsBigInt,
@@ -177,7 +177,7 @@ func makeTblCrossJoinL2Centroids(builder *QueryBuilder, bindCtx *BindContext, ta
 }
 
 func makeFinalProject(builder *QueryBuilder, bindCtx *BindContext, joinTblAndCentroidsUsingCrossL2Join int32) (int32, error) {
-	var finalProjections = getProjectionByLastNode(builder, joinTblAndCentroidsUsingCrossL2Join)
+	var finalProjections = getProjectionListByLastNode(builder, joinTblAndCentroidsUsingCrossL2Join)
 
 	centroidsVersion := DeepCopyExpr(finalProjections[0])
 	centroidsId := DeepCopyExpr(finalProjections[1])

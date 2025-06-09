@@ -299,7 +299,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
 			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-			unionProjection := getProjectionByLastNode(builder, sinkOrUnionNodeId)
+			unionProjection := getProjectionListByLastNode(builder, sinkOrUnionNodeId)
 			unionNode := &plan.Node{
 				NodeType:    plan.Node_UNION,
 				Children:    []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId},
@@ -381,7 +381,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			idNameMap[col.ColId] = col.Name
 			nameIdxMap[col.Name] = int32(idx)
 		}
-		baseProject := getProjectionByLastNode(builder, lastNodeId)
+		baseProject := getProjectionListByLastNode(builder, lastNodeId)
 
 		for _, tableId := range delCtx.tableDef.RefChildTbls {
 			// stmt: delete p, c from child_tbl c join parent_tbl p on c.pid = p.id , skip
@@ -641,7 +641,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							NodeType:    plan.Node_FILTER,
 							Children:    []int32{lastNodeId},
 							FilterList:  []*Expr{assertExpr},
-							ProjectList: getProjectionByLastNode(builder, lastNodeId),
+							ProjectList: getProjectionListByLastNode(builder, lastNodeId),
 							IsEnd:       true,
 						}
 						lastNodeId = builder.appendNode(filterNode, bindCtx)
@@ -664,7 +664,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: childForJoinProject,
 						}, bindCtx)
 						// inner join cannot dealwith null expr in projectList. so we append a project node
-						projectProjection := getProjectionByLastNode(builder, lastNodeId)
+						projectProjection := getProjectionListByLastNode(builder, lastNodeId)
 						for _, e := range rightConds {
 							projectProjection = append(projectProjection, &plan.Expr{
 								Typ: e.Typ,
@@ -798,7 +798,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 // insert into c values (1,1),(2,1),(3,2);
 // update f set a = 10 where b=1;    we need update c only once for 2 rows. not three times for 6 rows.
 func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32) int32 {
-	groupByList := getProjectionByLastNode(builder, lastNodeId)
+	groupByList := getProjectionListByLastNode(builder, lastNodeId)
 	aggProject := make([]*Expr, len(groupByList))
 	for i, e := range groupByList {
 		aggProject[i] = &Expr{
@@ -961,7 +961,7 @@ func appendPureInsertBranch(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 	// append project node if necessary
-	projectProjection := getProjectionByLastNode(builder, lastNodeId)
+	projectProjection := getProjectionListByLastNode(builder, lastNodeId)
 	if len(projectProjection) > len(tableDef.Cols) {
 		if len(projectProjection) > len(tableDef.Cols) {
 			projectProjection = projectProjection[:len(tableDef.Cols)]
@@ -976,7 +976,7 @@ func appendPureInsertBranch(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 	}
 
 	// append insert node
-	insertProjection := getProjectionByLastNode(builder, lastNodeId)
+	insertProjection := getProjectionListByLastNode(builder, lastNodeId)
 	// in this case. insert columns in front of batch
 	if len(insertProjection) > len(tableDef.Cols) {
 		insertProjection = insertProjection[:len(tableDef.Cols)]
@@ -1089,11 +1089,11 @@ func makeOneDeletePlan(
 	return lastNodeId, nil
 }
 
-func getProjectionByLastNodeForRightJoin(builder *QueryBuilder, lastNodeId int32) []*Expr {
+func getProjectionListByLastNodeForRightJoin(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	lastNode := builder.qry.Nodes[lastNodeId]
 	projLength := len(lastNode.ProjectList)
 	if projLength == 0 {
-		return getProjectionByLastNode(builder, lastNode.Children[0])
+		return getProjectionListByLastNode(builder, lastNode.Children[0])
 	}
 	projection := make([]*Expr, len(lastNode.ProjectList))
 	for i, expr := range lastNode.ProjectList {
@@ -1115,11 +1115,11 @@ func getProjectionByLastNodeForRightJoin(builder *QueryBuilder, lastNodeId int32
 	return projection
 }
 
-func getProjectionByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
+func getProjectionListByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	lastNode := builder.qry.Nodes[lastNodeId]
 	projLength := len(lastNode.ProjectList)
 	if projLength == 0 {
-		return getProjectionByLastNode(builder, lastNode.Children[0])
+		return getProjectionListByLastNode(builder, lastNode.Children[0])
 	}
 	projection := make([]*Expr, len(lastNode.ProjectList))
 	for i, expr := range lastNode.ProjectList {
@@ -1141,11 +1141,11 @@ func getProjectionByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	return projection
 }
 
-func getProjectionByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32) []*Expr {
+func getProjectionListByLastNodeWithTag(builder *QueryBuilder, lastNodeId, tag int32) []*Expr {
 	lastNode := builder.qry.Nodes[lastNodeId]
 	projLength := len(lastNode.ProjectList)
 	if projLength == 0 {
-		return getProjectionByLastNodeWithTag(builder, lastNode.Children[0], tag)
+		return getProjectionListByLastNodeWithTag(builder, lastNode.Children[0], tag)
 	}
 	projection := make([]*Expr, len(lastNode.ProjectList))
 	for i, expr := range lastNode.ProjectList {
@@ -1271,7 +1271,7 @@ func makeDeleteNodeInfo(ctx CompilerContext, objRef *ObjectRef, tableDef *TableD
 func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep int32) int32 {
 	lastNodeId := builder.qry.Steps[sourceStep]
 	// lastNode := builder.qry.Nodes[lastNodeId]
-	sinkScanProject := getProjectionByLastNode(builder, lastNodeId)
+	sinkScanProject := getProjectionListByLastNode(builder, lastNodeId)
 	sinkScanNode := &Node{
 		NodeType:    plan.Node_SINK_SCAN,
 		SourceStep:  []int32{sourceStep},
@@ -1284,7 +1284,7 @@ func appendSinkScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep 
 func appendSinkScanNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
 	lastNodeId := builder.qry.Steps[sourceStep]
 	// lastNode := builder.qry.Nodes[lastNodeId]
-	sinkScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	sinkScanProject := getProjectionListByLastNodeWithTag(builder, lastNodeId, tag)
 	sinkScanNode := &Node{
 		NodeType:    plan.Node_SINK_SCAN,
 		SourceStep:  []int32{sourceStep},
@@ -1308,7 +1308,7 @@ func appendSinkScanNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, sour
 func appendRecursiveScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
 	lastNodeId := builder.qry.Steps[sourceStep]
 	// lastNode := builder.qry.Nodes[lastNodeId]
-	recursiveScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	recursiveScanProject := getProjectionListByLastNodeWithTag(builder, lastNodeId, tag)
 	recursiveScanNode := &Node{
 		NodeType:    plan.Node_RECURSIVE_SCAN,
 		SourceStep:  []int32{sourceStep},
@@ -1332,7 +1332,7 @@ func appendRecursiveScanNode(builder *QueryBuilder, bindCtx *BindContext, source
 func appendCTEScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep, tag int32) int32 {
 	lastNodeId := builder.qry.Steps[sourceStep]
 	// lastNode := builder.qry.Nodes[lastNodeId]
-	recursiveScanProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	recursiveScanProject := getProjectionListByLastNodeWithTag(builder, lastNodeId, tag)
 	recursiveScanNode := &Node{
 		NodeType:    plan.Node_RECURSIVE_CTE,
 		SourceStep:  []int32{sourceStep},
@@ -1344,7 +1344,7 @@ func appendCTEScanNode(builder *QueryBuilder, bindCtx *BindContext, sourceStep, 
 }
 
 func appendSinkNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32) int32 {
-	sinkProject := getProjectionByLastNode(builder, lastNodeId)
+	sinkProject := getProjectionListByLastNode(builder, lastNodeId)
 	sinkNode := &Node{
 		NodeType:    plan.Node_SINK,
 		Children:    []int32{lastNodeId},
@@ -1355,7 +1355,7 @@ func appendSinkNode(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int3
 }
 
 func appendSinkNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, lastNodeId, tag int32) int32 {
-	sinkProject := getProjectionByLastNodeWithTag(builder, lastNodeId, tag)
+	sinkProject := getProjectionListByLastNodeWithTag(builder, lastNodeId, tag)
 	sinkNode := &Node{
 		NodeType:    plan.Node_SINK,
 		Children:    []int32{lastNodeId},
@@ -1461,7 +1461,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 
 	//for stmt:  update c1 set ref_col = null where col > 0;
 	//we will skip foreign key constraint check when set null
-	projectProjection := getProjectionByLastNode(builder, baseNodeId)
+	projectProjection := getProjectionListByLastNode(builder, baseNodeId)
 	baseNodeId = builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{baseNodeId},
@@ -1578,7 +1578,7 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			ProjectList: scanNodeProject,
 		}, bindCtx)
 
-		projectList := getProjectionByLastNode(builder, lastNodeId)
+		projectList := getProjectionListByLastNode(builder, lastNodeId)
 
 		// append project
 		projectList = append(projectList, &Expr{
@@ -1686,7 +1686,7 @@ func appendPreInsertNode(builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef,
 	lastNodeId int32, isUpdate bool) int32 {
 
-	preInsertProjection := getProjectionByLastNode(builder, lastNodeId)
+	preInsertProjection := getProjectionListByLastNode(builder, lastNodeId)
 	hiddenColumnTyp, hiddenColumnName := getHiddenColumnForPreInsert(tableDef)
 
 	hashAutoCol := false
@@ -1826,7 +1826,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 		}
 
 		// b) get projectList
-		outputProj := getProjectionByLastNode(builder, unionChildren[0])
+		outputProj := getProjectionListByLastNode(builder, unionChildren[0])
 
 		// c) build union in pairs
 		lastNodeId = unionChildren[0]
@@ -2241,7 +2241,7 @@ func appendDeleteIndexTablePlan(
 	********/
 	lastNodeId := baseNodeId
 	var err error
-	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
+	projectList := getProjectionListByLastNodeForRightJoin(builder, lastNodeId)
 	rfTag := builder.genNewMsgTag()
 
 	var rightRowIdPos int32 = -1
@@ -2416,7 +2416,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	originPkColumnPos, originPkType := getPkPos(tableDef, false)
 
 	lastNodeId := baseNodeId
-	projectList := getProjectionByLastNode(builder, lastNodeId)
+	projectList := getProjectionListByLastNode(builder, lastNodeId)
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
@@ -2543,7 +2543,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId := baseNodeId
 	var err error
-	projectList := getProjectionByLastNode(builder, lastNodeId)
+	projectList := getProjectionListByLastNode(builder, lastNodeId)
 
 	var entriesRowIdPos int32 = -1
 	var entriesFkPkColPos int32 = -1
@@ -2825,7 +2825,7 @@ func makePreUpdateDeletePlan(
 		if err != nil {
 			return -1, err
 		}
-		filterProjection := getProjectionByLastNode(builder, lastNodeId)
+		filterProjection := getProjectionListByLastNode(builder, lastNodeId)
 		filterNode := &Node{
 			NodeType:    plan.Node_FILTER,
 			Children:    []int32{lastNodeId},
@@ -2839,7 +2839,7 @@ func makePreUpdateDeletePlan(
 	// nextSourceStep := builder.appendStep(lastNodeId)
 
 	// lock old pk for delete statement
-	lastProjectList := getProjectionByLastNode(builder, lastNodeId)
+	lastProjectList := getProjectionListByLastNode(builder, lastNodeId)
 	originProjectListLen := len(lastProjectList)
 	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
 
