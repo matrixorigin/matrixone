@@ -390,49 +390,6 @@ func (s *HnswSync) run(proc *process.Process) error {
 			return err
 		}
 
-		/*
-			var mu sync.Mutex
-			var wg sync.WaitGroup
-			err_chan := make(chan error, s.tblcfg.ThreadsBuild)
-
-			nthread := int(s.tblcfg.ThreadsBuild)
-			for i := 0; i < nthread; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					var err error
-
-					for j, row := range s.cdc.Data {
-
-						if j%nthread != i {
-							continue
-						}
-
-						mu.Lock()
-						last, err = s.getLastModel(proc, current, last, maxcap)
-						if err != nil {
-							err_chan <- err
-							mu.Unlock()
-							return
-						}
-						// increment counter here to occupy last model and
-						// make sure last model is not overrided by using local variable thismodel
-						last.Len.Add(1)
-						thismodel := last
-						mu.Unlock()
-
-						thismodel.AddWithoutIncr(row.PKey, row.Vec)
-					}
-				}()
-			}
-
-			wg.Wait()
-
-			if len(err_chan) > 0 {
-				return <-err_chan
-			}
-		*/
-
 	} else {
 		var last *HnswModel
 
