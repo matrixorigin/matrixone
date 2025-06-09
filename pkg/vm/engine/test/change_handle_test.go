@@ -1301,9 +1301,9 @@ func TestChangesHandle7(t *testing.T) {
 		rpcAgent.Close()
 	}()
 	startTS := taeHandler.GetDB().TxnMgr.Now()
-	schema := catalog2.MockSchemaAll(20, 0)
+	schema := catalog2.MockSchemaAll(20, -1)
 	schema.Name = tableName
-	bat := catalog2.MockBatch(schema, 8192*2)
+	bat := catalog2.MockBatch(schema, 8192)
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -1311,7 +1311,10 @@ func TestChangesHandle7(t *testing.T) {
 	require.NoError(t, err)
 	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, rel.Append(ctx, bat))
 	require.Nil(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
 
 	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
