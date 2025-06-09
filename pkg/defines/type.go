@@ -216,6 +216,7 @@ type EngineKey struct{}
 // SqlKey use SqlKey{} to get string value from Context
 type SqlKey struct{}
 type DatTypKey struct{}
+type TableIDKey struct{}
 
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}

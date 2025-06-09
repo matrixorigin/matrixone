@@ -49,9 +49,10 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
-var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, error) {
+var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
 	planDefs := tableDef.GetDefs()
 	var exeDefs []TableDef
+	var propDef *PropertiesDef
 	c := new(ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
@@ -63,14 +64,30 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, error) {
 					Value: p.GetValue(),
 				}
 			}
-			exeDefs = append(exeDefs, &PropertiesDef{
-				Properties: properties,
-			})
+			propDef = &PropertiesDef{Properties: properties}
+			exeDefs = append(exeDefs, propDef)
 			c.Cts = append(c.Cts, &StreamConfigsDef{
 				Configs: defVal.Properties.GetProperties(),
 			})
 		}
 	}
+
+	if propDef == nil {
+		propDef = &PropertiesDef{Properties: make([]Property, 0)}
+		exeDefs = append(exeDefs, propDef)
+	}
+	extra := &api.SchemaExtra{
+		FeatureFlag: tableDef.FeatureFlag,
+	}
+	propDef.Properties = append(
+		propDef.Properties,
+		Property{
+			Key: "schema_extra",
+			ValueFactory: func() string {
+				return string(api.MustMarshalTblExtra(extra))
+			},
+		},
+	)
 
 	if tableDef.Indexes != nil {
 		c.Cts = append(c.Cts, &IndexDef{
@@ -99,7 +116,7 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, error) {
 	if tableDef.Partition != nil {
 		bytes, err := tableDef.Partition.Marshal()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		exeDefs = append(exeDefs, &PartitionDef{
 			Partitioned: 1,
@@ -122,7 +139,7 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, error) {
 			Name: tableDef.ClusterBy.Name,
 		})
 	}
-	return exeDefs, nil
+	return exeDefs, extra, nil
 }
 
 func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
@@ -193,8 +210,9 @@ type PropertiesDef struct {
 }
 
 type Property struct {
-	Key   string
-	Value string
+	Key          string
+	Value        string
+	ValueFactory func() string
 }
 
 type ClusterByDef struct {
@@ -971,6 +989,8 @@ type Relation interface {
 	CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (ChangesHandle, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
+
+	GetExtraInfo() *api.SchemaExtra
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
 	GetTableDef(context.Context) *plan.TableDef
