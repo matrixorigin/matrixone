@@ -20,6 +20,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -76,7 +78,7 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 		if err != nil {
 			return err
 		}
-		idxtblcfg.ThreadsBuild = val.(int64)
+		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(val.(int64))
 
 		idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
 		if err != nil {
@@ -85,7 +87,7 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 		idxtblcfg.IndexCapacity = idxcap.(int64)
 	} else {
 
-		idxtblcfg.ThreadsBuild = 0
+		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(0)
 		idxtblcfg.IndexCapacity = 1000000
 	}
 
@@ -194,6 +196,11 @@ type HnswSync struct {
 	cdc     *vectorindex.VectorIndexCdc[float32]
 	uid     string
 	ts      int64
+	ninsert atomic.Int32
+	ndelete atomic.Int32
+	nupdate atomic.Int32
+	current *HnswModel
+	last    *HnswModel
 }
 
 func (s *HnswSync) destroy() {
@@ -203,14 +210,15 @@ func (s *HnswSync) destroy() {
 	s.indexes = nil
 }
 
-func (s *HnswSync) run(proc *process.Process) error {
-	var err error
+func (s *HnswSync) checkContains(proc *process.Process) (maxcap uint, midx []int, err error) {
+	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
 
-	maxcap := uint(s.tblcfg.IndexCapacity)
+	maxcap = uint(s.tblcfg.IndexCapacity)
 
 	// try to find index cap
 	cdclen := len(s.cdc.Data)
-	midx := make([]int, cdclen)
+
+	midx = make([]int, cdclen)
 	// reset idx to -1
 	for i := range midx {
 		midx[i] = -1
@@ -220,34 +228,126 @@ func (s *HnswSync) run(proc *process.Process) error {
 	for i, m := range s.indexes {
 		err = m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 		if err != nil {
-			return err
+			return 0, nil, err
 		}
 
 		if maxcap < m.MaxCapacity {
 			maxcap = m.MaxCapacity
 		}
 
-		for j, row := range s.cdc.Data {
-			switch row.Type {
-			case vectorindex.CDC_UPSERT, vectorindex.CDC_DELETE:
-				if midx[j] == -1 {
-					found, err := m.Contains(row.PKey)
-					if err != nil {
-						return err
+		var wg sync.WaitGroup
+
+		nthread := int(s.tblcfg.ThreadsBuild)
+		for k := 0; k < nthread; k++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j, row := range s.cdc.Data {
+
+					if j%nthread != k {
+						continue
 					}
-					if found {
-						//os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
-						midx[j] = i
+
+					switch row.Type {
+					case vectorindex.CDC_UPSERT, vectorindex.CDC_DELETE:
+						if midx[j] == -1 {
+							found, err := m.Contains(row.PKey)
+							if err != nil {
+								err_chan <- err
+								return
+							}
+							if found {
+								//os.Stderr.WriteString(fmt.Sprintf("searching... found model %d row %d\n", i, j))
+								midx[j] = i
+
+								if row.Type == vectorindex.CDC_UPSERT {
+									s.nupdate.Add(1)
+								} else {
+									s.ndelete.Add(1)
+								}
+							}
+						}
 					}
+
 				}
-			}
+			}()
+		}
+
+		wg.Wait()
+		if len(err_chan) > 0 {
+			return 0, nil, <-err_chan
 		}
 
 		m.Unload()
 	}
 
-	current := (*HnswModel)(nil)
-	last := (*HnswModel)(nil)
+	return maxcap, midx, nil
+}
+
+func (s *HnswSync) insertAll(proc *process.Process, maxcap uint) error {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
+
+	nthread := int(s.tblcfg.ThreadsBuild)
+	for i := 0; i < nthread; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			for j, row := range s.cdc.Data {
+
+				if j%nthread != i {
+					continue
+				}
+
+				// make sure last model won't unload when full and return full
+				// so that we can unload outside the mutex
+				last, full, err := func() (*HnswModel, bool, error) {
+					mu.Lock()
+					defer mu.Unlock()
+					last, err2 := s.getLastModel(proc, maxcap, false)
+					if err2 != nil {
+						return nil, false, err2
+					}
+					// increment counter here to occupy last model and
+					last.Len.Add(1)
+					return last, last.Len.Load() >= int64(last.MaxCapacity), nil
+				}()
+				if err != nil {
+					err_chan <- err
+					return
+				}
+
+				last.AddWithoutIncr(row.PKey, row.Vec)
+				if full {
+					last.Unload()
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if len(err_chan) > 0 {
+		return <-err_chan
+	}
+
+	return nil
+}
+
+func (s *HnswSync) run(proc *process.Process) error {
+	var err error
+
+	maxcap, midx, err := s.checkContains(proc)
+	if err != nil {
+		return err
+	}
+
+	s.ninsert.Store(int32(len(s.cdc.Data)) - s.nupdate.Load() - s.ndelete.Load())
+
+	s.current = (*HnswModel)(nil)
+	s.last = (*HnswModel)(nil)
 	if len(s.indexes) == 0 {
 		// create a new model and do insert
 		id := s.getModelId()
@@ -256,12 +356,12 @@ func (s *HnswSync) run(proc *process.Process) error {
 			return err
 		}
 		s.indexes = append(s.indexes, newmodel)
-		last = newmodel
+		s.last = newmodel
 	} else {
-		last = s.indexes[len(s.indexes)-1]
+		s.last = s.indexes[len(s.indexes)-1]
 		// last model not load yet so check the last.Len instead of Full()
-		idxlen := uint(last.Len.Load())
-		if idxlen >= last.MaxCapacity {
+		idxlen := uint(s.last.Len.Load())
+		if idxlen >= s.last.MaxCapacity {
 			//os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
 			id := s.getModelId()
 			// model is already full, create a new model for insert
@@ -270,82 +370,139 @@ func (s *HnswSync) run(proc *process.Process) error {
 				return err
 			}
 			s.indexes = append(s.indexes, newmodel)
-			last = newmodel
+			s.last = newmodel
 
 		} else {
 			//os.Stderr.WriteString(fmt.Sprintf("load model with index %d\n", len(s.indexes)-1))
 			// load last
-			last.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
+			s.last.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 
 		}
 	}
 
-	for i, row := range s.cdc.Data {
+	os.Stderr.WriteString(fmt.Sprintf("len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n", len(s.cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load()))
 
-		switch row.Type {
-		case vectorindex.CDC_UPSERT:
-			if midx[i] == -1 {
-				// cannot find key from existing model. simple insert
-				last, err = s.getLastModel(proc, last, maxcap)
+	if len(s.cdc.Data) == int(s.ninsert.Load()) {
+		// pure insert and insert into parallel
+
+		err = s.insertAll(proc, maxcap)
+		if err != nil {
+			return err
+		}
+
+		/*
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			err_chan := make(chan error, s.tblcfg.ThreadsBuild)
+
+			nthread := int(s.tblcfg.ThreadsBuild)
+			for i := 0; i < nthread; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					var err error
+
+					for j, row := range s.cdc.Data {
+
+						if j%nthread != i {
+							continue
+						}
+
+						mu.Lock()
+						last, err = s.getLastModel(proc, current, last, maxcap)
+						if err != nil {
+							err_chan <- err
+							mu.Unlock()
+							return
+						}
+						// increment counter here to occupy last model and
+						// make sure last model is not overrided by using local variable thismodel
+						last.Len.Add(1)
+						thismodel := last
+						mu.Unlock()
+
+						thismodel.AddWithoutIncr(row.PKey, row.Vec)
+					}
+				}()
+			}
+
+			wg.Wait()
+
+			if len(err_chan) > 0 {
+				return <-err_chan
+			}
+		*/
+
+	} else {
+		var last *HnswModel
+
+		for i, row := range s.cdc.Data {
+
+			switch row.Type {
+			case vectorindex.CDC_UPSERT:
+				if midx[i] == -1 {
+					// cannot find key from existing model. simple insert
+					last, err = s.getLastModel(proc, maxcap, true)
+					if err != nil {
+						return err
+					}
+					// insert
+					err = last.Add(row.PKey, row.Vec)
+					if err != nil {
+						return err
+					}
+
+					break
+
+				}
+				current, err := s.getCurrentModel(proc, midx[i])
 				if err != nil {
 					return err
 				}
+
+				// update
+				err = current.Remove(row.PKey)
+				if err != nil {
+					return err
+				}
+
+				err = current.Add(row.PKey, row.Vec)
+				if err != nil {
+					return err
+				}
+
+			case vectorindex.CDC_DELETE:
+				if midx[i] == -1 {
+					// cannot find key from existing models. ignore it
+					//os.Stderr.WriteString("DELETE NOT FOUND\n")
+					continue
+				}
+
+				current, err := s.getCurrentModel(proc, midx[i])
+				if err != nil {
+					return err
+				}
+
+				// delete
+				err = current.Remove(row.PKey)
+				if err != nil {
+					return err
+				}
+
+			case vectorindex.CDC_INSERT:
+				last, err = s.getLastModel(proc, maxcap, true)
+				if err != nil {
+					return err
+				}
+
 				// insert
 				err = last.Add(row.PKey, row.Vec)
 				if err != nil {
 					return err
 				}
-
-				break
-
-			}
-			current, err := s.getCurrentModel(proc, current, midx[i])
-			if err != nil {
-				return err
 			}
 
-			// update
-			err = current.Remove(row.PKey)
-			if err != nil {
-				return err
-			}
-
-			err = current.Add(row.PKey, row.Vec)
-			if err != nil {
-				return err
-			}
-
-		case vectorindex.CDC_DELETE:
-			if midx[i] == -1 {
-				// cannot find key from existing models. ignore it
-				//os.Stderr.WriteString("DELETE NOT FOUND\n")
-				continue
-			}
-
-			current, err := s.getCurrentModel(proc, current, midx[i])
-			if err != nil {
-				return err
-			}
-
-			// delete
-			err = current.Remove(row.PKey)
-			if err != nil {
-				return err
-			}
-
-		case vectorindex.CDC_INSERT:
-			last, err = s.getLastModel(proc, last, maxcap)
-			if err != nil {
-				return err
-			}
-
-			// insert
-			err = last.Add(row.PKey, row.Vec)
-			if err != nil {
-				return err
-			}
 		}
-
 	}
 
 	// save to files and then save to database
@@ -391,26 +548,32 @@ func (s *HnswSync) getModelId() string {
 	return id
 }
 
-func (s *HnswSync) getCurrentModel(proc *process.Process, current *HnswModel, idx int) (*HnswModel, error) {
+func (s *HnswSync) getCurrentModel(proc *process.Process, idx int) (*HnswModel, error) {
 	m := s.indexes[idx]
-	if current != m {
-		if current != nil {
-			current.Unload()
+	if s.current != m {
+		// check current == last, if not, safe to unload
+		if s.current != nil && s.current != s.last {
+			s.current.Unload()
 		}
 		m.LoadIndex(proc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
-		current = m
+		s.current = m
 	}
-	return current, nil
+	return s.current, nil
 }
 
-func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap uint) (*HnswModel, error) {
+func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint, unloadWhenFull bool) (*HnswModel, error) {
 
-	full, err := last.Full()
+	full, err := s.last.Full()
 	if err != nil {
 		return nil, err
 	}
 
 	if full {
+		// check current == last, if not, safe to unload
+		if unloadWhenFull && s.current != s.last {
+			s.last.Unload()
+		}
+
 		id := s.getModelId()
 		// model is already full, create a new model for insert
 		newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
@@ -418,11 +581,11 @@ func (s *HnswSync) getLastModel(proc *process.Process, last *HnswModel, maxcap u
 			return nil, err
 		}
 		s.indexes = append(s.indexes, newmodel)
-		last = newmodel
+		s.last = newmodel
 
 	}
 	//os.Stderr.WriteString(fmt.Sprintf("getlast model full %v id = %s\n", full, last.Id))
-	return last, nil
+	return s.last, nil
 }
 
 // generate SQL to update the secondary index tables

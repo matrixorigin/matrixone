@@ -75,6 +75,11 @@ func NewHnswModelForBuild(id string, cfg vectorindex.IndexConfig, nthread int, m
 	if err != nil {
 		return nil, err
 	}
+
+	err = idx.Index.ChangeThreadsSearch(uint(nthread))
+	if err != nil {
+		return nil, err
+	}
 	return idx, nil
 }
 
@@ -291,6 +296,16 @@ func (idx *HnswModel) Add(key int64, vec []float32) error {
 	return idx.Index.Add(uint64(key), vec)
 }
 
+// add vector without increment the counter.  concurrency add will increment the counter before Add
+func (idx *HnswModel) AddWithoutIncr(key int64, vec []float32) error {
+	if idx.Index == nil {
+		return moerr.NewInternalErrorNoCtx("usearch index is nil")
+	}
+	idx.Dirty.Store(true)
+	//idx.Len.Add(1)
+	return idx.Index.Add(uint64(key), vec)
+}
+
 // remove key
 func (idx *HnswModel) Remove(key int64) error {
 	if idx.Index == nil {
@@ -427,6 +442,11 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 	}
 
 	err = usearchidx.ChangeThreadsSearch(uint(nthread))
+	if err != nil {
+		return err
+	}
+
+	err = usearchidx.ChangeThreadsAdd(uint(nthread))
 	if err != nil {
 		return err
 	}
