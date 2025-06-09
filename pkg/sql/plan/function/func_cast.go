@@ -397,6 +397,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_TS,
 		types.T_varchar,
 		types.T_timestamp,
+		types.T_int64,
 	},
 
 	types.T_Rowid: {
@@ -1760,6 +1761,9 @@ func tsToOthers(proc *process.Process,
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return tsToTimestamp(proc, source, rs, length, toType)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return tsToInt64(proc.Ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
 }
@@ -4555,6 +4559,42 @@ func uuidToStr(
 	return nil
 }
 
+func tsToStr(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.TS],
+	to *vector.FunctionResult[types.Varlena],
+	length int,
+	toType types.Type) error {
+
+	for i := 0; i < length; i++ {
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := to.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		str := tsVal.ToString()
+		result := []byte(str)
+
+		logutil.Info("*[tsToStr]",
+			zap.String("tsVal", str),
+			zap.String("result", string(result)),
+			zap.Int("row", i))
+
+		if int32(len(result)) > toType.Width {
+			return moerr.NewDataTruncated(ctx, "TS",
+				fmt.Sprintf("value '%s' exceeds varchar(%d) limit",
+					result, toType.Width))
+		}
+
+		if err := to.AppendBytes(result, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 func tsToTimestamp(
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.TS],
@@ -4602,10 +4642,10 @@ func tsToTimestamp(
 	return nil
 }
 
-func tsToStr(
+func tsToInt64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.TS],
-	to *vector.FunctionResult[types.Varlena],
+	to *vector.FunctionResult[int64],
 	length int,
 	toType types.Type) error {
 
@@ -4617,23 +4657,14 @@ func tsToStr(
 			}
 			continue
 		}
-		str := tsVal.ToString()
-		result := []byte(str)
 
-		logutil.Info("*[tsToStr]",
-			zap.String("tsVal", str),
-			zap.String("result", string(result)),
-			zap.Int("row", i))
+		physical := tsVal.Physical()
+		seconds := int64(physical / 1e9)
 
-		if int32(len(result)) > toType.Width {
-			return moerr.NewDataTruncated(ctx, "TS",
-				fmt.Sprintf("value '%s' exceeds varchar(%d) limit",
-					result, toType.Width))
-		}
-
-		if err := to.AppendBytes(result, false); err != nil {
+		if err := to.Append(seconds, false); err != nil {
 			return err
 		}
+
 	}
 
 	return nil

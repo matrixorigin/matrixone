@@ -1057,9 +1057,11 @@ func initFixed1() {
 		// T_TS -> xx
 		{types.T_TS, types.T_varchar, types.T_varchar, types.T_varchar},
 		{types.T_TS, types.T_timestamp, types.T_timestamp, types.T_timestamp},
+		{types.T_TS, types.T_int64, types.T_int64, types.T_int64},
 		// xx -> T_TS
 		{types.T_varchar, types.T_TS, types.T_varchar, types.T_varchar},
 		{types.T_timestamp, types.T_TS, types.T_timestamp, types.T_timestamp},
+		{types.T_int64, types.T_TS, types.T_int64, types.T_int64},
 	}
 
 	for _, r := range ru {
