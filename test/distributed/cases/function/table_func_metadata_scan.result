@@ -25,6 +25,18 @@ mo_ctl(dn, flush, table_func_metadata_scan.t)
 select sleep(1);
 sleep(1)
 0
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where delete_ts = "0-0";
+count(*)
+5
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where delete_ts = 0;
+count(*)
+5
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where create_ts <= NOW();
+count(*)
+5
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where ts_to_time(create_ts) <= NOW();
+count(*)
+5
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 count(*)
 5
@@ -38,14 +50,14 @@ col_name    rows_cnt    null_cnt    origin_size
 a    8192    0    32806
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
 col_name    rows_cnt    null_cnt    origin_size
-a    8192    0    32806
-b    8192    4096    197690
-c    8192    0    32806
-d    8192    0    65574
-e    8192    0    32806
+a    8192    0    429915
+b    8192    0    429915
+c    8192    0    429915
+d    8192    0    429915
+e    8192    0    429915
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 sum(origin_size)
-361682
+2149575
 select min(bit_cast(`min` as int)), max(bit_cast(`max` as int)), sum(bit_cast(`sum` as bigint)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 min(bit_cast(min as int))    max(bit_cast(max as int))    sum(bit_cast(sum as bigint))
 1    2    12288
@@ -57,10 +69,10 @@ sum(c)
 12697.60009765625
 select sum(bit_cast(`sum` as decimal(10, 8))) from metadata_scan('table_func_metadata_scan.t', 'd') g;
 sum(bit_cast(sum as decimal(10, 8)))
-12288
+12288.00000000
 select sum(d) from t;
 sum(d)
-12288
+12288.00000000
 select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'e') g;
 sum(bit_cast(sum as double))
 13639.68017578125

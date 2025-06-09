@@ -19,6 +19,10 @@ select count(*) from t;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'table_func_metadata_scan.t');
 select sleep(1);
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where delete_ts = "0-0";
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where delete_ts = 0;
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where create_ts <= NOW();
+select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g where ts_to_time(create_ts) <= NOW();
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 select count(*) from metadata_scan('table_func_metadata_scan.t', 'f') g;
