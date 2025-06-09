@@ -3656,6 +3656,7 @@ func TestIssue5543(t *testing.T) {
 				require.NoError(t, err)
 			}()
 
+			waitWaiters(t, l1, 0, []byte{2}, 1)
 			err = l1.Unlock(
 				ctx,
 				[]byte("txn2"),
