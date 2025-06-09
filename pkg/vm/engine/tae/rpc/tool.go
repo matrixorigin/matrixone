@@ -1050,11 +1050,21 @@ func (c *storageCkpArg) Run() error {
 }
 
 type storageCkpListArg struct {
-	ctx       *inspectContext
-	fromS3    bool
-	dir, name string
-	res       string
-	fs        fileservice.FileService
+	ctx         *inspectContext
+	fromS3      bool
+	dir, name   string
+	res         string
+	fs          fileservice.FileService
+	readEntries func(
+		ctx context.Context,
+		sid string,
+		dir string,
+		name string,
+		verbose int,
+		onEachEntry func(entry *checkpoint.CheckpointEntry),
+		mp *mpool.MPool,
+		fs fileservice.FileService,
+	) (entries []*checkpoint.CheckpointEntry, err error)
 }
 
 func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
@@ -1124,7 +1134,11 @@ func (c *storageCkpListArg) runOffline() (err error) {
 
 	// handle checkpoint meta file
 	if ioutil.IsMetadataName(c.name) {
-		if entries, err = checkpoint.ReadEntriesFromMeta(
+		readEntries := c.readEntries
+		if readEntries == nil {
+			readEntries = checkpoint.ReadEntriesFromMeta
+		}
+		if entries, err = readEntries(
 			ctx,
 			"",
 			"",
@@ -1145,6 +1159,7 @@ func (c *storageCkpListArg) runOffline() (err error) {
 	} else {
 		// handle checkpoint data file
 		// TODO
+		return moerr.NewInternalErrorNoCtx("not implemented")
 	}
 	if len(entries) == 0 {
 		return

@@ -18,9 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -178,4 +181,38 @@ func Test_CkpEntries(t *testing.T) {
 	jsonStr, err := entries.ToJson()
 	require.NoError(t, err)
 	t.Logf("entries: %s", jsonStr)
+}
+
+func Test_storageCkpListArg(t *testing.T) {
+	cmd := new(cobra.Command)
+	arg := new(storageCkpListArg)
+	err := arg.FromCommand(cmd)
+	arg.dir = "ckp/"
+	arg.name = "xxx"
+	err = arg.Run()
+	require.Error(t, err)
+
+	arg.name = "meta_0-0_1749279217089645000-1.ckp"
+	err = arg.Run()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+
+	entries := make([]*checkpoint.CheckpointEntry, 0)
+	entries = append(entries, new(checkpoint.CheckpointEntry))
+	entries = append(entries, new(checkpoint.CheckpointEntry))
+	arg.readEntries = func(
+		ctx context.Context,
+		sid string,
+		dir string,
+		name string,
+		verbose int,
+		onEachEntry func(entry *checkpoint.CheckpointEntry),
+		mp *mpool.MPool,
+		fs fileservice.FileService,
+	) ([]*checkpoint.CheckpointEntry, error) {
+		return entries, nil
+	}
+	err = arg.Run()
+	require.NoError(t, err)
+	t.Logf("resp.msg: %s", arg.String())
 }
