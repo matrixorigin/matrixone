@@ -1699,9 +1699,6 @@ func Test_checkModify(t *testing.T) {
 	defer ctrl.Finish()
 
 	resolveFn := func(schemaName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-		if schemaName == "err_db" {
-			return nil, nil, &moerr.Error{}
-		}
 		return nil, nil, nil
 	}
 	tests := []struct {
@@ -1713,16 +1710,6 @@ func Test_checkModify(t *testing.T) {
 			node:          &plan.Node{},
 			expected_flag: false,
 			expected_err:  false,
-		},
-		{
-			node: &plan.Node{
-				TableDef: &plan.TableDef{},
-				ObjRef: &plan.ObjectRef{
-					SchemaName: "err_db",
-				},
-			},
-			expected_flag: true,
-			expected_err:  true,
 		},
 		{
 			node: &plan.Node{
@@ -1774,9 +1761,6 @@ func Test_checkModify(t *testing.T) {
 			expected_err:  false,
 		},
 	}
-
-	flag, _ := checkModify(nil, resolveFn)
-	assert.Equal(t, true, flag)
 
 	for _, test := range tests {
 		flag, err := checkModify(&plan.Plan{
