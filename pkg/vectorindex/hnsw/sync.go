@@ -301,24 +301,20 @@ func (s *HnswSync) insertAll(proc *process.Process, maxcap uint) error {
 					continue
 				}
 
+				// skip delete with key not found in model
+				if row.Type == vectorindex.CDC_DELETE {
+					continue
+				}
+
 				// make sure last model won't unload when full and return full
 				// so that we can unload outside the mutex
-				last, full, err := func() (*HnswModel, bool, error) {
-					mu.Lock()
-					defer mu.Unlock()
-					last, err2 := s.getLastModel(proc, maxcap, false)
-					if err2 != nil {
-						return nil, false, err2
-					}
-					// increment counter here to occupy last model and
-					last.Len.Add(1)
-					return last, last.Len.Load() >= int64(last.MaxCapacity), nil
-				}()
+				last, full, err := s.getLastModelAndIncrForSync(proc, maxcap, &mu)
 				if err != nil {
 					err_chan <- err
 					return
 				}
 
+				// Len counter already incremented.  Just add to last model
 				last.AddWithoutIncr(row.PKey, row.Vec)
 				if full {
 					last.Unload()
@@ -399,7 +395,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 			case vectorindex.CDC_UPSERT:
 				if midx[i] == -1 {
 					// cannot find key from existing model. simple insert
-					last, err = s.getLastModel(proc, maxcap, true)
+					last, err = s.getLastModel(proc, maxcap)
 					if err != nil {
 						return err
 					}
@@ -447,7 +443,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 				}
 
 			case vectorindex.CDC_INSERT:
-				last, err = s.getLastModel(proc, maxcap, true)
+				last, err = s.getLastModel(proc, maxcap)
 				if err != nil {
 					return err
 				}
@@ -518,7 +514,7 @@ func (s *HnswSync) getCurrentModel(proc *process.Process, idx int) (*HnswModel, 
 	return s.current, nil
 }
 
-func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint, unloadWhenFull bool) (*HnswModel, error) {
+func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint) (*HnswModel, error) {
 
 	full, err := s.last.Full()
 	if err != nil {
@@ -527,7 +523,7 @@ func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint, unloadWhenFu
 
 	if full {
 		// check current == last, if not, safe to unload
-		if unloadWhenFull && s.current != s.last {
+		if s.current != s.last {
 			s.last.Unload()
 		}
 
@@ -543,6 +539,32 @@ func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint, unloadWhenFu
 	}
 	//os.Stderr.WriteString(fmt.Sprintf("getlast model full %v id = %s\n", full, last.Id))
 	return s.last, nil
+}
+
+func (s *HnswSync) getLastModelAndIncrForSync(proc *process.Process, maxcap uint, mu *sync.Mutex) (*HnswModel, bool, error) {
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	full := (s.last.Len.Load() >= int64(s.last.MaxCapacity))
+	if full {
+		id := s.getModelId()
+		// model is already full, create a new model for insert
+		newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		if err != nil {
+			return nil, false, err
+		}
+		s.indexes = append(s.indexes, newmodel)
+		s.last = newmodel
+
+	}
+	//os.Stderr.WriteString(fmt.Sprintf("getlast model full %v id = %s\n", full, last.Id))
+
+	// pre-occupy this model by increment a Len counter and do Add() outside the mutex
+	// make sure only one call can get full = true
+	idxlen := s.last.Len.Add(1)
+	full = (idxlen >= int64(s.last.MaxCapacity))
+	return s.last, full, nil
 }
 
 // generate SQL to update the secondary index tables
