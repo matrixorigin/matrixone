@@ -300,10 +300,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			oldDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, int32(step))
 			thisDelPlanSinkScanNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 			unionProjection := getProjectionListByLastNode(builder, sinkOrUnionNodeId)
-			thisChildren := []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId}
 			unionNode := &plan.Node{
 				NodeType:    plan.Node_UNION,
-				Children:    thisChildren,
+				Children:    []int32{oldDelPlanSinkScanNodeId, thisDelPlanSinkScanNodeId},
 				ProjectList: unionProjection,
 			}
 			unionNodeId := builder.appendNode(unionNode, bindCtx)
@@ -323,8 +322,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 		return nil
 	} else {
-		deleteNodID := builder.qry.Steps[delCtx.sourceStep]
-		builder.deleteNode[delCtx.tableDef.TblId] = deleteNodID
+		builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
 	}
 	isUpdate := delCtx.updateColLength > 0
 
@@ -579,19 +577,16 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							if filterExpr == nil {
 								filterExpr = tmpExpr
 							} else {
-								exprChildren := []*Expr{filterExpr, tmpExpr}
-								filterExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", exprChildren)
+								filterExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{filterExpr, tmpExpr})
 								if err != nil {
 									return nil
 								}
 							}
 						}
-						thisChildren := []int32{lastNodeId}
-						thisFilterList := []*Expr{filterExpr}
 						lastNodeId = builder.appendNode(&plan.Node{
 							NodeType:   plan.Node_FILTER,
-							Children:   thisChildren,
-							FilterList: thisFilterList,
+							Children:   []int32{lastNodeId},
+							FilterList: []*Expr{filterExpr},
 						}, bindCtx)
 					}
 
@@ -617,14 +612,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							ProjectList: childProjectList,
 						}, bindCtx)
 
-						thisChildren := []int32{lastNodeId, rightId}
-						thisProjectList := []*Expr{oneLeftCond}
 						lastNodeId = builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_JOIN,
-							Children:    thisChildren,
+							Children:    []int32{lastNodeId, rightId},
 							JoinType:    plan.Node_SEMI,
 							OnList:      joinConds,
-							ProjectList: thisProjectList,
+							ProjectList: []*Expr{oneLeftCond},
 						}, bindCtx)
 
 						colExpr := &Expr{
@@ -663,10 +656,9 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							TableDef:    DeepCopyTableDef(childTableDef, true),
 							ProjectList: childProjectList,
 						}, bindCtx)
-						thisChildren := []int32{lastNodeId, rightId}
 						lastNodeId = builder.appendNode(&plan.Node{
 							NodeType:    plan.Node_JOIN,
-							Children:    thisChildren,
+							Children:    []int32{lastNodeId, rightId},
 							JoinType:    plan.Node_INNER,
 							OnList:      joinConds,
 							ProjectList: childForJoinProject,

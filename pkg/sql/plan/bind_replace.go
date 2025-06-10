@@ -132,8 +132,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			} else {
 				args := make([]*plan.Expr, len(idxDef.Parts))
 				for j, part := range idxDef.Parts {
-					partName := catalog.ResolveAlias(part)
-					colIdx := tableDef.Name2ColIndex[partName]
+					colIdx := tableDef.Name2ColIndex[catalog.ResolveAlias(part)]
 					args[j] = &plan.Expr{
 						Typ: tableDef.Cols[colIdx].Typ,
 						Expr: &plan.Expr_Col{

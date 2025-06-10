@@ -4118,7 +4118,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 		case *tree.AlterTableModifyColumnClause:
-			if isVarcharLenModified(ctx.GetContext(), opt, tableDef) {
+			if isVarcharLengthModified(ctx.GetContext(), opt, tableDef) {
 				colName := opt.NewColumn.Name.ColName()
 				oldCol := FindColumn(tableDef.Cols, colName)
 				if oldCol == nil {

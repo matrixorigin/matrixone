@@ -62,7 +62,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
-		transAliasToName(builder.compCtx, tbl, "", aliasMap)
+		getAliasToName(builder.compCtx, tbl, "", aliasMap)
 	}
 
 	dmlCtx := NewDMLContext()

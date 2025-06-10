@@ -29,7 +29,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	}()
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
-		transAliasToName(ctx, tbl, "", aliasMap)
+		getAliasToName(ctx, tbl, "", aliasMap)
 	}
 	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap, "delete")
 	if err != nil {
