@@ -18,13 +18,17 @@ import (
 	"context"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -154,4 +158,75 @@ func TestMergeCommand(t *testing.T) {
 	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0 --l0-oneshot --patch-expire 1h")
 	require.NoError(t, err)
 
+	// checkpoint related
+	_, err = handle.runInspectCmd("inspect inmemory-ckp list")
+	require.NoError(t, err)
+
+	resp, err = handle.runInspectCmd("inspect storage-ckp list -name xxx")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "online mode is not implemented")
+}
+
+func Test_CkpEntries(t *testing.T) {
+	entries := NewCkpEntries(2)
+	var (
+		e1, e2 checkpoint.CheckpointEntry
+	)
+	entries.Add(&e1)
+	entries.Add(&e2)
+
+	require.Equal(t, 2, len(entries.Entries))
+	require.Equal(t, 2, entries.Count)
+
+	jsonStr, err := entries.ToJson()
+	require.NoError(t, err)
+	t.Logf("entries: %s", jsonStr)
+}
+
+func Test_storageCkpListArg(t *testing.T) {
+	cmd := new(cobra.Command)
+	arg := new(storageCkpListArg)
+	err := arg.FromCommand(cmd)
+	require.NoError(t, err)
+	arg.dir = "ckp/"
+	arg.name = "xxx"
+	err = arg.Run()
+	require.Error(t, err)
+
+	arg.name = "meta_0-0_1749279217089645000-1.ckp"
+	err = arg.Run()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+
+	entries := make([]*checkpoint.CheckpointEntry, 0)
+	entries = append(entries, new(checkpoint.CheckpointEntry))
+	entries = append(entries, new(checkpoint.CheckpointEntry))
+	arg.readEntries = func(
+		ctx context.Context,
+		sid string,
+		dir string,
+		name string,
+		verbose int,
+		onEachEntry func(entry *checkpoint.CheckpointEntry),
+		mp *mpool.MPool,
+		fs fileservice.FileService,
+	) ([]*checkpoint.CheckpointEntry, error) {
+		return entries, nil
+	}
+	err = arg.Run()
+	require.NoError(t, err)
+	t.Logf("resp.msg: %s", arg.String())
+}
+
+func Test_inspectArgs(t *testing.T) {
+	arg := new(moObjStatArg)
+	err := arg.InitReader(context.Background(), "xxx")
+	require.NoError(t, err)
+
+	arg2 := new(storageCkpArg)
+	t.Logf("arg2: %s", arg2.String())
+	err = arg2.FromCommand(nil)
+	require.NoError(t, err)
+	err = arg2.Run()
+	require.NoError(t, err)
 }

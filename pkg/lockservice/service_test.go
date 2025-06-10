@@ -3605,6 +3605,68 @@ func TestPreTxnLockInRollingRestartCN(t *testing.T) {
 	)
 }
 
+func TestIssue5543(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			oldVersion := l1.tableGroups.getVersion()
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{2}, {3}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			newVersion := l1.tableGroups.getVersion()
+			if oldVersion == newVersion {
+				// Heartbeat
+				l1.tableGroups.removeWithFilter(func(_ uint64, v lockTable) bool {
+					bind := v.getBind()
+					if bind.ServiceID == l1.serviceID {
+						return true
+					}
+					return false
+				})
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err1 := l1.Lock(
+					ctx,
+					0,
+					[][]byte{{2}},
+					[]byte("txn3"),
+					option)
+				require.NoError(t, err1)
+			}()
+
+			waitWaiters(t, l1, 0, []byte{2}, 1)
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+			wg.Wait()
+		},
+	)
+}
+
 func TestLockResultWithConflictAndTxnAborted(t *testing.T) {
 	runLockServiceTests(
 		t,

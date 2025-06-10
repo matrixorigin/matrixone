@@ -1270,3 +1270,72 @@ func TestChangeHandleFilterBatch2(t *testing.T) {
 		assert.NoError(t, handle.Close())
 	}
 }
+
+func TestChangesHandle7(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	startTS := taeHandler.GetDB().TxnMgr.Now()
+	schema := catalog2.MockSchemaAll(20, -1)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 8192)
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, rel.Append(ctx, bat))
+	require.Nil(t, txn.Commit(ctx))
+
+	testutil2.CompactBlocks(t, accountId, taeHandler.GetDB(), databaseName, schema, true)
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	mp := common.DebugAllocator
+
+	// check partition state, before flush
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		assert.NoError(t, err)
+		totalRowCount := 0
+		for {
+			data, tombstone, hint, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
+			assert.Nil(t, tombstone)
+			checkInsertBatch(bat, data, t)
+			totalRowCount += data.Vecs[0].Length()
+			data.Clean(mp)
+		}
+		assert.Equal(t, totalRowCount, 8192*2)
+		assert.NoError(t, handle.Close())
+	}
+}
