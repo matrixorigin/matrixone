@@ -3133,7 +3133,6 @@ func (builder *QueryBuilder) bindWhere(
 	if err != nil {
 		return
 	}
-
 	var expr *plan.Expr
 	for _, cond := range whereList {
 		if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
