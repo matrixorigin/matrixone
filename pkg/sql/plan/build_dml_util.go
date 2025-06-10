@@ -872,14 +872,13 @@ func buildInsertPlansWithRelatedHiddenTable(
 				if err != nil {
 					return err
 				}
+			} else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+				// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
+				// err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
+				// if err != nil {
+				// 	return err
+				// }
 			}
-			//  else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
-			// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
-			// err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
-			// if err != nil {
-			// 	return err
-			// }
-			// }
 
 		}
 
@@ -4201,11 +4200,11 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 				}
 			} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 				// TODO: choose either PostDeleteFullTextIndex or PreDeleteFullTextIndex
-				// if postdml_flag {
-				// err = buildPostDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
-				// } else {
-				err = buildPreDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
-				// }
+				if postdml_flag {
+					// err = buildPostDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
+				} else {
+					err = buildPreDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
+				}
 				if err != nil {
 					return err
 				}
@@ -4674,41 +4673,41 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 }
 
 // build PostDml FullText Index node
-// func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, indexObjRef *ObjectRef, indexTableDef *TableDef, tableDef *TableDef,
-// 	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
+func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, indexObjRef *ObjectRef, indexTableDef *TableDef, tableDef *TableDef,
+	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
 
-// 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
-// 	orgPkColPos, _ := getPkPos(tableDef, false)
+	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
+	orgPkColPos, _ := getPkPos(tableDef, false)
 
-// 	// postdml fulltext action
-// 	postdmlProject := getProjectionByLastNode(builder, lastNodeId)
-// 	postdml := &plan.Node{
-// 		NodeType:    plan.Node_POSTDML,
-// 		ProjectList: postdmlProject,
-// 		Children:    []int32{lastNodeId},
-// 		PostDmlCtx: &plan.PostDmlCtx{
-// 			Ref:                    indexObjRef,
-// 			PrimaryKeyIdx:          int32(orgPkColPos),
-// 			PrimaryKeyName:         tableDef.Pkey.PkeyColName,
-// 			IsDelete:               isDelete,
-// 			IsInsert:               isInsert,
-// 			IsDeleteWithoutFilters: isDeleteWithoutFilters,
-// 			FullText: &plan.PostDmlFullTextCtx{
-// 				SourceTableName: tableDef.Name,
-// 				IndexTableName:  indexTableDef.Name,
-// 				Parts:           indexdef.Parts,
-// 				AlgoParams:      indexdef.IndexAlgoParams,
-// 			},
-// 		},
-// 	}
-// 	lastNodeId = builder.appendNode(postdml, bindCtx)
-// 	// end postdml
+	// postdml fulltext action
+	postdmlProject := getProjectionByLastNode(builder, lastNodeId)
+	postdml := &plan.Node{
+		NodeType:    plan.Node_POSTDML,
+		ProjectList: postdmlProject,
+		Children:    []int32{lastNodeId},
+		PostDmlCtx: &plan.PostDmlCtx{
+			Ref:                    indexObjRef,
+			PrimaryKeyIdx:          int32(orgPkColPos),
+			PrimaryKeyName:         tableDef.Pkey.PkeyColName,
+			IsDelete:               isDelete,
+			IsInsert:               isInsert,
+			IsDeleteWithoutFilters: isDeleteWithoutFilters,
+			FullText: &plan.PostDmlFullTextCtx{
+				SourceTableName: tableDef.Name,
+				IndexTableName:  indexTableDef.Name,
+				Parts:           indexdef.Parts,
+				AlgoParams:      indexdef.IndexAlgoParams,
+			},
+		},
+	}
+	lastNodeId = builder.appendNode(postdml, bindCtx)
+	// end postdml
 
-// 	builder.appendStep(lastNodeId)
+	builder.appendStep(lastNodeId)
 
-// 	return nil
+	return nil
 
-// }
+}
 
 // Post Delete Fulltext Index to use PostDml node to save both DELETE SQL and UPDATE SQL (i.e Delete and Insert SQL) and execute after the pipelines
 // func buildPostDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
