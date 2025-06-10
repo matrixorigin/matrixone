@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -168,7 +169,8 @@ func (idx *HnswModel) SaveToFile() error {
 	if err != nil {
 		return err
 	}
-	os.Stderr.WriteString(fmt.Sprintf("hnsw save to idx %s, len = %d\n", idx.Id, idxlen))
+	logutil.Infof("hnsw save to idx %s, len = %d\n", idx.Id, idxlen)
+
 	// free memory
 	err = idx.Index.Destroy()
 	if err != nil {

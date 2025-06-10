@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -376,7 +377,9 @@ func (s *HnswSync) run(proc *process.Process) error {
 		}
 	}
 
-	os.Stderr.WriteString(fmt.Sprintf("len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n", len(s.cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load()))
+	logutil.Infof("hnsw_cdc_update: db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
+		s.tblcfg.DbName, s.tblcfg.SrcTable,
+		len(s.cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
 
 	if len(s.cdc.Data) == int(s.ninsert.Load()) {
 		// pure insert and insert into parallel

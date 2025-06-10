@@ -16,10 +16,10 @@ package function
 
 import (
 	"encoding/json"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,7 +31,6 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		return moerr.NewInvalidInput(proc.Ctx, "number of arguments != 4")
 	}
 
-	os.Stderr.WriteString("hnsCdcUpdate START\n")
 	dbVec := vector.GenerateFunctionStrParameter(ivecs[0])
 	tblVec := vector.GenerateFunctionStrParameter(ivecs[1])
 	dimVec := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
@@ -64,14 +63,15 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		if err != nil {
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is not json object")
 		}
+		logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
 		// hnsw sync
 		//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
 		err = hnsw.CdcSync(proc, string(dbname), string(tblname), dim, &cdc)
 		if err != nil {
 			return err
 		}
+		logutil.Infof("hnsw_cdc_update: END db=%s, table=%s\n", dbname, tblname)
 	}
 
-	os.Stderr.WriteString("hnsCdcUpdate END\n")
 	return nil
 }
