@@ -122,7 +122,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			tableDef.Cols = append(tableDef.Cols, tableDef.ClusterBy.CompCbkeyCol)
 		}
 
-		dupProjection := getProjectionListByLastNode(builder, lastNodeId)
+		dupProjection := getProjectionByLastNode(builder, lastNodeId)
 		// if table have pk & unique key. we need append an agg node before on_duplicate_key
 		if rewriteInfo.onDuplicateNeedAgg {
 			colLen := len(tableDef.Cols)

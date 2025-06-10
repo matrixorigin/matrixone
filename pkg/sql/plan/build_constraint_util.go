@@ -1356,7 +1356,7 @@ func appendForeignConstrantPlan(
 				NodeType:    plan.Node_FILTER,
 				Children:    []int32{lastNodeId},
 				FilterList:  filters,
-				ProjectList: getProjectionListByLastNode(builder, lastNodeId),
+				ProjectList: getProjectionByLastNode(builder, lastNodeId),
 			}
 			lastNodeId = builder.appendNode(filterNode, bindCtx)
 
