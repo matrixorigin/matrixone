@@ -32,7 +32,7 @@ func buildReplace(stmt *tree.Replace, ctx CompilerContext, isPrepareStmt bool, r
 	defer func() {
 		v2.TxnStatementBuildReplaceHistogram.Observe(time.Since(start).Seconds())
 	}()
-	tblInfo, err := makeDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "replace")
 	if err != nil {
 		return nil, err
 	}

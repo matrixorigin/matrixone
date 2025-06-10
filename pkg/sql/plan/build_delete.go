@@ -31,7 +31,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	for _, tbl := range stmt.TableRefs {
 		transAliasToName(ctx, tbl, "", aliasMap)
 	}
-	tblInfo, err := makeDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap, "delete")
+	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, aliasMap, "delete")
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.isMulti = tblInfo.isMulti
 		delPlanCtx.needAggFilter = tblInfo.needAggFilter
 		delPlanCtx.updateColLength = 0
-		delPlanCtx.rowIdPos = getRowIDPos(tableDef)
+		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
 		delPlanCtx.allDelTableIDs = allDelTableIDs
 		delPlanCtx.allDelTables = allDelTables
 		delPlanCtx.lockTable = needLockTable

@@ -353,12 +353,11 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	if len(lockTargets) > 0 {
-		bindTag := builder.genNewTag()
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_LOCK_OP,
 			Children:    []int32{lastNodeID},
 			TableDef:    dmlCtx.tableDefs[0],
-			BindingTags: []int32{bindTag},
+			BindingTags: []int32{builder.genNewTag()},
 			LockTargets: lockTargets,
 		}, bindCtx)
 

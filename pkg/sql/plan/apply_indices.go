@@ -905,8 +905,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID
 	}
 
-	cardLimit := float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt))
-	if rightChild.Stats.Outcnt > cardLimit || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
+	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID
 	}
 
@@ -1048,8 +1047,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter},
 		}, builder.ctxByNode[nodeID])
 
-		cardLimit := GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
-		nodeBuildRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, cardLimit, rfBuildExpr)
+		nodeBuildRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), rfBuildExpr)
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
 		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
 
@@ -1076,15 +1074,13 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			},
 		})
 
-		thisChildren := []int32{node.Children[0], idxTableNodeID}
-		thisOnList := []*plan.Expr{pkJoinCond}
 		idxJoinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: thisChildren,
+			Children: []int32{node.Children[0], idxTableNodeID},
 			JoinType: plan.Node_INDEX,
 			Limit:    leftChild.Limit,
 			Offset:   leftChild.Offset,
-			OnList:   thisOnList,
+			OnList:   []*plan.Expr{pkJoinCond},
 		}, builder.ctxByNode[nodeID])
 
 		leftChild.Limit, leftChild.Offset = nil, nil

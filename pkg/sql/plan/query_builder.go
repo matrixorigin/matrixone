@@ -3042,7 +3042,7 @@ func (builder *QueryBuilder) bindSelectClause(
 
 	if builder.isForUpdate {
 		tableDef := builder.qry.Nodes[nodeID].GetTableDef()
-		pkPos, pkTyp := getPrimaryKeyPos(tableDef, false)
+		pkPos, pkTyp := getPkPos(tableDef, false)
 		lastTag := builder.qry.Nodes[nodeID].BindingTags[0]
 		lockTarget := &plan.LockTarget{
 			TableId:            tableDef.TblId,
