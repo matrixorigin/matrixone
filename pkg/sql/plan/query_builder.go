@@ -4414,7 +4414,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		// TODO
-		obj, tableDef := builder.compCtx.Resolve(schema, table, snapshot)
+		obj, tableDef, err := builder.compCtx.Resolve(schema, table, snapshot)
+		if err != nil {
+			return 0, err
+		}
 		if tableDef == nil {
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist", table)
 		}
