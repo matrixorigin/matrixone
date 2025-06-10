@@ -34,6 +34,8 @@ count(*)
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts > 0;
 count(*)
 5
+select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts > 9.9;
+invalid argument operator >, bad value [TRANSACTION TIMESTAMP DECIMAL64]
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where cast(create_ts as TIMESTAMP) <= NOW();
 count(*)
 5
@@ -43,3 +45,5 @@ count(*)
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where ts_to_time(create_ts, 2) <= NOW();
 count(*)
 5
+select count(*) from metadata_scan("func_ts_to_time.t", "*")g where ts_to_time(1) <= NOW();
+invalid argument function ts_to_time, bad value [BIGINT]

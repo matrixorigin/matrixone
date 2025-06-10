@@ -3664,20 +3664,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_TS},
-				retType: func(parameters []types.Type) types.Type {
-					typ := types.T_timestamp.ToType()
-					typ.Scale = 6
-					return typ
-				},
-				newOp: func() executeLogicOfOverload {
-					return TSToTimestamp
-				},
-			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_TS, types.T_int64},
+				overloadId:      0,
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					typ := types.T_timestamp.ToType()
 					typ.Scale = 6

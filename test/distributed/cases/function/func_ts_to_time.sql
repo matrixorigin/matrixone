@@ -22,6 +22,8 @@ select sleep(1);
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts <= NOW();
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts = "0-0";
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts > 0;
+select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts > 9.9;
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where cast(create_ts as TIMESTAMP) <= NOW();
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where ts_to_time(create_ts) <= NOW();
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where ts_to_time(create_ts, 2) <= NOW();
+select count(*) from metadata_scan("func_ts_to_time.t", "*")g where ts_to_time(1) <= NOW();
