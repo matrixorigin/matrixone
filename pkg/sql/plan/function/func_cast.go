@@ -4573,12 +4573,6 @@ func tsToStr(
 		str := tsVal.ToString()
 		result := []byte(str)
 
-		if int32(len(result)) > toType.Width {
-			return moerr.NewDataTruncated(ctx, "TS",
-				fmt.Sprintf("value '%s' exceeds varchar(%d) limit",
-					result, toType.Width))
-		}
-
 		if err := to.AppendBytes(result, false); err != nil {
 			return err
 		}
