@@ -308,8 +308,9 @@ func (s *HnswSync) insertAll(proc *process.Process, maxcap uint) error {
 				}
 
 				// make sure last model won't unload when full and return full
-				// so that we can unload outside the mutex
-				last, full, err := s.getLastModelAndIncrForSync(proc, maxcap, &mu)
+				// don't unload any model here. Quite dangerous and There is no harm not to unload because
+				// cdc size max is 8192.  Model will eventually unload when save.
+				last, _, err := s.getLastModelAndIncrForSync(proc, maxcap, &mu)
 				if err != nil {
 					err_chan <- err
 					return
@@ -317,9 +318,6 @@ func (s *HnswSync) insertAll(proc *process.Process, maxcap uint) error {
 
 				// Len counter already incremented.  Just add to last model
 				last.AddWithoutIncr(row.PKey, row.Vec)
-				if full {
-					last.Unload()
-				}
 			}
 		}()
 	}
