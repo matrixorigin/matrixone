@@ -48,7 +48,7 @@ func NewDMLContext() *DMLContext {
 }
 
 func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Update) error {
-	err := dmlCtx.ResolveDMLCtxTables(ctx, stmt.Tables, stmt.With, nil, false)
+	err := dmlCtx.ResolveTables(ctx, stmt.Tables, stmt.With, nil, false)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (dmlCtx *DMLContext) ResolveUpdateTables(ctx CompilerContext, stmt *tree.Up
 	return nil
 }
 
-func (dmlCtx *DMLContext) ResolveDMLCtxTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
+func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
 		for _, cte := range with.CTEs {

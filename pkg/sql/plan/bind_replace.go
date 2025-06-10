@@ -27,7 +27,7 @@ import (
 
 func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContext) (int32, error) {
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveDMLCtxTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	if err != nil {
 		return 0, err
 	}
