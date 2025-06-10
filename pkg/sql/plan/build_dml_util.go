@@ -1435,7 +1435,7 @@ func getPrimaryKeyPos(tableDef *TableDef, ignoreFakePK bool) (int, Type) {
 	return -1, Type{}
 }
 
-func getRowIdPos(tableDef *TableDef) int {
+func getRowIDPos(tableDef *TableDef) int {
 	for i, col := range tableDef.Cols {
 		if col.Name == catalog.Row_ID {
 			return i
@@ -3572,7 +3572,7 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 
 			if delCtx.isDeleteWithoutFilters {
 				lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, entriesObjRef, entriesTableDef)
-				entriesDeleteIdx = getRowIdPos(entriesTableDef)
+				entriesDeleteIdx = getRowIDPos(entriesTableDef)
 				entriesTblPkPos, entriesTblPkTyp = getPrimaryKeyPos(entriesTableDef, false)
 			} else {
 				lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
@@ -3867,7 +3867,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 
 	if delCtx.isDeleteWithoutFilters {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
-		uniqueDeleteIdx = getRowIdPos(uniqueTableDef)
+		uniqueDeleteIdx = getRowIDPos(uniqueTableDef)
 		uniqueTblPkPos, uniqueTblPkTyp = getPrimaryKeyPos(uniqueTableDef, false)
 	} else {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
@@ -3981,7 +3981,7 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 
 	if delCtx.isDeleteWithoutFilters {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, masterObjRef, masterTableDef)
-		masterDeleteIdx = getRowIdPos(masterTableDef)
+		masterDeleteIdx = getRowIDPos(masterTableDef)
 		masterTblPkPos, masterTblPkTyp = getPrimaryKeyPos(masterTableDef, false)
 	} else {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
@@ -4473,7 +4473,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			ProjectList: scanNodeProject,
 		}, bindCtx)
 
-		deleteIdx := getRowIdPos(indexTableDef)
+		deleteIdx := getRowIDPos(indexTableDef)
 		retPkPos := 3 // __mo_fake_pk_col
 		retPkTyp := indexTableDef.Cols[retPkPos].Typ
 

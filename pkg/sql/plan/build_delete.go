@@ -78,7 +78,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.isMulti = tblInfo.isMulti
 		delPlanCtx.needAggFilter = tblInfo.needAggFilter
 		delPlanCtx.updateColLength = 0
-		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
+		delPlanCtx.rowIdPos = getRowIDPos(tableDef)
 		delPlanCtx.allDelTableIDs = allDelTableIDs
 		delPlanCtx.allDelTables = allDelTables
 		delPlanCtx.lockTable = needLockTable
