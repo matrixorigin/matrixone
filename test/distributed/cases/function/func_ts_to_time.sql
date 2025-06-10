@@ -18,6 +18,7 @@ insert into t select * from t;
 select count(*) from t;
 -- @ignore:0
 select mo_ctl("dn", "flush", "func_ts_to_time.t");
+select sleep(1);
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts <= NOW();
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts = "0-0";
 select count(*) from metadata_scan("func_ts_to_time.t", "*")g where create_ts > 0;
