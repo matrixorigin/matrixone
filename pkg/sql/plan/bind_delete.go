@@ -66,7 +66,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
+	err := dmlCtx.ResolveDMLCtxTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
 	if err != nil {
 		return 0, err
 	}
