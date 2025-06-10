@@ -145,7 +145,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
-func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
+func (c *Compile) applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
 	if op == nil {
 		return
 	}
@@ -204,16 +204,18 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
 			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TimeConsumed
 		}
+
+		c.anal.qry.BackgroundQueries = append(c.anal.qry.BackgroundQueries, op.OpStats.BackgroundQueries...)
 	}
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		applyOpStatsToNode(childOp, nodes, scopeParalleInfo)
+		c.applyOpStatsToNode(childOp, nodes, scopeParalleInfo)
 	}
 }
 
 // processPhyScope Recursive traversal of PhyScope and processing of PhyOperators within it
-func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statistic.StatsInfo) {
+func (c *Compile) processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statistic.StatsInfo) {
 	if scope == nil {
 		return
 	}
@@ -222,7 +224,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statisti
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
 		scopeParallInfo := NewParallelScopeInfo()
-		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
+		c.applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
 
 		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMajor {
 			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor, timeConsumeMajor)
@@ -235,7 +237,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statisti
 
 	// handle preScopes recursively
 	for _, preScope := range scope.PreScopes {
-		processPhyScope(&preScope, nodes, stats)
+		c.processPhyScope(&preScope, nodes, stats)
 	}
 }
 
@@ -246,12 +248,12 @@ func (c *Compile) fillPlanNodeAnalyzeInfo(stats *statistic.StatsInfo) {
 
 	// handle local scopes
 	for _, localScope := range c.anal.phyPlan.LocalScope {
-		processPhyScope(&localScope, c.anal.qry.Nodes, stats)
+		c.processPhyScope(&localScope, c.anal.qry.Nodes, stats)
 	}
 
 	// handle remote run scopes
 	for _, remoteScope := range c.anal.phyPlan.RemoteScope {
-		processPhyScope(&remoteScope, c.anal.qry.Nodes, stats)
+		c.processPhyScope(&remoteScope, c.anal.qry.Nodes, stats)
 	}
 }
 
