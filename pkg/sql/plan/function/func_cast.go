@@ -4563,13 +4563,7 @@ func tsToStr(
 	toType types.Type) error {
 
 	for i := 0; i < length; i++ {
-		tsVal, null := from.GetValue(uint64(i))
-		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
+		tsVal, _ := from.GetValue(uint64(i))
 		str := tsVal.ToString()
 		result := []byte(str)
 
@@ -4588,13 +4582,7 @@ func tsToTimestamp(
 	toType types.Type) error {
 
 	for i := 0; i < length; i++ {
-		tsVal, null := from.GetValue(uint64(i))
-		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
+		tsVal, _ := from.GetValue(uint64(i))
 
 		physical := tsVal.Physical()
 		seconds := int64(physical / 1e9)
@@ -4629,13 +4617,7 @@ func tsToInt64(
 	toType types.Type) error {
 
 	for i := 0; i < length; i++ {
-		tsVal, null := from.GetValue(uint64(i))
-		if null {
-			if err := to.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
+		tsVal, _ := from.GetValue(uint64(i))
 
 		physical := tsVal.Physical()
 		seconds := int64(physical / 1e9)
