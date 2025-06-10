@@ -57,7 +57,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, moerr.NewNYIf(ctx.GetContext(), "insert stream %s", tblName)
 	}
 
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	tblInfo, err := makeDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +419,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		return false
 	} else {
 		// check for auto increment primary key
-		pkPos, pkTyp := getPkPos(tableDef, true)
+		pkPos, pkTyp := getPrimaryKeyPos(tableDef, true)
 		if pkPos == -1 {
 			if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
 				return false // break condition 2

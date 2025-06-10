@@ -364,7 +364,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 	// delete origin table
 	lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
+	pkPos, pkTyp := getPrimaryKeyPos(delCtx.tableDef, false)
 	delNodeInfo := makeDeleteNodeInfo(ctx, delCtx.objRef, delCtx.tableDef, delCtx.rowIdPos, true, pkPos, pkTyp, delCtx.lockTable)
 	lastNodeId, err = makeOneDeletePlan(builder, bindCtx, lastNodeId, delNodeInfo, false, false, canTruncate)
 	putDeleteNodeInfo(delNodeInfo)
@@ -1419,7 +1419,7 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 	return lastNodeId, nil
 }
 
-func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, Type) {
+func getPrimaryKeyPos(tableDef *TableDef, ignoreFakePK bool) (int, Type) {
 	pkName := tableDef.Pkey.PkeyColName
 	// if pkName == catalog.CPrimaryKeyColName {
 	// 	return len(tableDef.Cols) - 1, makeHiddenColTyp()
@@ -1435,7 +1435,7 @@ func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, Type) {
 	return -1, Type{}
 }
 
-func getRowIdPos(tableDef *TableDef) int {
+func getRowIDPos(tableDef *TableDef) int {
 	for i, col := range tableDef.Cols {
 		if col.Name == catalog.Row_ID {
 			return i
@@ -1790,7 +1790,7 @@ func appendPreInsertSkMasterPlan(builder *QueryBuilder,
 
 	// 1. init details
 	idxDef := tableDef.Indexes[indexIdx]
-	originPkPos, originPkType := getPkPos(tableDef, false)
+	originPkPos, originPkType := getPrimaryKeyPos(tableDef, false)
 	//var rowIdPos int
 	//var rowIdType *Type
 
@@ -1964,7 +1964,7 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 			}
 		}
 
-		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
+		posOriginPk, typeOriginPk = getPrimaryKeyPos(tableDef, false)
 	}
 
 	// get optype
@@ -2131,7 +2131,7 @@ func appendPreInsertPlan(
 		}
 	}
 
-	pkColumn, originPkType := getPkPos(tableDef, false)
+	pkColumn, originPkType := getPrimaryKeyPos(tableDef, false)
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, pkColumn)
 
 	var ukType Type
@@ -2421,7 +2421,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	baseNodeId int32, tableDef *TableDef, indexDef *plan.IndexDef,
 	typMap map[string]plan.Type, posMap map[string]int) (int32, error) {
 
-	originPkColumnPos, originPkType := getPkPos(tableDef, false)
+	originPkColumnPos, originPkType := getPrimaryKeyPos(tableDef, false)
 
 	lastNodeId := baseNodeId
 	projectList := getProjectionListByLastNode(builder, lastNodeId)
@@ -2547,7 +2547,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	entriesObjRef *ObjectRef, entriesTableDef *TableDef,
 	baseNodeId int32, tableDef *TableDef) (int32, error) {
 
-	originPkColumnPos, originPkType := getPkPos(tableDef, false)
+	originPkColumnPos, originPkType := getPrimaryKeyPos(tableDef, false)
 
 	lastNodeId := baseNodeId
 	var err error
@@ -2849,7 +2849,7 @@ func makePreUpdateDeletePlan(
 	// lock old pk for delete statement
 	lastProjectList := getProjectionListByLastNode(builder, lastNodeId)
 	originProjectListLen := len(lastProjectList)
-	pkPos, pkTyp := getPkPos(delCtx.tableDef, false)
+	pkPos, pkTyp := getPrimaryKeyPos(delCtx.tableDef, false)
 
 	lockTarget := &plan.LockTarget{
 		TableId:            delCtx.tableDef.TblId,
@@ -2965,7 +2965,7 @@ func appendLockNode(
 	if !isUpdate && tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return -1, false
 	}
-	pkPos, pkTyp := getPkPos(tableDef, false)
+	pkPos, pkTyp := getPrimaryKeyPos(tableDef, false)
 	if pkPos == -1 {
 		return -1, false
 	}
@@ -3572,8 +3572,8 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 
 			if delCtx.isDeleteWithoutFilters {
 				lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, entriesObjRef, entriesTableDef)
-				entriesDeleteIdx = getRowIdPos(entriesTableDef)
-				entriesTblPkPos, entriesTblPkTyp = getPkPos(entriesTableDef, false)
+				entriesDeleteIdx = getRowIDPos(entriesTableDef)
+				entriesTblPkPos, entriesTblPkTyp = getPrimaryKeyPos(entriesTableDef, false)
 			} else {
 				lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 				lastNodeId, err = appendDeleteIvfTablePlan(builder, bindCtx, entriesObjRef, entriesTableDef, lastNodeId, delCtx.tableDef)
@@ -3867,8 +3867,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 
 	if delCtx.isDeleteWithoutFilters {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
-		uniqueDeleteIdx = getRowIdPos(uniqueTableDef)
-		uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
+		uniqueDeleteIdx = getRowIDPos(uniqueTableDef)
+		uniqueTblPkPos, uniqueTblPkTyp = getPrimaryKeyPos(uniqueTableDef, false)
 	} else {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
@@ -3981,8 +3981,8 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 
 	if delCtx.isDeleteWithoutFilters {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, masterObjRef, masterTableDef)
-		masterDeleteIdx = getRowIdPos(masterTableDef)
-		masterTblPkPos, masterTblPkTyp = getPkPos(masterTableDef, false)
+		masterDeleteIdx = getRowIDPos(masterTableDef)
+		masterTblPkPos, masterTblPkTyp = getPrimaryKeyPos(masterTableDef, false)
 	} else {
 		lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		lastNodeId, err = appendDeleteMasterTablePlan(builder, bindCtx, masterObjRef, masterTableDef, lastNodeId, delCtx.tableDef, indexdef, typMap, posMap)
@@ -4473,7 +4473,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			ProjectList: scanNodeProject,
 		}, bindCtx)
 
-		deleteIdx := getRowIdPos(indexTableDef)
+		deleteIdx := getRowIDPos(indexTableDef)
 		retPkPos := 3 // __mo_fake_pk_col
 		retPkTyp := indexTableDef.Cols[retPkPos].Typ
 
@@ -4485,7 +4485,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 
 		//rfTag := builder.genNewTag()
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
+		orgPkColPos, orgPkType := getPrimaryKeyPos(delCtx.tableDef, false)
 
 		var idxRowIdPos int32 = -1
 		var idxDocidPos int32 = 0  // doc_id

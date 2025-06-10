@@ -217,7 +217,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
 	}()
 	tblName := string(stmt.Table.ObjectName)
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	tblInfo, err := makeDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
 	}

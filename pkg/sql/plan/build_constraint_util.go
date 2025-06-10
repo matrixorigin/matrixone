@@ -95,7 +95,7 @@ func transAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, al
 }
 
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {
-	tblInfo, err := getDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
+	tblInfo, err := makeDmlTableInfo(ctx, stmt.Tables, stmt.With, nil, "update")
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +332,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
-func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
+func makeDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
 		typ:       typ,
 		nameToIdx: make(map[string]int),
@@ -1393,7 +1393,7 @@ func appendPrimaryConstraintPlan(
 
 	// need more comments here to explain checkCondition, for example, why updatePkCol is needed
 	// we should not checkInsertPkDup any more, insert into t values (1) checkInsertPkDup is false, however it may still conflict with pk already exists
-	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
+	if pkPos, pkTyp := getPrimaryKeyPos(tableDef, true); pkPos != -1 {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
 		useFuzzyFilter := config.CNPrimaryCheck.Load()
@@ -1592,7 +1592,7 @@ func appendPrimaryConstraintPlan(
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	if config.CNPrimaryCheck.Load() {
-		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
+		if pkPos, pkTyp := getPrimaryKeyPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewMsgTag()
 
 			if isUpdate && updatePkCol { // update stmt && pk included in update cols
