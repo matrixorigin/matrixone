@@ -174,7 +174,9 @@ func NewLogHAKeeperClientWithRetry(
 ) ClusterHAKeeperClient {
 	var c ClusterHAKeeperClient
 	createFn := func() error {
-		ctx, cancel := context.WithTimeoutCause(ctx, time.Second*5, moerr.CauseNewLogHAKeeperClientWithRetry)
+		ctx, cancel := context.WithTimeoutCause(
+			ctx, time.Second*5, moerr.CauseNewLogHAKeeperClientWithRetry,
+		)
 		defer cancel()
 		client, err := NewClusterHAKeeperClient(ctx, sid, cfg)
 		if err != nil {
@@ -354,28 +356,30 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		return v, nil
 	}
 
+	defer c.mu.Unlock()
+
 	for {
 		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
 		firstID, err := c.mu.client.sendCNAllocateID(ctx, "", c.cfg.AllocateIDBatch)
+
 		if err != nil {
 			c.resetClientLocked()
-		}
-		if c.isRetryableError(err) {
-			continue
+			if c.isRetryableError(err) {
+				continue
+			}
+			logutil.Error("failed to allocate id",
+				zap.Error(err),
+				zap.Uint64("batch", c.cfg.AllocateIDBatch),
+				zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
+				zap.Uint64("lastID", c.mu.sharedAllocID.lastID),
+			)
+			return 0, err
 		}
 
 		c.mu.sharedAllocID.nextID = firstID + 1
 		c.mu.sharedAllocID.lastID = firstID + c.cfg.AllocateIDBatch - 1
-		c.mu.Unlock()
-		if firstID == 0 {
-			logutil.Error("id should not be 0",
-				zap.Error(err),
-				zap.Uint64("batch", c.cfg.AllocateIDBatch),
-				zap.Uint64("nextID", c.mu.sharedAllocID.nextID),
-				zap.Uint64("lastID", c.mu.sharedAllocID.lastID))
-		}
 		return firstID, err
 	}
 }
@@ -498,7 +502,9 @@ func (c *managedHAKeeperClient) GetCNState(ctx context.Context) (pb.CNState, err
 }
 
 // UpdateCNLabel implements the ProxyHAKeeperClient interface.
-func (c *managedHAKeeperClient) UpdateCNLabel(ctx context.Context, label pb.CNStoreLabel) error {
+func (c *managedHAKeeperClient) UpdateCNLabel(
+	ctx context.Context, label pb.CNStoreLabel,
+) error {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return err
@@ -515,7 +521,9 @@ func (c *managedHAKeeperClient) UpdateCNLabel(ctx context.Context, label pb.CNSt
 }
 
 // UpdateCNWorkState implements the ProxyHAKeeperClient interface.
-func (c *managedHAKeeperClient) UpdateCNWorkState(ctx context.Context, state pb.CNWorkState) error {
+func (c *managedHAKeeperClient) UpdateCNWorkState(
+	ctx context.Context, state pb.CNWorkState,
+) error {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return err
@@ -532,7 +540,9 @@ func (c *managedHAKeeperClient) UpdateCNWorkState(ctx context.Context, state pb.
 }
 
 // PatchCNStore implements the ProxyHAKeeperClient interface.
-func (c *managedHAKeeperClient) PatchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
+func (c *managedHAKeeperClient) PatchCNStore(
+	ctx context.Context, stateLabel pb.CNStateLabel,
+) error {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return err
@@ -549,7 +559,9 @@ func (c *managedHAKeeperClient) PatchCNStore(ctx context.Context, stateLabel pb.
 }
 
 // DeleteCNStore implements the ProxyHAKeeperClient interface.
-func (c *managedHAKeeperClient) DeleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
+func (c *managedHAKeeperClient) DeleteCNStore(
+	ctx context.Context, cnStore pb.DeleteCNStore,
+) error {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return err
@@ -566,7 +578,9 @@ func (c *managedHAKeeperClient) DeleteCNStore(ctx context.Context, cnStore pb.De
 }
 
 // SendProxyHeartbeat implements the ProxyHAKeeperClient interface.
-func (c *managedHAKeeperClient) SendProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+func (c *managedHAKeeperClient) SendProxyHeartbeat(
+	ctx context.Context, hb pb.ProxyHeartbeat,
+) (pb.CommandBatch, error) {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return pb.CommandBatch{}, err
@@ -600,7 +614,9 @@ func (c *managedHAKeeperClient) GetBackupData(ctx context.Context) ([]byte, erro
 }
 
 // UpdateNonVotingReplicaNum implements the CNHAKeeperClient interface.
-func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(ctx context.Context, num uint64) error {
+func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(
+	ctx context.Context, num uint64,
+) error {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return err
@@ -617,7 +633,9 @@ func (c *managedHAKeeperClient) UpdateNonVotingReplicaNum(ctx context.Context, n
 }
 
 // UpdateNonVotingLocality implements the CNHAKeeperClient interface.
-func (c *managedHAKeeperClient) UpdateNonVotingLocality(ctx context.Context, locality pb.Locality) error {
+func (c *managedHAKeeperClient) UpdateNonVotingLocality(
+	ctx context.Context, locality pb.Locality,
+) error {
 	for {
 		if err := c.prepareClient(ctx); err != nil {
 			return err
@@ -846,7 +864,9 @@ func (c *hakeeperClient) checkLogServiceHealth(ctx context.Context, checkHealth 
 	return nil
 }
 
-func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) (pb.CommandBatch, error) {
+func (c *hakeeperClient) sendCNHeartbeat(
+	ctx context.Context, hb pb.CNStoreHeartbeat,
+) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:      pb.CN_HEARTBEAT,
 		CNHeartbeat: &hb,
@@ -854,7 +874,9 @@ func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeart
 	return c.sendHeartbeat(ctx, req)
 }
 
-func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, key string, batch uint64) (uint64, error) {
+func (c *hakeeperClient) sendCNAllocateID(
+	ctx context.Context, key string, batch uint64,
+) (uint64, error) {
 	req := pb.Request{
 		Method:       pb.CN_ALLOCATE_ID,
 		CNAllocateID: &pb.CNAllocateID{Key: key, Batch: batch},
@@ -959,7 +981,9 @@ func (c *hakeeperClient) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNS
 	return nil
 }
 
-func (c *hakeeperClient) sendProxyHeartbeat(ctx context.Context, hb pb.ProxyHeartbeat) (pb.CommandBatch, error) {
+func (c *hakeeperClient) sendProxyHeartbeat(
+	ctx context.Context, hb pb.ProxyHeartbeat,
+) (pb.CommandBatch, error) {
 	req := pb.Request{
 		Method:         pb.PROXY_HEARTBEAT,
 		ProxyHeartbeat: &hb,
@@ -983,7 +1007,9 @@ func (c *hakeeperClient) updateNonVotingReplicaNum(ctx context.Context, num uint
 	return nil
 }
 
-func (c *hakeeperClient) updateNonVotingLocality(ctx context.Context, locality pb.Locality) error {
+func (c *hakeeperClient) updateNonVotingLocality(
+	ctx context.Context, locality pb.Locality,
+) error {
 	req := pb.Request{
 		Method:            pb.UPDATE_NON_VOTING_LOCALITY,
 		NonVotingLocality: &locality,
