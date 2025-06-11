@@ -507,7 +507,7 @@ system_metrics
 use sub07;
 internal error: there is no publication pub07
 select sum(a) from test01;
-SQL parser error: table "test01" does not exist
+internal error: there is no publication pub07
 drop database sub07;
 drop publication pub07;
 internal error: publication 'pub07' does not exist
@@ -555,7 +555,7 @@ system_metrics
 use sub07;
 internal error: there is no publication pub08
 select * from t1;
-SQL parser error: table "t1" does not exist
+internal error: there is no publication pub08
 restore account acc01 from snapshot sp103;
 show databases;
 Database
@@ -568,7 +568,7 @@ system_metrics
 use sub07;
 internal error: there is no publication pub08
 select * from t1;
-SQL parser error: table "t1" does not exist
+internal error: there is no publication pub08
 drop database sub07;
 drop publication pub08;
 internal error: publication 'pub08' does not exist

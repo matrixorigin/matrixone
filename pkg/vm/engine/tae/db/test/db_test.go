@@ -4808,6 +4808,7 @@ func TestReadCheckpoint(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		t.Log(entry.String())
+		t.Log(entry.JsonString())
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {

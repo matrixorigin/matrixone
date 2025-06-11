@@ -3133,7 +3133,6 @@ func (builder *QueryBuilder) bindWhere(
 	if err != nil {
 		return
 	}
-
 	var expr *plan.Expr
 	for _, cond := range whereList {
 		if nodeID, expr, err = builder.flattenSubqueries(nodeID, cond, ctx); err != nil {
@@ -4414,7 +4413,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		// TODO
-		obj, tableDef := builder.compCtx.Resolve(schema, table, snapshot)
+		obj, tableDef, err := builder.compCtx.Resolve(schema, table, snapshot)
+		if err != nil {
+			return 0, err
+		}
 		if tableDef == nil {
 			return 0, moerr.NewParseErrorf(builder.GetContext(), "table %q does not exist", table)
 		}

@@ -408,12 +408,13 @@ const (
 	L2_DISTANCE_XC    = 341
 	L2_DISTANCE_SQ_XC = 342
 
+	TS_TO_TIME = 343
 	// hnsw function
-	HNSW_CDC_UPDATE = 343
+	HNSW_CDC_UPDATE = 344
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 344
+	FUNCTION_END_NUMBER = 345
 )
 
 // functionIdRegister is what function we have registered already.
@@ -509,6 +510,7 @@ var functionIdRegister = map[string]int32{
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
 	"str_to_date": STR_TO_DATE,
+	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions

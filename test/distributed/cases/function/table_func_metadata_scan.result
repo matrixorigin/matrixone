@@ -1,5 +1,5 @@
 select * from metadata_scan('table_func_metadata_scan.no_exist_table', '*') g;
-SQL parser error: table "no_exist_table" does not exist
+no such table table_func_metadata_scan.no_exist_table
 drop table if exists t;
 create table t(a int, b varchar, c float, d decimal(10, 8), e float(5, 2));
 insert into t values(1, null, 1.1, 1, 1.11);
@@ -25,6 +25,30 @@ mo_ctl(dn, flush, table_func_metadata_scan.t)
 select sleep(1);
 sleep(1)
 0
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts <= NOW();
+count(*)
+5
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts = "0-0";
+count(*)
+0
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts > 0;
+count(*)
+5
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where create_ts > 9.9;
+invalid argument operator >, bad value [TRANSACTION TIMESTAMP DECIMAL64]
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as float) > 9.9;
+invalid argument operator cast, bad value [TRANSACTION TIMESTAMP FLOAT]
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where cast(create_ts as TIMESTAMP) <= NOW();
+count(*)
+5
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts) <= NOW();
+count(*)
+5
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(create_ts, 2) <= NOW();
+count(*)
+5
+select count(*) from metadata_scan("table_func_metadata_scan.t", "*")g where ts_to_time(1) <= NOW();
+invalid argument function ts_to_time, bad value [BIGINT]
 select count(*) from metadata_scan('table_func_metadata_scan.t', '*') g;
 count(*)
 5
@@ -38,14 +62,14 @@ col_name    rows_cnt    null_cnt    origin_size
 a    8192    0    32806
 select col_name, rows_cnt, null_cnt, origin_size from metadata_scan('table_func_metadata_scan.t', '*') g;
 col_name    rows_cnt    null_cnt    origin_size
-a    8192    0    32806
-b    8192    4096    197690
-c    8192    0    32806
-d    8192    0    65574
-e    8192    0    32806
+a    8192    0    429915
+b    8192    0    429915
+c    8192    0    429915
+d    8192    0    429915
+e    8192    0    429915
 select sum(origin_size) from metadata_scan('table_func_metadata_scan.t', '*') g;
 sum(origin_size)
-361682
+2149575
 select min(bit_cast(`min` as int)), max(bit_cast(`max` as int)), sum(bit_cast(`sum` as bigint)) from metadata_scan('table_func_metadata_scan.t', 'a') g;
 min(bit_cast(min as int))    max(bit_cast(max as int))    sum(bit_cast(sum as bigint))
 1    2    12288
@@ -57,10 +81,10 @@ sum(c)
 12697.60009765625
 select sum(bit_cast(`sum` as decimal(10, 8))) from metadata_scan('table_func_metadata_scan.t', 'd') g;
 sum(bit_cast(sum as decimal(10, 8)))
-12288
+12288.00000000
 select sum(d) from t;
 sum(d)
-12288
+12288.00000000
 select sum(bit_cast(`sum` as double)) from metadata_scan('table_func_metadata_scan.t', 'e') g;
 sum(bit_cast(sum as double))
 13639.68017578125

@@ -72,12 +72,12 @@ func TestBuildTable_AlterView(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
 			x := store[schemaName+"."+tableName]
-			return x.obj, x.table
+			return x.obj, x.table, nil
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
