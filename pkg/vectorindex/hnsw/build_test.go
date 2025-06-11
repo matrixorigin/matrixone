@@ -17,6 +17,7 @@ package hnsw
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,7 +129,7 @@ func TestBuildMulti(t *testing.T) {
 	start = time.Now()
 
 	// check recall
-	failed := 0
+	var failed atomic.Int64
 	var wg2 sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg2.Add(1)
@@ -142,7 +143,7 @@ func TestBuildMulti(t *testing.T) {
 				require.True(t, ok)
 				_ = distances
 				if keys[0] != key {
-					failed++
+					failed.Add(1)
 					found, err := search.Contains(key)
 					require.Nil(t, err)
 					require.True(t, found)
@@ -162,8 +163,9 @@ func TestBuildMulti(t *testing.T) {
 	require.Nil(t, err)
 	require.False(t, found)
 
-	recall := float32(nthread*nitem-failed) / float32(nthread*nitem)
-	fmt.Printf("Recall %f\n", float32(nthread*nitem-failed)/float32(nthread*nitem))
+	failedCnt := int(failed.Load())
+	recall := float32(nthread*nitem-failedCnt) / float32(nthread*nitem)
+	fmt.Printf("Recall %f\n", float32(nthread*nitem-failedCnt)/float32(nthread*nitem))
 	require.True(t, (recall > 0.96))
 
 }
