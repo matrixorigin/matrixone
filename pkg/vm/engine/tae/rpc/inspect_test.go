@@ -154,4 +154,23 @@ func TestMergeCommand(t *testing.T) {
 	_, err = handle.runInspectCmd("merge trigger -t db1.test1 --kind l0 --l0-oneshot --patch-expire 1h")
 	require.NoError(t, err)
 
+	resp, err = handle.runInspectCmd("merge trace -t 1.2")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid input")
+
+	resp, err = handle.runInspectCmd("merge trace on")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "specified")
+
+	resp, err = handle.runInspectCmd("merge trace xx -t 1.2")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid input")
+
+	_, err = handle.runInspectCmd("merge trace on -t 1.2")
+	require.NoError(t, err)
+
+	_, err = handle.runInspectCmd("merge trace off -t 1.2")
+	require.NoError(t, err)
+	require.Contains(t, resp.Message, "invalid input")
+
 }
