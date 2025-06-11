@@ -165,12 +165,6 @@ func (idx *HnswModel) SaveToFile() error {
 	}
 	idx.Checksum = chksum
 
-	idxlen, err := idx.Index.Len()
-	if err != nil {
-		return err
-	}
-	logutil.Infof("hnsw save to idx %s, len = %d\n", idx.Id, idxlen)
-
 	// free memory
 	err = idx.Index.Destroy()
 	if err != nil {
@@ -211,6 +205,8 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 	if idx.FileSize == 0 {
 		return []string{}, nil
 	}
+
+	logutil.Infof("HnswModel.ToSql idx %s, len = %d\n", idx.Id, idx.Len.Load())
 
 	sqls := make([]string, 0, 5)
 
@@ -472,6 +468,8 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 	}
 	idx.Len.Store(int64(idxLen))
 
+	logutil.Debugf("HnswModel.LoadIndex idx %s, len = %d\n", idx.Id, idxLen)
+
 	idx.MaxCapacity, err = idx.Index.Capacity()
 	if err != nil {
 		return err
@@ -493,8 +491,14 @@ func (idx *HnswModel) Unload() error {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
 
+	idxLen, err := idx.Index.Len()
+	if err != nil {
+		return err
+	}
+	logutil.Debugf("HnswModel.Unload idx %s, len = %d\n", idx.Id, idxLen)
+
 	// SaveToFile will check Dirty bit. If dirty is true, save to file before unload
-	err := idx.SaveToFile()
+	err = idx.SaveToFile()
 	if err != nil {
 		return err
 	}
