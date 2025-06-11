@@ -358,11 +358,12 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 
 	defer c.mu.Unlock()
 
+	batchSize := c.cfg.AllocateIDBatch
 	for {
 		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.mu.client.sendCNAllocateID(ctx, "", c.cfg.AllocateIDBatch)
+		firstID, err := c.mu.client.sendCNAllocateID(ctx, "", batchSize)
 
 		if err != nil {
 			c.resetClientLocked()
@@ -379,7 +380,7 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		}
 
 		c.mu.sharedAllocID.nextID = firstID + 1
-		c.mu.sharedAllocID.lastID = firstID + c.cfg.AllocateIDBatch - 1
+		c.mu.sharedAllocID.lastID = firstID + batchSize - 1
 		return firstID, err
 	}
 }
@@ -395,7 +396,7 @@ func (c *managedHAKeeperClient) AllocateIDByKey(ctx context.Context, key string)
 func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	ctx context.Context,
 	key string,
-	batch uint64) (uint64, error) {
+	batchSize uint64) (uint64, error) {
 	// empty key is used in shared allocated IDs.
 	if len(key) == 0 {
 		return 0, moerr.NewInternalError(ctx, "key should not be empty")
@@ -419,16 +420,17 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 		if err := c.prepareClientLocked(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.mu.client.sendCNAllocateID(ctx, key, batch)
+		firstID, err := c.mu.client.sendCNAllocateID(ctx, key, batchSize)
 		if err != nil {
 			c.resetClientLocked()
-		}
-		if c.isRetryableError(err) {
-			continue
+			if c.isRetryableError(err) {
+				continue
+			}
+			return 0, err
 		}
 
 		allocIDs.nextID = firstID + 1
-		allocIDs.lastID = firstID + batch - 1
+		allocIDs.lastID = firstID + batchSize - 1
 		return firstID, err
 	}
 }
