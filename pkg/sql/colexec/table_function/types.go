@@ -39,7 +39,6 @@ type TableFunction struct {
 	IsSingle    bool
 	OffsetTotal [][2]int64
 	CanOpt      bool
-	LogicalPlan *plan.Query
 
 	vm.OperatorBase
 }
