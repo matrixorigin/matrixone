@@ -79,7 +79,7 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -132,6 +132,9 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if table == nil {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
 
 	newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
@@ -226,43 +229,6 @@ func (c *compilerContext) DefaultDatabase() string {
 	return strings.ToLower(c.defaultDB)
 }
 
-func (c *compilerContext) GetPrimaryKeyDef(
-	dbName string,
-	tableName string,
-	snapshot *plan.Snapshot) []*plan.ColDef {
-	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
-	if err != nil {
-		return nil
-	}
-	ctx, relation, err := c.getRelation(dbName, tableName, snapshot)
-	if err != nil {
-		return nil
-	}
-
-	priKeys, err := relation.GetPrimaryKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(priKeys) == 0 {
-		return nil
-	}
-
-	priDefs := make([]*plan.ColDef, 0, len(priKeys))
-	for _, key := range priKeys {
-		priDefs = append(priDefs, &plan.ColDef{
-			Name:       strings.ToLower(key.Name),
-			OriginName: key.Name,
-			Typ: plan.Type{
-				Id:    int32(key.Type.Oid),
-				Width: key.Type.Width,
-				Scale: key.Type.Scale,
-			},
-			Primary: key.Primary,
-		})
-	}
-	return priDefs
-}
-
 func (c *compilerContext) GetRootSql() string {
 	return c.sql
 }
@@ -289,7 +255,7 @@ func (c *compilerContext) SetContext(ctx context.Context) {
 	c.proc.ReplaceTopCtx(ctx)
 }
 
-func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef, err error) {
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
@@ -301,18 +267,21 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 		}
 	}
 
-	dbName, tableName, _ := c.engine.GetNameById(ctx, txnOpt, tableId)
+	dbName, tableName, e := c.engine.GetNameById(ctx, txnOpt, tableId)
+	if e != nil {
+		return nil, nil, e
+	}
 	if dbName == "" || tableName == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
 		dbName = strings.ToLower(dbName)
@@ -321,24 +290,31 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil, nil
+		if moerr.IsMoErrCode(err, moerr.ErrNoDB) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
 	}
 
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
+	}
+	if table == nil {
+		return nil, nil, nil
 	}
 
 	tableDef := table.CopyTableDef(ctx)
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
+	tableID := int64(table.GetTableID(ctx))
 	obj := &plan.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
-		Obj:        int64(table.GetTableID(ctx)),
+		Obj:        tableID,
 	}
-	return obj, tableDef
+	return obj, tableDef, nil
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
@@ -397,6 +373,9 @@ func (c *compilerContext) getRelation(
 
 	table, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, nil, nil
+		}
 		return nil, nil, err
 	}
 	return ctx, table, nil
