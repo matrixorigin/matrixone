@@ -285,7 +285,7 @@ func (s *HnswSync) checkContains(proc *process.Process) (maxcap uint, midx []int
 	return maxcap, midx, nil
 }
 
-func (s *HnswSync) insertAll(proc *process.Process, maxcap uint) error {
+func (s *HnswSync) insertAllInParallel(proc *process.Process, maxcap uint) error {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
@@ -331,15 +331,7 @@ func (s *HnswSync) insertAll(proc *process.Process, maxcap uint) error {
 	return nil
 }
 
-func (s *HnswSync) run(proc *process.Process) error {
-	var err error
-
-	maxcap, midx, err := s.checkContains(proc)
-	if err != nil {
-		return err
-	}
-
-	s.ninsert.Store(int32(len(s.cdc.Data)) - s.nupdate.Load() - s.ndelete.Load())
+func (s *HnswSync) setupModel(proc *process.Process, maxcap uint) error {
 
 	s.current = (*HnswModel)(nil)
 	s.last = (*HnswModel)(nil)
@@ -375,87 +367,114 @@ func (s *HnswSync) run(proc *process.Process) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *HnswSync) sequentialUpdate(proc *process.Process, maxcap uint, midx []int) error {
+
+	for i, row := range s.cdc.Data {
+
+		switch row.Type {
+		case vectorindex.CDC_UPSERT:
+			if midx[i] == -1 {
+				// cannot find key from existing model. simple insert
+				last, err := s.getLastModel(proc, maxcap)
+				if err != nil {
+					return err
+				}
+				// insert
+				err = last.Add(row.PKey, row.Vec)
+				if err != nil {
+					return err
+				}
+
+				break
+
+			}
+			current, err := s.getCurrentModel(proc, midx[i])
+			if err != nil {
+				return err
+			}
+
+			// update
+			err = current.Remove(row.PKey)
+			if err != nil {
+				return err
+			}
+
+			err = current.Add(row.PKey, row.Vec)
+			if err != nil {
+				return err
+			}
+
+		case vectorindex.CDC_DELETE:
+			if midx[i] == -1 {
+				// cannot find key from existing models. ignore it
+				//os.Stderr.WriteString("DELETE NOT FOUND\n")
+				continue
+			}
+
+			current, err := s.getCurrentModel(proc, midx[i])
+			if err != nil {
+				return err
+			}
+
+			// delete
+			err = current.Remove(row.PKey)
+			if err != nil {
+				return err
+			}
+
+		case vectorindex.CDC_INSERT:
+			last, err := s.getLastModel(proc, maxcap)
+			if err != nil {
+				return err
+			}
+
+			// insert
+			err = last.Add(row.PKey, row.Vec)
+			if err != nil {
+				return err
+			}
+		}
+
+	}
+	return nil
+}
+
+func (s *HnswSync) run(proc *process.Process) error {
+	var err error
+
+	// check contains and find the correspoding index id
+	maxcap, midx, err := s.checkContains(proc)
+	if err != nil {
+		return err
+	}
+
+	s.ninsert.Store(int32(len(s.cdc.Data)) - s.nupdate.Load() - s.ndelete.Load())
+
+	// setup s.last and s.current model. s.late will point to the last model in metadata and s.current is nil
+	err = s.setupModel(proc, maxcap)
+	if err != nil {
+		return err
+	}
+
 	logutil.Infof("hnsw_cdc_update: db=%s, table=%s, cdc: len=%d, ninsert = %d, ndelete = %d, nupdate = %d\n",
 		s.tblcfg.DbName, s.tblcfg.SrcTable,
 		len(s.cdc.Data), s.ninsert.Load(), s.ndelete.Load(), s.nupdate.Load())
 
 	if len(s.cdc.Data) == int(s.ninsert.Load()) {
 		// pure insert and insert into parallel
-
-		err = s.insertAll(proc, maxcap)
+		err = s.insertAllInParallel(proc, maxcap)
 		if err != nil {
 			return err
 		}
 
 	} else {
-		var last *HnswModel
-
-		for i, row := range s.cdc.Data {
-
-			switch row.Type {
-			case vectorindex.CDC_UPSERT:
-				if midx[i] == -1 {
-					// cannot find key from existing model. simple insert
-					last, err = s.getLastModel(proc, maxcap)
-					if err != nil {
-						return err
-					}
-					// insert
-					err = last.Add(row.PKey, row.Vec)
-					if err != nil {
-						return err
-					}
-
-					break
-
-				}
-				current, err := s.getCurrentModel(proc, midx[i])
-				if err != nil {
-					return err
-				}
-
-				// update
-				err = current.Remove(row.PKey)
-				if err != nil {
-					return err
-				}
-
-				err = current.Add(row.PKey, row.Vec)
-				if err != nil {
-					return err
-				}
-
-			case vectorindex.CDC_DELETE:
-				if midx[i] == -1 {
-					// cannot find key from existing models. ignore it
-					//os.Stderr.WriteString("DELETE NOT FOUND\n")
-					continue
-				}
-
-				current, err := s.getCurrentModel(proc, midx[i])
-				if err != nil {
-					return err
-				}
-
-				// delete
-				err = current.Remove(row.PKey)
-				if err != nil {
-					return err
-				}
-
-			case vectorindex.CDC_INSERT:
-				last, err = s.getLastModel(proc, maxcap)
-				if err != nil {
-					return err
-				}
-
-				// insert
-				err = last.Add(row.PKey, row.Vec)
-				if err != nil {
-					return err
-				}
-			}
-
+		// perform sequential update in single thread
+		err = s.sequentialUpdate(proc, maxcap, midx)
+		if err != nil {
+			return err
 		}
 	}
 
