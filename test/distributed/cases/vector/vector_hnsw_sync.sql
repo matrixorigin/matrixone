@@ -5,50 +5,50 @@ drop database if exists hnsw_cdc;
 create database if not exists hnsw_cdc;
 use hnsw_cdc;
 
-create table vector_index_01(a bigint primary key, b vecf32(3),c int,key c_k(c));
+create table t1(a bigint primary key, b vecf32(3),c int,key c_k(c));
 
 -- empty data
-create index idx01 using hnsw on vector_index_01(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
-drop pitr if exists `__mo_table_pitr_hnsw`;
-create pitr `__mo_table_pitr_hnsw` for table hnsw_cdc vector_index_01 range 2 'h';
-create cdc `__mo_cdc_hnsw_idx01` 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.vector_index_01' {'Level'='table'};
+create index idx01 using hnsw on t1(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
+drop pitr if exists `__mo_table_pitr_t1`;
+create pitr `__mo_table_pitr_t1` for table hnsw_cdc t1 range 2 'h';
+create cdc `__mo_cdc_t1_idx01` 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t1' {'Level'='table'};
 
 -- show cdc all;
 -- select sleep(30);
 
-insert into vector_index_01 values (0, "[1,2,3]", 1);
--- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"U", "pk":0, "v":[1,2,3]}]}');
+insert into t1 values (0, "[1,2,3]", 1);
+-- select hnsw_cdc_update('hnsw_cdc', 't1', 3, '{"start":"", "end":"", "cdc":[{"t":"U", "pk":0, "v":[1,2,3]}]}');
 
-UPDATE vector_index_01 set b = '[4,5,6]' where a = 0;
--- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"U", "pk":0, "v":[4,5,6]}]}');
+UPDATE t1 set b = '[4,5,6]' where a = 0;
+-- select hnsw_cdc_update('hnsw_cdc', 't1', 3, '{"start":"", "end":"", "cdc":[{"t":"U", "pk":0, "v":[4,5,6]}]}');
 
-insert into vector_index_01 values (1, "[2,3,4]", 1);
--- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"I", "pk":1, "v":[2,3,4]}]}');
+insert into t1 values (1, "[2,3,4]", 1);
+-- select hnsw_cdc_update('hnsw_cdc', 't1', 3, '{"start":"", "end":"", "cdc":[{"t":"I", "pk":1, "v":[2,3,4]}]}');
 
-DELETE FROM vector_index_01 WHERE a=1;
--- select hnsw_cdc_update('hnsw_cdc', 'vector_index_01', 3, '{"start":"", "end":"", "cdc":[{"t":"D", "pk":0}]}');
+DELETE FROM t1 WHERE a=1;
+-- select hnsw_cdc_update('hnsw_cdc', 't1', 3, '{"start":"", "end":"", "cdc":[{"t":"D", "pk":0}]}');
 
 select sleep(30);
 
 -- test with multi-cn is tricky.  since model is cached in memory, model may not be updated after CDC sync'd.  The only way to test is to all INSERT/DELETE/UPDATE before SELECT.
 -- already update to [4,5,6], result is [4,5,6]
-select * from vector_index_01 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
+select * from t1 order by  L2_DISTANCE(b,"[1,2,3]") ASC LIMIT 10;
 
 -- should return a=0
-select * from vector_index_01 order by  L2_DISTANCE(b,"[4,5,6]") ASC LIMIT 10;
+select * from t1 order by  L2_DISTANCE(b,"[4,5,6]") ASC LIMIT 10;
 
 -- a=1 deleted. result is [4,5,6]
-select * from vector_index_01 order by  L2_DISTANCE(b,"[2,3,4]") ASC LIMIT 10;
+select * from t1 order by  L2_DISTANCE(b,"[2,3,4]") ASC LIMIT 10;
 
-drop cdc task `__mo_cdc_hnsw_idx01`;
-drop pitr if exists `__mo_table_pitr_hnsw`;
-drop table vector_index_01;
+drop cdc task `__mo_cdc_t1_idx01`;
+drop pitr if exists `__mo_table_pitr_t1`;
+drop table t1;
 
 -- t2
 create table t2(a bigint primary key, b vecf32(128));
 create index idx2 using hnsw on t2(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
-drop pitr if exists `__mo_table_pitr_hnsw_cdc_t2`;
-create pitr `__mo_table_pitr_hnsw` for table hnsw_cdc t2 range 2 'h';
+drop pitr if exists `__mo_table_pitr_t2`;
+create pitr `__mo_table_pitr_t2` for table hnsw_cdc t2 range 2 'h';
 create cdc `__mo_cdc_hnsw_cdc_t2_idx2` 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t2' {'Level'='table'};
 -- select sleep(30);
 
@@ -69,7 +69,7 @@ select * from t2 order by L2_DISTANCE(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78,
 
 
 drop cdc task `__mo_cdc_hnsw_cdc_t2_idx2`;
-drop pitr if exists `__mo_table_pitr_hnsw_cdc_t2`;
+drop pitr if exists `__mo_table_pitr_t2`;
 drop table t2;
 
 -- end t2
@@ -111,3 +111,4 @@ drop table t3;
 -- end t3
 
 drop database hnsw_cdc;
+
