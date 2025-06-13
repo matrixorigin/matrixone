@@ -16,7 +16,6 @@ package gc
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type GCJob = CheckpointBasedGCJob
+type GCJob = BaseCheckpointGCJob
 
 type FilterFn func(context.Context, *bitmap.Bitmap, *batch.Batch, *mpool.MPool) error
 type SourerFn func(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error)

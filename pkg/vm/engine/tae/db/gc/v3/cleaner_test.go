@@ -172,7 +172,7 @@ func TestForMockCoverage(t *testing.T) {
 	var cleaner MockCleaner
 	ctx := context.Background()
 	require.NoError(t, cleaner.Replay(ctx))
-	require.NoError(t, cleaner.Process(ctx))
+	require.NoError(t, cleaner.Process(ctx, JT_GCExecute, nil))
 	require.NoError(t, cleaner.TryGC(ctx))
 	cleaner.AddChecker(nil, "")
 	require.Nil(t, cleaner.GetChecker(""))
@@ -181,7 +181,7 @@ func TestForMockCoverage(t *testing.T) {
 	require.Nil(t, cleaner.GetCheckpointGCWaterMark())
 	require.Nil(t, cleaner.GetScannedWindow())
 	require.Nil(t, cleaner.GetMinMerged())
-	require.Nil(t, cleaner.DoCheck(ctx))
+	require.Nil(t, cleaner.DoCheck(true))
 	v1, v2 := cleaner.GetPITRs()
 	require.Nil(t, v1)
 	require.Nil(t, v2)
