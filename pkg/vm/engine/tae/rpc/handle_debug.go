@@ -562,9 +562,26 @@ func (h *Handle) HandleDiskCleaner(
 	op := req.Op
 	key := req.Key
 	value := req.Value
-	if op == cmd_util.RemoveChecker {
+	switch op {
+	case cmd_util.RemoveChecker:
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
+	case cmd_util.StopGC:
+		h.db.CronJobs.RemoveJob(db.CronJobs_Name_GCDisk)
+		return
+	case cmd_util.StartGC:
+		err = h.db.CronJobs.AddJob(
+			db.CronJobs_Name_GCDisk,
+			h.db.Opts.GCCfg.ScanGCInterval,
+			func(ctx context.Context) {
+				h.db.DiskCleaner.GC(ctx)
+			},
+			1,
+		)
+		return
+	case cmd_util.AddChecker:
+		break
 	}
+
 	switch key {
 	case cmd_util.CheckerKeyTTL:
 		// Set a ttl, checkpoints whose endTS is less than this ttl can be consumed
@@ -613,19 +630,6 @@ func (h *Handle) HandleDiskCleaner(
 				end := ckp.GetEnd()
 				return !end.GE(&ts)
 			}, cmd_util.CheckerKeyMinTS)
-		return
-	case cmd_util.StopGC:
-		h.db.CronJobs.RemoveJob(db.CronJobs_Name_GCDisk)
-		return
-	case cmd_util.StartGC:
-		err = h.db.CronJobs.AddJob(
-			db.CronJobs_Name_GCDisk,
-			h.db.Opts.GCCfg.ScanGCInterval,
-			func(ctx context.Context) {
-				h.db.DiskCleaner.GC(ctx)
-			},
-			1,
-		)
 		return
 	default:
 		return nil, moerr.NewInvalidArgNoCtx(key, value)
