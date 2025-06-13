@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -1015,6 +1016,9 @@ func (c *storageCkpArg) PrepareCommand() *cobra.Command {
 	list := storageCkpListArg{}
 	storageCkpCmd.AddCommand(list.PrepareCommand())
 
+	stat := storageCkpStatArg{}
+	storageCkpCmd.AddCommand(stat.PrepareCommand())
+
 	return storageCkpCmd
 }
 
@@ -1028,7 +1032,8 @@ func (c *storageCkpArg) String() string {
 
 func (c *storageCkpArg) Usage() (res string) {
 	res += "Available Commands:\n"
-	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
+	res += fmt.Sprintf("  %-5v display checkpoint or table information from storage\n", "list")
+	res += fmt.Sprintf("  %-5v display stat of a given checkpoint from storage\n", "stat")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -1048,6 +1053,7 @@ type storageCkpBaseArg struct {
 	ctx         *inspectContext
 	fromS3      bool
 	dir, name   string
+	tid         int
 	res         string
 	fs          fileservice.FileService
 	readEntries func(
@@ -1071,8 +1077,9 @@ func (c *storageCkpBaseArg) FromCommand(cmd *cobra.Command) (err error) {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
 	c.fromS3, _ = cmd.Flags().GetBool("s3")
-	path, _ := cmd.Flags().GetString("name")
-	c.dir, c.name = filepath.Split(path)
+	c.dir, _ = cmd.Flags().GetString("dir")
+	c.name, _ = cmd.Flags().GetString("name")
+	c.tid, _ = cmd.Flags().GetInt("tid")
 	// TODO: from s3 dir
 	return nil
 }
@@ -1096,7 +1103,7 @@ func (c *storageCkpBaseArg) getEntriesFromMeta(
 	entries, err = readEntries(
 		ctx,
 		"",
-		"",
+		ioutil.GetCheckpointDir(),
 		c.name,
 		0,
 		nil,
@@ -1121,7 +1128,9 @@ func (c *storageCkpStatArg) PrepareCommand() *cobra.Command {
 	statCmd.SetUsageTemplate(c.Usage())
 
 	statCmd.Flags().StringP("name", "n", "", "name")
+	statCmd.Flags().StringP("dir", "d", "", "dir")
 	statCmd.Flags().BoolP("s3", "", false, "from s3")
+	statCmd.Flags().IntP("tid", "t", invalidId, "table id")
 
 	return statCmd
 }
@@ -1139,6 +1148,8 @@ func (c *storageCkpStatArg) Usage() (res string) {
 	res += "    The name of checkpoint\n"
 	res += "  -s, --s3=false:\n"
 	res += "    From s3\n"
+	res += "  -t, --tid=invalidId:\n"
+	res += "    The id of table\n"
 
 	return
 }
@@ -1150,22 +1161,88 @@ func (c *storageCkpStatArg) Run() (err error) {
 	return c.runOnline()
 }
 
-func (c *storageCkpStatArg) runOffline() (err error) {
-	// if err = c.initOfflineFS(context.Background()); err != nil {
-	// 	return
-	// }
-	// var entries []*checkpoint.CheckpointEntry
-	// if ioutil.IsMetadataName(c.name) {
-	// 	if entries, err = c.getEntriesFromMeta(context.Background()); err != nil {
-	// 		return
-	// 	}
-	// } else {
-	// 	// handle checkpoint data file
-	// 	// TODO
-	// 	return moerr.NewInternalErrorNoCtx("not implemented")
-	// }
+type CkpTableRange struct {
+	Entry  *checkpoint.CheckpointEntry
+	Ranges []ckputil.TableRange
+}
 
-	return nil
+func (c *storageCkpStatArg) getTableRanges(
+	ctx context.Context,
+	entries []*checkpoint.CheckpointEntry,
+) (ranges []CkpTableRange, err error) {
+	ranges = make([]CkpTableRange, 0, len(entries))
+	for _, entry := range entries {
+		var tmpRanges []ckputil.TableRange
+		if tmpRanges, err = entry.GetTableRangesByID(
+			ctx,
+			uint64(c.tid),
+			common.CheckpointAllocator,
+			c.fs,
+		); err != nil {
+			return
+		}
+		ranges = append(ranges, CkpTableRange{
+			Entry:  entry,
+			Ranges: tmpRanges,
+		})
+	}
+	return
+}
+
+func (c *storageCkpStatArg) getAllTableRanges(
+	ctx context.Context,
+	entries []*checkpoint.CheckpointEntry,
+) (ranges []CkpTableRange, err error) {
+	ranges = make([]CkpTableRange, 0, len(entries))
+	for _, entry := range entries {
+		var tmpRanges []ckputil.TableRange
+		if tmpRanges, err = entry.GetTableRanges(
+			ctx,
+			common.CheckpointAllocator, c.fs,
+		); err != nil {
+			return
+		}
+		ranges = append(ranges, CkpTableRange{
+			Entry:  entry,
+			Ranges: tmpRanges,
+		})
+	}
+	return
+}
+
+func (c *storageCkpStatArg) runOffline() (err error) {
+	if err = c.initOfflineFS(context.Background()); err != nil {
+		return
+	}
+	var entries []*checkpoint.CheckpointEntry
+	if ioutil.IsMetadataName(c.name) {
+		if entries, err = c.getEntriesFromMeta(context.Background()); err != nil {
+			return
+		}
+	} else {
+		// handle checkpoint data file
+		// TODO
+		return moerr.NewInternalErrorNoCtx("not implemented")
+	}
+
+	var ranges []CkpTableRange
+	if c.tid == invalidId {
+		if ranges, err = c.getAllTableRanges(context.Background(), entries); err != nil {
+			return
+		}
+	} else {
+		if ranges, err = c.getTableRanges(context.Background(), entries); err != nil {
+			return
+		}
+	}
+	// output ranges as json
+	jsonData, err := PrettyJson.MarshalIndent(ranges, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
+
+	return
 }
 
 func (c *storageCkpStatArg) runOnline() (err error) {
@@ -1188,6 +1265,7 @@ func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
 
 	listCmd.Flags().StringP("name", "n", "", "name")
 	listCmd.Flags().BoolP("s3", "", false, "from s3")
+	listCmd.Flags().StringP("dir", "d", "", "dir")
 
 	return listCmd
 }

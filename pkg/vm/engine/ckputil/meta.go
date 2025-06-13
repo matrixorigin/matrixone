@@ -17,6 +17,7 @@ package ckputil
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -63,6 +64,16 @@ type TableRange struct {
 	Start       types.Rowid
 	End         types.Rowid
 	ObjectStats objectio.ObjectStats
+}
+
+func (r *TableRange) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"table_id":     r.TableID,
+		"object_type":  r.ObjectType,
+		"start":        fmt.Sprintf("%d-%d", r.Start.GetBlockOffset(), r.Start.GetRowOffset()),
+		"end":          fmt.Sprintf("%d-%d", r.End.GetBlockOffset(), r.End.GetRowOffset()),
+		"object_stats": r.ObjectStats.String(),
+	})
 }
 
 func (r *TableRange) String() string {

@@ -251,6 +251,16 @@ func NewCKPReaderWithTableID_V2(
 	}
 }
 
+// must called after ReadMeta
+func (reader *CKPReader) GetTableRanges(
+	_ context.Context,
+) (ranges []ckputil.TableRange, err error) {
+	ranges = make([]ckputil.TableRange, 0, len(reader.dataRanges)+len(reader.tombstoneRanges))
+	ranges = append(ranges, reader.dataRanges...)
+	ranges = append(ranges, reader.tombstoneRanges...)
+	return
+}
+
 func (reader *CKPReader) ReadMeta(
 	ctx context.Context,
 ) (err error) {
