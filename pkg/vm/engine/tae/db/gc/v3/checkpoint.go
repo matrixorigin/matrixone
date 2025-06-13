@@ -904,9 +904,19 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
+		logutil.Info(
+			"GC-TRACE-GLOBAL-CHECKPOINT-FILE",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("gckp", ckp.String()),
+		)
 		if end.LT(&newWaterMark) {
 			nameMeta := ioutil.EncodeCKPMetadataFullName(
 				ckp.GetStart(), ckp.GetEnd(),
+			)
+			logutil.Info(
+				"GC-TRACE-DELETE-GLOBAL-CHECKPOINT-FILE",
+				zap.String("task", c.TaskNameLocked()),
+				zap.String("gckp", nameMeta),
 			)
 			deleteFiles = append(deleteFiles, nameMeta)
 		}
