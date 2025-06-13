@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -199,6 +200,66 @@ func Test_CkpEntries(t *testing.T) {
 	jsonStr, err := entries.ToJson()
 	require.NoError(t, err)
 	t.Logf("entries: %s", jsonStr)
+}
+
+func Test_storageCkpStatArg(t *testing.T) {
+	cmd := new(cobra.Command)
+	arg := new(storageCkpStatArg)
+	err := arg.FromCommand(cmd)
+	require.NoError(t, err)
+	arg.dir = "ckp/"
+	arg.name = "xxx"
+	err = arg.Run()
+	t.Logf("err: %v", err)
+	require.Error(t, err)
+
+	arg.name = "meta_0-0_1749279217089645000-1.ckp"
+	err = arg.Run()
+	t.Logf("err: %v", err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+
+	arg.name = "meta_0-0_1749279217089645000-1.ckp"
+	err = arg.Run()
+	t.Logf("err: %v", err)
+	require.Error(t, err)
+
+	entries := make([]*checkpoint.CheckpointEntry, 0)
+	entries = append(entries, new(checkpoint.CheckpointEntry))
+	entries = append(entries, new(checkpoint.CheckpointEntry))
+	arg.readEntries = func(
+		ctx context.Context,
+		sid string,
+		dir string,
+		name string,
+		verbose int,
+		onEachEntry func(entry *checkpoint.CheckpointEntry),
+		mp *mpool.MPool,
+		fs fileservice.FileService,
+	) ([]*checkpoint.CheckpointEntry, error) {
+		return entries, nil
+	}
+	tableID := uint64(100000)
+	arg.getRanges = func(
+		entry *checkpoint.CheckpointEntry,
+	) ([]ckputil.TableRange, error) {
+		var ranges []ckputil.TableRange
+		ranges = append(ranges, ckputil.TableRange{
+			TableID: tableID,
+		})
+		tableID++
+		return ranges, nil
+	}
+	err = arg.Run()
+	t.Logf("err: %v", err)
+	t.Logf("resp.msg: %s", arg.String())
+	require.NoError(t, err)
+
+	arg.tid = 100000
+	err = arg.Run()
+	t.Logf("err: %v", err)
+	t.Logf("resp.msg: %s", arg.String())
+	require.NoError(t, err)
 }
 
 func Test_storageCkpListArg(t *testing.T) {

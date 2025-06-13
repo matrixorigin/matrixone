@@ -1066,6 +1066,9 @@ type storageCkpBaseArg struct {
 		mp *mpool.MPool,
 		fs fileservice.FileService,
 	) (entries []*checkpoint.CheckpointEntry, err error)
+	getRanges func(
+		entry *checkpoint.CheckpointEntry,
+	) ([]ckputil.TableRange, error)
 }
 
 func (c *storageCkpBaseArg) String() string {
@@ -1171,14 +1174,22 @@ func (c *storageCkpStatArg) getTableRanges(
 	entries []*checkpoint.CheckpointEntry,
 ) (ranges []CkpTableRange, err error) {
 	ranges = make([]CkpTableRange, 0, len(entries))
+	getRanges := c.getRanges
+	if getRanges == nil {
+		getRanges = func(
+			entry *checkpoint.CheckpointEntry,
+		) ([]ckputil.TableRange, error) {
+			return entry.GetTableRangesByID(
+				ctx,
+				uint64(c.tid),
+				common.CheckpointAllocator,
+				c.fs,
+			)
+		}
+	}
 	for _, entry := range entries {
 		var tmpRanges []ckputil.TableRange
-		if tmpRanges, err = entry.GetTableRangesByID(
-			ctx,
-			uint64(c.tid),
-			common.CheckpointAllocator,
-			c.fs,
-		); err != nil {
+		if tmpRanges, err = getRanges(entry); err != nil {
 			return
 		}
 		ranges = append(ranges, CkpTableRange{
@@ -1193,13 +1204,18 @@ func (c *storageCkpStatArg) getAllTableRanges(
 	ctx context.Context,
 	entries []*checkpoint.CheckpointEntry,
 ) (ranges []CkpTableRange, err error) {
+	getRanges := c.getRanges
+	if getRanges == nil {
+		getRanges = func(
+			entry *checkpoint.CheckpointEntry,
+		) ([]ckputil.TableRange, error) {
+			return entry.GetTableRanges(ctx, common.CheckpointAllocator, c.fs)
+		}
+	}
 	ranges = make([]CkpTableRange, 0, len(entries))
 	for _, entry := range entries {
 		var tmpRanges []ckputil.TableRange
-		if tmpRanges, err = entry.GetTableRanges(
-			ctx,
-			common.CheckpointAllocator, c.fs,
-		); err != nil {
+		if tmpRanges, err = getRanges(entry); err != nil {
 			return
 		}
 		ranges = append(ranges, CkpTableRange{
