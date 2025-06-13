@@ -158,7 +158,7 @@ func MakeTableRangeBatch() *batch.Batch {
 
 // data should be sorted by table id and object type
 // the schema of the table entry
-func ExportToTableRanges(
+func ExportToTableRangesByFilter(
 	data *batch.Batch,
 	tableId uint64,
 	objectType int8,
@@ -183,6 +183,25 @@ func ExportToTableRanges(
 		}
 		ranges = append(ranges, TableRange{
 			TableID:     tableId,
+			ObjectType:  objectTypes[i],
+			Start:       startRows[i],
+			End:         endRows[i],
+			ObjectStats: objectio.ObjectStats(data.Vecs[4].GetBytesAt(i)),
+		})
+	}
+	return
+}
+
+func ExportToTableRanges(
+	data *batch.Batch,
+) (ranges []TableRange) {
+	tableIds := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
+	objectTypes := vector.MustFixedColNoTypeCheck[int8](data.Vecs[1])
+	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
+	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[3])
+	for i, rows := 0, data.RowCount(); i < rows; i++ {
+		ranges = append(ranges, TableRange{
+			TableID:     tableIds[i],
 			ObjectType:  objectTypes[i],
 			Start:       startRows[i],
 			End:         endRows[i],
