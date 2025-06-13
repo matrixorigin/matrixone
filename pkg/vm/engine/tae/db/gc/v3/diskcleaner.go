@@ -349,7 +349,7 @@ func (cleaner *DiskCleaner) Start() {
 		step := cleaner.step.Load()
 		switch step {
 		case StateStep_Write:
-			if err := cleaner.forceScheduleJob(JT_GCReplay); err != nil {
+			if err := cleaner.forceScheduleJob(JT_GCReplayAndExecute); err != nil {
 				panic(err)
 			}
 		case StateStep_Replay:
