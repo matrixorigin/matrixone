@@ -26,14 +26,12 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -1046,7 +1044,7 @@ func (c *storageCkpArg) Run() error {
 	return nil
 }
 
-type storageCkpListArg struct {
+type storageCkpBaseArg struct {
 	ctx         *inspectContext
 	fromS3      bool
 	dir, name   string
@@ -1064,28 +1062,76 @@ type storageCkpListArg struct {
 	) (entries []*checkpoint.CheckpointEntry, err error)
 }
 
-func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
-	ckpStatCmd := &cobra.Command{
-		Use:   "list",
-		Short: "checkpoint list",
-		Long:  "Display all checkpoints from storage",
+func (c *storageCkpBaseArg) String() string {
+	return c.res
+}
+
+func (c *storageCkpBaseArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	c.fromS3, _ = cmd.Flags().GetBool("s3")
+	path, _ := cmd.Flags().GetString("name")
+	c.dir, c.name = filepath.Split(path)
+	// TODO: from s3 dir
+	return nil
+}
+
+func (c *storageCkpBaseArg) initOfflineFS(
+	ctx context.Context,
+) (err error) {
+	c.fs, err = objectio.NewOfflineFS(
+		ctx, c.dir, c.fromS3,
+	)
+	return
+}
+
+func (c *storageCkpBaseArg) getEntriesFromMeta(
+	ctx context.Context,
+) (entries []*checkpoint.CheckpointEntry, err error) {
+	readEntries := c.readEntries
+	if readEntries == nil {
+		readEntries = checkpoint.ReadEntriesFromMeta
+	}
+	entries, err = readEntries(
+		ctx,
+		"",
+		"",
+		c.name,
+		0,
+		nil,
+		common.CheckpointAllocator,
+		c.fs,
+	)
+	return
+}
+
+type storageCkpStatArg struct {
+	storageCkpBaseArg
+}
+
+func (c *storageCkpStatArg) PrepareCommand() *cobra.Command {
+	statCmd := &cobra.Command{
+		Use:   "stat",
+		Short: "checkpoint stat",
+		Long:  "Display stat of a given checkpoint from storage",
 		Run:   RunFactory(c),
 	}
 
-	ckpStatCmd.SetUsageTemplate(c.Usage())
+	statCmd.SetUsageTemplate(c.Usage())
 
-	ckpStatCmd.Flags().StringP("name", "n", "", "name")
-	ckpStatCmd.Flags().BoolP("s3", "", false, "from s3")
+	statCmd.Flags().StringP("name", "n", "", "name")
+	statCmd.Flags().BoolP("s3", "", false, "from s3")
 
-	return ckpStatCmd
+	return statCmd
 }
 
-func (c *storageCkpListArg) Usage() (res string) {
-	res += "Examples(Note: no need to specify dir if in the online mode):\n"
-	res += "  # Display all information for the given checkpoint meta from storage\n"
-	res += "  inspect storage-ckp list -n dir/meta_0-0_1749279217089645000-1.ckp\n"
-	res += "  # Display information for the given checkpoint data from storage\n"
-	res += "  inspect storage-ckp list -n dir/019749d5-8f7c-733c-8b4c-4dae7731ae5b_00000\n"
+func (c *storageCkpStatArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display stat of a given checkpoint from storage\n"
+	res += "  inspect storage-ckp stat -n dir/meta_0-0_1749279217089645000-1.ckp\n"
+	res += "  # Display stat of a given checkpoint from s3\n"
+	res += "  inspect storage-ckp stat -n dir/meta_0-0_1749279217089645000-1.ckp --s3\n"
 
 	res += "\n"
 	res += "Options:\n"
@@ -1097,19 +1143,70 @@ func (c *storageCkpListArg) Usage() (res string) {
 	return
 }
 
-func (c *storageCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
-	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+func (c *storageCkpStatArg) Run() (err error) {
+	if c.ctx == nil {
+		return c.runOffline()
 	}
-	c.fromS3, _ = cmd.Flags().GetBool("s3")
-	path, _ := cmd.Flags().GetString("name")
-	c.dir, c.name = filepath.Split(path)
-	// TODO: from s3 dir
+	return c.runOnline()
+}
+
+func (c *storageCkpStatArg) runOffline() (err error) {
+	// if err = c.initOfflineFS(context.Background()); err != nil {
+	// 	return
+	// }
+	// var entries []*checkpoint.CheckpointEntry
+	// if ioutil.IsMetadataName(c.name) {
+	// 	if entries, err = c.getEntriesFromMeta(context.Background()); err != nil {
+	// 		return
+	// 	}
+	// } else {
+	// 	// handle checkpoint data file
+	// 	// TODO
+	// 	return moerr.NewInternalErrorNoCtx("not implemented")
+	// }
+
 	return nil
 }
 
-func (c *storageCkpListArg) String() string {
-	return c.res
+func (c *storageCkpStatArg) runOnline() (err error) {
+	return moerr.NewInternalErrorNoCtx("not implemented")
+}
+
+type storageCkpListArg struct {
+	storageCkpBaseArg
+}
+
+func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "checkpoint list",
+		Long:  "Display all checkpoints from storage",
+		Run:   RunFactory(c),
+	}
+
+	listCmd.SetUsageTemplate(c.Usage())
+
+	listCmd.Flags().StringP("name", "n", "", "name")
+	listCmd.Flags().BoolP("s3", "", false, "from s3")
+
+	return listCmd
+}
+
+func (c *storageCkpListArg) Usage() (res string) {
+	res += "Examples(Note: no need to specify dir if in the online mode):\n"
+	res += "  # Display all information for the given checkpoint meta from storage\n"
+	res += "  inspect storage-ckp list -n dir/meta_0-0_1749279217089645000-1.ckp\n"
+	// res += "  # Display information for the given checkpoint data from storage\n"
+	// res += "  inspect storage-ckp list -n dir/019749d5-8f7c-733c-8b4c-4dae7731ae5b_00000\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -n, --name=invalidPath:\n"
+	res += "    The name of checkpoint\n"
+	res += "  -s, --s3=false:\n"
+	res += "    From s3\n"
+
+	return
 }
 
 func (c *storageCkpListArg) Run() (err error) {
@@ -1121,45 +1218,18 @@ func (c *storageCkpListArg) Run() (err error) {
 
 func (c *storageCkpListArg) runOffline() (err error) {
 	ctx := context.Background()
-	if c.fs, err = objectio.NewOfflineFS(
-		ctx, c.dir, c.fromS3,
-	); err != nil {
+	if err = c.initOfflineFS(ctx); err != nil {
 		return
 	}
-
 	var entries []*checkpoint.CheckpointEntry
-
-	// handle checkpoint meta file
 	if ioutil.IsMetadataName(c.name) {
-		readEntries := c.readEntries
-		if readEntries == nil {
-			readEntries = checkpoint.ReadEntriesFromMeta
-		}
-		if entries, err = readEntries(
-			ctx,
-			"",
-			"",
-			c.name,
-			0,
-			nil,
-			common.CheckpointAllocator,
-			c.fs,
-		); err != nil {
-			logutil.Error(
-				"Command-Storage-Ckp-List-Failed",
-				zap.String("dir", c.dir),
-				zap.String("name", c.name),
-				zap.Error(err),
-			)
+		if entries, err = c.getEntriesFromMeta(ctx); err != nil {
 			return
 		}
 	} else {
 		// handle checkpoint data file
 		// TODO
 		return moerr.NewInternalErrorNoCtx("not implemented")
-	}
-	if len(entries) == 0 {
-		return
 	}
 
 	ckpEntries := NewCkpEntries(len(entries))
