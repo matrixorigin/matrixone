@@ -1015,6 +1015,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 
 func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
 	if taskFrameworkDisabled() {
+		logutil.Infof("debug_21848, taskFrameworkDisabled")
 		return 0, nil
 	}
 
