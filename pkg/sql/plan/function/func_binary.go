@@ -722,6 +722,47 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 	return nil
 }
 
+func TSToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	from := vector.GenerateFunctionFixedTypeParameter[types.TS](ivecs[0])
+	scale := int32(6)
+	if len(ivecs) == 2 && !ivecs[1].IsConstNull() {
+		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	for i := 0; i < length; i++ {
+		tsVal, null := from.GetValue(uint64(i))
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		physical := tsVal.Physical()
+		seconds := int64(physical / 1e9)
+		nanos := int64(physical % 1e9)
+		t := time.Unix(seconds, nanos).UTC()
+		timeStr := t.Format("2006-01-02 15:04:05.999999")
+
+		zone := time.Local
+		if proc != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		val, err := types.ParseTimestamp(zone, timeStr, scale)
+		if err != nil {
+			return err
+		}
+
+		if err = rs.Append(val, false); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+}
+
 func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	fromTzs := vector.GenerateFunctionStrParameter(ivecs[1])

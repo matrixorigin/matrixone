@@ -158,7 +158,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
 			}
 
-			idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
 			if len(idxTableDef.Name2ColIndex) == 0 {
 				idxTableDef.Name2ColIndex = make(map[string]int32)
 				for colIdx, col := range idxTableDef.Cols {

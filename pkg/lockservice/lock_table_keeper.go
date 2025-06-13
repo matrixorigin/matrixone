@@ -181,6 +181,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	req := acquireRequest()
 	defer releaseRequest(req)
 
+	oldVersion := k.groupTables.getVersion()
 	req.Method = pb.Method_KeepLockTableBind
 	req.KeepLockTableBind.ServiceID = k.serviceID
 	req.KeepLockTableBind.Status = k.service.getStatus()
@@ -224,14 +225,18 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	}
 
 	n := 0
-	k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
-		bind := v.getBind()
-		if bind.ServiceID == k.serviceID {
-			return true
-		}
-		n++
-		return false
-	})
+	newVersion := k.groupTables.getVersion()
+	if oldVersion == newVersion {
+		k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
+			bind := v.getBind()
+			if bind.ServiceID == k.serviceID {
+				n++
+				return true
+			}
+			return false
+		})
+	}
+
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local
 		// lock table are invalid. We just need to remove it from the map, and the next
