@@ -26,7 +26,7 @@ import (
 
 func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner, error) {
 	parameters := strings.Split(parameter, ".")
-	if len(parameters) > 3 || len(parameters) < 2 {
+	if len(parameters) > 3 || len(parameters) < 1 {
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid argument!")
 	}
 	op := parameters[0]
