@@ -445,11 +445,17 @@ func (s *HnswSync) sequentialUpdate(proc *process.Process, maxcap uint, midx []i
 func (s *HnswSync) run(proc *process.Process) error {
 	var err error
 
+	start := time.Now()
+
 	// check contains and find the correspoding index id
 	maxcap, midx, err := s.checkContains(proc)
 	if err != nil {
 		return err
 	}
+
+	t := time.Now()
+
+	checkidxElapsed := t.Sub(start)
 
 	s.ninsert.Store(int32(len(s.cdc.Data)) - s.nupdate.Load() - s.ndelete.Load())
 
@@ -478,6 +484,9 @@ func (s *HnswSync) run(proc *process.Process) error {
 		}
 	}
 
+	t2 := time.Now()
+	updateElapsed := t2.Sub(t)
+
 	// save to files and then save to database
 	sqls, err := s.ToSql(s.ts)
 	if err != nil {
@@ -488,7 +497,17 @@ func (s *HnswSync) run(proc *process.Process) error {
 		return nil
 	}
 
-	return s.runSqls(proc, sqls)
+	err = s.runSqls(proc, sqls)
+	if err != nil {
+		return err
+	}
+
+	t3 := time.Now()
+	saveElapsed := t3.Sub(t2)
+
+	logutil.Debugf("hnsw_cdc_update: time elapsed: checkidx %d ms, update %d ms, save %d ms",
+		checkidxElapsed.Milliseconds(), updateElapsed.Milliseconds(), saveElapsed.Milliseconds())
+	return nil
 }
 
 func (s *HnswSync) runSqls(proc *process.Process, sqls []string) error {
