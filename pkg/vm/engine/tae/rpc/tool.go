@@ -1141,12 +1141,14 @@ func (c *storageCkpStatArg) PrepareCommand() *cobra.Command {
 func (c *storageCkpStatArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display stat of a given checkpoint from storage\n"
-	res += "  inspect storage-ckp stat -n dir/meta_0-0_1749279217089645000-1.ckp\n"
+	res += "  inspect storage-ckp stat -n meta_0-0_1749279217089645000-1.ckp -dir mo-data/shared\n"
 	res += "  # Display stat of a given checkpoint from s3\n"
-	res += "  inspect storage-ckp stat -n dir/meta_0-0_1749279217089645000-1.ckp --s3\n"
+	res += "  inspect storage-ckp stat -n meta_0-0_1749279217089645000-1.ckp -d mo-data/shared --s3\n"
 
 	res += "\n"
 	res += "Options:\n"
+	res += "  -d, --dir=invalidPath:\n"
+	res += "    The dir checkpoint, which does not contain 'ckp/'\n"
 	res += "  -n, --name=invalidPath:\n"
 	res += "    The name of checkpoint\n"
 	res += "  -s, --s3=false:\n"
@@ -1289,7 +1291,7 @@ func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
 func (c *storageCkpListArg) Usage() (res string) {
 	res += "Examples(Note: no need to specify dir if in the online mode):\n"
 	res += "  # Display all information for the given checkpoint meta from storage\n"
-	res += "  inspect storage-ckp list -n dir/meta_0-0_1749279217089645000-1.ckp\n"
+	res += "  inspect storage-ckp list -n meta_0-0_1749279217089645000-1.ckp --dir mo-data/shared\n"
 	// res += "  # Display information for the given checkpoint data from storage\n"
 	// res += "  inspect storage-ckp list -n dir/019749d5-8f7c-733c-8b4c-4dae7731ae5b_00000\n"
 
@@ -1297,6 +1299,8 @@ func (c *storageCkpListArg) Usage() (res string) {
 	res += "Options:\n"
 	res += "  -n, --name=invalidPath:\n"
 	res += "    The name of checkpoint\n"
+	res += "  -d, --dir=invalidPath:\n"
+	res += "    The dir checkpoint, which does not contain 'ckp/'\n"
 	res += "  -s, --s3=false:\n"
 	res += "    From s3\n"
 
