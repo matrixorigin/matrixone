@@ -132,3 +132,7 @@ priority_rules:
     conditions:
       - queue-name=release-2.0
     priority: 2250
+  - name: priority for queue `release-2.2`
+    conditions:
+      - queue-name=release-2.2
+    priority: 2250
