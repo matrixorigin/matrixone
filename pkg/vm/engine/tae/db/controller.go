@@ -447,11 +447,13 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		// Rollback
 		return
 	}
-	if err = AddCronJob(
-		c.db, CronJobs_Name_GCDisk, true,
-	); err != nil {
-		// Rollback
-		return
+	if !c.db.Opts.GCCfg.DisableGC {
+		if err = AddCronJob(
+			c.db, CronJobs_Name_GCDisk, true,
+		); err != nil {
+			// Rollback
+			return
+		}
 	}
 	if err = AddCronJob(
 		c.db, CronJobs_Name_GCCheckpoint, true,

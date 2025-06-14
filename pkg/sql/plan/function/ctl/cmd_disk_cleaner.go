@@ -26,21 +26,23 @@ import (
 
 func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner, error) {
 	parameters := strings.Split(parameter, ".")
-	if len(parameters) > 3 || len(parameters) < 2 {
+	if len(parameters) > 3 || len(parameters) < 1 {
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid argument!")
 	}
 	op := parameters[0]
 	switch op {
-	case cmd_util.AddChecker:
-	case cmd_util.RemoveChecker:
+	case cmd_util.AddChecker, cmd_util.RemoveChecker:
 		break
+	case cmd_util.StopGC, cmd_util.StartGC:
+		return &cmd_util.DiskCleaner{
+			Op: op,
+		}, nil
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid operation!")
 	}
 	key := parameters[1]
 	switch key {
-	case cmd_util.CheckerKeyTTL:
-	case cmd_util.CheckerKeyMinTS:
+	case cmd_util.CheckerKeyTTL, cmd_util.CheckerKeyMinTS:
 		break
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid key!")
