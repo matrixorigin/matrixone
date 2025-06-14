@@ -78,5 +78,4 @@ mo_ctl('dn','DiskCleaner','stop_gc')
 select mo_ctl('dn','DiskCleaner','start_gc');
 mo_ctl(dn, DiskCleaner, start_gc)
 {\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-
 drop database if exists db1;
