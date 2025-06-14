@@ -2108,6 +2108,13 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	// TODO: HNSWCDC delete cdc task for vector, fulltext index
+	// cdc task name = __mo_cdc_{qry.Database}_{qry.Table}_{qry.IndexName}
+	// pitr name = __mo_table_pitr_{qry.Database}_{qry.Table}
+	// DROP PITR IF EXISTS `__mo_table_pitr_${qry.Database}_${srctable}`
+	// DROP CDC TASK __mo_cdc_${qry.Database}_${srctable}_${qry.IndexName}
+
 	return nil
 }
 
@@ -2667,6 +2674,8 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 		}
 	}
+
+	// TODO: HSNWCDC delete cdc task of the vector and fulltext index here
 
 	if isTemp {
 		if err := dbSource.Delete(c.proc.Ctx, engine.GetTempTableName(dbName, tblName)); err != nil {
