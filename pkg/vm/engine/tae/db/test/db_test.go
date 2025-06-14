@@ -12214,7 +12214,7 @@ func Test_TmpFileService2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, neesGC)
 }
-=======
+
 func TestTNCatalogEventSource(t *testing.T) {
 	ctx := context.Background()
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
@@ -12242,5 +12242,5 @@ func TestTNCatalogEventSource(t *testing.T) {
 	bat, free := source.GetMergeSettingsBatchFn()()
 	defer free()
 	require.NotNil(t, bat)
->>>>>>> main
+
 }
