@@ -141,7 +141,7 @@ show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
 sys_pub_1    sys    null    null    null    null    sub1    2024-08-09 16:06:32    1
 select * from sub1.sys_tbl_1;
-SQL parser error: table "sys_tbl_1" does not exist
+internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1
 use sub1;
 internal error: the account acc0 is not allowed to subscribe the publication sys_pub_1
 show subscriptions;
@@ -239,7 +239,7 @@ insert into acc2_tbl_1(q) values ('mo');
 create database sub2 from acc2 publication acc2_pub_1;
 internal error: the account acc1 is not allowed to subscribe the publication acc2_pub_1
 select * from sub2.acc2_tbl_1;
-SQL parser error: table "acc2_tbl_1" does not exist
+internal error: the account acc0 is not allowed to subscribe the publication acc2_pub_1
 use sub2;
 internal error: the account acc0 is not allowed to subscribe the publication acc2_pub_1
 show tables;

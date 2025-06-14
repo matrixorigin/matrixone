@@ -580,7 +580,7 @@ show tables;
 Tables_in_sub_db1
 t1
 SELECT NEXTVAL('seq_id');
-SQL parser error: table "seq_id" does not exist
+no such table sub_db1.seq_id
 drop publication pubname7;
 drop database db7;
 drop database sub_db1;

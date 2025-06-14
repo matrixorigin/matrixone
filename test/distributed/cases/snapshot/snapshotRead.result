@@ -607,7 +607,7 @@ drop snapshot if exists sp06;
 create snapshot sp06 for account;
 select count(*) from mo_catalog.mo_tables{snapshot = sp06} where reldatabase = 'mo_catalog';
 count(*)
-49
+50
 select * from mo_catalog.mo_database{snapshot = sp06} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
 1    mo_catalog    mo_catalog        0    0    2024-12-30 10:46:53    0
@@ -1207,9 +1207,9 @@ SQL parser error: table "t2" does not exist
 select * from t3{snapshot = 'sp10'};
 SQL parser error: table "t3" does not exist
 select distinct(object_name) from metadata_scan('test07.t3','a')m;
-SQL parser error: table "t3" does not exist
+no such table test07.t3
 select distinct(object_name) from metadata_scan('test07.t2','a')m;
-SQL parser error: table "t2" does not exist
+no such table test07.t2
 select distinct(object_name) from metadata_scan('test07.t1','a')m;
 object_name
 drop table t1;

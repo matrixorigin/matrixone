@@ -18,9 +18,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +57,7 @@ func TestGetColumMetadataScanInfoIsLocalErr(t *testing.T) {
 	runIsLocalErrTests(
 		t,
 		func(tbl *txnTableDelegate) {
-			_, err := tbl.GetColumMetadataScanInfo(context.Background(), "")
+			_, err := tbl.GetColumMetadataScanInfo(context.Background(), "", false)
 			require.Error(t, err)
 		},
 	)

@@ -40,12 +40,25 @@ func TestDiskCache(t *testing.T) {
 
 	// counter
 	numWritten := 0
+	numEvict := 0
 	ctx = OnDiskCacheWritten(ctx, func(path string, entry IOEntry) {
 		numWritten++
 	})
+	ctx = OnDiskCacheWritten(ctx, nil) // for coverage
+	ctx = OnDiskCacheEvict(ctx, func(path string) {
+		numEvict++
+	})
+	ctx = OnDiskCacheEvict(ctx, nil) // for coverage
+
+	// DiskCacheCallback context
+	_, set := ctx.Deadline()
+	assert.False(t, set)
+	if err := ctx.Err(); err != nil {
+		t.Fatal(err)
+	}
 
 	// new
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "", false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
@@ -130,7 +143,7 @@ func TestDiskCache(t *testing.T) {
 	testRead(cache)
 
 	// new cache instance and read
-	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "", false)
+	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
@@ -139,7 +152,7 @@ func TestDiskCache(t *testing.T) {
 	assert.Equal(t, 1, numWritten)
 
 	// new cache instance and update
-	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "", false)
+	cache, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
@@ -159,7 +172,13 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
 
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false, nil, "", false)
+	numEvict := 0
+	ctx = OnDiskCacheEvict(ctx, func(path string) {
+		numEvict++
+	})
+	ctx = OnDiskCacheEvict(ctx, nil) // for coverage
+
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false, nil, "")
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
@@ -224,7 +243,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 func TestDiskCacheFileCache(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "", false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
@@ -284,7 +303,7 @@ func TestDiskCacheDirSize(t *testing.T) {
 
 	dir := t.TempDir()
 	capacity := 1 << 20
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(int64(capacity)), nil, false, nil, "", false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(int64(capacity)), nil, false, nil, "")
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
 
@@ -347,7 +366,6 @@ func benchmarkDiskCacheWriteThenRead(
 		false,
 		nil,
 		"",
-		false,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -443,7 +461,6 @@ func benchmarkDiskCacheReadRandomOffsetAtLargeFile(
 		false,
 		nil,
 		"",
-		false,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -515,7 +532,6 @@ func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
 		false,
 		nil,
 		"",
-		false,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -587,7 +603,7 @@ func TestDiskCacheClearFiles(t *testing.T) {
 	assert.Nil(t, err)
 	numFiles := len(files)
 
-	_, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "", false)
+	_, err = NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
 
 	files, err = filepath.Glob(filepath.Join(dir, "*"))
@@ -601,7 +617,7 @@ func TestDiskCacheClearFiles(t *testing.T) {
 func TestDiskCacheBadWrite(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "", false)
+	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "")
 	assert.Nil(t, err)
 
 	written, err := cache.writeFile(
@@ -636,7 +652,6 @@ func TestDiskCacheGlobalSizeHint(t *testing.T) {
 		false,
 		nil,
 		"test",
-		false,
 	)
 	assert.Nil(t, err)
 	defer cache.Close(ctx)
@@ -669,7 +684,7 @@ func TestDiskCacheGlobalSizeHint(t *testing.T) {
 
 func TestDiskCacheSetFromFile(t *testing.T) {
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), nil, false, nil, "", false)
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), nil, false, nil, "")
 	require.Nil(t, err)
 	defer cache.Close(ctx)
 
@@ -694,7 +709,7 @@ func TestDiskCacheSetFromFile(t *testing.T) {
 
 func TestDiskCacheQuotaExceeded(t *testing.T) {
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(3), nil, false, nil, "", false)
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(3), nil, false, nil, "")
 	require.Nil(t, err)
 	defer cache.Close(ctx)
 

@@ -126,7 +126,7 @@ d_street_2 varchar(20),
 d_city varchar(20),
 d_state char(2),
 d_zip char(9),
-primary key (d_w_id, d_id) ) PARTITION BY KEY(d_w_id);
+primary key (d_w_id, d_id) );
 prepare __mo_stmt_id_1 from UPDATE bmsql_district  SET d_next_o_id = d_next_o_id + 1     WHERE d_w_id = ? AND d_id = ?;
 set @__mo_stmt_var_0=1, @__mo_stmt_var_1=7;
 execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1;
@@ -289,7 +289,7 @@ prepare stmt1 from 'show columns from t1';
 execute stmt1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null
-b    INT(32)    YES        null            
+b    INT(32)    YES        null
 prepare stmt1 from 'show variables like "aaaa"';
 execute stmt1;
 Variable_name    Value
@@ -703,6 +703,25 @@ execute s1 using @a, @b;
 a    t1_a
 10    1
 20    2
+drop table if exists t1;
+create table t1(a int, b int);
+prepare s1 from insert into t1 values (?,?);
+set @a=1;
+set @b=2;
+set @c=3;
+set @d=4;
+set @e=30;
+set @f=null;
+execute s1 using @a, @a;
+execute s1 using @b, @f;
+execute s1 using @c, @e;
+execute s1 using @d, @f;
+select * from t1;
+a    b
+1    1
+2    null
+3    30
+4    null
 drop database db1;
 create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
 create role prepare_role1;

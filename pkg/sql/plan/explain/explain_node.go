@@ -545,6 +545,17 @@ func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *Ex
 					describeColRef(&updateCtx.DeleteCols[i], buf)
 				}
 			}
+			if len(updateCtx.PartitionCols) > 0 {
+				buf.WriteString(" Partition Columns: ")
+				first := true
+				for i := range updateCtx.PartitionCols {
+					if !first {
+						buf.WriteString(", ")
+					}
+					first = false
+					describeColRef(&updateCtx.PartitionCols[i], buf)
+				}
+			}
 			lines = append(lines, buf.String())
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {

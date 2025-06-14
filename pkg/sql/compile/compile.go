@@ -1845,7 +1845,7 @@ func (c *Compile) compileSingleTableFunction(n *plan.Node) ([]*Scope, error) {
 	ds.DataSource = &Source{isConst: true, node: n}
 	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 	ds.Proc = c.proc.NewNoContextChildProc(0)
-	op := constructTableFunction(n)
+	op := constructTableFunction(n, c.pn.GetQuery())
 	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	ds.setRootOperator(op)
 	ss := []*Scope{ds}
@@ -1859,7 +1859,7 @@ func (c *Compile) compileGenerateSeriesParallel(n *plan.Node, ss []*Scope, paral
 	for i := 0; i < len(c.cnList); i++ {
 		ds := newScope(Merge)
 		currMcpu := min(c.cnList[i].Mcpu, parallelSize)
-		op := constructTableFunction(n)
+		op := constructTableFunction(n, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 
 		if currMcpu > 1 {
@@ -1912,7 +1912,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 		}
 	}
 	for i := range ss {
-		op := constructTableFunction(n)
+		op := constructTableFunction(n, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -3515,7 +3515,7 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
-	op, err := constructDeletion(n, c.e, c.proc)
+	op, err := constructDeletion(c.proc, n, c.e)
 	if err != nil {
 		return nil, err
 	}

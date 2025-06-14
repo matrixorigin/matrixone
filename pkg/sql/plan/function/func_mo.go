@@ -337,11 +337,7 @@ func MoTableSizeRowsHelper(
 		if dbNull || tblNull {
 			return "", "", false
 		}
-
-		d := functionUtil.QuickBytesToStr(dbBytes)
-		t := functionUtil.QuickBytesToStr(tblBytes)
-
-		return d, t, true
+		return string(dbBytes), string(tblBytes), true
 	}
 
 	defer func() {
@@ -483,8 +479,7 @@ func MoTableRowsOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			}
 		} else {
 			var rel engine.Relation
-			dbStr := functionUtil.QuickBytesToStr(db)
-			tblStr := functionUtil.QuickBytesToStr(tbl)
+			dbStr, tblStr := string(db), string(tbl)
 
 			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
 				if err = rs.Append(int64(0), false); err != nil {
@@ -582,8 +577,7 @@ func MoTableSizeOld(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			}
 		} else {
 			var rel engine.Relation
-			dbStr := functionUtil.QuickBytesToStr(db)
-			tblStr := functionUtil.QuickBytesToStr(tbl)
+			dbStr, tblStr := string(db), string(tbl)
 
 			if ok, err = specialTableFilterForNonSys(foolCtx, dbStr, tblStr); ok && err == nil {
 				if err = rs.Append(int64(0), false); err != nil {
@@ -769,9 +763,7 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 		if null1 || null2 || null3 {
 			rs.AppendMustNull()
 		} else {
-			dbStr := functionUtil.QuickBytesToStr(db)
-			tableStr := functionUtil.QuickBytesToStr(table)
-			columnStr := functionUtil.QuickBytesToStr(column)
+			dbStr, tableStr, columnStr := string(db), string(table), string(column)
 
 			// Magic code. too confused.
 			if tableStr == "mo_database" || tableStr == "mo_tables" || tableStr == "mo_columns" || tableStr == "sys_async_task" {
@@ -963,6 +955,7 @@ var (
 		"mo_snapshots":                0,
 		"mo_pitr":                     0,
 		catalog.MO_TABLE_STATS:        0,
+		catalog.MO_MERGE_SETTINGS:     0,
 	}
 )
 

@@ -16,8 +16,9 @@ package blockio
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 	"go.uber.org/zap"
 
@@ -277,53 +278,35 @@ func BlockDataRead(
 	return nil
 }
 
-func BlockCompactionRead(
+func CopyBlockData(
 	ctx context.Context,
 	location objectio.Location,
 	deletes []int64,
 	seqnums []uint16,
 	colTypes []types.Type,
+	outputBat *batch.Batch,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
-) (*batch.Batch, error) {
-	cacheVectors := containers.NewVectors(len(seqnums))
-
-	release, err := ioutil.LoadColumns(
-		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
+) (err error) {
+	var (
+		release      func()
+		cacheVectors = containers.NewVectors(len(seqnums))
 	)
-	if err != nil {
-		return nil, err
+
+	if release, err = ioutil.LoadColumns(
+		ctx, seqnums, colTypes, fs, location, cacheVectors, mp, fileservice.Policy(0),
+	); err != nil {
+		return
 	}
 	defer release()
-	// why comment? the cacheVector will be free when exit this function
-	//if len(deletes) == 0 {
-	//	result := batch.NewWithSize(len(seqnums))
-	//	for i := range cacheVectors {
-	//		result.Vecs[i] = &cacheVectors[i]
-	//	}
-	//	result.SetRowCount(result.Vecs[0].Length())
-	//	return result, nil
-	//}
-	result := batch.NewWithSize(len(seqnums))
-	for i, col := range cacheVectors {
-		typ := *col.GetType()
-		result.Vecs[i] = vector.NewVec(typ)
-		if err = vector.GetUnionAllFunction(typ, mp)(result.Vecs[i], &col); err != nil {
-			break
-		}
-		result.Vecs[i].Shrink(deletes, true)
-	}
 
-	if err != nil {
-		for _, col := range result.Vecs {
-			if col != nil {
-				col.Free(mp)
-			}
-		}
-		return nil, err
+	if err = containers.VectorsCopyToBatch(
+		cacheVectors, outputBat, mp,
+	); err != nil {
+		return
 	}
-	result.SetRowCount(result.Vecs[0].Length())
-	return result, nil
+	outputBat.Shrink(deletes, true)
+	return
 }
 
 func windowCNBatch(bat *batch.Batch, start, end uint64) error {

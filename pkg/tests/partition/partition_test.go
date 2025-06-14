@@ -16,12 +16,12 @@ package partition
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -35,11 +35,13 @@ var (
 	mu           sync.Mutex
 )
 
-func runPartitionTableCreateAndDeleteTests(
+func runPartitionTableCreateAndDeleteTestsWithAware(
 	t *testing.T,
 	sql string,
 	method partition.PartitionMethod,
 	validPartition func(idx int, p partition.Partition),
+	beforeDrop func(string, string, embed.ServiceOperator, partition.PartitionMetadata),
+	afterDrop func(embed.ServiceOperator, partition.PartitionMetadata),
 ) {
 	runPartitionClusterTest(
 		t,
@@ -80,6 +82,8 @@ func runPartitionTableCreateAndDeleteTests(
 				validPartition(idx, p)
 			}
 
+			beforeDrop(db, t.Name(), cn, metadata)
+
 			testutils.ExecSQL(
 				t,
 				db,
@@ -99,7 +103,24 @@ func runPartitionTableCreateAndDeleteTests(
 				require.False(t, testutils.TableExists(t, db, name, cn))
 			}
 
+			afterDrop(cn, metadata)
 		},
+	)
+}
+
+func runPartitionTableCreateAndDeleteTests(
+	t *testing.T,
+	sql string,
+	method partition.PartitionMethod,
+	validPartition func(idx int, p partition.Partition),
+) {
+	runPartitionTableCreateAndDeleteTestsWithAware(
+		t,
+		sql,
+		method,
+		validPartition,
+		func(string, string, embed.ServiceOperator, partition.PartitionMetadata) {},
+		func(embed.ServiceOperator, partition.PartitionMetadata) {},
 	)
 }
 

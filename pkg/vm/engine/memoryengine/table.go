@@ -417,41 +417,6 @@ func (t *Table) TableRenameInTxn(ctx context.Context, constraint [][]byte) error
 	return nil
 }
 
-func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
-	data.SetRowCount(data.RowCount())
-	shards, err := t.engine.shardPolicy.Batch(
-		ctx,
-		t.id,
-		t.TableDefs,
-		data,
-		getTNServices(t.engine.cluster),
-	)
-	if err != nil {
-		return err
-	}
-
-	for _, shard := range shards {
-		_, err := DoTxnRequest[UpdateResp](
-			ctx,
-			t.txnOperator,
-			false,
-			thisShard(shard.Shard),
-			OpUpdate,
-			&UpdateReq{
-				TableID:      t.id,
-				DatabaseName: t.databaseName,
-				TableName:    t.tableName,
-				Batch:        shard.Batch,
-			},
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 	data.SetRowCount(data.RowCount())
 	shards, err := t.engine.shardPolicy.Batch(
@@ -487,32 +452,6 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 	return nil
 }
 
-func (t *Table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	resps, err := DoTxnRequest[GetHiddenKeysResp](
-		ctx,
-		t.txnOperator,
-		true,
-		t.engine.anyShard,
-		OpGetHiddenKeys,
-		&GetHiddenKeysReq{
-			TableID: t.id,
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	resp := resps[0]
-
-	// convert from []engine.Attribute  to []*engine.Attribute
-	attrs := make([]*engine.Attribute, 0, len(resp.Attrs))
-	for i := 0; i < len(resp.Attrs); i++ {
-		attrs = append(attrs, &resp.Attrs[i])
-	}
-
-	return attrs, nil
-}
-
 func (t *Table) GetTableID(ctx context.Context) uint64 {
 	return uint64(t.id)
 }
@@ -530,11 +469,11 @@ func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) 
 	return nil, nil, nil
 }
 
-func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	return nil, nil
 }
 
-func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx int32) (bool, error) {
+func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx, _ int32) (bool, error) {
 	return true, nil
 }
 
@@ -555,5 +494,9 @@ func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.Obj
 }
 
 func (t *Table) Reset(op client.TxnOperator) error {
+	return nil
+}
+
+func (t *Table) GetExtraInfo() *api.SchemaExtra {
 	return nil
 }

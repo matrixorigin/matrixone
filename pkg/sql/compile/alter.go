@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -47,11 +48,17 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
 
+	oldId := originRel.GetTableID(c.proc.Ctx)
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 0. lock origin database metadata in catalog
@@ -187,6 +194,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	newId := newRel.GetTableID(c.proc.Ctx)
 	//--------------------------------------------------------------------------------------------------------------
 	// 7. rename temporary replica table into the original table( Table Id remains unchanged)
 	copyTblName := qry.CopyTableDef.Name
@@ -210,6 +218,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		// 8. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
+		extra := newRel.GetExtraInfo()
+		id := newRel.GetTableID(c.proc.Ctx)
 
 		for _, indexDef := range newTableDef.Indexes {
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
@@ -226,9 +236,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		for _, multiTableIndex := range multiTableIndexes {
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorIvfFlatIndex(c, id, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorHnswIndex(c, id, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
@@ -282,6 +292,18 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				return err
 			}
 		}
+	}
+
+	// update merge settings in mo_catalog.mo_merge_settings
+	err = c.runSqlWithSystemTenant(fmt.Sprintf(updateMoMergeSettings, newId, accountId, oldId))
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "update mo_catalog.mo_merge_settings for alter table",
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Uint64("origin table id", oldId),
+			zap.Uint64("copy table id", newId),
+			zap.Error(err))
+		return err
 	}
 	return nil
 }

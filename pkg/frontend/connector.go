@@ -47,7 +47,10 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 		dbName = ses.GetDatabaseName()
 	}
 	tableName := string(st.Table.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
+	_, tableDef, err := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
+	if err != nil {
+		return err
+	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
@@ -105,7 +108,10 @@ func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateCon
 	}
 	dbName := string(st.TableName.Schema())
 	tableName := string(st.TableName.Name())
-	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
+	_, tableDef, err := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
+	if err != nil {
+		return err
+	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}

@@ -502,3 +502,15 @@ drop table if exists agg01;
 create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key);
 not supported: ENUM column 'col2' cannot be in primary key
 drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), primary key (col2));
+not supported: ENUM column 'col2' cannot be in primary key
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') unique);
+not supported: ENUM column 'col2' cannot be in unique index
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), unique key (col2));
+not supported: ENUM column 'col2' cannot be in unique index
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw'), key (col2));
+not supported: ENUM column 'col2' cannot be in secondary index
+drop table if exists agg01;

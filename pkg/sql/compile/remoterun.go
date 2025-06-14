@@ -844,6 +844,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			for j, pos := range muCtx.DeleteCols {
 				updateCtxList[i].DeleteCols[j].ColPos = int32(pos)
 			}
+
+			updateCtxList[i].PartitionCols = make([]plan.ColRef, len(muCtx.PartitionCols))
+			for j, pos := range muCtx.PartitionCols {
+				updateCtxList[i].PartitionCols[j].ColPos = int32(pos)
+			}
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
 			AffectedRows:  t.GetAffectedRows(),
@@ -926,7 +931,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {

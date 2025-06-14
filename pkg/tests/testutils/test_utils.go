@@ -16,12 +16,11 @@ package testutils
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -33,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
 )
 
 func CreateTableAndWaitCNApplied(
@@ -339,4 +339,14 @@ func GetTableID(
 	)
 
 	return id
+}
+
+func MustParseMOCtlResult(t *testing.T, result string) string {
+	var r ctlResult
+	require.NoError(t, json.Unmarshal([]byte(result), &r))
+	return r.Result
+}
+
+type ctlResult struct {
+	Result string `json:"result"`
 }
