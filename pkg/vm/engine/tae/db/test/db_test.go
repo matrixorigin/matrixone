@@ -17,6 +17,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -4810,6 +4811,17 @@ func TestReadCheckpoint(t *testing.T) {
 	for _, entry := range entries {
 		t.Log(entry.String())
 		t.Log(entry.JsonString())
+		ranges, err := entry.GetTableRanges(ctx, common.CheckpointAllocator, tae.Runtime.Fs)
+		assert.NoError(t, err)
+		rangeJson, err := json.Marshal(ranges)
+		assert.NoError(t, err)
+		t.Log(string(rangeJson))
+
+		ranges, err = entry.GetTableRangesByID(ctx, 1000, common.CheckpointAllocator, tae.Runtime.Fs)
+		assert.NoError(t, err)
+		rangeJson, err = json.Marshal(ranges)
+		assert.NoError(t, err)
+		t.Log(string(rangeJson))
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
