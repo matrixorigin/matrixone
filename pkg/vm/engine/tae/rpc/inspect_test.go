@@ -224,6 +224,9 @@ func Test_storageCkpStatArg(t *testing.T) {
 	t.Logf("err: %v", err)
 	require.Error(t, err)
 
+	err = arg.runOnline()
+	require.Error(t, err)
+
 	entries := make([]*checkpoint.CheckpointEntry, 0)
 	entries = append(entries, new(checkpoint.CheckpointEntry))
 	entries = append(entries, new(checkpoint.CheckpointEntry))
@@ -250,6 +253,7 @@ func Test_storageCkpStatArg(t *testing.T) {
 		tableID++
 		return ranges, nil
 	}
+	arg.tid = invalidId
 	err = arg.Run()
 	t.Logf("err: %v", err)
 	t.Logf("resp.msg: %s", arg.String())
