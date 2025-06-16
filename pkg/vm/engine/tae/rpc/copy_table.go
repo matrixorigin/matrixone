@@ -67,7 +67,7 @@ func DecodeDumpTableDir(dir string) (tid uint64, createTime time.Time, snapshotT
 	if err != nil {
 		return 0, time.Time{}, types.TS{}, err
 	}
-	createTime, err = time.Parse(time.RFC3339, parts[1])
+	createTime, err = time.Parse("2006-01-02.15.04.05.MST", parts[1])
 	if err != nil {
 		return 0, time.Time{}, types.TS{}, err
 	}
@@ -97,7 +97,7 @@ func GCDumpTableFiles(filePath string, fs fileservice.FileService) (neesGC bool,
 }
 
 func GetDumpTableDir(tid uint64, snapshotTS types.TS) string {
-	dir := fmt.Sprintf("%v/%s_%v_%s", DumpTableDir, tid, time.Now(), snapshotTS.ToString())
+	dir := fmt.Sprintf("%d_%v_%s", tid, time.Now().Format("2006-01-02.15.04.05.MST"), snapshotTS.ToString())
 	return dir
 }
 
@@ -152,9 +152,10 @@ type CopyTableArg struct {
 	inspectContext  *inspectContext
 	objectListBatch *batch.Batch
 	mp              *mpool.MPool
-	fs              fileservice.FileService
+	srcfs, dstfs    fileservice.FileService
 }
 
+// for UT
 func NewCopyTableArg(
 	ctx context.Context,
 	table *catalog.TableEntry,
@@ -170,7 +171,8 @@ func NewCopyTableArg(
 		inspectContext:  inspectContext,
 		objectListBatch: NewObjectListBatch(),
 		mp:              mp,
-		fs:              fs,
+		dstfs:           fs,
+		srcfs:           fs,
 	}
 }
 func (c *CopyTableArg) PrepareCommand() *cobra.Command {
@@ -192,14 +194,22 @@ func (c *CopyTableArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		c.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
 		c.mp = common.DefaultAllocator
-		c.fs = c.inspectContext.db.Opts.LocalFs
+		c.dstfs, err = c.inspectContext.db.Opts.TmpFs.GetOrCreateApp(
+			&fileservice.AppConfig{
+				Name: DumpTableDir,
+				GCFn: GCDumpTableFiles,
+			},
+		)
+		c.srcfs = c.inspectContext.db.Opts.Fs
 		c.ctx = context.Background()
 		database, err := c.inspectContext.db.Catalog.GetDatabaseByID(uint64(did))
 		if err != nil {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("get database by id %d failed", did))
 			return err
 		}
 		c.table, err = database.GetTableEntryByID(uint64(tid))
 		if err != nil {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("get table by id %d-%d failed", did, tid))
 			return err
 		}
 		c.objectListBatch = NewObjectListBatch()
@@ -335,7 +345,7 @@ func (c *CopyTableArg) flushTableEntry() (err error) {
 
 func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
 	startTS := c.txn.GetStartTS()
-	if e.CreatedAt.EQ(&txnif.UncommitTS) || e.CreatedAt.LT(&startTS) {
+	if e.CreatedAt.EQ(&txnif.UncommitTS) || e.DeleteBefore(startTS) {
 		return nil
 	}
 	bat, err := c.visitObjectData(e)
@@ -350,11 +360,11 @@ func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
 	cnBatch := containers.ToCNBatch(bat)
 	if isPersisted {
 		name := e.ObjectStats.ObjectName().String()
-		dst := path.Join(c.dir, name)
+		dstName := path.Join(c.dir, name)
 		if _, err = fileservice.DoWithRetry(
 			"CopyFile",
 			func() ([]byte, error) {
-				return copyFile(c.ctx, c.fs, name, dst)
+				return copyFile(c.ctx, c.srcfs, c.dstfs, name, dstName)
 			},
 			64,
 			fileservice.IsRetryableError,
@@ -387,14 +397,12 @@ func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
 
 func copyFile(
 	ctx context.Context,
-	fs fileservice.FileService,
-
-	src string,
-	dst string,
+	srcFS, dstFS fileservice.FileService,
+	srcName, dstName string,
 ) ([]byte, error) {
 	var reader io.ReadCloser
 	ioVec := &fileservice.IOVector{
-		FilePath: src,
+		FilePath: srcName,
 		Entries: []fileservice.IOEntry{
 			{
 				ReadCloserForRead: &reader,
@@ -405,7 +413,7 @@ func copyFile(
 		Policy: fileservice.SkipAllCache,
 	}
 
-	err := fs.Read(ctx, ioVec)
+	err := srcFS.Read(ctx, ioVec)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +422,7 @@ func copyFile(
 	hasher := sha256.New()
 	hashingReader := io.TeeReader(reader, hasher)
 	dstIoVec := fileservice.IOVector{
-		FilePath: dst,
+		FilePath: dstName,
 		Entries: []fileservice.IOEntry{
 			{
 				ReaderForWrite: hashingReader,
@@ -425,7 +433,7 @@ func copyFile(
 		Policy: fileservice.SkipAllCache,
 	}
 
-	err = fs.Write(ctx, dstIoVec)
+	err = dstFS.Write(ctx, dstIoVec)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +442,7 @@ func copyFile(
 
 func (c *CopyTableArg) flush(name string, bat *batch.Batch) (err error) {
 	nameWithDir := fmt.Sprintf("%s/%s", c.dir, name)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCopyTable, nameWithDir, c.fs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCopyTable, nameWithDir, c.dstfs)
 	if err != nil {
 		return
 	}

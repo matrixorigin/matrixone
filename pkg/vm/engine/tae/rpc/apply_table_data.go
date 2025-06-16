@@ -241,7 +241,7 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			if _, err = fileservice.DoWithRetry(
 				"CopyFile",
 				func() ([]byte, error) {
-					return copyFile(a.ctx, a.fs, src, name)
+					return copyFile(a.ctx, a.fs, a.fs, src, name)
 				},
 				64,
 				fileservice.IsRetryableError,
