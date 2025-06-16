@@ -296,8 +296,6 @@ func (cleaner *DiskCleaner) doReplayAndExecute(ctx context.Context) (err error) 
 	if err = cleaner.doReplay(ctx); err != nil {
 		return
 	}
-	msg = "GC-TryGC"
-	err = cleaner.cleaner.TryGC(ctx)
 	return
 }
 
