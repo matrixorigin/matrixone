@@ -16,7 +16,9 @@ package index
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
+	"strings"
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/cespare/xxhash/v2"
@@ -28,7 +30,7 @@ import (
 	"github.com/samber/lo"
 )
 
-const FuseFilterError = "too many iterations, you probably have duplicate keys"
+const FuseFilterError = "too many iterations"
 
 func DecodeBloomFilter(sf StaticFilter, data []byte) error {
 	if err := sf.Unmarshal(data); err != nil {
@@ -71,13 +73,19 @@ func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 	var inner *xorfilter.BinaryFuse8
 	var err error
 	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-		if err.Error() == FuseFilterError {
+		if strings.Contains(err.Error(), FuseFilterError) {
 			// 230+ duplicate keys in hashes
 			// block was deleted 115+ rows
+			oldHashes := hashes
 			hashes = lo.Uniq(hashes)
+			logutil.Infof("PopulateBinaryFuse8 err: %v, "+
+				"old hashes: %v, new hashes: %v",
+				err.Error(), oldHashes, hashes)
 			if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 				return nil, err
 			}
+		} else {
+			return nil, err
 		}
 	}
 	sf := &bloomFilter{}
