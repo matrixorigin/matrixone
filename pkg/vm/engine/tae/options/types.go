@@ -78,6 +78,7 @@ type Options struct {
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`
+	TmpFs             *fileservice.TmpFileService              `toml:"-"`
 	WalClientFactory  logservicedriver.LogServiceClientFactory `toml:"-"`
 	Ctx               context.Context                          `toml:"-"`
 	Shard             metadata.TNShard                         `toml:"-"`

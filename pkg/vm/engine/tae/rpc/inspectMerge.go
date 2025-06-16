@@ -48,6 +48,9 @@ func (c *mergeArg) PrepareCommand() *cobra.Command {
 
 	mergeTriggerArg := &mergeTriggerArg{}
 	cmd.AddCommand(mergeTriggerArg.PrepareCommand())
+
+	mergeTraceArg := &mergeTraceArg{}
+	cmd.AddCommand(mergeTraceArg.PrepareCommand())
 	return cmd
 }
 
@@ -56,6 +59,73 @@ func (c *mergeArg) String() string                       { return "merge" }
 func (c *mergeArg) Run() error                           { return nil }
 
 // endregion: merge root
+
+// region: merge trace
+
+type mergeTraceArg struct {
+	ctx    *inspectContext
+	tbl    *catalog.TableEntry
+	enable bool
+}
+
+func (arg *mergeTraceArg) Run() error {
+	if arg.enable {
+		catalog.AddMergeTrace(arg.tbl.ID)
+	} else {
+		catalog.RemoveMergeTrace(arg.tbl.ID)
+	}
+	return nil
+}
+
+func (arg *mergeTraceArg) String() string {
+	action := "off"
+	if arg.enable {
+		action = "on"
+	}
+	return fmt.Sprintf("turn %s trace for %s", action, arg.tbl.GetNameDesc())
+}
+
+func (arg *mergeTraceArg) FromCommand(cmd *cobra.Command) (err error) {
+	arg.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	arg.enable = cmd.Flags().Args()[0] == "on"
+
+	address, err := cmd.Flags().GetString("target")
+	if err != nil {
+		return err
+	}
+	arg.tbl, err = parseTableTarget(address, arg.ctx.acinfo, arg.ctx.db)
+	if err != nil {
+		return err
+	}
+	if arg.tbl == nil {
+		return moerr.NewInvalidInputNoCtxf("table should be specified")
+	}
+	return nil
+}
+
+func (arg *mergeTraceArg) PrepareCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use: "trace [on|off]",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return moerr.NewInvalidInputNoCtxf(
+					"accepts 1 arg(s), received %d", len(args),
+				)
+			}
+			if args[0] != "on" && args[0] != "off" {
+				return moerr.NewInvalidInputNoCtxf(
+					"invalid action %s, should be on or off", args[0],
+				)
+			}
+			return nil
+		},
+		Short: "log input non-appendable objects of a table",
+		Run:   RunFactory(arg),
+	}
+	return cmd
+}
+
+// endregion: merge trace
 
 // region: merge switch
 
@@ -185,10 +255,16 @@ func (arg *mergeShowArg) Run() error {
 			"\n\tmerge tasks in queue: %d", answer.PendingMergeCnt,
 		))
 		out.WriteString(fmt.Sprintf(
-			"\n\tbig data merge counter: %v", answer.BigDataAcc,
+			"\n\tvaccum trig count: %v", answer.VaccumTrigCount,
+		))
+		out.WriteString(fmt.Sprintf(
+			"\n\tlast vaccum check: %s ago", answer.LastVaccumCheck.Round(time.Second),
 		))
 		if len(answer.Triggers) > 0 {
 			out.WriteString(fmt.Sprintf("\n\ttriggers: %s", answer.Triggers))
+		}
+		if len(answer.BaseTrigger) > 0 {
+			out.WriteString(fmt.Sprintf("\n\tbase trigger: %s", answer.BaseTrigger))
 		}
 		// check object distribution
 		// collect all object stats
@@ -275,7 +351,7 @@ func OutputVacuumStats(
 	tbl catalog.MergeTable,
 	opts *merge.VacuumOpts,
 ) {
-	stats, err := merge.CalculateVacuumStats(context.Background(), tbl, opts)
+	stats, err := merge.CalculateVacuumStats(context.Background(), tbl, opts, time.Now())
 	if err != nil {
 		out.WriteString(fmt.Sprintf("\nvacuum stats: %s", err))
 		return
@@ -346,7 +422,7 @@ type mergeTriggerArg struct {
 	l0CPoints  []float64
 
 	tombstoneOneShot bool
-	tombstoneL1Size  uint32
+	tombstoneL1Size  int
 	tombstoneL1Count int
 	tombstoneL2Count int
 }
@@ -401,7 +477,7 @@ func (arg *mergeTriggerArg) PrepareCommand() *cobra.Command {
 	cmd.Flags().IntVar(&arg.l0End, "l0-end", merge.DefaultLayerZeroOpts.End, "l0 end count")
 
 	cmd.Flags().BoolVar(&arg.tombstoneOneShot, "tombstone-oneshot", false, "merge all tombstone objects")
-	cmd.Flags().Uint32Var(&arg.tombstoneL1Size, "tombstone-l1-size", merge.DefaultTombstoneOpts.L1Size, "tombstone l1 size")
+	cmd.Flags().IntVar(&arg.tombstoneL1Size, "tombstone-l1-size", merge.DefaultTombstoneOpts.L1Size, "tombstone l1 size")
 	cmd.Flags().IntVar(&arg.tombstoneL1Count, "tombstone-l1-count", merge.DefaultTombstoneOpts.L1Count, "tombstone l1 count")
 	cmd.Flags().IntVar(&arg.tombstoneL2Count, "tombstone-l2-count", merge.DefaultTombstoneOpts.L2Count, "tombstone l2 count")
 

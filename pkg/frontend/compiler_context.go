@@ -351,15 +351,20 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	//open table
 	table, err := db.Relation(tempCtx, tableName, nil)
 	if err != nil {
-		tmpTable, e := tcc.getTmpRelation(tempCtx, engine.GetTempTableName(dbName, tableName))
-		if e != nil {
-			ses.Error(tempCtx,
-				"Failed to get table",
-				zap.String("tableName", tableName),
-				zap.Error(err))
-			return nil, nil, err
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			tmpTableName := engine.GetTempTableName(dbName, tableName)
+			tmpTable, e := tcc.getTmpRelation(tempCtx, tmpTableName)
+			if e != nil {
+				ses.Error(tempCtx,
+					"Failed to get table",
+					zap.String("tableName", tableName),
+					zap.Error(err))
+				return nil, nil, nil
+			} else {
+				table = tmpTable
+			}
 		} else {
-			table = tmpTable
+			return nil, nil, err
 		}
 	}
 
@@ -408,7 +413,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub 
 	return dbName, sub, nil
 }
 
-func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {
+func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	tempCtx := tcc.execCtx.reqCtx
 	txn := tcc.GetTxnHandler().GetTxn()
 
@@ -420,22 +425,24 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		}
 	}
 
-	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(tempCtx, txn, tableId)
+	eng := tcc.GetTxnHandler().GetStorage()
+	dbName, tableName, table, err := eng.GetRelationById(tempCtx, txn, tableId)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 
 	// convert
+	returnTableID := int64(tableId)
 	obj := &plan2.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
-		Obj:        int64(tableId),
+		Obj:        returnTableID,
 	}
 	tableDef := table.CopyTableDef(tempCtx)
-	return obj, tableDef
+	return obj, tableDef, nil
 }
 
-func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subMeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef) {
+func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subMeta *plan.SubscriptionMeta) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	txn := tcc.GetTxnHandler().GetTxn()
 
 	pubContext := tcc.execCtx.reqCtx
@@ -443,22 +450,24 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		pubContext = context.WithValue(pubContext, defines.TenantIDKey{}, uint32(subMeta.AccountId))
 	}
 
-	dbName, tableName, table, err := tcc.GetTxnHandler().GetStorage().GetRelationById(pubContext, txn, tableId)
+	eng := tcc.GetTxnHandler().GetStorage()
+	dbName, tableName, table, err := eng.GetRelationById(pubContext, txn, tableId)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 
 	// convert
+	returnTableID := int64(tableId)
 	obj := &plan2.ObjectRef{
 		SchemaName: dbName,
 		ObjName:    tableName,
-		Obj:        int64(tableId),
+		Obj:        returnTableID,
 	}
 	tableDef := table.CopyTableDef(pubContext)
-	return obj, tableDef
+	return obj, tableDef, nil
 }
 
-func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef) {
+func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()
@@ -473,13 +482,26 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	}
 
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
-	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return nil, nil
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoDB) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+
+	if sub != nil {
+		isSubMetaTable := pubsub.InSubMetaTables(sub, tableName)
+		if !isSubMetaTable {
+			return nil, nil, nil
+		}
 	}
 
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
+	}
+	if table == nil {
+		return nil, nil, nil
 	}
 	tableDef := table.CopyTableDef(ctx)
 	if tableDef.IsTemporary {
@@ -495,10 +517,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		dbName = sub.DbName
 	}
 
+	tableID := int64(table.GetTableID(ctx))
 	obj := &plan2.ObjectRef{
 		SchemaName:       dbName,
 		ObjName:          tableName,
-		Obj:              int64(table.GetTableID(ctx)),
+		Obj:              tableID,
 		SubscriptionName: subscriptionName,
 	}
 	if pubAccountId != -1 {
@@ -506,14 +529,14 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 			TenantId: pubAccountId,
 		}
 	}
-	return obj, tableDef
+	return obj, tableDef, nil
 }
 
 func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	ref *plan.ObjectRef,
 	tblName string,
 	snapshot *plan2.Snapshot,
-) (*plan2.ObjectRef, *plan2.TableDef) {
+) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()
@@ -532,13 +555,14 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 
 	ctx, table, err := tcc.getRelation(ref.SchemaName, tblName, subMeta, snapshot)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 
+	tableID := int64(table.GetTableID(ctx))
 	obj := &plan2.ObjectRef{
 		SchemaName:       ref.SchemaName,
 		ObjName:          tblName,
-		Obj:              int64(table.GetTableID(ctx)),
+		Obj:              tableID,
 		SubscriptionName: ref.SubscriptionName,
 		PubInfo:          ref.PubInfo,
 	}
@@ -548,7 +572,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		tableDef.Name = tblName
 	}
 
-	return obj, tableDef
+	return obj, tableDef, nil
 }
 
 func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *function.Udf, err error) {
@@ -740,7 +764,7 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		var udVar *UserDefinedVar
-		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil || udVar == nil {
+		if udVar, err = tcc.GetSession().GetUserDefinedVar(varName); err != nil {
 			return nil, err
 		}
 
@@ -807,40 +831,6 @@ func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (account
 	return accountIds, err
 }
 
-func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *plan2.Snapshot) []*plan2.ColDef {
-	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true, snapshot)
-	if err != nil || sub != nil && !pubsub.InSubMetaTables(sub, tableName) {
-		return nil
-	}
-	ctx, relation, err := tcc.getRelation(dbName, tableName, sub, snapshot)
-	if err != nil {
-		return nil
-	}
-
-	priKeys, err := relation.GetPrimaryKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(priKeys) == 0 {
-		return nil
-	}
-
-	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
-	for _, key := range priKeys {
-		priDefs = append(priDefs, &plan2.ColDef{
-			Name:       strings.ToLower(key.Name),
-			OriginName: key.Name,
-			Typ: plan2.Type{
-				Id:    int32(key.Type.Oid),
-				Width: key.Type.Width,
-				Scale: key.Type.Scale,
-			},
-			Primary: key.Primary,
-		})
-	}
-	return priDefs
-}
-
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snapshot) (*pb.StatsInfo, error) {
 	statser := statistic.StatsInfoFromContext(tcc.execCtx.reqCtx)
 	start := time.Now()
@@ -871,6 +861,9 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef, snapshot *plan2.Snaps
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub, snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if table == nil {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
 	cached, needUpdate := tcc.statsInCache(ctx, dbName, table, snapshot)
 	if cached == nil {

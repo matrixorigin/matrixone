@@ -971,6 +971,15 @@ func (txn *Transaction) WriteFileLocked(
 	}
 	txn.readOnly.Store(false)
 	txn.workspaceSize += uint64(bat2.Size())
+
+	if typ == DELETE {
+		col, area := vector.MustVarlenaRawData(bat2.Vecs[0])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			txn.StashFlushedTombstones(stats)
+		}
+	}
+
 	entry := Entry{
 		typ:          typ,
 		accountId:    accountId,
@@ -1342,9 +1351,6 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 					txn.writes[i].bat.Vecs, 0, txn.proc.Mp()); err != nil {
 					return err
 				}
-
-				txn.writes[i].bat.Vecs[0].SetSorted(true)
-				txn.writes[i].bat.Vecs[1].SetSorted(true)
 			}
 		}
 	}

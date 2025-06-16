@@ -17,6 +17,7 @@ package table_function
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -406,17 +407,17 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 }
 
 // Run SQL to get number of records in source table
-func runCountStar(proc *process.Process, s *fulltext.SearchAccum) error {
+func runCountStar(proc *process.Process, s *fulltext.SearchAccum) (executor.Result, error) {
 	sql := fmt.Sprintf(countstar_sql, s.TblName, fulltext.DOC_LEN_WORD)
 
 	res, err := ft_runSql(proc, sql)
 	if err != nil {
-		return err
+		return executor.Result{}, err
 	}
 	defer res.Close()
 
 	if len(res.Batches) == 0 {
-		return nil
+		return res, nil
 	}
 
 	bat := res.Batches[0]
@@ -433,11 +434,13 @@ func runCountStar(proc *process.Process, s *fulltext.SearchAccum) error {
 		s.ScoreAlgo = fulltext.ALGO_TFIDF
 	}
 
-	return nil
+	return res, nil
 }
 
 func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *TableFunction, srctbl, tblname, pattern string,
 	mode int64, scoreAlgo fulltext.FullTextScoreAlgo, bat *batch.Batch) (err error) {
+
+	opStats := tableFunction.OpAnalyzer.GetOpStats()
 
 	if u.sacc == nil {
 		// parse the search string to []Pattern and create SearchAccum
@@ -451,23 +454,41 @@ func fulltextIndexMatch(u *fulltextState, proc *process.Process, tableFunction *
 		u.aggcnt = make([]int64, s.Nkeywords)
 
 		// count(*) to get number of records in source table
-		err = runCountStar(proc, s)
+		res, err := runCountStar(proc, s)
 		if err != nil {
 			return err
 		}
 
 		u.sacc = s
 
+		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
 	}
 
 	//t1 := time.Now()
+
+	// we should wait the goroutine exit completely here,
+	// even the SQL stream is done inside the `runWordStats`.
+	// or will be resulting in data race on the tableFunction.
+	waiter := sync.WaitGroup{}
+	waiter.Add(1)
+
+	defer func() {
+		waiter.Wait()
+	}()
+
 	go func() {
+		defer func() {
+			waiter.Done()
+		}()
+
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
-		_, err := runWordStats(u, proc, u.sacc)
+		res, err := runWordStats(u, proc, u.sacc)
 		if err != nil {
 			u.errors <- err
 			return
 		}
+
+		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
 	}()
 
 	// get batch from SQL executor

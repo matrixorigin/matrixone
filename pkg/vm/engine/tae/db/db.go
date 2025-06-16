@@ -368,6 +368,7 @@ func (db *DB) Close() error {
 		db.Wal.Close()
 		db.Runtime.TransferTable.Close()
 		db.usageMemo.Clear()
+		db.Runtime.TmpFS.Close(context.Background())
 		if db.DBLocker != nil {
 			err = db.DBLocker.Close()
 		}

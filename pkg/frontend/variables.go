@@ -87,6 +87,8 @@ func errorSystemVariableIsGlobal() string { return "the system variable is globa
 
 func errorSystemVariableIsReadOnly() string { return "the system variable is read only" }
 
+func errorUserVariableDoesNotExist() string { return "the user variable %s does not exist" }
+
 type Scope int
 
 const (

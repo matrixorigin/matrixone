@@ -362,14 +362,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	}
 	n += int64(sn2)
 
-	if ver <= IOET_WALTxnCommand_Table_V1 {
-		s.CatalogVersion = pkgcatalog.CatalogVersion_V1
-	} else {
-		if sn2, err = r.Read(types.EncodeUint32(&s.CatalogVersion)); err != nil {
-			return
-		}
-		n += int64(sn2)
+	if sn2, err = r.Read(types.EncodeUint32(&s.CatalogVersion)); err != nil {
+		return
 	}
+	n += int64(sn2)
 
 	var sn int64
 	if sn, err = s.AcInfo.ReadFrom(r); err != nil {
@@ -480,14 +476,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += sn
-		if ver <= IOET_WALTxnCommand_Table_V2 {
-			def.EnumValues = ""
-		} else {
-			if def.EnumValues, sn, err = objectio.ReadString(r); err != nil {
-				return
-			}
-			n += sn
+		if def.EnumValues, sn, err = objectio.ReadString(r); err != nil {
+			return
 		}
+		n += sn
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}

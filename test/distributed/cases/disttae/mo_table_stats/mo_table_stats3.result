@@ -13,6 +13,7 @@ mo_data_key    Tae    Dynamic    1    0    1218    0    0    NULL    0    2024-1
 mo_foreign_keys    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:05    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_indexes    Tae    Dynamic    109    0    5904    0    0    NULL    0    2024-12-23 17:45:05    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_locks    null    null    null    null    null    null    null    null    null    2024-12-23 17:45:06    null    null    null    null    null    VIEW    0    moadmin
+mo_merge_settings    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_mysql_compatibility_mode    Tae    Dynamic    4    0    1442    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_pitr    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_pubs    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
