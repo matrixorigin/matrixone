@@ -193,19 +193,19 @@ func (filter *bloomFilter) Unmarshal(buffer []byte) error {
 }
 
 func (filter *bloomFilter) String() string {
-	str := "<BF>\n"
-	str += strconv.Itoa(int(filter.SegmentCount))
-	str += "\n"
-	str += strconv.Itoa(int(filter.SegmentCountLength))
-	str += "\n"
-	str += strconv.Itoa(int(filter.SegmentLength))
-	str += "\n"
-	str += strconv.Itoa(int(filter.SegmentLengthMask))
-	str += "\n"
-	str += strconv.Itoa(len(filter.Fingerprints))
-	str += "\n"
-	str += "</BF>"
-	return str
+	s := "<BF>\n"
+	s += strconv.Itoa(int(filter.SegmentCount))
+	s += "\n"
+	s += strconv.Itoa(int(filter.SegmentCountLength))
+	s += "\n"
+	s += strconv.Itoa(int(filter.SegmentLength))
+	s += "\n"
+	s += strconv.Itoa(int(filter.SegmentLengthMask))
+	s += "\n"
+	s += strconv.Itoa(len(filter.Fingerprints))
+	s += "\n"
+	s += "</BF>"
+	return s
 }
 
 func (filter *bloomFilter) PrefixFnId(_ uint8) uint8 {
