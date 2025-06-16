@@ -19,7 +19,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"iter"
 	"path"
 	"strconv"
 	"strings"
@@ -43,6 +42,13 @@ import (
 
 	"go.uber.org/zap"
 )
+
+func init() {
+	fileservice.RegisterAppConfig(&fileservice.AppConfig{
+		Name: DumpTableDir,
+		GCFn: GCDumpTableFiles,
+	})
+}
 
 const (
 	DumpTableDir = "DumpTable"
@@ -72,25 +78,20 @@ func DecodeDumpTableDir(dir string) (tid uint64, createTime time.Time, snapshotT
 	return
 }
 
-func GCDumpTableFiles(ctx context.Context, fs fileservice.FileService) (err error) {
-	var entries iter.Seq2[*fileservice.DirEntry, error]
-	if entries = fs.List(
-		ctx, DumpTableDir,
-	); err != nil {
+func GCDumpTableFiles(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
+	_, createTime, _, err := DecodeDumpTableDir(filePath)
+	if err != nil {
 		return
 	}
-	for entry, err := range entries {
-		if err != nil {
-			return err
+	if createTime.Add(time.Hour * 24 * 30).Before(time.Now()) {
+		neesGC = true
+		ctx := context.Background()
+		ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
+		defer cancel()
+		if err = fs.Delete(ctx, filePath); err != nil {
+			return
 		}
-		name := entry.Name
-		tid, createTime, _, err := DecodeDumpTableDir(name)
-		if err != nil {
-			return err
-		}
-		if createTime.Add(time.Hour * 24 * 30).Before(time.Now()) {
-			fs.Delete(ctx, path.Join(DumpTableDir, name))
-		}
+		return
 	}
 	return
 }
