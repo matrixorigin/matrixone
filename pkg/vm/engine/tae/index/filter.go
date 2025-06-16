@@ -33,8 +33,8 @@ import (
 
 const FuseFilterErrorMsg = "too many iterations"
 
-func DecodeBloomFilter(sf StaticFilter, data []byte) error {
-	if err := sf.Unmarshal(data); err != nil {
+func DecodeBloomFilter(sf StaticFilter, buf []byte) error {
+	if err := sf.Unmarshal(buf); err != nil {
 		return err
 	}
 	return nil
