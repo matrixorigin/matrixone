@@ -30,7 +30,7 @@ import (
 	"github.com/samber/lo"
 )
 
-const FuseFilterError = "too many iterations"
+const FuseFilterErrorMsg = "too many iterations"
 
 func DecodeBloomFilter(sf StaticFilter, data []byte) error {
 	if err := sf.Unmarshal(data); err != nil {
@@ -73,7 +73,7 @@ func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 	var inner *xorfilter.BinaryFuse8
 	var err error
 	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-		if strings.Contains(err.Error(), FuseFilterError) {
+		if strings.Contains(err.Error(), FuseFilterErrorMsg) {
 			// 230+ duplicate keys in hashes
 			// block was deleted 115+ rows
 			oldHashes := hashes
