@@ -267,6 +267,7 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo Vec
 		keys, distances, err = algo.Search(proc, newalgo, query, rt)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				// index destroyed by Remove() or HouseKeeping.  Retry!
 				continue
 			}
 			return nil, nil, err
