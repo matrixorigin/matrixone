@@ -17,6 +17,7 @@ package index
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -70,18 +71,21 @@ func NewBloomFilter(data containers.Vector) (StaticFilter, error) {
 }
 
 func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
-	var inner *xorfilter.BinaryFuse8
+	var inners *xorfilter.BinaryFuse8
 	var err error
-	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+	if inners, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+		logutil.Error("BuildFuseFilter",
+			zap.String("error", err.Error()))
 		if strings.Contains(err.Error(), FuseFilterErrorMsg) {
 			// 230+ duplicate keys in hashes
 			// block was deleted 115+ rows
 			oldHashes := hashes
 			hashes = lo.Uniq(hashes)
-			logutil.Infof("PopulateBinaryFuse8 err: %v, "+
-				"old hashes: %v, new hashes: %v",
-				err.Error(), oldHashes, hashes)
-			if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+			logutil.Info("BuildFuseFilter",
+				zap.String("error", err.Error()),
+				zap.Uint64s("old hashes", oldHashes),
+				zap.Uint64s("hashes", hashes))
+			if inners, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 				return nil, err
 			}
 		} else {
@@ -89,11 +93,11 @@ func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
 		}
 	}
 	sf := &bloomFilter{}
-	sf.BinaryFuse8 = *inner
+	sf.BinaryFuse8 = *inners
 	return sf, nil
 }
 
-func NewBloomFilter2(datas []containers.Vector) (StaticFilter, error) {
+func NewBloomFilter2(vectors []containers.Vector) (StaticFilter, error) {
 	hashes := make([]uint64, 0)
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
@@ -101,7 +105,7 @@ func NewBloomFilter2(datas []containers.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	for _, data := range datas {
+	for _, data := range vectors {
 		if err = containers.ForeachWindowBytes(data.GetDownstreamVector(), 0, data.Length(), op, nil); err != nil {
 			return nil, err
 		}
@@ -151,17 +155,17 @@ func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nu
 }
 
 func (filter *bloomFilter) Marshal() (buf []byte, err error) {
-	var w bytes.Buffer
-	if err = filter.MarshalWithBuffer(&w); err != nil {
+	var str bytes.Buffer
+	if err = filter.MarshalWithBuffer(&str); err != nil {
 		return
 	}
-	buf = w.Bytes()
+	buf = str.Bytes()
 	return
 }
 
-func (filter *bloomFilter) MarshalWithBuffer(w *bytes.Buffer) (err error) {
+func (filter *bloomFilter) MarshalWithBuffer(str *bytes.Buffer) (err error) {
 	if _, err = types.WriteValues(
-		w,
+		str,
 		filter.Seed,
 		filter.SegmentLength,
 		filter.SegmentLengthMask,
@@ -169,39 +173,39 @@ func (filter *bloomFilter) MarshalWithBuffer(w *bytes.Buffer) (err error) {
 		filter.SegmentCountLength); err != nil {
 		return
 	}
-	_, err = w.Write(types.EncodeSlice(filter.Fingerprints))
+	_, err = str.Write(types.EncodeSlice(filter.Fingerprints))
 	return
 }
 
-func (filter *bloomFilter) Unmarshal(buf []byte) error {
-	filter.Seed = types.DecodeFixed[uint64](buf[:8])
-	buf = buf[8:]
-	filter.SegmentLength = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.SegmentLengthMask = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.SegmentCount = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.SegmentCountLength = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.Fingerprints = types.DecodeSlice[uint8](buf)
+func (filter *bloomFilter) Unmarshal(buffer []byte) error {
+	filter.Seed = types.DecodeFixed[uint64](buffer[:8])
+	buffer = buffer[8:]
+	filter.SegmentLength = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.SegmentLengthMask = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.SegmentCount = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.SegmentCountLength = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.Fingerprints = types.DecodeSlice[uint8](buffer)
 	return nil
 }
 
 func (filter *bloomFilter) String() string {
-	s := "<BF>\n"
-	s += strconv.Itoa(int(filter.SegmentCount))
-	s += "\n"
-	s += strconv.Itoa(int(filter.SegmentCountLength))
-	s += "\n"
-	s += strconv.Itoa(int(filter.SegmentLength))
-	s += "\n"
-	s += strconv.Itoa(int(filter.SegmentLengthMask))
-	s += "\n"
-	s += strconv.Itoa(len(filter.Fingerprints))
-	s += "\n"
-	s += "</BF>"
-	return s
+	str := "<BF>\n"
+	str += strconv.Itoa(int(filter.SegmentCount))
+	str += "\n"
+	str += strconv.Itoa(int(filter.SegmentCountLength))
+	str += "\n"
+	str += strconv.Itoa(int(filter.SegmentLength))
+	str += "\n"
+	str += strconv.Itoa(int(filter.SegmentLengthMask))
+	str += "\n"
+	str += strconv.Itoa(len(filter.Fingerprints))
+	str += "\n"
+	str += "</BF>"
+	return str
 }
 
 func (filter *bloomFilter) PrefixFnId(_ uint8) uint8 {
