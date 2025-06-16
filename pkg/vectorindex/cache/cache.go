@@ -70,19 +70,20 @@ type VectorIndexSearch struct {
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
 	Algo       VectorIndexSearchIf
+	Cond       *sync.Cond
 }
 
 func (s *VectorIndexSearch) Destroy() {
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
 }
 
 func (s *VectorIndexSearch) Load(proc *process.Process) error {
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
 
 	err := s.Algo.Load(proc)
 	if err != nil {
@@ -94,6 +95,34 @@ func (s *VectorIndexSearch) Load(proc *process.Process) error {
 	s.Status.Store(STATUS_LOADED)
 	s.extend(true)
 	return nil
+}
+
+func (s *VectorIndexSearch) LoadAndSearch(proc *process.Process, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
+
+	err = s.Algo.Load(proc)
+	if err != nil {
+		// load error
+		s.Status.Store(STATUS_ERROR)
+		return nil, nil, err
+	}
+
+	// Loaded
+	s.Status.Store(STATUS_LOADED)
+	s.extend(true)
+
+	// signal condition
+	s.Cond.Broadcast()
+
+	// if error mark as outdated
+	err = s.Algo.UpdateConfig(newalgo)
+	if err != nil {
+		s.Status.Store(STATUS_OUTDATED)
+	}
+
+	s.extend(false)
+	return s.Algo.Search(proc, query, rt)
 }
 
 func (s *VectorIndexSearch) Expired() bool {
@@ -116,13 +145,11 @@ func (s *VectorIndexSearch) extend(update bool) {
 
 func (s *VectorIndexSearch) Search(proc *process.Process, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	s.Mutex.RLock()
+	defer s.Mutex.RUnlock()
 
 	for s.Status.Load() == 0 {
-		s.Mutex.RUnlock()
-		time.Sleep(time.Millisecond)
-		s.Mutex.RLock()
+		s.Cond.Wait()
 	}
-	defer s.Mutex.RUnlock()
 
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
@@ -244,17 +271,21 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	value, loaded := c.IndexMap.LoadOrStore(key, &VectorIndexSearch{Algo: newalgo})
+	s := &VectorIndexSearch{Algo: newalgo}
+	s.Cond = sync.NewCond(&s.Mutex)
+	value, loaded := c.IndexMap.LoadOrStore(key, s)
 	algo := value.(*VectorIndexSearch)
 	if !loaded {
 		// load model from database and if error during loading, remove the entry from gIndexMap
-		err := algo.Load(proc)
+		keys, distances, err := algo.LoadAndSearch(proc, newalgo, query, rt)
 		if err != nil {
 			c.IndexMap.Delete(key)
 			return nil, nil, err
 		}
+		return keys, distances, err
+	} else {
+		return algo.Search(proc, newalgo, query, rt)
 	}
-	return algo.Search(proc, newalgo, query, rt)
 }
 
 // remove key from cache
