@@ -66,8 +66,8 @@ type bloomFilter struct {
 	xorfilter.BinaryFuse8
 }
 
-func NewBloomFilter(data containers.Vector) (StaticFilter, error) {
-	return NewBloomFilter2([]containers.Vector{data})
+func NewBloomFilter(vec containers.Vector) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{vec})
 }
 
 func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
