@@ -94,35 +94,8 @@ func (s *VectorIndexSearch) Load(proc *process.Process) error {
 	// Loaded
 	s.Status.Store(STATUS_LOADED)
 	s.extend(true)
-	return nil
-}
-
-func (s *VectorIndexSearch) LoadAndSearch(proc *process.Process, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
-
-	err = s.Algo.Load(proc)
-	if err != nil {
-		// load error
-		s.Status.Store(STATUS_ERROR)
-		return nil, nil, err
-	}
-
-	// Loaded
-	s.Status.Store(STATUS_LOADED)
-	s.extend(true)
-
-	// signal condition
 	s.Cond.Broadcast()
-
-	// if error mark as outdated
-	err = s.Algo.UpdateConfig(newalgo)
-	if err != nil {
-		s.Status.Store(STATUS_OUTDATED)
-	}
-
-	s.extend(false)
-	return s.Algo.Search(proc, query, rt)
+	return nil
 }
 
 func (s *VectorIndexSearch) Expired() bool {
@@ -144,17 +117,24 @@ func (s *VectorIndexSearch) extend(update bool) {
 }
 
 func (s *VectorIndexSearch) Search(proc *process.Process, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+
+	func() {
+		s.Cond.L.Lock()
+		defer s.Cond.L.Unlock()
+		for s.Status.Load() == 0 {
+			s.Cond.Wait()
+		}
+	}()
+
 	s.Mutex.RLock()
 	defer s.Mutex.RUnlock()
 
-	for s.Status.Load() == 0 {
-		s.Cond.Wait()
-	}
+	// entry may be removed already
 
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
-			return nil, nil, moerr.NewInternalErrorNoCtx("Index destroyed")
+			return nil, nil, moerr.NewInvalidStateNoCtx("Index destroyed")
 		} else {
 			return nil, nil, moerr.NewInternalErrorNoCtx("Load index error")
 		}
@@ -271,20 +251,28 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
-	s := &VectorIndexSearch{Algo: newalgo}
-	s.Cond = sync.NewCond(&s.Mutex)
-	value, loaded := c.IndexMap.LoadOrStore(key, s)
-	algo := value.(*VectorIndexSearch)
-	if !loaded {
-		// load model from database and if error during loading, remove the entry from gIndexMap
-		keys, distances, err := algo.LoadAndSearch(proc, newalgo, query, rt)
+	for {
+		s := &VectorIndexSearch{Algo: newalgo}
+		s.Cond = sync.NewCond(&s.Mutex)
+		value, loaded := c.IndexMap.LoadOrStore(key, s)
+		algo := value.(*VectorIndexSearch)
+		if !loaded {
+			// load model from database and if error during loading, remove the entry from gIndexMap
+			err := algo.Load(proc)
+			if err != nil {
+				c.IndexMap.Delete(key)
+				return nil, nil, err
+			}
+		}
+		keys, distances, err = algo.Search(proc, newalgo, query, rt)
 		if err != nil {
-			c.IndexMap.Delete(key)
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
+				continue
+			}
 			return nil, nil, err
 		}
-		return keys, distances, err
-	} else {
-		return algo.Search(proc, newalgo, query, rt)
+
+		return keys, distances, nil
 	}
 }
 
