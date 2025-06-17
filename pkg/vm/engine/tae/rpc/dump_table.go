@@ -213,6 +213,7 @@ func (c *DumpTableArg) FromCommand(cmd *cobra.Command) (err error) {
 			return err
 		}
 		c.objectListBatch = NewObjectListBatch()
+		c.dir = GetDumpTableDir(c.table.ID, c.txn.GetStartTS())
 	} else {
 		return moerr.NewInternalErrorNoCtx("inspect context not found")
 	}
@@ -241,7 +242,6 @@ func (c *DumpTableArg) Run() (err error) {
 		return
 	}
 	defer c.txn.Commit(c.ctx)
-	c.dir = GetDumpTableDir(c.table.ID, c.txn.GetStartTS())
 	logutil.Info(
 		"DUMP-TABLE-START",
 		zap.String(
@@ -442,7 +442,7 @@ func copyFile(
 
 func (c *DumpTableArg) flush(name string, bat *batch.Batch) (err error) {
 	nameWithDir := fmt.Sprintf("%s/%s", c.dir, name)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCopyTable, nameWithDir, c.dstfs)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterDumpTable, nameWithDir, c.dstfs)
 	if err != nil {
 		return
 	}

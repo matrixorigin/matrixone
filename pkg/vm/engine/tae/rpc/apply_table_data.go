@@ -191,7 +191,7 @@ func (a *ApplyTableDataArg) Run() (err error) {
 		return
 	}
 
-	objectlistBatch, release, err := a.readBatch(CopyTableObjectList, ObjectListAttrs)
+	objectlistBatch, release, err := a.readBatch(DumpTableObjectList, ObjectListAttrs)
 	if err != nil {
 		return
 	}
@@ -328,13 +328,13 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 
 	var schemaBatch, tableBatch *batch.Batch
 	var schemaRelease, tableRelease func()
-	if schemaBatch, schemaRelease, err = a.readBatch(CopyTableSchema, catalog.SystemColumnSchema.AllNames()); err != nil {
+	if schemaBatch, schemaRelease, err = a.readBatch(DumpTableSchema, catalog.SystemColumnSchema.AllNames()); err != nil {
 		return
 	}
 	defer schemaRelease()
 	defer schemaBatch.Clean(a.mp)
 	tnSchemaBatch := containers.ToTNBatch(schemaBatch, a.mp)
-	if tableBatch, tableRelease, err = a.readBatch(CopyTableTable, catalog.SystemTableSchema.AllNames()); err != nil {
+	if tableBatch, tableRelease, err = a.readBatch(DumpTableTable, catalog.SystemTableSchema.AllNames()); err != nil {
 		return
 	}
 	defer tableRelease()

@@ -12101,7 +12101,8 @@ func Test_ApplyTableData(t *testing.T) {
 	opts.EnableApplyTableData = true
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	schema := catalog.MockSchema(2, -1)
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
@@ -12115,7 +12116,7 @@ func Test_ApplyTableData(t *testing.T) {
 
 	dir := "Test_ApplyTableData"
 
-	copyArg := taerpc.NewCopyTableArg(
+	dumpArg := taerpc.NewDumpTableArg(
 		ctx,
 		tableEntry,
 		dir,
@@ -12123,7 +12124,7 @@ func Test_ApplyTableData(t *testing.T) {
 		common.DebugAllocator,
 		tae.Opts.Fs,
 	)
-	err := copyArg.Run()
+	err := dumpArg.Run()
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
@@ -12140,6 +12141,13 @@ func Test_ApplyTableData(t *testing.T) {
 	assert.NoError(t, err)
 	err = applyArg.Run()
 	assert.NoError(t, err)
+
+	txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
+	assert.NoError(t, txn.Commit(ctx))
+	for i := 0; i < colCount; i++ {
+		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
+		assert.Equal(t, 2, rows)
+	}
 
 	t.Log(tae.Catalog.SimplePPString(3))
 }
