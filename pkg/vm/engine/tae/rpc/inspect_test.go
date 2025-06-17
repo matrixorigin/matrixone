@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"testing"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -349,32 +351,28 @@ func TestApplyTableData(t *testing.T) {
 	tableEntry := table.GetMeta().(*catalog.TableEntry)
 	assert.NoError(t, txn.Commit(ctx))
 
-	dir := "Test_ApplyTableData"
+	dumpTableCmd := fmt.Sprintf("dump-table -d %d -t %d", tableEntry.GetDB().ID, tableEntry.ID)
 
-	dumpArg := NewDumpTableArg(
-		ctx,
-		tableEntry,
-		dir,
-		MockInspectContext(tae.DB),
-		common.DebugAllocator,
-		tae.Opts.Fs,
+	_, err := mh.runInspectCmd(dumpTableCmd)
+	require.NoError(t, err)
+
+	dumpTableFS, err := tae.Runtime.TmpFS.GetOrCreateApp(
+		&fileservice.AppConfig{
+			Name: DumpTableDir,
+			GCFn: GCDumpTableFiles,
+		},
 	)
-	err := dumpArg.Run()
-	assert.NoError(t, err)
 
-	t.Log(tae.Catalog.SimplePPString(3))
+	dirs := dumpTableFS.List(ctx, "")
+	var dir string
+	for entry, err := range dirs {
+		assert.NoError(t, err)
+		t.Log(entry.Name)
+		dir = entry.Name
+	}
 
-	applyArg, err := NewApplyTableDataArg(
-		ctx,
-		dir,
-		MockInspectContext(tae.DB),
-		"db2",
-		"table2",
-		common.DebugAllocator,
-		tae.Opts.Fs,
-	)
-	assert.NoError(t, err)
-	err = applyArg.Run()
-	assert.NoError(t, err)
+	applyTableCmd := fmt.Sprintf("apply-table-data -d %v -t %v -o %s", "db2", "table2", dir)
 
+	_, err = mh.runInspectCmd(applyTableCmd)
+	require.NoError(t, err)
 }
