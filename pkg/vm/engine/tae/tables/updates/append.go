@@ -76,25 +76,6 @@ func NewAppendNode(
 	return n
 }
 
-func NewAppendNodeWithTS(
-	ts types.TS,
-	startRow, maxRow uint32,
-	isTombstone bool,
-	mvcc *AppendMVCCHandle) *AppendNode {
-	n := &AppendNode{
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:   ts.Prev(),
-			Prepare: ts,
-			End:     ts,
-		},
-		startRow:    startRow,
-		maxRow:      maxRow,
-		mvcc:        mvcc,
-		isTombstone: isTombstone,
-	}
-	return n
-}
-
 func NewEmptyAppendNode() *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},

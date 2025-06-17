@@ -114,6 +114,7 @@ var NameETL [NameStringOff]byte
 var NameNormal [NameStringOff]byte
 var NameTmp [NameStringOff]byte
 var NameCopyTable [NameStringOff]byte
+var NameDumpTable [NameStringOff]byte
 
 func init() {
 	copy(NameQueryResult[:], "Query_ResultXXXX")
@@ -123,6 +124,7 @@ func init() {
 	copy(NameNormal[:], "Writer_NormalXXX")
 	copy(NameTmp[:], "Writer_TmpXXXXXX")
 	copy(NameCopyTable[:], "Copy_TableXXXXXX")
+	copy(NameDumpTable[:], "Dump_TableXXXXXX")
 }
 
 func BuildQueryResultName() ObjectName {
@@ -150,5 +152,5 @@ func BuildTmpName() ObjectName {
 }
 
 func BuildDumpTableName() ObjectName {
-	return NameCopyTable[:]
+	return NameDumpTable[:]
 }

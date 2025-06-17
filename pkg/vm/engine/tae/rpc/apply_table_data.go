@@ -355,6 +355,9 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 		return
 	}
 
+	meta := a.rel.GetMeta().(*catalog.TableEntry)
+	meta.Stats.SkipCheckDirtyWhenSubscribe = true
+
 	a.tableID = a.rel.ID()
 
 	packer := types.NewPacker()

@@ -192,19 +192,6 @@ func (entry *ObjectEntry) GetDropEntry(
 	isNewNode = true
 	return
 }
-func (entry *ObjectEntry) GetDropEntryWithTS(
-	ts types.TS,
-) (dropped *ObjectEntry, updatedCEntry *ObjectEntry) {
-	dropped = entry.Clone()
-	dropped.ObjectState = ObjectState_Delete_Active
-	dropped.DeletedAt = ts
-	dropped.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(ts)
-	dropped.GetObjectData().UpdateMeta(dropped)
-	updatedCEntry = entry.Clone()
-	updatedCEntry.nextVersion = dropped
-	dropped.prevVersion = updatedCEntry
-	return
-}
 
 func (entry *ObjectEntry) GetUpdateEntry(
 	txn txnif.TxnReader,
@@ -699,12 +686,6 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *Object
 		ObjectState:    ObjectState_Create_ApplyCommit,
 	}
 	return e
-}
-func (entry *ObjectEntry) SetTable(tbl *TableEntry) {
-	entry.table = tbl
-}
-func (entry *ObjectEntry) SetObjectData(data data.Object) {
-	entry.objData = data
 }
 
 func MockObjectEntry(

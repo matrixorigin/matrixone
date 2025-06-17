@@ -72,9 +72,6 @@ func DecodeDumpTableDir(dir string) (tid uint64, createTime time.Time, snapshotT
 		return 0, time.Time{}, types.TS{}, err
 	}
 	snapshotTS = types.StringToTS(parts[2])
-	if err != nil {
-		return 0, time.Time{}, types.TS{}, err
-	}
 	return
 }
 
@@ -194,12 +191,14 @@ func (c *DumpTableArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		c.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
 		c.mp = common.DefaultAllocator
-		c.dstfs, err = c.inspectContext.db.Opts.TmpFs.GetOrCreateApp(
+		if c.dstfs, err = c.inspectContext.db.Opts.TmpFs.GetOrCreateApp(
 			&fileservice.AppConfig{
 				Name: DumpTableDir,
 				GCFn: GCDumpTableFiles,
 			},
-		)
+		); err != nil {
+			return
+		}
 		c.srcfs = c.inspectContext.db.Opts.Fs
 		c.ctx = context.Background()
 		database, err := c.inspectContext.db.Catalog.GetDatabaseByID(uint64(did))
