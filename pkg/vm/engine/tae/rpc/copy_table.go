@@ -83,7 +83,7 @@ func GCDumpTableFiles(filePath string, fs fileservice.FileService) (neesGC bool,
 	if err != nil {
 		return
 	}
-	if createTime.Add(time.Hour * 24 * 30).Before(time.Now()) {
+	if createTime.Add(time.Hour * 24).Before(time.Now()) {
 		neesGC = true
 		ctx := context.Background()
 		ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)

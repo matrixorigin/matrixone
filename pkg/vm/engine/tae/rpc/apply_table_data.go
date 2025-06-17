@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 )
 
@@ -47,10 +46,13 @@ type ApplyTableDataArg struct {
 	dir            string
 	inspectContext *inspectContext
 	mp             *mpool.MPool
-	fs             fileservice.FileService
+	srcFS, dstFS   fileservice.FileService
 
 	txn     txnif.AsyncTxn
 	catalog *catalog.Catalog
+
+	rel    handle.Relation
+	schema *catalog.Schema
 
 	tableName    string
 	tableID      uint64
@@ -74,7 +76,8 @@ func NewApplyTableDataArg(
 		tableName:      tableName,
 		inspectContext: inspectContext,
 		mp:             mp,
-		fs:             fs,
+		srcFS:          fs,
+		dstFS:          fs,
 	}
 	var err error
 	if a.txn, err = a.inspectContext.db.StartTxn(nil); err != nil {
@@ -105,7 +108,15 @@ func (a *ApplyTableDataArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		a.inspectContext = cmd.Flag("ictx").Value.(*inspectContext)
 		a.mp = common.DefaultAllocator
-		a.fs = a.inspectContext.db.Opts.Fs
+		if a.srcFS, err = a.inspectContext.db.Opts.TmpFs.GetOrCreateApp(
+			&fileservice.AppConfig{
+				Name: DumpTableDir,
+				GCFn: GCDumpTableFiles,
+			},
+		); err != nil {
+			return err
+		}
+		a.dstFS = a.inspectContext.db.Opts.Fs
 		a.ctx = context.Background()
 		if a.txn, err = a.inspectContext.db.StartTxn(nil); err != nil {
 			return err
@@ -153,7 +164,25 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			if err2 != nil {
 				logutil.Error("APPLY-TABLE-DATA-ROLLBACK-ERROR", zap.Error(err2))
 			}
+		} else {
+			err = a.txn.Commit(a.ctx)
 		}
+		logutil.Info(
+			"APPLY-TABLE-DATA-END",
+			zap.String("dir", a.dir),
+			zap.String(
+				"table",
+				fmt.Sprintf(
+					"%d-%v, %d-%s",
+					a.databaseID,
+					a.databaseName,
+					a.tableID,
+					a.tableName,
+				),
+			),
+			zap.String("end ts", a.txn.GetCommitTS().ToString()),
+			zap.Any("error", err),
+		)
 	}()
 	if err = a.createDatabase(); err != nil {
 		return
@@ -170,8 +199,6 @@ func (a *ApplyTableDataArg) Run() (err error) {
 	defer objectlistBatch.Clean(a.mp)
 	objTypes := vector.MustFixedColNoTypeCheck[int8](objectlistBatch.Vecs[ObjectListAttr_ObjectType_Idx])
 	idVec := objectlistBatch.Vecs[ObjectListAttr_ID_Idx]
-	createTSs := vector.MustFixedColNoTypeCheck[types.TS](objectlistBatch.Vecs[ObjectListAttr_CreateTS_Idx])
-	deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](objectlistBatch.Vecs[ObjectListAttr_DeleteTS_Idx])
 	isPersisted := vector.MustFixedColNoTypeCheck[bool](objectlistBatch.Vecs[ObjectListAttr_IsPersisted_Idx])
 
 	var table *catalog.TableEntry
@@ -194,37 +221,20 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			panic(fmt.Sprintf("invalid object type: %d", objTypes[i]))
 		}
 		stats := objectio.ObjectStats(idVec.GetBytesAt(i))
-		createEntry := &catalog.ObjectEntry{
-			ObjectNode: catalog.ObjectNode{IsTombstone: isTombstone},
-			EntryMVCCNode: catalog.EntryMVCCNode{
-				CreatedAt: createTSs[i],
-				DeletedAt: types.TS{},
+		var obj handle.Object
+		if obj, err = a.rel.CreateNonAppendableObject(
+			isTombstone,
+			&objectio.CreateObjOpt{
+				Stats:       &stats,
+				IsTombstone: isTombstone,
 			},
-			CreateNode:  txnbase.NewTxnMVCCNodeWithTS(createTSs[i]),
-			ObjectState: catalog.ObjectState_Create_ApplyCommit,
-		}
-		if !stats.GetAppendable() {
-			createEntry.ObjectStats = stats
-		} else {
-			emptyStats := objectio.NewObjectStatsWithObjectID(
-				stats.ObjectName().ObjectId(), stats.GetAppendable(), stats.GetSorted(), stats.GetCNCreated(),
-			)
-			createEntry.ObjectStats = *emptyStats
-		}
-		createEntry.SetTable(table)
-		createEntry.SetObjectData(a.catalog.MakeObjectFactory()(createEntry))
-		if !deleteTSs[i].IsEmpty() {
-			dropEntry, createEntry := createEntry.GetDropEntryWithTS(deleteTSs[i])
-			dropEntry.ObjectStats = stats
-			table.AddEntryLocked(dropEntry)
-			table.AddEntryLocked(createEntry)
-		} else {
-			table.AddEntryLocked(createEntry)
+		); err != nil {
+			return
 		}
 
-		attrs := table.GetLastestSchema(isTombstone).AllNames()
+		attrs := a.schema.AllNames()
 		attrs = append(attrs, objectio.TombstoneAttr_CommitTs_Attr)
-		name := createEntry.ObjectName().String()
+		name := stats.ObjectName().String()
 		if !isPersisted[i] {
 			var bat *batch.Batch
 			var objectRelease func()
@@ -232,16 +242,30 @@ func (a *ApplyTableDataArg) Run() (err error) {
 				return
 			}
 			defer objectRelease()
+			logutil.Infof("lalala %v, %v", name, attrs)
 			tnBat := containers.ToTNBatch(bat, a.mp)
-			createEntry.GetObjectData().ApplyDebugBatch(tnBat)
+			meta := obj.GetMeta().(*catalog.ObjectEntry)
+			var anodes []txnif.TxnEntry
+			if anodes, err = meta.GetObjectData().ApplyDebugBatch(tnBat, a.txn); err != nil {
+				return
+			}
+			for _, anode := range anodes {
+				a.txn.GetStore().LogTxnEntry(
+					a.databaseID,
+					a.tableID,
+					anode,
+					nil,
+					nil,
+				)
+			}
 		} else {
 
-			a.fs.Delete(a.ctx, name)
+			a.dstFS.Delete(a.ctx, name)
 			src := path.Join(a.dir, name)
 			if _, err = fileservice.DoWithRetry(
 				"CopyFile",
 				func() ([]byte, error) {
-					return copyFile(a.ctx, a.fs, a.fs, src, name)
+					return copyFile(a.ctx, a.srcFS, a.dstFS, src, name)
 				},
 				64,
 				fileservice.IsRetryableError,
@@ -251,24 +275,6 @@ func (a *ApplyTableDataArg) Run() (err error) {
 
 		}
 	}
-	if err = a.txn.Commit(a.ctx); err != nil {
-		return
-	}
-	logutil.Info(
-		"APPLY-TABLE-DATA-END",
-		zap.String("dir", a.dir),
-		zap.String(
-			"table",
-			fmt.Sprintf(
-				"%d-%v, %d-%s",
-				a.databaseID,
-				a.databaseName,
-				a.tableID,
-				a.tableName,
-			),
-		),
-		zap.String("end ts", a.txn.GetCommitTS().ToString()),
-	)
 	return
 
 }
@@ -279,12 +285,7 @@ func (a *ApplyTableDataArg) createDatabase() (err error) {
 
 	if database, err = a.txn.CreateDatabase(a.databaseName, "", ""); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
-			database, err = a.txn.GetDatabase(a.databaseName)
-			if err != nil {
-				return
-			}
-			a.databaseID = database.GetID()
-			return nil
+			return moerr.NewInternalErrorNoCtx("database already exists")
 		}
 		return
 	}
@@ -341,7 +342,21 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 	defer tableBatch.Clean(a.mp)
 	tnTableBatch := containers.ToTNBatch(tableBatch, a.mp)
 
-	a.tableID = a.catalog.NextTable()
+	var db handle.Database
+	if db, err = a.txn.GetDatabase(a.databaseName); err != nil {
+		return
+	}
+
+	a.schema, err = readSchema(a.tableName, tnSchemaBatch, tnTableBatch)
+
+	if a.rel, err = db.CreateRelation(a.schema); err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+			return moerr.NewInternalErrorNoCtx("table already exists")
+		}
+		return
+	}
+
+	a.tableID = a.rel.ID()
 
 	packer := types.NewPacker()
 	tnTableBatch.GetVectorByName(pkgcatalog.SystemRelAttr_ID).Update(0, a.tableID, false)
@@ -379,16 +394,6 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 	}
 	packer.Close()
 
-	panguEpoch := types.BuildTS(42424242, 0)
-	txnNode := &txnbase.TxnMVCCNode{
-		Start:   panguEpoch,
-		Prepare: panguEpoch,
-		End:     panguEpoch,
-	}
-
-	a.catalog.ReplayMOTables(a.ctx, txnNode, tnTableBatch, tnSchemaBatch, &catalog.BaseReplayer{})
-
-	var db handle.Database
 	if db, err = a.txn.GetDatabase(pkgcatalog.MO_CATALOG); err != nil {
 		return
 	}
@@ -417,7 +422,7 @@ func (a *ApplyTableDataArg) readBatch(name string, attrs []string) (bat *batch.B
 	fname := path.Join(a.dir, name)
 	var reader *ioutil.BlockReader
 	if reader, err = ioutil.NewFileReader(
-		a.fs,
+		a.srcFS,
 		fname,
 	); err != nil {
 		return
@@ -438,4 +443,58 @@ func (a *ApplyTableDataArg) readBatch(name string, attrs []string) (bat *batch.B
 	bat = bats[0]
 	bat.Attrs = attrs
 	return
+}
+
+func readSchema(
+	name string,
+	colBat *containers.Batch,
+	tblBat *containers.Batch,
+) (*catalog.Schema, error) {
+
+	if tblBat.Length() != 1 {
+		return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid table batch, %d", tblBat.Length()))
+	}
+	versions := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Version).GetDownstreamVector())
+	catalogVersions := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CatalogVersion).GetDownstreamVector())
+	partitioneds := vector.MustFixedColNoTypeCheck[int8](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partitioned).GetDownstreamVector())
+	roleIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Owner).GetDownstreamVector())
+	userIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Creator).GetDownstreamVector())
+	createAts := vector.MustFixedColNoTypeCheck[types.Timestamp](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateAt).GetDownstreamVector())
+	tenantIDs := vector.MustFixedColNoTypeCheck[uint32](tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_AccID).GetDownstreamVector())
+
+	colTids := vector.MustFixedColNoTypeCheck[uint64](colBat.GetVectorByName(pkgcatalog.SystemColAttr_RelID).GetDownstreamVector())
+	nullables := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_NullAbility).GetDownstreamVector())
+	isHiddens := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsHidden).GetDownstreamVector())
+	clusterbys := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsClusterBy).GetDownstreamVector())
+	autoIncrements := vector.MustFixedColNoTypeCheck[int8](colBat.GetVectorByName(pkgcatalog.SystemColAttr_IsAutoIncrement).GetDownstreamVector())
+	idxes := vector.MustFixedColNoTypeCheck[int32](colBat.GetVectorByName(pkgcatalog.SystemColAttr_Num).GetDownstreamVector())
+	seqNums := vector.MustFixedColNoTypeCheck[uint16](colBat.GetVectorByName(pkgcatalog.SystemColAttr_Seqnum).GetDownstreamVector())
+
+	schema := catalog.NewEmptySchema(name)
+	schema.ReadFromBatch(
+		colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, 0,
+		func(currentName string, currentTid uint64) (goNext bool) {
+			return true
+		},
+	)
+	schema.Comment = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).GetDownstreamVector().GetStringAt(0)
+	schema.Version = versions[0]
+	schema.CatalogVersion = catalogVersions[0]
+	schema.Partitioned = partitioneds[0]
+	schema.Partition = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Partition).GetDownstreamVector().GetStringAt(0)
+	schema.Relkind = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Kind).GetDownstreamVector().GetStringAt(0)
+	schema.Createsql = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_CreateSQL).GetDownstreamVector().GetStringAt(0)
+	schema.View = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ViewDef).GetDownstreamVector().GetStringAt(0)
+	schema.Constraint = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Constraint).GetDownstreamVector().CloneBytesAt(0)
+	schema.AcInfo.RoleID = roleIDs[0]
+	schema.AcInfo.UserID = userIDs[0]
+	schema.AcInfo.CreateAt = createAts[0]
+	schema.AcInfo.TenantID = tenantIDs[0]
+	// unmarshal before releasing, no need to copy
+	extra := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_ExtraInfo).GetDownstreamVector().GetBytesAt(0)
+	schema.MustRestoreExtra(extra)
+	if err := schema.Finalize(true); err != nil {
+		return nil, err
+	}
+	return schema, nil
 }

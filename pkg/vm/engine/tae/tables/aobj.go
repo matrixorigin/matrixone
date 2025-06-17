@@ -259,7 +259,7 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
 		return int32(vec.Length()), nil
 	}
 }
-func (obj *aobject) ApplyDebugBatch(bat *containers.Batch) (err error) {
+func (obj *aobject) ApplyDebugBatch(bat *containers.Batch, txn txnif.AsyncTxn) (ans []txnif.TxnEntry, err error) {
 	node := obj.PinNode()
 	defer node.Unref()
 	if node.IsPersisted() {
@@ -271,14 +271,21 @@ func (obj *aobject) ApplyDebugBatch(bat *containers.Batch) (err error) {
 	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
 	prevTS := commitTSs[0]
 	anodeStart := 0
+	ans = make([]txnif.TxnEntry, 0)
 	for i, ts := range commitTSs {
 		if !ts.EQ(&prevTS) {
-			obj.appendMVCC.AddAppendNodeWithTSLocked(uint32(anodeStart), uint32(i), prevTS)
+			an, create := obj.appendMVCC.AddAppendNodeLocked(txn, uint32(anodeStart), uint32(i))
+			if create {
+				ans = append(ans, an)
+			}
 			anodeStart = i
 			prevTS = ts
 		}
 	}
-	obj.appendMVCC.AddAppendNodeWithTSLocked(uint32(anodeStart), uint32(bat.Length()), prevTS)
+	an, create := obj.appendMVCC.AddAppendNodeLocked(txn, uint32(anodeStart), uint32(bat.Length()))
+	if create {
+		ans = append(ans, an)
+	}
 	tmpAttrs := bat.Attrs
 	bat.Attrs = tmpAttrs[:len(tmpAttrs)-1]
 	if _, err = mnode.ApplyAppendLocked(bat); err != nil {
