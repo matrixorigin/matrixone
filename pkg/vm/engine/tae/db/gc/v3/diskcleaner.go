@@ -30,6 +30,7 @@ import (
 )
 
 var CauseSwitchWrite2Replay = moerr.NewInternalErrorNoCtx("SwitchWrite2Replay")
+var CauseStopGC = moerr.NewInternalErrorNoCtx("StopGC")
 
 const (
 	JT_GCNoop tasks.JobType = 300 + iota

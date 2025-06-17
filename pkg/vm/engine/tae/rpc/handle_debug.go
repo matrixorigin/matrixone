@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"slices"
 	"strconv"
 	"strings"
@@ -566,20 +565,14 @@ func (h *Handle) HandleDiskCleaner(
 	case cmd_util.RemoveChecker:
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
 	case cmd_util.StopGC:
-		h.db.CronJobs.RemoveJob(db.CronJobs_Name_GCDisk)
-		if err = h.db.DiskCleaner.FlushQueue(ctx); err != nil {
+		if err = h.db.Controller.SwitchTxnMode(ctx, 3, ""); err != nil {
 			return
 		}
 		return
 	case cmd_util.StartGC:
-		err = h.db.CronJobs.AddJob(
-			db.CronJobs_Name_GCDisk,
-			h.db.Opts.GCCfg.ScanGCInterval,
-			func(ctx context.Context) {
-				h.db.DiskCleaner.GC(ctx)
-			},
-			1,
-		)
+		if err = h.db.Controller.SwitchTxnMode(ctx, 4, ""); err != nil {
+			return
+		}
 		return
 	case cmd_util.AddChecker:
 		break
