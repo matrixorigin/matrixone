@@ -1237,6 +1237,10 @@ func (m *MockCompilerContext) GetAccountId() (uint32, error) {
 	return 0, nil
 }
 
+func (m *MockCompilerContext) GetAccountName() string {
+	return ""
+}
+
 func (m *MockCompilerContext) GetContext() context.Context {
 	return m.ctx
 }

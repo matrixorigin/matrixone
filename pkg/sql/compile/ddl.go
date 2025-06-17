@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -3818,4 +3820,309 @@ var lockMoTable = func(
 		return err
 	}
 	return nil
+}
+
+func (s *Scope) CreatePitr(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
+	createPitr := s.Plan.GetDdl().GetCreatePitr()
+	pitrName := createPitr.GetName()
+	pitrLevel := tree.PitrLevel(createPitr.GetLevel())
+
+	// Get current account info
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
+	// Check if pitr exists
+	checkSql := getSqlForCheckPitrDup(createPitr)
+	res, err := c.runSqlWithResult(checkSql, int32(accountId))
+	if err != nil {
+		return err
+	}
+
+	// If pitr exists and IfNotExists is false, return error
+	if len(res.Batches) > 0 && res.Batches[0].RowCount() > 0 {
+		if !createPitr.GetIfNotExists() {
+			switch pitrLevel {
+			case tree.PITRLEVELCLUSTER:
+				return moerr.NewInternalError(c.proc.Ctx, "cluster level pitr already exists")
+			case tree.PITRLEVELACCOUNT:
+				return moerr.NewInternalErrorf(c.proc.Ctx, "account %s does not exist", createPitr.AccountName)
+			case tree.PITRLEVELDATABASE:
+				return moerr.NewInternalErrorf(c.proc.Ctx, "database `%s` already has a pitr", createPitr.DatabaseName)
+			case tree.PITRLEVELTABLE:
+				return moerr.NewInternalErrorf(c.proc.Ctx, "table %s.%s does not exist", createPitr.DatabaseName, createPitr.TableName)
+			}
+		}
+		return nil
+	}
+
+	// get pitr id
+	newUUid, err := uuid.NewV7()
+	if err != nil {
+		return err
+	}
+
+	// Build create pitr sql
+	sql := fmt.Sprintf(`insert into mo_catalog.mo_pitr(
+                               pitr_id, 
+                               pitr_name, 
+                               create_account, 
+                               create_time, 
+                               modified_time, 
+                               level, 
+                               account_id, 
+                               account_name, 
+                               database_name, 
+                               table_name, 
+                               obj_id, 
+                               pitr_length, 
+                               pitr_unit) values ('%s', '%s', %d, '%s', '%s', '%s', %d, '%s', '%s', '%s', %d, %d, '%s')`,
+		newUUid,
+		pitrName,
+		createPitr.GetCurrentAccountId(),
+		types.CurrentTimestamp().String2(time.UTC, 0),
+		types.CurrentTimestamp().String2(time.UTC, 0),
+		pitrLevel.String(),
+		createPitr.GetCurrentAccountId(),
+		createPitr.GetAccountName(),
+		createPitr.GetDatabaseName(),
+		createPitr.GetTableName(),
+		getPitrObjectId(createPitr),
+		createPitr.GetPitrValue(),
+		createPitr.GetPitrUnit())
+
+	// Execute create pitr sql
+	err = c.runSql(sql)
+	if err != nil {
+		return err
+	}
+
+	// --- Begin sys_mo_catalog_pitr logic ---
+	const sysMoCatalogPitr = "sys_mo_catalog_pitr"
+	const sysAccountId = 0
+
+	// Query for sys_mo_catalog_pitr
+	sysPitrSql := "select pitr_length, pitr_unit from mo_catalog.mo_pitr where pitr_name = '" + sysMoCatalogPitr + "'"
+	sysRes, err := c.runSqlWithResult(sysPitrSql, sysAccountId)
+	if err != nil {
+		return err
+	}
+	defer sysRes.Close()
+
+	var needInsertSysPitr = true
+	var needUpdateSysPitr = false
+	var sysPitrLength uint64
+	var sysPitrUnit string
+	if len(sysRes.Batches) > 0 && sysRes.Batches[0].RowCount() > 0 {
+		// sys_mo_catalog_pitr exists
+		needInsertSysPitr = false
+		vecs := sysRes.Batches[0].Vecs
+		if len(vecs) < 2 {
+			return moerr.NewInternalErrorf(c.proc.Ctx, "unexpected sys_mo_catalog_pitr result columns")
+		}
+		// pitr_length is uint64, pitr_unit is string (varlena)
+		if vecs[0].Length() > 0 {
+			col := vector.MustFixedColNoTypeCheck[uint64](vecs[0])
+			sysPitrLength = col[0]
+		}
+		if vecs[1].Length() > 0 {
+			col := vector.MustFixedColNoTypeCheck[types.Varlena](vecs[1])
+			sysPitrUnit = col[0].GetString(vecs[1].GetArea())
+		}
+		// Compare time ranges
+		oldMinTs, err := addTimeSpan(int(sysPitrLength), sysPitrUnit)
+		if err != nil {
+			return err
+		}
+		newMinTs, err := addTimeSpan(int(createPitr.GetPitrValue()), createPitr.GetPitrUnit())
+		if err != nil {
+			return err
+		}
+		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
+			needUpdateSysPitr = true
+		}
+	}
+
+	if needUpdateSysPitr {
+		updateSql := fmt.Sprintf("update mo_catalog.mo_pitr set pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s'", createPitr.GetPitrValue(), createPitr.GetPitrUnit(), sysMoCatalogPitr)
+		err = c.runSqlWithAccountId(updateSql, sysAccountId)
+		if err != nil {
+			return err
+		}
+	}
+
+	if needInsertSysPitr {
+		// Get mo_catalog database id
+		db, err := c.e.Database(c.proc.Ctx, catalog.MO_CATALOG, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		moCatalogId := db.GetDatabaseId(c.proc.Ctx)
+
+		// Generate new UUID for sys_mo_catalog_pitr
+		sysPitrUuid, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		insertSql := fmt.Sprintf(`insert into mo_catalog.mo_pitr(
+			pitr_id,
+			pitr_name,
+			create_account,
+			create_time,
+			modified_time,
+			level,
+			account_id,
+			account_name,
+			database_name,
+			table_name,
+			obj_id,
+			pitr_length,
+			pitr_unit) values ('%s', '%s', %d, '%s', '%s', '%s', %d, '%s', '%s', '%s', '%s', %d, '%s')`,
+			sysPitrUuid,
+			sysMoCatalogPitr,
+			sysAccountId,
+			types.CurrentTimestamp().String2(time.UTC, 0),
+			types.CurrentTimestamp().String2(time.UTC, 0),
+			tree.PITRLEVELDATABASE.String(),
+			sysAccountId,
+			"sys",
+			catalog.MO_CATALOG,
+			"",
+			moCatalogId,
+			createPitr.GetPitrValue(),
+			createPitr.GetPitrUnit())
+		err = c.runSqlWithAccountId(insertSql, sysAccountId)
+		if err != nil {
+			return err
+		}
+	}
+	// --- End sys_mo_catalog_pitr logic ---
+
+	return nil
+}
+
+// addTimeSpan returns the UTC time that is 'length' units before now, where unit is one of "h", "d", "mo", "y"
+func addTimeSpan(length int, unit string) (time.Time, error) {
+	now := time.Now().UTC()
+	switch unit {
+	case "h":
+		return now.Add(time.Duration(-length) * time.Hour), nil
+	case "d":
+		return now.AddDate(0, 0, -length), nil
+	case "mo":
+		return now.AddDate(0, -length, 0), nil
+	case "y":
+		return now.AddDate(-length, 0, 0), nil
+	default:
+		return time.Time{}, moerr.NewInternalErrorNoCtxf("unknown unit '%s'", unit)
+	}
+}
+
+func (s *Scope) DropPitr(c *Compile) error {
+	if s.ScopeAnalyzer == nil {
+		s.ScopeAnalyzer = NewScopeAnalyzer()
+	}
+	s.ScopeAnalyzer.Start()
+	defer s.ScopeAnalyzer.Stop()
+
+	dropPitr := s.Plan.GetDdl().GetDropPitr()
+	pitrName := dropPitr.GetName()
+	if pitrName == "" {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "pitr name is empty")
+	}
+	const sysMoCatalogPitr = "sys_mo_catalog_pitr"
+	const sysAccountId = 0
+
+	// Get current account
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
+	// 1. Check if PITR exists
+	checkSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
+	res, err := c.runSqlWithResult(checkSql, int32(accountId))
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	if len(res.Batches) == 0 || res.Batches[0].RowCount() == 0 {
+		if !dropPitr.GetIfExists() {
+			return moerr.NewInternalErrorf(c.proc.Ctx, "pitr %s does not exist", pitrName)
+		}
+		return nil
+	}
+
+	// 2. Delete PITR record
+	deleteSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
+	err = c.runSqlWithAccountId(deleteSql, int32(accountId))
+	if err != nil {
+		return err
+	}
+
+	// 3. Check if there are other PITR records besides sys_mo_catalog_pitr
+	checkOtherSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name != '%s'", sysMoCatalogPitr)
+	otherRes, err := c.runSqlWithResult(checkOtherSql, sysAccountId)
+	if err != nil {
+		return err
+	}
+	defer otherRes.Close()
+	if len(otherRes.Batches) == 0 || otherRes.Batches[0].RowCount() == 0 {
+		// 4. No other PITR records, delete sys_mo_catalog_pitr
+		deleteSysSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", sysMoCatalogPitr, sysAccountId)
+		err = c.runSqlWithAccountId(deleteSysSql, sysAccountId)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getSqlForCheckPitrDup(
+	createPitr *plan.CreatePitr,
+) string {
+	sql := "select pitr_id from mo_catalog.mo_pitr where create_account = %d"
+	switch tree.PitrLevel(createPitr.GetLevel()) {
+	case tree.PITRLEVELCLUSTER:
+		return getSqlForCheckDupPitrFormat(createPitr.CurrentAccountId, math.MaxUint64)
+	case tree.PITRLEVELACCOUNT:
+		if createPitr.OriginAccountName {
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createPitr.AccountName)
+		} else {
+			return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and account_name = '%s' and level = 'account' and pitr_status = 1;", createPitr.CurrentAccount)
+		}
+	case tree.PITRLEVELDATABASE:
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and database_name = '%s' and level = 'database' and pitr_status = 1;", createPitr.DatabaseName)
+	case tree.PITRLEVELTABLE:
+		return fmt.Sprintf(sql, createPitr.CurrentAccountId) + fmt.Sprintf(" and database_name = '%s' and table_name = '%s' and level = 'table' and pitr_status = 1;", createPitr.DatabaseName, createPitr.TableName)
+	}
+	return sql
+}
+
+func getSqlForCheckDupPitrFormat(accountId uint32, objId uint64) string {
+	return fmt.Sprintf(`select pitr_id from mo_catalog.mo_pitr where create_account = %d and obj_id = %d;`, accountId, objId)
+}
+
+func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
+	var objectId uint64
+	pitrLevel := tree.PitrLevel(createPitr.GetLevel())
+	switch pitrLevel {
+	case tree.PITRLEVELCLUSTER:
+		objectId = math.MaxUint64
+	case tree.PITRLEVELACCOUNT:
+		objectId = uint64(createPitr.AccountId)
+	case tree.PITRLEVELDATABASE:
+		objectId = createPitr.DatabaseId
+	case tree.PITRLEVELTABLE:
+		objectId = createPitr.TableId
+	}
+	return objectId
 }
