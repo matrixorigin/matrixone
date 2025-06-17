@@ -351,6 +351,7 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
+%token <str> CLONE
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -557,7 +558,7 @@ import (
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
-%type <accountsSetOption> alter_publication_accounts_opt, create_publication_accounts
+%type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
@@ -3643,6 +3644,7 @@ algorithm_type:
 |   INSTANT
 |   INPLACE
 |   COPY
+|   CLONE
 
 able_type:
     DISABLE
@@ -8001,6 +8003,15 @@ create_table_stmt:
         t.Table = *$5
         t.SubscriptionOption = $6
         $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name
+    {
+	t := tree.NewCloneTable()
+	t.CreateTable.Table = *$5
+	t.CreateTable.LikeTableName = *$7
+	t.CreateTable.IsAsLike = true
+	t.SrcTable = *$7
+	$$ = t
     }
 
 load_param_opt_2:
@@ -12536,6 +12547,7 @@ equal_opt:
 //|   TABLE_VALUES
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
+//|   CLONE
 
 non_reserved_keyword:
     ACCOUNT

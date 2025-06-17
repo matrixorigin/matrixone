@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -83,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
@@ -2276,4 +2276,23 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 	op := postdml.NewArgument()
 	op.PostDmlCtx = delCtx
 	return op
+}
+
+func constructTableClone(
+	c *Compile,
+	n *plan.Node,
+) *table_clone.TableClone {
+
+	metaCopy := table_clone.NewTableClone()
+
+	metaCopy.Ctx = &table_clone.TableCloneCtx{
+		Eng:       c.e,
+		SrcTblDef: n.TableDef,
+		SrcObjDef: n.ObjRef,
+
+		DstTblName:      n.InsertCtx.TableDef.Name,
+		DstDatabaseName: n.InsertCtx.TableDef.DbName,
+	}
+
+	return metaCopy
 }

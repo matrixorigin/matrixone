@@ -2978,6 +2978,18 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	return nil
 }
 
+func (s *Scope) TableClone(c *Compile) error {
+	var (
+		err error
+	)
+
+	if err = s.CreateTable(c); err != nil {
+		return err
+	}
+
+	return s.Run(c)
+}
+
 /*
 Sequence table got 1 row and 7 columns(besides row_id).
 -----------------------------------------------------------------------------------
