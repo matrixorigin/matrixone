@@ -228,7 +228,7 @@ func (c *Controller) onCmd(cmds ...any) {
 		case ControlCmd_ToStopGC:
 			c.handleToStopGC(command)
 		case ControlCmd_ToStartGC:
-
+			c.handleToStartGC(command)
 		default:
 			command.setError(
 				moerr.NewInternalErrorNoCtxf("unknown command type %d", command.typ),
