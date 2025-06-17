@@ -549,12 +549,6 @@ func (c *Controller) handleToStartGC(cmd *controlCmd) {
 		// Rollback
 		return
 	}
-	if err = CheckCronJobs(c.db, DBTxnMode_Write); err != nil {
-		// Rollback
-		return
-	}
-
-	return
 }
 
 func (c *Controller) Start() {
