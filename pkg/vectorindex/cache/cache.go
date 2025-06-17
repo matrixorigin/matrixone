@@ -45,9 +45,8 @@ import (
 const (
 	STATUS_NOT_INIT  = 0
 	STATUS_LOADED    = 1
-	STATUS_OUTDATED  = 2
-	STATUS_DESTROYED = 3
-	STATUS_ERROR     = 4
+	STATUS_DESTROYED = 2
+	STATUS_ERROR     = 3
 )
 
 var (
@@ -69,6 +68,7 @@ type VectorIndexSearch struct {
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
+	Outdated   atomic.Bool
 	Algo       VectorIndexSearchIf
 	Cond       *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
 }
@@ -142,7 +142,7 @@ func (s *VectorIndexSearch) Search(proc *process.Process, newalgo VectorIndexSea
 	// if error mark as outdated
 	err = s.Algo.UpdateConfig(newalgo)
 	if err != nil {
-		s.Status.Store(STATUS_OUTDATED)
+		s.Outdated.Store(true)
 	}
 
 	s.extend(false)
@@ -213,7 +213,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
-		if algo.Expired() || algo.Status.Load() == STATUS_OUTDATED {
+		if algo.Expired() || algo.Outdated.Load() {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
 		return true
