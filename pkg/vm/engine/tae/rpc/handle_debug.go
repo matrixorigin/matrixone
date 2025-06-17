@@ -565,14 +565,10 @@ func (h *Handle) HandleDiskCleaner(
 	case cmd_util.RemoveChecker:
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
 	case cmd_util.StopGC:
-		if err = h.db.Controller.SwitchTxnMode(ctx, 3, ""); err != nil {
-			return
-		}
+		err = h.db.Controller.SwitchTxnMode(ctx, 3, "")
 		return
 	case cmd_util.StartGC:
-		if err = h.db.Controller.SwitchTxnMode(ctx, 4, ""); err != nil {
-			return
-		}
+		err = h.db.Controller.SwitchTxnMode(ctx, 4, "")
 		return
 	case cmd_util.AddChecker:
 		break
