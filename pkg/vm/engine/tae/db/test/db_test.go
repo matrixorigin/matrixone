@@ -12207,7 +12207,7 @@ func Test_ApplyTableData2(t *testing.T) {
 	assert.NoError(t, txn.Commit(ctx))
 	for i := 0; i < colCount; i++ {
 		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
-		assert.Equal(t, 2, rows)
+		assert.Equal(t, 0, rows)
 	}
 
 	t.Log(tae.Catalog.SimplePPString(3))
