@@ -1536,9 +1536,9 @@ func (c *checkpointCleaner) tryScanLocked(
 	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
 
 	if initScanWaterMark.IsEmpty() {
-		gckps := c.checkpointCli.GetAllGlobalCheckpoints()
-		if len(gckps) > 0 {
-			initScanWaterMark = gckps[0].GetEnd()
+		maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
+		if maxGCkp != nil {
+			initScanWaterMark = maxGCkp.GetEnd()
 		}
 	}
 	// filter out the incremental checkpoints that do not meet the requirements
