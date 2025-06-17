@@ -70,23 +70,25 @@ type VectorIndexSearch struct {
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
 	Algo       VectorIndexSearchIf
-	Cond       *sync.Cond
+	Cond       *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
 }
 
 func (s *VectorIndexSearch) Destroy() {
-	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
+	s.Mutex.Lock()
+	defer func() {
+		s.Mutex.Unlock()
+		s.Cond.Broadcast()
+	}()
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
-	s.Cond.Broadcast()
 }
 
 func (s *VectorIndexSearch) Load(proc *process.Process) error {
-	s.Cond.L.Lock()
+	s.Mutex.Lock()
 	defer func() {
+		s.Mutex.Unlock()
 		s.Cond.Broadcast()
-		s.Cond.L.Unlock()
 	}()
 
 	err := s.Algo.Load(proc)
@@ -121,19 +123,13 @@ func (s *VectorIndexSearch) extend(update bool) {
 
 func (s *VectorIndexSearch) Search(proc *process.Process, newalgo VectorIndexSearchIf, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
-	func() {
-		s.Cond.L.Lock()
-		defer s.Cond.L.Unlock()
-		for s.Status.Load() == 0 {
-			s.Cond.Wait()
-		}
-	}()
-
-	s.Mutex.RLock()
-	defer s.Mutex.RUnlock()
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
+	for s.Status.Load() == 0 {
+		s.Cond.Wait()
+	}
 
 	// entry may be removed already
-
 	status := s.Status.Load()
 	if status >= STATUS_DESTROYED {
 		if status == STATUS_DESTROYED {
@@ -256,7 +252,8 @@ func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo Vec
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 	for {
 		s := &VectorIndexSearch{Algo: newalgo}
-		s.Cond = sync.NewCond(&s.Mutex)
+		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()
+		s.Cond = sync.NewCond(s.Mutex.RLocker())
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
 		if !loaded {
