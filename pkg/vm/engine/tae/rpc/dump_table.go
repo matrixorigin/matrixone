@@ -239,7 +239,7 @@ func (c *DumpTableArg) Run() (err error) {
 	if c.txn, err = c.inspectContext.db.StartTxn(nil); err != nil {
 		return
 	}
-	if c.dir == ""{
+	if c.dir == "" {
 		c.dir = GetDumpTableDir(c.table.ID, c.txn.GetStartTS())
 	}
 	defer c.txn.Commit(c.ctx)

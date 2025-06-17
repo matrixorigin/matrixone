@@ -12167,6 +12167,7 @@ func Test_ApplyTableData2(t *testing.T) {
 	bat := catalog.MockBatch(schema, 2)
 
 	tae.CreateRelAndAppend2(bat, true)
+	tae.DeleteAll(true)
 	txn, table := tae.GetRelation()
 	tableEntry := table.GetMeta().(*catalog.TableEntry)
 	assert.NoError(t, txn.Commit(ctx))
@@ -12200,6 +12201,9 @@ func Test_ApplyTableData2(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
+	newDBID := rel.GetMeta().(*catalog.TableEntry).GetDB().ID
+	newTableID := rel.GetMeta().(*catalog.TableEntry).ID
+
 	assert.NoError(t, txn.Commit(ctx))
 	for i := 0; i < colCount; i++ {
 		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
@@ -12207,6 +12211,13 @@ func Test_ApplyTableData2(t *testing.T) {
 	}
 
 	t.Log(tae.Catalog.SimplePPString(3))
+	_, close, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: totsp(types.TS{}),
+		CnWant: totsp(types.MaxTs()),
+		Table:  &api.TableID{DbId: newDBID, TbId: newTableID},
+	}, false)
+	assert.Nil(t, err)
+	close()
 }
 
 func TestDumpTableFileNameDecode(t *testing.T) {

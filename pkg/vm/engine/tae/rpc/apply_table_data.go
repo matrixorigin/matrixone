@@ -232,7 +232,9 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			return
 		}
 
-		attrs := a.schema.AllNames()
+		schema := a.rel.GetMeta().(*catalog.TableEntry).GetLastestSchema(isTombstone)
+
+		attrs := schema.AllNames()
 		attrs = append(attrs, objectio.TombstoneAttr_CommitTs_Attr)
 		name := stats.ObjectName().String()
 		if !isPersisted[i] {
