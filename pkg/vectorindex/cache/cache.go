@@ -79,11 +79,15 @@ func (s *VectorIndexSearch) Destroy() {
 	s.Algo.Destroy()
 	// destroyed
 	s.Status.Store(STATUS_DESTROYED)
+	s.Cond.Broadcast()
 }
 
 func (s *VectorIndexSearch) Load(proc *process.Process) error {
 	s.Cond.L.Lock()
-	defer s.Cond.L.Unlock()
+	defer func() {
+		s.Cond.Broadcast()
+		s.Cond.L.Unlock()
+	}()
 
 	err := s.Algo.Load(proc)
 	if err != nil {
@@ -94,7 +98,6 @@ func (s *VectorIndexSearch) Load(proc *process.Process) error {
 	// Loaded
 	s.Status.Store(STATUS_LOADED)
 	s.extend(true)
-	s.Cond.Broadcast()
 	return nil
 }
 
