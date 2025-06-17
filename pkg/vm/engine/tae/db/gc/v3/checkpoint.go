@@ -1519,9 +1519,10 @@ func (c *checkpointCleaner) tryScanLocked(
 	memoryBuffer *containers.OneSchemaBatchBuffer,
 ) (err error) {
 	// get the max scanned timestamp
-	var maxScannedTS types.TS
+	var maxScannedTS, initScanWaterMark types.TS
 	if scanWaterMark := c.GetScanWaterMark(); scanWaterMark != nil {
 		maxScannedTS = scanWaterMark.GetEnd()
+		initScanWaterMark = scanWaterMark.GetStart()
 	}
 
 	// get up to 10 incremental checkpoints starting from the max scanned timestamp
@@ -1533,9 +1534,17 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 
 	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
+
+	if initScanWaterMark.IsEmpty() {
+		gckps := c.checkpointCli.GetAllGlobalCheckpoints()
+		if len(gckps) > 0 {
+			initScanWaterMark = gckps[0].GetEnd()
+		}
+	}
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range checkpoints {
-		if !c.checkExtras(ckp) {
+		start := ckp.GetStart()
+		if !c.checkExtras(ckp) || start.LT(&initScanWaterMark) {
 			continue
 		}
 		candidates = append(candidates, ckp)
