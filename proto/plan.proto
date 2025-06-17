@@ -1132,6 +1132,8 @@ message DataDefinition {
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
 		RENAME_TABLE = 35;
+		CREATE_PITR = 36;
+		DROP_PITR = 37;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1161,6 +1163,8 @@ message DataDefinition {
 		AlterSequence  alter_sequence   = 19;
 		CreateView  create_view         = 20;
 		RenameTable rename_table 	    = 21;
+		CreatePitr create_pitr = 100;
+		DropPitr drop_pitr = 101;
 	}
 }
 
@@ -1537,4 +1541,26 @@ message MetadataScanInfo {
 	int64 compress_size = 9;
 	int64 origin_size   = 10;
 	bytes zone_map      = 11;
+}
+
+message CreatePitr {
+  bool if_not_exists = 1;
+  string name = 2;
+  int32 level = 3;
+  string account_name = 4;
+  string database_name = 5;
+  string table_name = 6;
+  int64 pitr_value = 7;
+  string pitr_unit = 8;
+	uint64 database_id = 9;
+	uint64 table_id = 10;
+	uint32 account_id = 11;
+	uint32 current_account_id = 12;
+	string current_account = 13;
+	bool origin_account_name = 14;
+}
+
+message DropPitr {
+  bool if_exists = 1;
+  string name = 2;
 }

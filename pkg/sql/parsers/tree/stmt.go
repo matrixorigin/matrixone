@@ -651,6 +651,9 @@ func (node *RestoreSnapShot) StmtKind() StmtKind {
 }
 
 func (node *CreatePitr) StmtKind() StmtKind {
+	if node.Internal {
+		return defaultStatusTyp
+	}
 	return frontendStatusTyp
 }
 
@@ -667,6 +670,9 @@ func (node *ShowPitr) StmtKind() StmtKind {
 }
 
 func (node *DropPitr) StmtKind() StmtKind {
+	if node.Internal {
+		return defaultStatusTyp
+	}
 	return frontendStatusTyp
 }
 

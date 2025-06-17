@@ -76,6 +76,7 @@ func (node *ShowPitr) GetQueryType() string     { return QueryTypeDQL }
 type DropPitr struct {
 	statementImpl
 
+	Internal bool
 	IfExists bool
 	Name     Identifier // pitr name
 }
@@ -106,6 +107,7 @@ func (node *DropPitr) GetQueryType() string     { return QueryTypeOth }
 type CreatePitr struct {
 	statementImpl
 
+	Internal    bool
 	IfNotExists bool
 	Name        Identifier // pitr name
 
@@ -116,6 +118,8 @@ type CreatePitr struct {
 
 	PitrValue int64
 	PitrUnit  string
+
+	ExecLocation ExecLocation // 执行位置：EXEC_IN_FRONTEND 或 EXEC_IN_ENGINE
 }
 
 func (node *CreatePitr) Format(ctx *FmtCtx) {
@@ -149,6 +153,10 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("%v ", node.PitrValue))
 	ctx.WriteString(" ")
 	ctx.WriteString(node.PitrUnit)
+
+	if node.ExecLocation == EXEC_IN_ENGINE {
+		ctx.WriteString(" in engine")
+	}
 }
 
 func (node *CreatePitr) GetStatementType() string { return "Create PITR" }

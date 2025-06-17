@@ -306,6 +306,10 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildDropDatabase(stmt, ctx)
 	case *tree.CreateTable:
 		return buildCreateTable(stmt, ctx)
+	case *tree.CreatePitr:
+		return buildCreatePitr(stmt, ctx)
+	case *tree.DropPitr:
+		return buildDropPitr(stmt, ctx)
 	case *tree.DropTable:
 		return buildDropTable(stmt, ctx)
 	case *tree.TruncateTable:
