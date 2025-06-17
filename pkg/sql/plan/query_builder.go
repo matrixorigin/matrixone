@@ -281,7 +281,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_SOURCE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN,
+		plan.Node_EXTERNAL_SCAN, plan.Node_SOURCE_SCAN, plan.Node_TABLE_CLONE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}

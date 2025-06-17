@@ -226,43 +226,53 @@ func (w *CNS3Writer) Close(mp *mpool.MPool) error {
 	return nil
 }
 
-func (w *CNS3Writer) FillBlockInfoBat(
+func ExpandObjectStatsToBatch(
 	mp *mpool.MPool,
-) (*batch.Batch, error) {
+	isTombstone bool,
+	outBath *batch.Batch,
+	statsList ...objectio.ObjectStats,
+) (err error) {
 
-	var err error
-
-	if !w.isTombstone {
+	if !isTombstone {
 		objectio.ForeachBlkInObjStatsList(
 			true, nil,
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				if err = vector.AppendBytes(
-					w.blockInfoBat.Vecs[0],
+					outBath.Vecs[0],
 					objectio.EncodeBlockInfo(&blk), false, mp); err != nil {
 					return false
 				}
 
 				return true
 
-			}, w.written...)
+			}, statsList...)
 
-		for i := range w.written {
-			if err = vector.AppendBytes(w.blockInfoBat.Vecs[1],
-				w.written[i].Marshal(), false, mp); err != nil {
-				return nil, err
+		for i := range statsList {
+			if err = vector.AppendBytes(outBath.Vecs[1],
+				statsList[i].Marshal(), false, mp); err != nil {
+				return err
 			}
 		}
 	} else {
-		for i := range w.written {
-			if err = vector.AppendBytes(w.blockInfoBat.Vecs[0],
-				w.written[i].Marshal(), false, mp); err != nil {
-				return nil, err
+		for i := range statsList {
+			if err = vector.AppendBytes(outBath.Vecs[0],
+				statsList[i].Marshal(), false, mp); err != nil {
+				return err
 			}
 		}
 	}
 
-	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
-	return w.blockInfoBat, nil
+	outBath.SetRowCount(outBath.Vecs[0].Length())
+	return nil
+}
+
+func (w *CNS3Writer) FillBlockInfoBat(
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+
+	err := ExpandObjectStatsToBatch(mp, w.isTombstone, w.blockInfoBat, w.written...)
+
+	return w.blockInfoBat, err
 }
 
 func AllocCNS3ResultBat(
