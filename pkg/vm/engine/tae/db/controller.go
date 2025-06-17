@@ -498,6 +498,7 @@ func (c *Controller) handleToStopGC(cmd *controlCmd) {
 	)
 
 	defer func() {
+		cmd.setError(err)
 		if err != nil {
 			logger = logutil.Error
 		}
@@ -531,6 +532,7 @@ func (c *Controller) handleToStartGC(cmd *controlCmd) {
 	)
 
 	defer func() {
+		cmd.setError(err)
 		if err != nil {
 			logger = logutil.Error
 		}
@@ -551,9 +553,7 @@ func (c *Controller) handleToStartGC(cmd *controlCmd) {
 		// Rollback
 		return
 	}
-	// 5.x TODO
 
-	WithTxnMode(DBTxnMode_Write)(c.db)
 	return
 }
 
