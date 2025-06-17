@@ -12151,6 +12151,103 @@ func Test_ApplyTableData(t *testing.T) {
 
 	t.Log(tae.Catalog.SimplePPString(3))
 }
+
+func Test_ApplyTableData2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dir := "Test_ApplyTableData"
+
+	dumpArg := taerpc.NewDumpTableArg(
+		ctx,
+		tableEntry,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err := dumpArg.Run()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	applyArg, err := taerpc.NewApplyTableDataArg(
+		ctx,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		"db2",
+		"table2",
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	err = applyArg.Run()
+	assert.NoError(t, err)
+
+	txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
+	assert.NoError(t, txn.Commit(ctx))
+	for i := 0; i < colCount; i++ {
+		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
+		assert.Equal(t, 2, rows)
+	}
+
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestDumpTableFileNameDecode(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dir := taerpc.GetDumpTableDir(tableEntry.ID, tae.TxnMgr.Now())
+
+	dumpArg := taerpc.NewDumpTableArg(
+		ctx,
+		tableEntry,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err := dumpArg.Run()
+	assert.NoError(t, err)
+
+	needGC, err := taerpc.GCDumpTableFiles(dir, tae.Opts.Fs)
+	assert.NoError(t, err)
+	assert.False(t, needGC)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+}
 func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
 

@@ -212,7 +212,6 @@ func (c *DumpTableArg) FromCommand(cmd *cobra.Command) (err error) {
 			return err
 		}
 		c.objectListBatch = NewObjectListBatch()
-		c.dir = GetDumpTableDir(c.table.ID, c.txn.GetStartTS())
 	} else {
 		return moerr.NewInternalErrorNoCtx("inspect context not found")
 	}
@@ -239,6 +238,9 @@ func (c *DumpTableArg) Usage() (res string) {
 func (c *DumpTableArg) Run() (err error) {
 	if c.txn, err = c.inspectContext.db.StartTxn(nil); err != nil {
 		return
+	}
+	if c.dir == ""{
+		c.dir = GetDumpTableDir(c.table.ID, c.txn.GetStartTS())
 	}
 	defer c.txn.Commit(c.ctx)
 	logutil.Info(

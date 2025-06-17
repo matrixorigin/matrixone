@@ -284,7 +284,12 @@ func (a *ApplyTableDataArg) createDatabase() (err error) {
 
 	if database, err = a.txn.CreateDatabase(a.databaseName, "", ""); err != nil {
 		if moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
-			return moerr.NewInternalErrorNoCtx("database already exists")
+			database, err = a.txn.GetDatabase(a.databaseName)
+			if err != nil {
+				return
+			}
+			a.databaseID = database.GetID()
+			return nil
 		}
 		return
 	}
