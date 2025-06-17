@@ -51,7 +51,7 @@ func init() {
 }
 
 const (
-	DumpTableDir = "DumpTable"
+	DumpTableDir = "dumpTable"
 )
 
 const (
@@ -102,9 +102,9 @@ func GetDumpTableDir(tid uint64, snapshotTS types.TS) string {
 }
 
 const (
-	CopyTableObjectList = "object_list"
-	CopyTableSchema     = "schema"
-	CopyTableTable      = "table"
+	DumpTableObjectList = "object_list"
+	DumpTableSchema     = "schema"
+	DumpTableTable      = "table"
 )
 
 const (
@@ -144,7 +144,7 @@ func NewObjectListBatch() *batch.Batch {
 	return batch.NewWithSchema(false, ObjectListAttrs, ObjectListTypes)
 }
 
-type CopyTableArg struct {
+type DumpTableArg struct {
 	ctx             context.Context
 	txn             txnif.AsyncTxn
 	table           *catalog.TableEntry
@@ -156,15 +156,15 @@ type CopyTableArg struct {
 }
 
 // for UT
-func NewCopyTableArg(
+func NewDumpTableArg(
 	ctx context.Context,
 	table *catalog.TableEntry,
 	dir string,
 	inspectContext *inspectContext,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) *CopyTableArg {
-	return &CopyTableArg{
+) *DumpTableArg {
+	return &DumpTableArg{
 		ctx:             ctx,
 		table:           table,
 		dir:             dir,
@@ -175,20 +175,20 @@ func NewCopyTableArg(
 		srcfs:           fs,
 	}
 }
-func (c *CopyTableArg) PrepareCommand() *cobra.Command {
-	copyTableCmd := &cobra.Command{
-		Use:   "copy-table",
-		Short: "Copy table",
+func (c *DumpTableArg) PrepareCommand() *cobra.Command {
+	dumpTableCmd := &cobra.Command{
+		Use:   "dump-table",
+		Short: "Dump table",
 		Run:   RunFactory(c),
 	}
-	copyTableCmd.SetUsageTemplate(c.Usage())
+	dumpTableCmd.SetUsageTemplate(c.Usage())
 
-	copyTableCmd.Flags().IntP("tid", "t", 0, "set table id")
-	copyTableCmd.Flags().IntP("did", "d", 0, "set database id")
-	return copyTableCmd
+	dumpTableCmd.Flags().IntP("tid", "t", 0, "set table id")
+	dumpTableCmd.Flags().IntP("did", "d", 0, "set database id")
+	return dumpTableCmd
 }
 
-func (c *CopyTableArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *DumpTableArg) FromCommand(cmd *cobra.Command) (err error) {
 	tid, _ := cmd.Flags().GetInt("tid")
 	did, _ := cmd.Flags().GetInt("did")
 	if cmd.Flag("ictx") != nil {
@@ -219,13 +219,13 @@ func (c *CopyTableArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *CopyTableArg) String() string {
-	return "copy-table"
+func (c *DumpTableArg) String() string {
+	return "dump-table"
 }
 
-func (c *CopyTableArg) Usage() (res string) {
+func (c *DumpTableArg) Usage() (res string) {
 	res += "Available Commands:\n"
-	res += fmt.Sprintf("  %-5v copy table data\n", "copy-table")
+	res += fmt.Sprintf("  %-5v dump table data\n", "dump-table")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -236,14 +236,14 @@ func (c *CopyTableArg) Usage() (res string) {
 
 	return
 }
-func (c *CopyTableArg) Run() (err error) {
+func (c *DumpTableArg) Run() (err error) {
 	if c.txn, err = c.inspectContext.db.StartTxn(nil); err != nil {
 		return
 	}
 	defer c.txn.Commit(c.ctx)
 	c.dir = GetDumpTableDir(c.table.ID, c.txn.GetStartTS())
 	logutil.Info(
-		"COPY-TABLE-START",
+		"DUMP-TABLE-START",
 		zap.String(
 			"table",
 			fmt.Sprintf(
@@ -276,11 +276,11 @@ func (c *CopyTableArg) Run() (err error) {
 	if err = c.table.RecurLoop(p); err != nil {
 		return err
 	}
-	if err := c.flush(CopyTableObjectList, c.objectListBatch); err != nil {
+	if err := c.flush(DumpTableObjectList, c.objectListBatch); err != nil {
 		return err
 	}
 	logutil.Info(
-		"COPY-TABLE-END",
+		"DUMP-TABLE-END",
 		zap.String(
 			"table",
 			fmt.Sprintf(
@@ -297,7 +297,7 @@ func (c *CopyTableArg) Run() (err error) {
 	return nil
 }
 
-func (c *CopyTableArg) flushTableSchema() (err error) {
+func (c *DumpTableArg) flushTableSchema() (err error) {
 	bat := containers.NewBatch()
 	typs := catalog.SystemColumnSchema.AllTypes()
 	attrs := catalog.SystemColumnSchema.AllNames()
@@ -314,13 +314,13 @@ func (c *CopyTableArg) flushTableSchema() (err error) {
 		txnimpl.FillColumnRow(c.table, c.table.GetLastestSchema(false), def.Name, bat.Vecs[def.Idx])
 	}
 	cnBatch := containers.ToCNBatch(bat)
-	if err := c.flush(CopyTableSchema, cnBatch); err != nil {
+	if err := c.flush(DumpTableSchema, cnBatch); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *CopyTableArg) flushTableEntry() (err error) {
+func (c *DumpTableArg) flushTableEntry() (err error) {
 	bat := containers.NewBatch()
 	typs := catalog.SystemTableSchema.AllTypes()
 	attrs := catalog.SystemTableSchema.AllNames()
@@ -337,13 +337,13 @@ func (c *CopyTableArg) flushTableEntry() (err error) {
 		txnimpl.FillTableRow(c.table, c.table.GetLastestSchema(false), def.Name, bat.Vecs[def.Idx])
 	}
 	cnBatch := containers.ToCNBatch(bat)
-	if err := c.flush(CopyTableTable, cnBatch); err != nil {
+	if err := c.flush(DumpTableTable, cnBatch); err != nil {
 		return err
 	}
 	return
 }
 
-func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
+func (c *DumpTableArg) onObject(e *catalog.ObjectEntry) error {
 	startTS := c.txn.GetStartTS()
 	if e.CreatedAt.EQ(&txnif.UncommitTS) || e.DeleteBefore(startTS) {
 		return nil
@@ -372,7 +372,7 @@ func (c *CopyTableArg) onObject(e *catalog.ObjectEntry) error {
 			return err
 		}
 		logutil.Info(
-			"COPY-TABLE-FLUSH",
+			"DUMP-TABLE-FLUSH",
 			zap.String(
 				"table",
 				fmt.Sprintf(
@@ -440,7 +440,7 @@ func copyFile(
 	return hasher.Sum(nil), nil
 }
 
-func (c *CopyTableArg) flush(name string, bat *batch.Batch) (err error) {
+func (c *DumpTableArg) flush(name string, bat *batch.Batch) (err error) {
 	nameWithDir := fmt.Sprintf("%s/%s", c.dir, name)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCopyTable, nameWithDir, c.dstfs)
 	if err != nil {
@@ -454,7 +454,7 @@ func (c *CopyTableArg) flush(name string, bat *batch.Batch) (err error) {
 		return
 	}
 	logutil.Info(
-		"COPY-TABLE-FLUSH",
+		"DUMP-TABLE-FLUSH",
 		zap.String(
 			"table",
 			fmt.Sprintf(
@@ -471,7 +471,7 @@ func (c *CopyTableArg) flush(name string, bat *batch.Batch) (err error) {
 	return
 }
 
-func (c *CopyTableArg) collectObjectList(e *catalog.ObjectEntry) (isPersisted bool, err error) {
+func (c *DumpTableArg) collectObjectList(e *catalog.ObjectEntry) (isPersisted bool, err error) {
 	startTS := c.txn.GetStartTS()
 	var objectType int8
 	if e.IsTombstone {
@@ -519,7 +519,7 @@ func (c *CopyTableArg) collectObjectList(e *catalog.ObjectEntry) (isPersisted bo
 	return
 }
 
-func (c *CopyTableArg) visitObjectData(e *catalog.ObjectEntry) (bat *containers.Batch, err error) {
+func (c *DumpTableArg) visitObjectData(e *catalog.ObjectEntry) (bat *containers.Batch, err error) {
 	schema := e.GetTable().GetLastestSchema(e.IsTombstone)
 	colIdxes := make([]int, 0)
 	// user rows, rowID, commitTS

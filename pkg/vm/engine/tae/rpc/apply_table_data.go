@@ -242,7 +242,6 @@ func (a *ApplyTableDataArg) Run() (err error) {
 				return
 			}
 			defer objectRelease()
-			logutil.Infof("lalala %v, %v", name, attrs)
 			tnBat := containers.ToTNBatch(bat, a.mp)
 			meta := obj.GetMeta().(*catalog.ObjectEntry)
 			var anodes []txnif.TxnEntry

@@ -149,6 +149,6 @@ func BuildTmpName() ObjectName {
 	return NameTmp[:]
 }
 
-func BuildCopyTableName() ObjectName {
+func BuildDumpTableName() ObjectName {
 	return NameCopyTable[:]
 }
