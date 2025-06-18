@@ -230,6 +230,7 @@ func ExpandObjectStatsToBatch(
 	mp *mpool.MPool,
 	isTombstone bool,
 	outBath *batch.Batch,
+	isCNCreated bool,
 	statsList ...objectio.ObjectStats,
 ) (err error) {
 
@@ -248,6 +249,10 @@ func ExpandObjectStatsToBatch(
 			}, statsList...)
 
 		for i := range statsList {
+			if isCNCreated {
+				objectio.WithCNCreated()(&statsList[i])
+			}
+
 			if err = vector.AppendBytes(outBath.Vecs[1],
 				statsList[i].Marshal(), false, mp); err != nil {
 				return err
@@ -255,6 +260,10 @@ func ExpandObjectStatsToBatch(
 		}
 	} else {
 		for i := range statsList {
+			if isCNCreated {
+				objectio.WithCNCreated()(&statsList[i])
+			}
+
 			if err = vector.AppendBytes(outBath.Vecs[0],
 				statsList[i].Marshal(), false, mp); err != nil {
 				return err
@@ -270,7 +279,7 @@ func (w *CNS3Writer) FillBlockInfoBat(
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 
-	err := ExpandObjectStatsToBatch(mp, w.isTombstone, w.blockInfoBat, w.written...)
+	err := ExpandObjectStatsToBatch(mp, w.isTombstone, w.blockInfoBat, true, w.written...)
 
 	return w.blockInfoBat, err
 }

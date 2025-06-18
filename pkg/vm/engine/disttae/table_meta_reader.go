@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -83,8 +82,6 @@ func NewTableMetaReader(
 	if pState, err = table.getPartitionState(ctx); err != nil {
 		return nil, err
 	}
-
-	fmt.Println("OKK2", snapshot.ToTimestamp().ToStdTime().String())
 
 	return &TableMetaReader{
 		fs:       fs,
@@ -336,12 +333,12 @@ func (r *TableMetaReader) collectVisibleObjs(
 		// if the obj is created by CN, the data commit time equals to the obj.CreateTime
 		if obj.GetCNCreated() {
 			if err = colexec.ExpandObjectStatsToBatch(
-				mp, isTombstone, outBatch, obj.ObjectStats); err != nil {
+				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
 				return err
 			}
 		} else if !obj.GetAppendable() {
 			if err = colexec.ExpandObjectStatsToBatch(
-				mp, isTombstone, outBatch, obj.ObjectStats); err != nil {
+				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
 				return err
 			}
 		} else {
@@ -360,7 +357,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 			if !colMeta.ZoneMap().AnyGTByValue(r.snapshot[:]) {
 				// all visible by snapshot
 				if err = colexec.ExpandObjectStatsToBatch(
-					mp, isTombstone, outBatch, obj.ObjectStats); err != nil {
+					mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
 					return err
 				}
 			} else {

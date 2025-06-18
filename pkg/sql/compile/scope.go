@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -1039,11 +1038,6 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		if err != nil {
 			return
 		}
-	}
-
-	if op, ok := vm.GetLeafOp(s.RootOp).(*table_clone.TableClone); ok {
-		op.R, err = disttae.NewTableMetaReader(c.proc.Ctx, s.DataSource.Rel)
-		return []engine.Reader{op.R}, err
 	}
 
 	switch {
