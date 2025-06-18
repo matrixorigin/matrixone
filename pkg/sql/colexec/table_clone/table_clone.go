@@ -17,16 +17,13 @@ package table_clone
 import (
 	"bytes"
 	"context"
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,7 +41,10 @@ func init() {
 }
 
 func (tc *TableClone) Free(proc *process.Process, pipelineFailed bool, err error) {
-
+	tc.dataObjBat.Clean(proc.Mp())
+	tc.tombstoneObjBat.Clean(proc.Mp())
+	tc.idxNameToReader = nil
+	tc.dstIdxNameToRel = nil
 }
 
 func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err error) {
@@ -72,53 +72,118 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	}
 
 	var (
-		err error
-
+		err   error
+		srcDB engine.Database
 		dstDB engine.Database
+
+		srcIdxRel engine.Relation
 	)
 
-	if tc.SrcRel, err = colexec.GetRelAndPartitionRelsByObjRef(
-		proc.Ctx, proc, tc.Ctx.Eng, tc.Ctx.SrcObjDef,
-	); err != nil {
-		return err
+	if len(tc.Ctx.SrcTblDef.Indexes) > 0 {
+		tc.idxNameToReader = make(map[string]engine.Reader)
+		tc.dstIdxNameToRel = make(map[string]engine.Relation)
 	}
 
-	if dstDB, err = tc.Ctx.Eng.Database(
-		proc.Ctx, tc.Ctx.DstDatabaseName, proc.GetTxnOperator(),
-	); err != nil {
-		return err
+	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, false)
+	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
+
+	{
+		if srcDB, err = tc.Ctx.Eng.Database(
+			proc.Ctx, tc.Ctx.SrcTblDef.DbName, proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
+
+		if tc.srcRel, err = srcDB.Relation(
+			proc.Ctx, tc.Ctx.SrcTblDef.Name, nil,
+		); err != nil {
+			return err
+		}
+
+		tc.srcRelReader, err = disttae.NewTableMetaReader(proc.Ctx, tc.srcRel)
 	}
 
-	if tc.DstRel, err = dstDB.Relation(proc.Ctx, tc.Ctx.DstTblName, nil); err != nil {
-		return err
+	{
+		if dstDB, err = tc.Ctx.Eng.Database(
+			proc.Ctx, tc.Ctx.DstDatabaseName, proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
+
+		if tc.dstRel, err = dstDB.Relation(proc.Ctx, tc.Ctx.DstTblName, nil); err != nil {
+			return err
+		}
 	}
 
-	tc.DataObjBat = colexec.AllocCNS3ResultBat(false, false)
-	tc.TombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
+	for _, idx := range tc.Ctx.SrcTblDef.Indexes {
+		if srcIdxRel, err =
+			srcDB.Relation(proc.Ctx, idx.IndexTableName, nil); err != nil {
+			return err
+		}
+
+		if tc.idxNameToReader[idx.IndexName], err =
+			disttae.NewTableMetaReader(proc.Ctx, srcIdxRel); err != nil {
+			return err
+		}
+	}
+
+	dstIndexes := tc.dstRel.GetTableDef(proc.Ctx).Indexes
+	for _, idx := range dstIndexes {
+		if tc.dstIdxNameToRel[idx.IndexName], err =
+			srcDB.Relation(proc.Ctx, idx.IndexTableName, nil); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
 
-func (tc *TableClone) reflagMeta(
+func clone(
 	ctx context.Context,
 	mp *mpool.MPool,
-	bat *batch.Batch,
-) {
+	reader engine.Reader,
+	dstRel engine.Relation,
+	dataObjBat *batch.Batch,
+	tombstoneObjBat *batch.Batch,
+) error {
 
 	var (
-		idx int
+		err error
 	)
 
-	if bat.VectorCount() > 1 {
-		idx = 1
+	if _, err = reader.Read(ctx, nil, nil, mp, dataObjBat); err != nil {
+		return err
 	}
 
-	col, area := vector.MustVarlenaRawData(bat.Vecs[idx])
-	for i := range col {
-		stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-		objectio.WithCNCreated()(&stats)
-		vector.SetBytesAt(bat.Vecs[idx], i, stats.Marshal(), mp)
+	// write data to the workspace
+	//for i := range dataObjBat.Vecs[1].Length() {
+	//	stats := objectio.ObjectStats(dataObjBat.Vecs[1].GetBytesAt(i))
+	//	fmt.Println("copy data", dstRel.GetTableName(), stats.Rows())
+	//}
+
+	if dataObjBat.RowCount() != 0 {
+		if err = dstRel.Write(ctx, dataObjBat); err != nil {
+			return err
+		}
 	}
+
+	if _, err = reader.Read(ctx, nil, nil, mp, tombstoneObjBat); err != nil {
+		return err
+	}
+
+	// write tombstone to the workspace
+	//for i := range tombstoneObjBat.Vecs[0].Length() {
+	//	stats := objectio.ObjectStats(tombstoneObjBat.Vecs[0].GetBytesAt(i))
+	//	fmt.Println("copy tombstone", dstRel.GetTableName(), stats.Rows())
+	//}
+
+	if tombstoneObjBat.RowCount() != 0 {
+		if err = dstRel.Delete(ctx, tombstoneObjBat, ""); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
@@ -127,36 +192,21 @@ func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
 		err error
 	)
 
-	if _, err = tc.R.Read(proc.Ctx, nil, nil, proc.Mp(), tc.DataObjBat); err != nil {
+	if err = clone(
+		proc.Ctx, proc.Mp(), tc.srcRelReader, tc.dstRel,
+		tc.dataObjBat, tc.tombstoneObjBat,
+	); err != nil {
 		return vm.CallResult{}, err
 	}
 
-	// write data to the workspace
-	for i := range tc.DataObjBat.Vecs[1].Length() {
-		stats := objectio.ObjectStats(tc.DataObjBat.Vecs[1].GetBytesAt(i))
-		fmt.Println("copy data", stats.Rows())
-	}
+	for idxName, reader := range tc.idxNameToReader {
+		tc.dataObjBat.CleanOnlyData()
+		tc.tombstoneObjBat.CleanOnlyData()
 
-	if tc.DataObjBat.RowCount() != 0 {
-		tc.reflagMeta(proc.Ctx, proc.Mp(), tc.DataObjBat)
-		if err = tc.DstRel.Write(proc.Ctx, tc.DataObjBat); err != nil {
-			return vm.CallResult{}, err
-		}
-	}
-
-	if _, err = tc.R.Read(proc.Ctx, nil, nil, proc.Mp(), tc.TombstoneObjBat); err != nil {
-		return vm.CallResult{}, err
-	}
-
-	// write tombstone to the workspace
-	for i := range tc.TombstoneObjBat.Vecs[0].Length() {
-		stats := objectio.ObjectStats(tc.TombstoneObjBat.Vecs[0].GetBytesAt(i))
-		fmt.Println("copy tombstone", stats.Rows())
-	}
-
-	if tc.TombstoneObjBat.RowCount() != 0 {
-		tc.reflagMeta(proc.Ctx, proc.Mp(), tc.TombstoneObjBat)
-		if err = tc.DstRel.Delete(proc.Ctx, tc.TombstoneObjBat, ""); err != nil {
+		if err = clone(
+			proc.Ctx, proc.Mp(), reader, tc.dstIdxNameToRel[idxName],
+			tc.dataObjBat, tc.tombstoneObjBat,
+		); err != nil {
 			return vm.CallResult{}, err
 		}
 	}
