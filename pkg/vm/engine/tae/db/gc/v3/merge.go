@@ -47,10 +47,16 @@ func MergeCheckpoint(
 	client checkpoint.Runner,
 	pool *mpool.MPool,
 	fs fileservice.FileService,
-) (deleteFiles, newFiles []string, checkpointEntry *checkpoint.CheckpointEntry, ckpData *batch.Batch, err error) {
+) (deleteFiles,
+	newFiles []string,
+	checkpointEntry *checkpoint.CheckpointEntry,
+	ckpData *batch.Batch,
+	err error) {
+	if len(ckpEntries) == 0 {
+		return
+	}
 	ckpData = ckputil.NewObjectListBatch()
-	datas := make([]*logtail.CKPReader, 0)
-	deleteFiles = make([]string, 0)
+	deleteSet := make(map[string]struct{})
 	for _, ckpEntry := range ckpEntries {
 		select {
 		case <-ctx.Done():
@@ -63,78 +69,17 @@ func MergeCheckpoint(
 			zap.String("task", taskName),
 			zap.String("entry", ckpEntry.String()),
 		)
-		var data *logtail.CKPReader
-		var locations map[string]objectio.Location
-		if _, data, err = logtail.LoadCheckpointEntriesFromKey(
-			ctx,
-			sid,
-			fs,
-			ckpEntry.GetLocation(),
-			ckpEntry.GetVersion(),
-			nil,
-			&types.TS{},
-		); err != nil {
-			return
-		}
-		datas = append(datas, data)
-		var nameMeta string
-		if ckpEntry.GetType() == checkpoint.ET_Compacted {
-			nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
-				ckpEntry.GetStart(), ckpEntry.GetEnd(),
-			)
-		} else {
-			nameMeta = ioutil.EncodeCKPMetadataFullName(
-				ckpEntry.GetStart(), ckpEntry.GetEnd(),
-			)
-		}
-
-		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
-		deleteFiles = append(deleteFiles, nameMeta)
-		// add checkpoint idx file to deleteFiles
-		deleteFiles = append(deleteFiles, ckpEntry.GetLocation().Name().String())
-		locations, err = logtail.LoadCheckpointLocations(
-			ctx, sid, data,
-		)
+		err = processCheckpointEntry(ctx, taskName, ckpEntry, sid, fs, bf, ckpData, pool, deleteSet)
 		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				deleteFiles = append(deleteFiles, nameMeta)
-				continue
-			}
 			return
 		}
-
-		for name := range locations {
-			deleteFiles = append(deleteFiles, name)
-		}
-	}
-	if len(datas) == 0 {
-		return
 	}
 
+	deleteFiles = make([]string, 0, len(deleteSet))
+	for k := range deleteSet {
+		deleteFiles = append(deleteFiles, k)
+	}
 	newFiles = make([]string, 0)
-
-	// merge objects referenced by sansphot and pitr
-	for _, data := range datas {
-		select {
-		case <-ctx.Done():
-			err = context.Cause(ctx)
-			return
-		default:
-		}
-		var objectBatch *batch.Batch
-		if objectBatch, err = data.GetCheckpointData(ctx); err != nil {
-			return
-		}
-		defer objectBatch.Clean(common.CheckpointAllocator)
-		statsVec := objectBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
-		bf.Test(statsVec,
-			func(exists bool, i int) {
-				if !exists {
-					return
-				}
-				appendValToBatchForObjectListBatch(objectBatch, ckpData, i, pool)
-			})
-	}
 
 	sinker := ckputil.NewDataSinker(pool, fs)
 	if err = sinker.Write(ctx, ckpData); err != nil {
@@ -182,6 +127,81 @@ func MergeCheckpoint(
 	checkpointEntry.SetVersion(logtail.CheckpointCurrentVersion)
 	newFiles = append(newFiles, name)
 	return
+}
+
+func processCheckpointEntry(
+	ctx context.Context,
+	taskName string,
+	ckpEntry *checkpoint.CheckpointEntry,
+	sid string,
+	fs fileservice.FileService,
+	bf *bloomfilter.BloomFilter,
+	ckpData *batch.Batch,
+	pool *mpool.MPool,
+	deleteSet map[string]struct{},
+) error {
+	var nameMeta string
+	if ckpEntry.GetType() == checkpoint.ET_Compacted {
+		nameMeta = ioutil.EncodeCompactCKPMetadataFullName(
+			ckpEntry.GetStart(), ckpEntry.GetEnd(),
+		)
+	} else {
+		nameMeta = ioutil.EncodeCKPMetadataFullName(
+			ckpEntry.GetStart(), ckpEntry.GetEnd(),
+		)
+	}
+	// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
+	deleteSet[nameMeta] = struct{}{}
+	// add checkpoint idx file to deleteFiles
+	deleteSet[ckpEntry.GetLocation().Name().String()] = struct{}{}
+
+	var data *logtail.CKPReader
+	var err error
+	if _, data, err = logtail.LoadCheckpointEntriesFromKey(
+		ctx,
+		sid,
+		fs,
+		ckpEntry.GetLocation(),
+		ckpEntry.GetVersion(),
+		nil,
+		&types.TS{},
+	); err != nil {
+		return err
+	}
+
+	locations, err := logtail.LoadCheckpointLocations(
+		ctx, sid, data,
+	)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			logutil.Warn(
+				"GC-MERGE-CHECKPOINT-FILE-NOTFOUND",
+				zap.String("task", taskName),
+				zap.String("filename", nameMeta),
+			)
+			return nil
+		}
+		return err
+	}
+	for name := range locations {
+		deleteSet[name] = struct{}{}
+	}
+
+	var objectBatch *batch.Batch
+	if objectBatch, err = data.GetCheckpointData(ctx); err != nil {
+		return err
+	}
+	defer objectBatch.Clean(common.CheckpointAllocator)
+	statsVec := objectBatch.Vecs[ckputil.TableObjectsAttr_ID_Idx]
+	bf.Test(statsVec,
+		func(exists bool, i int) {
+			if !exists {
+				return
+			}
+			appendValToBatchForObjectListBatch(objectBatch, ckpData, i, pool)
+		})
+
+	return nil
 }
 
 func makeBatchFromSchema(schema *catalog.Schema) *containers.Batch {
