@@ -65,8 +65,6 @@ func newAObject(
 	return obj
 }
 
-func (obj *aobject) Init() (err error) { return }
-
 func (obj *aobject) FreezeAppend() {
 	obj.frozen.Store(true)
 }
@@ -86,13 +84,6 @@ func (obj *aobject) IsAppendable() bool {
 	}
 	rows, _ := node.Rows()
 	return rows < obj.meta.Load().GetSchema().Extra.BlockMaxRows
-}
-
-func (obj *aobject) Pin() *common.PinnedItem[*aobject] {
-	obj.Ref()
-	return &common.PinnedItem[*aobject]{
-		Val: obj,
-	}
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -156,6 +147,13 @@ func (obj *aobject) PrepareCompact() bool {
 		logutil.Infof("obj %v, data ref count is %d", obj.meta.Load().ID().String(), obj.RefCount())
 	}
 	return prepareCompact
+}
+
+func (obj *aobject) Pin() *common.PinnedItem[*aobject] {
+	obj.Ref()
+	return &common.PinnedItem[*aobject]{
+		Val: obj,
+	}
 }
 
 // check if all rows are committed before the specified ts
@@ -355,6 +353,8 @@ func (obj *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
 	appender = newAppender(obj)
 	return
 }
+
+func (obj *aobject) Init() (err error) { return }
 
 func (obj *aobject) EstimateMemSize() int {
 	node := obj.PinNode()
