@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"runtime/debug"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"

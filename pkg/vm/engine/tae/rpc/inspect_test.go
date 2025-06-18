@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -430,13 +431,16 @@ func TestApplyTableDataError(t *testing.T) {
 
 	applyTableCmd := fmt.Sprintf("apply-table-data -d %v -t %v -o %s", "db2", "table2", dir)
 
-	_, err = mh.runInspectCmd(applyTableCmd)
-	require.Error(t, err)
-
-	tae.Opts.EnableApplyTableData = true
-	_, err = mh.runInspectCmd(applyTableCmd)
+	resp, err := mh.runInspectCmd(applyTableCmd)
+	assert.True(t, strings.Contains(resp.Message, "apply table data is not enabled"))
 	require.NoError(t, err)
 
-	_, err = mh.runInspectCmd(applyTableCmd)
-	require.Error(t, err)
+	tae.Opts.EnableApplyTableData = true
+	resp, err = mh.runInspectCmd(applyTableCmd)
+	t.Log(resp.Message)
+	require.NoError(t, err)
+
+	resp, err = mh.runInspectCmd(applyTableCmd)
+	assert.True(t, strings.Contains(resp.Message, "table already exists"))
+	require.NoError(t, err)
 }
