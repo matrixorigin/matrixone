@@ -429,7 +429,8 @@ func (a *ApplyTableDataArg) readBatch(name string, attrs []string) (bat *batch.B
 	); err != nil {
 		return
 	}
-	if len(bats) != 1 {
+	_, injected := objectio.GCDumpTableInjected()
+	if len(bats) != 1 || injected {
 		release()
 		for _, bat := range bats {
 			bat.Clean(a.mp)

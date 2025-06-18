@@ -12207,6 +12207,16 @@ func Test_ApplyTableData2(t *testing.T) {
 	assert.Error(t, err)
 	rmFn()
 
+	applyArg, err = taerpc.NewApplyTableDataArg(
+		ctx,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		"db2",
+		"table2",
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
 	err = applyArg.Run()
 	assert.NoError(t, err)
 
