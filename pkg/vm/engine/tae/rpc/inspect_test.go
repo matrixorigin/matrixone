@@ -361,6 +361,7 @@ func TestApplyTableData(t *testing.T) {
 			GCFn: GCDumpTableFiles,
 		},
 	)
+	require.NoError(t, err)
 
 	dirs := dumpTableFS.List(ctx, "")
 	var dir string
