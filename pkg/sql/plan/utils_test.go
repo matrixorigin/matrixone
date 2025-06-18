@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/stretchr/testify/assert"
@@ -124,7 +123,7 @@ func TestMakeCPKEYRuntimeFilter(t *testing.T) {
 		Name2ColIndex: name2colidx,
 	}
 	expr := GetColExpr(typ, 0, 0)
-	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef)
+	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef, false)
 }
 
 func TestDbNameOfObjRef(t *testing.T) {
