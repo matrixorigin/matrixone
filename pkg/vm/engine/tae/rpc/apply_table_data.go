@@ -201,16 +201,6 @@ func (a *ApplyTableDataArg) Run() (err error) {
 	idVec := objectlistBatch.Vecs[ObjectListAttr_ID_Idx]
 	isPersisted := vector.MustFixedColNoTypeCheck[bool](objectlistBatch.Vecs[ObjectListAttr_IsPersisted_Idx])
 
-	var table *catalog.TableEntry
-	var dbEntry *catalog.DBEntry
-	if dbEntry, err = a.catalog.GetDatabaseByID(a.databaseID); err != nil {
-		return
-	}
-	if table, err = dbEntry.GetTableEntryByID(a.tableID); err != nil {
-		return
-	}
-	table.Stats.SkipCheckDirtyWhenSubscribe = true
-
 	for i := 0; i < objectlistBatch.RowCount(); i++ {
 		var isTombstone bool
 		if objTypes[i] == ckputil.ObjectType_Data {
@@ -361,9 +351,6 @@ func (a *ApplyTableDataArg) createTable() (err error) {
 		}
 		return
 	}
-
-	meta := a.rel.GetMeta().(*catalog.TableEntry)
-	meta.Stats.SkipCheckDirtyWhenSubscribe = true
 
 	a.tableID = a.rel.ID()
 
