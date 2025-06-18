@@ -86,6 +86,16 @@ func GCDumpTableFiles(filePath string, fs fileservice.FileService) (neesGC bool,
 		ctx := context.Background()
 		ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)
 		defer cancel()
+		entrys := fs.List(ctx, filePath)
+		var entry *fileservice.DirEntry
+		for entry, err = range entrys {
+			if err != nil {
+				continue
+			}
+			if err = fs.Delete(ctx, path.Join(filePath, entry.Name)); err != nil {
+				return
+			}
+		}
 		if err = fs.Delete(ctx, filePath); err != nil {
 			return
 		}
