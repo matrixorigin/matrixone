@@ -12198,6 +12198,15 @@ func Test_ApplyTableData2(t *testing.T) {
 		tae.Opts.Fs,
 	)
 	assert.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectGCDumpTable("")
+	assert.NoError(t, err)
+	err = applyArg.Run()
+	assert.Error(t, err)
+	rmFn()
+
 	err = applyArg.Run()
 	assert.NoError(t, err)
 
