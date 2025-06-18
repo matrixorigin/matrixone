@@ -118,7 +118,10 @@ func buildCloneTable(
 
 	dstTblDef := DeepCopyTableDef(srcTblDef, true)
 	dstTblDef.Name = stmt.CreateTable.Table.ObjectName.String()
-	dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
+	// if the dst db name is empty, we assume that the dst tbl and src tbl belong to the same db.
+	if stmt.CreateTable.Table.SchemaName.String() != "" {
+		dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
+	}
 
 	id = builder.appendNode(&plan.Node{
 		ObjRef:       srcObj,
