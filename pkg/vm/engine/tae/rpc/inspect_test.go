@@ -413,6 +413,18 @@ func TestApplyTableDataError(t *testing.T) {
 	_, err := mh.runInspectCmd(dumpTableCmd)
 	require.NoError(t, err)
 
+	dumpTableCmd2 := fmt.Sprintf("dump-table -d %d -t %d", tae.Catalog.NextDB(), tableEntry.ID)
+	resp, err := mh.runInspectCmd(dumpTableCmd2)
+	require.NoError(t, err)
+	assert.True(t, strings.Contains(resp.Message, "get database by id"))
+	t.Log(resp.Message)
+
+	dumpTableCmd3 := fmt.Sprintf("dump-table -d %d -t %d", tableEntry.GetDB().ID, tae.Catalog.NextTable())
+	resp, err = mh.runInspectCmd(dumpTableCmd3)
+	require.NoError(t, err)
+	assert.True(t, strings.Contains(resp.Message, "get table by id"))
+	t.Log(resp.Message)
+
 	dumpTableFS, err := tae.Runtime.TmpFS.GetOrCreateApp(
 		&fileservice.AppConfig{
 			Name: DumpTableDir,
@@ -431,7 +443,7 @@ func TestApplyTableDataError(t *testing.T) {
 
 	applyTableCmd := fmt.Sprintf("apply-table-data -d %v -t %v -o %s", "db2", "table2", dir)
 
-	resp, err := mh.runInspectCmd(applyTableCmd)
+	resp, err = mh.runInspectCmd(applyTableCmd)
 	assert.True(t, strings.Contains(resp.Message, "apply table data is not enabled"))
 	require.NoError(t, err)
 

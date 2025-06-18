@@ -12257,6 +12257,13 @@ func TestDumpTableFileNameDecode(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, needGC)
 
+	_, _, _, err = taerpc.DecodeDumpTableDir("a_b")
+	assert.Error(t, err)
+	_, _, _, err = taerpc.DecodeDumpTableDir("a_b_c")
+	assert.Error(t, err)
+	_, _, _, err = taerpc.DecodeDumpTableDir("1000_b_c")
+	assert.Error(t, err)
+
 	t.Log(tae.Catalog.SimplePPString(3))
 
 }
