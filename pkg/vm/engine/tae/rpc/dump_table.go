@@ -80,7 +80,8 @@ func GCDumpTableFiles(filePath string, fs fileservice.FileService) (neesGC bool,
 	if err != nil {
 		return
 	}
-	if createTime.Add(time.Hour * 24).Before(time.Now()) {
+	_, injected := objectio.GCDumpTableInjected()
+	if createTime.Add(time.Hour*24).Before(time.Now()) || injected {
 		neesGC = true
 		ctx := context.Background()
 		ctx, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseClearPersistTable)

@@ -12265,7 +12265,14 @@ func TestDumpTableFileNameDecode(t *testing.T) {
 	assert.Error(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectGCDumpTable("")
+	assert.NoError(t, err)
+	defer rmFn()
+	needGC, err = taerpc.GCDumpTableFiles(dir, tae.Opts.Fs)
+	assert.NoError(t, err)
+	assert.True(t, needGC)
 }
 func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
