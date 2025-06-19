@@ -326,43 +326,46 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 	createStr += comment
 
 	if tableDef.Partition != nil {
-		partitionBy := " partition by "
-		meta, _, err := ctx.GetProcess().GetPartitionService().GetStorage().GetMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
-		if err != nil {
-			return "", nil, err
-		}
-		rangeOrList := false
-		switch meta.Method {
-		case partition.PartitionMethod_Hash:
-			partitionBy += "hash"
-		case partition.PartitionMethod_Key:
-			partitionBy += "key"
-		case partition.PartitionMethod_Range:
-			rangeOrList = true
-			partitionBy += "range "
-		case partition.PartitionMethod_List:
-			rangeOrList = true
-			partitionBy += "List "
-		}
-
-		cols := "("
-		cols += meta.Description
-		cols += ")"
-
-		if rangeOrList {
-			partitionBy += "columns" + cols + " ("
-			for i, p := range meta.Partitions {
-				if i > 0 {
-					partitionBy += ", "
-				}
-				partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
+		ps := ctx.GetProcess().GetPartitionService()
+		if ps.Enabled() {
+			partitionBy := " partition by "
+			meta, _, err := ps.GetStorage().GetMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
+			if err != nil {
+				return "", nil, err
 			}
-			partitionBy += ")"
-		} else {
-			partitionBy += cols
-			partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
+			rangeOrList := false
+			switch meta.Method {
+			case partition.PartitionMethod_Hash:
+				partitionBy += "hash"
+			case partition.PartitionMethod_Key:
+				partitionBy += "key"
+			case partition.PartitionMethod_Range:
+				rangeOrList = true
+				partitionBy += "range "
+			case partition.PartitionMethod_List:
+				rangeOrList = true
+				partitionBy += "List "
+			}
+
+			cols := "("
+			cols += meta.Description
+			cols += ")"
+
+			if rangeOrList {
+				partitionBy += "columns" + cols + " ("
+				for i, p := range meta.Partitions {
+					if i > 0 {
+						partitionBy += ", "
+					}
+					partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
+				}
+				partitionBy += ")"
+			} else {
+				partitionBy += cols
+				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
+			}
+			createStr += partitionBy
 		}
-		createStr += partitionBy
 	}
 
 	/**
