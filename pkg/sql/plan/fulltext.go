@@ -159,13 +159,18 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 // for table scan, primary key type is passed from TableDef
 // select f.* from index_table CROSS APPLY fulltext_index_tokenize('param', doc_id, body, title) as f
 // arg list [params, doc_id, part1, part2,...]
-
+//
 // for values scan, primary key type is passed from second argument
+// arg list [params, pktype, doc_id, part1, part2,...]
 //
 // select f.* from (select cast(column_0 as bigint) as id, column_1 as body, column_2 as title from (values row(1, 'body content', 'title content'))) as src
 // cross apply fulltext_index_tokenize('{"parser":"ngram"}', 23, id, body, title) as f;
 //
-// arg list [params, pktype, doc_id, part1, part2,...]
+// for composite primary key,
+//
+// select f.* from (select serial(cast(column_0 as bigint), cast(column_1 as bigint)) as id, column_2 as body, column_3 as title from
+// (values row(1, 2, 'body', 'title'), row(2, 3, 'body is heavy', 'I do not know'))) as src
+// cross apply fulltext_index_tokenize('{"parser":"ngram"}', 61, id, body, title) as f;
 func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 
 	if len(exprs) < 3 {
