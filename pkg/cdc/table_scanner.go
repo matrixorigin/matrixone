@@ -153,8 +153,16 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 func (s *TableDetector) scanTable() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var accountIds string
+	var (
+		accountIds string
+		mp         = make(map[uint32]TblMap)
+	)
 	s.Lock()
+	if len(s.SubscribedAccountIds) == 0 {
+		s.Mp = mp
+		s.Unlock()
+		return nil
+	}
 	var i int
 	for accountId := range s.SubscribedAccountIds {
 		if i != 0 {
@@ -175,7 +183,6 @@ func (s *TableDetector) scanTable() error {
 	}
 	defer result.Close()
 
-	mp := make(map[uint32]TblMap)
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			tblId := vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
