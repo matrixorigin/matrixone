@@ -6751,6 +6751,7 @@ func TestAppendAndGC2(t *testing.T) {
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	opts.CheckpointCfg.MinCount = 3
 	opts.CheckpointCfg.GlobalMinCount = 5
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 10
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	db := tae.DB
