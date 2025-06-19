@@ -904,9 +904,19 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
+		logutil.Info(
+			"GC-TRACE-GLOBAL-CHECKPOINT-FILE",
+			zap.String("task", c.TaskNameLocked()),
+			zap.String("gckp", ckp.String()),
+		)
 		if end.LT(&newWaterMark) {
 			nameMeta := ioutil.EncodeCKPMetadataFullName(
 				ckp.GetStart(), ckp.GetEnd(),
+			)
+			logutil.Info(
+				"GC-TRACE-DELETE-GLOBAL-CHECKPOINT-FILE",
+				zap.String("task", c.TaskNameLocked()),
+				zap.String("gckp", nameMeta),
 			)
 			deleteFiles = append(deleteFiles, nameMeta)
 		}
@@ -1524,8 +1534,8 @@ func (c *checkpointCleaner) tryScanLocked(
 		maxScannedTS = scanWaterMark.GetEnd()
 	}
 
-	// get up to 10 incremental checkpoints starting from the max scanned timestamp
-	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, 10)
+	// get up to maxMergeCheckpointCount incremental checkpoints starting from the max scanned timestamp
+	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxMergeCheckpointCount)
 
 	// quick return if there is no incremental checkpoint
 	if len(checkpoints) == 0 {

@@ -30,6 +30,7 @@ import (
 )
 
 var CauseSwitchWrite2Replay = moerr.NewInternalErrorNoCtx("SwitchWrite2Replay")
+var CauseStopGC = moerr.NewInternalErrorNoCtx("StopGC")
 
 const (
 	JT_GCNoop tasks.JobType = 300 + iota
@@ -296,8 +297,6 @@ func (cleaner *DiskCleaner) doReplayAndExecute(ctx context.Context) (err error) 
 	if err = cleaner.doReplay(ctx); err != nil {
 		return
 	}
-	msg = "GC-TryGC"
-	err = cleaner.cleaner.TryGC(ctx)
 	return
 }
 
