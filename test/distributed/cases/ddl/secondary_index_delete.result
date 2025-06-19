@@ -51,6 +51,3 @@ name    type    column_name
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
-drop table if exists parmas;
-CREATE TABLE params (`key` VARCHAR(250) NOT NULL,run_uuid VARCHAR(32) NOT NULL,CONSTRAINT param_pk PRIMARY KEY (`key`, run_uuid));
-CREATE INDEX index_params_run_uuid ON params (run_uuid);
