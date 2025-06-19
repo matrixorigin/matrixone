@@ -312,7 +312,6 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 	}()
 
 	wg.Wait()
-	time.Sleep(4 * time.Second)
 
 	os.Stderr.WriteString("cache.Destroy\n")
 	Cache.Destroy()
