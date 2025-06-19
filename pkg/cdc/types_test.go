@@ -211,6 +211,7 @@ func TestDbTableInfo_String(t *testing.T) {
 		SourceTblId   uint64
 		SinkDbName    string
 		SinkTblName   string
+		IdChanged     bool
 	}
 	tests := []struct {
 		name   string
@@ -225,8 +226,9 @@ func TestDbTableInfo_String(t *testing.T) {
 				SourceTblId:   1,
 				SinkDbName:    "sink_db",
 				SinkTblName:   "sink_tbl",
+				IdChanged:     false,
 			},
-			want: "source_db(1).source_tbl(1) -> sink_db.sink_tbl",
+			want: "source_db(1).source_tbl(1) -> sink_db.sink_tbl, false",
 		},
 	}
 	for _, tt := range tests {
@@ -238,6 +240,7 @@ func TestDbTableInfo_String(t *testing.T) {
 				SourceTblId:   tt.fields.SourceTblId,
 				SinkDbName:    tt.fields.SinkDbName,
 				SinkTblName:   tt.fields.SinkTblName,
+				IdChanged:     tt.fields.IdChanged,
 			}
 			assert.Equalf(t, tt.want, info.String(), "String()")
 		})

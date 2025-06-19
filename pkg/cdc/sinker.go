@@ -93,7 +93,7 @@ var NewSinker = func(
 	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
 	// possibly need to drop table first
 	if dbTblInfo.IdChanged {
-		_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("drop table `%s`", dbTblInfo.SinkTblName)), false)
+		_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)), false)
 	}
 	// create table
 	createSql := strings.TrimSpace(dbTblInfo.SourceCreateSql)
