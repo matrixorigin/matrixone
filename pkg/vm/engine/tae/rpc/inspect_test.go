@@ -16,18 +16,24 @@ package rpc
 
 import (
 	"context"
+	"fmt"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -311,5 +317,142 @@ func Test_inspectArgs(t *testing.T) {
 	err = arg2.FromCommand(nil)
 	require.NoError(t, err)
 	err = arg2.Run()
+	require.NoError(t, err)
+}
+
+func TestApplyTableData(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	ioutil.Start("")
+	mh := &mockHandle{
+		m: mpool.MustNewZero(),
+	}
+
+	mh.Handle = &Handle{
+		db: tae.DB,
+	}
+	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
+
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	tae.DeleteAll(true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dumpTableCmd := fmt.Sprintf("dump-table -d %d -t %d", tableEntry.GetDB().ID, tableEntry.ID)
+
+	_, err := mh.runInspectCmd(dumpTableCmd)
+	require.NoError(t, err)
+
+	dumpTableFS, err := tae.Runtime.TmpFS.GetOrCreateApp(
+		&fileservice.AppConfig{
+			Name: DumpTableDir,
+			GCFn: GCDumpTableFiles,
+		},
+	)
+	require.NoError(t, err)
+
+	dirs := dumpTableFS.List(ctx, "")
+	var dir string
+	for entry, err := range dirs {
+		assert.NoError(t, err)
+		t.Log(entry.Name)
+		dir = entry.Name
+	}
+
+	applyTableCmd := fmt.Sprintf("apply-table-data -d %v -t %v -o %s", "db2", "table2", dir)
+
+	_, err = mh.runInspectCmd(applyTableCmd)
+	require.NoError(t, err)
+}
+
+func TestApplyTableDataError(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	ioutil.Start("")
+	mh := &mockHandle{
+		m: mpool.MustNewZero(),
+	}
+
+	mh.Handle = &Handle{
+		db: tae.DB,
+	}
+	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))
+
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	tae.DeleteAll(true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dumpTableCmd := fmt.Sprintf("dump-table -d %d -t %d", tableEntry.GetDB().ID, tableEntry.ID)
+
+	_, err := mh.runInspectCmd(dumpTableCmd)
+	require.NoError(t, err)
+
+	dumpTableCmd2 := fmt.Sprintf("dump-table -d %d -t %d", tae.Catalog.NextDB(), tableEntry.ID)
+	resp, err := mh.runInspectCmd(dumpTableCmd2)
+	require.NoError(t, err)
+	assert.True(t, strings.Contains(resp.Message, "get database by id"))
+	t.Log(resp.Message)
+
+	dumpTableCmd3 := fmt.Sprintf("dump-table -d %d -t %d", tableEntry.GetDB().ID, tae.Catalog.NextTable())
+	resp, err = mh.runInspectCmd(dumpTableCmd3)
+	require.NoError(t, err)
+	assert.True(t, strings.Contains(resp.Message, "get table by id"))
+	t.Log(resp.Message)
+
+	dumpTableFS, err := tae.Runtime.TmpFS.GetOrCreateApp(
+		&fileservice.AppConfig{
+			Name: DumpTableDir,
+			GCFn: GCDumpTableFiles,
+		},
+	)
+	require.NoError(t, err)
+
+	dirs := dumpTableFS.List(ctx, "")
+	var dir string
+	for entry, err := range dirs {
+		assert.NoError(t, err)
+		t.Log(entry.Name)
+		dir = entry.Name
+	}
+
+	applyTableCmd := fmt.Sprintf("apply-table-data -d %v -t %v -o %s", "db2", "table2", dir)
+
+	resp, err = mh.runInspectCmd(applyTableCmd)
+	assert.True(t, strings.Contains(resp.Message, "apply table data is not enabled"))
+	require.NoError(t, err)
+
+	tae.Opts.EnableApplyTableData = true
+	resp, err = mh.runInspectCmd(applyTableCmd)
+	t.Log(resp.Message)
+	require.NoError(t, err)
+
+	resp, err = mh.runInspectCmd(applyTableCmd)
+	assert.True(t, strings.Contains(resp.Message, "table already exists"))
 	require.NoError(t, err)
 }
