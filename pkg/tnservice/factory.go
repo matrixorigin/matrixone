@@ -211,21 +211,22 @@ func (s *store) newTAEStorage(
 	max2LogServiceMsgSizeLimit := uint64(math.MaxUint64 / 2)
 
 	opt := &options.Options{
-		Clock:             s.rt.Clock(),
-		Fs:                fs,
-		LocalFs:           localFs,
-		TmpFs:             tmpFs.(*fileservice.TmpFileService),
-		WalClientFactory:  logservicedriver.LogServiceClientFactory(factory),
-		Shard:             shard,
-		CheckpointCfg:     ckpcfg,
-		GCCfg:             gcCfg,
-		MergeCfg:          mergeCfg,
-		IncrementalDedup:  s.cfg.Txn.IncrementalDedup == "true",
-		IsStandalone:      s.cfg.InStandalone,
-		Ctx:               ctx,
-		MaxMessageSize:    max2LogServiceMsgSizeLimit,
-		TaskServiceGetter: s.GetTaskService,
-		SID:               s.cfg.UUID,
+		Clock:                s.rt.Clock(),
+		Fs:                   fs,
+		LocalFs:              localFs,
+		TmpFs:                tmpFs.(*fileservice.TmpFileService),
+		WalClientFactory:     logservicedriver.LogServiceClientFactory(factory),
+		Shard:                shard,
+		CheckpointCfg:        ckpcfg,
+		GCCfg:                gcCfg,
+		MergeCfg:             mergeCfg,
+		IncrementalDedup:     s.cfg.Txn.IncrementalDedup == "true",
+		IsStandalone:         s.cfg.InStandalone,
+		Ctx:                  ctx,
+		MaxMessageSize:       max2LogServiceMsgSizeLimit,
+		TaskServiceGetter:    s.GetTaskService,
+		SID:                  s.cfg.UUID,
+		EnableApplyTableData: s.cfg.Txn.DebugMode,
 	}
 
 	return taestorage.NewTAEStorage(
