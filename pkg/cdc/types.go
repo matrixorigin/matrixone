@@ -233,16 +233,19 @@ type DbTableInfo struct {
 
 	SinkDbName  string
 	SinkTblName string
+
+	IdChanged bool
 }
 
 func (info DbTableInfo) String() string {
-	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v",
+	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v, %v",
 		info.SourceDbName,
 		info.SourceDbId,
 		info.SourceTblName,
 		info.SourceTblId,
 		info.SinkDbName,
 		info.SinkTblName,
+		info.IdChanged,
 	)
 }
 
@@ -255,7 +258,18 @@ func (info DbTableInfo) Clone() *DbTableInfo {
 		SourceCreateSql: info.SourceCreateSql,
 		SinkDbName:      info.SinkDbName,
 		SinkTblName:     info.SinkTblName,
+		IdChanged:       info.IdChanged,
 	}
+}
+
+func (info DbTableInfo) OnlyDiffinTblId(t *DbTableInfo) bool {
+	if info.SourceDbId != t.SourceDbId ||
+		info.SourceDbName != t.SourceDbName ||
+		info.SourceTblName != t.SourceTblName ||
+		info.SourceCreateSql != t.SourceCreateSql {
+		return false
+	}
+	return info.SourceTblId != t.SourceTblId
 }
 
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].

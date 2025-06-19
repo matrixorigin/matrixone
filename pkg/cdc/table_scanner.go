@@ -146,12 +146,26 @@ func (s *TableDetector) scanTable() {
 			}
 
 			key := GenDbTblKey(dbName, tblName)
-			mp[accountId][key] = &DbTableInfo{
+
+			oldInfo, exists := s.Mp[accountId][key]
+			newInfo := &DbTableInfo{
 				SourceDbId:      dbId,
 				SourceDbName:    dbName,
 				SourceTblId:     tblId,
 				SourceTblName:   tblName,
 				SourceCreateSql: createSql,
+			}
+			if !exists {
+				mp[accountId][key] = newInfo
+			} else {
+				mp[accountId][key] = &DbTableInfo{
+					SourceDbId:      dbId,
+					SourceDbName:    dbName,
+					SourceTblId:     tblId,
+					SourceTblName:   tblName,
+					SourceCreateSql: createSql,
+					IdChanged:       oldInfo.OnlyDiffinTblId(newInfo),
+				}
 			}
 		}
 		return true
