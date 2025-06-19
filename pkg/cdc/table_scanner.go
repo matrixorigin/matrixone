@@ -138,8 +138,13 @@ func (s *TableDetector) scanTable() {
 	defer cancel()
 	var accountIds string
 	s.Lock()
+	var i int
 	for accountId := range s.subscribedAccountIds {
-		accountIds += fmt.Sprintf("%d,", accountId)
+		if i != 0 {
+			accountIds += ","
+		}
+		accountIds += fmt.Sprintf("%d", accountId)
+		i++
 	}
 	s.Unlock()
 
