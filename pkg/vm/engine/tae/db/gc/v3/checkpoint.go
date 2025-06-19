@@ -1534,8 +1534,8 @@ func (c *checkpointCleaner) tryScanLocked(
 		maxScannedTS = scanWaterMark.GetEnd()
 	}
 
-	// get up to 10 incremental checkpoints starting from the max scanned timestamp
-	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, 10)
+	// get up to maxMergeCheckpointCount incremental checkpoints starting from the max scanned timestamp
+	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxMergeCheckpointCount)
 
 	// quick return if there is no incremental checkpoint
 	if len(checkpoints) == 0 {

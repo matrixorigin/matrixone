@@ -182,7 +182,19 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if gcWaterMark == nil {
 					return
 				}
-				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
+				ts := gcWaterMark.GetEnd()
+				// If gcWaterMark has not been updated for a long time
+				// exceeding GlobalVersionInterval, use GlobalVersionInterval
+				// must be more than 10 minutes to be effective,
+				// because in some cases of ut, GlobalVersionInterval will be very short
+				if db.Opts.CheckpointCfg.GlobalVersionInterval > 10*time.Minute {
+					interval := types.BuildTS(time.Now().UTC().UnixNano()-
+						int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
+					if ts.LE(&interval) {
+						ts = interval
+					}
+				}
+				db.Catalog.GCByTS(ctx, ts)
 			},
 			1,
 		)
