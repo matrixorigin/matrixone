@@ -336,9 +336,9 @@ func TestTryRebindLocked(t *testing.T) {
 			}
 			binds := a.registerService(newServiceID)
 			result := a.tryRebindLocked(binds, 0, old, 1)
-			assert.False(t, result.Valid)
-			assert.Equal(t, oldServiceID, result.ServiceID)
-			assert.Equal(t, uint64(1), result.Version)
+			assert.True(t, result.Valid)
+			assert.Equal(t, newServiceID, result.ServiceID)
+			assert.Equal(t, uint64(2), result.Version)
 
 			// Test case 2: Old binding is still valid
 			old = pb.LockTable{
