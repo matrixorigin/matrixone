@@ -171,6 +171,9 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 // select f.* from (select serial(cast(column_0 as bigint), cast(column_1 as bigint)) as id, column_2 as body, column_3 as title from
 // (values row(1, 2, 'body', 'title'), row(2, 3, 'body is heavy', 'I do not know'))) as src
 // cross apply fulltext_index_tokenize('{"parser":"ngram"}', 61, id, body, title) as f;
+//
+// for composite key, use hex string X'abcd' as input of primary key and skip serial()
+// select unhex(hex(serial(cast(0 as smallint), cast(1 as int))));
 func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
 
 	if len(exprs) < 3 {
