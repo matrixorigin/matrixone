@@ -89,6 +89,24 @@ func TestNewSinker(t *testing.T) {
 			want:    nil,
 			wantErr: assert.NoError,
 		},
+		{
+			args: args{
+				sinkUri: UriInfo{
+					SinkTyp: CDCSinkType_MySQL,
+				},
+				dbTblInfo: &DbTableInfo{
+					SourceCreateSql: "create table t1 (a int, b int, c int)",
+					IdChanged:       true,
+				},
+				watermarkUpdater: nil,
+				tableDef:         nil,
+				retryTimes:       0,
+				retryDuration:    0,
+				ar:               NewCdcActiveRoutine(),
+			},
+			want:    nil,
+			wantErr: assert.NoError,
+		},
 	}
 
 	db, mock, err := sqlmock.New()
