@@ -43,4 +43,8 @@ select mo_ctl('dn','globalcheckpoint','');
 select mo_ctl('dn','checkpoint','');
 select * from t;
 
+-- @separator:table
+select mo_ctl('dn','DiskCleaner','stop_gc');
+-- @separator:table
+select mo_ctl('dn','DiskCleaner','start_gc');
 drop database if exists db1;
