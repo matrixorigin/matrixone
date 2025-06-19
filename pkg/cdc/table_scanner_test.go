@@ -17,7 +17,6 @@ package cdc
 import (
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -56,18 +55,33 @@ func TestTableScanner(t *testing.T) {
 	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Return(res, nil).AnyTimes()
 
 	detector = &TableDetector{
-		Mutex:     sync.Mutex{},
-		Mp:        make(map[uint32]TblMap),
-		Callbacks: make(map[string]func(map[uint32]TblMap)),
-		exec:      mockSqlExecutor,
+		Mutex:                sync.Mutex{},
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]func(map[uint32]TblMap)),
+		callBackAccountId:    make(map[string]uint32),
+		subscribedAccountIds: make(map[uint32]bool),
+		exec:                 mockSqlExecutor,
 	}
 
-	detector.Register("id", func(mp map[uint32]TblMap) {})
+	detector.Register("id1", 1, func(mp map[uint32]TblMap) {})
 	assert.Equal(t, 1, len(detector.Callbacks))
+	detector.Register("id2", 2, func(mp map[uint32]TblMap) {})
+	assert.Equal(t, 2, len(detector.Callbacks))
+	assert.Equal(t, 2, len(detector.subscribedAccountIds))
 
-	// one round of scanTable
-	time.Sleep(11 * time.Second)
+	detector.Register("id3", 1, func(mp map[uint32]TblMap) {})
+	assert.Equal(t, 3, len(detector.Callbacks))
+	assert.Equal(t, 2, len(detector.subscribedAccountIds))
 
-	detector.UnRegister("id")
+	detector.UnRegister("id1")
+	assert.Equal(t, 2, len(detector.Callbacks))
+	assert.Equal(t, 2, len(detector.subscribedAccountIds))
+
+	detector.UnRegister("id2")
+	assert.Equal(t, 1, len(detector.Callbacks))
+	assert.Equal(t, 1, len(detector.subscribedAccountIds))
+
+	detector.UnRegister("id3")
 	assert.Equal(t, 0, len(detector.Callbacks))
+	assert.Equal(t, 0, len(detector.subscribedAccountIds))
 }

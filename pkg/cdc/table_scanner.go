@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -41,9 +42,11 @@ var getSqlExecutor = func(cnUUID string) executor.SQLExecutor {
 var GetTableDetector = func(cnUUID string) *TableDetector {
 	once.Do(func() {
 		detector = &TableDetector{
-			Mp:        make(map[uint32]TblMap),
-			Callbacks: make(map[string]func(map[uint32]TblMap)),
-			exec:      getSqlExecutor(cnUUID),
+			Mp:                   make(map[uint32]TblMap),
+			Callbacks:            make(map[string]func(map[uint32]TblMap)),
+			exec:                 getSqlExecutor(cnUUID),
+			callBackAccountId:    make(map[string]uint32),
+			subscribedAccountIds: make(map[uint32]bool),
 		}
 	})
 	return detector
@@ -59,11 +62,17 @@ type TableDetector struct {
 	Callbacks map[string]func(map[uint32]TblMap)
 	exec      executor.SQLExecutor
 	cancel    context.CancelFunc
+
+	callBackAccountId    map[string]uint32
+	subscribedAccountIds map[uint32]bool
 }
 
-func (s *TableDetector) Register(id string, cb func(map[uint32]TblMap)) {
+func (s *TableDetector) Register(id string, accountId uint32, cb func(map[uint32]TblMap)) {
 	s.Lock()
 	defer s.Unlock()
+
+	s.subscribedAccountIds[accountId] = true
+	s.callBackAccountId[id] = accountId
 
 	if len(s.Callbacks) == 0 {
 		ctx, cancel := context.WithCancel(
@@ -82,10 +91,22 @@ func (s *TableDetector) UnRegister(id string) {
 	s.Lock()
 	defer s.Unlock()
 
+	accountId := s.callBackAccountId[id]
 	delete(s.Callbacks, id)
+	delete(s.callBackAccountId, id)
 	if len(s.Callbacks) == 0 && s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
+	}
+	found := false
+	for _, cbAccountId := range s.callBackAccountId {
+		if cbAccountId == accountId {
+			found = true
+			break
+		}
+	}
+	if !found {
+		delete(s.subscribedAccountIds, accountId)
 	}
 }
 
@@ -115,10 +136,16 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 func (s *TableDetector) scanTable() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	var accountIds string
+	s.Lock()
+	for accountId := range s.subscribedAccountIds {
+		accountIds += fmt.Sprintf("%d,", accountId)
+	}
+	s.Unlock()
 
 	result, err := s.exec.Exec(
 		ctx,
-		CDCSQLBuilder.CollectTableInfoSQL(),
+		CDCSQLBuilder.CollectTableInfoSQL(accountIds),
 		executor.Options{},
 	)
 	if err != nil {
