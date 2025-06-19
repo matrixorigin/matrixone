@@ -299,6 +299,71 @@ func TestDbTableInfo_Clone(t *testing.T) {
 	}
 }
 
+func TestDbTableInfo_OnlyDiffinTblId(t *testing.T) {
+	type fields struct {
+		SourceDbName  string
+		SourceTblName string
+		SourceDbId    uint64
+		SourceTblId   uint64
+		SinkDbName    string
+		SinkTblName   string
+		IdChanged     bool
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   bool
+	}{
+		{
+			fields: fields{
+				SourceDbName:  "source_db",
+				SourceDbId:    2,
+				SourceTblName: "source_tbl",
+				SourceTblId:   1,
+				SinkDbName:    "sink_db",
+				SinkTblName:   "sink_tbl",
+				IdChanged:     false,
+			},
+			want: false,
+		},
+		{
+			fields: fields{
+				SourceDbName:  "source_db",
+				SourceDbId:    1,
+				SourceTblName: "source_tbl",
+				SourceTblId:   2,
+				SinkDbName:    "sink_db",
+				SinkTblName:   "sink_tbl",
+				IdChanged:     false,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := DbTableInfo{
+				SourceDbName:  tt.fields.SourceDbName,
+				SourceTblName: tt.fields.SourceTblName,
+				SourceDbId:    1,
+				SourceTblId:   1,
+				SinkDbName:    tt.fields.SinkDbName,
+				SinkTblName:   tt.fields.SinkTblName,
+				IdChanged:     tt.fields.IdChanged,
+			}
+			info := DbTableInfo{
+				SourceDbName:  tt.fields.SourceDbName,
+				SourceTblName: tt.fields.SourceTblName,
+				SourceDbId:    tt.fields.SourceDbId,
+				SourceTblId:   tt.fields.SourceTblId,
+				SinkDbName:    tt.fields.SinkDbName,
+				SinkTblName:   tt.fields.SinkTblName,
+				IdChanged:     tt.fields.IdChanged,
+			}
+			assert.Equalf(t, tt.want, base.OnlyDiffinTblId(&info), "OnlyDiffinTblId()")
+		})
+	}
+}
+
 func TestJsonDecode(t *testing.T) {
 	// TODO
 	//type args struct {
