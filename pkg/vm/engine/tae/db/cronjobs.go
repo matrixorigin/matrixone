@@ -178,11 +178,11 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if db.Opts.CatalogCfg.DisableGC {
 					return
 				}
-				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if gcWaterMark == nil {
+				scanWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
+				if scanWaterMark == nil {
 					return
 				}
-				ts := gcWaterMark.GetEnd()
+				ts := scanWaterMark.GetEnd()
 				// If gcWaterMark has not been updated for a long time
 				// exceeding GlobalVersionInterval, use GlobalVersionInterval
 				// must be more than 10 minutes to be effective,
