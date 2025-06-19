@@ -595,7 +595,8 @@ func (s *Schema) ReadFromBatch(
 	idxes []int32,
 	seqNums []uint16,
 	offset int,
-	targetTid uint64) (next int) {
+	checkFn func(currentName string, currentTid uint64) (goNext bool),
+) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	defer func() {
 		slices.SortStableFunc(s.ColDefs, func(i, j *ColDef) int {
@@ -609,7 +610,7 @@ func (s *Schema) ReadFromBatch(
 		name := nameVec.GetDownstreamVector().GetStringAt(offset)
 		id := tids[offset]
 		// every schema has 1 rowid column as last column, if have one, break
-		if name != s.Name || targetTid != id {
+		if !checkFn(name, id) {
 			break
 		}
 		def := new(ColDef)

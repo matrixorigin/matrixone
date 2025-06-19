@@ -248,6 +248,15 @@ func (s *Service) getManualPartitions(
 		return partition.PartitionMetadata{}, err
 	}
 
+	if len(partitionDesc) == 0 {
+		for i, col := range validColumns {
+			if i > 0 {
+				partitionDesc += ", "
+			}
+			partitionDesc += col
+		}
+	}
+
 	metadata := partition.PartitionMetadata{
 		TableID:      def.TblId,
 		TableName:    def.Name,

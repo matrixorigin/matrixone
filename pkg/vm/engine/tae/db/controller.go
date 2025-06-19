@@ -692,6 +692,7 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		db.Runtime.Options.CheckpointCfg.ScanInterval,
 		&merge.TNCatalogEventSource{Catalog: db.Catalog, TxnManager: db.TxnMgr},
 		merge.NewTNMergeExecutor(db.Runtime),
+		merge.NewStdClock(),
 	)
 	db.MergeScheduler.Start()
 	rollbackSteps.Add("stop merge scheduler", func() error {

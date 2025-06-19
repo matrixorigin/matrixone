@@ -997,7 +997,6 @@ func constructTableFunction(n *plan.Node, qry *plan.Query) *table_function.Table
 	arg.Params = n.TableDef.TblFunc.Param
 	arg.IsSingle = n.TableDef.TblFunc.IsSingle
 	arg.Limit = n.Limit
-	arg.LogicalPlan = qry
 	return arg
 }
 

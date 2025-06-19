@@ -2279,7 +2279,7 @@ func appendDeleteIndexTablePlan(
 		ObjRef:                 uniqueObjRef,
 		TableDef:               uniqueTableDef,
 		ProjectList:            scanNodeProject,
-		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
 	}
 	leftId := builder.appendNode(leftscan, bindCtx)
 	leftscan.Stats.ForceOneCN = true //to avoid bugs ,maybe refactor in the future
@@ -2401,7 +2401,7 @@ func appendDeleteIndexTablePlan(
 		JoinType:               joinType,
 		OnList:                 joinConds,
 		ProjectList:            projectList,
-		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr)},
+		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr, false)},
 	}, bindCtx)
 	recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], builder.qry.Nodes[lastNodeId], builder)
 	return lastNodeId, nil

@@ -16,7 +16,10 @@ package index
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"strconv"
+	"strings"
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/cespare/xxhash/v2"
@@ -28,10 +31,10 @@ import (
 	"github.com/samber/lo"
 )
 
-const FuseFilterError = "too many iterations, you probably have duplicate keys"
+const FuseFilterErrorMsg = "too many iterations"
 
-func DecodeBloomFilter(sf StaticFilter, data []byte) error {
-	if err := sf.Unmarshal(data); err != nil {
+func DecodeBloomFilter(sf StaticFilter, buf []byte) error {
+	if err := sf.Unmarshal(buf); err != nil {
 		return err
 	}
 	return nil
@@ -63,29 +66,38 @@ type bloomFilter struct {
 	xorfilter.BinaryFuse8
 }
 
-func NewBloomFilter(data containers.Vector) (StaticFilter, error) {
-	return NewBloomFilter2([]containers.Vector{data})
+func NewBloomFilter(vec containers.Vector) (StaticFilter, error) {
+	return NewBloomFilter2([]containers.Vector{vec})
 }
 
 func buildFuseFilter(hashes []uint64) (*bloomFilter, error) {
-	var inner *xorfilter.BinaryFuse8
+	var inners *xorfilter.BinaryFuse8
 	var err error
-	if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
-		if err.Error() == FuseFilterError {
+	if inners, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+		logutil.Error("BuildFuseFilter",
+			zap.String("error", err.Error()))
+		if strings.Contains(err.Error(), FuseFilterErrorMsg) {
 			// 230+ duplicate keys in hashes
 			// block was deleted 115+ rows
+			oldHashes := hashes
 			hashes = lo.Uniq(hashes)
-			if inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
+			logutil.Info("BuildFuseFilter",
+				zap.String("error", err.Error()),
+				zap.Uint64s("old hashes", oldHashes),
+				zap.Uint64s("hashes", hashes))
+			if inners, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
 				return nil, err
 			}
+		} else {
+			return nil, err
 		}
 	}
 	sf := &bloomFilter{}
-	sf.BinaryFuse8 = *inner
+	sf.BinaryFuse8 = *inners
 	return sf, nil
 }
 
-func NewBloomFilter2(datas []containers.Vector) (StaticFilter, error) {
+func NewBloomFilter2(vectors []containers.Vector) (StaticFilter, error) {
 	hashes := make([]uint64, 0)
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
@@ -93,7 +105,7 @@ func NewBloomFilter2(datas []containers.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	for _, data := range datas {
+	for _, data := range vectors {
 		if err = containers.ForeachWindowBytes(data.GetDownstreamVector(), 0, data.Length(), op, nil); err != nil {
 			return nil, err
 		}
@@ -143,17 +155,17 @@ func (filter *bloomFilter) MayContainsAnyKeys(keys containers.Vector) (bool, *nu
 }
 
 func (filter *bloomFilter) Marshal() (buf []byte, err error) {
-	var w bytes.Buffer
-	if err = filter.MarshalWithBuffer(&w); err != nil {
+	var str bytes.Buffer
+	if err = filter.MarshalWithBuffer(&str); err != nil {
 		return
 	}
-	buf = w.Bytes()
+	buf = str.Bytes()
 	return
 }
 
-func (filter *bloomFilter) MarshalWithBuffer(w *bytes.Buffer) (err error) {
+func (filter *bloomFilter) MarshalWithBuffer(str *bytes.Buffer) (err error) {
 	if _, err = types.WriteValues(
-		w,
+		str,
 		filter.Seed,
 		filter.SegmentLength,
 		filter.SegmentLengthMask,
@@ -161,22 +173,22 @@ func (filter *bloomFilter) MarshalWithBuffer(w *bytes.Buffer) (err error) {
 		filter.SegmentCountLength); err != nil {
 		return
 	}
-	_, err = w.Write(types.EncodeSlice(filter.Fingerprints))
+	_, err = str.Write(types.EncodeSlice(filter.Fingerprints))
 	return
 }
 
-func (filter *bloomFilter) Unmarshal(buf []byte) error {
-	filter.Seed = types.DecodeFixed[uint64](buf[:8])
-	buf = buf[8:]
-	filter.SegmentLength = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.SegmentLengthMask = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.SegmentCount = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.SegmentCountLength = types.DecodeFixed[uint32](buf[:4])
-	buf = buf[4:]
-	filter.Fingerprints = types.DecodeSlice[uint8](buf)
+func (filter *bloomFilter) Unmarshal(buffer []byte) error {
+	filter.Seed = types.DecodeFixed[uint64](buffer[:8])
+	buffer = buffer[8:]
+	filter.SegmentLength = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.SegmentLengthMask = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.SegmentCount = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.SegmentCountLength = types.DecodeFixed[uint32](buffer[:4])
+	buffer = buffer[4:]
+	filter.Fingerprints = types.DecodeSlice[uint8](buffer)
 	return nil
 }
 
