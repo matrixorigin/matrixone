@@ -124,7 +124,7 @@ func TestMakeCPKEYRuntimeFilter(t *testing.T) {
 		Name2ColIndex: name2colidx,
 	}
 	expr := GetColExpr(typ, 0, 0)
-	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef)
+	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef, false)
 }
 
 func TestDbNameOfObjRef(t *testing.T) {

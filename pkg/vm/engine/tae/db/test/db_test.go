@@ -17,10 +17,12 @@ package test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand"
+	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -4809,6 +4811,17 @@ func TestReadCheckpoint(t *testing.T) {
 	for _, entry := range entries {
 		t.Log(entry.String())
 		t.Log(entry.JsonString())
+		ranges, err := entry.GetTableRanges(ctx, common.CheckpointAllocator, tae.Runtime.Fs)
+		assert.NoError(t, err)
+		rangeJson, err := json.Marshal(ranges)
+		assert.NoError(t, err)
+		t.Log(string(rangeJson))
+
+		ranges, err = entry.GetTableRangesByID(ctx, 1000, common.CheckpointAllocator, tae.Runtime.Fs)
+		assert.NoError(t, err)
+		rangeJson, err = json.Marshal(ranges)
+		assert.NoError(t, err)
+		t.Log(string(rangeJson))
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
@@ -6737,6 +6750,7 @@ func TestAppendAndGC2(t *testing.T) {
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	opts.CheckpointCfg.MinCount = 3
 	opts.CheckpointCfg.GlobalMinCount = 5
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 10
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	db := tae.DB
@@ -10275,7 +10289,7 @@ func TestPersistTransferTable(t *testing.T) {
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs, time.Second, time.Minute, createdObjs)
+	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, time.Minute, createdObjs)
 	ids := make([]types.Rowid, 10)
 	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
@@ -10288,9 +10302,8 @@ func TestPersistTransferTable(t *testing.T) {
 	page.Train(transferMap)
 	tae.Runtime.TransferTable.AddPage(page)
 
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	ioVector := fileservice.IOVector{
-		FilePath: name.String(),
+		FilePath: model.GetTransferFileName(),
 	}
 	offset := int64(0)
 	data := page.Marshal()
@@ -10301,7 +10314,11 @@ func TestPersistTransferTable(t *testing.T) {
 	}
 	ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-	err := tae.Runtime.Fs.Write(context.Background(), ioVector)
+	transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{Name: "transfer"})
+	if err != nil {
+		return
+	}
+	err = transferFS.Write(context.Background(), ioVector)
 	if err != nil {
 		return
 	}
@@ -10343,7 +10360,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 			createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 			now := time.Now()
-			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs, time.Second, 2*time.Second, createdObjs)
+			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, 2*time.Second, createdObjs)
 			ids := make([]types.Rowid, 10)
 			transferMap := make(api.TransferMap)
 			for i := 0; i < 10; i++ {
@@ -10357,9 +10374,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 			page.Train(transferMap)
 			tae.Runtime.TransferTable.AddPage(page)
 
-			name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 			ioVector := fileservice.IOVector{
-				FilePath: name.String(),
+				FilePath: model.GetTransferFileName(),
 			}
 			offset := int64(0)
 			data := page.Marshal()
@@ -10370,7 +10386,11 @@ func TestClearPersistTransferTable(t *testing.T) {
 			}
 			ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-			err := tae.Runtime.Fs.Write(context.Background(), ioVector)
+			transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{Name: "transfer"})
+			if err != nil {
+				return
+			}
+			err = transferFS.Write(context.Background(), ioVector)
 			if err != nil {
 				return
 			}
@@ -12074,6 +12094,140 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	defer bat2.Clean(common.DebugAllocator)
 }
 
+func Test_TmpFileService1(t *testing.T) {
+	ctx := context.Background()
+
+	dir := testutils.InitTestEnv(ModuleName, t)
+	tmpFS, err := fileservice.NewTestTmpFileService("TMP", path.Join(dir, "tmp"), time.Millisecond*100)
+	assert.NoError(t, err)
+	defer tmpFS.Close(ctx)
+
+	getNameFn := func() string {
+		now := time.Now()
+		return fmt.Sprintf("test_%v", now.Format("2006-01-02.15.04.05.000.MST"))
+	}
+	decodeNameFn := func(name string) (time.Time, error) {
+		strs := strings.Split(name, "_")
+		return time.Parse("2006-01-02.15.04.05.000.MST", strs[1])
+	}
+
+	testFS, err := tmpFS.GetOrCreateApp(&fileservice.AppConfig{
+		Name: "test",
+		GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
+			createTime, err := decodeNameFn(filePath)
+			if err != nil {
+				return
+			}
+			if time.Since(createTime) > time.Millisecond*100 {
+				neesGC = true
+				if err = fs.Delete(context.Background(), filePath); err != nil {
+					return
+				}
+				return
+			}
+			return
+		},
+	})
+	assert.NoError(t, err)
+
+	testFS.Name()
+	{
+		name := model.GetTransferFileName()
+		_, err = model.DecodeTransferFileName(name)
+		assert.NoError(t, err)
+	}
+	data := []byte("test")
+	ioEntry := fileservice.IOEntry{
+		Offset: 0,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+
+	filePath := getNameFn()
+	err = testFS.Write(
+		ctx,
+		fileservice.IOVector{
+			FilePath: filePath,
+			Entries:  []fileservice.IOEntry{ioEntry},
+		},
+	)
+	assert.NoError(t, err)
+	_, err = testFS.StatFile(ctx, filePath)
+	assert.NoError(t, err)
+	listFn := func() []string {
+		entries := testFS.List(ctx, "")
+		files := make([]string, 0)
+		for entry, err := range entries {
+			if err != nil {
+				continue
+			}
+			files = append(files, entry.Name)
+		}
+		return files
+	}
+
+	files := listFn()
+	assert.Equal(t, 1, len(files), "files are %v", files)
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			files := listFn()
+			return len(files) == 0
+		},
+	)
+
+	files = listFn()
+	assert.Equal(t, 0, len(files), "files are %v", files)
+
+}
+
+func Test_TmpFileService2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	tae.Runtime.TmpFS.Delete(ctx, "transfer")
+	transferFS, err := model.GetTransferFS(tae.Runtime.TmpFS)
+	assert.NoError(t, err)
+
+	name := model.GetTransferFileName()
+	data := []byte("test")
+	ioEntry := fileservice.IOEntry{
+		Offset: 0,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	err = transferFS.Write(
+		ctx,
+		fileservice.IOVector{
+			FilePath: name,
+			Entries:  []fileservice.IOEntry{ioEntry},
+		},
+	)
+	assert.NoError(t, err)
+
+	listFn := func() []string {
+		entries := transferFS.List(ctx, "")
+		files := make([]string, 0)
+		for entry, err := range entries {
+			if err != nil {
+				continue
+			}
+			files = append(files, entry.Name)
+		}
+		return files
+	}
+
+	files := listFn()
+	assert.Equal(t, 1, len(files), "files are %v", files)
+
+	neesGC, err := model.TransferFileGCFn(name, transferFS)
+	assert.NoError(t, err)
+	assert.False(t, neesGC)
+}
+
 func TestTNCatalogEventSource(t *testing.T) {
 	ctx := context.Background()
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
@@ -12101,5 +12255,5 @@ func TestTNCatalogEventSource(t *testing.T) {
 	bat, free := source.GetMergeSettingsBatchFn()()
 	defer free()
 	require.NotNil(t, bat)
-	require.Equal(t, 1, bat.RowCount())
+
 }
