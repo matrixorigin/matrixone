@@ -15,10 +15,12 @@
 package cdc
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -52,9 +54,9 @@ func TestTableScanner(t *testing.T) {
 	}
 
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
-	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Return(res, nil).AnyTimes()
+	mockSqlExecutor.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Return(res, nil)
 
-	detector = &TableDetector{
+	td := &TableDetector{
 		Mutex:                sync.Mutex{},
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]func(map[uint32]TblMap)),
@@ -63,25 +65,64 @@ func TestTableScanner(t *testing.T) {
 		exec:                 mockSqlExecutor,
 	}
 
-	detector.Register("id1", 1, func(mp map[uint32]TblMap) {})
-	assert.Equal(t, 1, len(detector.Callbacks))
-	detector.Register("id2", 2, func(mp map[uint32]TblMap) {})
-	assert.Equal(t, 2, len(detector.Callbacks))
-	assert.Equal(t, 2, len(detector.SubscribedAccountIds))
+	td.Register("id1", 1, func(mp map[uint32]TblMap) {})
+	assert.Equal(t, 1, len(td.Callbacks))
+	td.Register("id2", 2, func(mp map[uint32]TblMap) {})
+	assert.Equal(t, 2, len(td.Callbacks))
+	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 
-	detector.Register("id3", 1, func(mp map[uint32]TblMap) {})
-	assert.Equal(t, 3, len(detector.Callbacks))
-	assert.Equal(t, 2, len(detector.SubscribedAccountIds))
+	td.Register("id3", 1, func(mp map[uint32]TblMap) {})
+	assert.Equal(t, 3, len(td.Callbacks))
+	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 
-	detector.UnRegister("id1")
-	assert.Equal(t, 2, len(detector.Callbacks))
-	assert.Equal(t, 2, len(detector.SubscribedAccountIds))
+	td.UnRegister("id1")
+	assert.Equal(t, 2, len(td.Callbacks))
+	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 
-	detector.UnRegister("id2")
-	assert.Equal(t, 1, len(detector.Callbacks))
-	assert.Equal(t, 1, len(detector.SubscribedAccountIds))
+	td.UnRegister("id2")
+	assert.Equal(t, 1, len(td.Callbacks))
+	assert.Equal(t, 1, len(td.SubscribedAccountIds))
 
-	detector.UnRegister("id3")
-	assert.Equal(t, 0, len(detector.Callbacks))
-	assert.Equal(t, 0, len(detector.SubscribedAccountIds))
+	td.UnRegister("id3")
+	assert.Equal(t, 0, len(td.Callbacks))
+	assert.Equal(t, 0, len(td.SubscribedAccountIds))
+
+	td.Register("id4", 1, func(mp map[uint32]TblMap) {})
+	assert.Equal(t, 1, len(td.Callbacks))
+	assert.Equal(t, 1, len(td.SubscribedAccountIds))
+
+	err := td.scanTable()
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(td.Mp))
+
+	mockSqlExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQL("1"),
+		executor.Options{},
+	).Return(executor.Result{}, moerr.NewInternalErrorNoCtx("mock error")).AnyTimes()
+
+	err = td.scanTable()
+	assert.Error(t, err)
+	assert.Equal(t, 1, len(td.Mp))
+
+	td.UnRegister("id4")
+	assert.Equal(t, 0, len(td.Callbacks))
+	assert.Equal(t, 0, len(td.SubscribedAccountIds))
+
+	err = td.scanTable()
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(td.Mp))
+}
+
+func Test_CollectTableInfoSQL(t *testing.T) {
+	var builder cdcSQLBuilder
+	sql := builder.CollectTableInfoSQL("1,2,3")
+	sql = strings.ToUpper(sql)
+	t.Log(sql)
+	expected := "SELECT  REL_ID,  RELNAME,  RELDATABASE_ID,  " +
+		"RELDATABASE,  REL_CREATESQL,  ACCOUNT_ID " +
+		"FROM `MO_CATALOG`.`MO_TABLES` " +
+		"WHERE  ACCOUNT_ID IN (1,2,3)  AND RELKIND = 'R'  " +
+		"AND RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
+	assert.Equal(t, expected, sql)
 }
