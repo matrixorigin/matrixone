@@ -120,6 +120,13 @@ type Reader interface {
 	Close()
 }
 
+type TableReader interface {
+	Run(ctx context.Context, ar *ActiveRoutine)
+	Close()
+	Info() *DbTableInfo
+	GetWg() *sync.WaitGroup
+}
+
 // Sinker manages and drains the sql parts
 type Sinker interface {
 	Run(ctx context.Context, ar *ActiveRoutine)
