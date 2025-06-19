@@ -251,6 +251,33 @@ func NewCKPReaderWithTableID_V2(
 	}
 }
 
+// must called after ReadMeta
+// if withTableID, return from dataRanges and tombstoneRanges
+// else load from reader
+func (reader *CKPReader) GetTableRanges(
+	ctx context.Context,
+) (ranges []ckputil.TableRange, err error) {
+	if reader.withTableID {
+		ranges = make([]ckputil.TableRange, 0, len(reader.dataRanges)+len(reader.tombstoneRanges))
+		ranges = append(ranges, reader.dataRanges...)
+		ranges = append(ranges, reader.tombstoneRanges...)
+		return
+	}
+	rangeBat := ckputil.MakeTableRangeBatch()
+	defer rangeBat.Clean(reader.mp)
+	if err = ckputil.CollectTableRanges(
+		ctx,
+		reader.ckpDataObjectStats,
+		rangeBat,
+		reader.mp,
+		reader.fs,
+	); err != nil {
+		return
+	}
+	ranges = ckputil.ExportToTableRanges(rangeBat)
+	return
+}
+
 func (reader *CKPReader) ReadMeta(
 	ctx context.Context,
 ) (err error) {
@@ -457,8 +484,8 @@ func readMetaWithTableID(
 		return
 	}
 	defer release()
-	dataRanges = ckputil.ExportToTableRanges(metaBatch, tableID, ckputil.ObjectType_Data)
-	tombstoneRanges = ckputil.ExportToTableRanges(metaBatch, tableID, ckputil.ObjectType_Tombstone)
+	dataRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Data)
+	tombstoneRanges = ckputil.ExportToTableRangesByFilter(metaBatch, tableID, ckputil.ObjectType_Tombstone)
 	return
 }
 
