@@ -88,14 +88,11 @@ var NewSinker = func(
 	ctx := context.Background()
 	padding := strings.Repeat(" ", sqlBufReserved)
 	// create db
-	logutil.Info("*[NewSinker] send", zap.String("sql", fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)))
 	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)), false)
 	// use db
-	logutil.Info("*[NewSinker] send", zap.String("sql", fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)))
 	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
 	// possibly need to drop table first
 	if dbTblInfo.IdChanged {
-		logutil.Info("*[NewSinker] send", zap.String("sql", fmt.Sprintf("drop table `%s`", dbTblInfo.SinkTblName)))
 		_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("drop table `%s`", dbTblInfo.SinkTblName)), false)
 	}
 	// create table
@@ -105,7 +102,6 @@ var NewSinker = func(
 	}
 	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceDbName, dbTblInfo.SinkDbName)
 	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceTblName, dbTblInfo.SinkTblName)
-	logutil.Info("*[NewSinker] send", zap.String("sql", padding+createSql))
 	_ = sink.Send(ctx, ar, []byte(padding+createSql), false)
 
 	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength, sinkUri.SinkTyp == CDCSinkType_MO), nil
@@ -342,10 +338,8 @@ var NewMysqlSinker = func(
 }
 
 func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
-	logutil.Info("*[Run] cdc Sinker Run", zap.String("sinker.Info", s.dbTblInfo.String()))
 	logutil.Infof("cdc mysqlSinker(%v).Run: start", s.dbTblInfo)
 	defer func() {
-		logutil.Info("*[Run] cdc Sinker stop", zap.String("sinker.Info", s.dbTblInfo.String()))
 		logutil.Infof("cdc mysqlSinker(%v).Run: end", s.dbTblInfo)
 	}()
 
@@ -376,7 +370,6 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 				s.SetError(err)
 			}
 		} else {
-			logutil.Info("*[Run] mysqlSinker send", zap.String("sqlBuffer", string(sqlBuffer)))
 			if err := s.mysql.Send(ctx, ar, sqlBuffer, true); err != nil {
 				logutil.Errorf("cdc mysqlSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuffer[sqlBufReserved:])
 				// record error

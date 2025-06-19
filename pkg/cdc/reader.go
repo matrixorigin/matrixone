@@ -16,7 +16,6 @@ package cdc
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"sync"
 	"time"
 
@@ -107,7 +106,6 @@ func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 		reader.Close()
 		return
 	}
-	logutil.Info("*[Run] cdc reader run", zap.String("reader.info", reader.info.String()))
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 
 	var err error
@@ -120,7 +118,6 @@ func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 		reader.Close()
 		reader.runningReaders.Delete(key)
 		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
-		logutil.Info("*[Run] cdc reader stop", zap.String("reader.info", reader.info.String()))
 	}()
 
 	for {
@@ -135,7 +132,6 @@ func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 		}
 
 		if err = reader.readTable(ctx, ar); err != nil {
-			logutil.Info("*[Run] cdc reader fail", zap.String("reader.info", reader.info.String()))
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 			return
 		}
@@ -209,7 +205,6 @@ func (reader *tableReader) readTableWithTxn(
 
 	//step1 : get relation
 	if _, _, rel, err = GetRelationById(ctx, reader.cnEngine, txnOp, reader.info.SourceTblId); err != nil {
-		logutil.Info("*[readTableWithTxn] GetRelationById failed")
 		return
 	}
 

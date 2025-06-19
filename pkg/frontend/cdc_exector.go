@@ -60,7 +60,6 @@ func CDCTaskExecutorFactory(
 	txnClient client.TxnClient,
 	txnEngine engine.Engine,
 ) taskservice.TaskExecutor {
-	logutil.Info("*[CDCTaskExecutorFactory] start")
 	return func(ctx context.Context, spec task.Task) error {
 		ctx1, cancel := context.WithTimeoutCause(
 			ctx, time.Second*5, CDCExectorError_QueryDaemonTaskTimeout,
@@ -176,7 +175,6 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	taskName := exec.spec.TaskName
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
-	logutil.Info("*[Start]", zap.String("taskId", taskId), zap.String("taskName", taskName), zap.String("cnUUID", cnUUID), zap.Uint32("accountId", accountId))
 	logutil.Infof("cdc task %s start on cn %s", taskName, cnUUID)
 
 	defer func() {
@@ -197,11 +195,9 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	ctx := defines.AttachAccountId(rootCtx, accountId)
 
 	// get cdc task definition
-	logutil.Info("*[Start] step into retrieveCdcTask")
 	if err = exec.retrieveCdcTask(ctx); err != nil {
 		return err
 	}
-	logutil.Info("*[Start] step out of retrieveCdcTask")
 
 	// reset runningReaders
 	exec.runningReaders = &sync.Map{}
@@ -377,7 +373,6 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 	for key, info := range allAccountTbls[accountId] {
 		// already running
 		if _, ok := exec.runningReaders.Load(key); ok {
-			logutil.Info("*[handleNewTables] reader already running]", zap.String("key", key), zap.String("TableInfo", info.Clone().String()))
 			continue
 		}
 
@@ -390,7 +385,6 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			continue
 		}
 
-		logutil.Info("*[handleNewTables] cdc find new table]", zap.String("newTableInfo", newTableInfo.String()))
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
 			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", exec.spec.TaskName, key, err)
@@ -428,7 +422,6 @@ func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) 
 
 // reader ----> sinker ----> remote db
 func (exec *CDCTaskExecutor) addExecPipelineForTable(ctx context.Context, info *cdc.DbTableInfo, txnOp client.TxnOperator) (err error) {
-	logutil.Info("*[addExecPipelineForTable] start")
 	// step 1. init watermarkUpdater
 	// get watermark from db
 	watermark, err := exec.watermarkUpdater.GetFromDb(info.SourceDbName, info.SourceTblName)
@@ -471,7 +464,6 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(ctx context.Context, info *
 	if err != nil {
 		return err
 	}
-	logutil.Info("*[addExecPipelineForTable] go sinker.Run")
 	go sinker.Run(ctx, exec.activeRoutine)
 
 	// step 3. new reader
@@ -490,19 +482,16 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(ctx context.Context, info *
 		exec.endTs,
 		exec.noFull,
 	)
-	logutil.Info("*[addExecPipelineForTable] go reader.Run")
 	go reader.Run(ctx, exec.activeRoutine)
 
 	return
 }
 
 func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
-	logutil.Info("*[retrieveCdcTask] start")
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
 	accId := exec.spec.Accounts[0].GetId()
 	sql := cdc.CDCSQLBuilder.GetTaskSQL(accId, exec.spec.TaskId)
-	logutil.Info("*[retrieveCdcTask]", zap.String("sql", sql))
 	res := exec.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		return res.Error()
