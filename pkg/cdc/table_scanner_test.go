@@ -61,7 +61,7 @@ func TestTableScanner(t *testing.T) {
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]func(map[uint32]TblMap)),
 		CallBackAccountId:    make(map[string]uint32),
-		SubscribedAccountIds: make(map[uint32]bool),
+		SubscribedAccountIds: make(map[uint32][]string),
 		exec:                 mockSqlExecutor,
 	}
 

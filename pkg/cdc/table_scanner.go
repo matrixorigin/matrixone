@@ -48,7 +48,7 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			Callbacks:            make(map[string]func(map[uint32]TblMap)),
 			exec:                 getSqlExecutor(cnUUID),
 			CallBackAccountId:    make(map[string]uint32),
-			SubscribedAccountIds: make(map[uint32]bool),
+			SubscribedAccountIds: make(map[uint32][]string),
 		}
 	})
 	return detector
@@ -66,14 +66,14 @@ type TableDetector struct {
 	cancel    context.CancelFunc
 
 	CallBackAccountId    map[string]uint32
-	SubscribedAccountIds map[uint32]bool
+	SubscribedAccountIds map[uint32][]string
 }
 
 func (s *TableDetector) Register(id string, accountId uint32, cb func(map[uint32]TblMap)) {
 	s.Lock()
 	defer s.Unlock()
 
-	s.SubscribedAccountIds[accountId] = true
+	s.SubscribedAccountIds[accountId] = append(s.SubscribedAccountIds[accountId], id)
 	s.CallBackAccountId[id] = accountId
 
 	if len(s.Callbacks) == 0 {
@@ -101,18 +101,18 @@ func (s *TableDetector) UnRegister(id string) {
 	accountId := s.CallBackAccountId[id]
 	delete(s.Callbacks, id)
 	delete(s.CallBackAccountId, id)
+	subscribedAccountIds := s.SubscribedAccountIds[accountId]
+	for i, subscribedAccountId := range subscribedAccountIds {
+		if subscribedAccountId == id {
+			s.SubscribedAccountIds[accountId] = append(subscribedAccountIds[:i], subscribedAccountIds[i+1:]...)
+			break
+		}
+	}
 	if len(s.Callbacks) == 0 && s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
 	}
-	found := false
-	for _, cbAccountId := range s.CallBackAccountId {
-		if cbAccountId == accountId {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if len(s.SubscribedAccountIds[accountId]) == 0 {
 		delete(s.SubscribedAccountIds, accountId)
 	}
 	logutil.Info(
