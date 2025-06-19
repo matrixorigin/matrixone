@@ -1540,7 +1540,13 @@ func (c *checkpointCleaner) tryScanLocked(
 		maxScannedTS = scanWaterMark.GetEnd()
 		initScanWaterMark = scanWaterMark.GetStart()
 	}
-
+	if initScanWaterMark.IsEmpty() {
+		maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
+		if maxGCkp != nil {
+			initScanWaterMark = maxGCkp.GetEnd()
+			maxScannedTS = maxGCkp.GetEnd()
+		}
+	}
 	// get up to 10 incremental checkpoints starting from the max scanned timestamp
 	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, 10)
 	logutil.Infof("maxScannedTS is %v, checkpoints is %d, initScanWaterMark is %v", maxScannedTS.ToString(), len(checkpoints), initScanWaterMark.ToString())
@@ -1551,13 +1557,6 @@ func (c *checkpointCleaner) tryScanLocked(
 
 	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
 
-	if initScanWaterMark.IsEmpty() {
-		maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
-		if maxGCkp != nil {
-			initScanWaterMark = maxGCkp.GetEnd()
-		}
-	}
-	logutil.Infof("initScanWaterMark is %v", initScanWaterMark.ToString())
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range checkpoints {
 		start := ckp.GetStart()
