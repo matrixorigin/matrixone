@@ -21,6 +21,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -85,6 +87,11 @@ func (s *TableDetector) Register(id string, accountId uint32, cb func(map[uint32
 		go s.scanTableLoop(ctx)
 	}
 	s.Callbacks[id] = cb
+	logutil.Info(
+		"CDC-TableDetector-Register",
+		zap.String("task-id", id),
+		zap.Uint32("account-id", accountId),
+	)
 }
 
 func (s *TableDetector) UnRegister(id string) {
@@ -108,21 +115,31 @@ func (s *TableDetector) UnRegister(id string) {
 	if !found {
 		delete(s.subscribedAccountIds, accountId)
 	}
+	logutil.Info(
+		"CDC-TableDetector-UnRegister",
+		zap.String("task-id", id),
+		zap.Uint32("account-id", accountId),
+	)
 }
 
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
-	logutil.Infof("cdc TableScanner.scanTableLoop: start")
+	logutil.Info("CDC-TableDetector-Scan-Start")
 	defer func() {
-		logutil.Infof("cdc TableScanner.scanTableLoop: end")
+		logutil.Info("CDC-TableDetector-Scan-End")
 	}()
 
-	timeTick := time.Tick(10 * time.Second)
+	timeTick := time.Tick(15 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-timeTick:
-			s.scanTable()
+			if err := s.scanTable(); err != nil {
+				logutil.Error(
+					"CDC-TableDetector-Scan-Error",
+					zap.Error(err),
+				)
+			}
 			// do callbacks
 			s.Lock()
 			for _, cb := range s.Callbacks {
@@ -133,8 +150,8 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	}
 }
 
-func (s *TableDetector) scanTable() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *TableDetector) scanTable() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var accountIds string
 	s.Lock()
@@ -154,7 +171,7 @@ func (s *TableDetector) scanTable() {
 		executor.Options{},
 	)
 	if err != nil {
-		return
+		return err
 	}
 	defer result.Close()
 
@@ -193,4 +210,5 @@ func (s *TableDetector) scanTable() {
 	s.Lock()
 	s.Mp = mp
 	s.Unlock()
+	return nil
 }
