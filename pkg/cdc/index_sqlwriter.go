@@ -47,9 +47,15 @@ type IvfflatSqlWriter struct {
 	BaseIndexSqlWriter
 }
 
+type HnswSqlWriter struct {
+	cdc  *vectorindex.VectorIndexCdc[float32]
+	meta vectorindex.HnswCdcParam
+}
+
 // check FulltextSqlWriter is the interface of IndexSqlWriter
 var _ IndexSqlWriter = new(FulltextSqlWriter)
 var _ IndexSqlWriter = new(IvfflatSqlWriter)
+var _ IndexSqlWriter = new(HnswSqlWriter)
 
 // check algo type to return the correct sql writer
 func NewIndexSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
@@ -200,7 +206,7 @@ func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 
 func (w *BaseIndexSqlWriter) Reset() {
 	w.lastCdcOp = ""
-	w.vbuf = w.vbuf[0:]
+	w.vbuf = w.vbuf[:0]
 }
 
 func (w *BaseIndexSqlWriter) Empty() bool {
@@ -276,6 +282,43 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("FulltextSqlWriter: invalid CDC type")
 	}
+
+	return nil, nil
+}
+
+func NewHnswSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	return &HnswSqlWriter{cdc: vectorindex.NewVectorIndexCdc[float32]()}, nil
+}
+
+func (w *HnswSqlWriter) Reset() {
+	w.cdc.Data = w.cdc.Data[:0]
+}
+
+func (w *HnswSqlWriter) Full() bool {
+	return len(w.cdc.Data) >= cap(w.cdc.Data)
+}
+
+func (w *HnswSqlWriter) Empty() bool {
+	return len(w.cdc.Data) == 0
+}
+
+func (w *HnswSqlWriter) CheckLastOp(op string) bool {
+	return true
+}
+
+func (w *HnswSqlWriter) Insert(ctx context.Context, row []any) error {
+	return nil
+}
+
+func (w *HnswSqlWriter) Upsert(ctx context.Context, row []any) error {
+	return nil
+}
+
+func (w *HnswSqlWriter) Delete(ctx context.Context, row []any) error {
+	return nil
+}
+
+func (w *HnswSqlWriter) ToSql() ([]byte, error) {
 
 	return nil, nil
 }
