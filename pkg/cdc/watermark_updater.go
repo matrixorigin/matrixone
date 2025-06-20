@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,10 +37,10 @@ var ErrSetAlreadyPersisted = moerr.NewInternalErrorNoCtx("set already persisted"
 var ErrNoWatermarkFound = moerr.NewInternalErrorNoCtx("no watermark found")
 
 const (
-	watermarkUpdateInterval = time.Second
+	WatermarkUpdateInterval          = time.Second * 3
+	ReadWatermarkProjectionList      = "account_id, task_id, db_name, tbl_name, watermark"
+	UpdateWatermarkCronJobNamePrefix = "CDCWatermarkUpdater-CronJob"
 )
-
-const ReadWMProjectionList = "account_id, task_id, db_name, tbl_name, watermark"
 
 var _ IWatermarkUpdater = new(WatermarkUpdater)
 
@@ -65,6 +66,26 @@ type UpdaterJob struct {
 	Key       *WatermarkKey
 	Watermark types.TS
 	TableInfo DbTableInfo
+}
+
+type UpdateOption func(*CDCWatermarkUpdater)
+
+func WithExportStatsInterval(interval time.Duration) UpdateOption {
+	return func(u *CDCWatermarkUpdater) {
+		u.opts.exportStatsInterval = interval
+	}
+}
+
+func WithCronJobInterval(interval time.Duration) UpdateOption {
+	return func(u *CDCWatermarkUpdater) {
+		u.opts.cronJobInterval = interval
+	}
+}
+
+func WithUserCronJob(fn func(ctx context.Context)) UpdateOption {
+	return func(u *CDCWatermarkUpdater) {
+		u.cronJob = fn
+	}
 }
 
 func NewGetOrAddCommittedWMJob(
@@ -101,6 +122,12 @@ func NewCommittingWMJob(
 
 type CDCWatermarkUpdater struct {
 	sync.RWMutex
+
+	opts struct {
+		exportStatsInterval time.Duration
+		cronJobInterval     time.Duration
+	}
+
 	// sql executor
 	ie ie.InternalExecutor
 	// watermarkMap saves the watermark of each table
@@ -108,8 +135,9 @@ type CDCWatermarkUpdater struct {
 	cacheCommitting  map[WatermarkKey]types.TS
 	cacheCommitted   map[WatermarkKey]types.TS
 
-	offbandQueue sm.Queue
-	cronJob      *tasks.CancelableJob
+	queue        sm.Queue
+	cronExecutor *tasks.CancelableJob
+	cronJob      func(ctx context.Context)
 
 	getOrAddCommittedBuffer []*UpdaterJob
 	addCommittedBuffer      []*UpdaterJob
@@ -117,6 +145,58 @@ type CDCWatermarkUpdater struct {
 	readKeysBuffer          map[WatermarkKey]struct {
 		watermark types.TS
 		ok        bool
+	}
+
+	stats struct {
+		runTimes       atomic.Uint64
+		skipTimes      atomic.Uint64
+		lastExportTime time.Time
+	}
+}
+
+func NewCDCWatermarkUpdater(
+	name string,
+	ie ie.InternalExecutor,
+	opts ...UpdateOption,
+) *CDCWatermarkUpdater {
+	u := &CDCWatermarkUpdater{
+		ie:               ie,
+		cacheUncommitted: make(map[WatermarkKey]types.TS),
+		cacheCommitting:  make(map[WatermarkKey]types.TS),
+		cacheCommitted:   make(map[WatermarkKey]types.TS),
+
+		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
+		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
+		committingBuffer:        make([]*UpdaterJob, 0, 100),
+		readKeysBuffer: make(map[WatermarkKey]struct {
+			watermark types.TS
+			ok        bool
+		}, 100),
+	}
+	for _, opt := range opts {
+		opt(u)
+	}
+	u.fillDefaults()
+	u.queue = sm.NewSafeQueue(5000, 200, u.onJobs)
+	u.cronExecutor = tasks.NewCancelableCronJob(
+		fmt.Sprintf("%s-%s", UpdateWatermarkCronJobNamePrefix, name),
+		u.opts.cronJobInterval,
+		u.wrapCronJob(u.cronJob),
+		true,
+		1,
+	)
+	return u
+}
+
+func (u *CDCWatermarkUpdater) fillDefaults() {
+	if u.opts.exportStatsInterval == 0 {
+		u.opts.exportStatsInterval = time.Minute * 10
+	}
+	if u.opts.cronJobInterval == 0 {
+		u.opts.cronJobInterval = WatermarkUpdateInterval
+	}
+	if u.cronJob == nil {
+		u.cronJob = u.cronRun
 	}
 }
 
@@ -309,7 +389,7 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 			values += ","
 		}
 		values += fmt.Sprintf(
-			"(%d, '%s', '%s', '%s', '%s', '%s')",
+			"(%d, '%s', '%s', '%s', '%s')",
 			job.Key.accountId,
 			job.Key.taskId,
 			job.Key.dbName,
@@ -384,16 +464,18 @@ func (u *CDCWatermarkUpdater) constructReadWMSQL(
 			key.tblName,
 		)
 	}
-	readSql = CDCSQLBuilder.GetWatermarkWhereSQL(ReadWMProjectionList, filterStr)
+	readSql = CDCSQLBuilder.GetWatermarkWhereSQL(ReadWatermarkProjectionList, filterStr)
 	return
 }
 
 func (u *CDCWatermarkUpdater) Start() {
-	u.offbandQueue.Start()
+	u.queue.Start()
+	u.cronExecutor.Start()
 }
 
 func (u *CDCWatermarkUpdater) Stop() {
-	u.offbandQueue.Stop()
+	u.cronExecutor.Stop()
+	u.queue.Stop()
 }
 
 func (u *CDCWatermarkUpdater) getFromCache(
@@ -452,7 +534,7 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	}
 
 	job := NewGetOrAddCommittedWMJob(ctx, key, watermark, tableInfo)
-	if _, err = u.offbandQueue.Enqueue(job); err != nil {
+	if _, err = u.queue.Enqueue(job); err != nil {
 		return
 	}
 	job.WaitDone()
@@ -467,7 +549,21 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 
 // cron job to move the watermark from uncommitted to
 // committing
-func (u *CDCWatermarkUpdater) run(ctx context.Context) {
+func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ctx context.Context) {
+	return func(ctx context.Context) {
+		if time.Since(u.stats.lastExportTime) > u.opts.exportStatsInterval {
+			u.stats.lastExportTime = time.Now()
+			logutil.Info(
+				"CDCWatermarkUpdater-Stats",
+				zap.Uint64("run-times", u.stats.runTimes.Load()),
+				zap.Uint64("skip-times", u.stats.skipTimes.Load()),
+			)
+		}
+		job(ctx)
+	}
+}
+
+func (u *CDCWatermarkUpdater) cronRun(ctx context.Context) {
 	u.Lock()
 	defer u.Unlock()
 	// if there is any watermark in committing, skip the current run
@@ -482,7 +578,7 @@ func (u *CDCWatermarkUpdater) run(ctx context.Context) {
 	}
 
 	job := NewCommittingWMJob(ctx)
-	if _, err := u.offbandQueue.Enqueue(job); err != nil {
+	if _, err := u.queue.Enqueue(job); err != nil {
 		// TODO: handle error
 		return
 	}
@@ -532,7 +628,7 @@ func (u *WatermarkUpdater) Run(ctx context.Context, ar *ActiveRoutine) {
 			return
 		case <-ar.Cancel:
 			return
-		case <-time.After(watermarkUpdateInterval):
+		case <-time.After(WatermarkUpdateInterval):
 			u.flushAll()
 		}
 	}

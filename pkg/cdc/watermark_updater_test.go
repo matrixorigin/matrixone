@@ -259,7 +259,7 @@ func TestWatermarkUpdater_Run(t *testing.T) {
 	ar := NewCdcActiveRoutine()
 	go u.Run(context.Background(), ar)
 
-	time.Sleep(2 * watermarkUpdateInterval)
+	time.Sleep(2 * WatermarkUpdateInterval)
 	ar.Cancel <- struct{}{}
 }
 
@@ -307,4 +307,33 @@ func TestWatermarkUpdater_flushAll(t *testing.T) {
 	actual, err = u.GetFromDb("db3", "t3")
 	assert.NoError(t, err)
 	assert.Equal(t, t2, actual)
+}
+
+func TestCDCWatermarkUpdater_Basic(t *testing.T) {
+	ie := newWmMockSQLExecutor()
+	cronJobExecNum := 0
+	var wg1 sync.WaitGroup
+	wg1.Add(1)
+	cronJob := func(ctx context.Context) {
+		cronJobExecNum++
+		t.Logf("cronJobExecNum: %d", cronJobExecNum)
+		if cronJobExecNum == 3 {
+			wg1.Done()
+		}
+	}
+
+	u := NewCDCWatermarkUpdater(
+		"test",
+		ie,
+		WithCronJobInterval(time.Millisecond),
+		WithUserCronJob(cronJob),
+		WithExportStatsInterval(time.Millisecond*5),
+	)
+	u.Start()
+	wg1.Wait()
+	assert.GreaterOrEqual(t, cronJobExecNum, 3)
+	u.Stop()
+	prevNum := cronJobExecNum
+	time.Sleep(time.Millisecond * 5)
+	assert.Equal(t, prevNum, cronJobExecNum)
 }
