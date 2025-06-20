@@ -543,9 +543,9 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 
 	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = %d ), ", w.dbTblInfo.SinkDbName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, 0)
 	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
-	sql += fmt.Sprintf("SELECT `%s`.`%s`, `%s`.`%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (%s, %s)",
-		w.dbTblInfo.SinkDbName, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		w.dbTblInfo.SinkDbName, catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (%s, %s)",
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		cnames_str,
 		w.ivfparam.OpType,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,

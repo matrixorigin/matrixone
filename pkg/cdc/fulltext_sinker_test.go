@@ -201,20 +201,20 @@ func TestNewHnswSqlWriter(t *testing.T) {
 func TestNewIvfflatSqlWriter(t *testing.T) {
 	var ctx context.Context
 
-	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float32, 3)
+	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
 	dbTableInfo := newTestDbTableInfo()
 
 	writer, err := NewIvfflatSqlWriter("ivfflat", dbTableInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
-	row := []any{int64(1000), []float32{1, 2, 3}, nil}
+	row := []any{int64(1000), []float64{1, 2, 3}, nil}
 	err = writer.Insert(ctx, row)
 	require.Nil(t, err)
 
-	row = []any{int64(2000), []float32{5, 6, 7}, nil}
+	row = []any{int64(2000), []float64{5, 6, 7}, nil}
 	err = writer.Insert(ctx, row)
 	require.Nil(t, err)
 
-	row = []any{int64(3000), []float32{5, 6, 7}, nil}
+	row = []any{int64(3000), []float64{5, 6, 7}, nil}
 	err = writer.Insert(ctx, row)
 	require.Nil(t, err)
 
