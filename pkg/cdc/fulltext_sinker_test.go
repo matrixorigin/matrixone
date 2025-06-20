@@ -81,8 +81,9 @@ func TestNewFulltextSqlWriter(t *testing.T) {
 	var ctx context.Context
 
 	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
+	dbTableInfo := newTestDbTableInfo()
 
-	writer, err := NewIndexSqlWriter("fulltext", tabledef, tabledef.Indexes)
+	writer, err := NewIndexSqlWriter("fulltext", dbTableInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{int64(1000), []uint8("hello world"), nil}
@@ -103,8 +104,9 @@ func TestNewFulltextSqlWriterCPkey(t *testing.T) {
 	var ctx context.Context
 
 	tabledef := newTestFulltextTableDef2Parts("__mo_cpkey", types.T_varbinary, "body", "title", types.T_varchar, 256)
+	dbTableInfo := newTestDbTableInfo()
 
-	writer, err := NewIndexSqlWriter("fulltext", tabledef, tabledef.Indexes)
+	writer, err := NewIndexSqlWriter("fulltext", dbTableInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{[]uint8("abcdef12"), []uint8("hello world"), []uint8("one title"), nil}

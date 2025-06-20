@@ -2,9 +2,11 @@ package cdc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,6 +30,7 @@ type BaseIndexSqlWriter struct {
 	param     string
 	tabledef  *plan.TableDef
 	indexdef  []*plan.IndexDef
+	dbTblInfo *DbTableInfo
 	algo      string
 	pkPos     int32
 	pkType    *types.Type
@@ -52,6 +55,7 @@ type HnswSqlWriter[T types.RealNumbers] struct {
 	meta      vectorindex.HnswCdcParam
 	tabledef  *plan.TableDef
 	indexdef  []*plan.IndexDef
+	dbTblInfo *DbTableInfo
 	pkPos     int32
 	pkType    *types.Type
 	partsPos  []int32
@@ -67,10 +71,10 @@ var _ IndexSqlWriter = new(IvfflatSqlWriter)
 var _ IndexSqlWriter = new(HnswSqlWriter[float32])
 
 // check algo type to return the correct sql writer
-func NewIndexSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+func NewIndexSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
 	switch algo {
 	case "fulltext":
-		return NewFulltextSqlWriter(algo, tabledef, indexdef)
+		return NewFulltextSqlWriter(algo, dbTblInfo, tabledef, indexdef)
 	case "ivfflat":
 	default:
 		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
@@ -79,8 +83,8 @@ func NewIndexSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.In
 	return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
 }
 
-func NewFulltextSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &FulltextSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, vbuf: make([]byte, 0, 1024)}}
+func NewFulltextSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	w := &FulltextSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, vbuf: make([]byte, 0, 1024)}}
 
 	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	typ := tabledef.Cols[w.pkPos].Typ
@@ -295,8 +299,82 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 	return nil, nil
 }
 
-func NewHnswSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	return &HnswSqlWriter[float32]{cdc: vectorindex.NewVectorIndexCdc[float32]()}, nil
+func NewHnswSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	w := &HnswSqlWriter[float32]{tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, cdc: vectorindex.NewVectorIndexCdc[float32]()}
+
+	// check the tabledef and indexdef
+	if len(tabledef.Pkey.Names) != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
+	}
+
+	if len(indexdef) != 2 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 2 secondary tables")
+	}
+
+	idxdef := indexdef[0]
+	if len(idxdef.Parts) != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
+	}
+
+	paramstr := idxdef.IndexAlgoParams
+	var meta, storage string
+	for _, idx := range indexdef {
+		if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Metadata {
+			meta = idx.IndexTableName
+		}
+		if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Storage {
+			storage = idx.IndexTableName
+		}
+	}
+
+	if len(meta) == 0 || len(storage) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table either meta or storage hidden index table not exist")
+	}
+
+	var hnswparam vectorindex.HnswParam
+	if len(paramstr) > 0 {
+		err := json.Unmarshal([]byte(paramstr), &hnswparam)
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtx("hnsw sync sinker. failed to convert hnsw param json")
+		}
+	}
+
+	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
+	typ := tabledef.Cols[w.pkPos].Typ
+	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+
+	nparts := len(idxdef.Parts)
+	w.partsPos = make([]int32, nparts)
+	w.partsType = make([]*types.Type, nparts)
+
+	for i, part := range idxdef.Parts {
+		w.partsPos[i] = tabledef.Name2ColIndex[part]
+		typ = tabledef.Cols[w.partsPos[i]].Typ
+		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
+
+	w.srcPos = make([]int32, nparts+1)
+	w.srcType = make([]*types.Type, nparts+1)
+
+	w.srcPos[0] = w.pkPos
+	w.srcType[0] = w.pkType
+	for i := range w.partsType {
+		w.srcPos[i+1] = w.partsPos[i]
+		w.srcType[i+1] = w.partsType[i]
+	}
+
+	w.dbName = tabledef.DbName
+
+	w.meta = vectorindex.HnswCdcParam{
+		MetaTbl:   meta,
+		IndexTbl:  storage,
+		DbName:    dbTblInfo.SinkDbName,
+		Table:     dbTblInfo.SinkTblName,
+		Params:    hnswparam,
+		Dimension: tabledef.Cols[w.partsPos[0]].Typ.Width,
+	}
+
+	return w, nil
 }
 
 func (w *HnswSqlWriter[T]) Reset() {
