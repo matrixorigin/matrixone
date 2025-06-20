@@ -2289,6 +2289,7 @@ func constructTableClone(
 		SrcTblDef: n.TableDef,
 		SrcObjDef: n.ObjRef,
 
+		ScanSnapshot:    n.ScanSnapshot,
 		DstTblName:      n.InsertCtx.TableDef.Name,
 		DstDatabaseName: n.InsertCtx.TableDef.DbName,
 	}
