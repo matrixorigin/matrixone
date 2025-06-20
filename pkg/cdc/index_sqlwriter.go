@@ -48,8 +48,17 @@ type IvfflatSqlWriter struct {
 }
 
 type HnswSqlWriter struct {
-	cdc  *vectorindex.VectorIndexCdc[float32]
-	meta vectorindex.HnswCdcParam
+	cdc       *vectorindex.VectorIndexCdc[float32]
+	meta      vectorindex.HnswCdcParam
+	tabledef  *plan.TableDef
+	indexdef  []*plan.IndexDef
+	pkPos     int32
+	pkType    *types.Type
+	partsPos  []int32
+	partsType []*types.Type
+	srcPos    []int32
+	srcType   []*types.Type
+	dbName    string
 }
 
 // check FulltextSqlWriter is the interface of IndexSqlWriter
@@ -307,18 +316,51 @@ func (w *HnswSqlWriter) CheckLastOp(op string) bool {
 }
 
 func (w *HnswSqlWriter) Insert(ctx context.Context, row []any) error {
+	key, ok := row[w.pkPos].(int64)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid key type. not int64")
+	}
+	v, ok := row[w.partsPos[0]].([]float32)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid vector type. not []float32")
+	}
+
+	w.cdc.Insert(key, v)
 	return nil
 }
 
 func (w *HnswSqlWriter) Upsert(ctx context.Context, row []any) error {
+	key, ok := row[w.pkPos].(int64)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid key type. not int64")
+	}
+	v, ok := row[w.partsPos[0]].([]float32)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid vector type. not []float32")
+	}
+
+	w.cdc.Upsert(key, v)
 	return nil
 }
 
 func (w *HnswSqlWriter) Delete(ctx context.Context, row []any) error {
+	key, ok := row[w.pkPos].(int64)
+	if !ok {
+		return moerr.NewInternalError(ctx, "invalid key type. not int64")
+	}
+	w.cdc.Delete(key)
 	return nil
 }
 
 func (w *HnswSqlWriter) ToSql() ([]byte, error) {
 
-	return nil, nil
+	// generate sql from cdc
+	js, err := w.cdc.ToJson()
+	if err != nil {
+		return nil, err
+	}
+	// pad extra space at the front and send SQL
+	sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.Dimension, js)
+
+	return []byte(sql), nil
 }
