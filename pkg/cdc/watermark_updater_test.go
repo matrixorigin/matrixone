@@ -468,3 +468,59 @@ func TestCDCWatermarkUpdater_cronRun(t *testing.T) {
 	assert.Equal(t, uint64(1), executeErrTimes.Load())
 	assert.Equal(t, uint64(1), u.stats.errorTimes.Load())
 }
+
+func TestCDCWatermarkUpdater_GetFromCache(t *testing.T) {
+	ctx := context.Background()
+	ie := newWmMockSQLExecutor()
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+	)
+	key1 := new(WatermarkKey)
+	key1.accountId = 1
+	wm1 := types.BuildTS(1, 1)
+	wm2 := types.BuildTS(2, 1)
+	err := u.Add(ctx, key1, &wm1)
+	assert.NoError(t, err)
+
+	key2 := new(WatermarkKey)
+	key2.accountId = 2
+
+	// 1. only cacheUncommitted
+	_, err = u.GetFromCache(ctx, key2)
+	assert.ErrorIs(t, err, ErrNoWatermarkFound)
+
+	rWM, err := u.GetFromCache(ctx, key1)
+	assert.NoError(t, err)
+	assert.True(t, wm1.EQ(&rWM))
+
+	// 2. only cacheCommitting
+	u.cacheUncommitted = make(map[WatermarkKey]types.TS)
+	u.cacheCommitting = make(map[WatermarkKey]types.TS)
+	u.cacheCommitting[*key1] = wm1
+	rWM, err = u.GetFromCache(ctx, key1)
+	assert.NoError(t, err)
+	assert.True(t, wm1.EQ(&rWM))
+	_, err = u.GetFromCache(ctx, key2)
+	assert.ErrorIs(t, err, ErrNoWatermarkFound)
+
+	// 3. only cacheCommitted
+	u.cacheUncommitted = make(map[WatermarkKey]types.TS)
+	u.cacheCommitting = make(map[WatermarkKey]types.TS)
+	u.cacheCommitted = make(map[WatermarkKey]types.TS)
+	u.cacheCommitted[*key1] = wm1
+	rWM, err = u.GetFromCache(ctx, key1)
+	assert.NoError(t, err)
+	assert.True(t, wm1.EQ(&rWM))
+	_, err = u.GetFromCache(ctx, key2)
+	assert.ErrorIs(t, err, ErrNoWatermarkFound)
+
+	// 4. cacheUncommitted and cacheCommitting same key with different watermark
+	u.cacheUncommitted = make(map[WatermarkKey]types.TS)
+	u.cacheCommitting = make(map[WatermarkKey]types.TS)
+	u.cacheCommitting[*key1] = wm1
+	u.cacheUncommitted[*key1] = wm2
+	rWM, err = u.GetFromCache(ctx, key1)
+	assert.NoError(t, err)
+	assert.Truef(t, wm2.EQ(&rWM), "wm2: %s, rWM: %s", wm2.ToString(), rWM.ToString())
+}
