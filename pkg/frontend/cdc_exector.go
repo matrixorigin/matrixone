@@ -209,7 +209,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	go exec.watermarkUpdater.Run(ctx, exec.activeRoutine)
 
 	// register to table scanner
-	cdc.GetTableDetector(cnUUID).Register(taskId, exec.handleNewTables)
+	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, exec.handleNewTables)
 
 	exec.isRunning = true
 	logutil.Infof("cdc task %s start on cn %s success", taskName, cnUUID)

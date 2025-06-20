@@ -189,7 +189,8 @@ const (
 		" account_id " +
 		"FROM `mo_catalog`.`mo_tables` " +
 		"WHERE " +
-		" relkind = '%s' " +
+		" account_id IN (%s) " +
+		" AND relkind = '%s' " +
 		" AND reldatabase NOT IN (%s)"
 )
 
@@ -294,11 +295,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 		OutputAttrs: []string{"encrypted_key"},
 	},
 	CDCCollectTableInfoSqlTemplate_Idx: {
-		SQL: fmt.Sprintf(
-			CDCCollectTableInfoSqlTemplate,
-			catalog.SystemOrdinaryRel,
-			AddSingleQuotesJoin(catalog.SystemDatabases),
-		),
+		SQL: CDCCollectTableInfoSqlTemplate,
 		OutputAttrs: []string{
 			"rel_id",
 			"relname",
@@ -589,6 +586,11 @@ func (b cdcSQLBuilder) UpdateWatermarkSQL(
 // ------------------------------------------------------------------------------------------------
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
-func (b cdcSQLBuilder) CollectTableInfoSQL() string {
-	return CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL
+func (b cdcSQLBuilder) CollectTableInfoSQL(account_ids string) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL,
+		account_ids,
+		catalog.SystemOrdinaryRel,
+		AddSingleQuotesJoin(catalog.SystemDatabases),
+	)
 }
