@@ -429,12 +429,12 @@ func NewIvfflatSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Tab
 	w := &IvfflatSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, vbuf: make([]byte, 0, 1024)}}
 
 	if len(indexdef) != 3 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 3 secondary tables")
+		return nil, moerr.NewInternalErrorNoCtx("ivf index table must have 3 secondary tables")
 	}
 
 	idxdef := indexdef[0]
 	if len(idxdef.Parts) != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
+		return nil, moerr.NewInternalErrorNoCtx("ivf index table only have one vector part")
 	}
 
 	paramstr := idxdef.IndexAlgoParams
@@ -452,14 +452,14 @@ func NewIvfflatSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Tab
 	}
 
 	if len(centroids_tbl) == 0 || len(entries_tbl) == 0 || len(meta_tbl) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table either meta or centroids or entries hidden index table not exist")
+		return nil, moerr.NewInternalErrorNoCtx("ivf index table either meta or centroids or entries hidden index table not exist")
 	}
 
 	var ivfparam vectorindex.IvfParam
 	if len(paramstr) > 0 {
 		err := json.Unmarshal([]byte(paramstr), &ivfparam)
 		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx("hnsw sync sinker. failed to convert hnsw param json")
+			return nil, moerr.NewInternalErrorNoCtx("ivf sync sinker. failed to convert ivf param json")
 		}
 	}
 
