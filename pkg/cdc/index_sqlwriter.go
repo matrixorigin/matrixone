@@ -19,6 +19,7 @@ type IndexSqlWriter interface {
 	Full() bool
 	ToSql() ([]byte, error)
 	Reset()
+	Empty() bool
 }
 
 type BaseIndexSqlWriter struct {
@@ -200,6 +201,10 @@ func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 func (w *BaseIndexSqlWriter) Reset() {
 	w.lastCdcOp = ""
 	w.vbuf = w.vbuf[0:]
+}
+
+func (w *BaseIndexSqlWriter) Empty() bool {
+	return len(w.vbuf) == 0
 }
 
 // with src as (select cast(serial(cast(column_0 as bigint), cast(column_1 as bigint)) as varchar) as id, column_2 as body, column_3 as title from
