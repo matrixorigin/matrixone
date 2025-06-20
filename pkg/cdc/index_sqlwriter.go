@@ -18,6 +18,7 @@ type IndexSqlWriter interface {
 	Delete(ctx context.Context, row []any) error
 	Full() bool
 	ToSql() ([]byte, error)
+	Reset()
 }
 
 type BaseIndexSqlWriter struct {
@@ -196,13 +197,16 @@ func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 	return nil
 }
 
+func (w *BaseIndexSqlWriter) Reset() {
+	w.lastCdcOp = ""
+	w.vbuf = w.vbuf[0:]
+}
+
 // with src as (select cast(serial(cast(column_0 as bigint), cast(column_1 as bigint)) as varchar) as id, column_2 as body, column_3 as title from
 // (values row(1, 2, 'body', 'title'), row(2, 3, 'body is heavy', 'I do not know'))) select f.* from src
 // cross apply fulltext_index_tokenize('{"parser":"ngram"}', 61, id, body, title) as f;
 func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
-	defer func() {
-		w.lastCdcOp = ""
-	}()
+	defer w.Reset()
 
 	if len(w.lastCdcOp) == 0 {
 		return nil, nil
@@ -254,9 +258,8 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 // src as (select column_0 as id, cast(column_1 as vecf32(3)) as embed from (values row(2005,'[0.4532634, 0.7297859, 0.48885703]'), row(2009, '[0.68150306, 0.6950923, 0.16590895] ')))
 // select __mo_index_centroid_version, __mo_index_centroid_id, id, embed from src centroidx('vector_l2_ops') join centroid using (__mo_index_centroid, embed);
 func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
-	defer func() {
-		w.lastCdcOp = ""
-	}()
+	defer w.Reset()
+
 	if len(w.lastCdcOp) == 0 {
 		return nil, nil
 	}
