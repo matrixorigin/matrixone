@@ -76,15 +76,27 @@ func WithExportStatsInterval(interval time.Duration) UpdateOption {
 	}
 }
 
+func WithCronJobErrorSupressTimes(times uint64) UpdateOption {
+	return func(u *CDCWatermarkUpdater) {
+		u.opts.cronJobErrorSupressTimes = times
+	}
+}
+
 func WithCronJobInterval(interval time.Duration) UpdateOption {
 	return func(u *CDCWatermarkUpdater) {
 		u.opts.cronJobInterval = interval
 	}
 }
 
-func WithUserCronJob(fn func(ctx context.Context)) UpdateOption {
+func WithCustomizedCronJob(fn func(ctx context.Context)) UpdateOption {
 	return func(u *CDCWatermarkUpdater) {
-		u.cronJob = fn
+		u.customized.cronJob = fn
+	}
+}
+
+func WithCustomizedScheduleJob(fn func(job *UpdaterJob) (err error)) UpdateOption {
+	return func(u *CDCWatermarkUpdater) {
+		u.customized.scheduleJob = fn
 	}
 }
 
@@ -124,8 +136,9 @@ type CDCWatermarkUpdater struct {
 	sync.RWMutex
 
 	opts struct {
-		exportStatsInterval time.Duration
-		cronJobInterval     time.Duration
+		exportStatsInterval      time.Duration
+		cronJobInterval          time.Duration
+		cronJobErrorSupressTimes uint64
 	}
 
 	// sql executor
@@ -137,7 +150,11 @@ type CDCWatermarkUpdater struct {
 
 	queue        sm.Queue
 	cronExecutor *tasks.CancelableJob
-	cronJob      func(ctx context.Context)
+
+	customized struct {
+		cronJob     func(ctx context.Context)
+		scheduleJob func(job *UpdaterJob) (err error)
+	}
 
 	getOrAddCommittedBuffer []*UpdaterJob
 	addCommittedBuffer      []*UpdaterJob
@@ -150,6 +167,7 @@ type CDCWatermarkUpdater struct {
 	stats struct {
 		runTimes       atomic.Uint64
 		skipTimes      atomic.Uint64
+		errorTimes     atomic.Uint64
 		lastExportTime time.Time
 	}
 }
@@ -181,7 +199,7 @@ func NewCDCWatermarkUpdater(
 	u.cronExecutor = tasks.NewCancelableCronJob(
 		fmt.Sprintf("%s-%s", UpdateWatermarkCronJobNamePrefix, name),
 		u.opts.cronJobInterval,
-		u.wrapCronJob(u.cronJob),
+		u.wrapCronJob(u.customized.cronJob),
 		true,
 		1,
 	)
@@ -195,8 +213,14 @@ func (u *CDCWatermarkUpdater) fillDefaults() {
 	if u.opts.cronJobInterval == 0 {
 		u.opts.cronJobInterval = WatermarkUpdateInterval
 	}
-	if u.cronJob == nil {
-		u.cronJob = u.cronRun
+	if u.customized.cronJob == nil {
+		u.customized.cronJob = u.cronRun
+	}
+	if u.customized.scheduleJob == nil {
+		u.customized.scheduleJob = u.scheduleJob
+	}
+	if u.opts.cronJobErrorSupressTimes == 0 {
+		u.opts.cronJobErrorSupressTimes = 500
 	}
 }
 
@@ -559,16 +583,25 @@ func (u *CDCWatermarkUpdater) wrapCronJob(job func(ctx context.Context)) func(ct
 				zap.Uint64("skip-times", u.stats.skipTimes.Load()),
 			)
 		}
+		u.stats.runTimes.Add(1)
 		job(ctx)
 	}
 }
 
+func (u *CDCWatermarkUpdater) scheduleJob(job *UpdaterJob) (err error) {
+	if _, err = u.queue.Enqueue(job); err != nil {
+		job.DoneWithErr(err)
+		return
+	}
+	return
+}
+
 func (u *CDCWatermarkUpdater) cronRun(ctx context.Context) {
 	u.Lock()
-	defer u.Unlock()
 	// if there is any watermark in committing, skip the current run
 	if len(u.cacheCommitting) > 0 || len(u.cacheUncommitted) == 0 {
-		// TODO: record skip times due to committing
+		u.stats.skipTimes.Add(1)
+		u.Unlock()
 		return
 	}
 	// move all watermarks from uncommitted to committing
@@ -576,18 +609,29 @@ func (u *CDCWatermarkUpdater) cronRun(ctx context.Context) {
 		u.cacheCommitting[key] = watermark
 		delete(u.cacheUncommitted, key)
 	}
+	u.Unlock()
+
+	var err error
+	defer func() {
+		if err != nil {
+			u.stats.errorTimes.Add(1)
+			times := u.stats.errorTimes.Load()
+			if times%u.opts.cronJobErrorSupressTimes == 0 {
+				logutil.Error(
+					"CDCWatermarkUpdater-Error",
+					zap.Error(err),
+					zap.Uint64("error-times", times),
+				)
+			}
+		}
+	}()
 
 	job := NewCommittingWMJob(ctx)
-	if _, err := u.queue.Enqueue(job); err != nil {
-		// TODO: handle error
+	if err = u.customized.scheduleJob(job); err != nil {
 		return
 	}
 	job.WaitDone()
-	res := job.GetResult()
-	if res.Err != nil {
-		// TODO: handle error
-		return
-	}
+	err = job.GetResult().Err
 }
 
 type WatermarkUpdater struct {
