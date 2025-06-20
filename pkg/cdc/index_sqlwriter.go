@@ -189,8 +189,6 @@ func (w *BaseIndexSqlWriter) Insert(ctx context.Context, row []any) error {
 	// same as previous operation and append to VALUES ROW(), ROW(),...
 	w.vbuf = appendString(w.vbuf, ",")
 	return w.writeRow(ctx, row)
-
-	return nil
 }
 
 func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
