@@ -136,7 +136,11 @@ func TestNewHnswSqlWriter(t *testing.T) {
 	require.Nil(t, err)
 
 	row = []any{int64(2000), []float32{5, 6, 7}, nil}
-	err = writer.Upsert(ctx, row)
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float32{5, 6, 7}, nil}
+	err = writer.Delete(ctx, row)
 	require.Nil(t, err)
 
 	bytes, err := writer.ToSql()
