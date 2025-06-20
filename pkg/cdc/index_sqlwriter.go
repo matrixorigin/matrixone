@@ -206,9 +206,9 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 	switch w.lastCdcOp {
 	case vectorindex.CDC_DELETE:
 	case vectorindex.CDC_UPSERT:
-		return w.ToFulltextUpsert(true)
+		return w.toFulltextUpsert(true)
 	case vectorindex.CDC_INSERT:
-		return w.ToFulltextUpsert(false)
+		return w.toFulltextUpsert(false)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("FulltextSqlWriter: invalid CDC type")
 	}
@@ -216,7 +216,7 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 	return nil, nil
 }
 
-func (w *FulltextSqlWriter) ToFulltextUpsert(upsert bool) ([]byte, error) {
+func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 
 	var sql string
 
