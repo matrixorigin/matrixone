@@ -541,9 +541,12 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbTblInfo.SinkDbName, w.entries_tbl)
 	}
 
-	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = %d ), ", w.dbTblInfo.SinkDbName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, 0)
+	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		w.dbTblInfo.SinkDbName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
+
+	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = (%s) ), ", w.dbTblInfo.SinkDbName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
 	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
-	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (%s, %s)",
+	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (`%s`, `%s`)",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		cnames_str,
