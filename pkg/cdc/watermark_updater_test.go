@@ -16,13 +16,16 @@ package cdc
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
@@ -335,7 +338,7 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 		"test",
 		ie,
 		WithCronJobInterval(time.Millisecond),
-		WithUserCronJob(cronJob),
+		WithCustomizedCronJob(cronJob),
 		WithExportStatsInterval(time.Millisecond*5),
 	)
 	u.Start()
@@ -345,4 +348,123 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 	prevNum := cronJobExecNum
 	time.Sleep(time.Millisecond * 5)
 	assert.Equal(t, prevNum, cronJobExecNum)
+}
+
+func TestCDCWatermarkUpdater_cronRun(t *testing.T) {
+	ie := newWmMockSQLExecutor()
+
+	executeError := moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s-execute-error", t.Name()))
+	scheduleErr := moerr.NewInternalErrorNoCtx(fmt.Sprintf("%s-schedule-error", t.Name()))
+
+	var passTimes atomic.Uint64
+	passScheduler := func(job *UpdaterJob) (err error) {
+		job.DoneWithResult(nil)
+		passTimes.Add(1)
+		return
+	}
+	var executeErrTimes atomic.Uint64
+	executeErrScheduler := func(job *UpdaterJob) (err error) {
+		job.DoneWithErr(executeError)
+		executeErrTimes.Add(1)
+		return
+	}
+	var scheduleErrTimes atomic.Uint64
+	scheduleErrScheduler := func(job *UpdaterJob) (err error) {
+		job.DoneWithErr(scheduleErr)
+		scheduleErrTimes.Add(1)
+		err = scheduleErr
+		return
+	}
+	_ = executeErrScheduler
+	_ = scheduleErrScheduler
+
+	implScheduler := passScheduler
+
+	scheduleJob := func(job *UpdaterJob) (err error) {
+		return implScheduler(job)
+	}
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+		WithCronJobInterval(time.Millisecond),
+		WithCronJobErrorSupressTimes(1),
+		WithCustomizedScheduleJob(scheduleJob),
+	)
+	u.Start()
+	defer u.Stop()
+
+	// check u.cacheUncommitted is empty logic
+	var wg1 sync.WaitGroup
+	wg1.Add(1)
+	go func() {
+		for {
+			if u.stats.skipTimes.Load() > 0 {
+				wg1.Done()
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	wg1.Wait()
+
+	ctx := context.Background()
+
+	// add 1 uncommitted watermark and check the execution logic
+	err := u.Add(ctx, new(WatermarkKey), new(types.TS))
+	assert.NoError(t, err)
+
+	// wait uncommitted watermark to be commtting
+	wg1.Add(2)
+	go func() {
+		for {
+			u.RLock()
+			l1 := len(u.cacheCommitting)
+			l2 := len(u.cacheUncommitted)
+			u.RUnlock()
+			if l1 == 1 && l2 == 0 {
+				wg1.Done()
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		for {
+			if passTimes.Load() > 0 {
+				wg1.Done()
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	wg1.Wait()
+	assert.Equal(t, uint64(1), passTimes.Load())
+
+	// clear cacheCommitting manually
+	u.Lock()
+	u.cacheCommitting = make(map[WatermarkKey]types.TS)
+	u.Unlock()
+
+	implScheduler = executeErrScheduler
+	err = u.Add(ctx, new(WatermarkKey), new(types.TS))
+	assert.NoError(t, err)
+
+	wg1.Add(2)
+	go func() {
+		for {
+			if executeErrTimes.Load() > 0 {
+				wg1.Done()
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		for {
+			if u.stats.errorTimes.Load() > 0 {
+				wg1.Done()
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	wg1.Wait()
+	assert.Equal(t, uint64(1), executeErrTimes.Load())
+	assert.Equal(t, uint64(1), u.stats.errorTimes.Load())
 }
