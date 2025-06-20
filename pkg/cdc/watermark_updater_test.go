@@ -309,7 +309,16 @@ func TestWatermarkUpdater_flushAll(t *testing.T) {
 	assert.Equal(t, t2, actual)
 }
 
-func TestCDCWatermarkUpdater_Basic(t *testing.T) {
+// Scenario:
+// 1. create a CDCWatermarkUpdater with user-defined cron job
+// 2. wait for the cron job to execute 3 times
+// 3. check the execution times: should be >= 3
+// 4. stop the CDCWatermarkUpdater
+// 5. get the execution times
+// 5. wait for 5ms
+// 6. check the execution times: should be the same as the previous value
+// 7. start the CDCWatermarkUpdater
+func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 	ie := newWmMockSQLExecutor()
 	cronJobExecNum := 0
 	var wg1 sync.WaitGroup
