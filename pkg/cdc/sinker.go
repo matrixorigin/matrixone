@@ -19,10 +19,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"go.uber.org/zap"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -53,6 +54,7 @@ var (
 )
 
 var NewSinker = func(
+	cnUUID string,
 	sinkUri UriInfo,
 	dbTblInfo *DbTableInfo,
 	watermarkUpdater IWatermarkUpdater,
@@ -66,6 +68,10 @@ var NewSinker = func(
 	//TODO: remove console
 	if sinkUri.SinkTyp == CDCSinkType_Console {
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
+	}
+
+	if sinkUri.SinkTyp == CDCSinkType_HnswSync {
+		return NewHnswSyncSinker(cnUUID, sinkUri, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
 	}
 
 	var (
@@ -449,7 +455,8 @@ func (s *mysqlSinker) SendDummy() {
 }
 
 func (s *mysqlSinker) Error() error {
-	if errPtr := s.err.Load().(*error); *errPtr != nil {
+	if ptr := s.err.Load(); ptr != nil {
+		errPtr := ptr.(*error)
 		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
 			return moerr.ConvertGoError(context.Background(), *errPtr)
 		} else {
