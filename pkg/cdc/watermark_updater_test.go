@@ -560,3 +560,50 @@ func TestCDCWatermarkUpdater_constructReadWMSQL(t *testing.T) {
 		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND tbl_name = 't2')"
 	assert.Equal(t, expectedSql, realSql)
 }
+
+func TestCDCWatermarkUpdater_constructAddWMSQL(t *testing.T) {
+	ie := newWmMockSQLExecutor()
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+	)
+	keys := make([]*UpdaterJob, 0, 1)
+	key1 := new(WatermarkKey)
+	key1.accountId = 1
+	key1.taskId = "test"
+	key1.dbName = "db1"
+	key1.tblName = "t1"
+	ts1 := types.BuildTS(1, 1)
+	keys = append(keys, &UpdaterJob{
+		Key:       key1,
+		Watermark: ts1,
+	})
+	key2 := new(WatermarkKey)
+	key2.accountId = 2
+	key2.taskId = "test"
+	key2.dbName = "db2"
+	key2.tblName = "t2"
+	ts2 := types.BuildTS(2, 1)
+	keys = append(keys, &UpdaterJob{
+		Key:       key2,
+		Watermark: ts2,
+	})
+	key3 := new(WatermarkKey)
+	key3.accountId = 3
+	key3.taskId = "test"
+	key3.dbName = "db3"
+	key3.tblName = "t3"
+	ts3 := types.BuildTS(3, 1)
+	keys = append(keys, &UpdaterJob{
+		Key:       key3,
+		Watermark: ts3,
+	})
+	realSql := u.constructAddWMSQL(keys)
+	expectedSql := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"VALUES " +
+		"(1, 'test', 'db1', 't1', '1-1', '')," +
+		"(2, 'test', 'db2', 't2', '2-1', '')," +
+		"(3, 'test', 'db3', 't3', '3-1', '')"
+
+	assert.Equal(t, expectedSql, realSql)
+}
