@@ -20,19 +20,479 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap"
 )
+
+var ErrSetAlreadyPersisted = moerr.NewInternalErrorNoCtx("set already persisted")
+var ErrNoWatermarkFound = moerr.NewInternalErrorNoCtx("no watermark found")
 
 const (
 	watermarkUpdateInterval = time.Second
 )
 
+const ReadWMProjectionList = "account_id, task_id, db_name, tbl_name, watermark"
+
 var _ IWatermarkUpdater = new(WatermarkUpdater)
+
+const (
+	JT_CDC_GetOrAddCommittedWM tasks.JobType = 400 + iota
+	JT_CDC_CommittingWM
+)
+
+func init() {
+	tasks.RegisterJobType(JT_CDC_GetOrAddCommittedWM, "CDC_GetOrAddCommittedWM")
+	tasks.RegisterJobType(JT_CDC_CommittingWM, "CDC_CommittingWM")
+}
+
+type WatermarkKey struct {
+	accountId uint64
+	taskId    string
+	dbName    string
+	tblName   string
+}
+
+type UpdaterJob struct {
+	tasks.Job
+	Key       *WatermarkKey
+	Watermark types.TS
+	TableInfo DbTableInfo
+}
+
+func NewGetOrAddCommittedWMJob(
+	ctx context.Context,
+	key *WatermarkKey,
+	watermark *types.TS,
+	tableInfo *DbTableInfo,
+) *UpdaterJob {
+	job := new(UpdaterJob)
+	job.Init(
+		ctx,
+		uuid.Must(uuid.NewV7()).String(),
+		JT_CDC_GetOrAddCommittedWM,
+		nil,
+	)
+	job.Key = key
+	job.Watermark = *watermark
+	job.TableInfo = *tableInfo
+	return job
+}
+
+func NewCommittingWMJob(
+	ctx context.Context,
+) *UpdaterJob {
+	job := new(UpdaterJob)
+	job.Init(
+		ctx,
+		uuid.Must(uuid.NewV7()).String(),
+		JT_CDC_CommittingWM,
+		nil,
+	)
+	return job
+}
+
+type CDCWatermarkUpdater struct {
+	sync.RWMutex
+	// sql executor
+	ie ie.InternalExecutor
+	// watermarkMap saves the watermark of each table
+	cacheUncommitted map[WatermarkKey]types.TS
+	cacheCommitting  map[WatermarkKey]types.TS
+	cacheCommitted   map[WatermarkKey]types.TS
+
+	offbandQueue sm.Queue
+	cronJob      *tasks.CancelableJob
+
+	getOrAddCommittedBuffer []*UpdaterJob
+	addCommittedBuffer      []*UpdaterJob
+	committingBuffer        []*UpdaterJob
+	readKeysBuffer          map[WatermarkKey]struct {
+		watermark types.TS
+		ok        bool
+	}
+}
+
+func (u *CDCWatermarkUpdater) resetJobs(err error) {
+	for i := range u.addCommittedBuffer {
+		if err != nil && u.addCommittedBuffer[i] != nil {
+			u.addCommittedBuffer[i].DoneWithErr(err)
+		}
+		u.addCommittedBuffer[i] = nil
+	}
+	u.addCommittedBuffer = u.addCommittedBuffer[:0]
+	for i := range u.getOrAddCommittedBuffer {
+		if err != nil && u.getOrAddCommittedBuffer[i] != nil {
+			u.getOrAddCommittedBuffer[i].DoneWithErr(err)
+		}
+		u.getOrAddCommittedBuffer[i] = nil
+	}
+	u.getOrAddCommittedBuffer = u.getOrAddCommittedBuffer[:0]
+	for i := range u.committingBuffer {
+		if err != nil && u.committingBuffer[i] != nil {
+			u.committingBuffer[i].DoneWithErr(err)
+		}
+		u.committingBuffer[i] = nil
+	}
+	u.committingBuffer = u.committingBuffer[:0]
+	for key := range u.readKeysBuffer {
+		delete(u.readKeysBuffer, key)
+	}
+}
+
+func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
+	var (
+		err    error
+		errMsg string
+	)
+	defer func() {
+		u.resetJobs(err)
+		if err != nil {
+			logutil.Error(
+				"CDC-Watermark-Read-Error",
+				zap.Error(err),
+				zap.String("err-msg", errMsg),
+			)
+		}
+	}()
+
+	for _, j := range jobs {
+		job := j.(*UpdaterJob)
+		switch job.Type() {
+		case JT_CDC_GetOrAddCommittedWM:
+			u.getOrAddCommittedBuffer = append(u.getOrAddCommittedBuffer, job)
+			u.readKeysBuffer[*job.Key] = struct {
+				watermark types.TS
+				ok        bool
+			}{
+				watermark: types.TS{},
+				ok:        false,
+			}
+		case JT_CDC_CommittingWM:
+			u.committingBuffer = append(u.committingBuffer, job)
+		default:
+			// TODO: handle error
+		}
+	}
+
+	// read watermarks from the `mo_cdc_watermark` table
+	// it collect all keys in the `getOrAddCommittedBuffer` and
+	// read the watermarks from the `mo_cdc_watermark` table. if
+	// the watermark is found, notify the job with the watermark, otherwise,
+	// add the job to the `addCommittedBuffer`.
+	if err, errMsg = u.execReadWM(); err != nil {
+		return
+	}
+
+	// it collect all keys in the `addCommittedBuffer` and
+	// add the watermarks records to the `mo_cdc_watermark` table.
+	if err, errMsg = u.execAddWM(); err != nil {
+		return
+	}
+
+	// batch update watermarks records in the `mo_cdc_watermark` table
+	err, errMsg = u.execBatchUpdateWM()
+	return
+}
+
+func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	readSql := u.constructReadWMSQL(u.readKeysBuffer)
+	res := u.ie.Query(ctx, readSql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		err = res.Error()
+		errMsg = fmt.Sprintf("read sql \"%s\" failed", readSql)
+		return
+	}
+
+	var (
+		key          WatermarkKey
+		watermarkStr string
+		watermark    types.TS
+	)
+	for i, rows := uint64(0), res.RowCount(); i < rows; i++ {
+		if key.accountId, err = res.GetUint64(ctx, i, 0); err != nil {
+			errMsg = fmt.Sprintf("read sql \"%s\" bad account_id", readSql)
+			return
+		}
+		if key.taskId, err = res.GetString(ctx, i, 1); err != nil {
+			errMsg = fmt.Sprintf("read sql \"%s\" bad task_id", readSql)
+			return
+		}
+		if key.dbName, err = res.GetString(ctx, i, 2); err != nil {
+			errMsg = fmt.Sprintf("read sql \"%s\" bad db_name", readSql)
+			return
+		}
+		if key.tblName, err = res.GetString(ctx, i, 3); err != nil {
+			errMsg = fmt.Sprintf("read sql \"%s\" bad tbl_name", readSql)
+			return
+		}
+		if watermarkStr, err = res.GetString(ctx, i, 4); err != nil {
+			errMsg = fmt.Sprintf("read sql \"%s\" bad watermark", readSql)
+			return
+		}
+		watermark = types.StringToTS(watermarkStr)
+
+		// update the readKeysBuffer
+		u.readKeysBuffer[key] = struct {
+			watermark types.TS
+			ok        bool
+		}{watermark: watermark, ok: true}
+	}
+
+	// for each job in the getOrAddCommittedBuffer, if the watermark is found,
+	// notify the job with the watermark, otherwise, add the job to the addCommittedBuffer
+	// and clear the getOrAddCommittedBuffer
+	// the jobs in the addCommittedBuffer will be processed in the `execAddWM`
+	u.Lock()
+	defer u.Unlock()
+	for i, job := range u.getOrAddCommittedBuffer {
+		if u.readKeysBuffer[*job.Key].ok {
+			u.cacheCommitted[*job.Key] = u.readKeysBuffer[*job.Key].watermark
+			job.DoneWithResult(u.readKeysBuffer[*job.Key].watermark)
+		} else {
+			u.addCommittedBuffer = append(u.addCommittedBuffer, job)
+		}
+		u.getOrAddCommittedBuffer[i] = nil
+	}
+	u.getOrAddCommittedBuffer = u.getOrAddCommittedBuffer[:0]
+	return
+}
+
+func (u *CDCWatermarkUpdater) execBatchUpdateWM() (err error, errMsg string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	commitSql := u.constructBatchUpdateWMSQL(u.committingBuffer)
+	err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
+	u.Lock()
+	defer u.Unlock()
+
+	if err != nil {
+		errMsg = fmt.Sprintf("commit sql \"%s\" failed", commitSql)
+	} else {
+		// commit watermarks from committing to committed
+		for key, watermark := range u.cacheCommitting {
+			u.cacheCommitted[key] = watermark
+		}
+	}
+
+	// notify committing jobs that the watermarks are committed and
+	// clear the committing buffer
+	for i, job := range u.committingBuffer {
+		job.DoneWithErr(err)
+		u.committingBuffer[i] = nil
+	}
+	u.committingBuffer = u.committingBuffer[:0]
+
+	// clear the committing cache
+	for key, _ := range u.cacheCommitting {
+		delete(u.cacheCommitting, key)
+	}
+	return
+}
+
+func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
+	jobs []*UpdaterJob,
+) (commitSql string) {
+	var values string
+	for i, job := range jobs {
+		if i > 0 {
+			values += ","
+		}
+		values += fmt.Sprintf(
+			"(%d, '%s', '%s', '%s', '%s', '%s')",
+			job.Key.accountId,
+			job.Key.taskId,
+			job.Key.dbName,
+			job.Key.tblName,
+			job.Watermark.ToString(),
+		)
+	}
+	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkSQL(values)
+	return
+}
+
+func (u *CDCWatermarkUpdater) execAddWM() (err error, errMsg string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
+	err = u.ie.Exec(ctx, addSql, ie.SessionOverrideOptions{})
+	if err != nil {
+		errMsg = fmt.Sprintf("add sql \"%s\" failed", addSql)
+	}
+	u.Lock()
+	defer u.Unlock()
+	for i, job := range u.addCommittedBuffer {
+		// add the watermark to the cacheCommitted
+		u.cacheCommitted[*job.Key] = job.Watermark
+		// notify the job with the watermark
+		job.DoneWithResult(job.Watermark)
+		// clear the addCommittedBuffer
+		u.addCommittedBuffer[i] = nil
+	}
+	// clear the addCommittedBuffer
+	u.addCommittedBuffer = u.addCommittedBuffer[:0]
+	return
+}
+
+func (u *CDCWatermarkUpdater) constructAddWMSQL(
+	jobs []*UpdaterJob,
+) (addSql string) {
+	var values string
+	for i, job := range jobs {
+		if i > 0 {
+			values += ","
+		}
+		values += fmt.Sprintf(
+			"(%d, '%s', '%s', '%s', '%s', '%s')",
+			job.Key.accountId,
+			job.Key.taskId,
+			job.Key.dbName,
+			job.Key.tblName,
+			job.Watermark.ToString(),
+			"",
+		)
+	}
+	addSql = CDCSQLBuilder.InsertWatermarkWithValuesSQL(values)
+	return
+}
+
+func (u *CDCWatermarkUpdater) constructReadWMSQL(
+	keys map[WatermarkKey]struct {
+		watermark types.TS
+		ok        bool
+	},
+) (readSql string) {
+	var (
+		filterStr string
+	)
+	for key := range keys {
+		filterStr += fmt.Sprintf(
+			" AND (account_id = %d AND task_id = %s AND db_name = %s AND tbl_name = %s)",
+			key.accountId,
+			key.taskId,
+			key.dbName,
+			key.tblName,
+		)
+	}
+	readSql = CDCSQLBuilder.GetWatermarkWhereSQL(ReadWMProjectionList, filterStr)
+	return
+}
+
+func (u *CDCWatermarkUpdater) Start() {
+	u.offbandQueue.Start()
+}
+
+func (u *CDCWatermarkUpdater) Stop() {
+	u.offbandQueue.Stop()
+}
+
+func (u *CDCWatermarkUpdater) getFromCache(
+	key *WatermarkKey,
+) (watermark types.TS, ok bool) {
+	u.RLock()
+	defer u.RUnlock()
+	if watermark, ok = u.cacheUncommitted[*key]; ok {
+		return
+	}
+	if watermark, ok = u.cacheCommitting[*key]; ok {
+		return
+	}
+	watermark, ok = u.cacheCommitted[*key]
+	return
+}
+
+func (u *CDCWatermarkUpdater) GetFromCache(
+	ctx context.Context,
+	key *WatermarkKey,
+) (watermark types.TS, err error) {
+	var ok bool
+	if watermark, ok = u.getFromCache(key); ok {
+		return
+	}
+	err = ErrNoWatermarkFound
+	return
+}
+
+func (u *CDCWatermarkUpdater) Add(
+	ctx context.Context,
+	key *WatermarkKey,
+	watermark *types.TS,
+) (err error) {
+	u.Lock()
+	defer u.Unlock()
+	u.cacheUncommitted[*key] = *watermark
+	return nil
+}
+
+// Note: suppose there is no concurrent write to the same key
+func (u *CDCWatermarkUpdater) GetOrAddCommitted(
+	ctx context.Context,
+	key *WatermarkKey,
+	watermark *types.TS,
+	tableInfo *DbTableInfo,
+) (ret types.TS, err error) {
+	u.RLock()
+	persisted, ok := u.cacheCommitted[*key]
+	u.RUnlock()
+	if ok {
+		if persisted.GE(watermark) {
+			err = ErrSetAlreadyPersisted
+			return
+		}
+	}
+
+	job := NewGetOrAddCommittedWMJob(ctx, key, watermark, tableInfo)
+	if _, err = u.offbandQueue.Enqueue(job); err != nil {
+		return
+	}
+	job.WaitDone()
+	res := job.GetResult()
+	if res.Err != nil {
+		err = res.Err
+	} else {
+		ret = *res.Res.(*types.TS)
+	}
+	return
+}
+
+// cron job to move the watermark from uncommitted to
+// committing
+func (u *CDCWatermarkUpdater) run(ctx context.Context) {
+	u.Lock()
+	defer u.Unlock()
+	// if there is any watermark in committing, skip the current run
+	if len(u.cacheCommitting) > 0 || len(u.cacheUncommitted) == 0 {
+		// TODO: record skip times due to committing
+		return
+	}
+	// move all watermarks from uncommitted to committing
+	for key, watermark := range u.cacheUncommitted {
+		u.cacheCommitting[key] = watermark
+		delete(u.cacheUncommitted, key)
+	}
+
+	job := NewCommittingWMJob(ctx)
+	if _, err := u.offbandQueue.Enqueue(job); err != nil {
+		// TODO: handle error
+		return
+	}
+	job.WaitDone()
+	res := job.GetResult()
+	if res.Err != nil {
+		// TODO: handle error
+		return
+	}
+}
 
 type WatermarkUpdater struct {
 	accountId uint64
