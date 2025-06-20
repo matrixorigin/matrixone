@@ -11,39 +11,93 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-type IndexSqlWriter struct {
+type IndexSqlWriter interface {
+	CheckLastOp(op string) bool
+	Upsert(ctx context.Context, row []any) error
+	Insert(ctx context.Context, row []any) error
+	Delete(ctx context.Context, row []any) error
+	Full() bool
+	ToSql() ([]byte, error)
+}
+
+type FulltextSqlWriter struct {
 	param     string
 	tabledef  *plan.TableDef
+	indexdef  []*plan.IndexDef
 	algo      string
-	pkPos     int
-	pkType    *plan.Type
-	partsPos  []int
-	partsType []*plan.Type
-	srcPos    []int
+	pkPos     int32
+	pkType    *types.Type
+	partsPos  []int32
+	partsType []*types.Type
+	srcPos    []int32
+	srcType   []*types.Type
 	lastCdcOp string
 	buf       []byte
 	vbuf      []byte
 }
 
-func NewIndexSqlWriter(algo string, tabledef *plan.TableDef, param string) *IndexSqlWriter {
-	return &IndexSqlWriter{algo: algo, tabledef: tabledef, param: param, vbuf: make([]byte, 0, 1024)}
+// check FulltextSqlWriter is the interface of IndexSqlWriter
+var _ IndexSqlWriter = new(FulltextSqlWriter)
+
+// check algo type to return the correct sql writer
+func NewIndexSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	switch algo {
+	case "fulltext":
+		return NewFulltextSqlWriter(algo, tabledef, indexdef)
+	case "ivfflat":
+	default:
+		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
+
+	}
+	return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
+}
+
+func NewFulltextSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	w := &FulltextSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, vbuf: make([]byte, 0, 1024)}
+
+	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
+	typ := tabledef.Cols[w.pkPos].Typ
+	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+
+	nparts := len(w.indexdef[0].Parts)
+	w.partsPos = make([]int32, nparts)
+	w.partsType = make([]*types.Type, nparts)
+
+	for i, part := range w.indexdef[0].Parts {
+		w.partsPos[i] = tabledef.Name2ColIndex[part]
+		typ = tabledef.Cols[w.partsPos[i]].Typ
+		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
+
+	w.srcPos = make([]int32, nparts+1)
+	w.srcType = make([]*types.Type, nparts+1)
+
 	w.srcPos[0] = w.pkPos
+	w.srcType[0] = w.pkType
 	for i := range w.partsType {
 		w.srcPos[i+1] = w.partsPos[i]
+		w.srcType[i+1] = w.partsType[i]
 	}
+
+	return w, nil
+}
+
+func (w *FulltextSqlWriter) Full() bool {
+	return false
 }
 
 // return true when last op is empty or last op == current op
-func (w *IndexSqlWriter) checkLastOp(op string) bool {
+func (w *FulltextSqlWriter) CheckLastOp(op string) bool {
 	return len(w.lastCdcOp) == 0 || w.lastCdcOp == op
 }
 
-func (w *IndexSqlWriter) writeRow(ctx context.Context, row []any) error {
+func (w *FulltextSqlWriter) writeRow(ctx context.Context, row []any) error {
+	var err error
 
 	w.vbuf = appendString(w.vbuf, "ROW(")
 
 	// pk
-	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkTyp, w.vbuf)
+	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
 	if err != nil {
 		return err
 	}
@@ -58,9 +112,10 @@ func (w *IndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 	}
 
 	w.vbuf = appendString(w.vbuf, ")")
+	return nil
 }
 
-func (w *IndexSqlWriter) Upsert(ctx context.Context, row []any) error {
+func (w *FulltextSqlWriter) Upsert(ctx context.Context, row []any) error {
 
 	if len(w.lastCdcOp) == 0 {
 		// init
@@ -71,7 +126,7 @@ func (w *IndexSqlWriter) Upsert(ctx context.Context, row []any) error {
 
 	if w.lastCdcOp != vectorindex.CDC_UPSERT {
 		// different from previous operation and generate SQL before append new UPSERT
-		return moerr.NewInternalErrorNoCtx("IndexSqlWriter.Upsert: append different op")
+		return moerr.NewInternalErrorNoCtx("FulltextSqlWriter.Upsert: append different op")
 	}
 
 	// same as previous operation and append to VALUES ROW(), ROW(),...
@@ -79,7 +134,7 @@ func (w *IndexSqlWriter) Upsert(ctx context.Context, row []any) error {
 	return w.writeRow(ctx, row)
 }
 
-func (w *IndexSqlWriter) Insert(ctx context.Context, row []any) error {
+func (w *FulltextSqlWriter) Insert(ctx context.Context, row []any) error {
 
 	if len(w.lastCdcOp) == 0 {
 		// init
@@ -90,7 +145,7 @@ func (w *IndexSqlWriter) Insert(ctx context.Context, row []any) error {
 
 	if w.lastCdcOp != vectorindex.CDC_INSERT {
 		// different from previous operation and generate SQL before append new UPSERT
-		return moerr.NewInternalErrorNoCtx("IndexSqlWriter.Insert: append different op")
+		return moerr.NewInternalErrorNoCtx("FulltextSqlWriter.Insert: append different op")
 	}
 
 	// same as previous operation and append to VALUES ROW(), ROW(),...
@@ -100,12 +155,13 @@ func (w *IndexSqlWriter) Insert(ctx context.Context, row []any) error {
 	return nil
 }
 
-func (w *IndexSqlWriter) Delete(ctx context.Context, row []any) error {
+func (w *FulltextSqlWriter) Delete(ctx context.Context, row []any) error {
+	var err error
 
 	if len(w.lastCdcOp) == 0 {
 		// init
 		w.lastCdcOp = vectorindex.CDC_DELETE
-		w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkTyp, w.vbuf)
+		w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
 		if err != nil {
 			return err
 		}
@@ -114,12 +170,12 @@ func (w *IndexSqlWriter) Delete(ctx context.Context, row []any) error {
 
 	if w.lastCdcOp != vectorindex.CDC_DELETE {
 		// different from previous operation and generate SQL before append new UPSERT
-		return moerr.NewInternalErrorNoCtx("IndexSqlWriter.Delete: append different op")
+		return moerr.NewInternalErrorNoCtx("FulltextSqlWriter.Delete: append different op")
 	}
 
 	// same as previous operation and append to IN ()
 	w.vbuf = appendString(w.vbuf, ",")
-	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkTyp, w.vbuf)
+	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
 	if err != nil {
 		return err
 	}
@@ -130,7 +186,7 @@ func (w *IndexSqlWriter) Delete(ctx context.Context, row []any) error {
 // with src as (select cast(serial(cast(column_0 as bigint), cast(column_1 as bigint)) as varchar) as id, column_2 as body, column_3 as title from
 // (values row(1, 2, 'body', 'title'), row(2, 3, 'body is heavy', 'I do not know'))) select f.* from src
 // cross apply fulltext_index_tokenize('{"parser":"ngram"}', 61, id, body, title) as f;
-func (w *IndexSqlWriter) ToFullTextSql() ([]byte, error) {
+func (w *FulltextSqlWriter) ToFullTextSql() ([]byte, error) {
 
 	if len(w.lastCdcOp) == 0 {
 		return nil, nil
@@ -141,39 +197,39 @@ func (w *IndexSqlWriter) ToFullTextSql() ([]byte, error) {
 	case vectorindex.CDC_UPSERT:
 	case vectorindex.CDC_INSERT:
 	default:
-		return moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid CDC type")
+		return nil, moerr.NewInternalErrorNoCtx("FulltextSqlWriter: invalid CDC type")
 	}
 
 	return nil, nil
 }
 
-func (w *IndexSqlWriter) ToIvfflatUpsert() ([]byte, error) {
+func (w *FulltextSqlWriter) ToIvfflatUpsert() ([]byte, error) {
 
 	var sql string
 
 	coldefs := make([]string, 0, len(w.srcPos))
 	cnames := make([]string, 0, len(w.srcPos))
 	for i, pos := range w.srcPos {
-		typ := w.tabledef.Cols[pos].Typ
-		newtype := types.New(types.T(typ.Id), typ.Width, typ.Scale)
-		typstr := t.DescString()
-		coldefs := append(coldef, fmt.Sprintf("CAST(column_%d as %s) as %d", i, typstr, w.tabledef.Cols[pos].Name))
-		cnames := append(cnames, w.tabledef.Cols[pos].Name)
+		typstr := w.srcType[i].DescString()
+		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, w.tabledef.Cols[pos].Name))
+		cnames = append(cnames, w.tabledef.Cols[pos].Name)
 	}
 
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
-	sql += fmt.Sprintf("REPLACE INTO %s ", tablename)
-	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s))", cols, string(w.vbuf))
-	sql += fmt.Sprintf(" SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", param, w.pkType.Id, cnames_str)
+	//sql += fmt.Sprintf("REPLACE INTO %s ", tablename)
+	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
+	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
+
+	return nil, nil
 }
 
 // REPLACE INTO __mo_index_secondary_0197786c-285f-70cb-9337-e484a3ff92c4(__mo_index_centroid_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col, __mo_index_centroid_fk_entry)
 // with centroid as (select * from __mo_index_secondary_0197786c-285f-70bb-b277-2cef56da590a where __mo_index_centroid_version = 0),
 // src as (select column_0 as id, cast(column_1 as vecf32(3)) as embed from (values row(2005,'[0.4532634, 0.7297859, 0.48885703]'), row(2009, '[0.68150306, 0.6950923, 0.16590895] ')))
 // select __mo_index_centroid_version, __mo_index_centroid_id, id, embed from src centroidx('vector_l2_ops') join centroid using (__mo_index_centroid, embed);
-func (w *IndexSqlWriter) ToIvfflatSql() ([]byte, error) {
+func (w *FulltextSqlWriter) ToIvfflatSql() ([]byte, error) {
 	if len(w.lastCdcOp) == 0 {
 		return nil, nil
 	}
@@ -183,13 +239,13 @@ func (w *IndexSqlWriter) ToIvfflatSql() ([]byte, error) {
 	case vectorindex.CDC_UPSERT:
 	case vectorindex.CDC_INSERT:
 	default:
-		return moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid CDC type")
+		return nil, moerr.NewInternalErrorNoCtx("FulltextSqlWriter: invalid CDC type")
 	}
 
 	return nil, nil
 }
 
-func (w *IndexSqlWriter) ToSql() ([]byte, error) {
+func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 	w.lastCdcOp = ""
 	switch w.algo {
 	case "fulltext":
