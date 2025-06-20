@@ -14,13 +14,22 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 type CloneTable struct {
 	statementImpl
 
 	SrcTable    TableName
 	CreateTable CreateTable
+
+	IsRestore     bool
+	IsRestoreByTS bool
+	FromAccount   uint32
+	ToAccount     uint32
+
+	Sql string
 }
 
 func (node *CloneTable) StmtKind() StmtKind {
@@ -51,4 +60,5 @@ func (node *CloneTable) Free() {
 
 func (node *CloneTable) reset() {
 	node.CreateTable.reset()
+	*node = CloneTable{}
 }
