@@ -50,11 +50,33 @@ func TestNewFulltextSqlWriter(t *testing.T) {
 	writer, err := NewIndexSqlWriter("fulltext", tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
-	row := []any{any(int64(1000)), any([]uint8("hello world")), any(nil)}
+	row := []any{int64(1000), []uint8("hello world"), nil}
 	err = writer.Upsert(ctx, row)
 	require.Nil(t, err)
 
-	row = []any{any(int64(2000)), any([]uint8("hello world")), any(nil)}
+	row = []any{int64(2000), []uint8("hello world"), nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	fmt.Println(string(bytes))
+
+}
+
+func TestNewFulltextSqlWriterCPkey(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestFulltextTableDef("id", types.T_varbinary, "body", types.T_varchar, 256)
+
+	writer, err := NewIndexSqlWriter("fulltext", tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+
+	row := []any{[]uint8("abcdef12"), []uint8("hello world"), nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{[]uint8("abc"), []uint8("hello world"), nil}
 	err = writer.Upsert(ctx, row)
 	require.Nil(t, err)
 
