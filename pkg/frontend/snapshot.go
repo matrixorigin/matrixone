@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -45,7 +46,7 @@ const view tableType = "VIEW"
 
 const clusterTable tableType = "CLUSTER TABLE"
 
-var (
+const (
 	insertIntoMoSnapshots = `insert into mo_catalog.mo_snapshots(
 		snapshot_id,
 		sname,
@@ -64,9 +65,11 @@ var (
 
 	checkSnapshotTsFormat = `select snapshot_id from mo_catalog.mo_snapshots where ts = %d order by snapshot_id;`
 
-	restoreTableDataByTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d }"
+	restoreTableDataByTsFmt = "create table `%s`.`%s` clone `%s`.`%s` {MO_TS = %d }"
+	//restoreTableDataByTsFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {MO_TS = %d }"
 
-	restoreTableDataByNameFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {SNAPSHOT = '%s'}"
+	restoreTableDataByNameFmt = "create table `%s`.`%s` clone `%s`.`%s` {SNAPSHOT = '%s'}"
+	//restoreTableDataByNameFmt = "insert into `%s`.`%s` SELECT * FROM `%s`.`%s` {SNAPSHOT = '%s'}"
 
 	getPastAccountsFmt = "select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } ORDER BY account_id ASC;"
 
@@ -77,6 +80,10 @@ var (
 	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
 
 	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s'"
+)
+
+var (
+	isRestoreByCloneSql = regexp.MustCompile("create table.*clone")
 
 	skipDbs = []string{"mysql", "system", "system_metrics", "mo_task", "mo_debug", "information_schema", moCatalog}
 
@@ -1312,8 +1319,13 @@ func recreateTable(
 	snapshotName string,
 	tblInfo *tableInfo,
 	toAccountId uint32,
-	snapshotTs int64) (err error) {
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblInfo.tblName, snapshotTs))
+	snapshotTs int64,
+) (err error) {
+
+	getLogger(sid).Info(
+		fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d",
+			snapshotName, tblInfo.tblName, snapshotTs))
+
 	curAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return
@@ -1334,18 +1346,21 @@ func recreateTable(
 	}
 
 	getLogger(sid).Info(fmt.Sprintf("[%s] start to drop table: %v,", snapshotName, tblInfo.tblName))
-	if err = bh.Exec(ctx, fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)); err != nil {
+	sql := fmt.Sprintf("drop table if exists `%s`", tblInfo.tblName)
+	if err = bh.Exec(ctx, sql); err != nil {
 		return
 	}
 
-	// create table
-	getLogger(sid).Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
-	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-		if strings.Contains(err.Error(), "no such table") {
-			getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
-			err = nil
+	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
+		// create table
+		getLogger(sid).Info(fmt.Sprintf("[%s] start to create table: %v, create table sql: %s", snapshotName, tblInfo.tblName, tblInfo.createSql))
+		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+			if strings.Contains(err.Error(), "no such table") {
+				getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", snapshotName, tblInfo.tblName))
+				err = nil
+			}
+			return
 		}
-		return
 	}
 
 	if curAccountId == toAccountId {
@@ -1354,7 +1369,11 @@ func recreateTable(
 		beginTime := time.Now()
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to insert select table: %v, insert sql: %s", snapshotName, tblInfo.tblName, insertIntoSql))
 		if err = bh.Exec(ctx, insertIntoSql); err != nil {
-			return
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && !strings.Contains(err.Error(), tblInfo.tblName) {
+				err = nil
+			} else {
+				return err
+			}
 		}
 		getLogger(sid).Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", snapshotName, tblInfo.tblName, time.Since(beginTime)))
 	} else {

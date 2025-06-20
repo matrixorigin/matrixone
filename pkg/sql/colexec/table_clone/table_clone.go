@@ -17,9 +17,13 @@ package table_clone
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -72,7 +76,8 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	}
 
 	var (
-		err   error
+		err error
+
 		srcDB engine.Database
 		dstDB engine.Database
 
@@ -88,19 +93,27 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
 
 	{
+		tc.Ctx.SrcCtx = proc.Ctx
+		if tc.Ctx.ScanSnapshot != nil && tc.Ctx.ScanSnapshot.Tenant != nil {
+			// the source data may be coming from a different account.
+			tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, tc.Ctx.ScanSnapshot.Tenant.TenantID)
+		}
+
 		if srcDB, err = tc.Ctx.Eng.Database(
-			proc.Ctx, tc.Ctx.SrcTblDef.DbName, proc.GetTxnOperator(),
+			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.DbName, proc.GetCloneTxnOperator(),
 		); err != nil {
 			return err
 		}
 
 		if tc.srcRel, err = srcDB.Relation(
-			proc.Ctx, tc.Ctx.SrcTblDef.Name, nil,
+			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.Name, nil,
 		); err != nil {
 			return err
 		}
 
-		tc.srcRelReader, err = disttae.NewTableMetaReader(proc.Ctx, tc.srcRel)
+		if tc.srcRelReader, err = disttae.NewTableMetaReader(tc.Ctx.SrcCtx, tc.srcRel); err != nil {
+			return err
+		}
 	}
 
 	{
@@ -117,12 +130,12 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 
 	for _, idx := range tc.Ctx.SrcTblDef.Indexes {
 		if srcIdxRel, err =
-			srcDB.Relation(proc.Ctx, idx.IndexTableName, nil); err != nil {
+			srcDB.Relation(tc.Ctx.SrcCtx, idx.IndexTableName, nil); err != nil {
 			return err
 		}
 
 		if tc.idxNameToReader[idx.IndexName], err =
-			disttae.NewTableMetaReader(proc.Ctx, srcIdxRel); err != nil {
+			disttae.NewTableMetaReader(tc.Ctx.SrcCtx, srcIdxRel); err != nil {
 			return err
 		}
 	}
@@ -130,7 +143,7 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	dstIndexes := tc.dstRel.GetTableDef(proc.Ctx).Indexes
 	for _, idx := range dstIndexes {
 		if tc.dstIdxNameToRel[idx.IndexName], err =
-			srcDB.Relation(proc.Ctx, idx.IndexTableName, nil); err != nil {
+			dstDB.Relation(proc.Ctx, idx.IndexTableName, nil); err != nil {
 			return err
 		}
 	}
@@ -139,7 +152,8 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 }
 
 func clone(
-	ctx context.Context,
+	dstCtx context.Context,
+	srcCtx context.Context,
 	mp *mpool.MPool,
 	reader engine.Reader,
 	dstRel engine.Relation,
@@ -151,35 +165,60 @@ func clone(
 		err error
 	)
 
-	if _, err = reader.Read(ctx, nil, nil, mp, dataObjBat); err != nil {
-		return err
+	checkObjStatsFmt := func(bat *batch.Batch, isTombstone bool) error {
+		idx := 0
+		if !isTombstone {
+			idx = 1
+		}
+
+		col, area := vector.MustVarlenaRawData(bat.Vecs[idx])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			if stats.GetAppendable() || !stats.GetCNCreated() {
+				return moerr.NewInternalErrorNoCtxf("object fmt wrong: %s", stats.FlagString())
+			}
+
+			//if isTombstone {
+			//	fmt.Println("copy tombstone", dstRel.GetTableName(), stats.Rows(), stats.GetAppendable())
+			//} else {
+			//	fmt.Println("copy data", dstRel.GetTableName(), stats.Rows(), stats.GetAppendable())
+			//}
+		}
+
+		return nil
 	}
 
-	// write data to the workspace
-	//for i := range dataObjBat.Vecs[1].Length() {
-	//	stats := objectio.ObjectStats(dataObjBat.Vecs[1].GetBytesAt(i))
-	//	fmt.Println("copy data", dstRel.GetTableName(), stats.Rows())
-	//}
-
-	if dataObjBat.RowCount() != 0 {
-		if err = dstRel.Write(ctx, dataObjBat); err != nil {
+	// copy data
+	{
+		if _, err = reader.Read(srcCtx, nil, nil, mp, dataObjBat); err != nil {
 			return err
+		}
+
+		if err = checkObjStatsFmt(dataObjBat, false); err != nil {
+			return err
+		}
+
+		if dataObjBat.RowCount() != 0 {
+			if err = dstRel.Write(dstCtx, dataObjBat); err != nil {
+				return err
+			}
 		}
 	}
 
-	if _, err = reader.Read(ctx, nil, nil, mp, tombstoneObjBat); err != nil {
-		return err
-	}
-
-	// write tombstone to the workspace
-	//for i := range tombstoneObjBat.Vecs[0].Length() {
-	//	stats := objectio.ObjectStats(tombstoneObjBat.Vecs[0].GetBytesAt(i))
-	//	fmt.Println("copy tombstone", dstRel.GetTableName(), stats.Rows())
-	//}
-
-	if tombstoneObjBat.RowCount() != 0 {
-		if err = dstRel.Delete(ctx, tombstoneObjBat, ""); err != nil {
+	// copy tombstone
+	{
+		if _, err = reader.Read(srcCtx, nil, nil, mp, tombstoneObjBat); err != nil {
 			return err
+		}
+
+		if err = checkObjStatsFmt(tombstoneObjBat, true); err != nil {
+			return err
+		}
+
+		if tombstoneObjBat.RowCount() != 0 {
+			if err = dstRel.Delete(dstCtx, tombstoneObjBat, ""); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -193,7 +232,8 @@ func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
 	)
 
 	if err = clone(
-		proc.Ctx, proc.Mp(), tc.srcRelReader, tc.dstRel,
+		proc.Ctx, tc.Ctx.SrcCtx,
+		proc.Mp(), tc.srcRelReader, tc.dstRel,
 		tc.dataObjBat, tc.tombstoneObjBat,
 	); err != nil {
 		return vm.CallResult{}, err
@@ -204,7 +244,8 @@ func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
 		tc.tombstoneObjBat.CleanOnlyData()
 
 		if err = clone(
-			proc.Ctx, proc.Mp(), reader, tc.dstIdxNameToRel[idxName],
+			proc.Ctx, tc.Ctx.SrcCtx,
+			proc.Mp(), reader, tc.dstIdxNameToRel[idxName],
 			tc.dataObjBat, tc.tombstoneObjBat,
 		); err != nil {
 			return vm.CallResult{}, err

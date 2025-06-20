@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -82,6 +83,8 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 	}
 }
 
+var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
+
 func (back *backExec) Exec(ctx context.Context, sql string) error {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
@@ -128,8 +131,11 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	}
 
 	var isRestore bool
-	if _, ok := statements[0].(*tree.Insert); ok {
-		if strings.Contains(sql, "MO_TS =") {
+	if restoreSqlRegx.MatchString(sql) {
+		switch statements[0].(type) {
+		case *tree.Insert:
+			isRestore = true
+		case *tree.CloneTable:
 			isRestore = true
 		}
 	}
@@ -391,11 +397,19 @@ func doComQueryInBack(
 		backSes.mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
-		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
-			insertStmt.IsRestore = true
-			insertStmt.FromDataTenantID = input.opAccount
-			if input.isRestoreByTs {
-				insertStmt.IsRestoreByTs = true
+		if input.isRestore {
+			switch s := stmt.(type) {
+			case *tree.Insert:
+				s.IsRestore = true
+				s.FromDataTenantID = input.opAccount
+				s.IsRestoreByTs = s.IsRestoreByTs || input.isRestoreByTs
+
+			case *tree.CloneTable:
+				s.Sql = input.sql
+				s.IsRestore = true
+				s.FromAccount = input.opAccount
+				s.ToAccount = input.toAccount
+				s.IsRestoreByTS = s.IsRestoreByTS || input.isRestoreByTs
 			}
 		}
 
