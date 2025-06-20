@@ -16,7 +16,8 @@ package gc
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -309,7 +310,7 @@ func MakeSnapshotAndPitrFineFilter(
 			name := stats.ObjectName().UnsafeString()
 			tableID := tableIDs[i]
 			createTS := createTSs[i]
-			dropTS := deleteTSs[i]
+			deleteTS := deleteTSs[i]
 
 			snapshots := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
@@ -322,14 +323,17 @@ func MakeSnapshotAndPitrFineFilter(
 				}
 				continue
 			}
-			if !createTS.LT(ts) || !dropTS.LT(ts) {
+			if !createTS.LT(ts) || !deleteTS.LT(ts) {
 				continue
 			}
-			if dropTS.IsEmpty() {
-				panic(fmt.Sprintf("dropTS is empty, name: %s, createTS: %s", name, createTS.ToString()))
+			if deleteTS.IsEmpty() {
+				logutil.Warn("GC-PANIC-TS-EMPTY",
+					zap.String("name", name),
+					zap.String("createTS", createTS.ToString()))
+				continue
 			}
 			if !logtail.ObjectIsSnapshotRefers(
-				&stats, pitr, &createTS, &dropTS, snapshots,
+				&stats, pitr, &createTS, &deleteTS, snapshots,
 			) {
 				bm.Add(uint64(i))
 			}
