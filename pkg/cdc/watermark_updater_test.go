@@ -524,3 +524,39 @@ func TestCDCWatermarkUpdater_GetFromCache(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Truef(t, wm2.EQ(&rWM), "wm2: %s, rWM: %s", wm2.ToString(), rWM.ToString())
 }
+
+// test constructReadWMSQL
+func TestCDCWatermarkUpdater_constructReadWMSQL(t *testing.T) {
+	ie := newWmMockSQLExecutor()
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+	)
+	keys := make(map[WatermarkKey]WatermarkResult)
+	key1 := new(WatermarkKey)
+	key1.accountId = 1
+	key1.taskId = "test"
+	key1.dbName = "db1"
+	key1.tblName = "t1"
+	key2 := new(WatermarkKey)
+	key2.accountId = 2
+	key2.taskId = "test"
+	key2.dbName = "db2"
+	key2.tblName = "t2"
+	ts1 := types.BuildTS(1, 1)
+	ts2 := types.BuildTS(2, 1)
+	keys[*key1] = WatermarkResult{
+		Watermark: ts1,
+		Ok:        true,
+	}
+	keys[*key2] = WatermarkResult{
+		Watermark: ts2,
+		Ok:        true,
+	}
+	realSql := u.constructReadWMSQL(keys)
+	expectedSql := "SELECT account_id, task_id, db_name, tbl_name, watermark FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` WHERE " +
+		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND tbl_name = 't1') OR " +
+		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND tbl_name = 't2')"
+	assert.Equal(t, expectedSql, realSql)
+}
