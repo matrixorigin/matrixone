@@ -61,6 +61,11 @@ type WatermarkKey struct {
 	tblName   string
 }
 
+type WatermarkResult struct {
+	Watermark types.TS
+	Ok        bool
+}
+
 type UpdaterJob struct {
 	tasks.Job
 	Key       *WatermarkKey
@@ -159,10 +164,7 @@ type CDCWatermarkUpdater struct {
 	getOrAddCommittedBuffer []*UpdaterJob
 	addCommittedBuffer      []*UpdaterJob
 	committingBuffer        []*UpdaterJob
-	readKeysBuffer          map[WatermarkKey]struct {
-		watermark types.TS
-		ok        bool
-	}
+	readKeysBuffer          map[WatermarkKey]WatermarkResult
 
 	stats struct {
 		runTimes       atomic.Uint64
@@ -186,10 +188,7 @@ func NewCDCWatermarkUpdater(
 		getOrAddCommittedBuffer: make([]*UpdaterJob, 0, 100),
 		addCommittedBuffer:      make([]*UpdaterJob, 0, 100),
 		committingBuffer:        make([]*UpdaterJob, 0, 100),
-		readKeysBuffer: make(map[WatermarkKey]struct {
-			watermark types.TS
-			ok        bool
-		}, 100),
+		readKeysBuffer:          make(map[WatermarkKey]WatermarkResult, 100),
 	}
 	for _, opt := range opts {
 		opt(u)
@@ -272,12 +271,9 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 		switch job.Type() {
 		case JT_CDC_GetOrAddCommittedWM:
 			u.getOrAddCommittedBuffer = append(u.getOrAddCommittedBuffer, job)
-			u.readKeysBuffer[*job.Key] = struct {
-				watermark types.TS
-				ok        bool
-			}{
-				watermark: types.TS{},
-				ok:        false,
+			u.readKeysBuffer[*job.Key] = WatermarkResult{
+				Watermark: types.TS{},
+				Ok:        false,
 			}
 		case JT_CDC_CommittingWM:
 			u.committingBuffer = append(u.committingBuffer, job)
@@ -347,10 +343,10 @@ func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
 		watermark = types.StringToTS(watermarkStr)
 
 		// update the readKeysBuffer
-		u.readKeysBuffer[key] = struct {
-			watermark types.TS
-			ok        bool
-		}{watermark: watermark, ok: true}
+		u.readKeysBuffer[key] = WatermarkResult{
+			Watermark: watermark,
+			Ok:        true,
+		}
 	}
 
 	// for each job in the getOrAddCommittedBuffer, if the watermark is found,
@@ -360,9 +356,9 @@ func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
 	u.Lock()
 	defer u.Unlock()
 	for i, job := range u.getOrAddCommittedBuffer {
-		if u.readKeysBuffer[*job.Key].ok {
-			u.cacheCommitted[*job.Key] = u.readKeysBuffer[*job.Key].watermark
-			job.DoneWithResult(u.readKeysBuffer[*job.Key].watermark)
+		if u.readKeysBuffer[*job.Key].Ok {
+			u.cacheCommitted[*job.Key] = u.readKeysBuffer[*job.Key].Watermark
+			job.DoneWithResult(u.readKeysBuffer[*job.Key].Watermark)
 		} else {
 			u.addCommittedBuffer = append(u.addCommittedBuffer, job)
 		}
@@ -471,22 +467,25 @@ func (u *CDCWatermarkUpdater) constructAddWMSQL(
 }
 
 func (u *CDCWatermarkUpdater) constructReadWMSQL(
-	keys map[WatermarkKey]struct {
-		watermark types.TS
-		ok        bool
-	},
+	keys map[WatermarkKey]WatermarkResult,
 ) (readSql string) {
 	var (
+		idx       int
 		filterStr string
 	)
+	// "(xxx AND yyy) OR (xxx AND yyy)"
 	for key := range keys {
+		if idx > 0 {
+			filterStr += " OR "
+		}
 		filterStr += fmt.Sprintf(
-			" AND (account_id = %d AND task_id = %s AND db_name = %s AND tbl_name = %s)",
+			"(account_id = %d AND task_id = '%s' AND db_name = '%s' AND tbl_name = '%s')",
 			key.accountId,
 			key.taskId,
 			key.dbName,
 			key.tblName,
 		)
+		idx++
 	}
 	readSql = CDCSQLBuilder.GetWatermarkWhereSQL(ReadWatermarkProjectionList, filterStr)
 	return
