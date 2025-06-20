@@ -39,6 +39,7 @@ func newTestFulltextTableDef(pkName string, pkType types.T, vecColName string, v
 				IndexAlgoParams:    `{"parser":"ngram"}`,
 			},
 		},
+		DbName: "mydb",
 	}
 }
 
@@ -72,6 +73,7 @@ func newTestFulltextTableDef2Parts(pkName string, pkType types.T, vecColName str
 				IndexAlgoParams:    `{"parser":"ngram"}`,
 			},
 		},
+		DbName: "mydb",
 	}
 }
 
