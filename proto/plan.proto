@@ -721,6 +721,8 @@ message Node {
 		APPLY = 53;
 		MULTI_UPDATE = 54;
 		POSTDML = 55;
+
+		TABLE_CLONE = 56;
 	}
 
 	enum JoinType {
@@ -1150,7 +1152,9 @@ message DataDefinition {
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
 		RENAME_TABLE = 35;
+		CREATE_TABLE_WITH_CLONE = 36;
 	}
+
 	//DataDefinition type
 	DdlType ddl_type = 1;
 

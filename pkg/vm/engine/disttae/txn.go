@@ -991,7 +991,9 @@ func (txn *Transaction) WriteFileLocked(
 		bat:          bat2,
 		tnStore:      tnStore,
 	}
+
 	txn.writes = append(txn.writes, entry)
+
 	return nil
 }
 
