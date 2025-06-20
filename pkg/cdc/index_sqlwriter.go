@@ -541,6 +541,12 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbTblInfo.SinkDbName, w.entries_tbl)
 	}
 
+	sql += fmt.Sprintf("(`%s`, `%s`, `%s`, `%s`) ",
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+
 	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 		w.dbTblInfo.SinkDbName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
