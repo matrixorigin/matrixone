@@ -33,10 +33,12 @@ type BaseIndexSqlWriter struct {
 	partsType []*types.Type
 	srcPos    []int32
 	srcType   []*types.Type
+	dbName    string
 }
 
 type FulltextSqlWriter struct {
 	BaseIndexSqlWriter
+	indexTableName string
 }
 
 type IvfflatSqlWriter struct {
@@ -86,6 +88,9 @@ func NewFulltextSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan
 		w.srcPos[i+1] = w.partsPos[i]
 		w.srcType[i+1] = w.partsType[i]
 	}
+
+	w.indexTableName = w.indexdef[0].IndexTableName
+	w.dbName = tabledef.DbName
 
 	return w, nil
 }
@@ -224,20 +229,18 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cnames := make([]string, 0, len(w.srcPos))
 	for i, pos := range w.srcPos {
 		typstr := w.srcType[i].DescString()
-		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, w.tabledef.Cols[pos].Name))
+		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as `%s`", i, typstr, w.tabledef.Cols[pos].Name))
 		cnames = append(cnames, w.tabledef.Cols[pos].Name)
 	}
 
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
-	/*
-		if upsert {
-			sql += fmt.Sprintf("REPLACE INTO %s ", tablename)
-		} else {
-			sql += fmt.Sprintf("INSERT INTO %s ", tablename)
-		}
-	*/
+	if upsert {
+		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+	} else {
+		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbName, w.indexTableName)
+	}
 
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
