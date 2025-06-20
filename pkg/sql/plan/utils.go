@@ -2025,7 +2025,13 @@ func doFormatExprInConsole(expr *plan.Expr, out *bytes.Buffer, depth int, option
 }
 
 // databaseIsValid checks whether the database exists or not.
-func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (string, error) {
+func databaseIsValid(dbName string, ctx CompilerContext, snapshot *Snapshot) (x string, err error) {
+	defer func() {
+		if err != nil {
+			p := 0
+			p++
+		}
+	}()
 	connectDBFirst := false
 	if len(dbName) == 0 {
 		connectDBFirst = true

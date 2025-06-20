@@ -700,7 +700,11 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}, nil
 }
 
-func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
+func buildCreateTable(
+	stmt *tree.CreateTable,
+	ctx CompilerContext,
+) (*Plan, error) {
+
 	if stmt.IsAsLike {
 		var err error
 		oldTable := stmt.LikeTableName
@@ -708,7 +712,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		tblName := formatStr(string(oldTable.ObjectName))
 		dbName := formatStr(string(oldTable.SchemaName))
 
-		snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+		var snapshot *Snapshot
+		snapshot = ctx.GetSnapshot()
+		if snapshot == nil {
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{}}
+		}
+
 		if dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot); err != nil {
 			return nil, err
 		}
@@ -732,9 +741,10 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
-		}
+		// TODO WHY?
+		//if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
+		//	return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+		//}
 		tableDef.Name = string(newTable.ObjectName)
 
 		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false)

@@ -15,6 +15,7 @@
 package table_clone
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,6 +33,9 @@ type TableCloneCtx struct {
 
 	DstTblName      string
 	DstDatabaseName string
+
+	SrcCtx       context.Context
+	ScanSnapshot *plan.Snapshot
 }
 
 type TableClone struct {

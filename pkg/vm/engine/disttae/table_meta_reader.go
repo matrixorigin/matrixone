@@ -40,15 +40,17 @@ const (
 )
 
 type TableMetaReader struct {
+	table    *txnTable
 	fs       fileservice.FileService
 	snapshot types.TS
 	state    int
-	tblDef   *plan.TableDef
-	pState   *logtailreplay.PartitionState
+	//tblDef   *plan.TableDef
+	pState *logtailreplay.PartitionState
 }
 
 func (r *TableMetaReader) Close() error {
-	r.tblDef = nil
+	//r.tblDef = nil
+	r.table = nil
 	r.pState = nil
 	r.state = endState
 	return nil
@@ -65,8 +67,8 @@ func NewTableMetaReader(
 
 		fs       fileservice.FileService
 		snapshot types.TS
-		tblDef   *plan.TableDef
-		pState   *logtailreplay.PartitionState
+		//tblDef   *plan.TableDef
+		pState *logtailreplay.PartitionState
 
 		table *txnTable
 	)
@@ -75,7 +77,7 @@ func NewTableMetaReader(
 		table = rel.(*txnTableDelegate).origin
 	}
 
-	tblDef = table.GetTableDef(ctx)
+	//tblDef = table.GetTableDef(ctx)
 	fs = table.getTxn().proc.GetFileService()
 	snapshot = types.TimestampToTS(table.getTxn().op.SnapshotTS())
 
@@ -86,8 +88,9 @@ func NewTableMetaReader(
 	return &TableMetaReader{
 		fs:       fs,
 		snapshot: snapshot,
-		tblDef:   tblDef,
-		pState:   pState,
+		//tblDef:   tblDef,
+		table:  table,
+		pState: pState,
 	}, nil
 }
 
@@ -122,14 +125,14 @@ func (r *TableMetaReader) Read(
 	)
 
 	if isTombstone {
-		pkCol := plan2.PkColByTableDef(r.tblDef)
+		pkCol := plan2.PkColByTableDef(r.table.tableDef)
 		pkType := plan2.ExprType2Type(&pkCol.Typ)
 
 		seqnums = []uint16{0, 1}
 		colTypes = []types.Type{types.T_Rowid.ToType(), pkType}
 		attrs = objectio.TombstoneAttrs_CN_Created
 	} else {
-		seqnums, colTypes, attrs, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(r.tblDef)
+		seqnums, colTypes, attrs, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(r.table.tableDef)
 	}
 
 	// step1
@@ -194,7 +197,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 			if isTombstone {
 				s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
 			} else {
-				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.tblDef, false)
+				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
 			}
 		}
 
@@ -295,9 +298,9 @@ func (r *TableMetaReader) collectVisibleObjs(
 		iter       objectio.ObjectIter
 		dataReader engine.Reader
 
-		meta     objectio.ObjectMeta
-		colMeta  objectio.ColumnMeta
-		dataMeta objectio.ObjectDataMeta
+		//meta     objectio.ObjectMeta
+		//colMeta  objectio.ColumnMeta
+		//dataMeta objectio.ObjectDataMeta
 
 		s3Writer  *colexec.CNS3Writer
 		dataBatch *batch.Batch
@@ -345,24 +348,31 @@ func (r *TableMetaReader) collectVisibleObjs(
 			// TN created and appendable object
 			// [cts----snapshot----dts]
 			//
-			loc := obj.ObjectLocation()
-			if meta, err = objectio.FastLoadObjectMeta(
-				ctx, &loc, false, r.fs); err != nil {
-				return err
-			}
-
-			dataMeta = meta.MustDataMeta()
-			colMeta = dataMeta.MustGetColumn(dataMeta.BlockHeader().MetaColumnCount() - 1)
-
-			if !colMeta.ZoneMap().AnyGTByValue(r.snapshot[:]) {
-				// all visible by snapshot
-				if err = colexec.ExpandObjectStatsToBatch(
-					mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
-					return err
-				}
-			} else {
-				objRelData.AppendObj(&obj.ObjectStats)
-			}
+			//loc := obj.ObjectLocation()
+			//if meta, err = objectio.FastLoadObjectMeta(
+			//	ctx, &loc, false, r.fs); err != nil {
+			//	return err
+			//}
+			//
+			//dataMeta = meta.MustDataMeta()
+			//colMeta = dataMeta.MustGetColumn(dataMeta.BlockHeader().MetaColumnCount() - 1)
+			//
+			//for i := range dataMeta.BlockCount() {
+			//	m := dataMeta.GetBlockMeta(i)
+			//	for j := range m.GetColumnCount() {
+			//		fmt.Println(i, j, m.MustGetColumn(j).ZoneMap().String())
+			//	}
+			//}
+			//
+			//if !colMeta.ZoneMap().AnyGTByValue(r.snapshot[:]) {
+			//	// all visible by snapshot
+			//	if err = colexec.ExpandObjectStatsToBatch(
+			//		mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
+			//		return err
+			//	}
+			//} else {
+			objRelData.AppendObj(&obj.ObjectStats)
+			//}
 		}
 	}
 
@@ -370,10 +380,11 @@ func (r *TableMetaReader) collectVisibleObjs(
 		if isTombstone {
 			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
 		} else {
-			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.tblDef, false)
+			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
 		}
 
 		source := &LocalDisttaeDataSource{
+			table:           r.table,
 			pState:          r.pState,
 			fs:              r.fs,
 			ctx:             ctx,
