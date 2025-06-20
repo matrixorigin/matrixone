@@ -372,8 +372,21 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 
 	for key, info := range allAccountTbls[accountId] {
 		// already running
-		if _, ok := exec.runningReaders.Load(key); ok {
-			continue
+		if val, ok := exec.runningReaders.Load(key); ok {
+			if reader, ok := val.(cdc.TableReader); ok {
+				readerInfo := reader.Info()
+				// wait the old reader to stop
+				if info.OnlyDiffinTblId(readerInfo) {
+					waitChan := make(chan struct{})
+					go func() {
+						defer close(waitChan)
+						reader.GetWg().Wait()
+					}()
+					<-waitChan
+				} else {
+					continue
+				}
+			}
 		}
 
 		if exec.exclude != nil && exec.exclude.MatchString(key) {
@@ -568,7 +581,6 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	if exec.startTs, err = CDCStrToTS(startTs); err != nil {
 		return err
 	}
-
 	// endTs
 	endTs, err := res.GetString(ctx, 0, 6)
 	if err != nil {

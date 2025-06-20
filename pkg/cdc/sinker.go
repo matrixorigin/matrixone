@@ -91,6 +91,10 @@ var NewSinker = func(
 	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)), false)
 	// use db
 	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
+	// possibly need to drop table first
+	if dbTblInfo.IdChanged {
+		_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)), false)
+	}
 	// create table
 	createSql := strings.TrimSpace(dbTblInfo.SourceCreateSql)
 	if len(createSql) < len(createTableIfNotExists) || !strings.EqualFold(createSql[:len(createTableIfNotExists)], createTableIfNotExists) {

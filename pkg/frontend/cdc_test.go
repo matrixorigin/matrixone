@@ -2773,6 +2773,59 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 	cdcTask.handleNewTables(mp)
 }
 
+func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	oldReader := &mockTableReader{
+		info: &cdc.DbTableInfo{SourceTblId: 100},
+		wg:   wg,
+	}
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{Accounts: []*task.Account{{Id: 0}}},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		exclude:        regexp.MustCompile("db1.important_table"),
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+	cdcTask.runningReaders.Store("db1.important_table", oldReader)
+
+	go func() {
+		time.Sleep(1000 * time.Millisecond)
+		wg.Done()
+	}()
+
+	newTable := &cdc.DbTableInfo{SourceTblId: 200}
+	mp := map[uint32]cdc.TblMap{
+		0: {"db1.important_table": newTable},
+	}
+
+	cdcTask.handleNewTables(mp)
+}
+
 type mockWatermarkUpdater struct{}
 
 func (m mockWatermarkUpdater) Run(context.Context, *cdc.ActiveRoutine) {
@@ -2813,6 +2866,23 @@ type mockReader struct{}
 func (m mockReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
 func (m mockReader) Close() {}
+
+type mockTableReader struct {
+	info *cdc.DbTableInfo
+	wg   *sync.WaitGroup
+}
+
+func (m mockTableReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
+
+func (m mockTableReader) Close() {}
+
+func (m mockTableReader) Info() *cdc.DbTableInfo {
+	return m.info
+}
+
+func (m mockTableReader) GetWg() *sync.WaitGroup {
+	return m.wg
+}
 
 type mockSinker struct{}
 
