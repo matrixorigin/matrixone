@@ -11,6 +11,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newTestIvfflatTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
+	return &plan.TableDef{
+		Name: "test_orig_tbl",
+		Name2ColIndex: map[string]int32{
+			pkName:     0,
+			vecColName: 1,
+			"dummy":    2, // Add another col to make sure pk/vec col indices are used
+		},
+		Cols: []*plan.ColDef{
+			{Name: pkName, Typ: plan.Type{Id: int32(pkType)}},
+			{Name: vecColName, Typ: plan.Type{Id: int32(vecType), Width: vecWidth}},
+			{Name: "dummy", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{pkName},
+			PkeyColName: pkName,
+		},
+		Indexes: []*plan.IndexDef{
+			{
+				IndexName:          "ivfidx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata,
+				IndexTableName:     "meta_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivfidx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids,
+				IndexTableName:     "centroids_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+			{
+				IndexName:          "ivfidx",
+				TableExist:         true,
+				IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+				IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				IndexTableName:     "entries_tbl",
+				Parts:              []string{vecColName},
+				IndexAlgoParams:    `{"lists":"16","op_type":"vector_l2_ops"}`,
+			},
+		},
+		DbName: "mydb",
+	}
+}
+
 func newTestFulltextTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
 	return &plan.TableDef{
 		Name: "test_orig_tbl",
@@ -141,6 +191,31 @@ func TestNewHnswSqlWriter(t *testing.T) {
 
 	row = []any{int64(3000), []float32{5, 6, 7}, nil}
 	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	fmt.Println(string(bytes))
+}
+
+func TestNewIvfflatSqlWriter(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float32, 3)
+	dbTableInfo := newTestDbTableInfo()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", dbTableInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+	row := []any{int64(1000), []float32{1, 2, 3}, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), []float32{5, 6, 7}, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float32{5, 6, 7}, nil}
+	err = writer.Insert(ctx, row)
 	require.Nil(t, err)
 
 	bytes, err := writer.ToSql()
