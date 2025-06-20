@@ -20,7 +20,9 @@ type IndexSqlWriter interface {
 	ToSql() ([]byte, error)
 }
 
-type FulltextSqlWriter struct {
+type BaseIndexSqlWriter struct {
+	lastCdcOp string
+	vbuf      []byte
 	param     string
 	tabledef  *plan.TableDef
 	indexdef  []*plan.IndexDef
@@ -31,9 +33,10 @@ type FulltextSqlWriter struct {
 	partsType []*types.Type
 	srcPos    []int32
 	srcType   []*types.Type
-	lastCdcOp string
-	buf       []byte
-	vbuf      []byte
+}
+
+type FulltextSqlWriter struct {
+	BaseIndexSqlWriter
 }
 
 // check FulltextSqlWriter is the interface of IndexSqlWriter
@@ -53,7 +56,7 @@ func NewIndexSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.In
 }
 
 func NewFulltextSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &FulltextSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, vbuf: make([]byte, 0, 1024)}
+	w := &FulltextSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, vbuf: make([]byte, 0, 1024)}}
 
 	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	typ := tabledef.Cols[w.pkPos].Typ
@@ -82,16 +85,16 @@ func NewFulltextSqlWriter(algo string, tabledef *plan.TableDef, indexdef []*plan
 	return w, nil
 }
 
-func (w *FulltextSqlWriter) Full() bool {
+func (w *BaseIndexSqlWriter) Full() bool {
 	return false
 }
 
 // return true when last op is empty or last op == current op
-func (w *FulltextSqlWriter) CheckLastOp(op string) bool {
+func (w *BaseIndexSqlWriter) CheckLastOp(op string) bool {
 	return len(w.lastCdcOp) == 0 || w.lastCdcOp == op
 }
 
-func (w *FulltextSqlWriter) writeRow(ctx context.Context, row []any) error {
+func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 	var err error
 
 	w.vbuf = appendString(w.vbuf, "ROW(")
@@ -115,7 +118,7 @@ func (w *FulltextSqlWriter) writeRow(ctx context.Context, row []any) error {
 	return nil
 }
 
-func (w *FulltextSqlWriter) Upsert(ctx context.Context, row []any) error {
+func (w *BaseIndexSqlWriter) Upsert(ctx context.Context, row []any) error {
 
 	if len(w.lastCdcOp) == 0 {
 		// init
@@ -134,7 +137,7 @@ func (w *FulltextSqlWriter) Upsert(ctx context.Context, row []any) error {
 	return w.writeRow(ctx, row)
 }
 
-func (w *FulltextSqlWriter) Insert(ctx context.Context, row []any) error {
+func (w *BaseIndexSqlWriter) Insert(ctx context.Context, row []any) error {
 
 	if len(w.lastCdcOp) == 0 {
 		// init
@@ -155,7 +158,7 @@ func (w *FulltextSqlWriter) Insert(ctx context.Context, row []any) error {
 	return nil
 }
 
-func (w *FulltextSqlWriter) Delete(ctx context.Context, row []any) error {
+func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 	var err error
 
 	if len(w.lastCdcOp) == 0 {
@@ -195,8 +198,9 @@ func (w *FulltextSqlWriter) ToFulltextSql() ([]byte, error) {
 	switch w.lastCdcOp {
 	case vectorindex.CDC_DELETE:
 	case vectorindex.CDC_UPSERT:
-		return w.ToFulltextUpsert()
+		return w.ToFulltextUpsert(true)
 	case vectorindex.CDC_INSERT:
+		return w.ToFulltextUpsert(false)
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("FulltextSqlWriter: invalid CDC type")
 	}
@@ -204,7 +208,7 @@ func (w *FulltextSqlWriter) ToFulltextSql() ([]byte, error) {
 	return nil, nil
 }
 
-func (w *FulltextSqlWriter) ToFulltextUpsert() ([]byte, error) {
+func (w *FulltextSqlWriter) ToFulltextUpsert(upsert bool) ([]byte, error) {
 
 	var sql string
 
@@ -219,7 +223,14 @@ func (w *FulltextSqlWriter) ToFulltextUpsert() ([]byte, error) {
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
-	//sql += fmt.Sprintf("REPLACE INTO %s ", tablename)
+	/*
+		if upsert {
+			sql += fmt.Sprintf("REPLACE INTO %s ", tablename)
+		} else {
+			sql += fmt.Sprintf("INSERT INTO %s ", tablename)
+		}
+	*/
+
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
 
