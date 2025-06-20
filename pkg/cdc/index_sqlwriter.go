@@ -186,7 +186,7 @@ func (w *FulltextSqlWriter) Delete(ctx context.Context, row []any) error {
 // with src as (select cast(serial(cast(column_0 as bigint), cast(column_1 as bigint)) as varchar) as id, column_2 as body, column_3 as title from
 // (values row(1, 2, 'body', 'title'), row(2, 3, 'body is heavy', 'I do not know'))) select f.* from src
 // cross apply fulltext_index_tokenize('{"parser":"ngram"}', 61, id, body, title) as f;
-func (w *FulltextSqlWriter) ToFullTextSql() ([]byte, error) {
+func (w *FulltextSqlWriter) ToFulltextSql() ([]byte, error) {
 
 	if len(w.lastCdcOp) == 0 {
 		return nil, nil
@@ -195,6 +195,7 @@ func (w *FulltextSqlWriter) ToFullTextSql() ([]byte, error) {
 	switch w.lastCdcOp {
 	case vectorindex.CDC_DELETE:
 	case vectorindex.CDC_UPSERT:
+		return w.ToFulltextUpsert()
 	case vectorindex.CDC_INSERT:
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("FulltextSqlWriter: invalid CDC type")
@@ -203,7 +204,7 @@ func (w *FulltextSqlWriter) ToFullTextSql() ([]byte, error) {
 	return nil, nil
 }
 
-func (w *FulltextSqlWriter) ToIvfflatUpsert() ([]byte, error) {
+func (w *FulltextSqlWriter) ToFulltextUpsert() ([]byte, error) {
 
 	var sql string
 
@@ -222,7 +223,8 @@ func (w *FulltextSqlWriter) ToIvfflatUpsert() ([]byte, error) {
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
 
-	return nil, nil
+	fmt.Printf("SQL :%s\n", sql)
+	return []byte(sql), nil
 }
 
 // REPLACE INTO __mo_index_secondary_0197786c-285f-70cb-9337-e484a3ff92c4(__mo_index_centroid_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col, __mo_index_centroid_fk_entry)
@@ -246,10 +248,12 @@ func (w *FulltextSqlWriter) ToIvfflatSql() ([]byte, error) {
 }
 
 func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
-	w.lastCdcOp = ""
+	defer func() {
+		w.lastCdcOp = ""
+	}()
 	switch w.algo {
 	case "fulltext":
-		return w.ToFullTextSql()
+		return w.ToFulltextSql()
 	case "ivfflat":
 		return w.ToIvfflatSql()
 	default:

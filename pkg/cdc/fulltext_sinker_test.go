@@ -1,6 +1,8 @@
 package cdc
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -41,9 +43,23 @@ func newTestFulltextTableDef(pkName string, pkType types.T, vecColName string, v
 }
 
 func TestNewFulltextSqlWriter(t *testing.T) {
+	var ctx context.Context
+
 	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
 
-	_, err := NewIndexSqlWriter("fulltext", tabledef, tabledef.Indexes)
+	writer, err := NewIndexSqlWriter("fulltext", tabledef, tabledef.Indexes)
 	require.Nil(t, err)
+
+	row := []any{any(int64(1000)), any([]uint8("hello world")), any(nil)}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{any(int64(2000)), any([]uint8("hello world")), any(nil)}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	fmt.Println(string(bytes))
 
 }
