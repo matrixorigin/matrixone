@@ -64,6 +64,10 @@ func IsInsertClause(inputSql string) (ok bool) {
 	return strings.HasPrefix(strings.ToUpper(inputSql), "INSERT")
 }
 
+func IsUpdateClause(inputSql string) (ok bool) {
+	return strings.HasPrefix(strings.ToUpper(inputSql), "UPDATE")
+}
+
 func IsInsertOnDuplicateUpdateClause(inputSql string) (ok bool) {
 	return strings.Contains(strings.ToUpper(inputSql), "ON DUPLICATE KEY UPDATE")
 }
@@ -108,6 +112,80 @@ func ParseSelectByPKs(inputSql string) (result ParseResult, err error) {
 		}
 		result.pkFilters = append(result.pkFilters, row)
 	}
+	return result, nil
+}
+
+// only support update with where by pk
+func ParseUpdate(inputSql string) (result ParseResult, err error) {
+	// 1. extract the db name and table name
+	// Ex.
+	//  1. "UPDATE `db1`.`t1` SET col3 = '1-1' WHERE col1 = 1;"
+	//  2. "UPDATE `db1`.`t1` SET col3 = '1-1', col4 = 4 WHERE col1 = 1 AND col2 = 'test';"
+	schemaRe := regexp.MustCompile(`UPDATE ` + "`([^`]+)`" + `\.` + "`([^`]+)`")
+	matches := schemaRe.FindStringSubmatch(inputSql)
+	if len(matches) != 3 {
+		return result, moerr.NewInternalErrorNoCtxf("invalid update sql: %s, matches: %v", inputSql, matches)
+	}
+	result.kind = 1
+	result.dbName = matches[1]
+	result.tableName = matches[2]
+
+	// 2. extract the update columns
+	// Ex.
+	//  1. "UPDATE `db1`.`t1` SET col3 = '1-1' WHERE col1 = 1 AND col2 = 'test';"
+	//     result.updateColumns: ["col3"]
+	//  2. "UPDATE `db1`.`t1` SET col3 = '1-1', col4 = 4 WHERE col1 = 1 AND col2 = 'test';"
+	//     result.updateColumns: ["col3", "col4"]
+	updateColumnsRe := regexp.MustCompile(`SET (.+?) WHERE`)
+	matches = updateColumnsRe.FindStringSubmatch(inputSql)
+	if len(matches) != 2 {
+		return result, moerr.NewInternalErrorNoCtxf("invalid update sql: %s, matches: %v", inputSql, matches)
+	}
+
+	// Split the SET clause by comma and extract column names
+	setClause := strings.TrimSpace(matches[1])
+	columnAssignments := strings.Split(setClause, ",")
+	result.updateColumns = make([]string, 0, len(columnAssignments))
+
+	for _, assignment := range columnAssignments {
+		// Each assignment is like "col3 = '1-1'" or "col4 = 4"
+		parts := strings.Split(strings.TrimSpace(assignment), "=")
+		if len(parts) >= 2 {
+			columnName := trimQuote(strings.TrimSpace(parts[0]))
+			result.updateColumns = append(result.updateColumns, columnName)
+		}
+	}
+
+	// extract the pk filters
+	// Ex.
+	//  1. "UPDATE `db1`.`t1` SET col3 = '1-1' WHERE col1 = 1 AND col2 = 'test';"
+	//     result.pkFilters: [[1, "test"]]
+	//  2. "UPDATE `db1`.`t1` SET col3 = '1-1', col4 = 4 WHERE col1 = 1;
+	//     result.pkFilters: [[1]]
+	//  3. "UPDATE `db1`.`t1` SET col3 = '1-1' WHERE (col1 = 1 AND col2 = 'test') OR (col1 = 2 AND col2 = 'test2');"
+	//     result.pkFilters: [[1, "test"], [2, "test2"]]
+	pkFiltersRe := regexp.MustCompile(`WHERE (?:\(([^)]+)\)(?: OR \(([^)]+)\))*|([^;]+))`)
+	matches = pkFiltersRe.FindStringSubmatch(inputSql)
+	if len(matches) < 2 {
+		logutil.Info("invalid update sql", zap.String("sql", inputSql), zap.Any("matches", matches))
+		return result, moerr.NewInternalErrorNoCtxf("invalid update sql: %s, matches: %v", inputSql, matches)
+	}
+
+	for i := 1; i < len(matches); i++ {
+		if matches[i] == "" {
+			continue
+		}
+		pkFilters := strings.Split(strings.TrimSpace(matches[i]), " AND ")
+		row := make([]string, 0, len(pkFilters))
+		for _, filter := range pkFilters {
+			filterParts := strings.Split(strings.TrimSpace(filter), " = ")
+			if len(filterParts) == 2 {
+				row = append(row, trimQuote(strings.TrimSpace(filterParts[1])))
+			}
+		}
+		result.pkFilters = append(result.pkFilters, row)
+	}
+
 	return result, nil
 }
 
@@ -1514,6 +1592,26 @@ func TestCDCWatermarkUpdater_ParseInsert(t *testing.T) {
 	assert.Equal(t, "mo_catalog", result.dbName)
 	assert.Equal(t, "mo_cdc_watermark", result.tableName)
 	assert.Equal(t, []string{}, result.projectionColumns)
+}
+
+func TestCDCWatermarkUpdater_ParseUpdate(t *testing.T) {
+	expectedSql := "UPDATE `db1`.`t1` SET col3 = '1-1' WHERE col1 = 1"
+	result, err := ParseUpdate(expectedSql)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, result.kind)
+	assert.Equal(t, "db1", result.dbName)
+	assert.Equal(t, "t1", result.tableName)
+	assert.Equal(t, []string{"col3"}, result.updateColumns)
+	assert.Equal(t, [][]string{{"1"}}, result.pkFilters)
+
+	expectedSql = "UPDATE `db1`.`t1` SET col3 = '1-1', col4 = 4, col5 = '5-1' WHERE col1 = 1 AND col2 = 'test'"
+	result, err = ParseUpdate(expectedSql)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, result.kind)
+	assert.Equal(t, "db1", result.dbName)
+	assert.Equal(t, "t1", result.tableName)
+	assert.Equal(t, []string{"col3", "col4", "col5"}, result.updateColumns)
+	assert.Equal(t, [][]string{{"1", "test"}}, result.pkFilters)
 }
 
 func TestCDCWatermarkUpdater_ParseSelectByPKs(t *testing.T) {
