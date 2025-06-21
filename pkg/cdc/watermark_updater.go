@@ -38,7 +38,7 @@ var ErrNoWatermarkFound = moerr.NewInternalErrorNoCtx("no watermark found")
 
 const (
 	WatermarkUpdateInterval          = time.Second * 3
-	ReadWatermarkProjectionList      = "account_id, task_id, db_name, tbl_name, watermark"
+	ReadWatermarkProjectionList      = "account_id, task_id, db_name, table_name, watermark"
 	UpdateWatermarkCronJobNamePrefix = "CDCWatermarkUpdater-CronJob"
 )
 
@@ -479,7 +479,7 @@ func (u *CDCWatermarkUpdater) constructReadWMSQL(
 			filterStr += " OR "
 		}
 		filterStr += fmt.Sprintf(
-			"(account_id = %d AND task_id = '%s' AND db_name = '%s' AND tbl_name = '%s')",
+			"(account_id = %d AND task_id = '%s' AND db_name = '%s' AND table_name = '%s')",
 			key.accountId,
 			key.taskId,
 			key.dbName,
