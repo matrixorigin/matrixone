@@ -276,6 +276,9 @@ func (m *mockSQLExecutor) executeSelect(selectSql string) ie.InternalExecResult 
 				err: err,
 			}
 		}
+		if len(row) == 0 {
+			continue
+		}
 		rows = append(rows, row)
 	}
 
@@ -293,7 +296,7 @@ func (m *mockSQLExecutor) executeSelect(selectSql string) ie.InternalExecResult 
 		}
 		retData = append(retData, retRow)
 	}
-	logutil.Debug(
+	logutil.Info(
 		"MockSQLExecutor.executeSelect",
 		zap.String("db-name", dbName),
 		zap.String("table-name", tableName),
@@ -337,7 +340,7 @@ func (m *mockSQLExecutor) executeInsert(insertSql string) error {
 		insertResult.rows,
 		false,
 	)
-	logutil.Debug(
+	logutil.Info(
 		"MockSQLExecutor.executeInsert",
 		zap.String("db-name", dbName),
 		zap.String("table-name", tableName),
@@ -373,7 +376,7 @@ func (m *mockSQLExecutor) executeInsertOnDuplicateUpdate(insertSql string) error
 		insertResult.rows,
 		true,
 	)
-	logutil.Debug(
+	logutil.Info(
 		"MockSQLExecutor.executeInsertOnDuplicateUpdate",
 		zap.String("db-name", dbName),
 		zap.String("table-name", tableName),
@@ -601,7 +604,7 @@ func (m *mockSQLExecutor) Insert(
 	return nil
 }
 
-func (m *mockSQLExecutor) Rows(
+func (m *mockSQLExecutor) RowCount(
 	dbName string,
 	tableName string,
 ) int {
@@ -1010,7 +1013,7 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 
 	err = executor.Exec(context.Background(), insertSql, ie.SessionOverrideOptions{})
 	assert.NoError(t, err)
-	assert.Equal(t, 2, executor.Rows("mo_catalog", "mo_cdc_watermark"))
+	assert.Equal(t, 2, executor.RowCount("mo_catalog", "mo_cdc_watermark"))
 	keys := make(map[WatermarkKey]WatermarkResult)
 	keys[*jobs[0].Key] = WatermarkResult{}
 	keys[*jobs[1].Key] = WatermarkResult{}
@@ -1060,11 +1063,15 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 		job.Watermark = types.BuildTS(int64(i+10), 1)
 	}
 
-	insertUpdateSql := u.constructBatchUpdateWMSQL(jobs)
+	keys2 := make(map[WatermarkKey]types.TS)
+	keys2[*jobs[0].Key] = jobs[0].Watermark
+	keys2[*jobs[1].Key] = jobs[1].Watermark
+
+	insertUpdateSql := u.constructBatchUpdateWMSQL(keys2)
 	t.Logf("insertUpdateSql: %s", insertUpdateSql)
 	err = executor.Exec(context.Background(), insertUpdateSql, ie.SessionOverrideOptions{})
 	assert.NoError(t, err)
-	assert.Equal(t, 2, executor.Rows("mo_catalog", "mo_cdc_watermark"))
+	assert.Equal(t, 2, executor.RowCount("mo_catalog", "mo_cdc_watermark"))
 
 	tuples = executor.Query(context.Background(), selectSql, ie.SessionOverrideOptions{})
 	assert.NoError(t, tuples.Error())
@@ -1390,45 +1397,74 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 		t.Name(),
 		ie,
 	)
-	keys := make([]*UpdaterJob, 0, 1)
+	keys := make(map[WatermarkKey]types.TS)
 	key1 := new(WatermarkKey)
 	key1.accountId = 1
 	key1.taskId = "test"
 	key1.dbName = "db1"
 	key1.tblName = "t1"
 	ts1 := types.BuildTS(1, 1)
-	keys = append(keys, &UpdaterJob{
-		Key:       key1,
-		Watermark: ts1,
-	})
+	keys[*key1] = ts1
 	key2 := new(WatermarkKey)
 	key2.accountId = 2
 	key2.taskId = "test"
 	key2.dbName = "db2"
 	key2.tblName = "t2"
 	ts2 := types.BuildTS(2, 1)
-	keys = append(keys, &UpdaterJob{
-		Key:       key2,
-		Watermark: ts2,
-	})
+	keys[*key2] = ts2
 	key3 := new(WatermarkKey)
 	key3.accountId = 3
 	key3.taskId = "test"
 	key3.dbName = "db3"
 	key3.tblName = "t3"
 	ts3 := types.BuildTS(3, 1)
-	keys = append(keys, &UpdaterJob{
-		Key:       key3,
-		Watermark: ts3,
-	})
-	expectedSql := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+	keys[*key3] = ts3
+	expectedSql1 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
+		"(1, 'test', 'db1', 't1', '1-1')," +
+		"(2, 'test', 'db2', 't2', '2-1')," +
+		"(3, 'test', 'db3', 't3', '3-1') " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+	expectedSql2 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
+		"(3, 'test', 'db3', 't3', '3-1')," +
+		"(2, 'test', 'db2', 't2', '2-1')," +
+		"(1, 'test', 'db1', 't1', '1-1') " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+	expectedSql3 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
+		"(3, 'test', 'db3', 't3', '3-1')," +
+		"(1, 'test', 'db1', 't1', '1-1')," +
+		"(2, 'test', 'db2', 't2', '2-1') " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+	expectedSql4 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
+		"(2, 'test', 'db2', 't2', '2-1')," +
+		"(3, 'test', 'db3', 't3', '3-1')," +
+		"(1, 'test', 'db1', 't1', '1-1') " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+	expectedSql5 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
+		"(2, 'test', 'db2', 't2', '2-1')," +
+		"(1, 'test', 'db1', 't1', '1-1')," +
+		"(3, 'test', 'db3', 't3', '3-1') " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+	expectedSql6 := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
 		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
 		"(1, 'test', 'db1', 't1', '1-1')," +
 		"(2, 'test', 'db2', 't2', '2-1')," +
 		"(3, 'test', 'db3', 't3', '3-1') " +
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
 	realSql := u.constructBatchUpdateWMSQL(keys)
-	assert.Equal(t, expectedSql, realSql)
+	assert.True(
+		t,
+		expectedSql1 == realSql ||
+			expectedSql2 == realSql ||
+			expectedSql3 == realSql ||
+			expectedSql4 == realSql ||
+			expectedSql5 == realSql ||
+			expectedSql6 == realSql,
+	)
 
 	re := regexp.MustCompile(`\(([^,]+),\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)'\)`)
 
@@ -1489,10 +1525,78 @@ func TestCDCWatermarkUpdater_ParseSelectByPKs(t *testing.T) {
 	assert.Equal(t, [][]string{{"1", "test"}, {"2", "test2"}}, result.pkFilters)
 }
 
-// func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
-// 	ie := newMockSQLExecutor()
-// 	u := NewCDCWatermarkUpdater(
-// 		t.Name(),
-// 		ie,
-// 	)
-// }
+func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
+	ie := newMockSQLExecutor()
+	err := ie.CreateTable(
+		"mo_catalog",
+		"mo_cdc_watermark",
+		[]string{"account_id", "task_id", "db_name", "table_name", "watermark", "err_msg"},
+		[]string{"account_id", "task_id", "db_name", "table_name"},
+	)
+	assert.NoError(t, err)
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+		WithCronJobInterval(time.Millisecond*1),
+	)
+	u.Start()
+	defer u.Stop()
+
+	ctx := context.Background()
+
+	ts := types.BuildTS(1, 1)
+	key := &WatermarkKey{
+		accountId: 1,
+		taskId:    "task1",
+		dbName:    "db1",
+		tblName:   "t1",
+	}
+	ret, err := u.GetOrAddCommitted(
+		ctx,
+		key,
+		&ts,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, ts, ret)
+
+	ret, err = u.GetOrAddCommitted(
+		ctx,
+		key,
+		&ts,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, ts, ret)
+
+	var smallTs types.TS
+	ret, err = u.GetOrAddCommitted(
+		ctx,
+		key,
+		&smallTs,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, ts, ret)
+
+	ret, err = u.GetFromCache(
+		ctx,
+		key,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, ts, ret)
+
+	assert.Equal(t, 1, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
+
+	ts2 := types.BuildTS(2, 1)
+	err = u.Add(
+		ctx,
+		key,
+		&ts2,
+	)
+	assert.NoError(t, err)
+	ret, err = u.GetFromCache(
+		ctx,
+		key,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, ts2, ret)
+	time.Sleep(time.Millisecond * 10)
+}
