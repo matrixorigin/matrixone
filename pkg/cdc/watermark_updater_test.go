@@ -42,12 +42,44 @@ type ParseResult struct {
 	rows              [][]string
 }
 
-func ParseInsert(sql string) (result ParseResult, err error) {
+func trimQuote(value string) string {
+	if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func ParseInsertOnDuplicateUpdate(inputSql string) (result ParseResult, err error) {
+	// 1. extract the db name and table name
+	insertSql := strings.Split(inputSql, "ON DUPLICATE KEY UPDATE")[0]
+	if result, err = ParseInsert(insertSql); err != nil {
+		return result, err
+	}
+	result.kind = 4
+	// 2. extract the update columns
+	// Ex.
+	//  1. "INSERT INTO `db1`.`t1` (col1, col2, col3) VALUES ... ON DUPLICATE KEY UPDATE watermark = VALUES(col2);"
+	//     result.updateColumns: ["col2"]
+	//  2. "INSERT INTO `db1`.`t1` (col1, col2, col3, col4) VALUES ... ON DUPLICATE KEY UPDATE watermark = VALUES(col1,col3);"
+	//     result.updateColumns: ["col1", "col3"]
+	updateColumnsRe := regexp.MustCompile(`ON DUPLICATE KEY UPDATE ([^=]+) = VALUES\(([^)]+)\)`)
+	matches := updateColumnsRe.FindStringSubmatch(inputSql)
+	if len(matches) != 3 {
+		return result, moerr.NewInternalErrorNoCtxf("invalid insert on duplicate update sql: %s, matches: %v", inputSql, matches)
+	}
+	result.updateColumns = strings.Split(strings.TrimSpace(matches[2]), ",")
+	for i, column := range result.updateColumns {
+		result.updateColumns[i] = trimQuote(strings.TrimSpace(column))
+	}
+	return result, nil
+}
+
+func ParseInsert(inputSql string) (result ParseResult, err error) {
 	// 1. extract the db name and table name
 	schemaRe := regexp.MustCompile(`INSERT INTO ` + "`([^`]+)`" + `\.` + "`([^`]+)`")
-	matches := schemaRe.FindStringSubmatch(sql)
+	matches := schemaRe.FindStringSubmatch(inputSql)
 	if len(matches) != 3 {
-		return result, moerr.NewInternalErrorNoCtxf("invalid insert sql: %s", sql)
+		return result, moerr.NewInternalErrorNoCtxf("invalid insert sql: %s, matches: %v", inputSql, matches)
 	}
 	result.kind = 0
 	result.dbName = matches[1]
@@ -59,9 +91,9 @@ func ParseInsert(sql string) (result ParseResult, err error) {
 	//  2. "INSERT INTO `db1`.`t1` (col1, col2, col3, col4) VALUES ..." +
 	//  3. "INSERT INTO `db1`.`t1` VALUES ..." +
 	projectionColumnsRe := regexp.MustCompile(`INSERT INTO ` + "`([^`]+)`" + `\.` + "`([^`]+)`" + `\s*\(([^)]+)\)`)
-	matches = projectionColumnsRe.FindStringSubmatch(sql)
+	matches = projectionColumnsRe.FindStringSubmatch(inputSql)
 	if len(matches) != 4 {
-		return result, moerr.NewInternalErrorNoCtxf("invalid insert sql: %s", sql)
+		return result, moerr.NewInternalErrorNoCtxf("invalid insert sql: %s", inputSql)
 	}
 	// trim the spaces and split the columns by comma
 	columns := strings.Split(strings.TrimSpace(matches[3]), ",")
@@ -80,17 +112,17 @@ func ParseInsert(sql string) (result ParseResult, err error) {
 	//     result.rows: [["1", "test", "db1"], ["2", "test", "db2"], ["3", "test", "db3"]]
 
 	// Find the position of VALUES keyword
-	valuesIndex := strings.Index(strings.ToUpper(sql), "VALUES")
+	valuesIndex := strings.Index(strings.ToUpper(inputSql), "VALUES")
 	if valuesIndex == -1 {
-		return result, moerr.NewInternalErrorNoCtxf("VALUES keyword not found in sql: %s", sql)
+		return result, moerr.NewInternalErrorNoCtxf("VALUES keyword not found in sql: %s", inputSql)
 	}
 
 	// Extract the part after VALUES
-	valuesPart := sql[valuesIndex:]
+	valuesPart := inputSql[valuesIndex:]
 	valuesRe := regexp.MustCompile(`\(([^)]+)\)`)
 	allMatches := valuesRe.FindAllStringSubmatch(valuesPart, -1)
 	if len(allMatches) == 0 {
-		return result, moerr.NewInternalErrorNoCtxf("no values found in sql: %s", sql)
+		return result, moerr.NewInternalErrorNoCtxf("no values found in sql: %s", inputSql)
 	}
 
 	result.rows = make([][]string, 0, len(allMatches))
@@ -101,12 +133,7 @@ func ParseInsert(sql string) (result ParseResult, err error) {
 		values := strings.Split(strings.TrimSpace(match[1]), ",")
 		row := make([]string, 0, len(values))
 		for _, value := range values {
-			// trim the spaces and quotes
-			value = strings.TrimSpace(value)
-			if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
-				value = value[1 : len(value)-1]
-			}
-			row = append(row, strings.TrimSpace(value))
+			row = append(row, trimQuote(strings.TrimSpace(value)))
 		}
 		result.rows = append(result.rows, row)
 	}
@@ -1070,4 +1097,19 @@ func TestCDCWatermarkUpdater_ParseInsert(t *testing.T) {
 	assert.Equal(t, "mo_cdc_watermark", result.tableName)
 	assert.Equal(t, []string{"account_id", "task_id", "db_name", "table_name", "watermark"}, result.projectionColumns)
 	assert.Equal(t, [][]string{{"1", "test", "db1", "t1", "1-1"}, {"2", "test", "db2", "t2", "2-1"}, {"3", "test", "db3", "t3", "3-1"}}, result.rows)
+
+	expectedSql = "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark, err_msg) VALUES " +
+		"(1, 'test', 'db1', 't1', '1-1', '')," +
+		"(2, 'test', 'db2', 't2', '2-1', 'err1')," +
+		"(3, 'test', 'db3', 't3', '3-1', '') " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark,err_msg)"
+	result, err = ParseInsertOnDuplicateUpdate(expectedSql)
+	assert.NoError(t, err)
+	assert.Equal(t, 4, result.kind)
+	assert.Equal(t, "mo_catalog", result.dbName)
+	assert.Equal(t, "mo_cdc_watermark", result.tableName)
+	assert.Equal(t, []string{"account_id", "task_id", "db_name", "table_name", "watermark", "err_msg"}, result.projectionColumns)
+	assert.Equal(t, [][]string{{"1", "test", "db1", "t1", "1-1", ""}, {"2", "test", "db2", "t2", "2-1", "err1"}, {"3", "test", "db3", "t3", "3-1", ""}}, result.rows)
+	assert.Equal(t, []string{"watermark", "err_msg"}, result.updateColumns)
 }
