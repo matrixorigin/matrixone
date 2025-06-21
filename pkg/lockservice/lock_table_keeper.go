@@ -225,17 +225,18 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	}
 
 	n := 0
-	newVersion := k.groupTables.getVersion()
-	if oldVersion == newVersion {
-		k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
-			bind := v.getBind()
-			if bind.ServiceID == k.serviceID {
-				n++
-				return true
-			}
+	k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
+		newVersion := k.groupTables.getVersion()
+		if oldVersion != newVersion {
 			return false
-		})
-	}
+		}
+		bind := v.getBind()
+		if bind.ServiceID == k.serviceID {
+			n++
+			return true
+		}
+		return false
+	})
 
 	if n > 0 {
 		// Keep bind receiving an explicit failure means that all the binds of the local
