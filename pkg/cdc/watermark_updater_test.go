@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1617,4 +1618,77 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 	)
 	assert.Equal(t, 1, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 
+	var tasksWg sync.WaitGroup
+
+	runTaskFunc := func(
+		wg *sync.WaitGroup,
+		key *WatermarkKey,
+		physicalStart int64,
+	) {
+		defer wg.Done()
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(4)))
+
+		logic := uint32(0)
+		candidateTS := types.BuildTS(physicalStart, logic)
+		logic++
+		persistedTS, err := u.GetOrAddCommitted(
+			ctx,
+			key,
+			&candidateTS,
+		)
+		assert.NoError(t, err)
+		assert.True(t, candidateTS.LE(&persistedTS))
+
+		for i := 0; i < 20; i++ {
+			ts := types.BuildTS(physicalStart, logic)
+			logic++
+			err = u.Add(
+				ctx,
+				key,
+				&ts,
+			)
+			assert.NoError(t, err)
+			cacheTS, err := u.GetFromCache(
+				ctx,
+				key,
+			)
+			assert.NoError(t, err)
+			assert.True(t, ts.EQ(&cacheTS))
+			time.Sleep(time.Microsecond * time.Duration(rand.Intn(1000)))
+		}
+	}
+
+	tasksWg.Add(5)
+	keys := make([]*WatermarkKey, 0, 5)
+	for i := 0; i < 5; i++ {
+		key := &WatermarkKey{
+			accountId: 1,
+			taskId:    fmt.Sprintf("task%d", i+10),
+			dbName:    "db1",
+			tblName:   "t1",
+		}
+		keys = append(keys, key)
+		go runTaskFunc(&tasksWg, key, int64(i+100000))
+	}
+
+	tasksWg.Wait()
+	assert.Equal(t, 6, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
+	for _, key := range keys {
+		testutils.WaitExpect(
+			5000,
+			func() bool {
+				tuple, err := ie.GetTableDataByPK(
+					"mo_catalog",
+					"mo_cdc_watermark",
+					[]string{fmt.Sprintf("%d", key.accountId), key.taskId, key.dbName, key.tblName},
+				)
+				t.Logf("tuple: %v", tuple)
+				if err != nil {
+					return false
+				}
+				ts := types.StringToTS(tuple[4])
+				return ts.Logical() >= 20
+			},
+		)
+	}
 }
