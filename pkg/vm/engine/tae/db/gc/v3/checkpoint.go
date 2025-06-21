@@ -1559,8 +1559,11 @@ func (c *checkpointCleaner) tryScanLocked(
 	if maxScannedTS.IsEmpty() {
 		maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
 		minCkp := c.checkpointCli.MinIncrementalCheckpoint()
-		start := minCkp.GetStart()
-		if minCkp != nil && !start.IsEmpty() && maxGCkp != nil {
+		var start types.TS
+		if minCkp != nil {
+			start = minCkp.GetStart()
+		}
+		if !start.IsEmpty() && maxGCkp != nil {
 			maxScannedTS = maxGCkp.GetEnd()
 			candidates = make([]*checkpoint.CheckpointEntry, 0)
 			candidates = append(candidates, maxGCkp)
