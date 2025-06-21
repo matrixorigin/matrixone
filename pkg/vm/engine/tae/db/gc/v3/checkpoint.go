@@ -1555,7 +1555,7 @@ func (c *checkpointCleaner) tryScanLocked(
 	if scanWaterMark := c.GetScanWaterMark(); scanWaterMark != nil {
 		maxScannedTS = scanWaterMark.GetEnd()
 	}
-	var candidates []*checkpoint.CheckpointEntry
+	candidates := make([]*checkpoint.CheckpointEntry, 0)
 	if maxScannedTS.IsEmpty() {
 		maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
 		minCkp := c.checkpointCli.MinIncrementalCheckpoint()
@@ -1565,7 +1565,6 @@ func (c *checkpointCleaner) tryScanLocked(
 		}
 		if !start.IsEmpty() && maxGCkp != nil {
 			maxScannedTS = maxGCkp.GetEnd()
-			candidates = make([]*checkpoint.CheckpointEntry, 0)
 			cpt := c.checkpointCli.GetCompacted()
 			if cpt == nil {
 				logutil.Info("GC-PANIC-REBUILD-TABLE",
@@ -1585,10 +1584,6 @@ func (c *checkpointCleaner) tryScanLocked(
 	// quick return if there is no incremental checkpoint
 	if len(checkpoints) == 0 && len(candidates) == 0 {
 		return
-	}
-
-	if len(candidates) == 0 {
-		candidates = make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
 	}
 
 	// filter out the incremental checkpoints that do not meet the requirements
