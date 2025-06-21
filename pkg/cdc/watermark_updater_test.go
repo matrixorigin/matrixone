@@ -92,6 +92,41 @@ func (m *mockSQLExecutor) RemoveTable(
 	return nil
 }
 
+func (m *mockSQLExecutor) Delete(
+	tableName string,
+	pkValues []string,
+) error {
+	m.Lock()
+	defer m.Unlock()
+	if _, ok := m.tables[tableName]; !ok {
+		return moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	}
+	pkColumns, hasPK := m.pkColumnsMap[tableName]
+	if !hasPK {
+		return moerr.NewInternalErrorNoCtxf("table %s has no primary key", tableName)
+	}
+	if len(pkValues) != len(pkColumns) {
+		return moerr.NewInternalErrorNoCtxf("pk values length mismatch: %d != %d", len(pkValues), len(pkColumns))
+	}
+	pkValue := strings.Join(pkValues, ",")
+	offset, ok := m.pkIndexMap[tableName][pkValue]
+	if !ok {
+		return nil
+	}
+	tableIndex := m.pkIndexMap[tableName]
+	delete(tableIndex, pkValue)
+	tableData := m.tables[tableName]
+	tableData = append(tableData[:offset], tableData[offset+1:]...)
+	m.tables[tableName] = tableData
+	// update the offset of the other pk values
+	for pk, idx := range tableIndex {
+		if idx > offset {
+			tableIndex[pk] = idx - 1
+		}
+	}
+	return nil
+}
+
 // when onDuplicateUpdate is true, currently this mock executor
 // only supports:
 //  1. when there is no primary key, the columns should be the same as the full columns
@@ -569,6 +604,25 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 	rows, err = executor.GetTableDataByPK("t1", []string{"4", "5"})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"4", "5", "66"}, rows)
+
+	err = executor.Delete("t1", []string{"1", "3"})
+	assert.NoError(t, err)
+	err = executor.Delete("t2", []string{"1", "2"})
+	assert.Error(t, err)
+	err = executor.Delete("t1", []string{"1", "2"})
+	assert.NoError(t, err)
+	rows, err = executor.GetTableDataByPK("t1", []string{"1", "2"})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(rows))
+
+	err = executor.Delete("t1", []string{"4", "5"})
+	assert.NoError(t, err)
+	rows, err = executor.GetTableDataByPK("t1", []string{"4", "5"})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(rows))
+
+	assert.Equal(t, 0, len(executor.tables["t1"]))
+	assert.Equal(t, 0, len(executor.pkIndexMap["t1"]))
 }
 
 // Scenario:
