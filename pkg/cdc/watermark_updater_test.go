@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -1585,18 +1586,35 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 
 	assert.Equal(t, 1, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
 
-	ts2 := types.BuildTS(2, 1)
-	err = u.Add(
-		ctx,
-		key,
-		&ts2,
+	for i := 0; i < 5; i++ {
+		nts := types.BuildTS(int64(i+1), 1)
+		err = u.Add(
+			ctx,
+			key,
+			&nts,
+		)
+		assert.NoError(t, err)
+		assert.NoError(t, err)
+		ret, err = u.GetFromCache(
+			ctx,
+			key,
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, nts, ret)
+		time.Sleep(time.Millisecond * 1)
+	}
+	testutils.WaitExpect(
+		5000,
+		func() bool {
+			tuple, err := ie.GetTableDataByPK(
+				"mo_catalog",
+				"mo_cdc_watermark",
+				[]string{"1", "task1", "db1", "t1"},
+			)
+			t.Logf("tuple: %v", tuple)
+			return err == nil && tuple[4] == "5-1"
+		},
 	)
-	assert.NoError(t, err)
-	ret, err = u.GetFromCache(
-		ctx,
-		key,
-	)
-	assert.NoError(t, err)
-	assert.Equal(t, ts2, ret)
-	time.Sleep(time.Millisecond * 10)
+	assert.Equal(t, 1, ie.RowCount("mo_catalog", "mo_cdc_watermark"))
+
 }
