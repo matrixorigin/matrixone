@@ -40,6 +40,7 @@ type ParseResult struct {
 	projectionColumns []string
 	updateColumns     []string
 	rows              [][]string
+	pkFilters         [][]string
 }
 
 func trimQuote(value string) string {
@@ -47,6 +48,49 @@ func trimQuote(value string) string {
 		return value[1 : len(value)-1]
 	}
 	return value
+}
+
+func ParseSelectByPKs(inputSql string) (result ParseResult, err error) {
+	// 1. extract the db name and table name
+	schemaRe := regexp.MustCompile(`SELECT ([^F]+) FROM ` + "`([^`]+)`" + `\.` + "`([^`]+)`")
+	matches := schemaRe.FindStringSubmatch(inputSql)
+	if len(matches) != 4 {
+		return result, moerr.NewInternalErrorNoCtxf("invalid select by pk sql: %s, matches: %v", inputSql, matches)
+	}
+	result.kind = 3
+	result.dbName = matches[2]
+	result.tableName = matches[3]
+	result.projectionColumns = strings.Split(strings.TrimSpace(matches[1]), ",")
+	for i, column := range result.projectionColumns {
+		result.projectionColumns[i] = trimQuote(strings.TrimSpace(column))
+	}
+	// 2. extract the pk filters
+	// Ex.
+	//  1. "SELECT col1, col2, col3 FROM db1.t1 WHERE (col1 = 1 AND col2 = 'test')";
+	//     result.pkFilters: [[1, "test"]]
+	//  2. "SELECT col2, col3 FROM db1.t1 WHERE (col1 = 1 AND col2 = 'test') OR (col1 = 2 AND col2 = 'test2')";
+	//     result.pkFilters: [[1, "test"], [2, "test2"]]
+	pkFiltersRe := regexp.MustCompile(`WHERE \(([^)]+)\)(?: OR \(([^)]+)\))*`)
+	matches = pkFiltersRe.FindStringSubmatch(inputSql)
+	if len(matches) < 2 {
+		return result, moerr.NewInternalErrorNoCtxf("invalid select by pk sql: %s, matches: %v", inputSql, matches)
+	}
+
+	for i := 1; i < len(matches); i++ {
+		if matches[i] == "" {
+			continue
+		}
+		pkFilters := strings.Split(strings.TrimSpace(matches[i]), " AND ")
+		row := make([]string, 0, len(pkFilters))
+		for _, filter := range pkFilters {
+			filterParts := strings.Split(strings.TrimSpace(filter), " = ")
+			if len(filterParts) == 2 {
+				row = append(row, trimQuote(strings.TrimSpace(filterParts[1])))
+			}
+		}
+		result.pkFilters = append(result.pkFilters, row)
+	}
+	return result, nil
 }
 
 func ParseInsertOnDuplicateUpdate(inputSql string) (result ParseResult, err error) {
@@ -161,70 +205,76 @@ func newMockSQLExecutor() *mockSQLExecutor {
 }
 
 func (m *mockSQLExecutor) CreateTable(
+	dbName string,
 	tableName string,
 	columns []string,
 	pkColumns []string,
 ) error {
 	m.Lock()
 	defer m.Unlock()
-	if _, ok := m.tables[tableName]; ok {
-		return moerr.NewInternalErrorNoCtxf("table %s already exists", tableName)
+	key := GenDbTblKey(dbName, tableName)
+	if _, ok := m.tables[key]; ok {
+		return moerr.NewInternalErrorNoCtxf("table %s already exists", key)
 	}
-	m.columnNames[tableName] = columns
-	m.columnIds[tableName] = make(map[string]int)
+	m.columnNames[key] = columns
+	m.columnIds[key] = make(map[string]int)
 	for i, column := range columns {
-		m.columnIds[tableName][column] = i
+		m.columnIds[key][column] = i
 	}
-	m.tables[tableName] = make([][]string, 0, 100)
-	m.pkColumnsMap[tableName] = append(m.pkColumnsMap[tableName], pkColumns...)
+	m.tables[key] = make([][]string, 0, 100)
+	m.pkColumnsMap[key] = append(m.pkColumnsMap[key], pkColumns...)
 	if len(pkColumns) > 0 {
-		m.pkIndexMap[tableName] = make(map[string]int)
+		m.pkIndexMap[key] = make(map[string]int)
 	}
 	return nil
 }
 
 func (m *mockSQLExecutor) RemoveTable(
+	dbName string,
 	tableName string,
 ) error {
 	m.Lock()
 	defer m.Unlock()
-	if _, ok := m.tables[tableName]; !ok {
-		return moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	key := GenDbTblKey(dbName, tableName)
+	if _, ok := m.tables[key]; !ok {
+		return moerr.NewInternalErrorNoCtxf("table %s not found", key)
 	}
-	delete(m.tables, tableName)
-	delete(m.columnNames, tableName)
-	delete(m.columnIds, tableName)
-	delete(m.pkColumnsMap, tableName)
-	delete(m.pkIndexMap, tableName)
+	delete(m.tables, key)
+	delete(m.columnNames, key)
+	delete(m.columnIds, key)
+	delete(m.pkColumnsMap, key)
+	delete(m.pkIndexMap, key)
 	return nil
 }
 
 func (m *mockSQLExecutor) Delete(
+	dbName string,
 	tableName string,
 	pkValues []string,
 ) error {
 	m.Lock()
 	defer m.Unlock()
-	if _, ok := m.tables[tableName]; !ok {
-		return moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	key := GenDbTblKey(dbName, tableName)
+	if _, ok := m.tables[key]; !ok {
+		return moerr.NewInternalErrorNoCtxf("table %s not found", key)
 	}
-	pkColumns, hasPK := m.pkColumnsMap[tableName]
+	pkColumns, hasPK := m.pkColumnsMap[key]
 	if !hasPK {
-		return moerr.NewInternalErrorNoCtxf("table %s has no primary key", tableName)
+		return moerr.NewInternalErrorNoCtxf("table %s has no primary key", key)
 	}
 	if len(pkValues) != len(pkColumns) {
 		return moerr.NewInternalErrorNoCtxf("pk values length mismatch: %d != %d", len(pkValues), len(pkColumns))
 	}
 	pkValue := strings.Join(pkValues, ",")
-	offset, ok := m.pkIndexMap[tableName][pkValue]
+	offset, ok := m.pkIndexMap[key][pkValue]
 	if !ok {
 		return nil
 	}
-	tableIndex := m.pkIndexMap[tableName]
+	tableIndex := m.pkIndexMap[key]
 	delete(tableIndex, pkValue)
-	tableData := m.tables[tableName]
+	tableData := m.tables[key]
 	tableData = append(tableData[:offset], tableData[offset+1:]...)
-	m.tables[tableName] = tableData
+	m.tables[key] = tableData
 	// update the offset of the other pk values
 	for pk, idx := range tableIndex {
 		if idx > offset {
@@ -241,6 +291,7 @@ func (m *mockSQLExecutor) Delete(
 //     and all the pks in the tuples should be found in the table
 //  3. remove this constraint when nulls are supported in the future: TODO
 func (m *mockSQLExecutor) Insert(
+	dbName string,
 	tableName string,
 	columns []string,
 	tuples [][]string,
@@ -248,17 +299,18 @@ func (m *mockSQLExecutor) Insert(
 ) error {
 	m.Lock()
 	defer m.Unlock()
-	if _, ok := m.tables[tableName]; !ok {
-		return moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	key := GenDbTblKey(dbName, tableName)
+	if _, ok := m.tables[key]; !ok {
+		return moerr.NewInternalErrorNoCtxf("table %s not found", key)
 	}
 	// the table full columns are: ['a', 'b', 'c'] and the
 	// columns here may be ['a', 'b'] or ['a', 'c'] or ['b', 'c']
 	// no check the columns here
-	fullColumns := m.columnNames[tableName]
-	columnIds := m.columnIds[tableName]
-	pkColumns, hasPK := m.pkColumnsMap[tableName]
-	pkIndex := m.pkIndexMap[tableName]
-	tableData := m.tables[tableName]
+	fullColumns := m.columnNames[key]
+	columnIds := m.columnIds[key]
+	pkColumns, hasPK := m.pkColumnsMap[key]
+	pkIndex := m.pkIndexMap[key]
+	tableData := m.tables[key]
 
 	// 0: invalid
 	// 1: insert without dedup
@@ -342,7 +394,7 @@ func (m *mockSQLExecutor) Insert(
 			pk := newPKs[i]
 			pkIndex[pk] = len(pkIndex)
 		}
-		m.tables[tableName] = tableData
+		m.tables[key] = tableData
 	case 3:
 		// update only
 		// find the old row by the pk and update the row
@@ -364,35 +416,37 @@ func (m *mockSQLExecutor) Insert(
 			}
 			tableData[offset] = oldRow
 		}
-		m.tables[tableName] = tableData
+		m.tables[key] = tableData
 	}
 	return nil
 }
 
 func (m *mockSQLExecutor) GetTableDataByPK(
+	dbName string,
 	tableName string,
 	pkValues []string,
 ) ([]string, error) {
 	m.RLock()
 	defer m.RUnlock()
-	if _, ok := m.tables[tableName]; !ok {
-		return nil, moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	key := GenDbTblKey(dbName, tableName)
+	if _, ok := m.tables[key]; !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("table %s not found", key)
 	}
-	pkColumns, hasPK := m.pkColumnsMap[tableName]
+	pkColumns, hasPK := m.pkColumnsMap[key]
 	if !hasPK {
-		return nil, moerr.NewInternalErrorNoCtxf("table %s has no primary key", tableName)
+		return nil, moerr.NewInternalErrorNoCtxf("table %s has no primary key", key)
 	}
 	if len(pkValues) != len(pkColumns) {
 		return nil, moerr.NewInternalErrorNoCtxf("pk values length mismatch: %d != %d", len(pkValues), len(pkColumns))
 	}
-	columns := m.columnNames[tableName]
-	pkIndex := m.pkIndexMap[tableName]
+	columns := m.columnNames[key]
+	pkIndex := m.pkIndexMap[key]
 	pkValue := strings.Join(pkValues, ",")
 	offset, ok := pkIndex[pkValue]
 	if !ok {
 		return nil, nil
 	}
-	tableData := m.tables[tableName]
+	tableData := m.tables[key]
 	row := tableData[offset]
 	ret := make([]string, 0, len(columns))
 	for i := range columns {
@@ -686,50 +740,50 @@ func TestWatermarkUpdater_flushAll(t *testing.T) {
 
 func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 	executor := newMockSQLExecutor()
-	err := executor.CreateTable("t1", []string{"a", "b", "c"}, []string{"a", "b"})
+	err := executor.CreateTable("db1", "t1", []string{"a", "b", "c"}, []string{"a", "b"})
 	assert.NoError(t, err)
-	err = executor.CreateTable("t1", []string{"a", "b", "c"}, []string{"a", "b"})
+	err = executor.CreateTable("db1", "t1", []string{"a", "b", "c"}, []string{"a", "b"})
 	assert.Error(t, err)
-	err = executor.Insert("t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "3"}, {"4", "5", "6"}}, false)
+	err = executor.Insert("db1", "t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "3"}, {"4", "5", "6"}}, false)
 	assert.NoError(t, err)
-	err = executor.Insert("t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "3"}, {"4", "5", "6"}}, false)
+	err = executor.Insert("db1", "t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "3"}, {"4", "5", "6"}}, false)
 	t.Logf("err: %v", err)
 	assert.Error(t, err)
-	_, err = executor.GetTableDataByPK("t2", []string{"1", "2"})
+	_, err = executor.GetTableDataByPK("db1", "t2", []string{"1", "2"})
 	assert.Error(t, err)
-	rows, err := executor.GetTableDataByPK("t1", []string{"1", "2"})
+	rows, err := executor.GetTableDataByPK("db1", "t1", []string{"1", "2"})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1", "2", "3"}, rows)
-	_, err = executor.GetTableDataByPK("t1", []string{"1", "2", "3", "4"})
+	_, err = executor.GetTableDataByPK("db1", "t1", []string{"1", "2", "3", "4"})
 	assert.Error(t, err)
 
-	err = executor.Insert("t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "33"}, {"4", "5", "66"}}, true)
+	err = executor.Insert("db1", "t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "33"}, {"4", "5", "66"}}, true)
 	assert.NoError(t, err)
-	rows, err = executor.GetTableDataByPK("t1", []string{"1", "2"})
+	rows, err = executor.GetTableDataByPK("db1", "t1", []string{"1", "2"})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1", "2", "33"}, rows)
-	rows, err = executor.GetTableDataByPK("t1", []string{"4", "5"})
+	rows, err = executor.GetTableDataByPK("db1", "t1", []string{"4", "5"})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"4", "5", "66"}, rows)
 
-	err = executor.Delete("t1", []string{"1", "3"})
+	err = executor.Delete("db1", "t1", []string{"1", "3"})
 	assert.NoError(t, err)
-	err = executor.Delete("t2", []string{"1", "2"})
+	err = executor.Delete("db1", "t2", []string{"1", "2"})
 	assert.Error(t, err)
-	err = executor.Delete("t1", []string{"1", "2"})
+	err = executor.Delete("db1", "t1", []string{"1", "2"})
 	assert.NoError(t, err)
-	rows, err = executor.GetTableDataByPK("t1", []string{"1", "2"})
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(rows))
-
-	err = executor.Delete("t1", []string{"4", "5"})
-	assert.NoError(t, err)
-	rows, err = executor.GetTableDataByPK("t1", []string{"4", "5"})
+	rows, err = executor.GetTableDataByPK("db1", "t1", []string{"1", "2"})
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(rows))
 
-	assert.Equal(t, 0, len(executor.tables["t1"]))
-	assert.Equal(t, 0, len(executor.pkIndexMap["t1"]))
+	err = executor.Delete("db1", "t1", []string{"4", "5"})
+	assert.NoError(t, err)
+	rows, err = executor.GetTableDataByPK("db1", "t1", []string{"4", "5"})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(rows))
+
+	assert.Equal(t, 0, len(executor.tables[GenDbTblKey("db1", "t1")]))
+	assert.Equal(t, 0, len(executor.pkIndexMap[GenDbTblKey("db1", "t1")]))
 }
 
 // Scenario:
@@ -974,11 +1028,16 @@ func TestCDCWatermarkUpdater_constructReadWMSQL(t *testing.T) {
 		Ok:        true,
 	}
 	realSql := u.constructReadWMSQL(keys)
-	expectedSql := "SELECT account_id, task_id, db_name, tbl_name, watermark FROM " +
+	expectedSql1 := "SELECT account_id, task_id, db_name, tbl_name, watermark FROM " +
 		"`mo_catalog`.`mo_cdc_watermark` WHERE " +
 		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND tbl_name = 't1') OR " +
 		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND tbl_name = 't2')"
-	assert.Equal(t, expectedSql, realSql)
+	expectedSql2 := "SELECT account_id, task_id, db_name, tbl_name, watermark FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` WHERE " +
+		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND tbl_name = 't2') OR " +
+		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND tbl_name = 't1')"
+	realSql = u.constructReadWMSQL(keys)
+	assert.True(t, expectedSql1 == realSql || expectedSql2 == realSql)
 }
 
 func TestCDCWatermarkUpdater_constructAddWMSQL(t *testing.T) {
@@ -1112,4 +1171,15 @@ func TestCDCWatermarkUpdater_ParseInsert(t *testing.T) {
 	assert.Equal(t, []string{"account_id", "task_id", "db_name", "table_name", "watermark", "err_msg"}, result.projectionColumns)
 	assert.Equal(t, [][]string{{"1", "test", "db1", "t1", "1-1", ""}, {"2", "test", "db2", "t2", "2-1", "err1"}, {"3", "test", "db3", "t3", "3-1", ""}}, result.rows)
 	assert.Equal(t, []string{"watermark", "err_msg"}, result.updateColumns)
+}
+
+func TestCDCWatermarkUpdater_ParseSelectByPKs(t *testing.T) {
+	expectedSql := "SELECT col1, col2, col3 FROM `db1`.`t1` WHERE (col1 = 1 AND col2 = 'test') OR (col1 = 2 AND col2 = 'test2')"
+	result, err := ParseSelectByPKs(expectedSql)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, result.kind)
+	assert.Equal(t, "db1", result.dbName)
+	assert.Equal(t, "t1", result.tableName)
+	assert.Equal(t, []string{"col1", "col2", "col3"}, result.projectionColumns)
+	assert.Equal(t, [][]string{{"1", "test"}, {"2", "test2"}}, result.pkFilters)
 }
