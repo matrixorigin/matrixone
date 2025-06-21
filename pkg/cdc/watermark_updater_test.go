@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,20 +33,249 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type mockSQLExecutor struct {
+	sync.RWMutex
+	columnNames  map[string][]string
+	columnIds    map[string]map[string]int
+	tables       map[string][][]string
+	pkColumnsMap map[string][]string
+	pkIndexMap   map[string]map[string]int
+	// support nulls in the future
+}
+
+func newMockSQLExecutor() *mockSQLExecutor {
+	return &mockSQLExecutor{
+		columnNames:  make(map[string][]string),
+		columnIds:    make(map[string]map[string]int),
+		tables:       make(map[string][][]string),
+		pkColumnsMap: make(map[string][]string),
+		pkIndexMap:   make(map[string]map[string]int),
+	}
+}
+
+func (m *mockSQLExecutor) CreateTable(
+	tableName string,
+	columns []string,
+	pkColumns []string,
+) error {
+	m.Lock()
+	defer m.Unlock()
+	if _, ok := m.tables[tableName]; ok {
+		return moerr.NewInternalErrorNoCtxf("table %s already exists", tableName)
+	}
+	m.columnNames[tableName] = columns
+	m.columnIds[tableName] = make(map[string]int)
+	for i, column := range columns {
+		m.columnIds[tableName][column] = i
+	}
+	m.tables[tableName] = make([][]string, 0, 100)
+	m.pkColumnsMap[tableName] = append(m.pkColumnsMap[tableName], pkColumns...)
+	if len(pkColumns) > 0 {
+		m.pkIndexMap[tableName] = make(map[string]int)
+	}
+	return nil
+}
+
+func (m *mockSQLExecutor) RemoveTable(
+	tableName string,
+) error {
+	m.Lock()
+	defer m.Unlock()
+	if _, ok := m.tables[tableName]; !ok {
+		return moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	}
+	delete(m.tables, tableName)
+	delete(m.columnNames, tableName)
+	delete(m.columnIds, tableName)
+	delete(m.pkColumnsMap, tableName)
+	delete(m.pkIndexMap, tableName)
+	return nil
+}
+
+// when onDuplicateUpdate is true, currently this mock executor
+// only supports:
+//  1. when there is no primary key, the columns should be the same as the full columns
+//  2. when there is primary key, the columns should include all the primary key columns
+//     and all the pks in the tuples should be found in the table
+//  3. remove this constraint when nulls are supported in the future: TODO
+func (m *mockSQLExecutor) Insert(
+	tableName string,
+	columns []string,
+	tuples [][]string,
+	onDuplicateUpdate bool,
+) error {
+	m.Lock()
+	defer m.Unlock()
+	if _, ok := m.tables[tableName]; !ok {
+		return moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	}
+	// the table full columns are: ['a', 'b', 'c'] and the
+	// columns here may be ['a', 'b'] or ['a', 'c'] or ['b', 'c']
+	// no check the columns here
+	fullColumns := m.columnNames[tableName]
+	columnIds := m.columnIds[tableName]
+	pkColumns, hasPK := m.pkColumnsMap[tableName]
+	pkIndex := m.pkIndexMap[tableName]
+	tableData := m.tables[tableName]
+
+	// 0: invalid
+	// 1: insert without dedup
+	// 2: insert with dedup and error on duplicate
+	// 3: update only
+	var insertMode int
+
+	// onDuplicateUpdate constraint check:
+	if onDuplicateUpdate {
+		if hasPK {
+			for _, pk := range pkColumns {
+				if !slices.Contains(columns, pk) {
+					return moerr.NewInternalErrorNoCtxf("primary key %s not found in columns %v", pk, columns)
+				}
+			}
+			insertMode = 3
+		} else {
+			// no primary key, the columns should be the same as the full columns
+			if len(columns) != len(fullColumns) {
+				return moerr.NewInternalErrorNoCtxf("columns length mismatch: %d != %d", len(columns), len(fullColumns))
+			}
+			insertMode = 1
+		}
+	} else {
+		if len(columns) != len(fullColumns) {
+			return moerr.NewInternalErrorNoCtxf("columns length mismatch: %d != %d", len(columns), len(fullColumns))
+		}
+		if hasPK {
+			insertMode = 2
+		} else {
+			insertMode = 1
+		}
+	}
+
+	columnsIdMap := make(map[int]int)
+	for i, column := range columns {
+		// input columns: ['b', 'a', 'c'], full columns: ['a', 'b', 'c']
+		// columnsIdMap: {1: 0, 0: 1, 2: 2}
+		columnsIdMap[columnIds[column]] = i
+	}
+	// if pkColumns is ['a', 'b'], the input columns is ['b', 'a', 'c']
+	// pkColumnIds: [1, 0]
+	pkColumnIds := make([]int, len(pkColumns))
+	for i, pk := range pkColumns {
+		pkColumnIds[i] = columnsIdMap[columnIds[pk]]
+	}
+
+	// insert mode check:
+	switch insertMode {
+	case 1:
+		// insert without dedup
+		for _, tuple := range tuples {
+			row := make([]string, len(fullColumns))
+			for i, cell := range tuple {
+				row[columnsIdMap[i]] = cell
+			}
+		}
+	case 2:
+		// insert with dedup and error on duplicate
+		newPKs := make([]string, 0, len(tuples))
+		newRows := make([][]string, 0, len(tuples))
+		for _, tuple := range tuples {
+			pkValues := make([]string, len(pkColumns))
+			for idx, id := range pkColumnIds {
+				pkValues[idx] = tuple[id]
+			}
+			pkValue := strings.Join(pkValues, ",")
+			if _, ok := pkIndex[pkValue]; ok {
+				return moerr.NewInternalErrorNoCtxf("primary key %s already exists", pkValue)
+			}
+			newPKs = append(newPKs, pkValue)
+			row := make([]string, len(fullColumns))
+			for i, cell := range tuple {
+				row[columnsIdMap[i]] = cell
+			}
+			newRows = append(newRows, row)
+		}
+		// insert the new rows
+		for i, row := range newRows {
+			tableData = append(tableData, row)
+			pk := newPKs[i]
+			pkIndex[pk] = len(pkIndex)
+		}
+		m.tables[tableName] = tableData
+	case 3:
+		// update only
+		// find the old row by the pk and update the row
+		pkValues := make([]string, len(pkColumns))
+		for _, tuple := range tuples {
+			pkValues = pkValues[:0]
+			for _, id := range pkColumnIds {
+				pkValues = append(pkValues, tuple[id])
+			}
+			pkValue := strings.Join(pkValues, ",")
+			// if the pkValue is not found, skip update
+			offset, ok := pkIndex[pkValue]
+			if !ok {
+				continue
+			}
+			oldRow := tableData[offset]
+			for i, cell := range tuple {
+				oldRow[columnsIdMap[i]] = cell
+			}
+			tableData[offset] = oldRow
+		}
+		m.tables[tableName] = tableData
+	}
+	return nil
+}
+
+func (m *mockSQLExecutor) GetTableDataByPK(
+	tableName string,
+	pkValues []string,
+) ([]string, error) {
+	m.RLock()
+	defer m.RUnlock()
+	if _, ok := m.tables[tableName]; !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("table %s not found", tableName)
+	}
+	pkColumns, hasPK := m.pkColumnsMap[tableName]
+	if !hasPK {
+		return nil, moerr.NewInternalErrorNoCtxf("table %s has no primary key", tableName)
+	}
+	if len(pkValues) != len(pkColumns) {
+		return nil, moerr.NewInternalErrorNoCtxf("pk values length mismatch: %d != %d", len(pkValues), len(pkColumns))
+	}
+	columns := m.columnNames[tableName]
+	pkIndex := m.pkIndexMap[tableName]
+	pkValue := strings.Join(pkValues, ",")
+	offset, ok := pkIndex[pkValue]
+	if !ok {
+		return nil, nil
+	}
+	tableData := m.tables[tableName]
+	row := tableData[offset]
+	ret := make([]string, 0, len(columns))
+	for i := range columns {
+		ret = append(ret, row[i])
+	}
+
+	return ret, nil
+}
+
 type wmMockSQLExecutor struct {
-	mp       map[string]string
-	insertRe *regexp.Regexp
-	updateRe *regexp.Regexp
-	selectRe *regexp.Regexp
+	mp                        map[string]string
+	insertRe                  *regexp.Regexp
+	updateRe                  *regexp.Regexp
+	selectRe                  *regexp.Regexp
+	insertOnDuplicateUpdateRe *regexp.Regexp
 }
 
 func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
 		mp: make(map[string]string),
 		// matches[1] = db_name, matches[2] = table_name, matches[3] = watermark
-		insertRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
-		updateRe: regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
-		selectRe: regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
+		insertRe:                  regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
+		updateRe:                  regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
+		selectRe:                  regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
+		insertOnDuplicateUpdateRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\) ON DUPLICATE KEY UPDATE watermark \= VALUES\(watermark\)$`),
 	}
 }
 
@@ -310,6 +540,35 @@ func TestWatermarkUpdater_flushAll(t *testing.T) {
 	actual, err = u.GetFromDb("db3", "t3")
 	assert.NoError(t, err)
 	assert.Equal(t, t2, actual)
+}
+
+func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
+	executor := newMockSQLExecutor()
+	err := executor.CreateTable("t1", []string{"a", "b", "c"}, []string{"a", "b"})
+	assert.NoError(t, err)
+	err = executor.CreateTable("t1", []string{"a", "b", "c"}, []string{"a", "b"})
+	assert.Error(t, err)
+	err = executor.Insert("t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "3"}, {"4", "5", "6"}}, false)
+	assert.NoError(t, err)
+	err = executor.Insert("t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "3"}, {"4", "5", "6"}}, false)
+	t.Logf("err: %v", err)
+	assert.Error(t, err)
+	_, err = executor.GetTableDataByPK("t2", []string{"1", "2"})
+	assert.Error(t, err)
+	rows, err := executor.GetTableDataByPK("t1", []string{"1", "2"})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1", "2", "3"}, rows)
+	_, err = executor.GetTableDataByPK("t1", []string{"1", "2", "3", "4"})
+	assert.Error(t, err)
+
+	err = executor.Insert("t1", []string{"a", "b", "c"}, [][]string{{"1", "2", "33"}, {"4", "5", "66"}}, true)
+	assert.NoError(t, err)
+	rows, err = executor.GetTableDataByPK("t1", []string{"1", "2"})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1", "2", "33"}, rows)
+	rows, err = executor.GetTableDataByPK("t1", []string{"4", "5"})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"4", "5", "66"}, rows)
 }
 
 // Scenario:
@@ -653,4 +912,13 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
 	realSql := u.constructBatchUpdateWMSQL(keys)
 	assert.Equal(t, expectedSql, realSql)
+
+	re := regexp.MustCompile(`\(([^,]+),\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)'\)`)
+
+	// Find all matches in the SQL string.
+	matches := re.FindAllStringSubmatch(realSql, -1)
+	t.Log(matches)
+	for _, match := range matches {
+		t.Log(match)
+	}
 }
