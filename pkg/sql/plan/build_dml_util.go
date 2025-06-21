@@ -2410,49 +2410,34 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId := baseNodeId
 	projectList := getProjectionByLastNode(builder, lastNodeId)
-	for i := range projectList {
-		col := projectList[i].GetCol()
-		if col != nil && col.RelPos == 0 {
-			col.RelPos = 1
-		}
-	}
 
-	neededCols := make([]*plan.ColDef, 0, 2)
-	scanNodeProject := make([]*Expr, 2)
-	for _, colVal := range masterTableDef.Cols {
+	var rightRowIdPos int32 = -1
+	var rightPkPos int32 = -1
+	scanNodeProject := make([]*Expr, len(masterTableDef.Cols))
+	for colIdx, colVal := range masterTableDef.Cols {
+
 		if colVal.Name == catalog.Row_ID {
-			scanNodeProject[0] = &plan.Expr{
-				Typ: colVal.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(len(neededCols)),
-						Name:   colVal.Name,
-					},
-				},
-			}
-			neededCols = append(neededCols, colVal)
+			rightRowIdPos = int32(colIdx)
 		} else if colVal.Name == catalog.MasterIndexTableIndexColName {
-			scanNodeProject[1] = &plan.Expr{
-				Typ: colVal.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(len(neededCols)),
-						Name:   colVal.Name,
-					},
+			rightPkPos = int32(colIdx)
+		}
+
+		scanNodeProject[colIdx] = &plan.Expr{
+			Typ: colVal.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(colIdx),
+					Name:   colVal.Name,
 				},
-			}
-			neededCols = append(neededCols, colVal)
+			},
 		}
 	}
 
-	newMasterTableDef := DeepCopyTableDef(masterTableDef, false)
-	newMasterTableDef.Cols = neededCols
-
-	masterScanId := builder.appendNode(&plan.Node{
+	rightId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
 		ObjRef:      masterObjRef,
-		TableDef:    newMasterTableDef,
+		TableDef:    masterTableDef,
 		ProjectList: scanNodeProject,
 	}, bindCtx)
 
@@ -2462,45 +2447,45 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	var joinConds *Expr
 	for idx, part := range indexDef.Parts {
 		// serial_full("colPos", col1, pk)
-		var origExpr *Expr
-		origExprArgs := make([]*Expr, 3)
-		origExprArgs[0] = makePlan2StringConstExprWithType(getColSeqFromColDef(tableDef.Cols[posMap[part]]))
-		origExprArgs[1] = &Expr{
+		var leftExpr *Expr
+		leftExprArgs := make([]*Expr, 3)
+		leftExprArgs[0] = makePlan2StringConstExprWithType(getColSeqFromColDef(tableDef.Cols[posMap[part]]))
+		leftExprArgs[1] = &Expr{
 			Typ: typMap[part],
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
+					RelPos: 0,
 					ColPos: int32(posMap[part]),
 					Name:   part,
 				},
 			},
 		}
-		origExprArgs[2] = &Expr{
+		leftExprArgs[2] = &Expr{
 			Typ: originPkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
+					RelPos: 0,
 					ColPos: int32(originPkColumnPos),
 					Name:   tableDef.Pkey.PkeyColName,
 				},
 			},
 		}
-		origExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", origExprArgs)
+		leftExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", leftExprArgs)
 		if err != nil {
 			return -1, err
 		}
 
-		var masterExpr = &plan.Expr{
-			Typ: scanNodeProject[1].Typ,
+		var rightExpr = &plan.Expr{
+			Typ: masterTableDef.Cols[rightPkPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: 1,
+					RelPos: 1,
+					ColPos: rightPkPos,
 					Name:   catalog.MasterIndexTableIndexColName,
 				},
 			},
 		}
-		currCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{masterExpr, origExpr})
+		currCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 		if err != nil {
 			return -1, err
 		}
@@ -2515,34 +2500,35 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	}
 
 	projectList = append(projectList, &plan.Expr{
-		Typ: scanNodeProject[0].Typ,
+		Typ: masterTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: 0,
+				RelPos: 1,
+				ColPos: rightRowIdPos,
 				Name:   catalog.Row_ID,
 			},
 		},
 	}, &plan.Expr{
-		Typ: scanNodeProject[1].Typ,
+		Typ: masterTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 0,
-				ColPos: 1,
+				RelPos: 1,
+				ColPos: rightPkPos,
 				Name:   catalog.MasterIndexTableIndexColName,
 			},
 		},
 	})
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
-		JoinType:    plan.Node_RIGHT,
-		Children:    []int32{masterScanId, lastNodeId},
+		JoinType:    plan.Node_LEFT,
+		Children:    []int32{lastNodeId, rightId},
 		OnList:      []*Expr{joinConds},
 		ProjectList: projectList,
 	}, bindCtx)
 
 	return lastNodeId, nil
 }
+
 func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	entriesObjRef *ObjectRef, entriesTableDef *TableDef,
 	baseNodeId int32, tableDef *TableDef) (int32, error) {
@@ -4474,29 +4460,47 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
 
-		var idxRowIdPos int32 = -1
-		var idxDocidPos int32 = 0  // doc_id
-		var idxFakePkPos int32 = 3 // __mo_fake_pk_col_
-		scanNodeProject := make([]*Expr, len(indexTableDef.Cols))
-		for colIdx, colVal := range indexTableDef.Cols {
-
+		neededCols := make([]*plan.ColDef, 0, 3)
+		scanNodeProject := make([]*Expr, 3)
+		for _, colVal := range indexTableDef.Cols {
 			if colVal.Name == catalog.Row_ID {
-				idxRowIdPos = int32(colIdx)
-			}
-			if colVal.Name == catalog.FakePrimaryKeyColName {
-				idxFakePkPos = int32(colIdx)
-			}
-
-			scanNodeProject[colIdx] = &plan.Expr{
-				Typ: colVal.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(colIdx),
-						Name:   colVal.Name,
+				scanNodeProject[0] = &plan.Expr{
+					Typ: colVal.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(len(neededCols)),
+							Name:   colVal.Name,
+						},
 					},
-				},
+				}
+				neededCols = append(neededCols, colVal)
+			} else if colVal.Name == catalog.FullTextIndex_TabCol_Id {
+				scanNodeProject[1] = &plan.Expr{
+					Typ: colVal.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(len(neededCols)),
+							Name:   colVal.Name,
+						},
+					},
+				}
+				neededCols = append(neededCols, colVal)
+			} else if colVal.Name == catalog.FakePrimaryKeyColName {
+				scanNodeProject[2] = &plan.Expr{
+					Typ: colVal.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(len(neededCols)),
+							Name:   colVal.Name,
+						},
+					},
+				}
+				neededCols = append(neededCols, colVal)
 			}
 		}
+
+		newIndexTableDef := DeepCopyTableDef(indexTableDef, false)
+		newIndexTableDef.Cols = neededCols
 
 		//probeExpr := &plan.Expr{
 		//	Typ: indexTableDef.Cols[idxDocidPos].Typ,
@@ -4513,7 +4517,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 			NodeType:    plan.Node_TABLE_SCAN,
 			Stats:       &plan.Stats{},
 			ObjRef:      indexObjRef,
-			TableDef:    indexTableDef,
+			TableDef:    newIndexTableDef,
 			ProjectList: scanNodeProject,
 			//RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, true)},
 		}
@@ -4521,11 +4525,11 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		//idxScanNode.Stats.ForceOneCN = true
 
 		var leftExpr = &plan.Expr{
-			Typ: indexTableDef.Cols[idxDocidPos].Typ,
+			Typ: scanNodeProject[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: idxDocidPos,
+					ColPos: 1,
 					Name:   "doc_id",
 				},
 			},
@@ -4549,29 +4553,29 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 
 		projectList := make([]*Expr, 0, 2)
 		projectList = append(projectList, &plan.Expr{
-			Typ: indexTableDef.Cols[idxRowIdPos].Typ,
+			Typ: scanNodeProject[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: idxRowIdPos,
+					ColPos: 0,
 					Name:   catalog.Row_ID,
 				},
 			},
 		}, &plan.Expr{
-			Typ: indexTableDef.Cols[idxDocidPos].Typ,
+			Typ: scanNodeProject[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: idxDocidPos,
+					ColPos: 1,
 					Name:   "doc_id",
 				},
 			},
 		}, &plan.Expr{
-			Typ: indexTableDef.Cols[idxFakePkPos].Typ,
+			Typ: scanNodeProject[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
-					ColPos: idxFakePkPos,
+					ColPos: 2,
 					Name:   catalog.FakePrimaryKeyColName,
 				},
 			},
@@ -4600,7 +4604,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 
 		deleteIdx := 0
 		retPkPos := deleteIdx + 2
-		retPkTyp := indexTableDef.Cols[idxFakePkPos].Typ
+		retPkTyp := scanNodeProject[2].Typ
 
 		return lastNodeId, deleteIdx, retPkPos, retPkTyp, nil
 	}
