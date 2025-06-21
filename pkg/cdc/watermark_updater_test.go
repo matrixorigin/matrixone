@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,9 +29,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type ParseResult struct {
@@ -48,6 +51,19 @@ func trimQuote(value string) string {
 		return value[1 : len(value)-1]
 	}
 	return value
+}
+
+func IsSelectClause(inputSql string) (ok bool) {
+	// no need to extract, just check the sql is valid
+	return strings.HasPrefix(strings.ToUpper(inputSql), "SELECT")
+}
+
+func IsInsertClause(inputSql string) (ok bool) {
+	return strings.HasPrefix(strings.ToUpper(inputSql), "INSERT")
+}
+
+func IsInsertOnDuplicateUpdateClause(inputSql string) (ok bool) {
+	return strings.Contains(strings.ToUpper(inputSql), "ON DUPLICATE KEY UPDATE")
 }
 
 func ParseSelectByPKs(inputSql string) (result ParseResult, err error) {
@@ -136,14 +152,16 @@ func ParseInsert(inputSql string) (result ParseResult, err error) {
 	//  3. "INSERT INTO `db1`.`t1` VALUES ..." +
 	projectionColumnsRe := regexp.MustCompile(`INSERT INTO ` + "`([^`]+)`" + `\.` + "`([^`]+)`" + `\s*\(([^)]+)\)`)
 	matches = projectionColumnsRe.FindStringSubmatch(inputSql)
-	if len(matches) != 4 {
-		return result, moerr.NewInternalErrorNoCtxf("invalid insert sql: %s", inputSql)
-	}
-	// trim the spaces and split the columns by comma
-	columns := strings.Split(strings.TrimSpace(matches[3]), ",")
-	result.projectionColumns = make([]string, 0, len(columns))
-	for _, column := range columns {
-		result.projectionColumns = append(result.projectionColumns, strings.TrimSpace(column))
+	if len(matches) == 4 {
+		// trim the spaces and split the columns by comma
+		columns := strings.Split(strings.TrimSpace(matches[3]), ",")
+		result.projectionColumns = make([]string, 0, len(columns))
+		for _, column := range columns {
+			result.projectionColumns = append(result.projectionColumns, strings.TrimSpace(column))
+		}
+	} else {
+		// No column definition, projectionColumns will be empty
+		result.projectionColumns = []string{}
 	}
 
 	// 3. extract the values
@@ -202,6 +220,130 @@ func newMockSQLExecutor() *mockSQLExecutor {
 		pkColumnsMap: make(map[string][]string),
 		pkIndexMap:   make(map[string]map[string]int),
 	}
+}
+
+func (m *mockSQLExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	pts ie.SessionOverrideOptions,
+) error {
+	if IsInsertClause(sql) {
+		return m.executeInsert(sql)
+	}
+	if IsInsertOnDuplicateUpdateClause(sql) {
+		return m.executeInsertOnDuplicateUpdate(sql)
+	}
+	return moerr.NewInternalErrorNoCtxf("invalid sql: %s", sql)
+}
+
+func (m *mockSQLExecutor) Query(
+	ctx context.Context,
+	sql string,
+	pts ie.SessionOverrideOptions,
+) (ie.InternalExecResult, error) {
+	if !IsSelectClause(sql) {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid sql: %s", sql)
+	}
+	return m.executeSelect(sql)
+}
+
+func (m *mockSQLExecutor) ApplySessionOverride(
+	opts ie.SessionOverrideOptions,
+) {
+}
+
+func (m *mockSQLExecutor) executeSelect(selectSql string) (ie.InternalExecResult, error) {
+	selectResult, err := ParseSelectByPKs(selectSql)
+	if err != nil {
+		return nil, err
+	}
+	dbName := selectResult.dbName
+	tableName := selectResult.tableName
+	key := GenDbTblKey(dbName, tableName)
+	rows := make([][]string, 0, len(selectResult.pkFilters))
+	for _, pk := range selectResult.pkFilters {
+		row, err := m.GetTableDataByPK(
+			dbName,
+			tableName,
+			pk,
+		)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
+
+	// fetch the columns specified in projection list
+	columnIds := make([]int, 0, len(selectResult.projectionColumns))
+	columnIdMap := m.columnIds[key]
+	for _, column := range selectResult.projectionColumns {
+		columnIds = append(columnIds, columnIdMap[column])
+	}
+	retData := make([][]any, 0, len(rows))
+	for _, row := range rows {
+		retRow := make([]any, 0, len(columnIds))
+		for _, columnId := range columnIds {
+			retRow = append(retRow, row[columnId])
+		}
+		retData = append(retData, retRow)
+	}
+	logutil.Debug(
+		"MockSQLExecutor.executeSelect",
+		zap.String("db-name", dbName),
+		zap.String("table-name", tableName),
+		zap.Int("row-count", len(rows)),
+		zap.String("projection-columns", strings.Join(selectResult.projectionColumns, ",")),
+		zap.Any("rows", rows),
+	)
+	return &internalExecResult{
+		affectedRows: uint64(len(rows)),
+		resultSet: &MysqlResultSet{
+			Columns: selectResult.projectionColumns,
+			Data:    retData,
+		},
+		err: nil,
+	}, nil
+}
+
+func (m *mockSQLExecutor) executeInsert(insertSql string) error {
+	insertResult, err := ParseInsert(insertSql)
+	if err != nil {
+		return err
+	}
+	dbName := insertResult.dbName
+	tableName := insertResult.tableName
+	key := GenDbTblKey(dbName, tableName)
+
+	var projectionColumns []string
+	if len(insertResult.projectionColumns) == 0 {
+		projectionColumns = make([]string, 0, len(m.columnNames[key]))
+		for _, column := range m.columnNames[key] {
+			projectionColumns = append(projectionColumns, column)
+		}
+	} else {
+		projectionColumns = insertResult.projectionColumns
+	}
+
+	err = m.Insert(
+		dbName,
+		tableName,
+		projectionColumns,
+		insertResult.rows,
+		false,
+	)
+	logutil.Debug(
+		"MockSQLExecutor.executeInsert",
+		zap.String("db-name", dbName),
+		zap.String("table-name", tableName),
+		zap.String("projection-columns", strings.Join(projectionColumns, ",")),
+		zap.Any("rows", insertResult.rows),
+		zap.Error(err),
+	)
+	return err
+}
+
+func (m *mockSQLExecutor) executeInsertOnDuplicateUpdate(insertSql string) error {
+	return nil
 }
 
 func (m *mockSQLExecutor) CreateTable(
@@ -421,6 +563,19 @@ func (m *mockSQLExecutor) Insert(
 	return nil
 }
 
+func (m *mockSQLExecutor) Rows(
+	dbName string,
+	tableName string,
+) int {
+	m.RLock()
+	defer m.RUnlock()
+	key := GenDbTblKey(dbName, tableName)
+	if _, ok := m.tables[key]; !ok {
+		return 0
+	}
+	return len(m.tables[key])
+}
+
 func (m *mockSQLExecutor) GetTableDataByPK(
 	dbName string,
 	tableName string,
@@ -510,7 +665,7 @@ type internalExecResult struct {
 }
 
 func (res *internalExecResult) GetUint64(ctx context.Context, i uint64, j uint64) (uint64, error) {
-	return res.resultSet.Data[i][j].(uint64), nil
+	return strconv.ParseUint(res.resultSet.Data[i][j].(string), 10, 64)
 }
 
 func (res *internalExecResult) Error() error {
@@ -530,7 +685,7 @@ func (res *internalExecResult) RowCount() uint64 {
 }
 
 func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
-	return nil, nil
+	return res.resultSet.Data[i], nil
 }
 
 func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
@@ -784,6 +939,65 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 
 	assert.Equal(t, 0, len(executor.tables[GenDbTblKey("db1", "t1")]))
 	assert.Equal(t, 0, len(executor.pkIndexMap[GenDbTblKey("db1", "t1")]))
+
+	err = executor.CreateTable(
+		"mo_catalog",
+		"mo_cdc_watermark",
+		[]string{"account_id", "task_id", "db_name", "tbl_name", "watermark", "err_msg"},
+		[]string{"account_id", "task_id", "db_name", "tbl_name"},
+	)
+	assert.NoError(t, err)
+	u := NewCDCWatermarkUpdater("test", nil)
+	jobs := make([]*UpdaterJob, 0, 2)
+	jobs = append(jobs, &UpdaterJob{
+		Key: &WatermarkKey{
+			accountId: 1,
+			taskId:    "test",
+			dbName:    "db1",
+			tblName:   "t1",
+		},
+		Watermark: types.BuildTS(1, 1),
+	})
+	jobs = append(jobs, &UpdaterJob{
+		Key: &WatermarkKey{
+			accountId: 2,
+			taskId:    "test",
+			dbName:    "db1",
+			tblName:   "t2",
+		},
+		Watermark: types.BuildTS(2, 1),
+	})
+	insertSql := u.constructAddWMSQL(jobs)
+	t.Logf("insertSql: %s", insertSql)
+
+	err = executor.Exec(context.Background(), insertSql, ie.SessionOverrideOptions{})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, executor.Rows("mo_catalog", "mo_cdc_watermark"))
+	keys := make(map[WatermarkKey]WatermarkResult)
+	keys[*jobs[0].Key] = WatermarkResult{}
+	keys[*jobs[1].Key] = WatermarkResult{}
+	selectSql := u.constructReadWMSQL(keys)
+	t.Logf("selectSql: %s", selectSql)
+	tuples, err := executor.Query(context.Background(), selectSql, ie.SessionOverrideOptions{})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), tuples.RowCount())
+	row0, err := tuples.Row(context.Background(), 0)
+	assert.NoError(t, err)
+	row1, err := tuples.Row(context.Background(), 1)
+	assert.NoError(t, err)
+	assert.Equal(t, []any{"1", "test", "db1", "t1", "1-1"}, row0)
+	assert.Equal(t, []any{"2", "test", "db1", "t2", "2-1"}, row1)
+
+	accountId, err := tuples.GetUint64(context.Background(), 0, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(1), accountId)
+	taskId, err := tuples.GetString(context.Background(), 0, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, "test", taskId)
+
+	accountId, err = tuples.GetUint64(context.Background(), 1, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), accountId)
 }
 
 // Scenario:
@@ -1171,6 +1385,14 @@ func TestCDCWatermarkUpdater_ParseInsert(t *testing.T) {
 	assert.Equal(t, []string{"account_id", "task_id", "db_name", "table_name", "watermark", "err_msg"}, result.projectionColumns)
 	assert.Equal(t, [][]string{{"1", "test", "db1", "t1", "1-1", ""}, {"2", "test", "db2", "t2", "2-1", "err1"}, {"3", "test", "db3", "t3", "3-1", ""}}, result.rows)
 	assert.Equal(t, []string{"watermark", "err_msg"}, result.updateColumns)
+
+	expectedSql = "INSERT INTO `mo_catalog`.`mo_cdc_watermark` VALUES (1, 'test', 'db1', 't1', '1-1', ''),(1, 'test', 'db1', 't2', '2-1', '')"
+	result, err = ParseInsert(expectedSql)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, result.kind)
+	assert.Equal(t, "mo_catalog", result.dbName)
+	assert.Equal(t, "mo_cdc_watermark", result.tableName)
+	assert.Equal(t, []string{}, result.projectionColumns)
 }
 
 func TestCDCWatermarkUpdater_ParseSelectByPKs(t *testing.T) {
