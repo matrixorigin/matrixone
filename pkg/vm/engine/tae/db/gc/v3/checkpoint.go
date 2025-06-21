@@ -1529,11 +1529,26 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 
-	if err = c.tryScanLocked(ctx, memoryBuffer); err != nil {
+	var tryGC bool
+	if err, tryGC = c.tryScanLocked(ctx, memoryBuffer); err != nil {
+		return
+	}
+	if !tryGC {
 		return
 	}
 	err = c.tryGCLocked(ctx, memoryBuffer)
 	return
+}
+
+func (c *checkpointCleaner) resetScannedTs() *types.TS {
+	maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
+	minCkp := c.checkpointCli.MinIncrementalCheckpoint()
+	start := minCkp.GetStart()
+	if minCkp == nil || start.IsEmpty() || maxGCkp == nil {
+		return nil
+	}
+	ts := maxGCkp.GetEnd()
+	return &ts
 }
 
 // tryScanLocked scans the incremental checkpoints and tries to create a new GC window
@@ -1543,18 +1558,24 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 func (c *checkpointCleaner) tryScanLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
-) (err error) {
+) (err error, tryGC bool) {
+
+	tryGC = true
 	// get the max scanned timestamp
-	var maxScannedTS, initScanWaterMark types.TS
+	var maxScannedTS types.TS
 	if scanWaterMark := c.GetScanWaterMark(); scanWaterMark != nil {
 		maxScannedTS = scanWaterMark.GetEnd()
-		initScanWaterMark = scanWaterMark.GetStart()
 	}
-	if initScanWaterMark.IsEmpty() {
+	var candidates []*checkpoint.CheckpointEntry
+	if maxScannedTS.IsEmpty() {
 		maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
-		if maxGCkp != nil {
-			initScanWaterMark = maxGCkp.GetEnd()
+		minCkp := c.checkpointCli.MinIncrementalCheckpoint()
+		start := minCkp.GetStart()
+		if minCkp != nil && !start.IsEmpty() && maxGCkp != nil {
 			maxScannedTS = maxGCkp.GetEnd()
+			candidates = make([]*checkpoint.CheckpointEntry, 0)
+			candidates = append(candidates, maxGCkp)
+			tryGC = false
 		}
 	}
 
@@ -1562,16 +1583,17 @@ func (c *checkpointCleaner) tryScanLocked(
 	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxMergeCheckpointCount)
 
 	// quick return if there is no incremental checkpoint
-	if len(checkpoints) == 0 {
+	if len(checkpoints) == 0 && len(candidates) == 0 {
 		return
 	}
 
-	candidates := make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
+	if len(candidates) == 0 {
+		candidates = make([]*checkpoint.CheckpointEntry, 0, len(checkpoints))
+	}
 
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range checkpoints {
-		start := ckp.GetStart()
-		if !c.checkExtras(ckp) || start.LT(&initScanWaterMark) {
+		if !c.checkExtras(ckp) {
 			continue
 		}
 		candidates = append(candidates, ckp)
