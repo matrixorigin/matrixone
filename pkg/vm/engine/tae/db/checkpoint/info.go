@@ -116,6 +116,10 @@ func (r *runner) MaxIncrementalCheckpoint() *CheckpointEntry {
 	return r.store.MaxIncrementalCheckpoint()
 }
 
+func (r *runner) MinIncrementalCheckpoint() *CheckpointEntry {
+	return r.store.MinIncrementalCheckpoint()
+}
+
 func (r *runner) GetCatalog() *catalog.Catalog {
 	return r.catalog
 }
