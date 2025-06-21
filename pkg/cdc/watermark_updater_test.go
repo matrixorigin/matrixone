@@ -240,9 +240,11 @@ func (m *mockSQLExecutor) Query(
 	ctx context.Context,
 	sql string,
 	pts ie.SessionOverrideOptions,
-) (ie.InternalExecResult, error) {
+) ie.InternalExecResult {
 	if !IsSelectClause(sql) {
-		return nil, moerr.NewInternalErrorNoCtxf("invalid sql: %s", sql)
+		return &internalExecResult{
+			err: moerr.NewInternalErrorNoCtxf("invalid sql: %s", sql),
+		}
 	}
 	return m.executeSelect(sql)
 }
@@ -252,10 +254,12 @@ func (m *mockSQLExecutor) ApplySessionOverride(
 ) {
 }
 
-func (m *mockSQLExecutor) executeSelect(selectSql string) (ie.InternalExecResult, error) {
+func (m *mockSQLExecutor) executeSelect(selectSql string) ie.InternalExecResult {
 	selectResult, err := ParseSelectByPKs(selectSql)
 	if err != nil {
-		return nil, err
+		return &internalExecResult{
+			err: err,
+		}
 	}
 	dbName := selectResult.dbName
 	tableName := selectResult.tableName
@@ -268,7 +272,9 @@ func (m *mockSQLExecutor) executeSelect(selectSql string) (ie.InternalExecResult
 			pk,
 		)
 		if err != nil {
-			return nil, err
+			return &internalExecResult{
+				err: err,
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -302,7 +308,7 @@ func (m *mockSQLExecutor) executeSelect(selectSql string) (ie.InternalExecResult
 			Data:    retData,
 		},
 		err: nil,
-	}, nil
+	}
 }
 
 func (m *mockSQLExecutor) executeInsert(insertSql string) error {
@@ -1010,8 +1016,8 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 	keys[*jobs[1].Key] = WatermarkResult{}
 	selectSql := u.constructReadWMSQL(keys)
 	t.Logf("selectSql: %s", selectSql)
-	tuples, err := executor.Query(context.Background(), selectSql, ie.SessionOverrideOptions{})
-	assert.NoError(t, err)
+	tuples := executor.Query(context.Background(), selectSql, ie.SessionOverrideOptions{})
+	assert.NoError(t, tuples.Error())
 	assert.Equal(t, uint64(2), tuples.RowCount())
 	row0, err := tuples.Row(context.Background(), 0)
 	assert.NoError(t, err)
@@ -1060,8 +1066,8 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, executor.Rows("mo_catalog", "mo_cdc_watermark"))
 
-	tuples, err = executor.Query(context.Background(), selectSql, ie.SessionOverrideOptions{})
-	assert.NoError(t, err)
+	tuples = executor.Query(context.Background(), selectSql, ie.SessionOverrideOptions{})
+	assert.NoError(t, tuples.Error())
 	assert.Equal(t, uint64(2), tuples.RowCount())
 	row0, err = tuples.Row(context.Background(), 0)
 	assert.NoError(t, err)
@@ -1482,3 +1488,11 @@ func TestCDCWatermarkUpdater_ParseSelectByPKs(t *testing.T) {
 	assert.Equal(t, []string{"col1", "col2", "col3"}, result.projectionColumns)
 	assert.Equal(t, [][]string{{"1", "test"}, {"2", "test2"}}, result.pkFilters)
 }
+
+// func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
+// 	ie := newMockSQLExecutor()
+// 	u := NewCDCWatermarkUpdater(
+// 		t.Name(),
+// 		ie,
+// 	)
+// }
