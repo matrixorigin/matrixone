@@ -1566,6 +1566,14 @@ func (c *checkpointCleaner) tryScanLocked(
 		if !start.IsEmpty() && maxGCkp != nil {
 			maxScannedTS = maxGCkp.GetEnd()
 			candidates = make([]*checkpoint.CheckpointEntry, 0)
+			cpt := c.checkpointCli.GetCompacted()
+			if cpt == nil {
+				logutil.Info("GC-PANIC-REBUILD-TABLE",
+					zap.String("max gCkp", maxGCkp.String()),
+					zap.String("start", start.ToString()))
+			} else {
+				candidates = append(candidates, cpt)
+			}
 			candidates = append(candidates, maxGCkp)
 			tryGC = false
 		}
