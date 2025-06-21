@@ -1540,17 +1540,6 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	return
 }
 
-func (c *checkpointCleaner) resetScannedTs() *types.TS {
-	maxGCkp := c.checkpointCli.MaxGlobalCheckpoint()
-	minCkp := c.checkpointCli.MinIncrementalCheckpoint()
-	start := minCkp.GetStart()
-	if minCkp == nil || start.IsEmpty() || maxGCkp == nil {
-		return nil
-	}
-	ts := maxGCkp.GetEnd()
-	return &ts
-}
-
 // tryScanLocked scans the incremental checkpoints and tries to create a new GC window
 // it will update `mutation.scanned` and `mutation.metaFiles`
 // it will update the scan watermark
