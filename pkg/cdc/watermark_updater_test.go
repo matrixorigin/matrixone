@@ -33,6 +33,86 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type ParseResult struct {
+	kind              int // 0: insert, 1: update, 2: delete, 3: select, 4: insert on duplicate update
+	dbName            string
+	tableName         string
+	projectionColumns []string
+	updateColumns     []string
+	rows              [][]string
+}
+
+func ParseInsert(sql string) (result ParseResult, err error) {
+	// 1. extract the db name and table name
+	schemaRe := regexp.MustCompile(`INSERT INTO ` + "`([^`]+)`" + `\.` + "`([^`]+)`")
+	matches := schemaRe.FindStringSubmatch(sql)
+	if len(matches) != 3 {
+		return result, moerr.NewInternalErrorNoCtxf("invalid insert sql: %s", sql)
+	}
+	result.kind = 0
+	result.dbName = matches[1]
+	result.tableName = matches[2]
+
+	// 2. extract the projection columns
+	// Ex.
+	//  1. "INSERT INTO `db1`.`t1` (col1, col2, col3) VALUES ..." +
+	//  2. "INSERT INTO `db1`.`t1` (col1, col2, col3, col4) VALUES ..." +
+	//  3. "INSERT INTO `db1`.`t1` VALUES ..." +
+	projectionColumnsRe := regexp.MustCompile(`INSERT INTO ` + "`([^`]+)`" + `\.` + "`([^`]+)`" + `\s*\(([^)]+)\)`)
+	matches = projectionColumnsRe.FindStringSubmatch(sql)
+	if len(matches) != 4 {
+		return result, moerr.NewInternalErrorNoCtxf("invalid insert sql: %s", sql)
+	}
+	// trim the spaces and split the columns by comma
+	columns := strings.Split(strings.TrimSpace(matches[3]), ",")
+	result.projectionColumns = make([]string, 0, len(columns))
+	for _, column := range columns {
+		result.projectionColumns = append(result.projectionColumns, strings.TrimSpace(column))
+	}
+
+	// 3. extract the values
+	// Ex.
+	//  1. "INSERT INTO `db1`.`t1` (col1, col2, col3) VALUES (1, 'test', 'db1')"
+	//     result.rows: [["1", "test", "db1"]]
+	//  2. "INSERT INTO `db1`.`t1` (col1, col2, col3) VALUES (1, 'test', 'db1'), (2, 'test', 'db2'), (3, 'test', 'db3')"
+	//     result.rows: [["1", "test", "db1"], ["2", "test", "db2"], ["3", "test", "db3"]]
+	//  3. "INSERT INTO `db1`.`t1` VALUES (1, 'test', 'db1'), (2, 'test', 'db2'), (3, 'test', 'db3')"
+	//     result.rows: [["1", "test", "db1"], ["2", "test", "db2"], ["3", "test", "db3"]]
+
+	// Find the position of VALUES keyword
+	valuesIndex := strings.Index(strings.ToUpper(sql), "VALUES")
+	if valuesIndex == -1 {
+		return result, moerr.NewInternalErrorNoCtxf("VALUES keyword not found in sql: %s", sql)
+	}
+
+	// Extract the part after VALUES
+	valuesPart := sql[valuesIndex:]
+	valuesRe := regexp.MustCompile(`\(([^)]+)\)`)
+	allMatches := valuesRe.FindAllStringSubmatch(valuesPart, -1)
+	if len(allMatches) == 0 {
+		return result, moerr.NewInternalErrorNoCtxf("no values found in sql: %s", sql)
+	}
+
+	result.rows = make([][]string, 0, len(allMatches))
+	for _, match := range allMatches {
+		if len(match) != 2 {
+			continue
+		}
+		values := strings.Split(strings.TrimSpace(match[1]), ",")
+		row := make([]string, 0, len(values))
+		for _, value := range values {
+			// trim the spaces and quotes
+			value = strings.TrimSpace(value)
+			if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+				value = value[1 : len(value)-1]
+			}
+			row = append(row, strings.TrimSpace(value))
+		}
+		result.rows = append(result.rows, row)
+	}
+	return result, nil
+}
+
 type mockSQLExecutor struct {
 	sync.RWMutex
 	columnNames  map[string][]string
@@ -975,4 +1055,19 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 	for _, match := range matches {
 		t.Log(match)
 	}
+}
+
+func TestCDCWatermarkUpdater_ParseInsert(t *testing.T) {
+	expectedSql := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) VALUES " +
+		"(1, 'test', 'db1', 't1', '1-1')," +
+		"(2, 'test', 'db2', 't2', '2-1')," +
+		"(3, 'test', 'db3', 't3', '3-1')"
+	result, err := ParseInsert(expectedSql)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, result.kind)
+	assert.Equal(t, "mo_catalog", result.dbName)
+	assert.Equal(t, "mo_cdc_watermark", result.tableName)
+	assert.Equal(t, []string{"account_id", "task_id", "db_name", "table_name", "watermark"}, result.projectionColumns)
+	assert.Equal(t, [][]string{{"1", "test", "db1", "t1", "1-1"}, {"2", "test", "db2", "t2", "2-1"}, {"3", "test", "db3", "t3", "3-1"}}, result.rows)
 }
