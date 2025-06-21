@@ -70,7 +70,6 @@ type UpdaterJob struct {
 	tasks.Job
 	Key       *WatermarkKey
 	Watermark types.TS
-	TableInfo DbTableInfo
 }
 
 type UpdateOption func(*CDCWatermarkUpdater)
@@ -109,7 +108,6 @@ func NewGetOrAddCommittedWMJob(
 	ctx context.Context,
 	key *WatermarkKey,
 	watermark *types.TS,
-	tableInfo *DbTableInfo,
 ) *UpdaterJob {
 	job := new(UpdaterJob)
 	job.Init(
@@ -120,7 +118,6 @@ func NewGetOrAddCommittedWMJob(
 	)
 	job.Key = key
 	job.Watermark = *watermark
-	job.TableInfo = *tableInfo
 	return job
 }
 
@@ -303,6 +300,9 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 }
 
 func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
+	if len(u.readKeysBuffer) == 0 {
+		return nil, ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -369,9 +369,12 @@ func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
 }
 
 func (u *CDCWatermarkUpdater) execBatchUpdateWM() (err error, errMsg string) {
+	if len(u.committingBuffer) == 0 || len(u.cacheCommitting) == 0 {
+		return nil, ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	commitSql := u.constructBatchUpdateWMSQL(u.committingBuffer)
+	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
 	err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
 	u.Lock()
 	defer u.Unlock()
@@ -401,27 +404,32 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (err error, errMsg string) {
 }
 
 func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
-	jobs []*UpdaterJob,
+	keys map[WatermarkKey]types.TS,
 ) (commitSql string) {
 	var values string
-	for i, job := range jobs {
+	i := 0
+	for key, wm := range keys {
 		if i > 0 {
 			values += ","
 		}
 		values += fmt.Sprintf(
 			"(%d, '%s', '%s', '%s', '%s')",
-			job.Key.accountId,
-			job.Key.taskId,
-			job.Key.dbName,
-			job.Key.tblName,
-			job.Watermark.ToString(),
+			key.accountId,
+			key.taskId,
+			key.dbName,
+			key.tblName,
+			wm.ToString(),
 		)
+		i++
 	}
 	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkSQL(values)
 	return
 }
 
 func (u *CDCWatermarkUpdater) execAddWM() (err error, errMsg string) {
+	if len(u.addCommittedBuffer) == 0 {
+		return nil, ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
@@ -544,19 +552,18 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	ctx context.Context,
 	key *WatermarkKey,
 	watermark *types.TS,
-	tableInfo *DbTableInfo,
 ) (ret types.TS, err error) {
 	u.RLock()
 	persisted, ok := u.cacheCommitted[*key]
 	u.RUnlock()
 	if ok {
 		if persisted.GE(watermark) {
-			err = ErrSetAlreadyPersisted
+			ret = persisted
 			return
 		}
 	}
 
-	job := NewGetOrAddCommittedWMJob(ctx, key, watermark, tableInfo)
+	job := NewGetOrAddCommittedWMJob(ctx, key, watermark)
 	if _, err = u.queue.Enqueue(job); err != nil {
 		return
 	}
@@ -565,7 +572,7 @@ func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	if res.Err != nil {
 		err = res.Err
 	} else {
-		ret = *res.Res.(*types.TS)
+		ret = res.Res.(types.TS)
 	}
 	return
 }
