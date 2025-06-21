@@ -227,11 +227,11 @@ func (m *mockSQLExecutor) Exec(
 	sql string,
 	pts ie.SessionOverrideOptions,
 ) error {
-	if IsInsertClause(sql) {
-		return m.executeInsert(sql)
-	}
 	if IsInsertOnDuplicateUpdateClause(sql) {
 		return m.executeInsertOnDuplicateUpdate(sql)
+	}
+	if IsInsertClause(sql) {
+		return m.executeInsert(sql)
 	}
 	return moerr.NewInternalErrorNoCtxf("invalid sql: %s", sql)
 }
@@ -343,7 +343,39 @@ func (m *mockSQLExecutor) executeInsert(insertSql string) error {
 }
 
 func (m *mockSQLExecutor) executeInsertOnDuplicateUpdate(insertSql string) error {
-	return nil
+	insertResult, err := ParseInsertOnDuplicateUpdate(insertSql)
+	if err != nil {
+		return err
+	}
+	dbName := insertResult.dbName
+	tableName := insertResult.tableName
+	key := GenDbTblKey(dbName, tableName)
+
+	if len(insertResult.projectionColumns) == 0 {
+		insertResult.projectionColumns = make([]string, 0, len(m.columnNames[key]))
+		for _, column := range m.columnNames[key] {
+			insertResult.projectionColumns = append(insertResult.projectionColumns, column)
+		}
+	} else {
+		insertResult.projectionColumns = insertResult.projectionColumns
+	}
+
+	err = m.Insert(
+		dbName,
+		tableName,
+		insertResult.projectionColumns,
+		insertResult.rows,
+		true,
+	)
+	logutil.Debug(
+		"MockSQLExecutor.executeInsertOnDuplicateUpdate",
+		zap.String("db-name", dbName),
+		zap.String("table-name", tableName),
+		zap.String("projection-columns", strings.Join(insertResult.projectionColumns, ",")),
+		zap.Any("rows", insertResult.rows),
+		zap.Error(err),
+	)
+	return err
 }
 
 func (m *mockSQLExecutor) CreateTable(
@@ -943,8 +975,8 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 	err = executor.CreateTable(
 		"mo_catalog",
 		"mo_cdc_watermark",
-		[]string{"account_id", "task_id", "db_name", "tbl_name", "watermark", "err_msg"},
-		[]string{"account_id", "task_id", "db_name", "tbl_name"},
+		[]string{"account_id", "task_id", "db_name", "table_name", "watermark", "err_msg"},
+		[]string{"account_id", "task_id", "db_name", "table_name"},
 	)
 	assert.NoError(t, err)
 	u := NewCDCWatermarkUpdater("test", nil)
@@ -985,19 +1017,64 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 	assert.NoError(t, err)
 	row1, err := tuples.Row(context.Background(), 1)
 	assert.NoError(t, err)
-	assert.Equal(t, []any{"1", "test", "db1", "t1", "1-1"}, row0)
-	assert.Equal(t, []any{"2", "test", "db1", "t2", "2-1"}, row1)
+	// row0 and row1 disorder
+	if row0[0] == "1" {
+		assert.Equal(t, []any{"1", "test", "db1", "t1", "1-1"}, row0)
+		assert.Equal(t, []any{"2", "test", "db1", "t2", "2-1"}, row1)
+		accountId, err := tuples.GetUint64(context.Background(), 0, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), accountId)
+		accountId, err = tuples.GetUint64(context.Background(), 1, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), accountId)
+		taskId, err := tuples.GetString(context.Background(), 0, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, "test", taskId)
+		taskId, err = tuples.GetString(context.Background(), 1, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, "test", taskId)
+	} else {
+		assert.Equal(t, []any{"2", "test", "db1", "t2", "2-1"}, row0)
+		assert.Equal(t, []any{"1", "test", "db1", "t1", "1-1"}, row1)
+		accountId, err := tuples.GetUint64(context.Background(), 0, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), accountId)
+		accountId, err = tuples.GetUint64(context.Background(), 1, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), accountId)
+		taskId, err := tuples.GetString(context.Background(), 0, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, "test", taskId)
+		taskId, err = tuples.GetString(context.Background(), 1, 1)
+		assert.NoError(t, err)
+		assert.Equal(t, "test", taskId)
+	}
 
-	accountId, err := tuples.GetUint64(context.Background(), 0, 0)
-	assert.NoError(t, err)
-	assert.Equal(t, uint64(1), accountId)
-	taskId, err := tuples.GetString(context.Background(), 0, 1)
-	assert.NoError(t, err)
-	assert.Equal(t, "test", taskId)
+	for i, job := range jobs {
+		job.Watermark = types.BuildTS(int64(i+10), 1)
+	}
 
-	accountId, err = tuples.GetUint64(context.Background(), 1, 0)
+	insertUpdateSql := u.constructBatchUpdateWMSQL(jobs)
+	t.Logf("insertUpdateSql: %s", insertUpdateSql)
+	err = executor.Exec(context.Background(), insertUpdateSql, ie.SessionOverrideOptions{})
 	assert.NoError(t, err)
-	assert.Equal(t, uint64(2), accountId)
+	assert.Equal(t, 2, executor.Rows("mo_catalog", "mo_cdc_watermark"))
+
+	tuples, err = executor.Query(context.Background(), selectSql, ie.SessionOverrideOptions{})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), tuples.RowCount())
+	row0, err = tuples.Row(context.Background(), 0)
+	assert.NoError(t, err)
+	row1, err = tuples.Row(context.Background(), 1)
+	assert.NoError(t, err)
+	if row0[0] == "1" {
+		assert.Equal(t, []any{"1", "test", "db1", "t1", "10-1"}, row0)
+		assert.Equal(t, []any{"2", "test", "db1", "t2", "11-1"}, row1)
+	} else {
+		assert.Equal(t, []any{"2", "test", "db1", "t2", "11-1"}, row0)
+		assert.Equal(t, []any{"1", "test", "db1", "t1", "10-1"}, row1)
+	}
+
 }
 
 // Scenario:
@@ -1242,14 +1319,14 @@ func TestCDCWatermarkUpdater_constructReadWMSQL(t *testing.T) {
 		Ok:        true,
 	}
 	realSql := u.constructReadWMSQL(keys)
-	expectedSql1 := "SELECT account_id, task_id, db_name, tbl_name, watermark FROM " +
+	expectedSql1 := "SELECT account_id, task_id, db_name, table_name, watermark FROM " +
 		"`mo_catalog`.`mo_cdc_watermark` WHERE " +
-		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND tbl_name = 't1') OR " +
-		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND tbl_name = 't2')"
-	expectedSql2 := "SELECT account_id, task_id, db_name, tbl_name, watermark FROM " +
+		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND table_name = 't1') OR " +
+		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND table_name = 't2')"
+	expectedSql2 := "SELECT account_id, task_id, db_name, table_name, watermark FROM " +
 		"`mo_catalog`.`mo_cdc_watermark` WHERE " +
-		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND tbl_name = 't2') OR " +
-		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND tbl_name = 't1')"
+		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND table_name = 't2') OR " +
+		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND table_name = 't1')"
 	realSql = u.constructReadWMSQL(keys)
 	assert.True(t, expectedSql1 == realSql || expectedSql2 == realSql)
 }
