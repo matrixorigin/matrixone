@@ -615,7 +615,21 @@ func (u *CDCWatermarkUpdater) GetFromCache(
 	return
 }
 
-func (u *CDCWatermarkUpdater) Add(
+func (u *CDCWatermarkUpdater) UpdateWatermarkErrMsg(
+	ctx context.Context,
+	key *WatermarkKey,
+	errMsg string,
+) (err error) {
+	job := NewUpdateWMErrMsgJob(ctx, key, errMsg)
+	if _, err = u.queue.Enqueue(job); err != nil {
+		return
+	}
+	job.WaitDone()
+	err = job.GetResult().Err
+	return
+}
+
+func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	ctx context.Context,
 	key *WatermarkKey,
 	watermark *types.TS,

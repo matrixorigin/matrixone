@@ -1268,7 +1268,7 @@ func TestCDCWatermarkUpdater_cronRun(t *testing.T) {
 	ctx := context.Background()
 
 	// add 1 uncommitted watermark and check the execution logic
-	err := u.Add(ctx, new(WatermarkKey), new(types.TS))
+	err := u.UpdateWatermarkOnly(ctx, new(WatermarkKey), new(types.TS))
 	assert.NoError(t, err)
 
 	// wait uncommitted watermark to be commtting
@@ -1302,7 +1302,7 @@ func TestCDCWatermarkUpdater_cronRun(t *testing.T) {
 	u.Unlock()
 
 	implScheduler = executeErrScheduler
-	err = u.Add(ctx, new(WatermarkKey), new(types.TS))
+	err = u.UpdateWatermarkOnly(ctx, new(WatermarkKey), new(types.TS))
 	assert.NoError(t, err)
 
 	wg1.Add(2)
@@ -1338,7 +1338,7 @@ func TestCDCWatermarkUpdater_GetFromCache(t *testing.T) {
 	key1.accountId = 1
 	wm1 := types.BuildTS(1, 1)
 	wm2 := types.BuildTS(2, 1)
-	err := u.Add(ctx, key1, &wm1)
+	err := u.UpdateWatermarkOnly(ctx, key1, &wm1)
 	assert.NoError(t, err)
 
 	key2 := new(WatermarkKey)
@@ -1788,7 +1788,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		nts := types.BuildTS(int64(i+1), 1)
-		err = u.Add(
+		err = u.UpdateWatermarkOnly(
 			ctx,
 			key,
 			&nts,
@@ -1841,7 +1841,7 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			ts := types.BuildTS(physicalStart, logic)
 			logic++
-			err = u.Add(
+			err = u.UpdateWatermarkOnly(
 				ctx,
 				key,
 				&ts,
@@ -1890,4 +1890,70 @@ func TestCDCWatermarkUpdater_CDCWatermarkUpdaterRun(t *testing.T) {
 			},
 		)
 	}
+}
+
+func initMockSQLExecutorForWatermarkUpdater(t *testing.T) *mockSQLExecutor {
+	ie := newMockSQLExecutor()
+	err := ie.CreateTable(
+		"mo_catalog",
+		"mo_cdc_watermark",
+		[]string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+		[]string{"account_id", "task_id", "db_name", "table_name"},
+	)
+	assert.NoError(t, err)
+	return ie
+}
+
+func initCDCWatermarkUpdater(t *testing.T) (*CDCWatermarkUpdater, *mockSQLExecutor) {
+	ie := initMockSQLExecutorForWatermarkUpdater(t)
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+		WithCronJobInterval(time.Millisecond*1),
+	)
+	return u, ie
+}
+func TestCDCWatermarkUpdater_UpdateWatermarkErrMsg(t *testing.T) {
+	u, ie := initCDCWatermarkUpdater(t)
+	u.Start()
+	defer u.Stop()
+
+	key := &WatermarkKey{
+		accountId: 1,
+		taskId:    "task1",
+		dbName:    "db1",
+		tblName:   "t1",
+	}
+
+	err := u.UpdateWatermarkErrMsg(
+		context.Background(),
+		key,
+		"err1",
+	)
+	// should be error because the watermark is not found
+	assert.Error(t, err)
+
+	ts := types.BuildTS(1, 1)
+	ret, err := u.GetOrAddCommitted(
+		context.Background(),
+		key,
+		&ts,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, ts, ret)
+
+	err = u.UpdateWatermarkErrMsg(
+		context.Background(),
+		key,
+		"err1",
+	)
+	assert.NoError(t, err)
+
+	tuple, err := ie.GetTableDataByPK(
+		"mo_catalog",
+		"mo_cdc_watermark",
+		[]string{fmt.Sprintf("%d", key.accountId), key.taskId, key.dbName, key.tblName},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{fmt.Sprintf("%d", key.accountId), key.taskId, key.dbName, key.tblName, "err1"}, tuple)
 }
