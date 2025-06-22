@@ -47,11 +47,13 @@ var _ IWatermarkUpdater = new(WatermarkUpdater)
 const (
 	JT_CDC_GetOrAddCommittedWM tasks.JobType = 400 + iota
 	JT_CDC_CommittingWM
+	JT_CDC_UpdateWMErrMsg
 )
 
 func init() {
 	tasks.RegisterJobType(JT_CDC_GetOrAddCommittedWM, "CDC_GetOrAddCommittedWM")
 	tasks.RegisterJobType(JT_CDC_CommittingWM, "CDC_CommittingWM")
+	tasks.RegisterJobType(JT_CDC_UpdateWMErrMsg, "CDC_UpdateWMErrMsg")
 }
 
 type WatermarkKey struct {
@@ -70,6 +72,7 @@ type UpdaterJob struct {
 	tasks.Job
 	Key       *WatermarkKey
 	Watermark types.TS
+	ErrMsg    string
 }
 
 type UpdateOption func(*CDCWatermarkUpdater)
@@ -134,6 +137,23 @@ func NewCommittingWMJob(
 	return job
 }
 
+func NewUpdateWMErrMsgJob(
+	ctx context.Context,
+	key *WatermarkKey,
+	errMsg string,
+) *UpdaterJob {
+	job := new(UpdaterJob)
+	job.Init(
+		ctx,
+		uuid.Must(uuid.NewV7()).String(),
+		JT_CDC_UpdateWMErrMsg,
+		nil,
+	)
+	job.Key = key
+	job.ErrMsg = errMsg
+	return job
+}
+
 type CDCWatermarkUpdater struct {
 	sync.RWMutex
 
@@ -161,6 +181,7 @@ type CDCWatermarkUpdater struct {
 	getOrAddCommittedBuffer []*UpdaterJob
 	addCommittedBuffer      []*UpdaterJob
 	committingBuffer        []*UpdaterJob
+	committingErrMsgBuffer  []*UpdaterJob
 	readKeysBuffer          map[WatermarkKey]WatermarkResult
 
 	stats struct {
@@ -242,6 +263,13 @@ func (u *CDCWatermarkUpdater) resetJobs(err error) {
 		u.committingBuffer[i] = nil
 	}
 	u.committingBuffer = u.committingBuffer[:0]
+	for i := range u.committingErrMsgBuffer {
+		if err != nil && u.committingErrMsgBuffer[i] != nil {
+			u.committingErrMsgBuffer[i].DoneWithErr(err)
+		}
+		u.committingErrMsgBuffer[i] = nil
+	}
+	u.committingErrMsgBuffer = u.committingErrMsgBuffer[:0]
 	for key := range u.readKeysBuffer {
 		delete(u.readKeysBuffer, key)
 	}
@@ -274,6 +302,12 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 			}
 		case JT_CDC_CommittingWM:
 			u.committingBuffer = append(u.committingBuffer, job)
+		case JT_CDC_UpdateWMErrMsg:
+			if _, err := u.GetFromCache(context.Background(), job.Key); err != nil {
+				job.DoneWithErr(err)
+				continue
+			}
+			u.committingErrMsgBuffer = append(u.committingErrMsgBuffer, job)
 		default:
 			// TODO: handle error
 		}
@@ -295,7 +329,10 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 	}
 
 	// batch update watermarks records in the `mo_cdc_watermark` table
-	err, errMsg = u.execBatchUpdateWM()
+	if err, errMsg = u.execBatchUpdateWM(); err != nil {
+		return
+	}
+	err, errMsg = u.execBatchUpdateWMErrMsg()
 	return
 }
 
@@ -403,6 +440,27 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (err error, errMsg string) {
 	return
 }
 
+func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (err error, errMsg string) {
+	if len(u.committingErrMsgBuffer) == 0 {
+		return nil, ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	errMsgSql := u.constructBatchUpdateWMErrMsgSQL(u.committingErrMsgBuffer)
+	err = u.ie.Exec(ctx, errMsgSql, ie.SessionOverrideOptions{})
+	if err != nil {
+		errMsg = fmt.Sprintf("update err_msg sql \"%s\" failed", errMsgSql)
+	}
+	u.Lock()
+	defer u.Unlock()
+	for i, job := range u.committingErrMsgBuffer {
+		job.DoneWithErr(err)
+		u.committingErrMsgBuffer[i] = nil
+	}
+	u.committingErrMsgBuffer = u.committingErrMsgBuffer[:0]
+	return
+}
+
 func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 	keys map[WatermarkKey]types.TS,
 ) (commitSql string) {
@@ -423,6 +481,27 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMSQL(
 		i++
 	}
 	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkSQL(values)
+	return
+}
+
+func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
+	jobs []*UpdaterJob,
+) (commitSql string) {
+	var values string
+	for i, job := range jobs {
+		if i > 0 {
+			values += ","
+		}
+		values += fmt.Sprintf(
+			"(%d, '%s', '%s', '%s', '%s')",
+			job.Key.accountId,
+			job.Key.taskId,
+			job.Key.dbName,
+			job.Key.tblName,
+			job.ErrMsg, // only update the err_msg
+		)
+	}
+	commitSql = CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values)
 	return
 }
 
