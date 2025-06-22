@@ -165,6 +165,12 @@ const (
 		"VALUES %s " +
 		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
 
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, err_msg) " +
+		"VALUES %s " +
+		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
+
 	CDCUpdateWatermarkSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
 		"SET watermark='%s' " +
@@ -209,26 +215,27 @@ const (
 )
 
 const (
-	CDCInsertTaskSqlTemplate_Idx              = 0
-	CDCGetTaskSqlTemplate_Idx                 = 1
-	CDCShowTaskSqlTemplate_Idx                = 2
-	CDCGetTaskIdSqlTemplate_Idx               = 3
-	CDCDeleteTaskSqlTemplate_Idx              = 4
-	CDCUpdateTaskStateSQL_Idx                 = 5
-	CDCUpdateTaskStateAndErrMsgSQL_Idx        = 6
-	CDCInsertWatermarkSqlTemplate_Idx         = 7
-	CDCGetWatermarkSqlTemplate_Idx            = 8
-	CDCGetTableWatermarkSQL_Idx               = 9
-	CDCUpdateWatermarkSQL_Idx                 = 10
-	CDCUpdateWatermarkErrMsgSQL_Idx           = 11
-	CDCDeleteWatermarkSqlTemplate_Idx         = 12
-	CDCDeleteWatermarkByTableSqlTemplate_Idx  = 13
-	CDCGetDataKeySQL_Idx                      = 14
-	CDCCollectTableInfoSqlTemplate_Idx        = 15
-	CDCGetWatermarkWhereSqlTemplate_Idx       = 16
-	CDCOnDuplicateUpdateWatermarkTemplate_Idx = 17
+	CDCInsertTaskSqlTemplate_Idx                    = 0
+	CDCGetTaskSqlTemplate_Idx                       = 1
+	CDCShowTaskSqlTemplate_Idx                      = 2
+	CDCGetTaskIdSqlTemplate_Idx                     = 3
+	CDCDeleteTaskSqlTemplate_Idx                    = 4
+	CDCUpdateTaskStateSQL_Idx                       = 5
+	CDCUpdateTaskStateAndErrMsgSQL_Idx              = 6
+	CDCInsertWatermarkSqlTemplate_Idx               = 7
+	CDCGetWatermarkSqlTemplate_Idx                  = 8
+	CDCGetTableWatermarkSQL_Idx                     = 9
+	CDCUpdateWatermarkSQL_Idx                       = 10
+	CDCUpdateWatermarkErrMsgSQL_Idx                 = 11
+	CDCDeleteWatermarkSqlTemplate_Idx               = 12
+	CDCDeleteWatermarkByTableSqlTemplate_Idx        = 13
+	CDCGetDataKeySQL_Idx                            = 14
+	CDCCollectTableInfoSqlTemplate_Idx              = 15
+	CDCGetWatermarkWhereSqlTemplate_Idx             = 16
+	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
 
-	CDCSqlTemplateCount = 18
+	CDCSqlTemplateCount = 19
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -326,6 +333,9 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCOnDuplicateUpdateWatermarkTemplate_Idx: {
 		SQL: CDCOnDuplicateUpdateWatermarkTemplate,
+	},
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
+		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
 	},
 }
 
@@ -634,6 +644,15 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCOnDuplicateUpdateWatermarkTemplate_Idx].SQL,
+		values,
+	)
+}
+
+func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
+	values string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx].SQL,
 		values,
 	)
 }

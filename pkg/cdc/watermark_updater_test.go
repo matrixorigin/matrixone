@@ -1545,15 +1545,116 @@ func TestCDCWatermarkUpdater_constructBatchUpdateWMSQL(t *testing.T) {
 			expectedSql5 == realSql ||
 			expectedSql6 == realSql,
 	)
+}
 
-	re := regexp.MustCompile(`\(([^,]+),\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)'\)`)
+func TestCDCWatermarkUpdater_constructBatchUpdateWMErrMsgSQL(t *testing.T) {
+	ie := newWmMockSQLExecutor()
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+	)
+	jobs := make([]*UpdaterJob, 0, 1)
+	key1 := new(WatermarkKey)
+	key1.accountId = 1
+	key1.taskId = "test"
+	key1.dbName = "db1"
+	key1.tblName = "t1"
+	ts1 := types.BuildTS(1, 1)
+	jobs = append(jobs, &UpdaterJob{
+		Key:       key1,
+		Watermark: ts1,
+		ErrMsg:    "err1",
+	})
+	key2 := new(WatermarkKey)
+	key2.accountId = 2
+	key2.taskId = "test"
+	key2.dbName = "db2"
+	key2.tblName = "t2"
+	ts2 := types.BuildTS(2, 1)
+	jobs = append(jobs, &UpdaterJob{
+		Key:       key2,
+		Watermark: ts2,
+		ErrMsg:    "",
+	})
+	realSql := u.constructBatchUpdateWMErrMsgSQL(jobs)
+	expectedSql := "INSERT INTO `mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, err_msg) VALUES " +
+		"(1, 'test', 'db1', 't1', 'err1')," +
+		"(2, 'test', 'db2', 't2', '') " +
+		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
+	assert.Equal(t, expectedSql, realSql)
+}
 
-	// Find all matches in the SQL string.
-	matches := re.FindAllStringSubmatch(realSql, -1)
-	t.Log(matches)
-	for _, match := range matches {
-		t.Log(match)
-	}
+func TestCDCWatermarkUpdater_execBatchUpdateWMErrMsg(t *testing.T) {
+	ie := newMockSQLExecutor()
+	u := NewCDCWatermarkUpdater(
+		t.Name(),
+		ie,
+	)
+	jobs := make([]*UpdaterJob, 0, 2)
+	key1 := new(WatermarkKey)
+	key1.accountId = 1
+	key1.taskId = "test"
+	key1.dbName = "db1"
+	key1.tblName = "t1"
+
+	jobs = append(jobs, NewUpdateWMErrMsgJob(
+		context.Background(),
+		key1,
+		"err1",
+	))
+
+	key2 := new(WatermarkKey)
+	key2.accountId = 2
+	key2.taskId = "test"
+	key2.dbName = "db2"
+	key2.tblName = "t2"
+	jobs = append(jobs, NewUpdateWMErrMsgJob(
+		context.Background(),
+		key2,
+		"err2",
+	))
+
+	err := ie.CreateTable(
+		`mo_catalog`,
+		`mo_cdc_watermark`,
+		[]string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+		[]string{"account_id", "task_id", "db_name", "table_name"},
+	)
+	assert.NoError(t, err)
+
+	err = ie.Insert(
+		`mo_catalog`,
+		`mo_cdc_watermark`,
+		[]string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
+		[][]string{{"1", "test", "db1", "t1", ""}, {"2", "test", "db2", "t2", ""}},
+		false,
+	)
+	assert.NoError(t, err)
+
+	u.committingErrMsgBuffer = jobs
+	err, errMsg := u.execBatchUpdateWMErrMsg()
+	assert.NoError(t, err)
+	assert.Equal(t, "", errMsg)
+
+	rowCount := ie.RowCount(`mo_catalog`, `mo_cdc_watermark`)
+	assert.Equal(t, 2, rowCount)
+
+	tuple, err := ie.GetTableDataByPK(
+		`mo_catalog`,
+		`mo_cdc_watermark`,
+		[]string{"1", "test", "db1", "t1"},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1", "test", "db1", "t1", "err1"}, tuple)
+
+	tuple, err = ie.GetTableDataByPK(
+		`mo_catalog`,
+		`mo_cdc_watermark`,
+		[]string{"2", "test", "db2", "t2"},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"2", "test", "db2", "t2", "err2"}, tuple)
 }
 
 func TestCDCWatermarkUpdater_ParseInsert(t *testing.T) {
