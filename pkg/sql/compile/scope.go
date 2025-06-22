@@ -653,7 +653,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	return nil
 }
 
-func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
+func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 	var runtimeInExprList []*plan.Expr
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
@@ -689,22 +689,25 @@ func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
 	return runtimeInExprList, false, nil
 }
 
-func (s *Scope) handleBlockFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
-	var appendNotPkFilter []*plan.Expr
+func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
+	var nonPkFilters, pkFilters []*plan.Expr
+
+	rfSpecs := s.DataSource.RuntimeFilterSpecs
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
-		if pkPos != col.ColPos {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
+		if rfSpecs[i].NotOnPk {
+			nonPkFilters = append(nonPkFilters, plan2.DeepCopyExpr(runtimeInExprList[i]))
+		} else {
+			pkFilters = append(pkFilters, plan2.DeepCopyExpr(runtimeInExprList[i]))
 		}
 	}
 
 	// reset filter
-	if len(appendNotPkFilter) > 0 {
+	if len(nonPkFilters) > 0 {
 		// put expr in filter instruction
 		op := vm.GetLeafOp(s.RootOp)
 		if _, ok := op.(*table_scan.TableScan); ok {
@@ -714,19 +717,18 @@ func (s *Scope) handleBlockFilters(c *Compile, runtimeInExprList []*plan.Expr) (
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
+		err := arg.SetRuntimeExpr(s.Proc, nonPkFilters)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	// reset datasource
-	if len(runtimeInExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+	if len(pkFilters) > 0 {
 		if s.DataSource.FilterExpr != nil {
-			newExprList = append(newExprList, s.DataSource.FilterExpr)
+			pkFilters = append(pkFilters, s.DataSource.FilterExpr)
 		}
-		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(pkFilters)
 	}
 
 	for _, e := range s.DataSource.BlockFilterList {
@@ -737,9 +739,8 @@ func (s *Scope) handleBlockFilters(c *Compile, runtimeInExprList []*plan.Expr) (
 	}
 
 	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-	if len(s.DataSource.node.BlockFilterList) > 0 {
-		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
-	}
+	newExprList = append(newExprList, s.DataSource.BlockFilterList...)
+
 	return newExprList, nil
 }
 
@@ -1021,7 +1022,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList, blockFilterList []*plan.Expr
 	var emptyScan bool
-	runtimeFilterList, emptyScan, err = s.handleRuntimeFilter(c)
+	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
 	if err != nil {
 		return
 	}
@@ -1032,7 +1033,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 	}
 	if !emptyScan {
-		blockFilterList, err = s.handleBlockFilters(c, runtimeFilterList)
+		blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
 		if err != nil {
 			return
 		}
