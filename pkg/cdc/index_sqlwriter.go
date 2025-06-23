@@ -93,7 +93,6 @@ func NewIndexSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Table
 		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
 
 	}
-	return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
 }
 
 // Implementation of Base Index SqlWriter
