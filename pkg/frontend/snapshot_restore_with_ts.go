@@ -316,6 +316,17 @@ func restoreToAccountFromTS(
 		return
 	}
 
+	// restore system db
+	if err = restoreSystemDatabaseFromTS(ctx,
+		sid,
+		bh,
+		snapshotTs,
+		restoreAccount,
+		toAccountId,
+	); err != nil {
+		return
+	}
+
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v", restoreAccount, snapshotTs, dbName))
@@ -336,16 +347,6 @@ func restoreToAccountFromTS(
 		}
 	}
 
-	// restore system db
-	if err = restoreSystemDatabaseFromTS(ctx,
-		sid,
-		bh,
-		snapshotTs,
-		restoreAccount,
-		toAccountId,
-	); err != nil {
-		return
-	}
 	return
 }
 
