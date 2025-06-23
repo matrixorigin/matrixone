@@ -257,6 +257,8 @@ func (s *indexSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 }
 
 func (s *indexSyncSinker) Sink(ctx context.Context, data *DecoderOutput) {
+	// TODO: IMPORTANT: check the indexdef here so that Add/Drop index can be reflected here
+
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
 	if data.toTs.LE(&watermark) {
 		logutil.Errorf("cdc indexSyncSinker(%v): unexpected watermark: %s, current watermark: %s",
