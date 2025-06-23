@@ -394,6 +394,12 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 		return moerr.NewInternalError(ctx, "invalid vector type. not []float32")
 	}
 
+	if v == nil {
+		// vector is nil, do Delete
+		w.cdc.Delete(key)
+		return nil
+	}
+
 	w.cdc.Insert(key, v)
 	return nil
 }
@@ -406,6 +412,12 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid vector type. not []float32")
+	}
+
+	if v == nil {
+		// vector is nil, do Delete
+		w.cdc.Delete(key)
+		return nil
 	}
 
 	w.cdc.Upsert(key, v)
