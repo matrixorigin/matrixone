@@ -110,49 +110,6 @@ var NewHnswSyncSinker = func(
 		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
 	}
 
-	/*
-		pkcol := tableDef.Name2ColIndex[pkColName]
-		veccol := tableDef.Name2ColIndex[indexdef.Parts[0]]
-
-		if tableDef.Cols[pkcol].Typ.Id != int32(types.T_int64) {
-			return nil, moerr.NewInternalErrorNoCtx("hnsw index table primary key is not int64")
-
-		}
-
-		// get param and index table name
-		paramstr := indexdef.IndexAlgoParams
-		var meta, storage string
-		for _, idx := range hnswindexes {
-			if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Metadata {
-				meta = idx.IndexTableName
-			}
-			if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Storage {
-				storage = idx.IndexTableName
-			}
-		}
-
-		if len(meta) == 0 || len(storage) == 0 {
-			return nil, moerr.NewInternalErrorNoCtx("hnsw index table either meta or storage hidden index table not exist")
-		}
-
-		var hnswparam vectorindex.HnswParam
-		if len(paramstr) > 0 {
-			err := json.Unmarshal([]byte(paramstr), &hnswparam)
-			if err != nil {
-				return nil, moerr.NewInternalErrorNoCtx("hnsw sync sinker. failed to convert hnsw param json")
-			}
-		}
-
-		param := vectorindex.HnswCdcParam{
-			MetaTbl:   meta,
-			IndexTbl:  storage,
-			DbName:    dbTblInfo.SinkDbName,
-			Table:     dbTblInfo.SinkTblName,
-			Params:    hnswparam,
-			Dimension: tableDef.Cols[veccol].Typ.Width,
-		}
-	*/
-
 	sqlwriter, err := NewIndexSqlWriter("hnsw", dbTblInfo, tableDef, hnswindexes)
 	if err != nil {
 		return nil, err
