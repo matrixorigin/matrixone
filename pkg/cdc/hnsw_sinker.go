@@ -14,7 +14,7 @@
 
 package cdc
 
-// hnswSyncSinker is to update HNSW index via CDC.
+// indexSyncSinker is to update HNSW index via CDC.
 // It will read CDC changes and create JSON as input to function hnsw_cdc_update(dbname, tablename, vector_dimenion, json)
 // You can refer the JSON format from vectorindex.VectorIndexCdc
 // Single batch will split into multiple json objects and each json has maximum 8192 records (see vectorindex.VectorIndexCdc).
@@ -39,11 +39,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-var _ Sinker = &hnswSyncSinker{}
+var _ Sinker = &indexSyncSinker{}
 
 var sqlExecutorFactory = _sqlExecutorFactory
 
-type hnswSyncSinker struct {
+type indexSyncSinker struct {
 	cnUUID           string
 	dbTblInfo        *DbTableInfo
 	watermarkUpdater IWatermarkUpdater
@@ -67,7 +67,7 @@ func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
 	return exec, nil
 }
 
-var NewHnswSyncSinker = func(
+var NewIndexSyncSinker = func(
 	cnUUID string,
 	sinkUri UriInfo,
 	dbTblInfo *DbTableInfo,
@@ -119,7 +119,7 @@ var NewHnswSyncSinker = func(
 	var maxAllowedPacket uint64
 	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
 
-	s := &hnswSyncSinker{
+	s := &indexSyncSinker{
 		cnUUID:           cnUUID,
 		dbTblInfo:        dbTblInfo,
 		watermarkUpdater: watermarkUpdater,
@@ -131,15 +131,15 @@ var NewHnswSyncSinker = func(
 		sqlWriters:       []IndexSqlWriter{sqlwriter},
 		rowdata:          make([]any, len(tableDef.Cols)),
 	}
-	logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+	logutil.Infof("cdc indexSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 	return s, nil
 
 }
 
-func (s *hnswSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
-	logutil.Infof("cdc hnswSyncSinker(%v).Run: start", s.dbTblInfo)
+func (s *indexSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
+	logutil.Infof("cdc indexSyncSinker(%v).Run: start", s.dbTblInfo)
 	defer func() {
-		logutil.Infof("cdc hnswSyncSinker(%v).Run: end", s.dbTblInfo)
+		logutil.Infof("cdc indexSyncSinker(%v).Run: end", s.dbTblInfo)
 	}()
 
 	closed := false
@@ -173,7 +173,7 @@ func (s *hnswSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 						opts := executor.Options{}
 						res, err := s.exec.Exec(newctx, string(sqlBuf), opts)
 						if err != nil {
-							logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+							logutil.Errorf("cdc indexSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
 							os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
 							os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
 							s.SetError(err)
@@ -215,7 +215,7 @@ func (s *hnswSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 							} else {
 								res, err := exec.Exec(string(sqlBuf), opts.StatementOption())
 								if err != nil {
-									logutil.Errorf("cdc hnswSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
+									logutil.Errorf("cdc indexSyncSinker(%v) send sql failed, err: %v, sql: %s", s.dbTblInfo, err, sqlBuf[sqlBufReserved:])
 									os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sqlBuf)))
 									os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
 									return err
@@ -233,7 +233,7 @@ func (s *hnswSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 					if moe.ErrorCode() == moerr.ErrQueryInterrupted {
 						// skip rollback error
 						//os.Stderr.WriteString("error QueryInterrupted....rollback\n")
-						logutil.Errorf("cdc hnswSyncSinker(%v) parent rollback", s.dbTblInfo)
+						logutil.Errorf("cdc indexSyncSinker(%v) parent rollback", s.dbTblInfo)
 					} else {
 						s.SetError(err)
 					}
@@ -259,10 +259,10 @@ func (s *hnswSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 	}
 }
 
-func (s *hnswSyncSinker) Sink(ctx context.Context, data *DecoderOutput) {
+func (s *indexSyncSinker) Sink(ctx context.Context, data *DecoderOutput) {
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
 	if data.toTs.LE(&watermark) {
-		logutil.Errorf("cdc hnswSyncSinker(%v): unexpected watermark: %s, current watermark: %s",
+		logutil.Errorf("cdc indexSyncSinker(%v): unexpected watermark: %s, current watermark: %s",
 			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
 		return
 	}
@@ -288,27 +288,27 @@ func (s *hnswSyncSinker) Sink(ctx context.Context, data *DecoderOutput) {
 		//os.Stderr.WriteString(fmt.Sprintf("sinkTail insertBat %d, deletBat = %d\n", data.insertAtmBatch.RowCount(), data.deleteAtmBatch.RowCount()))
 		s.sinkTail(ctx, data.insertAtmBatch, data.deleteAtmBatch)
 	} else {
-		s.SetError(moerr.NewInternalError(ctx, fmt.Sprintf("cdc hnswSyncSinker unexpected output type: %v", data.outputTyp)))
+		s.SetError(moerr.NewInternalError(ctx, fmt.Sprintf("cdc indexSyncSinker unexpected output type: %v", data.outputTyp)))
 	}
 }
 
-func (s *hnswSyncSinker) SendBegin() {
+func (s *indexSyncSinker) SendBegin() {
 	s.sqlBufSendCh <- begin
 }
 
-func (s *hnswSyncSinker) SendCommit() {
+func (s *indexSyncSinker) SendCommit() {
 	s.sqlBufSendCh <- commit
 }
 
-func (s *hnswSyncSinker) SendRollback() {
+func (s *indexSyncSinker) SendRollback() {
 	s.sqlBufSendCh <- rollback
 }
 
-func (s *hnswSyncSinker) SendDummy() {
+func (s *indexSyncSinker) SendDummy() {
 	s.sqlBufSendCh <- dummy
 }
 
-func (s *hnswSyncSinker) Error() error {
+func (s *indexSyncSinker) Error() error {
 	if ptr := s.err.Load(); ptr != nil {
 		errPtr := ptr.(*error)
 		if errPtr != nil {
@@ -325,28 +325,28 @@ func (s *hnswSyncSinker) Error() error {
 	return nil
 }
 
-func (s *hnswSyncSinker) SetError(err error) {
+func (s *indexSyncSinker) SetError(err error) {
 	s.err.Store(&err)
 }
 
-func (s *hnswSyncSinker) ClearError() {
+func (s *indexSyncSinker) ClearError() {
 	var err *moerr.Error
 	s.SetError(err)
 }
 
-func (s *hnswSyncSinker) Reset() {
+func (s *indexSyncSinker) Reset() {
 	for _, writer := range s.sqlWriters {
 		writer.Reset()
 	}
 	s.err = atomic.Value{}
 }
 
-func (s *hnswSyncSinker) Close() {
+func (s *indexSyncSinker) Close() {
 	// stop Run goroutine
 	close(s.sqlBufSendCh)
 }
 
-func (s *hnswSyncSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
+func (s *indexSyncSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
 	var err error
 
 	for i := 0; i < batchRowCount(bat); i++ {
@@ -375,7 +375,7 @@ func (s *hnswSyncSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
 
 // upsertBatch and deleteBatch is sorted by ts
 // for the same ts, delete first, then upsert
-func (s *hnswSyncSinker) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) {
+func (s *indexSyncSinker) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) {
 	var err error
 
 	upsertIter := upsertBatch.GetRowIterator().(*atomicBatchRowIter)
@@ -429,7 +429,7 @@ func (s *hnswSyncSinker) sinkTail(ctx context.Context, upsertBatch, deleteBatch 
 	s.flushCdc()
 }
 
-func (s *hnswSyncSinker) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
+func (s *indexSyncSinker) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
 	if err = upsertIter.Row(ctx, s.rowdata); err != nil {
@@ -461,7 +461,7 @@ func (s *hnswSyncSinker) sinkUpsert(ctx context.Context, upsertIter *atomicBatch
 	return nil
 }
 
-func (s *hnswSyncSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
+func (s *indexSyncSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
 	if err = deleteIter.Row(ctx, s.rowdata); err != nil {
@@ -493,7 +493,7 @@ func (s *hnswSyncSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatch
 	return nil
 }
 
-func (s *hnswSyncSinker) flushCdc() (err error) {
+func (s *indexSyncSinker) flushCdc() (err error) {
 	for _, writer := range s.sqlWriters {
 		err = s.sendSql(writer)
 		if err != nil {
@@ -503,7 +503,7 @@ func (s *hnswSyncSinker) flushCdc() (err error) {
 	return nil
 }
 
-func (s *hnswSyncSinker) sendSql(writer IndexSqlWriter) error {
+func (s *indexSyncSinker) sendSql(writer IndexSqlWriter) error {
 	if writer.Empty() {
 		return nil
 	}

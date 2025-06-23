@@ -221,7 +221,7 @@ var (
 
 // --- Test Cases ---
 
-func TestNewHnswSyncSinker(t *testing.T) {
+func TestNewIndexSyncSinker(t *testing.T) {
 
 	dbTblInfo := newTestDbTableInfo()
 	ar := newTestActiveRoutine()
@@ -234,7 +234,7 @@ func TestNewHnswSyncSinker(t *testing.T) {
 
 	t.Run("success float32", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 128)
-		sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		sinker, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.NoError(t, err)
 		require.NotNil(t, sinker)
 		sinker.Close()
@@ -243,7 +243,7 @@ func TestNewHnswSyncSinker(t *testing.T) {
 	/*
 		t.Run("success float64", func(t *testing.T) {
 			tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float64, 128)
-			sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+			sinker, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 			require.NoError(t, err)
 			require.NotNil(t, sinker)
 			sinker.Close()
@@ -253,7 +253,7 @@ func TestNewHnswSyncSinker(t *testing.T) {
 	t.Run("invalid pkey count", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 128)
 		tblDef.Pkey.Names = []string{"pk1", "pk2"}
-		_, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		_, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	})
@@ -261,7 +261,7 @@ func TestNewHnswSyncSinker(t *testing.T) {
 	t.Run("invalid hnsw index count", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 128)
 		tblDef.Indexes = []*plan.IndexDef{tblDef.Indexes[0]} // Only one index
-		_, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		_, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	})
@@ -269,14 +269,14 @@ func TestNewHnswSyncSinker(t *testing.T) {
 	t.Run("invalid index parts count", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 128)
 		tblDef.Indexes[0].Parts = []string{"vec1", "vec2"}
-		_, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		_, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	})
 
 	t.Run("invalid pkey type", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int32, "vec", types.T_array_float32, 128) // PK is int32
-		_, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		_, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	})
@@ -284,7 +284,7 @@ func TestNewHnswSyncSinker(t *testing.T) {
 	t.Run("missing meta index", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 128)
 		tblDef.Indexes[0].IndexAlgoTableType = "invalid" // Corrupt meta index type
-		_, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		_, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	})
@@ -292,14 +292,14 @@ func TestNewHnswSyncSinker(t *testing.T) {
 	t.Run("invalid hnsw params json", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 128)
 		tblDef.Indexes[0].IndexAlgoParams = `{"M":16, efConstruction":200 ...` // Invalid JSON
-		_, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		_, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	})
 
 	t.Run("unsupported vector type", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_int32, 128) // Vector is int32
-		_, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+		_, err := NewIndexSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 	})
@@ -311,11 +311,11 @@ func TestHnswSyncSinker_Run(t *testing.T) {
 	watermarkUpdater := NewMockWatermarkUpdater()
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
-	sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
+	sinker, err := NewIndexSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
 	require.NoError(t, err)
 	defer sinker.Close()
 
-	s := sinker.(*hnswSyncSinker)
+	s := sinker.(*indexSyncSinker)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -352,11 +352,11 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 	watermarkUpdater := NewMockWatermarkUpdater()
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
-	sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
+	sinker, err := NewIndexSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
 	require.NoError(t, err)
 	defer sinker.Close()
 
-	s := sinker.(*hnswSyncSinker)
+	s := sinker.(*indexSyncSinker)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -427,11 +427,11 @@ func TestHnswSyncSinker_Sink(t *testing.T) {
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	watermarkUpdater := NewMockWatermarkUpdater()
-	sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
+	sinker, err := NewIndexSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
 	require.NoError(t, err)
 	defer sinker.Close()
 
-	s := sinker.(*hnswSyncSinker)
+	s := sinker.(*indexSyncSinker)
 	ctx := context.Background()
 
 	t.Run("snapshot", func(t *testing.T) {
@@ -512,8 +512,8 @@ func TestHnswSyncSinker_SendSql(t *testing.T) {
 		watermarkMap: &sync.Map{},
 	}
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
-	sinker, _ := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
-	s := sinker.(*hnswSyncSinker)
+	sinker, _ := NewIndexSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
+	s := sinker.(*indexSyncSinker)
 	defer s.Close() // Closes sqlBufSendCh
 
 	t.Run("send sql happy path", func(t *testing.T) {
@@ -589,7 +589,7 @@ func TestHnswSyncSinker_ErrorHandling(t *testing.T) {
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
 
-	s := &hnswSyncSinker{}     // Minimal struct for error testing
+	s := &indexSyncSinker{}    // Minimal struct for error testing
 	s.err.Store((*error)(nil)) // Initialize with nil error pointer
 
 	require.Nil(t, s.Error())
@@ -625,8 +625,8 @@ func TestHnswSyncSinker_Sink_AtomicBatch(t *testing.T) {
 		watermarkMap: &sync.Map{},
 	}
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
-	sinker, _ := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
-	s := sinker.(*hnswSyncSinker)
+	sinker, _ := NewIndexSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
+	s := sinker.(*indexSyncSinker)
 	defer s.Close() // Closes sqlBufSendCh
 
 	bat := testutil.NewBatchWithVectors(

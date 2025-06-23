@@ -70,8 +70,8 @@ var NewSinker = func(
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
 	}
 
-	if sinkUri.SinkTyp == CDCSinkType_HnswSync {
-		return NewHnswSyncSinker(cnUUID, sinkUri, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
+	if sinkUri.SinkTyp == CDCSinkType_IndexSync {
+		return NewIndexSyncSinker(cnUUID, sinkUri, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
 	}
 
 	var (
