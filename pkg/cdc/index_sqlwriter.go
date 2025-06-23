@@ -27,6 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
+const (
+	MAX_CDC_DATA_SIZE = 8192
+)
+
 // IndexSqlWriter interface
 type IndexSqlWriter interface {
 	CheckLastOp(op string) bool
@@ -43,6 +47,7 @@ type IndexSqlWriter interface {
 type BaseIndexSqlWriter struct {
 	lastCdcOp string
 	vbuf      []byte
+	ndata     int
 	param     string
 	tabledef  *plan.TableDef
 	indexdef  []*plan.IndexDef
@@ -111,7 +116,7 @@ func NewIndexSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Table
 
 // Implementation of Base Index SqlWriter
 func (w *BaseIndexSqlWriter) Full() bool {
-	return false
+	return w.ndata >= MAX_CDC_DATA_SIZE
 }
 
 // return true when last op is empty or last op == current op
@@ -140,6 +145,7 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 	}
 
 	w.vbuf = appendString(w.vbuf, ")")
+	w.ndata += 1
 	return nil
 }
 
@@ -191,6 +197,7 @@ func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 		if err != nil {
 			return err
 		}
+		w.ndata += 1
 
 	}
 
@@ -205,6 +212,7 @@ func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 	if err != nil {
 		return err
 	}
+	w.ndata += 1
 
 	return nil
 }
@@ -212,6 +220,7 @@ func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 func (w *BaseIndexSqlWriter) Reset() {
 	w.lastCdcOp = ""
 	w.vbuf = w.vbuf[:0]
+	w.ndata = 0
 }
 
 func (w *BaseIndexSqlWriter) Empty() bool {
@@ -264,6 +273,7 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 
 	switch w.lastCdcOp {
 	case vectorindex.CDC_DELETE:
+		return w.toFulltextDelete()
 	case vectorindex.CDC_UPSERT:
 		return w.toFulltextUpsert(true)
 	case vectorindex.CDC_INSERT:
@@ -273,6 +283,11 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+func (w *FulltextSqlWriter) toFulltextDelete() ([]byte, error) {
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.dbTblInfo.SinkDbName, w.indexTableName, catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
+	return []byte(sql), nil
 }
 
 func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
@@ -552,6 +567,7 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 
 	switch w.lastCdcOp {
 	case vectorindex.CDC_DELETE:
+		return w.toIvfflatDelete()
 	case vectorindex.CDC_UPSERT:
 		return w.toIvfflatUpsert(true)
 	case vectorindex.CDC_INSERT:
@@ -561,6 +577,17 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+// catalog.SystemSI_IVFFLAT_TblCol_Entries_version
+// catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
+// catalog.CPrimaryKeyColName
+func (w *IvfflatSqlWriter) toIvfflatDelete() ([]byte, error) {
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.dbTblInfo.SinkDbName, w.entries_tbl,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		string(w.vbuf))
+	return []byte(sql), nil
+
 }
 
 func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
