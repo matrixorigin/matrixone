@@ -56,6 +56,11 @@ type indexSyncSinker struct {
 	rowdata          []any
 }
 
+type IndexEntry struct {
+	algo    string
+	indexes []*plan.IndexDef
+}
+
 func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
 	// sql executor
 	v, ok := runtime.ServiceRuntime(cnUUID).GetGlobalVariables(runtime.InternalSQLExecutor)
@@ -86,38 +91,32 @@ var NewIndexSyncSinker = func(
 		return nil, err
 	}
 
-	// check the tabledef and indexdef
-	if len(tableDef.Pkey.Names) != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
-	}
-
-	hnswindexes := make([]*plan.IndexDef, 0, 2)
+	sqlwriters := make([]IndexSqlWriter, 0, 5)
+	indexmap := make(map[string]*IndexEntry)
 
 	for _, idx := range tableDef.Indexes {
-		if idx.TableExist && catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-			hnswindexes = append(hnswindexes, idx)
+		if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+			fmt.Printf("idx %v\n", idx)
+			key := idx.IndexName
+			sidx, ok := indexmap[key]
+			if ok {
+				sidx.indexes = append(sidx.indexes, idx)
+			} else {
+				ie := &IndexEntry{algo: idx.IndexAlgo, indexes: make([]*plan.IndexDef, 0, 3)}
+				ie.indexes = append(ie.indexes, idx)
+				indexmap[key] = ie
+			}
 		}
 
 	}
 
-	if len(hnswindexes) != 2 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table without index definition")
+	for key, ie := range indexmap {
+		sqlwriter, err := NewIndexSqlWriter(ie.algo, dbTblInfo, tableDef, ie.indexes)
+		if err != nil {
+			return nil, err
+		}
+		sqlwriters = append(sqlwriters, sqlwriter)
 	}
-
-	indexdef := hnswindexes[0]
-
-	if len(indexdef.Parts) != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
-	}
-
-	sqlwriter, err := NewIndexSqlWriter("hnsw", dbTblInfo, tableDef, hnswindexes)
-	if err != nil {
-		return nil, err
-	}
-
-	// create sinker
-	var maxAllowedPacket uint64
-	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
 
 	s := &indexSyncSinker{
 		cnUUID:           cnUUID,
@@ -128,10 +127,9 @@ var NewIndexSyncSinker = func(
 		sqlBufSendCh:     make(chan []byte),
 		err:              atomic.Value{},
 		exec:             exec,
-		sqlWriters:       []IndexSqlWriter{sqlwriter},
+		sqlWriters:       sqlwriters,
 		rowdata:          make([]any, len(tableDef.Cols)),
 	}
-	logutil.Infof("cdc indexSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
 	return s, nil
 
 }

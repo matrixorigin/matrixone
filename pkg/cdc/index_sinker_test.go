@@ -56,7 +56,7 @@ func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType t
 		},
 		Indexes: []*plan.IndexDef{
 			{
-				IndexName:          "hnsw_meta_idx",
+				IndexName:          "hnsw_idx",
 				TableExist:         true,
 				IndexAlgo:          catalog.MoIndexHnswAlgo.ToString(),
 				IndexAlgoTableType: catalog.Hnsw_TblType_Metadata,
@@ -65,7 +65,7 @@ func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType t
 				IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
 			},
 			{
-				IndexName:          "hnsw_storage_idx",
+				IndexName:          "hnsw_idx",
 				TableExist:         true,
 				IndexAlgo:          catalog.MoIndexHnswAlgo.ToString(),
 				IndexAlgoTableType: catalog.Hnsw_TblType_Storage,
