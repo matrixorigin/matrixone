@@ -63,10 +63,6 @@ type CatalogCache struct {
 	databases *databaseCache
 }
 
-func (c *CatalogCache) GetTables() *btree.BTreeG[*TableItem] {
-	return c.tables.data
-}
-
 // database cache:
 //
 //		. get by database key
