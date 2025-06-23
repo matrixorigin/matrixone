@@ -109,7 +109,7 @@ var NewIndexSyncSinker = func(
 
 	}
 
-	for key, ie := range indexmap {
+	for _, ie := range indexmap {
 		sqlwriter, err := NewIndexSqlWriter(ie.algo, dbTblInfo, tableDef, ie.indexes)
 		if err != nil {
 			return nil, err
