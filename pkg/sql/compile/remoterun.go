@@ -642,7 +642,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
 	case *filter.Filter:
-		in.Filter = t.E
+		in.Filters = t.FilterExprs
+		in.RuntimeFilters = t.RuntimeFilterExprs
 	case *semi.SemiJoin:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,
@@ -1150,7 +1151,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
-		arg.E = opr.Filter
+		arg.FilterExprs = opr.Filters
+		arg.RuntimeFilterExprs = opr.RuntimeFilters
 		op = arg
 	case vm.Semi:
 		t := opr.GetSemiJoin()

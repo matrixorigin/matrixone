@@ -4456,9 +4456,11 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		// create sink scan and join with index table JOIN LEFT ON (sink.pkcol = index.docid) and project with (docid, row_id)
 		// see appendDeleteMasterTablePlan
 
-		//rfTag := builder.genNewTag()
+		rfTag := builder.genNewTag()
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
+
+		var docIdPos int32 = -1
 
 		neededCols := make([]*plan.ColDef, 0, 3)
 		scanNodeProject := make([]*Expr, 3)
@@ -4484,6 +4486,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 						},
 					},
 				}
+				docIdPos = int32(len(neededCols))
 				neededCols = append(neededCols, colVal)
 			} else if colVal.Name == catalog.FakePrimaryKeyColName {
 				scanNodeProject[2] = &plan.Expr{
@@ -4502,27 +4505,27 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		newIndexTableDef := DeepCopyTableDef(indexTableDef, false)
 		newIndexTableDef.Cols = neededCols
 
-		//probeExpr := &plan.Expr{
-		//	Typ: indexTableDef.Cols[idxDocidPos].Typ,
-		//	Expr: &plan.Expr_Col{
-		//		Col: &plan.ColRef{
-		//			RelPos: 0,
-		//			ColPos: idxDocidPos,
-		//			Name:   "doc_id",
-		//		},
-		//	},
-		//}
+		probeExpr := &plan.Expr{
+			Typ: scanNodeProject[1].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: docIdPos,
+					Name:   "doc_id",
+				},
+			},
+		}
 
 		idxScanNode := &plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			Stats:       &plan.Stats{},
-			ObjRef:      indexObjRef,
-			TableDef:    newIndexTableDef,
-			ProjectList: scanNodeProject,
-			//RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, true)},
+			NodeType:               plan.Node_TABLE_SCAN,
+			Stats:                  &plan.Stats{},
+			ObjRef:                 indexObjRef,
+			TableDef:               newIndexTableDef,
+			ProjectList:            scanNodeProject,
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, true)},
 		}
 		idxScanId := builder.appendNode(idxScanNode, bindCtx)
-		//idxScanNode.Stats.ForceOneCN = true
+		idxScanNode.Stats.ForceOneCN = true
 
 		var leftExpr = &plan.Expr{
 			Typ: scanNodeProject[1].Typ,
@@ -4582,24 +4585,24 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		},
 		)
 
-		//rfBuildExpr := &plan.Expr{
-		//	Typ: orgPkType,
-		//	Expr: &plan.Expr_Col{
-		//		Col: &plan.ColRef{
-		//			RelPos: 0,
-		//			ColPos: 0,
-		//		},
-		//	},
-		//}
+		rfBuildExpr := &plan.Expr{
+			Typ: orgPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 0,
+				},
+			},
+		}
 
-		//sid := builder.compCtx.GetProcess().GetService()
+		sid := builder.compCtx.GetProcess().GetService()
 		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_JOIN,
-			JoinType:    plan.Node_RIGHT,
-			Children:    []int32{idxScanId, lastNodeId},
-			OnList:      []*Expr{joinCond},
-			ProjectList: projectList,
-			//RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr, true)},
+			NodeType:               plan.Node_JOIN,
+			JoinType:               plan.Node_RIGHT,
+			Children:               []int32{idxScanId, lastNodeId},
+			OnList:                 []*Expr{joinCond},
+			ProjectList:            projectList,
+			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr, true)},
 		}, bindCtx)
 
 		deleteIdx := 0
