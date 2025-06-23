@@ -76,12 +76,13 @@ var _ IndexSqlWriter = new(HnswSqlWriter[float32])
 
 // check algo type to return the correct sql writer
 func NewIndexSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	algo = catalog.ToLower(algo)
 	switch algo {
-	case "fulltext":
+	case catalog.MOIndexFullTextAlgo.ToString():
 		return NewFulltextSqlWriter(algo, dbTblInfo, tabledef, indexdef)
-	case "ivfflat":
+	case catalog.MoIndexIvfFlatAlgo.ToString():
 		return NewIvfflatSqlWriter(algo, dbTblInfo, tabledef, indexdef)
-	case "hnsw":
+	case catalog.MoIndexHnswAlgo.ToString():
 		return NewHnswSqlWriter(algo, dbTblInfo, tabledef, indexdef)
 	default:
 		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
