@@ -107,10 +107,19 @@ func (node *UnresolvedName) ColNameOrigin() string {
 }
 
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
-	for i := node.NumParts - 1; i >= 0; i-- {
-		ctx.WriteString(node.CStrParts[i].Origin())
-		if i > 0 {
-			ctx.WriteByte('.')
+	if ctx.quoteIdentifier {
+		for i := node.NumParts - 1; i >= 0; i-- {
+			ctx.WriteString("`" + node.CStrParts[i].Origin() + "`")
+			if i > 0 {
+				ctx.WriteByte('.')
+			}
+		}
+	} else {
+		for i := node.NumParts - 1; i >= 0; i-- {
+			ctx.WriteString(node.CStrParts[i].Origin())
+			if i > 0 {
+				ctx.WriteByte('.')
+			}
 		}
 	}
 	if node.Star && node.NumParts > 0 {
