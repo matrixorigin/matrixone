@@ -1586,15 +1586,15 @@ func (c *checkpointCleaner) tryScanLocked(
 	}
 
 	// get up to maxMergeCheckpointCount incremental checkpoints starting from the max scanned timestamp
-	checkpoints := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxMergeCheckpointCount)
+	ckps := c.checkpointCli.ICKPSeekLT(maxScannedTS, c.config.maxMergeCheckpointCount)
 
 	// quick return if there is no incremental checkpoint
-	if len(checkpoints) == 0 && len(candidates) == 0 {
+	if len(ckps) == 0 && len(candidates) == 0 {
 		return
 	}
 
 	// filter out the incremental checkpoints that do not meet the requirements
-	for _, ckp := range checkpoints {
+	for _, ckp := range ckps {
 		if !c.checkExtras(ckp) {
 			continue
 		}
