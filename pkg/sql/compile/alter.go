@@ -329,7 +329,6 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 
 	switch qry.AlgorithmType {
 	case plan.AlterTable_COPY:
-		qry.CreateTmpTableSql += " partition by hash(c) partitions 2"
 		return s.doAlterTable(c)
 	default:
 		// alter primary table
@@ -362,7 +361,12 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 				table.ObjectNamePrefix,
 				table.AtTsExpr,
 			)
-			sql := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+			sql := tree.StringWithOpts(
+				stmt,
+				dialect.MYSQL,
+				tree.WithQuoteIdentifier(),
+				tree.WithSingleQuoteString(),
+			)
 			if err := c.runSql(sql); err != nil {
 				return err
 			}
