@@ -13,6 +13,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
+// IndexSqlWriter interface
 type IndexSqlWriter interface {
 	CheckLastOp(op string) bool
 	Upsert(ctx context.Context, row []any) error
@@ -24,6 +25,7 @@ type IndexSqlWriter interface {
 	Empty() bool
 }
 
+// Base implementation of IVFFLAT and FULLTEXT.  Their implementation are simliar.
 type BaseIndexSqlWriter struct {
 	lastCdcOp string
 	vbuf      []byte
@@ -41,11 +43,13 @@ type BaseIndexSqlWriter struct {
 	dbName    string
 }
 
+// Fulltext Sql Writer.  Only one hidden secondary index table
 type FulltextSqlWriter struct {
 	BaseIndexSqlWriter
 	indexTableName string
 }
 
+// Ivfflat Sql writer. Three hidden secondary index tables
 type IvfflatSqlWriter struct {
 	BaseIndexSqlWriter
 	centroids_tbl string
@@ -54,6 +58,7 @@ type IvfflatSqlWriter struct {
 	ivfparam      vectorindex.IvfParam
 }
 
+// Hnsw Sql Writer.  Use the vectorindex.VectorIndeXCdc JSON format
 type HnswSqlWriter[T types.RealNumbers] struct {
 	cdc       *vectorindex.VectorIndexCdc[T]
 	meta      vectorindex.HnswCdcParam
@@ -91,39 +96,7 @@ func NewIndexSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Table
 	return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
 }
 
-func NewFulltextSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &FulltextSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, vbuf: make([]byte, 0, 1024)}}
-
-	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
-	typ := tabledef.Cols[w.pkPos].Typ
-	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
-
-	nparts := len(w.indexdef[0].Parts)
-	w.partsPos = make([]int32, nparts)
-	w.partsType = make([]*types.Type, nparts)
-
-	for i, part := range w.indexdef[0].Parts {
-		w.partsPos[i] = tabledef.Name2ColIndex[part]
-		typ = tabledef.Cols[w.partsPos[i]].Typ
-		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
-	}
-
-	w.srcPos = make([]int32, nparts+1)
-	w.srcType = make([]*types.Type, nparts+1)
-
-	w.srcPos[0] = w.pkPos
-	w.srcType[0] = w.pkType
-	for i := range w.partsType {
-		w.srcPos[i+1] = w.partsPos[i]
-		w.srcType[i+1] = w.partsType[i]
-	}
-
-	w.indexTableName = w.indexdef[0].IndexTableName
-	w.dbName = tabledef.DbName
-
-	return w, nil
-}
-
+// Implementation of Base Index SqlWriter
 func (w *BaseIndexSqlWriter) Full() bool {
 	return false
 }
@@ -232,6 +205,40 @@ func (w *BaseIndexSqlWriter) Empty() bool {
 	return len(w.vbuf) == 0
 }
 
+// New Fulltext Sql Writer
+func NewFulltextSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	w := &FulltextSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, vbuf: make([]byte, 0, 1024)}}
+
+	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
+	typ := tabledef.Cols[w.pkPos].Typ
+	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+
+	nparts := len(w.indexdef[0].Parts)
+	w.partsPos = make([]int32, nparts)
+	w.partsType = make([]*types.Type, nparts)
+
+	for i, part := range w.indexdef[0].Parts {
+		w.partsPos[i] = tabledef.Name2ColIndex[part]
+		typ = tabledef.Cols[w.partsPos[i]].Typ
+		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
+
+	w.srcPos = make([]int32, nparts+1)
+	w.srcType = make([]*types.Type, nparts+1)
+
+	w.srcPos[0] = w.pkPos
+	w.srcType[0] = w.pkType
+	for i := range w.partsType {
+		w.srcPos[i+1] = w.partsPos[i]
+		w.srcType[i+1] = w.partsType[i]
+	}
+
+	w.indexTableName = w.indexdef[0].IndexTableName
+	w.dbName = tabledef.DbName
+
+	return w, nil
+}
+
 // with src as (select cast(serial(cast(column_0 as bigint), cast(column_1 as bigint)) as varchar) as id, column_2 as body, column_3 as title from
 // (values row(1, 2, 'body', 'title'), row(2, 3, 'body is heavy', 'I do not know'))) select f.* from src
 // cross apply fulltext_index_tokenize('{"parser":"ngram"}', 61, id, body, title) as f;
@@ -283,6 +290,7 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	return []byte(sql), nil
 }
 
+// Implementation of HNSW Sql writer
 func NewHnswSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
 	w := &HnswSqlWriter[float32]{tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, cdc: vectorindex.NewVectorIndexCdc[float32]()}
 
@@ -447,6 +455,7 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 	return []byte(sql), nil
 }
 
+// Implementation of Ivfflat Sql writer
 func NewIvfflatSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
 	w := &IvfflatSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, vbuf: make([]byte, 0, 1024)}}
 
