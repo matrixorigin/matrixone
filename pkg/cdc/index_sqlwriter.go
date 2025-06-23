@@ -280,8 +280,6 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("FulltextSqlWriter: invalid CDC type")
 	}
-
-	return nil, nil
 }
 
 func (w *FulltextSqlWriter) toFulltextDelete() ([]byte, error) {
@@ -574,8 +572,6 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("IvfflatSqlWriter: invalid CDC type")
 	}
-
-	return nil, nil
 }
 
 // catalog.SystemSI_IVFFLAT_TblCol_Entries_version
