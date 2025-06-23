@@ -24,6 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
@@ -141,7 +145,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 5. drop original table
-	if err = dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+	if err := c.runSql("drop table `" + tblName + "`"); err != nil {
 		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", c.db),
 			zap.String("origin tableName", qry.GetTableDef().Name),
@@ -316,6 +320,61 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetAlterTable()
+
+	ps := c.proc.GetPartitionService()
+	if !ps.Enabled() ||
+		!features.IsPartitioned(qry.TableDef.FeatureFlag) {
+		return s.doAlterTable(c)
+	}
+
+	switch qry.AlgorithmType {
+	case plan.AlterTable_COPY:
+		qry.CreateTmpTableSql += " partition by hash(c) partitions 2"
+		return s.doAlterTable(c)
+	default:
+		// alter primary table
+		if err := s.doAlterTable(c); err != nil {
+			return err
+		}
+
+		// alter all partition tables
+		metadata, err := ps.GetPartitionMetadata(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			c.proc.Base.TxnOperator,
+		)
+		if err != nil {
+			return err
+		}
+
+		st, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+		stmt := st.(*tree.AlterTable)
+		table := stmt.Table
+		stmt.PartitionOption = nil
+		for _, p := range metadata.Partitions {
+			stmt.Table = tree.NewTableName(
+				tree.Identifier(p.PartitionTableName),
+				table.ObjectNamePrefix,
+				table.AtTsExpr,
+			)
+			sql := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+			if err := c.runSql(sql); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func (s *Scope) doAlterTable(c *Compile) error {
+	qry := s.Plan.GetDdl().GetAlterTable()
+
+	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		err = s.AlterTableCopy(c)
 	} else {
@@ -334,7 +393,6 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 			}
 		}
 	}
-
 	return err
 }
 

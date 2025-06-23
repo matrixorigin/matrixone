@@ -3619,6 +3619,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		Database:       databaseName,
 		TableDef:       tableDef,
 		IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		RawSQL:         tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString()),
 	}
 	accountId, err := ctx.GetAccountId()
 	if err != nil {

@@ -552,16 +552,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
-				for _, indexdef := range tableDef.Indexes {
+				for idx, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
 						dropIndexMap[indexdef.IndexName] = true
 
 						//1. drop index table
 						if indexdef.TableExist {
-							if _, err = dbSource.Relation(c.proc.Ctx, indexdef.IndexTableName, nil); err != nil {
-								return err
-							}
-							if err = dbSource.Delete(c.proc.Ctx, indexdef.IndexTableName); err != nil {
+							if err := c.runSql("drop table `" + indexdef.IndexTableName + "`"); err != nil {
 								return err
 							}
 						}
@@ -571,6 +568,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if err != nil {
 							return err
 						}
+						extra.IndexTables = append(extra.IndexTables[:idx], extra.IndexTables[idx+1:]...)
 					} else {
 						notDroppedIndex = append(notDroppedIndex, indexdef)
 					}
