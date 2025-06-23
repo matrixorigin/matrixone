@@ -2109,11 +2109,11 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	// TODO: HNSWCDC delete cdc task for vector, fulltext index
-	// cdc task name = __mo_cdc_{qry.Database}_{qry.Table}_{qry.IndexName}
+	// TODO: HNSWCDC delete cdc table task for vector, fulltext index
+	// cdc task name = __mo_cdc_{qry.Database}_{qry.Table}
 	// pitr name = __mo_table_pitr_{qry.Database}_{qry.Table}
 	// DROP PITR IF EXISTS `__mo_table_pitr_${qry.Database}_${srctable}`
-	// DROP CDC TASK __mo_cdc_${qry.Database}_${srctable}_${qry.IndexName}
+	// DROP CDC TASK __mo_cdc_${qry.Database}_${srctable}
 
 	return nil
 }
