@@ -100,9 +100,9 @@ type RuntimeConfig struct {
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {
-	Start string                   `json:"start"`
-	End   string                   `json:"end"`
-	Data  []VectorIndexCdcEntry[T] `json:"cdc"`
+	// Start string                   `json:"start"`
+	// End   string                   `json:"end"`
+	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
 func NewVectorIndexCdc[T types.RealNumbers]() *VectorIndexCdc[T] {

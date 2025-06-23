@@ -80,6 +80,9 @@ func NewIndexSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Table
 	case "fulltext":
 		return NewFulltextSqlWriter(algo, dbTblInfo, tabledef, indexdef)
 	case "ivfflat":
+		return NewIvfflatSqlWriter(algo, dbTblInfo, tabledef, indexdef)
+	case "hnsw":
+		return NewHnswSqlWriter(algo, dbTblInfo, tabledef, indexdef)
 	default:
 		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
 
@@ -323,6 +326,10 @@ func NewHnswSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableD
 	typ := tabledef.Cols[w.pkPos].Typ
 	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 
+	if w.pkType.Oid != types.T_int64 {
+		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: primary key is not bigint")
+	}
+
 	nparts := len(idxdef.Parts)
 	w.partsPos = make([]int32, nparts)
 	w.partsType = make([]*types.Type, nparts)
@@ -331,6 +338,10 @@ func NewHnswSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableD
 		w.partsPos[i] = tabledef.Name2ColIndex[part]
 		typ = tabledef.Cols[w.partsPos[i]].Typ
 		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
+
+	if w.partsType[0].Oid != types.T_array_float32 {
+		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: part is not vecf32")
 	}
 
 	w.srcPos = make([]int32, nparts+1)

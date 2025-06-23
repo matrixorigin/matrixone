@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/btree"
@@ -238,18 +237,18 @@ func TestNewHnswSyncSinker(t *testing.T) {
 		sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
 		require.NoError(t, err)
 		require.NotNil(t, sinker)
-		require.Equal(t, int32(0), sinker.(*hnswSyncSinker[float32]).pkcol)
-		require.Equal(t, int32(1), sinker.(*hnswSyncSinker[float32]).veccol)
 		sinker.Close()
 	})
 
-	t.Run("success float64", func(t *testing.T) {
-		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float64, 128)
-		sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
-		require.NoError(t, err)
-		require.NotNil(t, sinker)
-		sinker.Close()
-	})
+	/*
+		t.Run("success float64", func(t *testing.T) {
+			tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float64, 128)
+			sinker, err := NewHnswSyncSinker("test-uuid", UriInfo{}, dbTblInfo, watermarkUpdater, tblDef, 3, time.Second, ar, 1024, "10s")
+			require.NoError(t, err)
+			require.NotNil(t, sinker)
+			sinker.Close()
+		})
+	*/
 
 	t.Run("invalid pkey count", func(t *testing.T) {
 		tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 128)
@@ -316,7 +315,7 @@ func TestHnswSyncSinker_Run(t *testing.T) {
 	require.NoError(t, err)
 	defer sinker.Close()
 
-	s := sinker.(*hnswSyncSinker[float32])
+	s := sinker.(*hnswSyncSinker)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -357,7 +356,7 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 	require.NoError(t, err)
 	defer sinker.Close()
 
-	s := sinker.(*hnswSyncSinker[float32])
+	s := sinker.(*hnswSyncSinker)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -432,7 +431,7 @@ func TestHnswSyncSinker_Sink(t *testing.T) {
 	require.NoError(t, err)
 	defer sinker.Close()
 
-	s := sinker.(*hnswSyncSinker[float32])
+	s := sinker.(*hnswSyncSinker)
 	ctx := context.Background()
 
 	t.Run("snapshot", func(t *testing.T) {
@@ -458,15 +457,16 @@ func TestHnswSyncSinker_Sink(t *testing.T) {
 		}
 		s.Sink(ctx, output)
 		require.NoError(t, s.Error())
-		js, err := s.cdc.ToJson()
+		sql, err := s.sqlWriters[0].ToSql()
 		require.NoError(t, err)
-		require.Equal(t, string(js), `{"start":"1-0","end":"2-0","cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}`)
+		require.Equal(t, string(sql), `SELECT hnsw_cdc_update('sink_db', 'sink_tbl', 2, '{"cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}');`)
 	})
 
 	t.Run("noMoreData", func(t *testing.T) {
+		rowdata := []any{int64(100), []float32{1.0, 2.0}}
 		s.Reset()
-		s.cdc.Upsert(int64(100), []float32{1.0, 2.0}) // Add some data
-		require.False(t, s.cdc.Empty())
+		s.sqlWriters[0].Upsert(ctx, rowdata) // Add some data
+		require.False(t, s.sqlWriters[0].Empty())
 
 		var sqlSent bool
 		doneCh := make(chan struct{})
@@ -495,30 +495,41 @@ func TestHnswSyncSinker_Sink(t *testing.T) {
 			t.Fatal("timed out waiting for SQL to be sent on noMoreData")
 		}
 		require.True(t, sqlSent)
-		require.True(t, s.cdc.Empty(), "CDC should be reset after noMoreData flush")
+		require.True(t, s.sqlWriters[0].Empty(), "CDC should be reset after noMoreData flush")
 	})
 
 }
 
 func TestHnswSyncSinker_SendSql(t *testing.T) {
 
+	dbTblInfo := newTestDbTableInfo()
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	watermarkUpdater := &WatermarkUpdater{
 		watermarkMap: &sync.Map{},
 	}
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	sinker, _ := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
-	s := sinker.(*hnswSyncSinker[float32])
+	s := sinker.(*hnswSyncSinker)
 	defer s.Close() // Closes sqlBufSendCh
 
 	t.Run("send sql happy path", func(t *testing.T) {
+		var err error
+		row1 := []any{int64(1), []float32{0.1, 0.2}}
+		row2 := []any{int64(2), []float32{0.3, 0.4}}
+
 		s.Reset()
-		s.cdc.Upsert(int64(1), []float32{0.1, 0.2})
-		s.cdc.Delete(int64(2))
-		s.cdc.Start = "ts1"
-		s.cdc.End = "ts2"
+		err = s.sqlWriters[0].Upsert(ctx, row1)
+		require.NoError(t, err)
+		err = s.sqlWriters[0].Delete(ctx, row2)
+		require.NoError(t, err)
+		/*
+			s.cdc.Start = "ts1"
+			s.cdc.End = "ts2"
+		*/
 
 		var receivedSql []byte
 		var wg sync.WaitGroup
@@ -528,7 +539,7 @@ func TestHnswSyncSinker_SendSql(t *testing.T) {
 			receivedSql = <-s.sqlBufSendCh
 		}()
 
-		err := s.sendSql()
+		err = s.sendSql(s.sqlWriters[0])
 		require.NoError(t, err)
 		wg.Wait() // Wait for the goroutine to receive the SQL
 
@@ -548,23 +559,22 @@ func TestHnswSyncSinker_SendSql(t *testing.T) {
 		// The cdc.Start and cdc.End are part of the ToJson output, but sendSql resets cdc *after* ToJson
 		// So we need to capture the state of cdc *before* it's reset for the expected JSON.
 		// Let's reconstruct the expected JSON more carefully.
-		cdcForJson := vectorindex.NewVectorIndexCdc[float32]()
-		cdcForJson.Upsert(int64(1), []float32{0.1, 0.2})
-		cdcForJson.Delete(int64(2))
-		cdcForJson.Start = "ts1"
-		cdcForJson.End = "ts2"
-		expectedJsonBytes, _ := cdcForJson.ToJson()
-
-		expectedSql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', %d, '%s');",
-			strings.Repeat(" ", sqlBufReserved),
-			s.param.DbName, s.param.Table, s.param.Dimension, string(expectedJsonBytes))
-		require.Equal(t, expectedSql, sqlStr)
-		require.True(t, s.cdc.Empty(), "CDC should be reset after sending SQL")
+		writer, err := NewHnswSqlWriter("hnsw", dbTblInfo, tblDef, tblDef.Indexes)
+		require.NoError(t, err)
+		writer.Upsert(ctx, row1)
+		writer.Delete(ctx, row2)
+		/*
+			cdcForJson.Start = "ts1"
+			cdcForJson.End = "ts2"
+		*/
+		expectedSqlBytes, _ := writer.ToSql()
+		require.Equal(t, string(expectedSqlBytes), sqlStr)
+		require.True(t, s.sqlWriters[0].Empty(), "CDC should be reset after sending SQL")
 	})
 
 	t.Run("send sql empty cdc", func(t *testing.T) {
 		s.Reset() // Ensure CDC is empty
-		err := s.sendSql()
+		err := s.sendSql(s.sqlWriters[0])
 		require.NoError(t, err)
 		select {
 		case <-s.sqlBufSendCh:
@@ -579,8 +589,8 @@ func TestHnswSyncSinker_ErrorHandling(t *testing.T) {
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
 
-	s := &hnswSyncSinker[float32]{} // Minimal struct for error testing
-	s.err.Store((*error)(nil))      // Initialize with nil error pointer
+	s := &hnswSyncSinker{}     // Minimal struct for error testing
+	s.err.Store((*error)(nil)) // Initialize with nil error pointer
 
 	require.Nil(t, s.Error())
 
@@ -606,6 +616,8 @@ func TestHnswSyncSinker_Sink_AtomicBatch(t *testing.T) {
 
 	proc := testutil.NewProcess()
 
+	dbTblInfo := newTestDbTableInfo()
+	ctx := context.Background()
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
 
@@ -614,7 +626,7 @@ func TestHnswSyncSinker_Sink_AtomicBatch(t *testing.T) {
 	}
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	sinker, _ := NewHnswSyncSinker("test-uuid", UriInfo{}, newTestDbTableInfo(), watermarkUpdater, tblDef, 0, 0, newTestActiveRoutine(), 1024, "1s")
-	s := sinker.(*hnswSyncSinker[float32])
+	s := sinker.(*hnswSyncSinker)
 	defer s.Close() // Closes sqlBufSendCh
 
 	bat := testutil.NewBatchWithVectors(
@@ -674,19 +686,21 @@ func TestHnswSyncSinker_Sink_AtomicBatch(t *testing.T) {
 	wg.Wait() // Wait for the goroutine to receive the SQL
 	sqlStr := string(receivedSql)
 
-	cdcForJson := vectorindex.NewVectorIndexCdc[float32]()
-	cdcForJson.Upsert(int64(1), []float32{0.1, 0.2})
-	cdcForJson.Upsert(int64(2), []float32{0.3, 0.4})
-	cdcForJson.Delete(int64(1))
-	cdcForJson.Delete(int64(2))
-	cdcForJson.Start = "1-0"
-	cdcForJson.End = "2-0"
-	expectedJsonBytes, _ := cdcForJson.ToJson()
+	row1 := []any{int64(1), []float32{0.1, 0.2}}
+	row2 := []any{int64(2), []float32{0.3, 0.4}}
 
-	expectedSql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', %d, '%s');",
-		strings.Repeat(" ", sqlBufReserved),
-		s.param.DbName, s.param.Table, s.param.Dimension, string(expectedJsonBytes))
-	require.Equal(t, expectedSql, sqlStr)
-	require.True(t, s.cdc.Empty(), "CDC should be reset after sending SQL")
+	writer, _ := NewHnswSqlWriter("hnsw", dbTblInfo, tblDef, tblDef.Indexes)
+	writer.Upsert(ctx, row1)
+	writer.Upsert(ctx, row2)
+	writer.Delete(ctx, row1)
+	writer.Delete(ctx, row2)
+	/*
+		cdcForJson.Start = "1-0"
+		cdcForJson.End = "2-0"
+	*/
+	expectedSqlBytes, _ := writer.ToSql()
+
+	require.Equal(t, string(expectedSqlBytes), sqlStr)
+	require.True(t, s.sqlWriters[0].Empty(), "CDC should be reset after sending SQL")
 
 }

@@ -23,10 +23,8 @@ package cdc
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -34,8 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -43,24 +39,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-var _ Sinker = &hnswSyncSinker[float32]{}
+var _ Sinker = &hnswSyncSinker{}
 
 var sqlExecutorFactory = _sqlExecutorFactory
 
-type hnswSyncSinker[T types.RealNumbers] struct {
+type hnswSyncSinker struct {
 	cnUUID           string
 	dbTblInfo        *DbTableInfo
 	watermarkUpdater IWatermarkUpdater
 	ar               *ActiveRoutine
 	tableDef         *plan.TableDef
-	cdc              *vectorindex.VectorIndexCdc[T]
-	param            vectorindex.HnswCdcParam
 	err              atomic.Value
-
-	sqlBufSendCh chan []byte
-	pkcol        int32
-	veccol       int32
-	exec         executor.SQLExecutor
+	sqlWriters       []IndexSqlWriter
+	sqlBufSendCh     chan []byte
+	exec             executor.SQLExecutor
+	rowdata          []any
 }
 
 func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
@@ -98,8 +91,6 @@ var NewHnswSyncSinker = func(
 		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
 	}
 
-	pkColName := tableDef.Pkey.PkeyColName
-
 	hnswindexes := make([]*plan.IndexDef, 0, 2)
 
 	for _, idx := range tableDef.Indexes {
@@ -119,94 +110,76 @@ var NewHnswSyncSinker = func(
 		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
 	}
 
-	pkcol := tableDef.Name2ColIndex[pkColName]
-	veccol := tableDef.Name2ColIndex[indexdef.Parts[0]]
+	/*
+		pkcol := tableDef.Name2ColIndex[pkColName]
+		veccol := tableDef.Name2ColIndex[indexdef.Parts[0]]
 
-	if tableDef.Cols[pkcol].Typ.Id != int32(types.T_int64) {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table primary key is not int64")
+		if tableDef.Cols[pkcol].Typ.Id != int32(types.T_int64) {
+			return nil, moerr.NewInternalErrorNoCtx("hnsw index table primary key is not int64")
 
-	}
-
-	// get param and index table name
-	paramstr := indexdef.IndexAlgoParams
-	var meta, storage string
-	for _, idx := range hnswindexes {
-		if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Metadata {
-			meta = idx.IndexTableName
 		}
-		if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Storage {
-			storage = idx.IndexTableName
+
+		// get param and index table name
+		paramstr := indexdef.IndexAlgoParams
+		var meta, storage string
+		for _, idx := range hnswindexes {
+			if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Metadata {
+				meta = idx.IndexTableName
+			}
+			if idx.IndexAlgoTableType == catalog.Hnsw_TblType_Storage {
+				storage = idx.IndexTableName
+			}
 		}
-	}
 
-	if len(meta) == 0 || len(storage) == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table either meta or storage hidden index table not exist")
-	}
-
-	var hnswparam vectorindex.HnswParam
-	if len(paramstr) > 0 {
-		err := json.Unmarshal([]byte(paramstr), &hnswparam)
-		if err != nil {
-			return nil, moerr.NewInternalErrorNoCtx("hnsw sync sinker. failed to convert hnsw param json")
+		if len(meta) == 0 || len(storage) == 0 {
+			return nil, moerr.NewInternalErrorNoCtx("hnsw index table either meta or storage hidden index table not exist")
 		}
-	}
 
-	param := vectorindex.HnswCdcParam{
-		MetaTbl:   meta,
-		IndexTbl:  storage,
-		DbName:    dbTblInfo.SinkDbName,
-		Table:     dbTblInfo.SinkTblName,
-		Params:    hnswparam,
-		Dimension: tableDef.Cols[veccol].Typ.Width,
+		var hnswparam vectorindex.HnswParam
+		if len(paramstr) > 0 {
+			err := json.Unmarshal([]byte(paramstr), &hnswparam)
+			if err != nil {
+				return nil, moerr.NewInternalErrorNoCtx("hnsw sync sinker. failed to convert hnsw param json")
+			}
+		}
+
+		param := vectorindex.HnswCdcParam{
+			MetaTbl:   meta,
+			IndexTbl:  storage,
+			DbName:    dbTblInfo.SinkDbName,
+			Table:     dbTblInfo.SinkTblName,
+			Params:    hnswparam,
+			Dimension: tableDef.Cols[veccol].Typ.Width,
+		}
+	*/
+
+	sqlwriter, err := NewIndexSqlWriter("hnsw", dbTblInfo, tableDef, hnswindexes)
+	if err != nil {
+		return nil, err
 	}
 
 	// create sinker
 	var maxAllowedPacket uint64
 	maxAllowedPacket = min(maxAllowedPacket, maxSqlLength)
 
-	if tableDef.Cols[veccol].Typ.Id == int32(types.T_array_float32) {
-		s := &hnswSyncSinker[float32]{
-			cnUUID:           cnUUID,
-			dbTblInfo:        dbTblInfo,
-			watermarkUpdater: watermarkUpdater,
-			ar:               ar,
-			tableDef:         tableDef,
-			cdc:              vectorindex.NewVectorIndexCdc[float32](),
-			sqlBufSendCh:     make(chan []byte),
-			pkcol:            pkcol,
-			veccol:           veccol,
-			err:              atomic.Value{},
-			param:            param,
-			exec:             exec,
-		}
-		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
-		return s, nil
-
-	} else if tableDef.Cols[veccol].Typ.Id == int32(types.T_array_float64) {
-		s := &hnswSyncSinker[float64]{
-			cnUUID:           cnUUID,
-			dbTblInfo:        dbTblInfo,
-			watermarkUpdater: watermarkUpdater,
-			ar:               ar,
-			tableDef:         tableDef,
-			cdc:              vectorindex.NewVectorIndexCdc[float64](),
-			sqlBufSendCh:     make(chan []byte),
-			pkcol:            pkcol,
-			veccol:           veccol,
-			err:              atomic.Value{},
-			param:            param,
-			exec:             exec,
-		}
-		logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
-		return s, nil
-
-	} else {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table part is not []float32 or []float64")
+	s := &hnswSyncSinker{
+		cnUUID:           cnUUID,
+		dbTblInfo:        dbTblInfo,
+		watermarkUpdater: watermarkUpdater,
+		ar:               ar,
+		tableDef:         tableDef,
+		sqlBufSendCh:     make(chan []byte),
+		err:              atomic.Value{},
+		exec:             exec,
+		sqlWriters:       []IndexSqlWriter{sqlwriter},
+		rowdata:          make([]any, len(tableDef.Cols)),
 	}
+	logutil.Infof("cdc hnswSyncSinker(%v) maxAllowedPacket = %d", s.dbTblInfo, maxAllowedPacket)
+	return s, nil
 
 }
 
-func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
+func (s *hnswSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 	logutil.Infof("cdc hnswSyncSinker(%v).Run: start", s.dbTblInfo)
 	defer func() {
 		logutil.Infof("cdc hnswSyncSinker(%v).Run: end", s.dbTblInfo)
@@ -329,20 +302,17 @@ func (s *hnswSyncSinker[T]) Run(ctx context.Context, ar *ActiveRoutine) {
 	}
 }
 
-func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
+func (s *hnswSyncSinker) Sink(ctx context.Context, data *DecoderOutput) {
 	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
 	if data.toTs.LE(&watermark) {
 		logutil.Errorf("cdc hnswSyncSinker(%v): unexpected watermark: %s, current watermark: %s",
 			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
 		return
 	}
-	s.cdc.Start = data.fromTs.ToString()
-	s.cdc.End = data.toTs.ToString()
 
 	if data.noMoreData {
-
 		// complete sql statement
-		err := s.sendSql()
+		err := s.flushCdc()
 		if err != nil {
 			s.SetError(err)
 		}
@@ -365,23 +335,23 @@ func (s *hnswSyncSinker[T]) Sink(ctx context.Context, data *DecoderOutput) {
 	}
 }
 
-func (s *hnswSyncSinker[T]) SendBegin() {
+func (s *hnswSyncSinker) SendBegin() {
 	s.sqlBufSendCh <- begin
 }
 
-func (s *hnswSyncSinker[T]) SendCommit() {
+func (s *hnswSyncSinker) SendCommit() {
 	s.sqlBufSendCh <- commit
 }
 
-func (s *hnswSyncSinker[T]) SendRollback() {
+func (s *hnswSyncSinker) SendRollback() {
 	s.sqlBufSendCh <- rollback
 }
 
-func (s *hnswSyncSinker[T]) SendDummy() {
+func (s *hnswSyncSinker) SendDummy() {
 	s.sqlBufSendCh <- dummy
 }
 
-func (s *hnswSyncSinker[T]) Error() error {
+func (s *hnswSyncSinker) Error() error {
 	if ptr := s.err.Load(); ptr != nil {
 		errPtr := ptr.(*error)
 		if errPtr != nil {
@@ -398,48 +368,49 @@ func (s *hnswSyncSinker[T]) Error() error {
 	return nil
 }
 
-func (s *hnswSyncSinker[T]) SetError(err error) {
+func (s *hnswSyncSinker) SetError(err error) {
 	s.err.Store(&err)
 }
 
-func (s *hnswSyncSinker[T]) ClearError() {
+func (s *hnswSyncSinker) ClearError() {
 	var err *moerr.Error
 	s.SetError(err)
 }
 
-func (s *hnswSyncSinker[T]) Reset() {
-	s.cdc.Reset()
+func (s *hnswSyncSinker) Reset() {
+	for _, writer := range s.sqlWriters {
+		writer.Reset()
+	}
 	s.err = atomic.Value{}
 }
 
-func (s *hnswSyncSinker[T]) Close() {
+func (s *hnswSyncSinker) Close() {
 	// stop Run goroutine
 	close(s.sqlBufSendCh)
 }
 
-func (s *hnswSyncSinker[T]) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
-	pkvec := bat.Vecs[s.pkcol]
-	vecvec := bat.Vecs[s.veccol]
+func (s *hnswSyncSinker) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
+	var err error
+
 	for i := 0; i < batchRowCount(bat); i++ {
-		pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, i)
-
-		// check null
-		if vecvec.IsNull(uint64(i)) {
-			// nil vector means delete
-			s.cdc.Delete(pk)
-		} else {
-			v := vector.GetArrayAt[T](vecvec, i)
-
-			s.cdc.Upsert(pk, v)
+		if err = extractRowFromEveryVector(ctx, bat, i, s.rowdata); err != nil {
+			s.SetError(err)
+			return
 		}
 
-		// check full
-		if s.cdc.Full() {
-			// send sql
-			err := s.sendSql()
+		for _, writer := range s.sqlWriters {
+			err = writer.Upsert(ctx, s.rowdata)
 			if err != nil {
 				s.SetError(err)
 				return
+			}
+
+			if writer.Full() {
+				err = s.sendSql(writer)
+				if err != nil {
+					s.SetError(err)
+					return
+				}
 			}
 		}
 	}
@@ -447,7 +418,7 @@ func (s *hnswSyncSinker[T]) sinkSnapshot(ctx context.Context, bat *batch.Batch) 
 
 // upsertBatch and deleteBatch is sorted by ts
 // for the same ts, delete first, then upsert
-func (s *hnswSyncSinker[T]) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) {
+func (s *hnswSyncSinker) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) {
 	var err error
 
 	upsertIter := upsertBatch.GetRowIterator().(*atomicBatchRowIter)
@@ -501,73 +472,95 @@ func (s *hnswSyncSinker[T]) sinkTail(ctx context.Context, upsertBatch, deleteBat
 	s.flushCdc()
 }
 
-func (s *hnswSyncSinker[T]) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
+func (s *hnswSyncSinker) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	row := upsertIter.Item()
-	bat := row.Src
-
-	pkvec := bat.Vecs[s.pkcol]
-	vecvec := bat.Vecs[s.veccol]
-	pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, row.Offset)
-
-	// check null
-	if vecvec.IsNull(uint64(row.Offset)) {
-		// nil vector means delete
-		s.cdc.Delete(pk)
-	} else {
-		v := vector.GetArrayAt[T](vecvec, row.Offset)
-
-		s.cdc.Upsert(pk, v)
+	if err = upsertIter.Row(ctx, s.rowdata); err != nil {
+		return err
 	}
 
-	if s.cdc.Full() {
-		// send SQL
-		return s.sendSql()
+	for _, writer := range s.sqlWriters {
+		if !writer.CheckLastOp(vectorindex.CDC_UPSERT) {
+			// last op is not UPSERT, sendSql first
+			// send SQL
+			err = s.sendSql(writer)
+			if err != nil {
+				return err
+			}
+
+		}
+
+		writer.Upsert(ctx, s.rowdata)
+
+		if writer.Full() {
+			// send SQL
+			err = s.sendSql(writer)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
 }
 
-func (s *hnswSyncSinker[T]) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
+func (s *hnswSyncSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	row := deleteIter.Item()
-	bat := row.Src
+	if err = deleteIter.Row(ctx, s.rowdata); err != nil {
+		return err
+	}
 
-	pkvec := bat.Vecs[s.pkcol]
-	pk := vector.GetFixedAtWithTypeCheck[int64](pkvec, row.Offset)
+	for _, writer := range s.sqlWriters {
+		if !writer.CheckLastOp(vectorindex.CDC_DELETE) {
+			// last op is not DELETE, sendSql first
+			// send SQL
+			err = s.sendSql(writer)
+			if err != nil {
+				return err
+			}
 
-	s.cdc.Delete(pk)
-	if s.cdc.Full() {
-		return s.sendSql()
+		}
+
+		writer.Delete(ctx, s.rowdata)
+
+		if writer.Full() {
+			// send SQL
+			err = s.sendSql(writer)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
 }
 
-func (s *hnswSyncSinker[T]) flushCdc() (err error) {
-	return s.sendSql()
+func (s *hnswSyncSinker) flushCdc() (err error) {
+	for _, writer := range s.sqlWriters {
+		err = s.sendSql(writer)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (s *hnswSyncSinker[T]) sendSql() error {
-	if s.cdc.Empty() {
+func (s *hnswSyncSinker) sendSql(writer IndexSqlWriter) error {
+	if writer.Empty() {
 		return nil
 	}
 
 	// generate sql from cdc
-	js, err := s.cdc.ToJson()
+	sql, err := writer.ToSql()
 	if err != nil {
 		return err
 	}
-	// pad extra space at the front and send SQL
-	padding := strings.Repeat(" ", sqlBufReserved)
-	sql := fmt.Sprintf("%s SELECT hnsw_cdc_update('%s', '%s', %d, '%s');", padding, s.param.DbName, s.param.Table, s.param.Dimension, js)
 
-	s.sqlBufSendCh <- []byte(sql)
+	s.sqlBufSendCh <- sql
 
 	// reset
-	s.cdc.Reset()
+	writer.Reset()
 
 	return nil
 }
