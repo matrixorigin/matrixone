@@ -11,7 +11,7 @@ create table t1(a bigint primary key, b vecf32(3),c int,key c_k(c));
 create index idx01 using hnsw on t1(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
 drop pitr if exists `__mo_table_pitr_t1`;
 create pitr `__mo_table_pitr_t1` for table hnsw_cdc t1 range 2 'h';
-create cdc `__mo_cdc_t1_idx01` 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t1' {'Level'='table'};
+create cdc `__mo_cdc_t1_idx01` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t1' {'Level'='table'};
 
 -- show cdc all;
 -- select sleep(30);
@@ -49,7 +49,7 @@ create table t2(a bigint primary key, b vecf32(128));
 create index idx2 using hnsw on t2(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
 drop pitr if exists `__mo_table_pitr_t2`;
 create pitr `__mo_table_pitr_t2` for table hnsw_cdc t2 range 2 'h';
-create cdc `__mo_cdc_hnsw_cdc_t2_idx2` 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t2' {'Level'='table'};
+create cdc `__mo_cdc_hnsw_cdc_t2_idx2` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t2' {'Level'='table'};
 -- select sleep(30);
 
 load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2 fields terminated by ':' parallel 'true';
@@ -85,7 +85,7 @@ create index idx3 using hnsw on t3(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTI
 
 drop pitr if exists `__mo_table_pitr_hnsw_cdc_t3`;
 create pitr `__mo_table_pitr_hnsw_cdc_t3` for table hnsw_cdc t3 range 2 'h';
-create cdc `__mo_cdc_hnsw_cdc_t3_idx3` 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t3' {'Level'='table'};
+create cdc `__mo_cdc_hnsw_cdc_t3_idx3` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t3' {'Level'='table'};
 
 -- select sleep(30);
 

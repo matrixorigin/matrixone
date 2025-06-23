@@ -123,7 +123,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		if cdc.EnableConsoleSink && opts.SinkType == cdc.CDCSinkType_Console {
 			opts.UseConsole = true
 		}
-		if !opts.UseConsole && opts.SinkType != cdc.CDCSinkType_MySQL && opts.SinkType != cdc.CDCSinkType_MO && opts.SinkType != cdc.CDCSinkType_HnswSync {
+		if !opts.UseConsole && opts.SinkType != cdc.CDCSinkType_MySQL && opts.SinkType != cdc.CDCSinkType_MO && opts.SinkType != cdc.CDCSinkType_IndexSync {
 			err = moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", req.SinkType)
 			return
 		}
