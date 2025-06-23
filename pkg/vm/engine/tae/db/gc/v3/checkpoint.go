@@ -1574,6 +1574,13 @@ func (c *checkpointCleaner) tryScanLocked(
 				candidates = append(candidates, cpt)
 			}
 			candidates = append(candidates, maxGCkp)
+			gcWaterMark := c.GetGCWaterMark()
+			if gcWaterMark != nil {
+				logutil.Warn("GC-PANIC-REBUILD-GC-WATER-MARK",
+					zap.String("max gCkp", maxGCkp.String()),
+					zap.String("gcWaterMark", gcWaterMark.String()))
+			}
+			c.updateGCWaterMark(maxGCkp)
 			tryGC = false
 		}
 	}
