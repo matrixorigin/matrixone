@@ -21,15 +21,27 @@ type TableName struct {
 }
 
 func (tn TableName) Format(ctx *FmtCtx) {
-	if tn.ExplicitCatalog {
-		ctx.WriteString(string(tn.CatalogName))
-		ctx.WriteByte('.')
+	if ctx.quoteIdentifier {
+		if tn.ExplicitCatalog {
+			ctx.WriteString("`" + string(tn.CatalogName) + "`")
+			ctx.WriteByte('.')
+		}
+		if tn.ExplicitSchema {
+			ctx.WriteString("`" + string(tn.SchemaName) + "`")
+			ctx.WriteByte('.')
+		}
+		ctx.WriteString("`" + string(tn.ObjectName) + "`")
+	} else {
+		if tn.ExplicitCatalog {
+			ctx.WriteString(string(tn.CatalogName))
+			ctx.WriteByte('.')
+		}
+		if tn.ExplicitSchema {
+			ctx.WriteString(string(tn.SchemaName))
+			ctx.WriteByte('.')
+		}
+		ctx.WriteString(string(tn.ObjectName))
 	}
-	if tn.ExplicitSchema {
-		ctx.WriteString(string(tn.SchemaName))
-		ctx.WriteByte('.')
-	}
-	ctx.WriteString(string(tn.ObjectName))
 	if tn.AtTsExpr != nil {
 		tn.AtTsExpr.Format(ctx)
 	}
