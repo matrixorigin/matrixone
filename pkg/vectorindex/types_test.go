@@ -34,14 +34,14 @@ func TestCdc(t *testing.T) {
 	js, err := cdc.ToJson()
 	require.Nil(t, err)
 
-	require.Equal(t, js, `{"start":"","end":"","cdc":[{"t":"I","pk":0,"v":[0,1,2]}]}`)
+	require.Equal(t, js, `{"cdc":[{"t":"I","pk":0,"v":[0,1,2]}]}`)
 
 	// delete
 	cdc.Delete(key)
 	js, err = cdc.ToJson()
 	require.Nil(t, err)
 
-	require.Equal(t, js, `{"start":"","end":"","cdc":[{"t":"I","pk":0,"v":[0,1,2]},{"t":"D","pk":0}]}`)
+	require.Equal(t, js, `{"cdc":[{"t":"I","pk":0,"v":[0,1,2]},{"t":"D","pk":0}]}`)
 
 	// upsert
 	cdc.Upsert(key2, v2)
@@ -49,7 +49,7 @@ func TestCdc(t *testing.T) {
 	js, err = cdc.ToJson()
 	require.Nil(t, err)
 
-	require.Equal(t, js, `{"start":"","end":"","cdc":[{"t":"I","pk":0,"v":[0,1,2]},{"t":"D","pk":0},{"t":"U","pk":1,"v":[1,2,3]}]}`)
+	require.Equal(t, js, `{"cdc":[{"t":"I","pk":0,"v":[0,1,2]},{"t":"D","pk":0},{"t":"U","pk":1,"v":[1,2,3]}]}`)
 
 	require.False(t, cdc.Empty())
 
@@ -59,5 +59,5 @@ func TestCdc(t *testing.T) {
 
 	js, err = cdc.ToJson()
 	require.NoError(t, err)
-	require.Equal(t, js, `{"start":"","end":"","cdc":[]}`)
+	require.Equal(t, js, `{"cdc":[]}`)
 }
