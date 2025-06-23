@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,11 +45,17 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(filter.ctr.executors) == 0 && filter.FilterExprs != nil {
-		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.FilterExprs}))
+		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.FilterExprs)
+		if err != nil {
+			return
+		}
 	}
 
 	if len(filter.RuntimeFilterExprs) > 0 {
 		filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.RuntimeFilterExprs)
+		if err != nil {
+			return
+		}
 	}
 
 	if filter.ctr.allExecutors == nil {
@@ -62,7 +67,7 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.runtimeExecutors...)
 	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.executors...)
 
-	return err
+	return
 }
 
 func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {

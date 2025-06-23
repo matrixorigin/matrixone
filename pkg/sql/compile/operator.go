@@ -665,9 +665,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
+func constructRestrict(n *plan.Node, filterExprs []*plan.Expr) *filter.Filter {
 	op := filter.NewArgument()
-	op.FilterExprs = filterExpr
+	op.FilterExprs = filterExprs
 	op.IsEnd = n.IsEnd
 	return op
 }

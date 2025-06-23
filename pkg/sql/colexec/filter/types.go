@@ -28,7 +28,7 @@ var _ vm.Operator = new(Filter)
 
 type Filter struct {
 	ctr                container
-	FilterExprs        *plan.Expr
+	FilterExprs        []*plan.Expr
 	RuntimeFilterExprs []*plan.Expr
 	IsEnd              bool
 

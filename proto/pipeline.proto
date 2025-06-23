@@ -514,8 +514,8 @@ message Instruction{
   PreInsert pre_insert               = 18;
   PreInsertUnique pre_insert_unique  = 19;
   repeated plan.OrderBySpec order_by = 20;
-  repeated plan.Expr    project_list = 21;
-  plan.Expr    filter = 22;
+  repeated plan.Expr project_list = 21;
+  repeated plan.Expr filters = 22;
   repeated plan.Expr runtime_filters = 23;
   plan.Expr    limit = 24;
   plan.Expr    offset = 25;
