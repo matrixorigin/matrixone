@@ -125,9 +125,9 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			pKeyMsg = "serial("
 			for i, part := range originTableDef.Pkey.Names {
 				if i == 0 {
-					pKeyMsg += part
+					pKeyMsg += "`" + part + "`"
 				} else {
-					pKeyMsg += "," + part
+					pKeyMsg += "," + "`" + part + "`"
 				}
 			}
 			pKeyMsg += ")"
