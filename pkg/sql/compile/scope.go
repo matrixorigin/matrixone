@@ -717,8 +717,10 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		nonPkFilters = append(nonPkFilters, arg.E)
-		arg.E = colexec.RewriteFilterExprList(plan2.DeepCopyExprList(nonPkFilters))
+		err := arg.SetRuntimeExpr(s.Proc, nonPkFilters)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// reset datasource
