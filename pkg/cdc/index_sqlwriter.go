@@ -149,6 +149,17 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 	return nil
 }
 
+func (w *BaseIndexSqlWriter) writeDeleteRow(ctx context.Context, row []any) error {
+	var err error
+
+	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
+	if err != nil {
+		return err
+	}
+	w.ndata += 1
+	return nil
+}
+
 func (w *BaseIndexSqlWriter) Upsert(ctx context.Context, row []any) error {
 
 	if len(w.lastCdcOp) == 0 {
@@ -188,17 +199,11 @@ func (w *BaseIndexSqlWriter) Insert(ctx context.Context, row []any) error {
 }
 
 func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
-	var err error
 
 	if len(w.lastCdcOp) == 0 {
 		// init
 		w.lastCdcOp = vectorindex.CDC_DELETE
-		w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
-		if err != nil {
-			return err
-		}
-		w.ndata += 1
-
+		return w.writeDeleteRow(ctx, row)
 	}
 
 	if w.lastCdcOp != vectorindex.CDC_DELETE {
@@ -208,13 +213,7 @@ func (w *BaseIndexSqlWriter) Delete(ctx context.Context, row []any) error {
 
 	// same as previous operation and append to IN ()
 	w.vbuf = appendString(w.vbuf, ",")
-	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
-	if err != nil {
-		return err
-	}
-	w.ndata += 1
-
-	return nil
+	return w.writeDeleteRow(ctx, row)
 }
 
 func (w *BaseIndexSqlWriter) Reset() {
