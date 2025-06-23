@@ -190,6 +190,8 @@ const (
 		"FROM `mo_catalog`.`mo_tables` " +
 		"WHERE " +
 		" account_id IN (%s) " +
+		"%s" +
+		"%s" +
 		" AND relkind = '%s' " +
 		" AND reldatabase NOT IN (%s)"
 )
@@ -586,10 +588,22 @@ func (b cdcSQLBuilder) UpdateWatermarkSQL(
 // ------------------------------------------------------------------------------------------------
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
-func (b cdcSQLBuilder) CollectTableInfoSQL(account_ids string) string {
+func (b cdcSQLBuilder) CollectTableInfoSQL(account_ids string, db_names string, table_names string) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL,
 		account_ids,
+		func() string {
+			if db_names == "*" {
+				return ""
+			}
+			return " AND reldatabase IN (" + db_names + ") "
+		}(),
+		func() string {
+			if table_names == "*" {
+				return ""
+			}
+			return " AND relname IN (" + table_names + ") "
+		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
 	)
