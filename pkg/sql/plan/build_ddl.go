@@ -742,9 +742,9 @@ func buildCreateTable(
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
 		// TODO WHY?
-		//if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
-		//	return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
-		//}
+		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+		}
 		tableDef.Name = string(newTable.ObjectName)
 
 		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false)

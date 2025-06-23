@@ -52,7 +52,26 @@ func (tc *TableClone) Free(proc *process.Process, pipelineFailed bool, err error
 }
 
 func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err error) {
-	return
+	if tc.dataObjBat != nil {
+		tc.dataObjBat.CleanOnlyData()
+	}
+
+	if tc.tombstoneObjBat != nil {
+		tc.tombstoneObjBat.CleanOnlyData()
+	}
+
+	if tc.idxNameToReader != nil {
+		for _, r := range tc.idxNameToReader {
+			r.Close()
+		}
+		clear(tc.idxNameToReader)
+	}
+
+	if tc.dstIdxNameToRel != nil {
+		clear(tc.dstIdxNameToRel)
+	}
+
+	tc.srcRelReader.Close()
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
