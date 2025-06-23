@@ -96,7 +96,6 @@ var NewIndexSyncSinker = func(
 
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-			fmt.Printf("idx %v\n", idx)
 			key := idx.IndexName
 			sidx, ok := indexmap[key]
 			if ok {
