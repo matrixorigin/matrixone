@@ -199,8 +199,8 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
-	var dbs []string
-	var tables []string
+	dbs := make([]string, 0, len(exec.tables.Pts))
+	tables := make([]string, 0, len(exec.tables.Pts))
 	for _, pt := range exec.tables.Pts {
 		dbs = append(dbs, pt.Source.Database)
 		tables = append(tables, pt.Source.Table)
