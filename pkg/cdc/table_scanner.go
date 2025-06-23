@@ -49,6 +49,10 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			exec:                 getSqlExecutor(cnUUID),
 			CallBackAccountId:    make(map[string]uint32),
 			SubscribedAccountIds: make(map[uint32][]string),
+			CallBackDbName:       make(map[string][]string),
+			SubscribedDbNames:    make(map[string][]string),
+			CallBackTableName:    make(map[string][]string),
+			SubscribedTableNames: make(map[string][]string),
 		}
 	})
 	return detector
@@ -67,14 +71,34 @@ type TableDetector struct {
 
 	CallBackAccountId    map[string]uint32
 	SubscribedAccountIds map[uint32][]string
+
+	// taskname -> [db1, db2 ...]
+	CallBackDbName map[string][]string
+	// dbname -> [taska, taskb ...]
+	SubscribedDbNames map[string][]string
+
+	// taskname -> [tbl1, tbl2 ...]
+	CallBackTableName map[string][]string
+	// tablename -> [taska, taskb ...]
+	SubscribedTableNames map[string][]string
 }
 
-func (s *TableDetector) Register(id string, accountId uint32, cb func(map[uint32]TblMap)) {
+func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb func(map[uint32]TblMap)) {
 	s.Lock()
 	defer s.Unlock()
 
 	s.SubscribedAccountIds[accountId] = append(s.SubscribedAccountIds[accountId], id)
 	s.CallBackAccountId[id] = accountId
+
+	for _, db := range dbs {
+		s.SubscribedDbNames[db] = append(s.SubscribedDbNames[db], id)
+	}
+	s.CallBackDbName[id] = dbs
+
+	for _, table := range tables {
+		s.SubscribedTableNames[table] = append(s.SubscribedTableNames[table], id)
+	}
+	s.CallBackTableName[id] = tables
 
 	if len(s.Callbacks) == 0 {
 		ctx, cancel := context.WithCancel(
@@ -98,27 +122,60 @@ func (s *TableDetector) UnRegister(id string) {
 	s.Lock()
 	defer s.Unlock()
 
-	accountId := s.CallBackAccountId[id]
-	delete(s.Callbacks, id)
-	delete(s.CallBackAccountId, id)
-	subscribedAccountIds := s.SubscribedAccountIds[accountId]
-	for i, subscribedAccountId := range subscribedAccountIds {
-		if subscribedAccountId == id {
-			s.SubscribedAccountIds[accountId] = append(subscribedAccountIds[:i], subscribedAccountIds[i+1:]...)
-			break
+	if accountID, ok := s.CallBackAccountId[id]; ok {
+		if tasks, ok := s.SubscribedAccountIds[accountID]; ok {
+			for i, taskID := range tasks {
+				if taskID == id {
+					s.SubscribedAccountIds[accountID] = append(tasks[:i], tasks[i+1:]...)
+					break
+				}
+			}
+			if len(s.SubscribedAccountIds[accountID]) == 0 {
+				delete(s.SubscribedAccountIds, accountID)
+			}
 		}
+		delete(s.CallBackAccountId, id)
 	}
-	if len(s.Callbacks) == 0 && s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+
+	if dbs, ok := s.CallBackDbName[id]; ok {
+		for _, db := range dbs {
+			if tasks, ok := s.SubscribedDbNames[db]; ok {
+				for i, taskID := range tasks {
+					if taskID == id {
+						s.SubscribedDbNames[db] = append(tasks[:i], tasks[i+1:]...)
+						break
+					}
+				}
+				if len(s.SubscribedDbNames[db]) == 0 {
+					delete(s.SubscribedDbNames, db)
+				}
+			}
+		}
+		delete(s.CallBackDbName, id)
 	}
-	if len(s.SubscribedAccountIds[accountId]) == 0 {
-		delete(s.SubscribedAccountIds, accountId)
+
+	if tables, ok := s.CallBackTableName[id]; ok {
+		for _, table := range tables {
+			if tasks, ok := s.SubscribedTableNames[table]; ok {
+				for i, taskID := range tasks {
+					if taskID == id {
+						s.SubscribedTableNames[table] = append(tasks[:i], tasks[i+1:]...)
+						break
+					}
+				}
+				if len(s.SubscribedTableNames[table]) == 0 {
+					delete(s.SubscribedTableNames, table)
+				}
+			}
+		}
+		delete(s.CallBackTableName, id)
 	}
+
+	delete(s.Callbacks, id)
+
 	logutil.Info(
 		"CDC-TableDetector-UnRegister",
 		zap.String("task-id", id),
-		zap.Uint32("account-id", accountId),
 	)
 }
 
@@ -155,10 +212,14 @@ func (s *TableDetector) scanTable() error {
 	defer cancel()
 	var (
 		accountIds string
+		dbNames    string
+		tableNames string
 		mp         = make(map[uint32]TblMap)
 	)
+
 	s.Lock()
-	if len(s.SubscribedAccountIds) == 0 {
+
+	if len(s.SubscribedAccountIds) == 0 || len(s.SubscribedDbNames) == 0 || len(s.SubscribedTableNames) == 0 {
 		s.Mp = mp
 		s.Unlock()
 		return nil
@@ -171,11 +232,35 @@ func (s *TableDetector) scanTable() error {
 		accountIds += fmt.Sprintf("%d", accountId)
 		i++
 	}
+	i = 0
+	for dbName := range s.SubscribedDbNames {
+		if dbName == "*" {
+			dbNames = "*"
+			break
+		}
+		if i != 0 {
+			dbNames += ","
+		}
+		dbNames += fmt.Sprintf("'%s'", dbName)
+		i++
+	}
+	i = 0
+	for tableName := range s.SubscribedTableNames {
+		if tableName == "*" {
+			tableNames = "*"
+			break
+		}
+		if i != 0 {
+			tableNames += ","
+		}
+		tableNames += fmt.Sprintf("'%s'", tableName)
+		i++
+	}
 	s.Unlock()
 
 	result, err := s.exec.Exec(
 		ctx,
-		CDCSQLBuilder.CollectTableInfoSQL(accountIds),
+		CDCSQLBuilder.CollectTableInfoSQL(accountIds, dbNames, tableNames),
 		executor.Options{},
 	)
 	if err != nil {
