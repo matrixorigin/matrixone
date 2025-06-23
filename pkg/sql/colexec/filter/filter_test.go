@@ -59,7 +59,7 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Filter{
-				E: &plan.Expr{
+				FilterExprs: &plan.Expr{
 					Typ: plan2.MakePlan2Type(&boolType),
 					Expr: &plan.Expr_F{
 						F: &plan.Function{
@@ -98,7 +98,7 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Filter{
-				E: &plan.Expr{
+				FilterExprs: &plan.Expr{
 					Typ: plan2.MakePlan2Type(&boolType),
 					Expr: &plan.Expr_F{
 						F: &plan.Function{

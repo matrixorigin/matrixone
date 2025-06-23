@@ -31,7 +31,7 @@ const opName = "filter"
 
 func (filter *Filter) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
-	buf.WriteString(fmt.Sprintf("filter(%s)", filter.E))
+	buf.WriteString(fmt.Sprintf("filter(%s)", filter.FilterExprs))
 }
 
 func (filter *Filter) OpType() vm.OpType {
@@ -45,8 +45,12 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		filter.OpAnalyzer.Reset()
 	}
 
-	if len(filter.ctr.executors) == 0 && filter.E != nil {
-		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.E}))
+	if len(filter.ctr.executors) == 0 && filter.FilterExprs != nil {
+		filter.ctr.executors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, colexec.SplitAndExprs([]*plan.Expr{filter.FilterExprs}))
+	}
+
+	if len(filter.RuntimeFilterExprs) > 0 {
+		filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, filter.RuntimeFilterExprs)
 	}
 
 	if filter.ctr.allExecutors == nil {
@@ -54,6 +58,7 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 	} else {
 		filter.ctr.allExecutors = filter.ctr.allExecutors[:0]
 	}
+
 	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.runtimeExecutors...)
 	filter.ctr.allExecutors = append(filter.ctr.allExecutors, filter.ctr.executors...)
 

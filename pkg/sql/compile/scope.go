@@ -720,10 +720,7 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		err := arg.SetRuntimeExpr(s.Proc, nonPkFilters)
-		if err != nil {
-			return nil, err
-		}
+		arg.RuntimeFilterExprs = nonPkFilters
 	}
 
 	// reset datasource
