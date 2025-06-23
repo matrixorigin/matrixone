@@ -1167,11 +1167,11 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	now := time.Now()
 
 	var (
-		filesToGC           []string
-		metafile            string
-		err                 error
-		softCost, mergeCost time.Duration
-		extraErrMsg         string
+		filesToGC                   []string
+		metafile                    string
+		err                         error
+		softDuration, mergeDuration time.Duration
+		extraErrMsg                 string
 	)
 
 	defer func() {
@@ -1179,8 +1179,8 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 			"GC-TRACE-DO-GC-AGAINST-GCKP",
 			zap.String("task", c.TaskNameLocked()),
 			zap.Duration("duration", time.Since(now)),
-			zap.Duration("soft-gc", softCost),
-			zap.Duration("merge-table", mergeCost),
+			zap.Duration("soft-gc", softDuration),
+			zap.Duration("merge-table", mergeDuration),
 			zap.Error(err),
 			zap.String("metafile", metafile),
 			zap.String("extra-err-msg", extraErrMsg),
@@ -1229,7 +1229,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		scannedWindow.tsRange.start,
 		scannedWindow.tsRange.end,
 	))
-	softCost = time.Since(now)
+	softDuration = time.Since(now)
 
 	// update gc watermark and refresh snapshot meta with the latest gc result
 	// gcWaterMark will be updated to the end of the global checkpoint after each GC
@@ -1241,7 +1241,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	// TODO:
 	c.updateGCWaterMark(gckp)
 	c.mutation.snapshotMeta.MergeTableInfo(accountSnapshots, pitrs)
-	mergeCost = time.Since(now)
+	mergeDuration = time.Since(now)
 	return filesToGC, nil
 }
 
@@ -1605,9 +1605,9 @@ func (c *checkpointCleaner) tryScanLocked(
 		return
 	}
 
-	var newWindow *GCWindow
+	var window *GCWindow
 	var tmpNewFiles []string
-	if newWindow, tmpNewFiles, err = c.scanCheckpointsLocked(
+	if window, tmpNewFiles, err = c.scanCheckpointsLocked(
 		ctx, candidates, memoryBuffer,
 	); err != nil {
 		logutil.Error(
@@ -1617,7 +1617,7 @@ func (c *checkpointCleaner) tryScanLocked(
 		)
 		return
 	}
-	c.mutAddScannedLocked(newWindow)
+	c.mutAddScannedLocked(window)
 	c.updateScanWaterMark(candidates[len(candidates)-1])
 	files := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
