@@ -63,6 +63,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroup(proc); err != nil {
 		return err
 	}
+	group.ctr.spilledPartitionFiles = make(map[int]string)
 	return group.PrepareProjection(proc)
 }
 
@@ -163,6 +164,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	group.ctr.estimatedSize = group.ctr.hr.Hash.Size()
+	//TODO add agg state size
+
 	res := vm.NewCallResult()
 	res.Batch = b
 	return res, nil
@@ -192,6 +196,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 				group.ctr.state = vm.End
 				return nil, nil
 			}
+			//TODO handle spilled results
 			return group.ctr.result1.PopResult(proc.Mp())
 		}
 

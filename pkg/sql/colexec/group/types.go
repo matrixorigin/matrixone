@@ -34,6 +34,12 @@ const (
 )
 
 const (
+	ctrStateConsuming vm.CtrState = iota
+	ctrStateSpilling
+	ctrStateReadingSpilled
+)
+
+const (
 	thisOperatorName = "group"
 )
 
@@ -146,6 +152,9 @@ type container struct {
 	state             vm.CtrState
 	dataSourceIsEmpty bool
 
+	estimatedSize  int64
+	spillThreshold int64
+
 	// hash.
 	hr          ResHashRelated
 	mtyp        int
@@ -161,6 +170,9 @@ type container struct {
 	result1 GroupResultBuffer
 	// result if NeedEval is false.
 	result2 GroupResultNoneBlock
+
+	numPartitions         int
+	spilledPartitionFiles map[int]string
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
