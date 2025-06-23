@@ -285,7 +285,6 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
 
-	fmt.Printf("SQL :%s\n", sql)
 	return []byte(sql), nil
 }
 
@@ -590,6 +589,5 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		w.tabledef.Cols[w.partsPos[0]].Name)
 
-	fmt.Printf("SQL :%s\n", sql)
 	return []byte(sql), nil
 }
