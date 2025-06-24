@@ -110,6 +110,17 @@ func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
 	return nil
 }
 
+func (s *runnerStore) MinIncrementalCheckpoint() *CheckpointEntry {
+	s.RLock()
+	minEntry, _ := s.incrementals.Min()
+	s.RUnlock()
+
+	if minEntry != nil && minEntry.IsFinished() {
+		return minEntry
+	}
+	return nil
+}
+
 func (s *runnerStore) GetCheckpointedLocked() types.TS {
 	var ret types.TS
 	maxICKP, _ := s.incrementals.Max()
