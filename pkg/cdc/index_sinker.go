@@ -54,6 +54,7 @@ type indexSyncSinker struct {
 	sqlBufSendCh     chan []byte
 	exec             executor.SQLExecutor
 	rowdata          []any
+	rowdelete        []any
 }
 
 type IndexEntry struct {
@@ -95,8 +96,8 @@ var NewIndexSyncSinker = func(
 	indexmap := make(map[string]*IndexEntry)
 
 	for _, idx := range tableDef.Indexes {
-		//	if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-		if idx.TableExist && catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+		if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+			//if idx.TableExist && catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
 			key := idx.IndexName
 			sidx, ok := indexmap[key]
 			if ok {
@@ -129,6 +130,7 @@ var NewIndexSyncSinker = func(
 		exec:             exec,
 		sqlWriters:       sqlwriters,
 		rowdata:          make([]any, len(tableDef.Cols)),
+		rowdelete:        make([]any, 1), // delete row only have one column pk
 	}
 	return s, nil
 
@@ -464,7 +466,7 @@ func (s *indexSyncSinker) sinkUpsert(ctx context.Context, upsertIter *atomicBatc
 func (s *indexSyncSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	if err = deleteIter.Row(ctx, s.rowdata); err != nil {
+	if err = deleteIter.Row(ctx, s.rowdelete); err != nil {
 		return err
 	}
 
@@ -479,7 +481,7 @@ func (s *indexSyncSinker) sinkDelete(ctx context.Context, deleteIter *atomicBatc
 
 		}
 
-		writer.Delete(ctx, s.rowdata)
+		writer.Delete(ctx, s.rowdelete)
 
 		if writer.Full() {
 			// send SQL
@@ -515,6 +517,8 @@ func (s *indexSyncSinker) sendSql(writer IndexSqlWriter) error {
 	}
 
 	s.sqlBufSendCh <- sql
+	os.Stderr.WriteString(string(sql))
+	os.Stderr.WriteString("\n")
 
 	// reset
 	writer.Reset()

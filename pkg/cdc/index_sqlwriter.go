@@ -152,7 +152,7 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 func (w *BaseIndexSqlWriter) writeDeleteRow(ctx context.Context, row []any) error {
 	var err error
 
-	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
+	w.vbuf, err = convertColIntoSql(ctx, row[0], w.pkType, w.vbuf)
 	if err != nil {
 		return err
 	}
@@ -458,7 +458,8 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 }
 
 func (w *HnswSqlWriter[T]) Delete(ctx context.Context, row []any) error {
-	key, ok := row[w.pkPos].(int64)
+	// first column is the primary key
+	key, ok := row[0].(int64)
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid key type. not int64")
 	}
