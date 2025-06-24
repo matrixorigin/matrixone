@@ -171,22 +171,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	// 5.2 delete all index table of the original table
-	if qry.TableDef.Indexes != nil {
-		for _, indexdef := range qry.TableDef.Indexes {
-			if indexdef.TableExist {
-				if err = dbSource.Delete(c.proc.Ctx, indexdef.IndexTableName); err != nil {
-					c.proc.Error(c.proc.Ctx, "delete all index table of origin table for alter table",
-						zap.String("databaseName", c.db),
-						zap.String("origin tableName", qry.GetTableDef().Name),
-						zap.String("origin tableName index table", indexdef.IndexTableName),
-						zap.Error(err))
-					return err
-				}
-			}
-		}
-	}
-
 	//6. obtain relation for new tables
 	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {

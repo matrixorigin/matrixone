@@ -552,6 +552,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
+				var newIndexes []uint64
 				for idx, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
 						dropIndexMap[indexdef.IndexName] = true
@@ -568,13 +569,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						if err != nil {
 							return err
 						}
-						extra.IndexTables = append(extra.IndexTables[:idx], extra.IndexTables[idx+1:]...)
 					} else {
 						notDroppedIndex = append(notDroppedIndex, indexdef)
+						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
 				}
 				// Avoid modifying slice directly during iteration
 				tableDef.Indexes = notDroppedIndex
+				extra.IndexTables = newIndexes
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
 				alterKinds = append(alterKinds, api.AlterKind_DropColumn)
 				var idx int
