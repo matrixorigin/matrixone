@@ -592,10 +592,10 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 
 	coldefs := make([]string, 0, len(w.srcPos))
 	cnames := make([]string, 0, len(w.srcPos))
-	for i, pos := range w.srcPos {
+	for i := range w.srcPos {
 		typstr := w.srcType[i].DescString()
-		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as `%s`", i, typstr, w.tabledef.Cols[pos].Name))
-		cnames = append(cnames, w.tabledef.Cols[pos].Name)
+		cnames = append(cnames, fmt.Sprintf("src%d", i))
+		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as `%s`", i, typstr, cnames[i]))
 	}
 
 	cols := strings.Join(coldefs, ", ")
@@ -624,7 +624,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		cnames_str,
 		w.ivfparam.OpType,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		w.tabledef.Cols[w.partsPos[0]].Name)
+		cnames[1])
 
 	return []byte(sql), nil
 }
