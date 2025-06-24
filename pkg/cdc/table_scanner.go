@@ -17,6 +17,7 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -124,12 +125,9 @@ func (s *TableDetector) UnRegister(id string) {
 
 	if accountID, ok := s.CallBackAccountId[id]; ok {
 		if tasks, ok := s.SubscribedAccountIds[accountID]; ok {
-			for i, taskID := range tasks {
-				if taskID == id {
-					s.SubscribedAccountIds[accountID] = append(tasks[:i], tasks[i+1:]...)
-					break
-				}
-			}
+			s.SubscribedAccountIds[accountID] = slices.DeleteFunc(tasks, func(taskID string) bool {
+				return taskID == id
+			})
 			if len(s.SubscribedAccountIds[accountID]) == 0 {
 				delete(s.SubscribedAccountIds, accountID)
 			}
@@ -140,12 +138,9 @@ func (s *TableDetector) UnRegister(id string) {
 	if dbs, ok := s.CallBackDbName[id]; ok {
 		for _, db := range dbs {
 			if tasks, ok := s.SubscribedDbNames[db]; ok {
-				for i, taskID := range tasks {
-					if taskID == id {
-						s.SubscribedDbNames[db] = append(tasks[:i], tasks[i+1:]...)
-						break
-					}
-				}
+				s.SubscribedDbNames[db] = slices.DeleteFunc(tasks, func(taskID string) bool {
+					return taskID == id
+				})
 				if len(s.SubscribedDbNames[db]) == 0 {
 					delete(s.SubscribedDbNames, db)
 				}
@@ -157,12 +152,9 @@ func (s *TableDetector) UnRegister(id string) {
 	if tables, ok := s.CallBackTableName[id]; ok {
 		for _, table := range tables {
 			if tasks, ok := s.SubscribedTableNames[table]; ok {
-				for i, taskID := range tasks {
-					if taskID == id {
-						s.SubscribedTableNames[table] = append(tasks[:i], tasks[i+1:]...)
-						break
-					}
-				}
+				s.SubscribedTableNames[table] = slices.DeleteFunc(tasks, func(taskID string) bool {
+					return taskID == id
+				})
 				if len(s.SubscribedTableNames[table]) == 0 {
 					delete(s.SubscribedTableNames, table)
 				}
@@ -232,29 +224,27 @@ func (s *TableDetector) scanTable() error {
 		accountIds += fmt.Sprintf("%d", accountId)
 		i++
 	}
-	i = 0
+	dbNamesSlice := make([]string, 0, len(s.SubscribedDbNames))
 	for dbName := range s.SubscribedDbNames {
 		if dbName == "*" {
 			dbNames = "*"
 			break
 		}
-		if i != 0 {
-			dbNames += ","
-		}
-		dbNames += fmt.Sprintf("'%s'", dbName)
-		i++
+		dbNamesSlice = append(dbNamesSlice, dbName)
 	}
-	i = 0
+	if dbNames != "*" {
+		dbNames = AddSingleQuotesJoin(dbNamesSlice)
+	}
+	tableNamesSlice := make([]string, 0, len(s.SubscribedTableNames))
 	for tableName := range s.SubscribedTableNames {
 		if tableName == "*" {
 			tableNames = "*"
 			break
 		}
-		if i != 0 {
-			tableNames += ","
-		}
-		tableNames += fmt.Sprintf("'%s'", tableName)
-		i++
+		tableNamesSlice = append(tableNamesSlice, tableName)
+	}
+	if tableNames != "*" {
+		tableNames = AddSingleQuotesJoin(tableNamesSlice)
 	}
 	s.Unlock()
 
