@@ -249,12 +249,7 @@ func NewFulltextSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Ta
 
 	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	typ := tabledef.Cols[w.pkPos].Typ
-	if tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		// hardcode __mo_cpkey_col column to varbinary
-		w.pkType = &types.Type{Oid: types.T_varbinary, Width: typ.Width, Scale: typ.Scale}
-	} else {
-		w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
-	}
+	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 
 	nparts := len(w.indexdef[0].Parts)
 	w.partsPos = make([]int32, nparts)
