@@ -114,7 +114,7 @@ func (r *TableMetaReader) Read(
 		seqnums  []uint16
 		colTypes []types.Type
 
-		logs1, logs2 zap.Field
+		logs1, logs2 = zap.Skip(), zap.Skip()
 
 		isTombstone = r.state == tombstoneMetaState
 	)
@@ -131,7 +131,9 @@ func (r *TableMetaReader) Read(
 			stateStr = "tombstone"
 		}
 
-		logutil.Info("TableMetaReader", zap.String("state", stateStr), logs1, logs2)
+		logutil.Info("TableMetaReader",
+			zap.String("state", stateStr),
+			zap.Error(err), logs1, logs2)
 	}()
 
 	outBatch.CleanOnlyData()
@@ -205,9 +207,6 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 		if s3Writer != nil {
 			s3Writer.Close(mp)
 		}
-
-		log = zap.String("collectVisibleInMemRows",
-			fmt.Sprintf("%d-%d-%d", objCnt, blkCnt, rowCnt))
 	}()
 
 	writeS3 := func() error {
@@ -260,7 +259,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 				)
 			}
 			if err != nil {
-				return log, err
+				return zap.Skip(), err
 			}
 		}
 
@@ -268,7 +267,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 
 		if rowsBatch.RowCount() >= options.DefaultBlockMaxRows {
 			if err = writeS3(); err != nil {
-				return log, err
+				return zap.Skip(), err
 			}
 
 			rowsBatch.CleanOnlyData()
@@ -276,25 +275,25 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 	}
 
 	if rowsBatch == nil {
-		return log, nil
+		return zap.Skip(), nil
 	}
 
 	if rowsBatch.RowCount() > 0 {
 		if err = writeS3(); err != nil {
-			return log, err
+			return zap.Skip(), err
 		}
 	}
 
 	if sl, err = s3Writer.Sync(ctx, mp); err != nil {
-		return log, err
+		return zap.Skip(), err
 	}
 
 	if tmpBat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
-		return log, err
+		return zap.Skip(), err
 	}
 
 	if _, err = outBatch.Append(ctx, mp, tmpBat); err != nil {
-		return log, err
+		return zap.Skip(), err
 	}
 
 	for _, s := range sl {
@@ -302,6 +301,9 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 		blkCnt += int(s.BlkCnt())
 		rowCnt += int(s.Rows())
 	}
+
+	log = zap.String("collectVisibleInMemRows",
+		fmt.Sprintf("%d-%d-%d", objCnt, blkCnt, rowCnt))
 
 	return log, nil
 }
@@ -346,17 +348,12 @@ func (r *TableMetaReader) collectVisibleObjs(
 		if iter != nil {
 			iter.Close()
 		}
-
-		log = zap.String("collectVisibleObjs",
-			fmt.Sprintf("copy(%d-%d-%d), new(%d-%d-%d)",
-				copyObjCnt, copyBlkCnt, copyRowCnt,
-				newObjCnt, newBlkCnt, newRowCnt))
 	}()
 
 	if iter, err = r.pState.NewObjectsIter(
 		r.snapshot, true, isTombstone,
 	); err != nil {
-		return log, err
+		return zap.Skip(), err
 	}
 
 	for iter.Next() {
@@ -370,7 +367,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 
 			if err = colexec.ExpandObjectStatsToBatch(
 				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
-				return log, err
+				return zap.Skip(), err
 			}
 		} else {
 			objRelData.AppendObj(&obj.ObjectStats)
@@ -409,7 +406,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 		for {
 			stop, err = dataReader.Read(ctx, attrs, nil, mp, dataBatch)
 			if err != nil {
-				return log, err
+				return zap.Skip(), err
 			}
 
 			if stop {
@@ -417,20 +414,20 @@ func (r *TableMetaReader) collectVisibleObjs(
 			}
 
 			if err = s3Writer.Write(ctx, mp, dataBatch); err != nil {
-				return log, err
+				return zap.Skip(), err
 			}
 		}
 
 		if sl, err = s3Writer.Sync(ctx, mp); err != nil {
-			return log, err
+			return zap.Skip(), err
 		}
 
 		if tmpBat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
-			return log, err
+			return zap.Skip(), err
 		}
 
 		if _, err = outBatch.Append(ctx, mp, tmpBat); err != nil {
-			return log, err
+			return zap.Skip(), err
 		}
 
 		for _, s := range sl {
@@ -441,6 +438,10 @@ func (r *TableMetaReader) collectVisibleObjs(
 	}
 
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
+
+	log = zap.String("collectVisibleObjs",
+		fmt.Sprintf("copy(%d-%d-%d), new(%d-%d-%d)",
+			copyObjCnt, copyBlkCnt, copyRowCnt, newObjCnt, newBlkCnt, newRowCnt))
 
 	return log, nil
 }
