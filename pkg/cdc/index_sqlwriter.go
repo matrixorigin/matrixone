@@ -302,7 +302,7 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
-	if upsert {
+	if !upsert {
 		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
 	} else {
 		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbName, w.indexTableName)
@@ -523,7 +523,12 @@ func NewIvfflatSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Tab
 
 	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	typ := tabledef.Cols[w.pkPos].Typ
-	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	if tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		// hardcode __mo_cpkey_col column to varbinary
+		w.pkType = &types.Type{Oid: types.T_varbinary, Width: typ.Width, Scale: typ.Scale}
+	} else {
+		w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
 
 	nparts := len(w.indexdef[0].Parts)
 	w.partsPos = make([]int32, nparts)
@@ -601,7 +606,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
-	if upsert {
+	if !upsert {
 		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbTblInfo.SinkDbName, w.entries_tbl)
 	} else {
 		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbTblInfo.SinkDbName, w.entries_tbl)
