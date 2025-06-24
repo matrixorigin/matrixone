@@ -114,7 +114,8 @@ func (s *runnerStore) MinIncrementalCheckpoint() *CheckpointEntry {
 	s.RLock()
 	minEntry, _ := s.incrementals.Min()
 	s.RUnlock()
-	if minEntry == nil || minEntry.IsFinished() {
+
+	if minEntry.IsFinished() {
 		return minEntry
 	}
 	return nil
