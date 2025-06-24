@@ -130,9 +130,17 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 	w.vbuf = appendString(w.vbuf, "ROW(")
 
 	// pk
-	w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
-	if err != nil {
-		return err
+	if w.tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		cpkType := &types.Type{Oid: types.T_varbinary, Width: w.pkType.Width, Scale: w.pkType.Scale}
+		w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], cpkType, w.vbuf)
+		if err != nil {
+			return err
+		}
+	} else {
+		w.vbuf, err = convertColIntoSql(ctx, row[w.pkPos], w.pkType, w.vbuf)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i, t := range w.partsType {
@@ -152,9 +160,18 @@ func (w *BaseIndexSqlWriter) writeRow(ctx context.Context, row []any) error {
 func (w *BaseIndexSqlWriter) writeDeleteRow(ctx context.Context, row []any) error {
 	var err error
 
-	w.vbuf, err = convertColIntoSql(ctx, row[0], w.pkType, w.vbuf)
-	if err != nil {
-		return err
+	if w.tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		cpkType := &types.Type{Oid: types.T_varbinary, Width: w.pkType.Width, Scale: w.pkType.Scale}
+		w.vbuf, err = convertColIntoSql(ctx, row[0], cpkType, w.vbuf)
+		if err != nil {
+			return err
+		}
+	} else {
+		w.vbuf, err = convertColIntoSql(ctx, row[0], w.pkType, w.vbuf)
+		if err != nil {
+			return err
+		}
+
 	}
 	w.ndata += 1
 	return nil
@@ -232,7 +249,12 @@ func NewFulltextSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Ta
 
 	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	typ := tabledef.Cols[w.pkPos].Typ
-	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	if tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		// hardcode __mo_cpkey_col column to varbinary
+		w.pkType = &types.Type{Oid: types.T_varbinary, Width: typ.Width, Scale: typ.Scale}
+	} else {
+		w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
+	}
 
 	nparts := len(w.indexdef[0].Parts)
 	w.partsPos = make([]int32, nparts)
@@ -523,12 +545,7 @@ func NewIvfflatSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.Tab
 
 	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	typ := tabledef.Cols[w.pkPos].Typ
-	if tabledef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-		// hardcode __mo_cpkey_col column to varbinary
-		w.pkType = &types.Type{Oid: types.T_varbinary, Width: typ.Width, Scale: typ.Scale}
-	} else {
-		w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
-	}
+	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 
 	nparts := len(w.indexdef[0].Parts)
 	w.partsPos = make([]int32, nparts)
