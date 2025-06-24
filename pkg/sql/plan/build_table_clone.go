@@ -156,6 +156,7 @@ func buildCloneTable(
 	}, bindCtx)
 
 	builder.qry.Steps = append(builder.qry.Steps, id)
+	builder.qry.Nodes[0].Stats.ForceOneCN = true
 	builder.skipStats = true
 
 	if createTablePlan, err = buildCreateTable(&stmt.CreateTable, ctx); err != nil {
