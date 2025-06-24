@@ -872,26 +872,35 @@ func buildInsertPlansWithRelatedHiddenTable(
 				if err != nil {
 					return err
 				}
-			} else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
+
+			}
+			/*  disable fulltext
+
+			else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 				// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
 				err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
 				if err != nil {
 					return err
 				}
 			}
+			*/
 
 		}
 
 		// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
+		/* disable fulltext
 		if !postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 			err = buildPreInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
 			if err != nil {
 				return err
 			}
 		}
+		*/
 	}
 
+	/* disable IVFFLAT
 	buildPreInsertMultiTableIndexes(ctx, builder, bindCtx, objRef, tableDef, sourceStep, multiTableIndexes)
+	*/
 
 	ifInsertFromUnique := false
 	if tableDef.Pkey != nil && ifInsertFromUniqueColMap != nil {
@@ -4200,6 +4209,7 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 				}
 			} else if indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 				// TODO: choose either PostDeleteFullTextIndex or PreDeleteFullTextIndex
+				/* distable fulltext
 				if postdml_flag {
 					err = buildPostDeleteFullTextIndex(ctx, builder, bindCtx, delCtx, indexdef, idx, typMap, posMap)
 				} else {
@@ -4208,10 +4218,13 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 				if err != nil {
 					return err
 				}
+				*/
 			}
 		}
 
+		/* disable ivfflat
 		buildDeleteMultiTableIndexes(ctx, builder, bindCtx, delCtx, multiTableIndexes)
+		*/
 	}
 
 	return nil
