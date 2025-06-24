@@ -588,21 +588,21 @@ func (b cdcSQLBuilder) UpdateWatermarkSQL(
 // ------------------------------------------------------------------------------------------------
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
-func (b cdcSQLBuilder) CollectTableInfoSQL(account_ids string, db_names string, table_names string) string {
+func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, tableNames string) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL,
-		account_ids,
+		accountIDs,
 		func() string {
-			if db_names == "*" {
+			if dbNames == "*" {
 				return ""
 			}
-			return " AND reldatabase IN (" + db_names + ") "
+			return " AND reldatabase IN (" + dbNames + ") "
 		}(),
 		func() string {
-			if table_names == "*" {
+			if tableNames == "*" {
 				return ""
 			}
-			return " AND relname IN (" + table_names + ") "
+			return " AND relname IN (" + tableNames + ") "
 		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
