@@ -62,22 +62,30 @@ func TestTableScanner(t *testing.T) {
 		Callbacks:            make(map[string]func(map[uint32]TblMap)),
 		CallBackAccountId:    make(map[string]uint32),
 		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
 		exec:                 mockSqlExecutor,
 	}
 
-	td.Register("id1", 1, func(mp map[uint32]TblMap) {})
+	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) {})
 	assert.Equal(t, 1, len(td.Callbacks))
-	td.Register("id2", 2, func(mp map[uint32]TblMap) {})
+	td.Register("id2", 2, []string{"db2"}, []string{"tbl2"}, func(mp map[uint32]TblMap) {})
 	assert.Equal(t, 2, len(td.Callbacks))
 	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 
-	td.Register("id3", 1, func(mp map[uint32]TblMap) {})
+	td.Register("id3", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) {})
 	assert.Equal(t, 3, len(td.Callbacks))
 	assert.Equal(t, 2, len(td.SubscribedAccountIds))
+	assert.Equal(t, 2, len(td.SubscribedDbNames["db1"]))
+	assert.Equal(t, []string{"id1", "id3"}, td.SubscribedDbNames["db1"])
 
 	td.UnRegister("id1")
 	assert.Equal(t, 2, len(td.Callbacks))
 	assert.Equal(t, 2, len(td.SubscribedAccountIds))
+	assert.Equal(t, 1, len(td.SubscribedDbNames["db1"]))
+	assert.Equal(t, []string{"id3"}, td.SubscribedDbNames["db1"])
 
 	td.UnRegister("id2")
 	assert.Equal(t, 1, len(td.Callbacks))
@@ -86,8 +94,9 @@ func TestTableScanner(t *testing.T) {
 	td.UnRegister("id3")
 	assert.Equal(t, 0, len(td.Callbacks))
 	assert.Equal(t, 0, len(td.SubscribedAccountIds))
+	assert.Equal(t, 0, len(td.SubscribedDbNames))
 
-	td.Register("id4", 1, func(mp map[uint32]TblMap) {})
+	td.Register("id4", 1, []string{"db4"}, []string{"tbl4"}, func(mp map[uint32]TblMap) {})
 	assert.Equal(t, 1, len(td.Callbacks))
 	assert.Equal(t, 1, len(td.SubscribedAccountIds))
 
@@ -97,7 +106,7 @@ func TestTableScanner(t *testing.T) {
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1"),
+		CDCSQLBuilder.CollectTableInfoSQL("1", "'db4'", "'tbl4'"),
 		executor.Options{},
 	).Return(executor.Result{}, moerr.NewInternalErrorNoCtx("mock error")).AnyTimes()
 
@@ -116,7 +125,7 @@ func TestTableScanner(t *testing.T) {
 
 func Test_CollectTableInfoSQL(t *testing.T) {
 	var builder cdcSQLBuilder
-	sql := builder.CollectTableInfoSQL("1,2,3")
+	sql := builder.CollectTableInfoSQL("1,2,3", "*", "*")
 	sql = strings.ToUpper(sql)
 	t.Log(sql)
 	expected := "SELECT  REL_ID,  RELNAME,  RELDATABASE_ID,  " +
@@ -125,4 +134,8 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 		"WHERE  ACCOUNT_ID IN (1,2,3)  AND RELKIND = 'R'  " +
 		"AND RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
 	assert.Equal(t, expected, sql)
+
+	sql = builder.CollectTableInfoSQL("0", "'source_db'", "'orders'")
+	expected = "SELECT  REL_ID,  RELNAME,  RELDATABASE_ID,  RELDATABASE,  REL_CREATESQL,  ACCOUNT_ID FROM `MO_CATALOG`.`MO_TABLES` WHERE  ACCOUNT_ID IN (0)  AND RELDATABASE IN ('SOURCE_DB')  AND RELNAME IN ('ORDERS')  AND RELKIND = 'R'  AND RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
+	assert.Equal(t, strings.ToUpper(expected), strings.ToUpper(sql))
 }
