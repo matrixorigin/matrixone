@@ -203,6 +203,11 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 					if ok {
 						indexStr += " WITH PARSER " + parser
 					}
+
+					async, ok := paramMap[catalog.Async]
+					if ok && async == "true" {
+						indexStr += " ASYNC"
+					}
 				}
 
 			} else {
