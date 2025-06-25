@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -145,7 +146,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 5. drop original table
-	if err := c.runSql("drop table `" + tblName + "`"); err != nil {
+	if err := c.runSqlWithOptions("drop table `"+tblName+"`", executor.StatementOption{}.WithIgnoreForeignKey()); err != nil {
 		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", c.db),
 			zap.String("origin tableName", qry.GetTableDef().Name),
