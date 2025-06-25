@@ -304,6 +304,20 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	return res
 }
 
+func IsIndexAsync(indexAlgoParams string) (bool, error) {
+	if len(indexAlgoParams) > 0 {
+		param, err := IndexParamsStringToMap(indexAlgoParams)
+		if err != nil {
+			return false, err
+		}
+		v, ok := param[Async]
+		if ok {
+			return v == "true", nil
+		}
+	}
+	return false, nil
+}
+
 //------------------------[END] IndexAlgoParams------------------------
 
 // ------------------------[START] Aliaser------------------------
