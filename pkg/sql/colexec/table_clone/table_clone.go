@@ -21,10 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -71,7 +75,13 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 		clear(tc.dstIdxNameToRel)
 	}
 
-	tc.srcRelReader.Close()
+	if tc.srcRelReader != nil {
+		tc.srcRelReader.Close()
+	}
+
+	if tc.Ctx.SrcAutoIncrOffsets != nil {
+		clear(tc.Ctx.SrcAutoIncrOffsets)
+	}
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
@@ -95,7 +105,8 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	}
 
 	var (
-		err error
+		err   error
+		txnOp client.TxnOperator
 
 		srcDB engine.Database
 		dstDB engine.Database
@@ -118,8 +129,13 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 			tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, tc.Ctx.ScanSnapshot.Tenant.TenantID)
 		}
 
+		txnOp = proc.GetCloneTxnOperator()
+		if txnOp == nil {
+			txnOp = proc.GetTxnOperator()
+		}
+
 		if srcDB, err = tc.Ctx.Eng.Database(
-			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.DbName, proc.GetCloneTxnOperator(),
+			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.DbName, txnOp,
 		); err != nil {
 			return err
 		}
@@ -271,7 +287,85 @@ func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 	}
 
+	if err = tc.updateDstAutoIncrColumns(proc.Ctx, proc); err != nil {
+		return vm.CallResult{}, err
+	}
+
 	return vm.CallResult{}, nil
+}
+
+func (tc *TableClone) updateDstAutoIncrColumns(
+	dstCtx context.Context,
+	proc *process.Process,
+) error {
+
+	if tc.Ctx.SrcAutoIncrOffsets == nil {
+		return nil
+	}
+
+	var (
+		err      error
+		typs     []types.Type
+		incrCols []incrservice.AutoColumn
+
+		maxVal int64
+
+		dstTblDef *plan.TableDef
+	)
+
+	dstTblDef = tc.dstRel.GetTableDef(dstCtx)
+	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(dstTblDef)
+	incrCols = incrservice.GetAutoColumnFromDef(dstTblDef)
+
+	vecs := make([]*vector.Vector, len(typs))
+	for i, typ := range typs {
+		vecs[i] = vector.NewVec(typ)
+	}
+
+	defer func() {
+		for i := range vecs {
+			vecs[i].Free(proc.Mp())
+		}
+	}()
+
+	maxVal = int64(0)
+	for _, col := range incrCols {
+		maxVal = int64(tc.Ctx.SrcAutoIncrOffsets[int32(col.ColIndex)])
+
+		var val any
+		switch typs[col.ColIndex].Oid {
+		case types.T_uint8:
+			val = uint8(maxVal)
+		case types.T_uint16:
+			val = uint16(maxVal)
+		case types.T_uint32:
+			val = uint32(maxVal)
+		case types.T_uint64:
+			val = uint64(maxVal)
+		case types.T_int8:
+			val = int8(maxVal)
+		case types.T_int16:
+			val = int16(maxVal)
+		case types.T_int32:
+			val = int32(maxVal)
+		case types.T_int64:
+			val = int64(maxVal)
+		}
+
+		if err = vector.AppendAny(
+			vecs[col.ColIndex], val, false, proc.Mp(),
+		); err != nil {
+			return err
+		}
+	}
+
+	if _, err = proc.GetIncrService().InsertValues(
+		dstCtx, tc.dstRel.GetTableID(dstCtx), vecs, vecs[0].Length(), maxVal,
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (tc *TableClone) Release() {
