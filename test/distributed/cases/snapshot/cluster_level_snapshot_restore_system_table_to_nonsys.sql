@@ -484,7 +484,7 @@ drop snapshot if exists sp02;
 create snapshot sp02 for cluster;
 
 -- @session:id=1&user=acc01:test_account&password=111
-drop role r1, r2, r6, r7;
+drop role r1, r2;
 select role_name, creator, owner from mo_catalog.mo_role;
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 -- @session

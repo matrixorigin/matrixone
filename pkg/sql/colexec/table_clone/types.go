@@ -36,6 +36,8 @@ type TableCloneCtx struct {
 
 	SrcCtx       context.Context
 	ScanSnapshot *plan.Snapshot
+
+	SrcAutoIncrOffsets map[int32]uint64
 }
 
 type TableClone struct {
