@@ -1005,6 +1005,10 @@ func TestRegisterCdcExecutor(t *testing.T) {
 			Callbacks:            map[string]func(map[uint32]cdc.TblMap){"id": func(mp map[uint32]cdc.TblMap) {}},
 			CallBackAccountId:    map[string]uint32{"id": 0},
 			SubscribedAccountIds: map[uint32][]string{0: {"id"}},
+			CallBackDbName:       make(map[string][]string),
+			SubscribedDbNames:    make(map[string][]string),
+			CallBackTableName:    make(map[string][]string),
+			SubscribedTableNames: make(map[string][]string),
 		}
 	})
 
