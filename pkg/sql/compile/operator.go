@@ -2340,7 +2340,6 @@ func constructTableClone(
 	}
 
 	if ret, err = c.runSqlWithResult(sql, int32(account)); err != nil {
-		fmt.Println(metaCopy.Ctx.SrcTblDef.Name)
 		return nil, err
 	}
 
