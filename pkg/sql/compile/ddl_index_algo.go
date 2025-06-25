@@ -147,7 +147,11 @@ func (s *Scope) handleFullTextIndexTable(
 		return err
 	}
 
-	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+	insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+	if err != nil {
+		return err
+	}
+
 	for _, insertSQL := range insertSQLs {
 		err = c.runSql(insertSQL)
 		if err != nil {
