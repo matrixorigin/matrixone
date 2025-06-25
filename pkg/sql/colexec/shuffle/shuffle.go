@@ -16,11 +16,7 @@ package shuffle
 
 import (
 	"bytes"
-<<<<<<< HEAD
 	"fmt"
-
-=======
->>>>>>> 74ada5848 (fix shuffle join for recursive cte)
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
