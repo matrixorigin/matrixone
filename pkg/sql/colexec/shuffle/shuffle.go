@@ -16,7 +16,6 @@ package shuffle
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -90,6 +89,8 @@ SENDLAST:
 		if bat == nil {
 			ap.ctr.ending = true
 			goto SENDLAST
+		} else if bat.Last() {
+			return result, nil
 		} else if !bat.IsEmpty() {
 			if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
 				bat, err = hashShuffle(ap, bat, proc)
