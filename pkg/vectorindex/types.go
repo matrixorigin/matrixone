@@ -69,12 +69,14 @@ type HnswParam struct {
 	Quantization   string `json:"quantization"`
 	OpType         string `json:"op_type"`
 	EfSearch       string `json:"ef_search"`
+	Async          string `json:"async"`
 }
 
 // IVF specified parameters
 type IvfParam struct {
 	Lists  string `json:"lists"`
 	OpType string `json:"op_type"`
+	Async  string `json:"async"`
 }
 
 type IvfflatIndexConfig struct {

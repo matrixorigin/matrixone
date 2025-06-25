@@ -1662,10 +1662,10 @@ func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.F
 		if indexInfo.IndexOption != nil {
 			if indexInfo.IndexOption.ParserName != "" {
 				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
-				indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
-				if err != nil {
-					return err
-				}
+			}
+			indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
+			if err != nil {
+				return err
 			}
 			if indexInfo.IndexOption.Comment != "" {
 				indexDef.Comment = indexInfo.IndexOption.Comment

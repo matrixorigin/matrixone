@@ -2048,6 +2048,15 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
+	async, err := catalog.IsIndexAsync(indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+
+	// TODO: ERIC CREATE PITR AND CDC TASK HERE
+	if async {
+
+	}
 	return nil
 
 }

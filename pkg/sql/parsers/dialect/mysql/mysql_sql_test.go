@@ -811,7 +811,8 @@ var (
 		}, {
 			input: "create table t (a int, b char, index if not exists idx (a, b))",
 		}, {
-			input: "create table t (a int, b char, fulltext idx (a, b))",
+			input:  "create table t (a int, b char, fulltext idx (a, b) async)",
+			output: "create table t (a int, b char, fulltext idx (a, b) ASYNC )",
 		}, {
 			input:  "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
 			output: "create table t (a int, b char, constraint p1 primary key idx using none (a, b))",
@@ -1511,6 +1512,9 @@ var (
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
 		}, {
 			input: "create index idx1 on a (a)",
 		}, {
@@ -3208,6 +3212,10 @@ var (
 		{
 			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 QUANTIZATION 'BF16' OP_TYPE 'VECTOR_L2_OPS'",
 			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 QUANTIZATION BF16 OP_TYPE VECTOR_L2_OPS ",
+		},
+		{
+			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 QUANTIZATION 'BF16' OP_TYPE 'VECTOR_L2_OPS' ASYNC",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 QUANTIZATION BF16 OP_TYPE VECTOR_L2_OPS ASYNC ",
 		},
 		{
 			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_search = 64 ef_construction = 100  quantization 'bf16'  op_type 'vector_l2_ops' )",
