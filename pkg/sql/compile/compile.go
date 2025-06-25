@@ -4890,7 +4890,10 @@ func (c *Compile) compileTableClone(
 		return nil, err
 	}
 
-	copyOp := constructTableClone(c, cloneQry.Nodes[0])
+	copyOp, err := constructTableClone(c, cloneQry.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
 
 	s1 = newScope(TableClone)
 	s1.NodeInfo = nodes[0]

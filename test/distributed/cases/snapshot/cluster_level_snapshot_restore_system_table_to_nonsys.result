@@ -555,11 +555,13 @@ r1    32    true
 r2    32    true
 drop snapshot if exists sp02;
 create snapshot sp02 for cluster;
-drop role r1, r2, r6, r7;
+drop role r1, r2;
 select role_name, creator, owner from mo_catalog.mo_role;
 role_name    creator    owner
 accountadmin    2    2
 public    2    2
+r6    2    2
+r7    2    2
 select role_name, privilege_id, with_grant_option from mo_catalog.mo_role_privs where role_name in ('r1', 'r2');
 role_name    privilege_id    with_grant_option
 restore account acc01 from snapshot sp02;
