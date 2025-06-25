@@ -96,8 +96,7 @@ var NewIndexSyncSinker = func(
 	indexmap := make(map[string]*IndexEntry)
 
 	for _, idx := range tableDef.Indexes {
-		//if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-		if idx.TableExist && catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+		if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
 			key := idx.IndexName
 			sidx, ok := indexmap[key]
 			if ok {
@@ -117,6 +116,7 @@ var NewIndexSyncSinker = func(
 			return nil, err
 		}
 		sqlwriters = append(sqlwriters, sqlwriter)
+		os.Stderr.WriteString(fmt.Sprintf("sql writer %T\n", sqlwriter))
 	}
 
 	s := &indexSyncSinker{
