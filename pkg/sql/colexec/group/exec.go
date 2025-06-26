@@ -63,7 +63,9 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroup(proc); err != nil {
 		return err
 	}
+	group.ctr.numPartitions = 32 //TODO dynamic configurable?
 	group.ctr.spilledPartitionFiles = make(map[int]string)
+	group.ctr.spillThreshold = proc.GetLim().Size //TODO more flexible way to determine this
 	return group.PrepareProjection(proc)
 }
 
@@ -164,8 +166,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	group.ctr.estimatedSize = group.ctr.hr.Hash.Size()
-	//TODO add agg state size
+	group.ctr.estimatedSize = group.ctr.EstimateAggStatesSize()
 
 	res := vm.NewCallResult()
 	res.Batch = b
@@ -191,6 +192,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 	}
 
 	for {
+		//TODO state transition
 		if group.ctr.state == vm.Eval {
 			if group.ctr.result1.IsEmpty() {
 				group.ctr.state = vm.End
@@ -217,6 +219,11 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		}
 		if res.IsEmpty() {
 			continue
+		}
+
+		if group.ctr.estimatedSize > group.ctr.spillThreshold {
+			// Trigger spill
+			return group.spillData(proc)
 		}
 
 		group.ctr.dataSourceIsEmpty = false
@@ -499,4 +506,18 @@ func (group *Group) consumeBatchToRes(
 
 		return res.RowCount() < intermediateResultSendActionTrigger, nil
 	}
+}
+
+func (group *Group) spillData(proc *process.Process) (vm.CallResult, error) {
+	for partitionID := 0; partitionID < group.ctr.numPartitions; partitionID++ {
+		encoded, err := group.ctr.hr.encodePartition(partitionID, group.ctr.result1.AggList)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		_ = encoded
+		var filePath string
+		//TODO write to spill fileservice
+		group.ctr.spilledPartitionFiles[partitionID] = filePath
+	}
+	return vm.NewCallResult(), nil
 }

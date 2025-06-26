@@ -37,6 +37,7 @@ const (
 	ctrStateConsuming vm.CtrState = iota
 	ctrStateSpilling
 	ctrStateReadingSpilled
+	ctrStateFlushing
 )
 
 const (
@@ -248,4 +249,13 @@ func (group *Group) Release() {
 	if group != nil {
 		reuse.Free[Group](group, nil)
 	}
+}
+
+func (ctr *container) EstimateAggStatesSize() int64 {
+	if ctr.hr.Hash == nil {
+		return 0
+	}
+	//TODO not accurate?
+	return ctr.hr.Hash.Size()
+	//return int64(ctr.hr.Hash.GroupCount() * 64)
 }
