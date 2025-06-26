@@ -745,9 +745,14 @@ func buildCreateTable(
 		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
-		tableDef.Name = string(newTable.ObjectName)
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false)
+		tableDef.Name = string(newTable.ObjectName)
+		tableDef.DbName = string(newTable.SchemaName)
+		if len(tableDef.DbName) == 0 {
+			tableDef.DbName = ctx.DefaultDatabase()
+		}
+
+		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true)
 		if err != nil {
 			return nil, err
 		}

@@ -724,16 +724,6 @@ func init() {
 		func(a *AttributeVisable) { a.reset() },
 		reuse.DefaultOptions[AttributeVisable](), //.
 	) //WithEnableChecker()
-
-	reuse.CreatePool[CloneTable](
-		func() *CloneTable {
-			return &CloneTable{
-				CreateTable: CreateTable{},
-			}
-		},
-		func(c *CloneTable) { c.reset() },
-		reuse.DefaultOptions[CloneTable](), //.
-	) //WithEnableChecker()
 }
 
 type CreateOption interface {

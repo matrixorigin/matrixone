@@ -5666,6 +5666,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+	case *tree.CloneDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll)
+		writeDatabaseAndTableDirectly = true
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}

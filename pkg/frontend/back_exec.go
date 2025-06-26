@@ -408,7 +408,7 @@ func doComQueryInBack(
 				s.Sql = input.sql
 				s.IsRestore = true
 				s.FromAccount = input.opAccount
-				s.ToAccount = input.toAccount
+				s.ToAccountId = input.toAccount
 				s.IsRestoreByTS = s.IsRestoreByTS || input.isRestoreByTs
 			}
 		}
