@@ -522,7 +522,7 @@ count(*)
 30001
 select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode) limit 1;
 count(*)
-1
+30001
 drop table t1;
 drop table if exists articles;
 create table articles (id int auto_increment not null primary key, title varchar, body text);
