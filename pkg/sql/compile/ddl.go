@@ -450,7 +450,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 		// 3. lock foreign key's table
 		for _, action := range qry.Actions {
-			if action.Action == nil {
+			if action == nil {
 				continue
 			}
 			switch act := action.Action.(type) {
@@ -528,7 +528,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	cols := tableDef.Cols
 	// drop foreign key
 	for _, action := range qry.Actions {
-		if action.Action == nil {
+		if action == nil {
 			continue
 		}
 		switch act := action.Action.(type) {
