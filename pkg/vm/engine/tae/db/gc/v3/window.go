@@ -157,14 +157,30 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	filesToGC, filesNotGC := job.Result()
 	var metaFile string
 	var err error
-	if metaFile, err = w.writeMetaForRemainings(
+	var bat *batch.Batch
+	if metaFile, bat, err = w.writeMetaForRemainings(
 		ctx, filesNotGC,
 	); err != nil {
 		return nil, "", err
 	}
+	notGC := make(map[string]struct{})
+	for _, stats := range filesNotGC {
+		notGC[stats.ObjectName().UnsafeString()] = struct{}{}
+	}
+	defer bat.Clean(w.mp)
+	//if bat != nil && len(bat.Vecs) > 0 && bat.Vecs[0].Length() > 0 {
+	//	nbf := bloomfilter.New(int64(bat.Vecs[0].Length()), probility)
+	//	nbf.Add(bat.Vecs[0])
+	//}
 
 	w.files = filesNotGC
-	return filesToGC, metaFile, nil
+	toGC := make([]string, 0)
+	for _, file := range filesToGC {
+		if _, ok := notGC[file]; !ok {
+			toGC = append(toGC, file)
+		}
+	}
+	return toGC, metaFile, nil
 }
 
 // ScanCheckpoints will load data from the `checkpointEntries` one by one and
@@ -239,11 +255,13 @@ func (w *GCWindow) ScanCheckpoints(
 	w.tsRange.start = start
 	w.tsRange.end = end
 	newFiles, _ := sinker.GetResult()
-	if metaFile, err = w.writeMetaForRemainings(
+	var bat *batch.Batch
+	if metaFile, bat, err = w.writeMetaForRemainings(
 		ctx, newFiles,
 	); err != nil {
 		return
 	}
+	defer bat.Clean(w.mp)
 	w.files = append(w.files, newFiles...)
 	return metaFile, nil
 }
@@ -267,22 +285,21 @@ func (w *GCWindow) getSinker(
 func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
-) (string, error) {
+) (string, *batch.Batch, error) {
 	select {
 	case <-ctx.Done():
-		return "", context.Cause(ctx)
+		return "", nil, context.Cause(ctx)
 	default:
 	}
 	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
-	defer ret.Clean(w.mp)
 	for _, s := range stats {
 		if err := vector.AppendBytes(
 			ret.GetVector(0), s[:], false, w.mp,
 		); err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
 	writer, err := objectio.NewObjectWriterSpecial(
@@ -290,14 +307,19 @@ func (w *GCWindow) writeMetaForRemainings(
 		ioutil.MakeFullName(w.dir, name),
 		w.fs,
 	)
+	defer func() {
+		if err != nil {
+			ret.Clean(w.mp)
+		}
+	}()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	_, err = writer.WriteEnd(ctx)
-	return name, err
+	return name, ret, err
 }
 
 func (w *GCWindow) Merge(o *GCWindow) {
