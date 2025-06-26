@@ -199,6 +199,13 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
+	dbs := make([]string, 0, len(exec.tables.Pts))
+	tables := make([]string, 0, len(exec.tables.Pts))
+	for _, pt := range exec.tables.Pts {
+		dbs = append(dbs, pt.Source.Database)
+		tables = append(tables, pt.Source.Table)
+	}
+
 	// reset runningReaders
 	exec.runningReaders = &sync.Map{}
 
@@ -209,7 +216,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	go exec.watermarkUpdater.Run(ctx, exec.activeRoutine)
 
 	// register to table scanner
-	cdc.GetTableDetector(cnUUID).Register(taskId, exec.handleNewTables)
+	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
 
 	exec.isRunning = true
 	logutil.Infof("cdc task %s start on cn %s success", taskName, cnUUID)
@@ -372,8 +379,21 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 
 	for key, info := range allAccountTbls[accountId] {
 		// already running
-		if _, ok := exec.runningReaders.Load(key); ok {
-			continue
+		if val, ok := exec.runningReaders.Load(key); ok {
+			if reader, ok := val.(cdc.TableReader); ok {
+				readerInfo := reader.Info()
+				// wait the old reader to stop
+				if info.OnlyDiffinTblId(readerInfo) {
+					waitChan := make(chan struct{})
+					go func() {
+						defer close(waitChan)
+						reader.GetWg().Wait()
+					}()
+					<-waitChan
+				} else {
+					continue
+				}
+			}
 		}
 
 		if exec.exclude != nil && exec.exclude.MatchString(key) {
@@ -568,7 +588,6 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	if exec.startTs, err = CDCStrToTS(startTs); err != nil {
 		return err
 	}
-
 	// endTs
 	endTs, err := res.GetString(ctx, 0, 6)
 	if err != nil {

@@ -70,10 +70,11 @@ type Options struct {
 
 	BulkTomestoneTxnThreshold uint64
 	// MaxMessageSize is the size of max message which is sent to log-service.
-	MaxMessageSize   uint64
-	TransferTableTTL time.Duration
-	IncrementalDedup bool
-	IsStandalone     bool
+	MaxMessageSize       uint64
+	TransferTableTTL     time.Duration
+	IncrementalDedup     bool
+	IsStandalone         bool
+	EnableApplyTableData bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`

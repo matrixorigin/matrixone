@@ -2203,7 +2203,7 @@ func MakeFalseExpr() *Expr {
 	}
 }
 
-func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef) *plan.RuntimeFilterSpec {
+func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef, notOnPk bool) *plan.RuntimeFilterSpec {
 	cpkeyIdx, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
 	if !ok {
 		panic("fail to convert runtime filter to composite primary key!")
@@ -2216,25 +2216,28 @@ func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *p
 		UpperLimit:  upperlimit,
 		Expr:        expr,
 		MatchPrefix: true,
+		NotOnPk:     notOnPk,
 	}
 }
 
-func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr, notOnPk bool) *plan.RuntimeFilterSpec {
 	serialExpr, _ := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{expr})
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
 		UpperLimit:  upperlimit,
 		Expr:        serialExpr,
 		MatchPrefix: matchPrefix,
+		NotOnPk:     notOnPk,
 	}
 }
 
-func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr, notOnPk bool) *plan.RuntimeFilterSpec {
 	return &plan.RuntimeFilterSpec{
 		Tag:         tag,
 		UpperLimit:  upperlimit,
 		Expr:        expr,
 		MatchPrefix: matchPrefix,
+		NotOnPk:     notOnPk,
 	}
 }
 
