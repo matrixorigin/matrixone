@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,63 +70,12 @@ func (m *wmMockSQLExecutor) Exec(_ context.Context, sql string, _ ie.SessionOver
 	return nil
 }
 
-type MysqlResultSet struct {
-	//column information
-	Columns []string
-	//column name --> column index
-	Name2Index map[string]uint64
-	//data
-	Data [][]interface{}
-}
-
-type internalExecResult struct {
-	affectedRows uint64
-	resultSet    *MysqlResultSet
-	err          error
-}
-
-func (res *internalExecResult) GetUint64(ctx context.Context, i uint64, j uint64) (uint64, error) {
-	return strconv.ParseUint(res.resultSet.Data[i][j].(string), 10, 64)
-}
-
-func (res *internalExecResult) Error() error {
-	return res.err
-}
-
-func (res *internalExecResult) ColumnCount() uint64 {
-	return 1
-}
-
-func (res *internalExecResult) Column(ctx context.Context, i uint64) (name string, typ uint8, signed bool, err error) {
-	return "test", 1, true, nil
-}
-
-func (res *internalExecResult) RowCount() uint64 {
-	return uint64(len(res.resultSet.Data))
-}
-
-func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
-	return res.resultSet.Data[i], nil
-}
-
-func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
-	return nil, nil
-}
-
-func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cid uint64) (float64, error) {
-	return 0.0, nil
-}
-
-func (res *internalExecResult) GetString(ctx context.Context, i uint64, j uint64) (string, error) {
-	return res.resultSet.Data[i][j].(string), nil
-}
-
 func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
 	if strings.HasPrefix(sql, "SELECT") {
 		matches := m.selectRe.FindStringSubmatch(sql)
-		return &internalExecResult{
+		return &InternalExecResultForTest{
 			affectedRows: 1,
-			resultSet: &MysqlResultSet{
+			resultSet: &MysqlResultSetForTest{
 				Columns:    nil,
 				Name2Index: nil,
 				Data: [][]interface{}{

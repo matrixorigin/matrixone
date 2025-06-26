@@ -2225,13 +2225,12 @@ func TestCdcTask_Resume(t *testing.T) {
 }
 
 func TestCdcTask_Restart(t *testing.T) {
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
 	cdc := &CDCTaskExecutor{
-		activeRoutine: cdc.NewCdcActiveRoutine(),
-		watermarkUpdater: cdc.NewWatermarkUpdater(
-			sysAccountID,
-			"taskID-0",
-			nil,
-		),
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
@@ -2270,29 +2269,20 @@ func TestCdcTask_Cancel(t *testing.T) {
 		<-ch
 	}()
 
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-
-	sqlx := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = .* AND task_id = .*"
-	mock.ExpectExec(sqlx).WillReturnResult(sqlmock.NewResult(1, 1))
-	tie := &testIE{
-		db: db,
-	}
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
 	cdc := &CDCTaskExecutor{
-		activeRoutine: cdc.NewCdcActiveRoutine(),
-		watermarkUpdater: cdc.NewWatermarkUpdater(
-			sysAccountID,
-			"taskID-1",
-			tie,
-		),
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		holdCh:    ch,
 		isRunning: true,
 	}
-	err = cdc.Cancel()
-	assert.NoErrorf(t, err, "Pause()")
+	err := cdc.Cancel()
+	assert.NoErrorf(t, err, "Cancel()")
 }
 
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
@@ -2312,7 +2302,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		startTs              types.TS
 		noFull               bool
 		activeRoutine        *cdc.ActiveRoutine
-		sunkWatermarkUpdater *cdc.WatermarkUpdater
+		sunkWatermarkUpdater *cdc.CDCWatermarkUpdater
 	}
 	type args struct {
 		ctx context.Context
@@ -2935,14 +2925,20 @@ func (m mockSinker) Close() {
 func (m mockSinker) ClearError() {}
 
 func TestCdcTask_addExecPipelineForTable(t *testing.T) {
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
 	cdcTask := &CDCTaskExecutor{
-		watermarkUpdater: &mockWatermarkUpdater{},
+		watermarkUpdater: u,
 		runningReaders:   &sync.Map{},
 		noFull:           true,
 		additionalConfig: map[string]interface{}{
 			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
 			cdc.CDCTaskExtraOptions_SendSqlTimeout:       cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
+		},
+		spec: &task.CreateCdcDetails{
+			Accounts: []*task.Account{{Id: 0}},
 		},
 	}
 
@@ -3002,8 +2998,6 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 			types.TS,
 			types.TS,
 			bool,
-			uint64,
-			string,
 		) cdc.Reader {
 			return &mockReader{}
 		})
