@@ -18,6 +18,7 @@ import (
 	"context"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -314,7 +315,7 @@ func (m *mockSQLExecutor) Query(
 	pts ie.SessionOverrideOptions,
 ) ie.InternalExecResult {
 	if !IsSelectClause(sql) {
-		return &internalExecResult{
+		return &InternalExecResultForTest{
 			err: moerr.NewInternalErrorNoCtxf("invalid sql: %s", sql),
 		}
 	}
@@ -329,7 +330,7 @@ func (m *mockSQLExecutor) ApplySessionOverride(
 func (m *mockSQLExecutor) executeSelect(selectSql string) ie.InternalExecResult {
 	selectResult, err := ParseSelectByPKs(selectSql)
 	if err != nil {
-		return &internalExecResult{
+		return &InternalExecResultForTest{
 			err: err,
 		}
 	}
@@ -344,7 +345,7 @@ func (m *mockSQLExecutor) executeSelect(selectSql string) ie.InternalExecResult 
 			pk,
 		)
 		if err != nil {
-			return &internalExecResult{
+			return &InternalExecResultForTest{
 				err: err,
 			}
 		}
@@ -376,9 +377,9 @@ func (m *mockSQLExecutor) executeSelect(selectSql string) ie.InternalExecResult 
 		zap.String("projection-columns", strings.Join(selectResult.projectionColumns, ",")),
 		zap.Any("rows", rows),
 	)
-	return &internalExecResult{
+	return &InternalExecResultForTest{
 		affectedRows: uint64(len(rows)),
-		resultSet: &MysqlResultSet{
+		resultSet: &MysqlResultSetForTest{
 			Columns: selectResult.projectionColumns,
 			Data:    retData,
 		},
@@ -743,4 +744,55 @@ func InitCDCWatermarkUpdaterForTest(t *testing.T) (*CDCWatermarkUpdater, *mockSQ
 		WithCronJobInterval(time.Millisecond*1),
 	)
 	return u, ie
+}
+
+type MysqlResultSetForTest struct {
+	//column information
+	Columns []string
+	//column name --> column index
+	Name2Index map[string]uint64
+	//data
+	Data [][]interface{}
+}
+
+type InternalExecResultForTest struct {
+	affectedRows uint64
+	resultSet    *MysqlResultSetForTest
+	err          error
+}
+
+func (res *InternalExecResultForTest) GetUint64(ctx context.Context, i uint64, j uint64) (uint64, error) {
+	return strconv.ParseUint(res.resultSet.Data[i][j].(string), 10, 64)
+}
+
+func (res *InternalExecResultForTest) Error() error {
+	return res.err
+}
+
+func (res *InternalExecResultForTest) ColumnCount() uint64 {
+	return 1
+}
+
+func (res *InternalExecResultForTest) Column(ctx context.Context, i uint64) (name string, typ uint8, signed bool, err error) {
+	return "test", 1, true, nil
+}
+
+func (res *InternalExecResultForTest) RowCount() uint64 {
+	return uint64(len(res.resultSet.Data))
+}
+
+func (res *InternalExecResultForTest) Row(ctx context.Context, i uint64) ([]interface{}, error) {
+	return res.resultSet.Data[i], nil
+}
+
+func (res *InternalExecResultForTest) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
+	return nil, nil
+}
+
+func (res *InternalExecResultForTest) GetFloat64(ctx context.Context, ridx uint64, cid uint64) (float64, error) {
+	return 0.0, nil
+}
+
+func (res *InternalExecResultForTest) GetString(ctx context.Context, i uint64, j uint64) (string, error) {
+	return res.resultSet.Data[i][j].(string), nil
 }
