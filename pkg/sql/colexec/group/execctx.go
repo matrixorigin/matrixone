@@ -418,7 +418,7 @@ func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
 	return count, kth
 }
 
-type EncodedState struct {
+type EncodedPartition struct {
 	GroupKeys [][]byte
 	AggStates [][]byte
 }
@@ -427,7 +427,7 @@ func (hr *ResHashRelated) encodePartition(
 	partitionID int,
 	aggList []aggexec.AggFuncExec,
 ) (
-	encoded []byte,
+	encoded *EncodedPartition,
 	err error,
 ) {
 

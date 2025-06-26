@@ -166,7 +166,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	group.ctr.estimatedSize = group.ctr.EstimateAggStatesSize()
+	group.ctr.estimatedSize = group.ctr.estimateStateSize()
 
 	res := vm.NewCallResult()
 	res.Batch = b
