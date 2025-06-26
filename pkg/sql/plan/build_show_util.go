@@ -550,5 +550,5 @@ func formatStr(str string) string {
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
-	return builder.resolveTsHint(AtTsExpr)
+	return builder.ResolveTsHint(AtTsExpr)
 }

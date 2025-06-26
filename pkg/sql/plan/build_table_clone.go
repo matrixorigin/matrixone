@@ -68,7 +68,7 @@ func buildCloneTable(
 	}
 
 	if stmt.SrcTable.AtTsExpr != nil {
-		bindCtx.snapshot, err = builder.resolveTsHint(stmt.SrcTable.AtTsExpr)
+		bindCtx.snapshot, err = builder.ResolveTsHint(stmt.SrcTable.AtTsExpr)
 		if err != nil {
 			return nil, err
 		}
@@ -139,9 +139,10 @@ func buildCloneTable(
 
 	dstTblDef := DeepCopyTableDef(srcTblDef, true)
 	dstTblDef.Name = stmt.CreateTable.Table.ObjectName.String()
-	// if the dst db name is empty, we assume that the dst tbl and src tbl belong to the same db.
-	if stmt.CreateTable.Table.SchemaName.String() != "" {
-		dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
+	dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
+
+	if dstTblDef.DbName == "" {
+		dstTblDef.DbName = ctx.DefaultDatabase()
 	}
 
 	id = builder.appendNode(&plan.Node{
