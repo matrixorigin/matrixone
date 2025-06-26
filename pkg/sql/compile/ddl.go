@@ -450,6 +450,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 		// 3. lock foreign key's table
 		for _, action := range qry.Actions {
+			if action.Action == nil {
+				continue
+			}
 			switch act := action.Action.(type) {
 			case *plan.AlterTable_Action_Drop:
 				alterTableDrop := act.Drop
@@ -525,6 +528,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	cols := tableDef.Cols
 	// drop foreign key
 	for _, action := range qry.Actions {
+		if action.Action == nil {
+			continue
+		}
 		switch act := action.Action.(type) {
 		case *plan.AlterTable_Action_AlterVarcharLength:
 			alterKinds = append(alterKinds, api.AlterKind_ReplaceDef)

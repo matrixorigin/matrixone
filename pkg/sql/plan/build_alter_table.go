@@ -476,15 +476,13 @@ func onlyVarcharLengthModified(
 			newIsNotNull := !a.Is
 			if origIsNotNull != newIsNotNull {
 				onlyNullMatched = false
-				break
 			}
 		default:
 			onlyNullMatched = false
-			break
 		}
-	}
-	if !onlyNullMatched {
-		return
+		if !onlyNullMatched {
+			return
+		}
 	}
 
 	ok = true
