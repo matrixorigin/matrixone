@@ -146,19 +146,18 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
 
 	for i, tableDef := range dmlCtx.tableDefs {
+		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
+		if hasIrregularIndex {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+		}
+		tableDef.Indexes = validIndexes
+
 		idxDefs := tableDef.Indexes
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
-			if !idxDef.TableExist {
-				continue
-			}
-
-			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
-			}
-
 			idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+
 			if len(idxTableDef.Name2ColIndex) == 0 {
 				idxTableDef.Name2ColIndex = make(map[string]int32)
 				for colIdx, col := range idxTableDef.Cols {
