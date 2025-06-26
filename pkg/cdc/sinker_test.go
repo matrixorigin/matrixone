@@ -549,7 +549,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		SinkTblName: "tblName",
 	}
 
-	u, _ := initCDCWatermarkUpdater(t)
+	u, _ := InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
 	u.UpdateWatermarkOnly(context.Background(), &WatermarkKey{
@@ -690,7 +690,7 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 		SourceTblName: "t1",
 	}
 
-	watermarkUpdater, _ := initCDCWatermarkUpdater(t)
+	watermarkUpdater, _ := InitCDCWatermarkUpdaterForTest(t)
 	watermarkUpdater.Start()
 	defer watermarkUpdater.Stop()
 	wmTS := types.BuildTS(0, 1)
@@ -880,7 +880,7 @@ func Test_mysqlSinker_sinkInsert(t *testing.T) {
 }
 
 func Test_mysqlsink(t *testing.T) {
-	wmark, _ := initCDCWatermarkUpdater(t)
+	wmark, _ := InitCDCWatermarkUpdaterForTest(t)
 	wmark.Start()
 	defer wmark.Stop()
 	ts := types.BuildTS(100, 100)
