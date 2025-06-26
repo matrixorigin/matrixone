@@ -22,8 +22,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -363,6 +365,7 @@ func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
 	defer cancel()
 
 	readSql := u.constructReadWMSQL(u.readKeysBuffer)
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	res := u.ie.Query(ctx, readSql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
 		err = res.Error()
@@ -431,6 +434,7 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (err error, errMsg string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
 	u.Lock()
 	defer u.Unlock()
@@ -466,6 +470,7 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (err error, errMsg strin
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	errMsgSql := u.constructBatchUpdateWMErrMsgSQL(u.committingErrMsgBuffer)
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	err = u.ie.Exec(ctx, errMsgSql, ie.SessionOverrideOptions{})
 	if err != nil {
 		errMsg = fmt.Sprintf("update err_msg sql \"%s\" failed", errMsgSql)
@@ -531,6 +536,7 @@ func (u *CDCWatermarkUpdater) execAddWM() (err error, errMsg string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	addSql := u.constructAddWMSQL(u.addCommittedBuffer)
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	err = u.ie.Exec(ctx, addSql, ie.SessionOverrideOptions{})
 	if err != nil {
 		errMsg = fmt.Sprintf("add sql \"%s\" failed", addSql)
