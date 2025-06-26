@@ -223,7 +223,9 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 
 		if group.ctr.estimatedSize > group.ctr.spillThreshold {
 			// Trigger spill
-			return group.spillData(proc)
+			if err := group.spillData(proc); err != nil {
+				return nil, err
+			}
 		}
 
 		group.ctr.dataSourceIsEmpty = false
@@ -508,16 +510,16 @@ func (group *Group) consumeBatchToRes(
 	}
 }
 
-func (group *Group) spillData(proc *process.Process) (vm.CallResult, error) {
+func (group *Group) spillData(proc *process.Process) error {
 	for partitionID := 0; partitionID < group.ctr.numPartitions; partitionID++ {
 		encoded, err := group.ctr.hr.encodePartition(partitionID, group.ctr.result1.AggList)
 		if err != nil {
-			return vm.CancelResult, err
+			return err
 		}
 		_ = encoded
 		var filePath string
 		//TODO write to spill fileservice
 		group.ctr.spilledPartitionFiles[partitionID] = filePath
 	}
-	return vm.NewCallResult(), nil
+	return nil
 }
