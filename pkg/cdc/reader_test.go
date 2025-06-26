@@ -197,7 +197,7 @@ func Test_tableReader_Run(t *testing.T) {
 	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
 	defer stub8.Reset()
 
-	u, _ := initCDCWatermarkUpdater(t)
+	u, _ := InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
 
@@ -284,7 +284,7 @@ func Test_tableReader_readTable(t *testing.T) {
 		},
 	)
 
-	u, _ := initCDCWatermarkUpdater(t)
+	u, _ := InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
 	reader := &tableReader{
@@ -343,7 +343,7 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 	defer put.Put()
 
 	taskId := NewTaskId()
-	u, _ := initCDCWatermarkUpdater(t)
+	u, _ := InitCDCWatermarkUpdaterForTest(t)
 	u.Start()
 	defer u.Stop()
 
