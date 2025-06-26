@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -320,7 +319,7 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]*ObjectEntry) {
+func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) {
 	ckpReader.ForEachRow(
 		ctx,
 		func(
@@ -332,6 +331,9 @@ func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CK
 			rowID types.Rowid,
 		) error {
 			name := stats.ObjectName().String()
+			if objects[name] == nil {
+				objects[name] = make(map[uint64]*ObjectEntry)
+			}
 			object := &ObjectEntry{
 				stats:    &stats,
 				createTS: createTS,
@@ -339,7 +341,7 @@ func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CK
 				db:       dbid,
 				table:    tid,
 			}
-			objects[name] = object
+			objects[name][tid] = object
 			return nil
 		},
 	)
@@ -351,17 +353,21 @@ func (w *GCWindow) Close() {
 
 // collectData collects data from memory that can be written to s3
 func collectMapData(
-	objects map[string]*ObjectEntry,
+	objects map[string]map[uint64]*ObjectEntry,
 	bat *batch.Batch,
 	mp *mpool.MPool,
 ) error {
 	if len(objects) == 0 {
 		return nil
 	}
-	for _, entry := range objects {
-		err := addObjectToBatch(bat, entry.stats, entry, mp)
-		if err != nil {
-			return err
+	length := 0
+	for _, tables := range objects {
+		for _, entry := range tables {
+			length++
+			err := addObjectToBatch(bat, entry.stats, entry, mp)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	batch.SetLength(bat, len(objects))
