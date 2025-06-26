@@ -201,7 +201,7 @@ func (w *GCWindow) ScanCheckpoints(
 				return false, err
 			}
 		}
-		objects := make(map[string]*ObjectEntry)
+		objects := make(map[string]map[uint64]*ObjectEntry)
 		collectObjectsFromCheckpointData(ctx, ckpReader, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err

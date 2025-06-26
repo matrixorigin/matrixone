@@ -144,7 +144,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		attrTypes,
 	)
 	defer buffer.Close(e.mp)
-	transObjects := make(map[string]*ObjectEntry, 100)
+	transObjects := make(map[string]map[uint64]*ObjectEntry, 100)
 	coarseFilter, err := MakeBloomfilterCoarseFilter(
 		ctx,
 		e.config.coarseEstimateRows,
@@ -207,7 +207,7 @@ func MakeBloomfilterCoarseFilter(
 	location objectio.Location,
 	ckpVersion uint32,
 	ts *types.TS,
-	transObjects *map[string]*ObjectEntry,
+	transObjects *map[string]map[uint64]*ObjectEntry,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (
@@ -258,20 +258,25 @@ func MakeBloomfilterCoarseFilter(
 				buf := bat.Vecs[0].GetRawBytesAt(i)
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().UnsafeString()
-
-				if dropTS.IsEmpty() && (*transObjects)[name] == nil {
+				tid := tableIDs[i]
+				if dropTS.IsEmpty() &&
+					((*transObjects)[name] == nil ||
+						(*transObjects)[name][tableIDs[i]] == nil) {
+					if (*transObjects)[name] == nil {
+						(*transObjects)[name] = make(map[uint64]*ObjectEntry)
+					}
 					object := &ObjectEntry{
 						stats:    &stats,
 						createTS: createTS,
 						dropTS:   dropTS,
 						db:       dbs[i],
-						table:    tableIDs[i],
+						table:    tid,
 					}
-					(*transObjects)[name] = object
+					(*transObjects)[name][tid] = object
 					return
 				}
-				if (*transObjects)[name] != nil {
-					(*transObjects)[name].dropTS = dropTS
+				if (*transObjects)[name] != nil && (*transObjects)[name][tid] != nil {
+					(*transObjects)[name][tid].dropTS = dropTS
 					return
 				}
 			},
@@ -286,7 +291,7 @@ func MakeSnapshotAndPitrFineFilter(
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
-	transObjects map[string]*ObjectEntry,
+	transObjects map[string]map[uint64]*ObjectEntry,
 ) (
 	filter FilterFn,
 	err error,
@@ -315,13 +320,16 @@ func MakeSnapshotAndPitrFineFilter(
 			snapshots := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
 
-			if entry := transObjects[name]; entry != nil {
-				if !logtail.ObjectIsSnapshotRefers(
-					entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
-				) {
-					bm.Add(uint64(i))
+			if transObjects[name] != nil {
+				tables := transObjects[name]
+				if entry := tables[tableID]; entry != nil {
+					if !logtail.ObjectIsSnapshotRefers(
+						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
+					) {
+						bm.Add(uint64(i))
+					}
+					continue
 				}
-				continue
 			}
 			if !createTS.LT(ts) || !deleteTS.LT(ts) {
 				continue
