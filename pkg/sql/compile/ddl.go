@@ -2599,7 +2599,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, false); e != nil {
+		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
