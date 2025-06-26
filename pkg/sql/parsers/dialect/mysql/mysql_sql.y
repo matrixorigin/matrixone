@@ -7723,6 +7723,23 @@ create_database_stmt:
         )
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
+|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt
+    {
+    	var t = tree.NewCloneDatabase()
+    	t.DstDatabase = tree.Identifier($4)
+    	t.SrcDatabase = tree.Identifier($6)
+    	t.AtTsExpr = $7
+    	$$ = t
+    }
+|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt TO ACCOUNT ident
+    {
+    	var t = tree.NewCloneDatabase()
+    	t.DstDatabase = tree.Identifier($4)
+    	t.SrcDatabase = tree.Identifier($6)
+    	t.AtTsExpr = $7
+    	t.ToAccountName = tree.Identifier($10.Compare())
+    	$$ = t
+    }
 
 subscription_opt:
     {
@@ -8011,6 +8028,16 @@ create_table_stmt:
 	t.CreateTable.LikeTableName = *$7
 	t.CreateTable.IsAsLike = true
 	t.SrcTable = *$7
+	$$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name TO ACCOUNT ident
+    {
+	t := tree.NewCloneTable()
+	t.CreateTable.Table = *$5
+	t.CreateTable.LikeTableName = *$7
+	t.CreateTable.IsAsLike = true
+	t.SrcTable = *$7
+	t.ToAccountName = tree.Identifier($10.Compare())
 	$$ = t
     }
 

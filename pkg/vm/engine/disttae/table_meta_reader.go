@@ -120,18 +120,23 @@ func (r *TableMetaReader) Read(
 	)
 
 	defer func() {
+		stateStr := "data"
+		if r.state == tombstoneMetaState {
+			stateStr = "tombstone"
+		}
+
 		if r.state == dataMetaState {
 			r.state = tombstoneMetaState
 		} else {
 			r.state = endState
 		}
 
-		stateStr := "data"
-		if r.state == tombstoneMetaState {
-			stateStr = "tombstone"
-		}
-
 		logutil.Info("TableMetaReader",
+			zap.String("table",
+				fmt.Sprintf("%s(%d)-%s(%d)-%s",
+					r.table.db.databaseName, r.table.db.databaseId,
+					r.table.tableName, r.table.tableId,
+					r.snapshot.ToString())),
 			zap.String("state", stateStr),
 			zap.Error(err), logs1, logs2)
 	}()
@@ -158,7 +163,8 @@ func (r *TableMetaReader) Read(
 
 	// step2
 	logs2, err = r.collectVisibleInMemRows(
-		ctx, mp, outBatch, isTombstone, seqnums, attrs, colTypes)
+		ctx, mp, outBatch, isTombstone, seqnums, attrs, colTypes,
+	)
 
 	return false, err
 }
