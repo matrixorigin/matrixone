@@ -123,7 +123,7 @@ type CDCTaskExecutor struct {
 
 	activeRoutine *cdc.ActiveRoutine
 	// watermarkUpdater update the watermark of the items that has been sunk to downstream
-	watermarkUpdater cdc.IWatermarkUpdater
+	watermarkUpdater *cdc.CDCWatermarkUpdater
 	// runningReaders store the running execute pipelines, map key pattern: db.table
 	runningReaders *sync.Map
 
@@ -210,10 +210,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	exec.runningReaders = &sync.Map{}
 
 	// start watermarkUpdater
-	exec.watermarkUpdater = cdc.NewWatermarkUpdater(
-		uint64(accountId), taskId, exec.ie,
-	)
-	go exec.watermarkUpdater.Run(ctx, exec.activeRoutine)
+	exec.watermarkUpdater = cdc.GetCDCWatermarkUpdater(exec.cnUUID, exec.ie)
 
 	// register to table scanner
 	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
@@ -441,28 +438,39 @@ func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) 
 }
 
 // reader ----> sinker ----> remote db
-func (exec *CDCTaskExecutor) addExecPipelineForTable(ctx context.Context, info *cdc.DbTableInfo, txnOp client.TxnOperator) (err error) {
+func (exec *CDCTaskExecutor) addExecPipelineForTable(
+	ctx context.Context,
+	info *cdc.DbTableInfo,
+	txnOp client.TxnOperator,
+) (err error) {
 	// step 1. init watermarkUpdater
 	// get watermark from db
-	watermark, err := exec.watermarkUpdater.GetFromDb(info.SourceDbName, info.SourceTblName)
-	if moerr.IsMoErrCode(err, moerr.ErrNoWatermarkFound) {
-		// add watermark into db if not exists
-		watermark = exec.startTs
-		if exec.noFull {
-			watermark = types.TimestampToTS(txnOp.SnapshotTS())
-		}
-		if err = exec.watermarkUpdater.InsertIntoDb(info, watermark); err != nil {
-			return
-		}
-	} else if err != nil {
-		return
+	watermark := exec.startTs
+	if exec.noFull {
+		watermark = types.TimestampToTS(txnOp.SnapshotTS())
 	}
+	watermarkKey := cdc.WatermarkKey{
+		AccountId: uint64(exec.spec.Accounts[0].GetId()),
+		TaskId:    exec.spec.TaskId,
+		DBName:    info.SourceDbName,
+		TableName: info.SourceTblName,
+	}
+	if watermark, err = exec.watermarkUpdater.GetOrAddCommitted(
+		ctx,
+		&watermarkKey,
+		&watermark,
+	); err != nil {
+		return err
+	}
+
 	// clear err msg
-	if err = exec.watermarkUpdater.SaveErrMsg(info.SourceDbName, info.SourceTblName, ""); err != nil {
+	if err = exec.watermarkUpdater.UpdateWatermarkErrMsg(
+		ctx,
+		&watermarkKey,
+		"",
+	); err != nil {
 		return
 	}
-	// add watermark into memory
-	exec.watermarkUpdater.UpdateMem(info.SourceDbName, info.SourceTblName, watermark)
 
 	tableDef, err := cdc.GetTableDef(ctx, txnOp, exec.cnEngine, info.SourceTblId)
 	if err != nil {
@@ -472,6 +480,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(ctx context.Context, info *
 	// step 2. new sinker
 	sinker, err := cdc.NewSinker(
 		exec.sinkUri,
+		uint64(exec.spec.Accounts[0].GetId()),
 		info,
 		exec.watermarkUpdater,
 		tableDef,
@@ -492,6 +501,8 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(ctx context.Context, info *
 		exec.cnEngine,
 		exec.mp,
 		exec.packerPool,
+		uint64(exec.spec.Accounts[0].GetId()),
+		exec.spec.TaskId,
 		info,
 		sinker,
 		exec.watermarkUpdater,
