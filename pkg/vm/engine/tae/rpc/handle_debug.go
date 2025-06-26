@@ -561,9 +561,19 @@ func (h *Handle) HandleDiskCleaner(
 	op := req.Op
 	key := req.Key
 	value := req.Value
-	if op == cmd_util.RemoveChecker {
+	switch op {
+	case cmd_util.RemoveChecker:
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
+	case cmd_util.StopGC:
+		err = h.db.Controller.SwitchTxnMode(ctx, 3, "")
+		return
+	case cmd_util.StartGC:
+		err = h.db.Controller.SwitchTxnMode(ctx, 4, "")
+		return
+	case cmd_util.AddChecker:
+		break
 	}
+
 	switch key {
 	case cmd_util.CheckerKeyTTL:
 		// Set a ttl, checkpoints whose endTS is less than this ttl can be consumed

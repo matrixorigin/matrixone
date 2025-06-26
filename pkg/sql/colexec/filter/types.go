@@ -27,9 +27,10 @@ import (
 var _ vm.Operator = new(Filter)
 
 type Filter struct {
-	ctr   container
-	E     *plan.Expr
-	IsEnd bool
+	ctr                container
+	FilterExprs        []*plan.Expr
+	RuntimeFilterExprs []*plan.Expr
+	IsEnd              bool
 
 	vm.OperatorBase
 }
@@ -74,15 +75,15 @@ type container struct {
 	allExecutors     []colexec.ExpressionExecutor // = executors + runtimeExecutor, do not free this executors
 }
 
-func (filter *Filter) SetRuntimeExpr(proc *process.Process, exes []*plan.Expr) (err error) {
-	filter.ctr.cleanRuntimeExecutor()
-	filter.ctr.runtimeExecutors, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, exes)
+func (filter *Filter) SetRuntimeFilterExprs(proc *process.Process, exes []*plan.Expr) (err error) {
+	filter.RuntimeFilterExprs = exes
 	return
 }
 
 func (filter *Filter) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	filter.ctr.resetExecutor()
 	filter.ctr.cleanRuntimeExecutor()
+	filter.RuntimeFilterExprs = nil
 }
 
 func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -92,6 +93,7 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 	if filter.ctr.buf != nil {
 		filter.ctr.buf.Clean(proc.Mp())
 	}
+	filter.RuntimeFilterExprs = nil
 }
 
 func (filter *Filter) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

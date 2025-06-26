@@ -82,6 +82,31 @@ func TestOriginSQL(t *testing.T) {
 }
 
 var (
+	partitionSQL = struct {
+		input  string
+		output string
+	}{
+		input:  "create table `db_testalterpartitiontablewithaddcolumn_702488000`.`testalterpartitiontablewithaddcolumn_copy_01979b62-2421-7956-81bf-53bb3b5a0090` (`c` int default null comment 'abc', `b` int default null, `d` int default null) partition by hash (c) partitions 2",
+		output: "create table `db_testalterpartitiontablewithaddcolumn_702488000`.`testalterpartitiontablewithaddcolumn_copy_01979b62-2421-7956-81bf-53bb3b5a0090` (`c` int default null comment abc, `b` int default null, `d` int default null) partition by hash (`c`) partitions 2",
+	}
+)
+
+func TestQuoteIdentifer(t *testing.T) {
+	if partitionSQL.output == "" {
+		partitionSQL.output = partitionSQL.input
+	}
+	ast, err := ParseOne(context.TODO(), partitionSQL.input, 1)
+	if err != nil {
+		t.Errorf("Parse(%q) err: %v", partitionSQL.input, err)
+		return
+	}
+	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifer())
+	if partitionSQL.output != out {
+		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
+	}
+}
+
+var (
 	validSQL = []struct {
 		input  string
 		output string

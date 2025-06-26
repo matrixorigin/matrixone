@@ -121,14 +121,16 @@ func NewFlushTableTailEntry(
 			}
 		}
 		// prepare transfer pages
-		entry.addTransferPages(ctx)
+		if err := entry.addTransferPages(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	return entry, nil
 }
 
 // add transfer pages for dropped aobjects
-func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
+func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked(false).HasPK()
 	ioVector := model.InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings))
@@ -146,7 +148,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 			id,
 			bts,
 			isTransient,
-			entry.rt.LocalFs,
+			entry.rt.TmpFS,
 			model.GetTTL(),
 			model.GetDiskTTL(),
 			objectIDs,
@@ -156,14 +158,18 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		start = time.Now()
 		err := model.AddTransferPage(page, ioVector)
 		if err != nil {
-			return
+			return err
 		}
 		duration += time.Since(start)
 		pages = append(pages, page)
 	}
 
 	start = time.Now()
-	model.WriteTransferPage(ctx, entry.rt.LocalFs, pages, *ioVector)
+	transferFS, err := model.GetTransferFS(entry.rt.TmpFS)
+	if err != nil {
+		return err
+	}
+	model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
 	now := time.Now()
 	for _, page := range pages {
 		if page.BornTS() != bts {
@@ -175,6 +181,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
+	return nil
 }
 
 // collectDelsAndTransfer collects deletes in flush process and moves them to the created obj

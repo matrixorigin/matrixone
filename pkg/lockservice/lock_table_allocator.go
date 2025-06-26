@@ -445,7 +445,6 @@ func (l *lockTableAllocator) tryRebindLocked(
 			zap.String("service", binds.serviceID),
 			zap.Int64("old timestamp", oldTimestamp),
 			zap.Int64("new timestamp", newTimestamp))
-		return old
 	}
 	// find a valid table and service bind
 	if old.Valid {

@@ -79,3 +79,6 @@ insert into t1 values(1,"Abby", 24);
 show index from t1;
 show create table t1;
 select name, type, column_name from mo_catalog.mo_indexes mi where name="idx7";
+drop table if exists parmas;
+CREATE TABLE params (`key` VARCHAR(250) NOT NULL,run_uuid VARCHAR(32) NOT NULL,CONSTRAINT param_pk PRIMARY KEY (`key`, run_uuid));
+CREATE INDEX index_params_run_uuid ON params (run_uuid);

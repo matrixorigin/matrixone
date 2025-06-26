@@ -32,6 +32,7 @@ import (
 )
 
 var _ Reader = new(tableReader)
+var _ TableReader = new(tableReader)
 
 type tableReader struct {
 	cnTxnClient          client.TxnClient
@@ -50,6 +51,8 @@ type tableReader struct {
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
 	delTsColIdx, delCompositedPkColIdx int
+
+	wg sync.WaitGroup
 }
 
 var NewTableReader = func(
@@ -95,6 +98,14 @@ var NewTableReader = func(
 	return reader
 }
 
+func (reader *tableReader) Info() *DbTableInfo {
+	return reader.info
+}
+
+func (reader *tableReader) GetWg() *sync.WaitGroup {
+	return &reader.wg
+}
+
 func (reader *tableReader) Close() {
 	reader.sinker.Close()
 }
@@ -109,7 +120,9 @@ func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
 
 	var err error
+	reader.wg.Add(1)
 	defer func() {
+		defer reader.wg.Done()
 		if err != nil {
 			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceDbName, reader.info.SourceTblName, err.Error()); err != nil {
 				logutil.Infof("cdc tableReader(%v).Run: save err msg failed, err: %v", reader.info, err)
