@@ -2967,6 +2967,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 		func(
 			cdc.UriInfo,
 			uint64,
+			string,
 			*cdc.DbTableInfo,
 			*cdc.CDCWatermarkUpdater,
 			*plan.TableDef,

@@ -481,6 +481,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	sinker, err := cdc.NewSinker(
 		exec.sinkUri,
 		uint64(exec.spec.Accounts[0].GetId()),
+		exec.spec.TaskId,
 		info,
 		exec.watermarkUpdater,
 		tableDef,

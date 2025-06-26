@@ -84,6 +84,10 @@ type WatermarkKey struct {
 	TableName string
 }
 
+func (k *WatermarkKey) String() string {
+	return fmt.Sprintf("%d.%s.%s.%s", k.AccountId, k.TaskId, k.DBName, k.TableName)
+}
+
 type WatermarkResult struct {
 	Watermark types.TS
 	Ok        bool

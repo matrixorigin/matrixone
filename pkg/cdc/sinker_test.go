@@ -40,6 +40,7 @@ func TestNewSinker(t *testing.T) {
 	type args struct {
 		sinkUri          UriInfo
 		accountId        uint64
+		taskId           string
 		dbTblInfo        *DbTableInfo
 		watermarkUpdater *CDCWatermarkUpdater
 		tableDef         *plan.TableDef
@@ -129,7 +130,7 @@ func TestNewSinker(t *testing.T) {
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, uint64, *DbTableInfo, *CDCWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, uint64, string, *DbTableInfo, *CDCWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
@@ -139,6 +140,7 @@ func TestNewSinker(t *testing.T) {
 			got, err := NewSinker(
 				tt.args.sinkUri,
 				tt.args.accountId,
+				tt.args.taskId,
 				tt.args.dbTblInfo,
 				tt.args.watermarkUpdater,
 				tt.args.tableDef,
@@ -373,6 +375,7 @@ func TestNewMysqlSinker(t *testing.T) {
 	NewMysqlSinker(
 		sink,
 		1,
+		"task-1",
 		dbTblInfo,
 		nil,
 		tableDef,
@@ -577,6 +580,7 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 	s := NewMysqlSinker(
 		sink,
 		1,
+		"task-1",
 		dbTblInfo,
 		u,
 		tableDef,
