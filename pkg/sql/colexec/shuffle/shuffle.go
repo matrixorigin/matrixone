@@ -103,6 +103,7 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 			shuffle.ctr.lastForShufflePool = shuffle.ctr.shufflePool.Ending()
 			result.Status = vm.ExecNext
 			result.Batch = batch.EmptyBatch
+			return result, nil
 		} else if bat.Last() {
 			return result, nil
 		} else if !bat.IsEmpty() {
