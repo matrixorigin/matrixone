@@ -2966,17 +2966,47 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	})
 	defer stubGetTableDef.Reset()
 
-	stubSinker := gostub.Stub(&cdc.NewSinker, func(cdc.UriInfo, *cdc.DbTableInfo, cdc.IWatermarkUpdater,
-		*plan.TableDef, int, time.Duration, *cdc.ActiveRoutine, uint64, string) (cdc.Sinker, error) {
-		return &mockSinker{}, nil
-	})
+	stubSinker := gostub.Stub(
+		&cdc.NewSinker,
+		func(
+			cdc.UriInfo,
+			uint64,
+			*cdc.DbTableInfo,
+			*cdc.CDCWatermarkUpdater,
+			*plan.TableDef,
+			int,
+			time.Duration,
+			*cdc.ActiveRoutine,
+			uint64,
+			string,
+		) (cdc.Sinker, error) {
+			return &mockSinker{}, nil
+		})
 	defer stubSinker.Reset()
 
-	stubReader := gostub.Stub(&cdc.NewTableReader, func(client.TxnClient, engine.Engine, *mpool.MPool,
-		*fileservice.Pool[*types.Packer], *cdc.DbTableInfo, cdc.Sinker, cdc.IWatermarkUpdater, *plan.TableDef, bool,
-		*sync.Map, types.TS, types.TS, bool) cdc.Reader {
-		return &mockReader{}
-	})
+	stubReader := gostub.Stub(
+		&cdc.NewTableReader,
+		func(
+			client.TxnClient,
+			engine.Engine,
+			*mpool.MPool,
+			*fileservice.Pool[*types.Packer],
+			uint64,
+			string,
+			*cdc.DbTableInfo,
+			cdc.Sinker,
+			*cdc.CDCWatermarkUpdater,
+			*plan.TableDef,
+			bool,
+			*sync.Map,
+			types.TS,
+			types.TS,
+			bool,
+			uint64,
+			string,
+		) cdc.Reader {
+			return &mockReader{}
+		})
 	defer stubReader.Reset()
 
 	assert.NoError(t, cdcTask.addExecPipelineForTable(context.Background(), info, txnOperator))
