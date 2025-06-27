@@ -2687,7 +2687,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	// TODO: HSNWCDC delete cdc task of the vector and fulltext index here
+	// TODO: HNSWCDC delete cdc task of the vector and fulltext index here
 	idxmap := make(map[string]bool)
 	for _, idx := range qry.GetTableDef().Indexes {
 		if idx.TableExist &&

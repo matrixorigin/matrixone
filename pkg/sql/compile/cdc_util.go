@@ -63,8 +63,27 @@ func DeleteIndexPitr(c *Compile, dbname string, tablename string) error {
 	return nil
 }
 
+func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) bool {
+	for _, idx := range tableDef.Indexes {
+		if idx.IndexName == indexname {
+			if idx.TableExist &&
+				(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
+					catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
+					catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+				return true
+			}
+		}
+	}
+	return false
+}
 func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string, sinker_type int8) error {
 	var err error
+
+	if !checkValidIndexCdc(tableDef, indexname) {
+		// index name is not valid cdc task. ignore it
+		return moerr.NewInternalError(c.proc.Ctx, "CreateIndexCdcTask: index type is not valid for CDC update")
+	}
+
 	// create table pitr if not exists and return pitr_id
 	pitr_id, err := CreateIndexPitr(c, dbname, tablename)
 	if err != nil {
@@ -86,6 +105,11 @@ func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tabl
 
 func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
 	var err error
+
+	if !checkValidIndexCdc(tableDef, indexname) {
+		// index name is not valid cdc task. ignore it
+		return nil
+	}
 
 	// delete index cdc task
 	_, err = DeleteTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: indexname})
