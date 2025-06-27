@@ -358,7 +358,6 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 		return
 	}
 	errMsg, err = u.execBatchUpdateWMErrMsg()
-	return
 }
 
 func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
