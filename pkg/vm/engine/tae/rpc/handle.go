@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -900,11 +901,17 @@ func (h *Handle) HandleWrite(
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
+		err = errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
+			req.DatabaseId,
+			req.DatabaseName)))
 		return
 	}
 
 	tb, err := dbase.GetRelationByID(req.TableID)
 	if err != nil {
+		err = errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
+			req.TableID,
+			req.TableName)))
 		return
 	}
 
