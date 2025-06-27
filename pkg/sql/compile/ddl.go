@@ -2063,7 +2063,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	// HNSWCDC CREATE PITR AND CDC TASK HERE
 	if async {
 		logutil.Infof("Ivfflat index Async is true")
-		sinker_type := int8(0)
+		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
 		err = CreateIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, sinker_type)
 		if err != nil {

@@ -167,7 +167,7 @@ func (s *Scope) handleFullTextIndexTable(
 	// TODO: HNSWCDC create PITR and CDC TASK here
 	if async {
 		logutil.Infof("fulltext index Async is true")
-		sinker_type := int8(0)
+		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 		err = CreateIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name,
 			indexDef.IndexTableName, sinker_type)
 		if err != nil {
@@ -578,7 +578,7 @@ func (s *Scope) handleVectorHnswIndex(
 	}
 
 	// TODO: HNSWCDC 4. register CDC update
-	sinker_type := int8(0)
+	sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
 	err = CreateIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type)
 	if err != nil {
 		return err
