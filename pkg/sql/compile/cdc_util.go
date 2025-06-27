@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -76,13 +75,10 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) bool {
 	}
 	return false
 }
+
+// NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
 func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string, sinker_type int8) error {
 	var err error
-
-	if !checkValidIndexCdc(tableDef, indexname) {
-		// index name is not valid cdc task. ignore it
-		return moerr.NewInternalError(c.proc.Ctx, "CreateIndexCdcTask: index type is not valid for CDC update")
-	}
 
 	// create table pitr if not exists and return pitr_id
 	pitr_id, err := CreateIndexPitr(c, dbname, tablename)
@@ -176,6 +172,8 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 	}
 	return int8(0)
 }
+
+// NOTE: CreateAllIndexCdcTasks will create CDC task based on existing tableDef
 func CreateAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
 	for _, idx := range tabledef.Indexes {
