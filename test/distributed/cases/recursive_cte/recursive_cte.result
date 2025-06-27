@@ -92,3 +92,9 @@ Charlie    1
 David    2
 Eve    2
 Frank    2
+drop table if exists t1;
+create table t1(id bigint primary key, parent_id bigint, tenant_id varchar(50));
+insert into t1 select *,*,* from generate_series(1000000) g;
+WITH recursive tb (id, parent_id) AS (SELECT id,parent_id FROM t1 WHERE id IN ( 1937478033946447874, 1,2,3) AND tenant_id != '000000' UNION ALL SELECT c.id, c.parent_id FROM t1 c JOIN tb t ON c.id = t.parent_id WHERE c.tenant_id != '000000') select count(*) from tb;
+recursive level out of range
+drop table if exists t1;
