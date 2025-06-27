@@ -487,7 +487,6 @@ func TestCDCWatermarkUpdater_constructReadWMSQL(t *testing.T) {
 		Watermark: ts2,
 		Ok:        true,
 	}
-	realSql := u.constructReadWMSQL(keys)
 	expectedSql1 := "SELECT account_id, task_id, db_name, table_name, watermark FROM " +
 		"`mo_catalog`.`mo_cdc_watermark` WHERE " +
 		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND table_name = 't1') OR " +
@@ -496,7 +495,7 @@ func TestCDCWatermarkUpdater_constructReadWMSQL(t *testing.T) {
 		"`mo_catalog`.`mo_cdc_watermark` WHERE " +
 		"(account_id = 2 AND task_id = 'test' AND db_name = 'db2' AND table_name = 't2') OR " +
 		"(account_id = 1 AND task_id = 'test' AND db_name = 'db1' AND table_name = 't1')"
-	realSql = u.constructReadWMSQL(keys)
+	realSql := u.constructReadWMSQL(keys)
 	assert.True(t, expectedSql1 == realSql || expectedSql2 == realSql)
 }
 
@@ -709,7 +708,7 @@ func TestCDCWatermarkUpdater_execBatchUpdateWMErrMsg(t *testing.T) {
 	assert.NoError(t, err)
 
 	u.committingErrMsgBuffer = jobs
-	err, errMsg := u.execBatchUpdateWMErrMsg()
+	errMsg, err := u.execBatchUpdateWMErrMsg()
 	assert.NoError(t, err)
 	assert.Equal(t, "", errMsg)
 

@@ -399,9 +399,7 @@ func (m *mockSQLExecutor) executeInsert(insertSql string) error {
 	var projectionColumns []string
 	if len(insertResult.projectionColumns) == 0 {
 		projectionColumns = make([]string, 0, len(m.columnNames[key]))
-		for _, column := range m.columnNames[key] {
-			projectionColumns = append(projectionColumns, column)
-		}
+		projectionColumns = append(projectionColumns, m.columnNames[key]...)
 	} else {
 		projectionColumns = insertResult.projectionColumns
 	}
@@ -435,11 +433,7 @@ func (m *mockSQLExecutor) executeInsertOnDuplicateUpdate(insertSql string) error
 
 	if len(insertResult.projectionColumns) == 0 {
 		insertResult.projectionColumns = make([]string, 0, len(m.columnNames[key]))
-		for _, column := range m.columnNames[key] {
-			insertResult.projectionColumns = append(insertResult.projectionColumns, column)
-		}
-	} else {
-		insertResult.projectionColumns = insertResult.projectionColumns
+		insertResult.projectionColumns = append(insertResult.projectionColumns, m.columnNames[key]...)
 	}
 
 	err = m.Insert(

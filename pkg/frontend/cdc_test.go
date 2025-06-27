@@ -2820,41 +2820,6 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 	cdcTask.handleNewTables(mp)
 }
 
-type mockWatermarkUpdater struct{}
-
-func (m mockWatermarkUpdater) Run(context.Context, *cdc.ActiveRoutine) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockWatermarkUpdater) InsertIntoDb(*cdc.DbTableInfo, types.TS) error {
-	return nil
-}
-
-func (m mockWatermarkUpdater) GetFromMem(string, string) types.TS {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockWatermarkUpdater) GetFromDb(dbName, tblName string) (watermark types.TS, err error) {
-	err = moerr.NewErrNoWatermarkFoundNoCtx(dbName, tblName)
-	return
-}
-
-func (m mockWatermarkUpdater) UpdateMem(string, string, types.TS) {
-
-}
-
-func (m mockWatermarkUpdater) DeleteFromMem(string, string) {}
-
-func (m mockWatermarkUpdater) DeleteFromDb(string, string) error {
-	return nil
-}
-
-func (m mockWatermarkUpdater) SaveErrMsg(string, string, string) error {
-	return nil
-}
-
 type mockReader struct{}
 
 func (m mockReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
