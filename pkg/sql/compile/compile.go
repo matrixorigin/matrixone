@@ -4659,11 +4659,26 @@ func (c *Compile) runSql(sql string) error {
 	return c.runSqlWithAccountId(sql, NoAccountId)
 }
 
+func (c *Compile) runSqlWithOptions(
+	sql string,
+	options executor.StatementOption,
+) error {
+	return c.runSqlWithAccountIdAndOptions(sql, NoAccountId, options)
+}
+
 func (c *Compile) runSqlWithAccountId(sql string, accountId int32) error {
+	return c.runSqlWithAccountIdAndOptions(sql, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runSqlWithAccountIdAndOptions(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+) error {
 	if sql == "" {
 		return nil
 	}
-	res, err := c.runSqlWithResult(sql, accountId)
+	res, err := c.runSqlWithResultAndOptions(sql, accountId, options)
 	if err != nil {
 		return err
 	}
@@ -4672,6 +4687,14 @@ func (c *Compile) runSqlWithAccountId(sql string, accountId int32) error {
 }
 
 func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result, error) {
+	return c.runSqlWithResultAndOptions(sql, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runSqlWithResultAndOptions(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -4687,7 +4710,8 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		WithTxn(c.proc.GetTxnOperator()).
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
-		WithLowerCaseTableNames(&lower)
+		WithLowerCaseTableNames(&lower).
+		WithStatementOption(options)
 
 	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
