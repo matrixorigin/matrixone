@@ -2060,7 +2060,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		return err
 	}
 
-	// TODO: HNSWCDC CREATE PITR AND CDC TASK HERE
+	// HNSWCDC CREATE PITR AND CDC TASK HERE
 	if async {
 		logutil.Infof("Ivfflat index Async is true")
 		sinker_type := int8(0)
@@ -2124,16 +2124,16 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	}
 
-	//3. delete index object from mo_catalog.mo_indexes
-	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
-	err = c.runSql(deleteSql)
+	//3. HNSWCDC delete cdc table task for vector, fulltext index
+	tableDef := r.GetTableDef(c.proc.Ctx)
+	err = DropIndexCdcTask(c, tableDef, qry.Database, qry.Table, qry.IndexName)
 	if err != nil {
 		return err
 	}
 
-	// TODO: HNSWCDC delete cdc table task for vector, fulltext index
-	tableDef := r.GetTableDef(c.proc.Ctx)
-	err = DropIndexCdcTask(c, tableDef, qry.Database, qry.Table, qry.IndexName)
+	//4. delete index object from mo_catalog.mo_indexes
+	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
+	err = c.runSql(deleteSql)
 	if err != nil {
 		return err
 	}
@@ -2687,7 +2687,7 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	// TODO: HNSWCDC delete cdc task of the vector and fulltext index here
+	// HNSWCDC delete cdc task of the vector and fulltext index here
 	idxmap := make(map[string]bool)
 	for _, idx := range qry.GetTableDef().Indexes {
 		if idx.TableExist &&
