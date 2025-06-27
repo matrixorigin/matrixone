@@ -2408,6 +2408,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
+	// TODO: HNSWCDC drop CDC task with old table Id before truncate index table
+
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
 		var err error
@@ -2518,6 +2520,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
+
+	// TODO: HNSWCDC create CDC task with new table Id
 
 	c.addAffectedRows(uint64(affectedRows))
 	return nil
