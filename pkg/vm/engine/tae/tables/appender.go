@@ -116,7 +116,7 @@ func (appender *objectAppender) ApplyAppend(
 	node := n.MustMNode()
 	appender.obj.Lock()
 	defer appender.obj.Unlock()
-	from, err = node.ApplyAppendLocked(bat, txn)
+	from, err = node.ApplyAppendLocked(bat)
 
 	schema := node.writeSchema
 	for _, colDef := range schema.ColDefs {

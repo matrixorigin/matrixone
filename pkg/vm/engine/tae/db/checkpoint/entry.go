@@ -422,6 +422,31 @@ func (e *CheckpointEntry) String() string {
 // read related
 //===============================================================
 
+func (e *CheckpointEntry) GetTableRangesByID(
+	ctx context.Context,
+	tableID uint64,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (ranges []ckputil.TableRange, err error) {
+	reader := logtail.NewCKPReaderWithTableID_V2(e.version, e.cnLocation, tableID, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
+	}
+	return reader.GetTableRanges(ctx)
+}
+
+func (e *CheckpointEntry) GetTableRanges(
+	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (ranges []ckputil.TableRange, err error) {
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
+	}
+	return reader.GetTableRanges(ctx)
+}
+
 // Only for test
 // Only fill in columns ObjectID, CreateTS and DeleteTS
 func (e *CheckpointEntry) GetTableByID(

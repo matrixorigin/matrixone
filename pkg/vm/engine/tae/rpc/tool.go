@@ -26,16 +26,15 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -1017,6 +1016,9 @@ func (c *storageCkpArg) PrepareCommand() *cobra.Command {
 	list := storageCkpListArg{}
 	storageCkpCmd.AddCommand(list.PrepareCommand())
 
+	stat := storageCkpStatArg{}
+	storageCkpCmd.AddCommand(stat.PrepareCommand())
+
 	return storageCkpCmd
 }
 
@@ -1030,7 +1032,8 @@ func (c *storageCkpArg) String() string {
 
 func (c *storageCkpArg) Usage() (res string) {
 	res += "Available Commands:\n"
-	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
+	res += fmt.Sprintf("  %-5v display checkpoint or table information from storage\n", "list")
+	res += fmt.Sprintf("  %-5v display stat of a given checkpoint from storage\n", "stat")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -1046,10 +1049,11 @@ func (c *storageCkpArg) Run() error {
 	return nil
 }
 
-type storageCkpListArg struct {
+type storageCkpBaseArg struct {
 	ctx         *inspectContext
 	fromS3      bool
 	dir, name   string
+	tid         int
 	res         string
 	fs          fileservice.FileService
 	readEntries func(
@@ -1062,54 +1066,245 @@ type storageCkpListArg struct {
 		mp *mpool.MPool,
 		fs fileservice.FileService,
 	) (entries []*checkpoint.CheckpointEntry, err error)
+	getRanges func(
+		entry *checkpoint.CheckpointEntry,
+	) ([]ckputil.TableRange, error)
+}
+
+func (c *storageCkpBaseArg) String() string {
+	return c.res
+}
+
+func (c *storageCkpBaseArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	c.fromS3, _ = cmd.Flags().GetBool("s3")
+	c.dir, _ = cmd.Flags().GetString("dir")
+	c.name, _ = cmd.Flags().GetString("name")
+	c.tid, _ = cmd.Flags().GetInt("tid")
+	// TODO: from s3 dir
+	return nil
+}
+
+func (c *storageCkpBaseArg) initOfflineFS(
+	ctx context.Context,
+) (err error) {
+	c.fs, err = objectio.NewOfflineFS(
+		ctx, c.dir, c.fromS3,
+	)
+	return
+}
+
+func (c *storageCkpBaseArg) getEntriesFromMeta(
+	ctx context.Context,
+) (entries []*checkpoint.CheckpointEntry, err error) {
+	readEntries := c.readEntries
+	if readEntries == nil {
+		readEntries = checkpoint.ReadEntriesFromMeta
+	}
+	entries, err = readEntries(
+		ctx,
+		"",
+		ioutil.GetCheckpointDir(),
+		c.name,
+		0,
+		nil,
+		common.CheckpointAllocator,
+		c.fs,
+	)
+	return
+}
+
+type storageCkpStatArg struct {
+	storageCkpBaseArg
+}
+
+func (c *storageCkpStatArg) PrepareCommand() *cobra.Command {
+	statCmd := &cobra.Command{
+		Use:   "stat",
+		Short: "checkpoint stat",
+		Long:  "Display stat of a given checkpoint from storage",
+		Run:   RunFactory(c),
+	}
+
+	statCmd.SetUsageTemplate(c.Usage())
+
+	statCmd.Flags().StringP("name", "n", "", "name")
+	statCmd.Flags().StringP("dir", "d", "", "dir")
+	statCmd.Flags().BoolP("s3", "", false, "from s3")
+	statCmd.Flags().IntP("tid", "t", invalidId, "table id")
+
+	return statCmd
+}
+
+func (c *storageCkpStatArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display stat of a given checkpoint from storage\n"
+	res += "  inspect storage-ckp stat -n meta_0-0_1749279217089645000-1.ckp -dir mo-data/shared\n"
+	res += "  # Display stat of a given checkpoint from s3\n"
+	res += "  inspect storage-ckp stat -n meta_0-0_1749279217089645000-1.ckp -d mo-data/shared --s3\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -d, --dir=invalidPath:\n"
+	res += "    The dir checkpoint, which does not contain 'ckp/'\n"
+	res += "  -n, --name=invalidPath:\n"
+	res += "    The name of checkpoint\n"
+	res += "  -s, --s3=false:\n"
+	res += "    From s3\n"
+	res += "  -t, --tid=invalidId:\n"
+	res += "    The id of table\n"
+
+	return
+}
+
+func (c *storageCkpStatArg) Run() (err error) {
+	if c.ctx == nil {
+		return c.runOffline()
+	}
+	return c.runOnline()
+}
+
+type CkpTableRange struct {
+	Entry  *checkpoint.CheckpointEntry
+	Ranges []ckputil.TableRange
+}
+
+func (c *storageCkpStatArg) getTableRanges(
+	ctx context.Context,
+	entries []*checkpoint.CheckpointEntry,
+) (ranges []CkpTableRange, err error) {
+	ranges = make([]CkpTableRange, 0, len(entries))
+	getRanges := c.getRanges
+	if getRanges == nil {
+		getRanges = func(
+			entry *checkpoint.CheckpointEntry,
+		) ([]ckputil.TableRange, error) {
+			return entry.GetTableRangesByID(
+				ctx,
+				uint64(c.tid),
+				common.CheckpointAllocator,
+				c.fs,
+			)
+		}
+	}
+	for _, entry := range entries {
+		var tmpRanges []ckputil.TableRange
+		if tmpRanges, err = getRanges(entry); err != nil {
+			return
+		}
+		ranges = append(ranges, CkpTableRange{
+			Entry:  entry,
+			Ranges: tmpRanges,
+		})
+	}
+	return
+}
+
+func (c *storageCkpStatArg) getAllTableRanges(
+	ctx context.Context,
+	entries []*checkpoint.CheckpointEntry,
+) (ranges []CkpTableRange, err error) {
+	getRanges := c.getRanges
+	if getRanges == nil {
+		getRanges = func(
+			entry *checkpoint.CheckpointEntry,
+		) ([]ckputil.TableRange, error) {
+			return entry.GetTableRanges(ctx, common.CheckpointAllocator, c.fs)
+		}
+	}
+	ranges = make([]CkpTableRange, 0, len(entries))
+	for _, entry := range entries {
+		var tmpRanges []ckputil.TableRange
+		if tmpRanges, err = getRanges(entry); err != nil {
+			return
+		}
+		ranges = append(ranges, CkpTableRange{
+			Entry:  entry,
+			Ranges: tmpRanges,
+		})
+	}
+	return
+}
+
+func (c *storageCkpStatArg) runOffline() (err error) {
+	if err = c.initOfflineFS(context.Background()); err != nil {
+		return
+	}
+	var entries []*checkpoint.CheckpointEntry
+	if ioutil.IsMetadataName(c.name) {
+		if entries, err = c.getEntriesFromMeta(context.Background()); err != nil {
+			return
+		}
+	} else {
+		// handle checkpoint data file
+		// TODO
+		return moerr.NewInternalErrorNoCtx("not implemented")
+	}
+
+	var ranges []CkpTableRange
+	if c.tid == invalidId {
+		if ranges, err = c.getAllTableRanges(context.Background(), entries); err != nil {
+			return
+		}
+	} else {
+		if ranges, err = c.getTableRanges(context.Background(), entries); err != nil {
+			return
+		}
+	}
+	// output ranges as json
+	jsonData, err := PrettyJson.MarshalIndent(ranges, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
+
+	return
+}
+
+func (c *storageCkpStatArg) runOnline() (err error) {
+	return moerr.NewInternalErrorNoCtx("not implemented")
+}
+
+type storageCkpListArg struct {
+	storageCkpBaseArg
 }
 
 func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
-	ckpStatCmd := &cobra.Command{
+	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "checkpoint list",
 		Long:  "Display all checkpoints from storage",
 		Run:   RunFactory(c),
 	}
 
-	ckpStatCmd.SetUsageTemplate(c.Usage())
+	listCmd.SetUsageTemplate(c.Usage())
 
-	ckpStatCmd.Flags().StringP("name", "n", "", "name")
-	ckpStatCmd.Flags().BoolP("s3", "", false, "from s3")
+	listCmd.Flags().StringP("name", "n", "", "name")
+	listCmd.Flags().BoolP("s3", "", false, "from s3")
+	listCmd.Flags().StringP("dir", "d", "", "dir")
 
-	return ckpStatCmd
+	return listCmd
 }
 
 func (c *storageCkpListArg) Usage() (res string) {
 	res += "Examples(Note: no need to specify dir if in the online mode):\n"
 	res += "  # Display all information for the given checkpoint meta from storage\n"
-	res += "  inspect storage-ckp list -n dir/meta_0-0_1749279217089645000-1.ckp\n"
-	res += "  # Display information for the given checkpoint data from storage\n"
-	res += "  inspect storage-ckp list -n dir/019749d5-8f7c-733c-8b4c-4dae7731ae5b_00000\n"
+	res += "  inspect storage-ckp list -n meta_0-0_1749279217089645000-1.ckp --dir mo-data/shared\n"
+	// res += "  # Display information for the given checkpoint data from storage\n"
+	// res += "  inspect storage-ckp list -n dir/019749d5-8f7c-733c-8b4c-4dae7731ae5b_00000\n"
 
 	res += "\n"
 	res += "Options:\n"
 	res += "  -n, --name=invalidPath:\n"
 	res += "    The name of checkpoint\n"
+	res += "  -d, --dir=invalidPath:\n"
+	res += "    The dir checkpoint, which does not contain 'ckp/'\n"
 	res += "  -s, --s3=false:\n"
 	res += "    From s3\n"
 
 	return
-}
-
-func (c *storageCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
-	if cmd.Flag("ictx") != nil {
-		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
-	}
-	c.fromS3, _ = cmd.Flags().GetBool("s3")
-	path, _ := cmd.Flags().GetString("name")
-	c.dir, c.name = filepath.Split(path)
-	// TODO: from s3 dir
-	return nil
-}
-
-func (c *storageCkpListArg) String() string {
-	return c.res
 }
 
 func (c *storageCkpListArg) Run() (err error) {
@@ -1121,45 +1316,18 @@ func (c *storageCkpListArg) Run() (err error) {
 
 func (c *storageCkpListArg) runOffline() (err error) {
 	ctx := context.Background()
-	if c.fs, err = objectio.NewOfflineFS(
-		ctx, c.dir, c.fromS3,
-	); err != nil {
+	if err = c.initOfflineFS(ctx); err != nil {
 		return
 	}
-
 	var entries []*checkpoint.CheckpointEntry
-
-	// handle checkpoint meta file
 	if ioutil.IsMetadataName(c.name) {
-		readEntries := c.readEntries
-		if readEntries == nil {
-			readEntries = checkpoint.ReadEntriesFromMeta
-		}
-		if entries, err = readEntries(
-			ctx,
-			"",
-			"",
-			c.name,
-			0,
-			nil,
-			common.CheckpointAllocator,
-			c.fs,
-		); err != nil {
-			logutil.Error(
-				"Command-Storage-Ckp-List-Failed",
-				zap.String("dir", c.dir),
-				zap.String("name", c.name),
-				zap.Error(err),
-			)
+		if entries, err = c.getEntriesFromMeta(ctx); err != nil {
 			return
 		}
 	} else {
 		// handle checkpoint data file
 		// TODO
 		return moerr.NewInternalErrorNoCtx("not implemented")
-	}
-	if len(entries) == 0 {
-		return
 	}
 
 	ckpEntries := NewCkpEntries(len(entries))
