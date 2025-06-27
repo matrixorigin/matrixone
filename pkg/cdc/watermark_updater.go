@@ -343,27 +343,27 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 	// read the watermarks from the `mo_cdc_watermark` table. if
 	// the watermark is found, notify the job with the watermark, otherwise,
 	// add the job to the `addCommittedBuffer`.
-	if err, errMsg = u.execReadWM(); err != nil {
+	if errMsg, err = u.execReadWM(); err != nil {
 		return
 	}
 
 	// it collect all keys in the `addCommittedBuffer` and
 	// add the watermarks records to the `mo_cdc_watermark` table.
-	if err, errMsg = u.execAddWM(); err != nil {
+	if errMsg, err = u.execAddWM(); err != nil {
 		return
 	}
 
 	// batch update watermarks records in the `mo_cdc_watermark` table
-	if err, errMsg = u.execBatchUpdateWM(); err != nil {
+	if errMsg, err = u.execBatchUpdateWM(); err != nil {
 		return
 	}
-	err, errMsg = u.execBatchUpdateWMErrMsg()
+	errMsg, err = u.execBatchUpdateWMErrMsg()
 	return
 }
 
-func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
+func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 	if len(u.readKeysBuffer) == 0 {
-		return nil, ""
+		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -431,9 +431,9 @@ func (u *CDCWatermarkUpdater) execReadWM() (err error, errMsg string) {
 	return
 }
 
-func (u *CDCWatermarkUpdater) execBatchUpdateWM() (err error, errMsg string) {
+func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
 	if len(u.committingBuffer) == 0 || len(u.cacheCommitting) == 0 {
-		return nil, ""
+		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -461,15 +461,15 @@ func (u *CDCWatermarkUpdater) execBatchUpdateWM() (err error, errMsg string) {
 	u.committingBuffer = u.committingBuffer[:0]
 
 	// clear the committing cache
-	for key, _ := range u.cacheCommitting {
+	for key := range u.cacheCommitting {
 		delete(u.cacheCommitting, key)
 	}
 	return
 }
 
-func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (err error, errMsg string) {
+func (u *CDCWatermarkUpdater) execBatchUpdateWMErrMsg() (errMsg string, err error) {
 	if len(u.committingErrMsgBuffer) == 0 {
-		return nil, ""
+		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -533,9 +533,9 @@ func (u *CDCWatermarkUpdater) constructBatchUpdateWMErrMsgSQL(
 	return
 }
 
-func (u *CDCWatermarkUpdater) execAddWM() (err error, errMsg string) {
+func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	if len(u.addCommittedBuffer) == 0 {
-		return nil, ""
+		return "", nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

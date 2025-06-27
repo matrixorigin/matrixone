@@ -225,9 +225,8 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
 
 	exec.isRunning = true
-	var clearErrMsgErr error
 	// start success, clear err msg
-	clearErrMsgErr = exec.updateErrMsg(ctx, "")
+	clearErrMsgErr := exec.updateErrMsg(ctx, "")
 
 	logutil.Info(
 		"CDC-Task-Start-Success",
