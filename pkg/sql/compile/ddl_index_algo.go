@@ -578,7 +578,8 @@ func (s *Scope) handleVectorHnswIndex(
 	}
 
 	// TODO: HNSWCDC 4. register CDC update
-	err = createCdcHnswIndex(c, indexDefs, qryDatabase, originalTableDef)
+	sinker_type := int8(0)
+	err = CreateIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type)
 	if err != nil {
 		return err
 	}

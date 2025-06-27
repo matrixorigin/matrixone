@@ -561,29 +561,3 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 
 	return []string{sql}, nil
 }
-
-// TODO: HNSWCDC 4. register CDC update
-// CDC Task is 'Table' level.  Existing CDC task may be serving other indexes and we shall drop and create CDC task so that TableDef.Indexes is up-to-date.
-// If not, new index may not be updated because the old IndexSinker has to old TableDef.Indexes in memory.
-//
-// DROP PITR IF EXISTS `__mo_table_pitr_${db}_${srctable}`
-// DROP CDC IF EXISTS TASK __mo_cdc_${db}_${srctable}  NOTE: IF EXISTS is not valid SQL for DROP CDC
-// CREATE PITR IF NOT EXISTS __mo_table_pitr_${db}_${srctable} for table ${db} ${srctable) range 2 'h';
-// CREATE CDC IF NOT EXISTS __mo_cdc_${db}_${srctable} 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' '${db}.${srctable}' {'Level'='table'}'
-func createCdcHnswIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
-
-	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
-	}
-	srctbl := originalTableDef.Name
-	indexname := idxdef_meta.IndexName
-	sinker_type := int8(0)
-
-	err := CreateIndexCdcTask(c, originalTableDef, qryDatabase, srctbl, indexname, sinker_type)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
