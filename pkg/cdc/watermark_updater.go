@@ -48,12 +48,14 @@ const (
 	JT_CDC_GetOrAddCommittedWM tasks.JobType = 400 + iota
 	JT_CDC_CommittingWM
 	JT_CDC_UpdateWMErrMsg
+	JT_CDC_RemoveCachedWM
 )
 
 func init() {
 	tasks.RegisterJobType(JT_CDC_GetOrAddCommittedWM, "CDC_GetOrAddCommittedWM")
 	tasks.RegisterJobType(JT_CDC_CommittingWM, "CDC_CommittingWM")
 	tasks.RegisterJobType(JT_CDC_UpdateWMErrMsg, "CDC_UpdateWMErrMsg")
+	tasks.RegisterJobType(JT_CDC_RemoveCachedWM, "CDC_RemoveCachedWM")
 }
 
 func GetCDCWatermarkUpdater(
@@ -176,6 +178,21 @@ func NewUpdateWMErrMsgJob(
 	)
 	job.Key = key
 	job.ErrMsg = errMsg
+	return job
+}
+
+func NewRemoveCachedWMJob(
+	ctx context.Context,
+	key *WatermarkKey,
+) *UpdaterJob {
+	job := new(UpdaterJob)
+	job.Init(
+		ctx,
+		uuid.Must(uuid.NewV7()).String(),
+		JT_CDC_RemoveCachedWM,
+		nil,
+	)
+	job.Key = key
 	return job
 }
 
@@ -333,8 +350,19 @@ func (u *CDCWatermarkUpdater) onJobs(jobs ...any) {
 				continue
 			}
 			u.committingErrMsgBuffer = append(u.committingErrMsgBuffer, job)
+		case JT_CDC_RemoveCachedWM:
+			u.Lock()
+			if _, ok := u.cacheCommitted[*job.Key]; ok {
+				delete(u.cacheCommitted, *job.Key)
+				job.DoneWithErr(nil)
+			}
+			u.Unlock()
+			logutil.Info(
+				"CDC-Remove-Cached-WM-Success",
+				zap.String("key", job.Key.String()),
+			)
 		default:
-			// TODO: handle error
+			logutil.Fatal("unknown job type", zap.Int("job-type", int(job.Type())))
 		}
 	}
 
@@ -431,12 +459,28 @@ func (u *CDCWatermarkUpdater) execReadWM() (errMsg string, err error) {
 }
 
 func (u *CDCWatermarkUpdater) execBatchUpdateWM() (errMsg string, err error) {
-	if len(u.committingBuffer) == 0 || len(u.cacheCommitting) == 0 {
+	if len(u.committingBuffer) == 0 {
 		return "", nil
 	}
+	u.Lock()
+	// no committing jobs and no uncommitted watermarks, skip
+	if len(u.committingBuffer)+len(u.cacheUncommitted) == 0 {
+		u.Unlock()
+		return "", nil
+	}
+	// move uncommitted watermarks to committing
+	for key, watermark := range u.cacheUncommitted {
+		u.cacheCommitting[key] = watermark
+	}
+	// clear uncommitted watermarks
+	for key := range u.cacheUncommitted {
+		delete(u.cacheUncommitted, key)
+	}
+	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
+	u.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	commitSql := u.constructBatchUpdateWMSQL(u.cacheCommitting)
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	err = u.ie.Exec(ctx, commitSql, ie.SessionOverrideOptions{})
 	u.Lock()
@@ -668,6 +712,37 @@ func (u *CDCWatermarkUpdater) UpdateWatermarkOnly(
 	return nil
 }
 
+func (u *CDCWatermarkUpdater) RemoveCachedWM(
+	ctx context.Context,
+	key *WatermarkKey,
+) (err error) {
+	if err = u.ForceFlush(ctx); err != nil {
+		logutil.Error(
+			"CDCWatermarkUpdater-RemoveCachedWM-ForceFlushFailed",
+			zap.String("key", key.String()),
+			zap.Error(err),
+		)
+		return
+	}
+	job := NewRemoveCachedWMJob(ctx, key)
+	if _, err = u.queue.Enqueue(job); err != nil {
+		return
+	}
+	job.WaitDone()
+	err = job.GetResult().Err
+	return
+}
+
+func (u *CDCWatermarkUpdater) ForceFlush(ctx context.Context) (err error) {
+	job := NewCommittingWMJob(ctx)
+	if err = u.customized.scheduleJob(job); err != nil {
+		return
+	}
+	job.WaitDone()
+	err = job.GetResult().Err
+	return
+}
+
 // Note: suppose there is no concurrent write to the same key
 func (u *CDCWatermarkUpdater) GetOrAddCommitted(
 	ctx context.Context,
@@ -753,10 +828,5 @@ func (u *CDCWatermarkUpdater) cronRun(ctx context.Context) {
 		}
 	}()
 
-	job := NewCommittingWMJob(ctx)
-	if err = u.customized.scheduleJob(job); err != nil {
-		return
-	}
-	job.WaitDone()
-	err = job.GetResult().Err
+	err = u.ForceFlush(ctx)
 }
