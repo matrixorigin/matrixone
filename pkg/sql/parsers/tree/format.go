@@ -67,7 +67,7 @@ func WithEscapeSingleQuoteString() FmtCtxOption {
 	})
 }
 
-func WithQuoteIdentifer() FmtCtxOption {
+func WithQuoteIdentifier() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.quoteIdentifier = true
 	})

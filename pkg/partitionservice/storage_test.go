@@ -190,5 +190,5 @@ func TestGetPartitionTableCreateSQL(t *testing.T) {
 			PartitionTableName: "test_p1",
 		},
 	)
-	require.Equal(t, "create table test_p1 (a int)", str)
+	require.Equal(t, "create table `test_p1` (`a` int)", str)
 }
