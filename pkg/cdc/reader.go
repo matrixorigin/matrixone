@@ -117,7 +117,10 @@ func (reader *tableReader) Close() {
 	reader.sinker.Close()
 }
 
-func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
+func (reader *tableReader) Run(
+	ctx context.Context,
+	ar *ActiveRoutine,
+) {
 	key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
 	if _, loaded := reader.runningReaders.LoadOrStore(key, reader); loaded {
 		logutil.Warn(
@@ -139,13 +142,15 @@ func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
 	reader.wg.Add(1)
 	defer func() {
 		defer reader.wg.Done()
+		key := WatermarkKey{
+			AccountId: reader.accountId,
+			TaskId:    reader.taskId,
+			DBName:    reader.info.SourceDbName,
+			TableName: reader.info.SourceTblName,
+		}
+		defer reader.wMarkUpdater.RemoveCachedWM(ctx, &key)
+
 		if err != nil {
-			key := WatermarkKey{
-				AccountId: reader.accountId,
-				TaskId:    reader.taskId,
-				DBName:    reader.info.SourceDbName,
-				TableName: reader.info.SourceTblName,
-			}
 			errMsg := err.Error()
 			if err = reader.wMarkUpdater.UpdateWatermarkErrMsg(
 				ctx,
