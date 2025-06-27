@@ -2706,22 +2706,9 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// HNSWCDC delete cdc task of the vector and fulltext index here
-	idxmap := make(map[string]bool)
-	for _, idx := range qry.GetTableDef().Indexes {
-		if idx.TableExist &&
-			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-
-			_, ok := idxmap[idx.IndexName]
-			if !ok {
-				idxmap[idx.IndexName] = true
-				err = DropIndexCdcTask(c, qry.GetTableDef(), qry.Database, qry.Table, idx.IndexName)
-				if err != nil {
-					return err
-				}
-			}
-		}
+	err = DropAllIndexCdcTasks(c, qry.GetTableDef(), qry.Database, qry.Table)
+	if err != nil {
+		return err
 	}
 
 	// delete all index objects record of the table in mo_catalog.mo_indexes
