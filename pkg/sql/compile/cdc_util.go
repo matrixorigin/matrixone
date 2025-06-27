@@ -33,6 +33,8 @@ type SinkerInfo struct {
 
 func CreateTask(c *Compile, pitr_id int, sinkerinfo SinkerInfo) (bool, error) {
 	logutil.Infof("Create Index Task %v", sinkerinfo)
+	//dummyurl := "mysql://root:111@127.0.0.1:6001"
+	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
 	return true, nil
 }
 
@@ -48,19 +50,20 @@ func getIndexPitrName(dbname string, tablename string) string {
 func CreateIndexPitr(c *Compile, dbname string, tablename string) (int, error) {
 	pitr_name := getIndexPitrName(dbname, tablename)
 	pitr_id := 0
-	logutil.Infof("Create Index Pitr %s", pitr_name)
+	sql := fmt.Sprintf("CREATE PITR `%s` FOR TABLE `%s` `%s` range 2 'h';", pitr_name, dbname, tablename)
+	logutil.Infof("Create Index Pitr %s:", pitr_name, sql)
 	return pitr_id, nil
 }
 
 func DeleteIndexPitr(c *Compile, dbname string, tablename string) error {
 	pitr_name := getIndexPitrName(dbname, tablename)
 	// remove pitr
-	logutil.Infof("Delete Index Pitr %s", pitr_name)
-
+	sql := fmt.Sprintf("DROP PITR IF EXISTS `%s`;", pitr_name)
+	logutil.Infof("Delete Index Pitr %s: %s", pitr_name, sql)
 	return nil
 }
 
-func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
+func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string, sinker_type int8) error {
 	var err error
 	// create table pitr if not exists and return pitr_id
 	pitr_id, err := CreateIndexPitr(c, dbname, tablename)
@@ -69,7 +72,7 @@ func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tabl
 	}
 
 	// create index cdc task
-	ok, err := CreateTask(c, pitr_id, SinkerInfo{SinkerType: 0, DBName: dbname, TableName: tablename, IndexName: indexname})
+	ok, err := CreateTask(c, pitr_id, SinkerInfo{SinkerType: sinker_type, DBName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
@@ -85,7 +88,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	var err error
 
 	// delete index cdc task
-	_, err = DeleteTask(c, SinkerInfo{SinkerType: 0, DBName: dbname, TableName: tablename, IndexName: indexname})
+	_, err = DeleteTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}

@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -486,15 +485,6 @@ func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, ind
 		pkColName,
 		concat)
 
-	async, err := catalog.IsIndexAsync(params)
-	if err != nil {
-		return nil, err
-	}
-	// TODO: ERIC create PITR and CDC TASK here
-	if async {
-		logutil.Infof("fulltext index Async is true")
-	}
-
 	return []string{sql}, nil
 }
 
@@ -580,35 +570,20 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 // DROP CDC IF EXISTS TASK __mo_cdc_${db}_${srctable}  NOTE: IF EXISTS is not valid SQL for DROP CDC
 // CREATE PITR IF NOT EXISTS __mo_table_pitr_${db}_${srctable} for table ${db} ${srctable) range 2 'h';
 // CREATE CDC IF NOT EXISTS __mo_cdc_${db}_${srctable} 'mysql://root:111@127.0.0.1:6001' 'hnswsync' 'mysql://root:111@127.0.0.1:6001' '${db}.${srctable}' {'Level'='table'}'
-func genCdcHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
+func createCdcHnswIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) error {
 
 	idxdef_meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
 	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
+		return moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
 	}
 	srctbl := originalTableDef.Name
-	pitrname := fmt.Sprintf("__mo_index_pitr_%s_%s", qryDatabase, srctbl)
-	cdcname := fmt.Sprintf("__mo_index_cdc_%s_%s_%s", qryDatabase, srctbl, idxdef_meta.IndexName)
+	indexname := idxdef_meta.IndexName
+	sinker_type := int8(0)
 
-	var sql string
+	err := CreateIndexCdcTask(c, originalTableDef, qryDatabase, srctbl, indexname, sinker_type)
+	if err != nil {
+		return err
+	}
 
-	sqls := make([]string, 0, 3)
-
-	// CREATE PITR
-	sql = fmt.Sprintf("DROP PITR IF EXISTS `%s`;", pitrname)
-	sqls = append(sqls, sql)
-
-	sql = fmt.Sprintf("CREATE PITR `%s` FOR TABLE `%s` `%s` range 2 'h';", pitrname, qryDatabase, srctbl)
-	sqls = append(sqls, sql)
-
-	// CREATE CDC TASK
-	dummyurl := "mysql://root:111@127.0.0.1:6001"
-	sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'hnswsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
-	sqls = append(sqls, sql)
-
-	//os.Stderr.WriteString(fmt.Sprintf("%v\n", sqls))
-	// TODO: HNSWCDC remove the line below to run the above SQLs
-	sqls = sqls[:0]
-
-	return sqls, nil
+	return nil
 }
