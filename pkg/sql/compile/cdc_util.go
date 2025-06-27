@@ -97,8 +97,9 @@ func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tabl
 	}
 
 	if !ok {
-		// cdc task already exist
-		return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("index cdc task (%s, %s, %s) already exists", dbname, tablename, indexname))
+		// cdc task already exist. ignore it.  IVFFLAT alter reindex will call CreateIndexCdcTask multiple times.
+		logutil.Infof("index cdc task (%s, %s, %s) already exists", dbname, tablename, indexname)
+		return nil
 	}
 	return nil
 }
