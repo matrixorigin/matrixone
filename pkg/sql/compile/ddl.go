@@ -2705,7 +2705,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// HNSWCDC delete cdc task of the vector and fulltext index here
-	err = DropAllIndexCdcTasks(c, qry.GetTableDef(), qry.Database, qry.Table)
+	err = DropAllIndexCdcTasks(c, rel.GetTableDef(c.proc.Ctx), qry.Database, qry.Table)
 	if err != nil {
 		return err
 	}
