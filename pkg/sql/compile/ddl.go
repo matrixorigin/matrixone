@@ -2531,22 +2531,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	// TODO: HNSWCDC create CDC task with new table Id
 	if !isTemp {
 		tabledef := rel.GetTableDef(c.proc.Ctx)
-		idxmap := make(map[string]bool)
-		for _, idx := range tabledef.Indexes {
-			if idx.TableExist &&
-				(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-					catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-					catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-				_, ok := idxmap[idx.IndexName]
-				if !ok {
-					idxmap[idx.IndexName] = true
-					sinker_type := int8(0)
-					e := CreateIndexCdcTask(c, tabledef, dbName, tblName, idx.IndexName, sinker_type)
-					if e != nil {
-						return e
-					}
-				}
-			}
+		e := CreateAllIndexCdcTasks(c, tabledef, dbName, tblName)
+		if e != nil {
+			return e
 		}
 	}
 
