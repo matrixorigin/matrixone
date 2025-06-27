@@ -114,6 +114,26 @@ func (w *GCWindow) MakeFilesReader(
 	)
 }
 
+// stringSetFromStats converts a slice of ObjectStats to a set of object names.
+func stringSetFromStats(stats []objectio.ObjectStats) map[string]struct{} {
+	set := make(map[string]struct{}, len(stats))
+	for _, s := range stats {
+		set[s.ObjectName().UnsafeString()] = struct{}{}
+	}
+	return set
+}
+
+// filterStringsNotInSet returns all strings in candidates that are not in notSet.
+func filterStringsNotInSet(candidates []string, notSet map[string]struct{}) []string {
+	out := make([]string, 0, len(candidates))
+	for _, s := range candidates {
+		if _, found := notSet[s]; !found {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // ExecuteGlobalCheckpointBasedGC is to remove objectentry that can be deleted from GCWindow
 // it will refresh the files in GCWindow with the files that can not be GC'ed
 // it will return the files that could be GC'ed
@@ -157,29 +177,13 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	filesToGC, filesNotGC := job.Result()
 	var metaFile string
 	var err error
-	var bat *batch.Batch
-	if metaFile, bat, err = w.writeMetaForRemainings(
+	if metaFile, err = w.writeMetaForRemainings(
 		ctx, filesNotGC,
 	); err != nil {
 		return nil, "", err
 	}
-	notGC := make(map[string]struct{})
-	for _, stats := range filesNotGC {
-		notGC[stats.ObjectName().UnsafeString()] = struct{}{}
-	}
-	defer bat.Clean(w.mp)
-	//if bat != nil && len(bat.Vecs) > 0 && bat.Vecs[0].Length() > 0 {
-	//	nbf := bloomfilter.New(int64(bat.Vecs[0].Length()), probility)
-	//	nbf.Add(bat.Vecs[0])
-	//}
-
-	w.files = filesNotGC
-	toGC := make([]string, 0)
-	for _, file := range filesToGC {
-		if _, ok := notGC[file]; !ok {
-			toGC = append(toGC, file)
-		}
-	}
+	filesNotGCSet := stringSetFromStats(filesNotGC)
+	toGC := filterStringsNotInSet(filesToGC, filesNotGCSet)
 	return toGC, metaFile, nil
 }
 
@@ -255,13 +259,11 @@ func (w *GCWindow) ScanCheckpoints(
 	w.tsRange.start = start
 	w.tsRange.end = end
 	newFiles, _ := sinker.GetResult()
-	var bat *batch.Batch
-	if metaFile, bat, err = w.writeMetaForRemainings(
+	if metaFile, err = w.writeMetaForRemainings(
 		ctx, newFiles,
 	); err != nil {
 		return
 	}
-	defer bat.Clean(w.mp)
 	w.files = append(w.files, newFiles...)
 	return metaFile, nil
 }
@@ -285,21 +287,22 @@ func (w *GCWindow) getSinker(
 func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
-) (string, *batch.Batch, error) {
+) (string, error) {
 	select {
 	case <-ctx.Done():
-		return "", nil, context.Cause(ctx)
+		return "", context.Cause(ctx)
 	default:
 	}
 	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
+	defer ret.Clean(w.mp)
 	for _, s := range stats {
 		if err := vector.AppendBytes(
 			ret.GetVector(0), s[:], false, w.mp,
 		); err != nil {
-			return "", nil, err
+			return "", err
 		}
 	}
 	writer, err := objectio.NewObjectWriterSpecial(
@@ -307,19 +310,14 @@ func (w *GCWindow) writeMetaForRemainings(
 		ioutil.MakeFullName(w.dir, name),
 		w.fs,
 	)
-	defer func() {
-		if err != nil {
-			ret.Clean(w.mp)
-		}
-	}()
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
-		return "", nil, err
+		return "", err
 	}
 	_, err = writer.WriteEnd(ctx)
-	return name, ret, err
+	return name, err
 }
 
 func (w *GCWindow) Merge(o *GCWindow) {
