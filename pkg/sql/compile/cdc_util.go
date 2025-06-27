@@ -31,14 +31,14 @@ type SinkerInfo struct {
 	IndexName  string
 }
 
-func CreateTask(c *Compile, pitr_id int, sinkerinfo SinkerInfo) (bool, error) {
+func CreateCdcTask(c *Compile, pitr_id int, sinkerinfo SinkerInfo) (bool, error) {
 	logutil.Infof("Create Index Task %v", sinkerinfo)
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
 	return true, nil
 }
 
-func DeleteTask(c *Compile, sinkerinfo SinkerInfo) (bool, error) {
+func DeleteCdcTask(c *Compile, sinkerinfo SinkerInfo) (bool, error) {
 	logutil.Infof("Delete Index Task %v", sinkerinfo)
 	return true, nil
 }
@@ -91,7 +91,7 @@ func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tabl
 	}
 
 	// create index cdc task
-	ok, err := CreateTask(c, pitr_id, SinkerInfo{SinkerType: sinker_type, DBName: dbname, TableName: tablename, IndexName: indexname})
+	ok, err := CreateCdcTask(c, pitr_id, SinkerInfo{SinkerType: sinker_type, DBName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	}
 
 	// delete index cdc task
-	_, err = DeleteTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: indexname})
+	_, err = DeleteCdcTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
@@ -141,4 +141,26 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	}
 
 	return nil
+}
+
+func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
+	idxmap := make(map[string]bool)
+	for _, idx := range tabledef.Indexes {
+		if idx.TableExist &&
+			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
+				catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
+				catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+			_, ok := idxmap[idx.IndexName]
+			if !ok {
+				idxmap[idx.IndexName] = true
+				_, e := DeleteCdcTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: idx.IndexName})
+				if e != nil {
+					return e
+				}
+			}
+		}
+	}
+
+	// remove pitr
+	return DeleteIndexPitr(c, dbname, tablename)
 }

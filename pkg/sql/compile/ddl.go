@@ -2399,21 +2399,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	// TODO: HNSWCDC drop CDC task with old table Id before truncate index table
 	if !isTemp {
 		tabledef := rel.GetTableDef(c.proc.Ctx)
-		idxmap := make(map[string]bool)
-		for _, idx := range tabledef.Indexes {
-			if idx.TableExist &&
-				(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-					catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-					catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-				_, ok := idxmap[idx.IndexName]
-				if !ok {
-					idxmap[idx.IndexName] = true
-					e := DropIndexCdcTask(c, tabledef, dbName, tblName, idx.IndexName)
-					if e != nil {
-						return e
-					}
-				}
-			}
+		e := DropAllIndexCdcTasks(c, tabledef, dbName, tblName)
+		if e != nil {
+			return e
 		}
 	}
 
