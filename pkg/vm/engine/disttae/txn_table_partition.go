@@ -312,8 +312,8 @@ func (t *partitionTxnTable) UpdateConstraint(context.Context, *engine.Constraint
 	panic("not implemented")
 }
 
-func (t *partitionTxnTable) AlterTable(context.Context, *engine.ConstraintDef, []*api.AlterTableReq) error {
-	panic("not implemented")
+func (t *partitionTxnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
+	return t.primary.AlterTable(ctx, c, reqs)
 }
 
 func (t *partitionTxnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {

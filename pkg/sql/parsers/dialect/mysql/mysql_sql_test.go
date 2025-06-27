@@ -100,7 +100,7 @@ func TestQuoteIdentifer(t *testing.T) {
 		t.Errorf("Parse(%q) err: %v", partitionSQL.input, err)
 		return
 	}
-	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifer())
+	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier())
 	if partitionSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
 	}

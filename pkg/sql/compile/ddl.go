@@ -451,6 +451,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 
 		// 3. lock foreign key's table
 		for _, action := range qry.Actions {
+			if action == nil {
+				continue
+			}
 			switch act := action.Action.(type) {
 			case *plan.AlterTable_Action_Drop:
 				alterTableDrop := act.Drop
@@ -526,6 +529,9 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	cols := tableDef.Cols
 	// drop foreign key
 	for _, action := range qry.Actions {
+		if action == nil {
+			continue
+		}
 		switch act := action.Action.(type) {
 		case *plan.AlterTable_Action_AlterVarcharLength:
 			alterKinds = append(alterKinds, api.AlterKind_ReplaceDef)
@@ -553,16 +559,14 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_INDEX {
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				var notDroppedIndex []*plan.IndexDef
-				for _, indexdef := range tableDef.Indexes {
+				var newIndexes []uint64
+				for idx, indexdef := range tableDef.Indexes {
 					if indexdef.IndexName == constraintName {
 						dropIndexMap[indexdef.IndexName] = true
 
 						//1. drop index table
 						if indexdef.TableExist {
-							if _, err = dbSource.Relation(c.proc.Ctx, indexdef.IndexTableName, nil); err != nil {
-								return err
-							}
-							if err = dbSource.Delete(c.proc.Ctx, indexdef.IndexTableName); err != nil {
+							if err := c.runSql("drop table `" + indexdef.IndexTableName + "`"); err != nil {
 								return err
 							}
 						}
@@ -574,10 +578,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						}
 					} else {
 						notDroppedIndex = append(notDroppedIndex, indexdef)
+						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
 				}
 				// Avoid modifying slice directly during iteration
 				tableDef.Indexes = notDroppedIndex
+				extra.IndexTables = newIndexes
 			} else if alterTableDrop.Typ == plan.AlterTableDrop_COLUMN {
 				alterKinds = append(alterKinds, api.AlterKind_DropColumn)
 				var idx int
@@ -2616,7 +2622,7 @@ func (s *Scope) DropTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, false); e != nil {
+		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e

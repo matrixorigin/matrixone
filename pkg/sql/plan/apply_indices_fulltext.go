@@ -115,7 +115,13 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			NodeType: plan.Node_SORT,
 			Children: []int32{idxID},
 			OrderBy:  orderByScore,
+			Limit:    DeepCopyExpr(scanNode.Limit),
+			Offset:   DeepCopyExpr(scanNode.Offset),
 		}, ctx)
+
+		// move scanNode.Limit to sortNode
+		scanNode.Limit = nil
+		scanNode.Offset = nil
 
 		projNode.Children[0] = sortByID
 	}
@@ -184,14 +190,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	var ret_filter_node_ids = make([]int32, len(filterids))
 	var ret_proj_node_ids = make([]int32, len(projids))
-
-	var limit *plan.Expr
-
-	if scanNode.Limit != nil {
-		limit = scanNode.Limit
-	} else if projNode.Limit != nil {
-		limit = projNode.Limit
-	}
 
 	indexDefs := make([]*plan.IndexDef, 0)
 	// copy filters and then delete the fulltext_match from scanNode.FilterList
@@ -306,11 +304,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			},
 		}
 
-		// pushdown limit
-		if limit != nil {
-			curr_ftnode.Limit = DeepCopyExpr(limit)
-		}
-
 		// change doc_id type to the primary type here
 		curr_ftnode.TableDef.Cols[0].Typ.Id = pkType.Id
 		curr_ftnode.TableDef.Cols[0].Typ.Width = pkType.Width
@@ -368,12 +361,7 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		Children: []int32{scanNode.NodeId, last_node_id},
 		JoinType: plan.Node_INNER,
 		OnList:   []*Expr{wherePkEqPk},
-		Limit:    DeepCopyExpr(scanNode.Limit),
-		Offset:   DeepCopyExpr(scanNode.Offset),
 	}, ctx)
-
-	scanNode.Limit = nil
-	scanNode.Offset = nil
 
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }
