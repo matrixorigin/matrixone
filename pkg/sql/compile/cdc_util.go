@@ -51,7 +51,7 @@ func CreateIndexPitr(c *Compile, dbname string, tablename string) (int, error) {
 	pitr_name := getIndexPitrName(dbname, tablename)
 	pitr_id := 0
 	sql := fmt.Sprintf("CREATE PITR `%s` FOR TABLE `%s` `%s` range 2 'h';", pitr_name, dbname, tablename)
-	logutil.Infof("Create Index Pitr %s:", pitr_name, sql)
+	logutil.Infof("Create Index Pitr %s. sql: %s:", pitr_name, sql)
 	return pitr_id, nil
 }
 
