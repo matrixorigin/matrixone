@@ -28,23 +28,32 @@ import (
 
 func getOpAndToAccountId(
 	reqCtx context.Context,
+	ses *Session,
 	bh BackgroundExec,
 	toAccountName string,
-) (opAccountId, toAccountId uint32, err error) {
+	atTsExpr *tree.AtTimeStamp,
+) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
+
+	if atTsExpr != nil {
+		builder := plan.NewQueryBuilder(plan2.Query_INSERT, ses.txnCompileCtx, false, true)
+		if snapshot, err = builder.ResolveTsHint(atTsExpr); err != nil {
+			return 0, 0, nil, err
+		}
+	}
 
 	if opAccountId, err = defines.GetAccountId(reqCtx); err != nil {
-		return
+		return 0, 0, nil, err
 	}
 
 	if len(toAccountName) == 0 {
-		return opAccountId, opAccountId, nil
+		return opAccountId, opAccountId, snapshot, nil
 	}
 
 	if toAccountId, err = getAccountId(reqCtx, bh, toAccountName); err != nil {
-		return
+		return 0, 0, nil, err
 	}
 
-	return opAccountId, toAccountId, nil
+	return opAccountId, toAccountId, snapshot, nil
 }
 
 // create table x.y clone r.s {MO_TS, SNAPSHOT} to account t
@@ -65,10 +74,11 @@ func handleCloneTableAcrossAccounts(
 
 		bh BackgroundExec
 
-		newDbName string
+		snapshot *plan2.Snapshot
 
-		toAccountId uint32
-		opAccountId uint32
+		toAccountId   uint32
+		opAccountId   uint32
+		fromAccountId uint32
 	)
 
 	bh = ses.GetBackgroundExec(reqCtx)
@@ -80,27 +90,60 @@ func handleCloneTableAcrossAccounts(
 		err = finishTxn(reqCtx, bh, err)
 	}()
 
-	if opAccountId, toAccountId, err = getOpAndToAccountId(
-		reqCtx, bh, stmt.ToAccountName.String(),
+	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
+		reqCtx, ses, bh, stmt.ToAccountName.String(), stmt.SrcTable.AtTsExpr,
 	); err != nil {
 		return err
 	}
 
-	newDbName = stmt.CreateTable.Table.SchemaName.String()
-	if newDbName == "" {
-		newDbName = ses.GetTxnCompileCtx().DefaultDatabase()
-		bh.(*backExec).backSes.SetDatabaseName(newDbName)
+	if stmt.SrcTable.SchemaName == "" {
+		fromAccountId = opAccountId
+		if snapshot != nil && snapshot.Tenant != nil {
+			fromAccountId = snapshot.Tenant.TenantID
+		}
+
+		// src acc = op acc
+		// src acc = to acc
+		// src != op acc and src != to acc
+		if fromAccountId == opAccountId {
+			stmt.SrcTable.SchemaName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+		}
 	}
 
-	// the the opAccount is not sys, opAccount must equals to the toAccount
-	if newDbName == moCatalog ||
-		(opAccountId != sysAccountID && opAccountId != toAccountId) {
-		return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+	if stmt.SrcTable.SchemaName == "" {
+		return moerr.NewInternalErrorNoCtxf(
+			"no db selected for the src table %s", stmt.SrcTable.ObjectName)
+	}
+
+	if stmt.CreateTable.Table.SchemaName == "" {
+		if toAccountId == opAccountId {
+			stmt.CreateTable.Table.SchemaName = tree.Identifier(ses.GetTxnCompileCtx().DefaultDatabase())
+		}
+	}
+
+	if stmt.CreateTable.Table.SchemaName == "" {
+		return moerr.NewInternalErrorNoCtxf(
+			"no db selected for the dst table %s", stmt.CreateTable.Table.ObjectName)
+	}
+
+	bh.(*backExec).backSes.SetDatabaseName(ses.GetTxnCompileCtx().DefaultDatabase())
+
+	if stmt.CreateTable.Table.SchemaName == moCatalog {
+		return moerr.NewInternalErrorNoCtxf("cannot create table under the mo_catalog")
+	}
+
+	if opAccountId != sysAccountID && opAccountId != toAccountId {
+		return moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 	}
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
 	sql := strings.Split(strings.ToLower(execCtx.input.sql), "to")[0]
+
+	if snapshot == nil {
+		suffix := fmt.Sprintf(" {MO_TS = %d}", ses.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
+		sql += suffix
+	}
 
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return err
@@ -145,14 +188,14 @@ func handleCloneDatabase(
 		err = finishTxn(reqCtx, bh, err)
 	}()
 
-	if opAccountId, toAccountId, err = getOpAndToAccountId(
-		reqCtx, bh, stmt.ToAccountName.String(),
+	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
+		reqCtx, ses, bh, stmt.ToAccountName.String(), stmt.AtTsExpr,
 	); err != nil {
 		return err
 	}
 
 	if opAccountId != sysAccountID && opAccountId != toAccountId {
-		return moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
+		return moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
 	}
 
 	ctx1 = defines.AttachAccountId(reqCtx, toAccountId)
@@ -162,7 +205,7 @@ func handleCloneDatabase(
 		return err
 	}
 
-	if stmt.AtTsExpr == nil {
+	if snapshot == nil {
 		if srcTblInfos, err = showFullTables(
 			reqCtx, ses.GetService(), bh, "", stmt.SrcDatabase.String(), "",
 		); err != nil {
@@ -170,11 +213,6 @@ func handleCloneDatabase(
 		}
 	} else {
 		snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
-
-		builder := plan.NewQueryBuilder(plan2.Query_INSERT, ses.txnCompileCtx, false, true)
-		if snapshot, err = builder.ResolveTsHint(stmt.AtTsExpr); err != nil {
-			return err
-		}
 
 		ctx2 = reqCtx
 		if snapshot.Tenant != nil {
@@ -188,6 +226,7 @@ func handleCloneDatabase(
 		}
 	}
 
+	now := ses.proc.GetTxnOperator().SnapshotTS().PhysicalTime
 	ctx3 = defines.AttachAccountId(reqCtx, toAccountId)
 	for _, srcTbl := range srcTblInfos {
 		sql := fmt.Sprintf(
@@ -196,6 +235,9 @@ func handleCloneDatabase(
 
 		if snapCondition != "" {
 			sql = sql + " " + snapCondition
+		} else {
+			suffix := fmt.Sprintf(" {MO_TS = %d}", now)
+			sql += suffix
 		}
 
 		if err = bh.ExecRestore(ctx3, sql, opAccountId, toAccountId); err != nil {
