@@ -4071,13 +4071,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				},
 			}
 		case *tree.AlterTableModifyColumnClause:
-			if isVarcharLengthModified(ctx.GetContext(), opt, tableDef) {
+			ok, _ := isVarcharLengthBumped(ctx.GetContext(), opt, tableDef)
+			if ok {
 				colName := opt.NewColumn.Name.ColName()
 				oldCol := FindColumn(tableDef.Cols, colName)
-				if oldCol == nil {
-					return nil, moerr.NewBadFieldError(ctx.GetContext(), opt.NewColumn.Name.ColNameOrigin(), tableDef.Name)
-				}
-
 				newColType, err := getTypeFromAst(ctx.GetContext(), opt.NewColumn.Type)
 				if err != nil {
 					return nil, err
