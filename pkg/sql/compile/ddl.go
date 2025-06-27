@@ -2396,6 +2396,27 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	// TODO: HNSWCDC drop CDC task with old table Id before truncate index table
+	if !isTemp {
+		tabledef := rel.GetTableDef(c.proc.Ctx)
+		idxmap := make(map[string]bool)
+		for _, idx := range tabledef.Indexes {
+			if idx.TableExist &&
+				(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
+					catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
+					catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+				_, ok := idxmap[idx.IndexName]
+				if !ok {
+					idxmap[idx.IndexName] = true
+					e := DropIndexCdcTask(c, tabledef, dbName, tblName, idx.IndexName)
+					if e != nil {
+						return e
+					}
+				}
+			}
+		}
+	}
+
 	if isTemp {
 		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
 		_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, tblName))
@@ -2407,8 +2428,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
-
-	// TODO: HNSWCDC drop CDC task with old table Id before truncate index table
 
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
@@ -2522,6 +2541,26 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// TODO: HNSWCDC create CDC task with new table Id
+	if !isTemp {
+		tabledef := rel.GetTableDef(c.proc.Ctx)
+		idxmap := make(map[string]bool)
+		for _, idx := range tabledef.Indexes {
+			if idx.TableExist &&
+				(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
+					catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
+					catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+				_, ok := idxmap[idx.IndexName]
+				if !ok {
+					idxmap[idx.IndexName] = true
+					sinker_type := int8(0)
+					e := CreateIndexCdcTask(c, tabledef, dbName, tblName, idx.IndexName, sinker_type)
+					if e != nil {
+						return e
+					}
+				}
+			}
+		}
+	}
 
 	c.addAffectedRows(uint64(affectedRows))
 	return nil
