@@ -175,20 +175,29 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	taskName := exec.spec.TaskName
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
-	logutil.Infof("cdc task %s start on cn %s", taskName, cnUUID)
+	logutil.Info(
+		"CDC-Task-Start",
+		zap.String("task-id", taskId),
+		zap.String("task-name", taskName),
+		zap.String("cn-uuid", cnUUID),
+		zap.Uint32("account-id", accountId),
+	)
 
 	defer func() {
 		if err != nil {
-			logutil.Errorf("cdc task %s start failed, err: %v", taskName, err)
-
 			// if Start failed, there will be some dangle goroutines(watermarkUpdater, reader, sinker...)
 			// need to close them to avoid goroutine leak
 			exec.activeRoutine.ClosePause()
 			exec.activeRoutine.CloseCancel()
 
-			if updateErrMsgErr := exec.updateErrMsg(rootCtx, err.Error()); updateErrMsgErr != nil {
-				logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, updateErrMsgErr)
-			}
+			updateErrMsgErr := exec.updateErrMsg(rootCtx, err.Error())
+			logutil.Error(
+				"CDC-Task-Start-Failed",
+				zap.String("task-id", taskId),
+				zap.String("task-name", taskName),
+				zap.Error(err),
+				zap.NamedError("update-err-msg-err", updateErrMsgErr),
+			)
 		}
 	}()
 
@@ -216,12 +225,16 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
 
 	exec.isRunning = true
-	logutil.Infof("cdc task %s start on cn %s success", taskName, cnUUID)
+	var clearErrMsgErr error
 	// start success, clear err msg
-	if err = exec.updateErrMsg(ctx, ""); err != nil {
-		logutil.Errorf("cdc task %s update err msg failed, err: %v", taskName, err)
-		err = nil
-	}
+	clearErrMsgErr = exec.updateErrMsg(ctx, "")
+
+	logutil.Info(
+		"CDC-Task-Start-Success",
+		zap.String("task-id", taskId),
+		zap.String("task-name", taskName),
+		zap.NamedError("clear-err-msg-err", clearErrMsgErr),
+	)
 
 	// hold
 	exec.holdCh = make(chan int, 1)
@@ -236,9 +249,17 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 
 // Resume cdc task from last recorded watermark
 func (exec *CDCTaskExecutor) Resume() error {
-	logutil.Infof("cdc task %s resume", exec.spec.TaskName)
+	logutil.Info(
+		"CDC-Task-Resume-Start",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+	)
 	defer func() {
-		logutil.Infof("cdc task %s resume success", exec.spec.TaskName)
+		logutil.Info(
+			"CDC-Task-Resume-Success",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+		)
 	}()
 
 	go func() {
@@ -251,9 +272,17 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
-	logutil.Infof("cdc task %s restart", exec.spec.TaskName)
+	logutil.Info(
+		"CDC-Task-Restart-Start",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+	)
 	defer func() {
-		logutil.Infof("cdc task %s restart success", exec.spec.TaskName)
+		logutil.Info(
+			"CDC-Task-Restart-Success",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+		)
 	}()
 
 	if exec.isRunning {
@@ -273,9 +302,17 @@ func (exec *CDCTaskExecutor) Restart() error {
 
 // Pause cdc task
 func (exec *CDCTaskExecutor) Pause() error {
-	logutil.Infof("cdc task %s pause", exec.spec.TaskName)
+	logutil.Info(
+		"CDC-Task-Pause-Start",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+	)
 	defer func() {
-		logutil.Infof("cdc task %s pause success", exec.spec.TaskName)
+		logutil.Info(
+			"CDC-Task-Pause-Success",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+		)
 	}()
 
 	if exec.isRunning {
@@ -290,9 +327,17 @@ func (exec *CDCTaskExecutor) Pause() error {
 
 // Cancel cdc task
 func (exec *CDCTaskExecutor) Cancel() error {
-	logutil.Infof("cdc task %s cancel", exec.spec.TaskName)
+	logutil.Info(
+		"CDC-Task-Cancel-Start",
+		zap.String("task-id", exec.spec.TaskId),
+		zap.String("task-name", exec.spec.TaskName),
+	)
 	defer func() {
-		logutil.Infof("cdc task %s cancel success", exec.spec.TaskName)
+		logutil.Info(
+			"CDC-Task-Cancel-Success",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+		)
 	}()
 
 	if exec.isRunning {
@@ -363,14 +408,24 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 
 	txnOp, err := cdc.GetTxnOp(ctx, exec.cnEngine, exec.cnTxnClient, "cdc-handleNewTables")
 	if err != nil {
-		logutil.Errorf("cdc task %s get txn op failed, err: %v", exec.spec.TaskName, err)
+		logutil.Error(
+			"CDC-Task-HandleNewTables-GetTxnOpFailed",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.Error(err),
+		)
 		return
 	}
 	defer func() {
 		cdc.FinishTxnOp(ctx, err, txnOp, exec.cnEngine)
 	}()
 	if err = exec.cnEngine.New(ctx, txnOp); err != nil {
-		logutil.Errorf("cdc task %s new engine failed, err: %v", exec.spec.TaskName, err)
+		logutil.Error(
+			"CDC-Task-HandleNewTables-NewEngineFailed",
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.Error(err),
+		)
 		return
 	}
 
@@ -408,6 +463,20 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		} else {
 			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", exec.spec.TaskName, key)
 		}
+		logger := logutil.Info
+		msg := "CDC-Task-HandleNewTables-Success"
+		if err != nil {
+			logger = logutil.Error
+			msg = "CDC-Task-HandleNewTables-Failed"
+		}
+		logger(
+			msg,
+			zap.String("task-id", exec.spec.TaskId),
+			zap.String("task-name", exec.spec.TaskName),
+			zap.String("table-key", key),
+			zap.String("table-info", newTableInfo.String()),
+			zap.Error(err),
+		)
 	}
 }
 
