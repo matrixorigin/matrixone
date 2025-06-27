@@ -85,6 +85,7 @@ const (
 	HnswEfConstruction   = "ef_construction"
 	HnswQuantization     = "quantization"
 	HnswEfSearch         = "ef_search"
+	Async                = "async"
 )
 
 /* 1. ToString Functions */
@@ -133,6 +134,12 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
 	}
 
+	if val, ok := result[Async]; ok {
+		if val == "true" {
+			res += fmt.Sprintf(" %s ", Async)
+		}
+	}
+
 	return res, nil
 }
 
@@ -179,10 +186,16 @@ func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error
 	// fulltext index here
 	if def.IndexOption != nil {
 		parsername := strings.ToLower(def.IndexOption.ParserName)
-		if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
+		if len(parsername) > 0 {
+			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
+				return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
+			}
+			res["parser"] = parsername
 		}
-		res["parser"] = parsername
+
+		if def.IndexOption.Async {
+			res[Async] = "true"
+		}
 	}
 	return res, nil
 }
@@ -223,6 +236,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {
 				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
+			}
+
+			if idx.IndexOption.Async {
+				res[Async] = "true"
 			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {
@@ -265,6 +282,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			} else {
 				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 			}
+
+			if idx.IndexOption.Async {
+				res[Async] = "true"
+			}
 		default:
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
 		}
@@ -279,6 +300,20 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	res[IndexAlgoParamLists] = "1"                       // set lists = 1 as default
 	res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 	return res
+}
+
+func IsIndexAsync(indexAlgoParams string) (bool, error) {
+	if len(indexAlgoParams) > 0 {
+		param, err := IndexParamsStringToMap(indexAlgoParams)
+		if err != nil {
+			return false, err
+		}
+		v, ok := param[Async]
+		if ok {
+			return v == "true", nil
+		}
+	}
+	return false, nil
 }
 
 //------------------------[END] IndexAlgoParams------------------------

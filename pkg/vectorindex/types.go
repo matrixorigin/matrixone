@@ -15,8 +15,10 @@
 package vectorindex
 
 import (
+	"encoding/json"
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
@@ -29,6 +31,12 @@ import (
 
 const (
 	MaxChunkSize = 65536
+)
+
+const (
+	CDC_INSERT = "I"
+	CDC_UPSERT = "U"
+	CDC_DELETE = "D"
 )
 
 // HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
@@ -61,12 +69,14 @@ type HnswParam struct {
 	Quantization   string `json:"quantization"`
 	OpType         string `json:"op_type"`
 	EfSearch       string `json:"ef_search"`
+	Async          string `json:"async"`
 }
 
 // IVF specified parameters
 type IvfParam struct {
 	Lists  string `json:"lists"`
 	OpType string `json:"op_type"`
+	Async  string `json:"async"`
 }
 
 type IvfflatIndexConfig struct {
@@ -89,6 +99,83 @@ type IndexConfig struct {
 type RuntimeConfig struct {
 	Limit uint
 	Probe uint
+}
+
+type VectorIndexCdc[T types.RealNumbers] struct {
+	// Start string                   `json:"start"`
+	// End   string                   `json:"end"`
+	Data []VectorIndexCdcEntry[T] `json:"cdc"`
+}
+
+func NewVectorIndexCdc[T types.RealNumbers]() *VectorIndexCdc[T] {
+	return &VectorIndexCdc[T]{
+		Data: make([]VectorIndexCdcEntry[T], 0, 8192),
+	}
+}
+
+func (h *VectorIndexCdc[T]) Reset() {
+	h.Data = h.Data[:0]
+}
+
+func (h *VectorIndexCdc[T]) Empty() bool {
+	return len(h.Data) == 0
+}
+
+func (h *VectorIndexCdc[T]) Full() bool {
+	return len(h.Data) >= cap(h.Data)
+}
+
+func (h *VectorIndexCdc[T]) Insert(key int64, v []T) {
+	e := VectorIndexCdcEntry[T]{
+		Type: CDC_INSERT,
+		PKey: key,
+		Vec:  v,
+	}
+
+	h.Data = append(h.Data, e)
+}
+
+func (h *VectorIndexCdc[T]) Upsert(key int64, v []T) {
+	e := VectorIndexCdcEntry[T]{
+		Type: CDC_UPSERT,
+		PKey: key,
+		Vec:  v,
+	}
+
+	h.Data = append(h.Data, e)
+}
+
+func (h *VectorIndexCdc[T]) Delete(key int64) {
+	e := VectorIndexCdcEntry[T]{
+		Type: CDC_DELETE,
+		PKey: key,
+	}
+
+	h.Data = append(h.Data, e)
+}
+
+func (h *VectorIndexCdc[T]) ToJson() (string, error) {
+
+	b, err := json.Marshal(h)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+type VectorIndexCdcEntry[T types.RealNumbers] struct {
+	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
+	PKey int64  `json:"pk"`
+	Vec  []T    `json:"v,omitempty"`
+}
+
+type HnswCdcParam struct {
+	DbName    string    `json:"db"`
+	Table     string    `json:"table"`
+	MetaTbl   string    `json:"meta"`
+	IndexTbl  string    `json:"index"`
+	Params    HnswParam `json:"params"`
+	Dimension int32     `json:"dimension"`
 }
 
 // nthread == 0, result will return NumCPU - 1

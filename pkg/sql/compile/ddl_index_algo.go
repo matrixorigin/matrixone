@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -147,13 +148,33 @@ func (s *Scope) handleFullTextIndexTable(
 		return err
 	}
 
-	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+	insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+	if err != nil {
+		return err
+	}
+
 	for _, insertSQL := range insertSQLs {
 		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
 		}
 	}
+
+	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	// TODO: HNSWCDC create PITR and CDC TASK here
+	if async {
+		logutil.Infof("fulltext index Async is true")
+		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
+		err = CreateIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name,
+			indexDef.IndexTableName, sinker_type)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -554,6 +575,13 @@ func (s *Scope) handleVectorHnswIndex(
 		if err != nil {
 			return err
 		}
+	}
+
+	// TODO: HNSWCDC 4. register CDC update
+	sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
+	err = CreateIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type)
+	if err != nil {
+		return err
 	}
 
 	return nil

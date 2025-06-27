@@ -36,6 +36,7 @@ func init() {
 		"asc":                        ASC,
 		"ascii":                      ASCII,
 		"asensitive":                 UNUSED,
+		"async":                      ASYNC,
 		"auto_increment":             AUTO_INCREMENT,
 		"autoextend_size":            AUTOEXTEND_SIZE,
 		"auto_random":                AUTO_RANDOM,
