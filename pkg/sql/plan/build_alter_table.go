@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -317,7 +316,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
-	algorithm := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
+	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
+	if err != nil {
+		return nil, err
+	}
 	if algorithm == plan.AlterTable_COPY {
 		return buildAlterTableCopy(stmt, ctx)
 	} else {
@@ -325,7 +327,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 }
 
-func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.AlterTableOption, tableDef *TableDef) (algorithm plan.AlterTable_AlgorithmType) {
+func ResolveAlterTableAlgorithm(
+	ctx context.Context,
+	validAlterSpecs []tree.AlterTableOption,
+	tableDef *TableDef,
+) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
@@ -338,8 +344,6 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			case *tree.UniqueIndex:
 				algorithm = plan.AlterTable_INPLACE
 			case *tree.Index:
-				algorithm = plan.AlterTable_INPLACE
-			case *tree.ColumnTableDef:
 				algorithm = plan.AlterTable_INPLACE
 			default:
 				algorithm = plan.AlterTable_INPLACE
@@ -371,7 +375,12 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
-			if isVarcharLengthModified(ctx, option, tableDef) {
+			var ok bool
+			ok, err = isVarcharLengthBumped(ctx, option, tableDef)
+			if err != nil {
+				return
+			}
+			if ok {
 				algorithm = plan.AlterTable_INPLACE
 			}
 		case *tree.AlterTableChangeColumnClause:
@@ -388,124 +397,96 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_INPLACE
 		}
 		if algorithm != plan.AlterTable_COPY {
-			return algorithm
+			return
 		}
 	}
-	return algorithm
+	return
 }
 
-func isVarcharLengthModified(ctx context.Context, spec *tree.AlterTableModifyColumnClause, tableDef *TableDef) bool {
-	specNewColumn := spec.NewColumn
-	colName := specNewColumn.Name.ColName()
-
-	logutil.Infof("DEBUG isVarcharLengthModified: Starting function for table %s, column %s", tableDef.Name, colName)
-
-	// Find the original column
-	oldCol := FindColumn(tableDef.Cols, colName)
-	if oldCol == nil || oldCol.Hidden {
-		logutil.Infof("DEBUG isVarcharLengthModified: Column %s not found or hidden in table %s", colName, tableDef.Name)
-		return false
+func isVarcharLengthBumped(
+	ctx context.Context,
+	clause *tree.AlterTableModifyColumnClause,
+	tableDef *TableDef,
+) (ok bool, err error) {
+	oCol := FindColumn(tableDef.Cols, clause.NewColumn.Name.ColName())
+	if oCol == nil {
+		err = moerr.NewBadFieldError(
+			ctx, clause.NewColumn.Name.ColNameOrigin(), tableDef.Name)
+		return
 	}
 
-	logutil.Infof("DEBUG isVarcharLengthModified: Found old column %s - Type ID: %d, Width: %d, Scale: %d, AutoIncr: %t, NotNull: %t",
-		colName, oldCol.Typ.Id, oldCol.Typ.Width, oldCol.Typ.Scale, oldCol.Typ.AutoIncr, oldCol.Default != nil && !oldCol.Default.NullAbility)
-
-	// Parse the new column type
-	newColType, err := getTypeFromAst(ctx, specNewColumn.Type)
-	if err != nil {
-		logutil.Infof("DEBUG isVarcharLengthModified: Failed to parse new column type for %s: %v", colName, err)
-		return false
-	}
-
-	logutil.Infof("DEBUG isVarcharLengthModified: New column type - ID: %d, Width: %d, Scale: %d, AutoIncr: %t",
-		newColType.Id, newColType.Width, newColType.Scale, newColType.AutoIncr)
-
-	// Check if both old and new are varchar types
-	oldIsVarchar := oldCol.Typ.Id == int32(types.T_varchar)
-	newIsVarchar := newColType.Id == int32(types.T_varchar)
-
-	logutil.Infof("DEBUG isVarcharLengthModified: Old is varchar: %t, New is varchar: %t", oldIsVarchar, newIsVarchar)
-
-	if !oldIsVarchar || !newIsVarchar {
-		logutil.Infof("DEBUG isVarcharLengthModified: Not both varchar types, returning false")
-		return false // Not a varchar type modification
-	}
-
-	// Check if only the width (length) is different
-	// All other properties should remain the same, including column name
-	typeIdMatch := oldCol.Typ.Id == newColType.Id
-	scaleMatch := oldCol.Typ.Scale == newColType.Scale
-	autoIncrMatch := oldCol.Typ.AutoIncr == newColType.AutoIncr
-	widthIncrease := oldCol.Typ.Width < newColType.Width
-	nameMatch := strings.EqualFold(oldCol.Name, colName)
-
-	logutil.Infof("DEBUG isVarcharLengthModified: Type ID match: %t (%d == %d)", typeIdMatch, oldCol.Typ.Id, newColType.Id)
-	logutil.Infof("DEBUG isVarcharLengthModified: Scale match: %t (%d == %d)", scaleMatch, oldCol.Typ.Scale, newColType.Scale)
-	logutil.Infof("DEBUG isVarcharLengthModified: AutoIncr match: %t (%t == %t)", autoIncrMatch, oldCol.Typ.AutoIncr, newColType.AutoIncr)
-	logutil.Infof("DEBUG isVarcharLengthModified: Width increase: %t (%d <= %d)", widthIncrease, oldCol.Typ.Width, newColType.Width)
-	logutil.Infof("DEBUG isVarcharLengthModified: Name match: %t (%s == %s)", nameMatch, oldCol.Name, colName)
-
-	if typeIdMatch && scaleMatch && autoIncrMatch && widthIncrease && nameMatch {
-		// Check if any attributes are specified in the new column definition
-		if len(specNewColumn.Attributes) > 0 {
-			logutil.Infof("DEBUG isVarcharLengthModified: Found %d attributes in new column definition", len(specNewColumn.Attributes))
-			// Check each attribute - only be lenient with NULL attributes
-			for i, attr := range specNewColumn.Attributes {
-				logutil.Infof("DEBUG isVarcharLengthModified: Checking attribute %d: %T", i, attr)
-				switch a := attr.(type) {
-				case *tree.AttributeNull:
-					// Strict check for NOT NULL/NULL constraint modifications
-					oldIsNotNull := oldCol.Default != nil && !oldCol.Default.NullAbility
-					newIsNotNull := !a.Is
-
-					logutil.Infof("DEBUG isVarcharLengthModified: AttributeNull - old NotNull: %t, new NotNull: %t (a.Is: %t)",
-						oldIsNotNull, newIsNotNull, a.Is)
-
-					// Restore the strict check for NULL attributes
-					if oldIsNotNull != newIsNotNull {
-						logutil.Infof("DEBUG isVarcharLengthModified: NOT NULL/NULL constraint modification detected, returning false")
-						// NOT NULL/NULL constraint modification is not allowed
-						return false
-					}
-					// If constraints are consistent, this is acceptable for varchar length modification
-					logutil.Infof("DEBUG isVarcharLengthModified: NOT NULL constraint is consistent, continuing")
-				case *tree.AttributeDefault:
-					logutil.Infof("DEBUG isVarcharLengthModified: AttributeDefault detected, returning false")
-					// Default value modification is not allowed
-					return false
-				case *tree.AttributeAutoIncrement:
-					logutil.Infof("DEBUG isVarcharLengthModified: AttributeAutoIncrement detected, returning false")
-					// Auto increment modification is not allowed
-					return false
-				case *tree.AttributeComment:
-					logutil.Infof("DEBUG isVarcharLengthModified: AttributeComment detected, returning false")
-					// Comment modification is not allowed
-					return false
-				case *tree.AttributePrimaryKey, *tree.AttributeUniqueKey, *tree.AttributeUnique, *tree.AttributeKey:
-					logutil.Infof("DEBUG isVarcharLengthModified: Key constraint attribute detected, returning false")
-					// Key constraint modifications are not allowed
-					return false
-				case *tree.AttributeCollate:
-					logutil.Infof("DEBUG isVarcharLengthModified: AttributeCollate detected, returning false")
-					// Collation modification is not allowed
-					return false
-				default:
-					logutil.Infof("DEBUG isVarcharLengthModified: Unknown attribute type %T detected, returning false", attr)
-					// Any other attribute modification is not allowed
-					return false
-				}
-			}
-		} else {
-			logutil.Infof("DEBUG isVarcharLengthModified: No attributes specified in new column definition")
+	if clause.Position != nil &&
+		clause.Position.Typ != tree.ColumnPositionNone {
+		var newPos int
+		newPos, err = findPositionRelativeColumn(
+			ctx, tableDef.Cols, clause.Position)
+		if err != nil {
+			return
 		}
-
-		// This is a varchar length modification with only NULL constraint changes allowed
-		logutil.Infof("DEBUG isVarcharLengthModified: All checks passed, returning true for varchar length modification")
-		return true
+		if newPos != int(oCol.ColId-1) {
+			return
+		}
 	}
 
-	logutil.Infof("DEBUG isVarcharLengthModified: Basic type/property checks failed, returning false")
-	return false
+	ok, err = onlyVarcharLengthModified(ctx, clause.NewColumn, oCol)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func onlyVarcharLengthModified(
+	ctx context.Context,
+	newColumn *tree.ColumnTableDef,
+	oCol *ColDef,
+) (ok bool, err error) {
+
+	name := newColumn.Name.ColName()
+	newColType, err := getTypeFromAst(ctx, newColumn.Type)
+	if err != nil {
+		return
+	}
+
+	oldColType := oCol.Typ
+
+	if oldColType.Id != newColType.Id ||
+		newColType.Id != int32(types.T_varchar) {
+		return
+	}
+
+	scaleMatch := oldColType.Scale == newColType.Scale
+	autoIncrMatch := oldColType.AutoIncr == newColType.AutoIncr
+	nameMatch := strings.EqualFold(oCol.Name, name)
+	enumMatch := oldColType.Enumvalues == newColType.Enumvalues
+
+	if !scaleMatch || !autoIncrMatch || !nameMatch || !enumMatch {
+		return
+	}
+
+	widthIncrease := oldColType.Width < newColType.Width
+	if !widthIncrease {
+		return
+	}
+
+	onlyNullMatched := true
+	for _, attr := range newColumn.Attributes {
+		switch a := attr.(type) {
+		case *tree.AttributeNull:
+			origIsNotNull := oCol.Default != nil && !oCol.Default.NullAbility
+			newIsNotNull := !a.Is
+			if origIsNotNull != newIsNotNull {
+				onlyNullMatched = false
+			}
+		default:
+			onlyNullMatched = false
+		}
+		if !onlyNullMatched {
+			return
+		}
+	}
+
+	ok = true
+	return
 }
 
 func buildNotNullColumnVal(col *ColDef) string {
