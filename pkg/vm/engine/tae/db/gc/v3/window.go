@@ -176,6 +176,9 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		buffer,
 		w.mp,
 	)
+	if err != nil {
+		return nil, "", err
+	}
 	filesToGC := make([]string, 0, 20)
 	bf.Test(vecToGC,
 		func(exists bool, i int) {
