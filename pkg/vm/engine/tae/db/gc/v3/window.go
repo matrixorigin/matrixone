@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -114,26 +115,6 @@ func (w *GCWindow) MakeFilesReader(
 	)
 }
 
-// stringSetFromStats converts a slice of ObjectStats to a set of object names.
-func stringSetFromStats(stats []objectio.ObjectStats) map[string]struct{} {
-	set := make(map[string]struct{}, len(stats))
-	for _, s := range stats {
-		set[s.ObjectName().UnsafeString()] = struct{}{}
-	}
-	return set
-}
-
-// filterStringsNotInSet returns all strings in candidates that are not in notSet.
-func filterStringsNotInSet(candidates []string, notSet map[string]struct{}) []string {
-	out := make([]string, 0, len(candidates))
-	for _, s := range candidates {
-		if _, found := notSet[s]; !found {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 // ExecuteGlobalCheckpointBasedGC is to remove objectentry that can be deleted from GCWindow
 // it will refresh the files in GCWindow with the files that can not be GC'ed
 // it will return the files that could be GC'ed
@@ -178,6 +159,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	vecToGC.Free(w.mp)
 	var metaFile string
 	var err error
+	var bf *bloomfilter.BloomFilter
 	if metaFile, err = w.writeMetaForRemainings(
 		ctx, filesNotGC,
 	); err != nil {
@@ -185,7 +167,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	}
 	w.files = filesNotGC
 	sourcer = w.MakeFilesReader(ctx, fs)
-	bf, err := BuildBloomfilter(
+	bf, err = BuildBloomfilter(
 		ctx,
 		Default_Coarse_EstimateRows,
 		Default_Coarse_Probility,
