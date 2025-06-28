@@ -171,11 +171,16 @@ func handleCloneDatabase(
 		toAccountId uint32
 		opAccountId uint32
 
-		ctx1, ctx2, ctx3 context.Context
+		ctx1, ctx2 context.Context
 
 		srcTblInfos []*tableInfo
 		snapshot    *plan2.Snapshot
 
+		viewMap = make(map[string]*tableInfo)
+
+		sortedViews   []string
+		sortedFkTbls  []string
+		fkTableMap    map[string]*tableInfo
 		snapCondition string
 	)
 
@@ -205,33 +210,33 @@ func handleCloneDatabase(
 		return err
 	}
 
-	if snapshot == nil {
-		if srcTblInfos, err = showFullTables(
-			reqCtx, ses.GetService(), bh, "", stmt.SrcDatabase.String(), "",
-		); err != nil {
-			return err
-		}
-	} else {
-		snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
-
-		ctx2 = reqCtx
-		if snapshot.Tenant != nil {
-			ctx2 = defines.AttachAccountId(reqCtx, snapshot.Tenant.TenantID)
-		}
-
-		if srcTblInfos, err = showFullTablesWitsTs(
-			ctx2, ses.GetService(), bh, "", snapshot.TS.PhysicalTime, stmt.SrcDatabase.String(), "",
-		); err != nil {
-			return err
-		}
+	if srcTblInfos, err = getTableInfos(
+		reqCtx, ses.GetService(), bh, snapshot,
+		stmt.SrcDatabase.String(), "",
+	); err != nil {
+		return err
 	}
 
-	now := ses.proc.GetTxnOperator().SnapshotTS().PhysicalTime
-	ctx3 = defines.AttachAccountId(reqCtx, toAccountId)
-	for _, srcTbl := range srcTblInfos {
+	snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
+
+	if sortedFkTbls, err = fkTablesTopoSort(
+		reqCtx, bh, snapshot, stmt.SrcDatabase.String(), "",
+	); err != nil {
+		return err
+	}
+
+	if fkTableMap, err = getTableInfoMap(
+		reqCtx, ses.GetService(), bh, snapshot, stmt.SrcDatabase.String(), "", sortedFkTbls,
+	); err != nil {
+		return err
+	}
+
+	now := ses.GetProc().GetTxnOperator().SnapshotTS().PhysicalTime
+	ctx2 = defines.AttachAccountId(reqCtx, toAccountId)
+
+	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
 		sql := fmt.Sprintf(
-			"create table `%s`.`%s` clone `%s`.`%s`",
-			stmt.DstDatabase, srcTbl.tblName, srcTbl.dbName, srcTbl.tblName)
+			"create table `%s`.`%s` clone `%s`.`%s`", dstDb, dstTbl, srcDb, srcTbl)
 
 		if snapCondition != "" {
 			sql = sql + " " + snapCondition
@@ -240,7 +245,73 @@ func handleCloneDatabase(
 			sql += suffix
 		}
 
-		if err = bh.ExecRestore(ctx3, sql, opAccountId, toAccountId); err != nil {
+		if err = bh.ExecRestore(ctx2, sql, opAccountId, toAccountId); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	for _, srcTbl := range srcTblInfos {
+
+		key := genKey(srcTbl.dbName, srcTbl.tblName)
+		if _, ok := fkTableMap[key]; ok {
+			continue
+		}
+
+		if srcTbl.typ == view {
+			viewMap[key] = srcTbl
+			continue
+		}
+
+		if err = cloneTable(
+			stmt.DstDatabase.String(), srcTbl.tblName,
+			stmt.SrcDatabase.String(), srcTbl.tblName,
+		); err != nil {
+			return err
+		}
+	}
+
+	// clone foreign key related table
+	for _, key := range sortedFkTbls {
+		if tblInfo := fkTableMap[key]; tblInfo != nil {
+			if err = cloneTable(
+				stmt.DstDatabase.String(), tblInfo.tblName,
+				stmt.SrcDatabase.String(), tblInfo.tblName,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
+	// clone view table
+	if len(viewMap) != 0 {
+		fromAccount := opAccountId
+		if snapshot != nil && snapshot.Tenant != nil {
+			fromAccount = snapshot.Tenant.TenantID
+		}
+
+		if sortedViews, err = sortedViewInfos(
+			reqCtx, ses, bh, "", snapshot, viewMap, fromAccount, toAccountId,
+		); err != nil {
+			return err
+		}
+
+		for i := range sortedViews {
+			sortedViews[i] = strings.ReplaceAll(
+				sortedViews[i], stmt.SrcDatabase.String(), stmt.DstDatabase.String())
+		}
+
+		newViewMap := make(map[string]*tableInfo)
+		for key, info := range viewMap {
+			key = strings.ReplaceAll(key, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
+			info.createSql = strings.ReplaceAll(info.createSql, stmt.SrcDatabase.String(), stmt.DstDatabase.String())
+			info.dbName = stmt.DstDatabase.String()
+
+			newViewMap[key] = info
+		}
+
+		if err = restoreViews(reqCtx, ses, bh, "", newViewMap, toAccountId, sortedViews); err != nil {
 			return err
 		}
 	}

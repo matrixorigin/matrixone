@@ -88,55 +88,6 @@ func buildCloneTable(
 			"table %v-%v does not exist", srcDatabaseName.String(), srcTableName.String())
 	}
 
-	// check schema
-	//ignoreCol := func(def *ColDef) bool {
-	//	return def.Name == catalog.Row_ID || def.ClusterBy || catalog.IsFakePkName(def.Name)
-	//}
-	//
-	//i, j := 0, 0
-	//for i < len(srcTblDef.Cols) && j < len(dstTblDef.Cols) {
-	//	if ignoreCol(srcTblDef.Cols[i]) {
-	//		i++
-	//		continue
-	//	}
-	//
-	//	if ignoreCol(dstTblDef.Cols[j]) {
-	//		j++
-	//		continue
-	//	}
-	//
-	//	t1 := ExprType2Type(&srcTblDef.Cols[i].Typ)
-	//	t2 := ExprType2Type(&dstTblDef.Cols[j].Typ)
-	//
-	//	if !t1.Eq(t2) {
-	//		return nil, moerr.NewInternalErrorNoCtxf(
-	//			"%v.%v has a different column type than %v.%v at idx %v. expect %v, got %v",
-	//			srcTblDef.DbName, srcTblDef.Name,
-	//			dstTblDef.DbName, dstTblDef.Name, i, t1.String(), t2.String())
-	//	}
-	//
-	//	i++
-	//	j++
-	//}
-	//
-	//for i < len(srcTblDef.Cols) {
-	//	if ignoreCol(srcTblDef.Cols[i]) {
-	//		i++
-	//	}
-	//}
-	//
-	//for j < len(dstTblDef.Cols) {
-	//	if ignoreCol(dstTblDef.Cols[j]) {
-	//		j++
-	//	}
-	//}
-	//
-	//if !(i >= len(srcTblDef.Cols) && (j >= len(dstTblDef.Cols))) {
-	//	return nil, moerr.NewInternalErrorNoCtxf(
-	//		"%v.%v has a different number of columns than %v.%v.",
-	//		srcTblDef.DbName, srcTblDef.Name, dstTblDef.DbName, dstTblDef.Name)
-	//}
-
 	dstTblDef := DeepCopyTableDef(srcTblDef, true)
 	dstTblDef.Name = stmt.CreateTable.Table.ObjectName.String()
 	dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
