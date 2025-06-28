@@ -1380,6 +1380,7 @@ message AlterTable {
 	// alter table may insert fk records related to this table
 	// into mo_foreign_keys
 	repeated string updateFkSqls = 11;
+	string RawSQL            = 12;
 }
 
 message DropTable {

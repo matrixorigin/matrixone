@@ -199,6 +199,13 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
+	dbs := make([]string, 0, len(exec.tables.Pts))
+	tables := make([]string, 0, len(exec.tables.Pts))
+	for _, pt := range exec.tables.Pts {
+		dbs = append(dbs, pt.Source.Database)
+		tables = append(tables, pt.Source.Table)
+	}
+
 	// reset runningReaders
 	exec.runningReaders = &sync.Map{}
 
@@ -209,7 +216,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	go exec.watermarkUpdater.Run(ctx, exec.activeRoutine)
 
 	// register to table scanner
-	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, exec.handleNewTables)
+	cdc.GetTableDetector(cnUUID).Register(taskId, accountId, dbs, tables, exec.handleNewTables)
 
 	exec.isRunning = true
 	logutil.Infof("cdc task %s start on cn %s success", taskName, cnUUID)

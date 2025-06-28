@@ -263,6 +263,62 @@ func TestCacheConcurrent(t *testing.T) {
 	Cache = nil
 }
 
+func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+
+	VectorIndexCacheTTL = 2 * time.Second
+	VectorIndexCacheTTL = 2 * time.Second
+	Cache = NewVectorIndexCache()
+	Cache.TickerInterval = 1 * time.Second
+
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+	Cache.Once()
+
+	time.Sleep(1999 * time.Millisecond)
+	var wg sync.WaitGroup
+	nthread := 8
+	for i := 0; i < nthread; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 2000; j++ {
+				idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+				idxcfg.Usearch.Metric = usearch.L2sq
+				tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+				//os.Stderr.WriteString("cache getindex\n")
+				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+				//os.Stderr.WriteString("cache search\n")
+				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+				anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				require.Nil(t, err)
+				if keys, ok := anykeys.([]int64); ok {
+					require.Equal(t, len(keys), 1)
+					require.Equal(t, keys[0], int64(1))
+				}
+				require.Equal(t, distances[0], float64(2.0))
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 4000; j++ {
+			Cache.Remove("__secondary_index")
+		}
+	}()
+
+	wg.Wait()
+
+	os.Stderr.WriteString("cache.Destroy\n")
+	Cache.Destroy()
+	os.Stderr.WriteString("cache.Destroy end\n")
+	Cache = nil
+}
+
 func TestCacheLoadError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 

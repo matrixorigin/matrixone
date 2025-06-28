@@ -990,6 +990,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return LengthUTF8
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LengthUTF8
+				},
+			},
 		},
 	},
 

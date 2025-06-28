@@ -757,7 +757,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+		createTable.RawSQL = tree.StringWithOpts(
+			stmt,
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithSingleQuoteString(),
+		)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -3619,6 +3624,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		Database:       databaseName,
 		TableDef:       tableDef,
 		IsClusterTable: util.TableIsClusterTable(tableDef.GetTableType()),
+		RawSQL: tree.StringWithOpts(
+			stmt,
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithSingleQuoteString(),
+		),
 	}
 	accountId, err := ctx.GetAccountId()
 	if err != nil {
