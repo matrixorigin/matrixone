@@ -174,7 +174,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		return nil, "", err
 	}
 
-	filesToGC, filesNotGC := job.Result()
+	vecToGC, filesNotGC := job.Result()
+	vecToGC.Free(w.mp)
 	var metaFile string
 	var err error
 	if metaFile, err = w.writeMetaForRemainings(
@@ -182,9 +183,29 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	); err != nil {
 		return nil, "", err
 	}
-	filesNotGCSet := stringSetFromStats(filesNotGC)
-	toGC := filterStringsNotInSet(filesToGC, filesNotGCSet)
-	return toGC, metaFile, nil
+	w.files = filesNotGC
+	sourcer = w.MakeFilesReader(ctx, fs)
+	bf, err := BuildBloomfilter(
+		ctx,
+		Default_Coarse_EstimateRows,
+		Default_Coarse_Probility,
+		0,
+		sourcer.Read,
+		buffer,
+		w.mp,
+	)
+	filesToGC := make([]string, 0, 20)
+	bf.Test(vecToGC,
+		func(exists bool, i int) {
+			if !exists {
+				buf := vecToGC.GetRawBytesAt(i)
+				stats := (objectio.ObjectStats)(buf)
+				name := stats.ObjectName().UnsafeString()
+				filesToGC = append(filesToGC, name)
+				return
+			}
+		})
+	return filesToGC, metaFile, nil
 }
 
 // ScanCheckpoints will load data from the `checkpointEntries` one by one and

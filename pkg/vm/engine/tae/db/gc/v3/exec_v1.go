@@ -72,7 +72,7 @@ type CheckpointBasedGCJob struct {
 	globalCkpVer     uint32
 
 	result struct {
-		filesToGC  []string
+		vecToGC    *vector.Vector
 		filesNotGC []objectio.ObjectStats
 	}
 }
@@ -119,7 +119,7 @@ func (e *CheckpointBasedGCJob) Close() error {
 	e.ts = nil
 	e.globalCkpLoc = nil
 	e.globalCkpVer = 0
-	e.result.filesToGC = nil
+	e.result.vecToGC = nil
 	e.result.filesNotGC = nil
 	return e.GCExecutor.Close()
 }
@@ -172,8 +172,8 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		return err
 	}
 
-	e.result.filesToGC = make([]string, 0, 20)
-	finalSinker, err := MakeFinalCanGCSinker(&e.result.filesToGC)
+	e.result.vecToGC = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	finalSinker, err := MakeFinalCanGCSinker(e.result.vecToGC, e.mp)
 	if err != nil {
 		return err
 	}
@@ -195,8 +195,8 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 	return nil
 }
 
-func (e *CheckpointBasedGCJob) Result() ([]string, []objectio.ObjectStats) {
-	return e.result.filesToGC, e.result.filesNotGC
+func (e *CheckpointBasedGCJob) Result() (*vector.Vector, []objectio.ObjectStats) {
+	return e.result.vecToGC, e.result.filesNotGC
 }
 
 func MakeBloomfilterCoarseFilter(
@@ -351,16 +351,15 @@ func MakeSnapshotAndPitrFineFilter(
 }
 
 func MakeFinalCanGCSinker(
-	filesToGC *[]string,
+	vec *vector.Vector,
+	mp *mpool.MPool,
 ) (
 	SinkerFn,
 	error,
 ) {
-	buffer := make(map[string]struct{}, 100)
 	return func(
 		ctx context.Context, bat *batch.Batch,
 	) error {
-		clear(buffer)
 		var dropTSs []types.TS
 		var tableIDs []uint64
 		if bat.Vecs[0].Length() > 0 {
@@ -370,19 +369,23 @@ func MakeFinalCanGCSinker(
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			buf := bat.Vecs[0].GetRawBytesAt(i)
 			stats := (*objectio.ObjectStats)(unsafe.Pointer(&buf[0]))
-			name := stats.ObjectName().String()
 			dropTS := dropTSs[i]
 			tableID := tableIDs[i]
 			if !dropTS.IsEmpty() {
-				buffer[name] = struct{}{}
+				if err := vector.AppendBytes(
+					vec, stats[:], false, mp,
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			if !logtail.IsMoTable(tableID) {
-				buffer[name] = struct{}{}
+				if err := vector.AppendBytes(
+					vec, stats[:], false, mp,
+				); err != nil {
+					return err
+				}
 			}
-		}
-		for name := range buffer {
-			*filesToGC = append(*filesToGC, name)
 		}
 		return nil
 	}, nil
