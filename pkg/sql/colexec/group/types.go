@@ -34,6 +34,13 @@ const (
 )
 
 const (
+	ctrStateConsuming vm.CtrState = iota
+	ctrStateSpilling
+	ctrStateReadingSpilled
+	ctrStateFlushing
+)
+
+const (
 	thisOperatorName = "group"
 )
 
@@ -146,6 +153,9 @@ type container struct {
 	state             vm.CtrState
 	dataSourceIsEmpty bool
 
+	estimatedSize  int64
+	spillThreshold int64
+
 	// hash.
 	hr          ResHashRelated
 	mtyp        int
@@ -161,6 +171,10 @@ type container struct {
 	result1 GroupResultBuffer
 	// result if NeedEval is false.
 	result2 GroupResultNoneBlock
+
+	numPartitions         int
+	spilledPartitionFiles map[int]string
+	nextSpillPartitionID  int
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
@@ -236,4 +250,21 @@ func (group *Group) Release() {
 	if group != nil {
 		reuse.Free[Group](group, nil)
 	}
+}
+
+func (ctr *container) estimateStateSize() int64 {
+	if ctr.hr.Hash == nil {
+		return 0
+	}
+	totalSize := ctr.hr.Hash.Size()
+
+	//TODO add aggexec.AggFuncExec.Size()
+	if ctr.result1.AggList != nil {
+		totalSize += int64(ctr.hr.Hash.GroupCount() * 64)
+	}
+	if ctr.result2.res != nil && ctr.result2.res.Aggs != nil {
+		totalSize += int64(ctr.hr.Hash.GroupCount() * 64)
+	}
+
+	return totalSize
 }
