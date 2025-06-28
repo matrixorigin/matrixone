@@ -3461,17 +3461,6 @@ func (builder *QueryBuilder) bindValues(
 		return
 	}
 
-	strTyp := plan.Type{
-		Id:          int32(types.T_text),
-		NotNullable: false,
-	}
-	strColTyp := makeTypeByPlan2Type(strTyp)
-	strColTargetTyp := &plan.Expr{
-		Typ: strTyp,
-		Expr: &plan.Expr_T{
-			T: &plan.TargetType{},
-		},
-	}
 	colCount := len(valuesClause.Rows[0])
 	for j := 1; j < rowCount; j++ {
 		if len(valuesClause.Rows[j]) != colCount {
@@ -3492,18 +3481,6 @@ func (builder *QueryBuilder) bindValues(
 	ctx.binder = NewWhereBinder(builder, ctx)
 	for i := 0; i < colCount; i++ {
 		rowSetData.Cols[i] = &plan.ColData{}
-		for j := 0; j < rowCount; j++ {
-			var planExpr *plan.Expr
-			if planExpr, err = ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true); err != nil {
-				return
-			}
-			if planExpr, err = forceCastExpr2(builder.GetContext(), planExpr, strColTyp, strColTargetTyp); err != nil {
-				return
-			}
-			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
-				Expr: planExpr,
-			})
-		}
 
 		colName := fmt.Sprintf("column_%d", i) // like MySQL
 		selectList = append(selectList, tree.SelectExpr{
@@ -3514,7 +3491,18 @@ func (builder *QueryBuilder) bindValues(
 		tableDef.Cols[i] = &plan.ColDef{
 			ColId: 0,
 			Name:  colName,
-			Typ:   strTyp,
+		}
+
+		for j := 0; j < rowCount; j++ {
+			var planExpr *plan.Expr
+			if planExpr, err = ctx.binder.BindExpr(valuesClause.Rows[j][i], 0, true); err != nil {
+				return
+			}
+
+			tableDef.Cols[i].Typ = planExpr.Typ
+			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
+				Expr: planExpr,
+			})
 		}
 	}
 	nodeUUID, _ := uuid.NewV7()
