@@ -30,7 +30,7 @@ type SinkerInfo struct {
 	IndexName  string
 }
 
-func CreateCdcTask(c *Compile, pitr_id int, sinkerinfo SinkerInfo) (bool, error) {
+func CreateCdcTask(c *Compile, pitr_name string, sinkerinfo SinkerInfo) (bool, error) {
 	logutil.Infof("Create Index Task %v", sinkerinfo)
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
@@ -46,12 +46,11 @@ func getIndexPitrName(dbname string, tablename string) string {
 	return fmt.Sprintf("__mo_idxpitr_%s_%s", dbname, tablename)
 }
 
-func CreateIndexPitr(c *Compile, dbname string, tablename string) (int, error) {
+func CreateIndexPitr(c *Compile, dbname string, tablename string) (string, error) {
 	pitr_name := getIndexPitrName(dbname, tablename)
-	pitr_id := 0
 	sql := fmt.Sprintf("CREATE PITR `%s` FOR TABLE `%s` `%s` range 2 'h';", pitr_name, dbname, tablename)
 	logutil.Infof("Create Index Pitr %s. sql: %s:", pitr_name, sql)
-	return pitr_id, nil
+	return pitr_name, nil
 }
 
 func DeleteIndexPitr(c *Compile, dbname string, tablename string) error {
@@ -80,14 +79,14 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) bool {
 func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string, sinker_type int8) error {
 	var err error
 
-	// create table pitr if not exists and return pitr_id
-	pitr_id, err := CreateIndexPitr(c, dbname, tablename)
+	// create table pitr if not exists and return pitr_name
+	pitr_name, err := CreateIndexPitr(c, dbname, tablename)
 	if err != nil {
 		return err
 	}
 
 	// create index cdc task
-	ok, err := CreateCdcTask(c, pitr_id, SinkerInfo{SinkerType: sinker_type, DBName: dbname, TableName: tablename, IndexName: indexname})
+	ok, err := CreateCdcTask(c, pitr_name, SinkerInfo{SinkerType: sinker_type, DBName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
