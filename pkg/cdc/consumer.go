@@ -15,8 +15,11 @@
 package cdc
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 type DataRetriever interface {
@@ -44,6 +47,13 @@ func NewTxnRetriever(txn *client.TxnOperator) DataRetriever {
 	return &TxnRetriever{Txn: txn}
 }
 
+type ConsumerInfo struct {
+	ConsumerType int8
+	TableName    string
+	DbName       string
+	IndexName    string
+}
+
 type Consumer interface {
 	Consume(DataRetriever) error
 	Reset()
@@ -51,13 +61,57 @@ type Consumer interface {
 }
 
 type IndexConsumer struct {
+	cnUUID    string
+	info      *ConsumerInfo
+	dbTblInfo *DbTableInfo
+	tableDef  *plan.TableDef
+	sqlWriter IndexSqlWriter
+	exec      executor.SQLExecutor
+	rowdata   []any
+	rowdelete []any
 }
 
 var _ Consumer = new(IndexConsumer)
 
-func NewIndexConsumer() (Consumer, error) {
+func NewIndexConsumer(cnUUID string,
+	tableDef *plan.TableDef,
+	info *ConsumerInfo) (Consumer, error) {
 
-	return &IndexConsumer{}, nil
+	exec, err := sqlExecutorFactory(cnUUID)
+	if err != nil {
+		return nil, err
+	}
+
+	dbTblInfo := &DbTableInfo{SinkDbName: info.DbName, SinkTblName: info.TableName}
+
+	ie := &IndexEntry{indexes: make([]*plan.IndexDef, 0, 3)}
+
+	for _, idx := range tableDef.Indexes {
+		if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+			key := idx.IndexName
+			if key == info.IndexName {
+				if len(ie.algo) == 0 {
+					ie.algo = idx.IndexAlgo
+				}
+				ie.indexes = append(ie.indexes, idx)
+			}
+		}
+
+	}
+
+	sqlwriter, err := NewIndexSqlWriter(ie.algo, dbTblInfo, tableDef, ie.indexes)
+
+	c := &IndexConsumer{cnUUID: cnUUID,
+		info:      info,
+		dbTblInfo: dbTblInfo,
+		tableDef:  tableDef,
+		sqlWriter: sqlwriter,
+		exec:      exec,
+		rowdata:   make([]any, len(tableDef.Cols)),
+		rowdelete: make([]any, 1),
+	}
+
+	return c, nil
 }
 
 func (c *IndexConsumer) Consume(r DataRetriever) error {

@@ -17,13 +17,22 @@ package cdc
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
 func TestConsumer(t *testing.T) {
+	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
+	defer sqlexecstub.Reset()
+
 	r := NewTxnRetriever(nil)
 
-	consumer, err := NewIndexConsumer()
+	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
+	cnUUID := "a-b-c-d"
+	info := &ConsumerInfo{DbName: "db", TableName: "tbl", IndexName: "hnsw_idx"}
+
+	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
 	require.NoError(t, err)
 	err = consumer.Consume(r)
 	require.NoError(t, err)
