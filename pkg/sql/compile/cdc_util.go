@@ -140,8 +140,10 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	return nil
 }
 
+// drop all cdc tasks according to tableDef
 func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
+	var err error
 	for _, idx := range tabledef.Indexes {
 		if idx.TableExist &&
 			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
@@ -150,9 +152,21 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 			_, ok := idxmap[idx.IndexName]
 			if !ok {
 				idxmap[idx.IndexName] = true
-				_, e := DeleteCdcTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: idx.IndexName})
-				if e != nil {
-					return e
+				async := false
+				if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+					// HNSW always async
+					async = true
+				} else {
+					async, err = catalog.IsIndexAsync(idx.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+				}
+				if async {
+					_, e := DeleteCdcTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: idx.IndexName})
+					if e != nil {
+						return e
+					}
 				}
 			}
 		}
@@ -173,9 +187,10 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 	return int8(0)
 }
 
-// NOTE: CreateAllIndexCdcTasks will create CDC task based on existing tableDef
+// NOTE: CreateAllIndexCdcTasks will create CDC task according to existing tableDef
 func CreateAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
+	var err error
 	for _, idx := range tabledef.Indexes {
 		if idx.TableExist &&
 			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
@@ -184,10 +199,22 @@ func CreateAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, 
 			_, ok := idxmap[idx.IndexName]
 			if !ok {
 				idxmap[idx.IndexName] = true
-				sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
-				e := CreateIndexCdcTask(c, tabledef, dbname, tablename, idx.IndexName, sinker_type)
-				if e != nil {
-					return e
+				async := false
+				if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+					// HNSW always async
+					async = true
+				} else {
+					async, err = catalog.IsIndexAsync(idx.IndexAlgoParams)
+					if err != nil {
+						return err
+					}
+				}
+				if async {
+					sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
+					e := CreateIndexCdcTask(c, tabledef, dbname, tablename, idx.IndexName, sinker_type)
+					if e != nil {
+						return e
+					}
 				}
 			}
 		}
