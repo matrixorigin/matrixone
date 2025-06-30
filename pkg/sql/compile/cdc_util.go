@@ -51,8 +51,8 @@ func CreateIndexPitr(c *Compile, dbname string, tablename string) (string, error
 	pitr_name := getIndexPitrName(dbname, tablename)
 
 	// check pitr exists before create
+	sql = fmt.Sprintf("SHOW PITR  WHERE pitr_name = '%s'", pitr_name)
 	/*
-		sql = fmt.Sprintf("SHOW PITR  WHERE pitr_name = '%s'", pitr_name)
 		res, err := c.runSqlWithResult(sql, NoAccountId)
 		if err != nil {
 			return pitr_name, err
@@ -67,6 +67,13 @@ func CreateIndexPitr(c *Compile, dbname string, tablename string) (string, error
 
 	sql = fmt.Sprintf("CREATE PITR `%s` FOR TABLE `%s` `%s` range 2 'h';", pitr_name, dbname, tablename)
 	logutil.Infof("Create Index Pitr %s. sql: %s:", pitr_name, sql)
+	/*
+		err := c.runSql(sql)
+		if err != nil {
+			return pitr_name, err
+		}
+	*/
+
 	return pitr_name, nil
 }
 
@@ -75,6 +82,13 @@ func DeleteIndexPitr(c *Compile, dbname string, tablename string) error {
 	// remove pitr
 	sql := fmt.Sprintf("DROP PITR IF EXISTS `%s`;", pitr_name)
 	logutil.Infof("Delete Index Pitr %s: %s", pitr_name, sql)
+	/*
+		err := c.runSql(sql)
+		if err != nil {
+			return err
+		}
+	*/
+
 	return nil
 }
 
