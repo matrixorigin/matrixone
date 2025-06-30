@@ -67,7 +67,7 @@ func OrderedSearchOffsetsByGreat[T types.OrderedT](lb T, closed bool, quick bool
 }
 
 func FixedSizeSearchOffsetsByLessTypeChecked[
-	T types.Decimal128 | types.Decimal64](
+	T types.Decimal128 | types.Decimal64 | types.Uuid](
 	ub T, closed bool, quick bool, cmp func(a, b T) int) func(vector *Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
@@ -89,7 +89,7 @@ func FixedSizeSearchOffsetsByLessTypeChecked[
 	}
 }
 
-func FixedSizeSearchOffsetsByGTTypeChecked[T types.Decimal128 | types.Decimal64](
+func FixedSizeSearchOffsetsByGTTypeChecked[T types.Decimal128 | types.Decimal64 | types.Uuid](
 	lb T, closed bool, quick bool, cmp func(a, b T) int,
 ) func(vector *Vector) []int64 {
 	return func(vector *Vector) []int64 {
@@ -100,9 +100,9 @@ func FixedSizeSearchOffsetsByGTTypeChecked[T types.Decimal128 | types.Decimal64]
 		}
 
 		for x := len(rows) - 1; x >= 0; x-- {
-			if closed && cmp(rows[x], lb) <= 0 {
+			if closed && cmp(rows[x], lb) >= 0 {
 				sels = append(sels, int64(x))
-			} else if !closed && cmp(rows[x], lb) < 0 {
+			} else if !closed && cmp(rows[x], lb) > 0 {
 				sels = append(sels, int64(x))
 			} else if quick {
 				break
@@ -156,7 +156,7 @@ func VarlenSearchOffsetByGreat(lb []byte, closed bool, quick bool) func(*Vector)
 	}
 }
 
-func OrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal128 | types.Decimal64](
+func OrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal128 | types.Decimal64 | types.Uuid](
 	vals []T, cmp func(T, T) int) func(*Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
@@ -177,7 +177,7 @@ func OrderedLinearSearchOffsetByValFactory[T types.OrderedT | types.Decimal128 |
 	}
 }
 
-func FixedSizeLinearSearchOffsetByValFactory[T types.Decimal128 | types.Decimal64](
+func FixedSizeLinearSearchOffsetByValFactory[T types.Decimal128 | types.Decimal64 | types.Uuid](
 	vals []T, cmp func(T, T) int) func(*Vector) []int64 {
 	return OrderedLinearSearchOffsetByValFactory(vals, cmp)
 }
@@ -311,7 +311,7 @@ func LinearCollectOffsetsByBetweenFactory[T types.BuiltinNumber | types.Times | 
 }
 
 func FixedSizedLinearCollectOffsetsByBetweenFactory[
-	T types.Decimal128 | types.Decimal64](lb, ub T, cmp func(T, T) int) func(*Vector) []int64 {
+	T types.Decimal128 | types.Decimal64 | types.Uuid](lb, ub T, cmp func(T, T) int) func(*Vector) []int64 {
 	return func(vector *Vector) []int64 {
 		var sels []int64
 		vecLen := vector.Length()
@@ -492,7 +492,7 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 			offset := 0
 			for i := range subVals {
 				idx, found := sort.Find(len(rows), func(idx int) int {
-					return cmp(subVals[i], rows[i])
+					return cmp(subVals[i], rows[idx])
 				})
 				if idx < len(rows) {
 					if found {
@@ -577,7 +577,7 @@ func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int
 	}
 }
 
-func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal](lval, rval T, cmp func(T, T) int) func(*Vector) []int64 {
+func CollectOffsetsByBetweenWithCompareFactory[T types.Decimal | types.Uuid](lval, rval T, cmp func(T, T) int) func(*Vector) []int64 {
 	return func(vec *Vector) []int64 {
 		vecLen := vec.Length()
 		if vecLen == 0 {
