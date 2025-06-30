@@ -112,10 +112,7 @@ func ConstructBlockPKFilter(
 		case types.T_decimal128:
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Decimal128{types.DecodeDecimal128(basePKFilter.LB)}, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory([]types.Decimal128{types.DecodeDecimal128(basePKFilter.LB)}, types.CompareDecimal128)
-		case types.T_varchar:
-			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{basePKFilter.LB})
-			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory([][]byte{basePKFilter.LB})
-		case types.T_json:
+		case types.T_varchar, types.T_char, types.T_binary, types.T_json:
 			sortedSearchFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{basePKFilter.LB})
 			unSortedSearchFunc = vector.VarlenLinearSearchOffsetByValFactory([][]byte{basePKFilter.LB})
 		case types.T_enum:
@@ -266,10 +263,7 @@ func ConstructBlockPKFilter(
 		case types.T_decimal128:
 			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, true, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, false, types.CompareDecimal128)
-		case types.T_varchar:
-			sortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.LB, closed, true)
-			unSortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.LB, closed, false)
-		case types.T_json:
+		case types.T_varchar, types.T_char, types.T_binary, types.T_json:
 			sortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.LB, closed, true)
 			unSortedSearchFunc = vector.VarlenSearchOffsetByLess(basePKFilter.LB, closed, false)
 		case types.T_enum:
@@ -335,10 +329,7 @@ func ConstructBlockPKFilter(
 		case types.T_decimal128:
 			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, true, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.DecodeDecimal128(basePKFilter.LB), closed, false, types.CompareDecimal128)
-		case types.T_varchar:
-			sortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.LB, closed, true)
-			unSortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.LB, closed, false)
-		case types.T_json:
+		case types.T_varchar, types.T_char, types.T_json, types.T_binary:
 			sortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.LB, closed, true)
 			unSortedSearchFunc = vector.VarlenSearchOffsetByGreat(basePKFilter.LB, closed, false)
 		case types.T_enum:
@@ -448,12 +439,7 @@ func ConstructBlockPKFilter(
 
 			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareDecimal128)
 			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareDecimal128)
-		case types.T_text, types.T_datalink, types.T_varchar:
-			lb := string(basePKFilter.LB)
-			ub := string(basePKFilter.UB)
-			sortedSearchFunc = vector.CollectOffsetsByBetweenString(lb, ub, hint)
-			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenString(lb, ub, hint)
-		case types.T_json:
+		case types.T_text, types.T_datalink, types.T_varchar, types.T_char, types.T_binary, types.T_json:
 			lb := string(basePKFilter.LB)
 			ub := string(basePKFilter.UB)
 			sortedSearchFunc = vector.CollectOffsetsByBetweenString(lb, ub, hint)
