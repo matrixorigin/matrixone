@@ -2949,7 +2949,7 @@ func Test_restoreViews(t *testing.T) {
 			sortedViews []string
 		)
 
-		sortedViews, err = sortedViewInfos(
+		_, err = sortedViewInfos(
 			ctx, ses, bh, "sp01", nil, viewMap, 0, 0)
 		assert.Error(t, err)
 
@@ -2981,7 +2981,7 @@ func Test_restoreViews(t *testing.T) {
 			},
 		}
 
-		sortedViews, err = sortedViewInfos(
+		_, err = sortedViewInfos(
 			ctx, ses, bh, "sp01", nil, viewMap, 0, 0)
 		assert.Error(t, err)
 		//
