@@ -768,6 +768,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		function.PREFIX_EQ,
 		function.PREFIX_IN,
 		function.PREFIX_BETWEEN,
+		function.IN,
 	}
 
 	tys := []types.T{
@@ -775,7 +776,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_date, types.T_timestamp,
-		types.T_decimal128, types.T_varchar,
+		types.T_decimal128, types.T_varchar, types.T_uuid,
 	}
 
 	needVec := func(op int) bool {
@@ -792,7 +793,31 @@ func TestConstructBlockPKFilter(t *testing.T) {
 			op == function.PREFIX_BETWEEN
 	}
 
-	for range 100 {
+	intToUUID := func(x int32) types.Uuid {
+		hex := types.EncodeInt32(&x)
+		for i := 16 - len(hex); i > 0; i-- {
+			hex = append(hex, 0)
+		}
+
+		var u types.Uuid
+		require.NoError(t, err)
+		require.Equal(t, 16, len(hex))
+
+		u = types.Uuid(hex)
+
+		return u
+	}
+
+	var msg string
+
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println(msg)
+			panic(r)
+		}
+	}()
+
+	for range 200 {
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 		lb := float64(rnd.Intn(100) + 2)
 		ub := float64(rnd.Intn(100) + 2)
@@ -1015,6 +1040,27 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					}
 					llb = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(lb), B64_127: uint64(lb)})
 					uub = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(ub), B64_127: uint64(ub)})
+
+				case types.T_uuid:
+					if needVec(op) {
+						for x := lb; x <= ub; x++ {
+							u := intToUUID(int32(x))
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeUuid(&u), false, mp)
+							} else {
+								vector.AppendFixed[types.Uuid](vec, u, false, mp)
+							}
+						}
+						vec.InplaceSort()
+					}
+
+					u := intToUUID(int32(lb))
+					llb = make([]byte, len(u))
+					copy(llb[:], u[:])
+
+					u = intToUUID(int32(ub))
+					uub = make([]byte, len(u))
+					copy(uub[:], u[:])
 				}
 
 				basePKFilter := BasePKFilter{
@@ -1161,6 +1207,30 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							vector.AppendFixed(inputVec, xx, false, mp)
 						}
 					}
+
+				case types.T_decimal128:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := types.Decimal128{B0_63: uint64(x)}
+
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeDecimal128(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+
+					inputVec.InplaceSort()
+
+				case types.T_uuid:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := intToUUID(int32(x))
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeUuid(&xx), false, mp)
+						} else {
+							vector.AppendFixed[types.Uuid](inputVec, xx, false, mp)
+						}
+					}
+					inputVec.InplaceSort()
 				}
 
 				if opOnBinary(op) && (ty == types.T_float32 || ty == types.T_float64) {
@@ -1168,14 +1238,15 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					continue
 				}
 
+				msg = fmt.Sprintf("lb: %v, ub: %v\nbaseFilter: %v\ninputVec: %v",
+					lb, ub,
+					basePKFilter.String(),
+					common.MoVectorToString(inputVec, 100))
+
 				sel1 := blkPKFilter.SortedSearchFunc(inputVec)
 				sel2 := blkPKFilter.UnSortedSearchFunc(inputVec)
 
-				require.Equal(t, sel1, sel2,
-					fmt.Sprintf("lb: %v, ub: %v\nbaseFilter: %v\ninputVec: %v",
-						lb, ub,
-						basePKFilter.String(),
-						common.MoVectorToString(inputVec, 100)))
+				require.Equal(t, sel1, sel2, msg)
 			}
 		}
 	}

@@ -16,6 +16,8 @@ package readutil
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -119,6 +121,13 @@ func ConstructBlockPKFilter(
 		case types.T_enum:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.DecodeEnum(basePKFilter.LB)})
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]types.Enum{types.DecodeEnum(basePKFilter.LB)}, nil)
+		case types.T_uuid:
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Uuid{types.Uuid(basePKFilter.LB)}, types.CompareUuid)
+			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory([]types.Uuid{types.Uuid(basePKFilter.LB)}, types.CompareUuid)
+		default:
+			logutil.Warn("ConstructBlockPKFilter skipped data type",
+				zap.Int("expr op", basePKFilter.Op),
+				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.PREFIX_EQ:
@@ -191,6 +200,13 @@ func ConstructBlockPKFilter(
 		case types.T_enum:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Enum](vec))
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Enum](vec), nil)
+		case types.T_uuid:
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Uuid](vec), types.CompareUuid)
+			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Uuid](vec), types.CompareUuid)
+		default:
+			logutil.Warn("ConstructBlockPKFilter skipped data type",
+				zap.Int("expr op", basePKFilter.Op),
+				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.PREFIX_IN:
@@ -259,6 +275,13 @@ func ConstructBlockPKFilter(
 		case types.T_enum:
 			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeEnum(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeEnum(basePKFilter.LB), closed, false)
+		case types.T_uuid:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.Uuid(basePKFilter.LB), closed, true, types.CompareUuid)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.Uuid(basePKFilter.LB), closed, false, types.CompareUuid)
+		default:
+			logutil.Warn("ConstructBlockPKFilter skipped data type",
+				zap.Int("expr op", basePKFilter.Op),
+				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.GREAT_EQUAL, function.GREAT_THAN:
@@ -321,6 +344,13 @@ func ConstructBlockPKFilter(
 		case types.T_enum:
 			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeEnum(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeEnum(basePKFilter.LB), closed, false)
+		case types.T_uuid:
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.Uuid(basePKFilter.LB), closed, true, types.CompareUuid)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.Uuid(basePKFilter.LB), closed, false, types.CompareUuid)
+		default:
+			logutil.Warn("ConstructBlockPKFilter skipped data type",
+				zap.Int("expr op", basePKFilter.Op),
+				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
@@ -433,6 +463,17 @@ func ConstructBlockPKFilter(
 			ub := types.DecodeEnum(basePKFilter.UB)
 			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
 			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
+
+		case types.T_uuid:
+			val1 := types.Uuid(basePKFilter.LB)
+			val2 := types.Uuid(basePKFilter.UB)
+
+			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareUuid)
+			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareUuid)
+		default:
+			logutil.Warn("ConstructBlockPKFilter skipped data type",
+				zap.Int("expr op", basePKFilter.Op),
+				zap.String("data type", basePKFilter.Oid.String()))
 		}
 	}
 
