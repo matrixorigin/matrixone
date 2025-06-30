@@ -15,11 +15,17 @@
 package cdc
 
 import (
+	"context"
+	"os"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 type DataRetriever interface {
@@ -55,20 +61,22 @@ type ConsumerInfo struct {
 }
 
 type Consumer interface {
-	Consume(DataRetriever) error
+	Consume(context.Context, DataRetriever) error
 	Reset()
 	Close()
 }
 
 type IndexConsumer struct {
-	cnUUID    string
-	info      *ConsumerInfo
-	dbTblInfo *DbTableInfo
-	tableDef  *plan.TableDef
-	sqlWriter IndexSqlWriter
-	exec      executor.SQLExecutor
-	rowdata   []any
-	rowdelete []any
+	cnUUID       string
+	info         *ConsumerInfo
+	dbTblInfo    *DbTableInfo
+	tableDef     *plan.TableDef
+	sqlWriter    IndexSqlWriter
+	exec         executor.SQLExecutor
+	rowdata      []any
+	rowdelete    []any
+	sqlBufSendCh chan []byte
+	done         chan bool
 }
 
 var _ Consumer = new(IndexConsumer)
@@ -102,39 +110,98 @@ func NewIndexConsumer(cnUUID string,
 	sqlwriter, err := NewIndexSqlWriter(ie.algo, dbTblInfo, tableDef, ie.indexes)
 
 	c := &IndexConsumer{cnUUID: cnUUID,
-		info:      info,
-		dbTblInfo: dbTblInfo,
-		tableDef:  tableDef,
-		sqlWriter: sqlwriter,
-		exec:      exec,
-		rowdata:   make([]any, len(tableDef.Cols)),
-		rowdelete: make([]any, 1),
+		info:         info,
+		dbTblInfo:    dbTblInfo,
+		tableDef:     tableDef,
+		sqlWriter:    sqlwriter,
+		exec:         exec,
+		rowdata:      make([]any, len(tableDef.Cols)),
+		rowdelete:    make([]any, 1),
+		sqlBufSendCh: make(chan []byte),
+		done:         make(chan bool),
 	}
 
 	return c, nil
 }
 
-func (c *IndexConsumer) Consume(r DataRetriever) error {
+func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	noMoreData := false
 	var insertBatch, deleteBatch *AtomicBatch
+	errch := make(chan error, 2)
 	var err error
 
+	// create thread to poll sql
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		opts := executor.Options{}
+		err := c.exec.ExecTxn(newctx,
+			func(exec executor.TxnExecutor) error {
+				for {
+					select {
+					case <-ctx.Done():
+						return nil
+					case e2 := <-errch:
+						return e2
+					case sql, ok := <-c.sqlBufSendCh:
+						if !ok {
+							// channel closed
+							return nil
+						}
+
+						// update SQL
+						res, err := exec.Exec(string(sql), opts.StatementOption())
+						if err != nil {
+							return err
+						}
+						res.Close()
+					}
+				}
+			}, opts)
+		if err != nil {
+			errch <- err
+			return
+		}
+
+	}()
+
+	// read data
 	for !noMoreData {
 
 		insertBatch, deleteBatch, noMoreData, err = r.Next()
 		if err != nil {
+			errch <- err
+			noMoreData = true
 			return err
 		}
 
 		if noMoreData {
+			close(c.sqlBufSendCh)
 			return nil
 		}
 
 		// update index
-		var _ = insertBatch
-		var _ = deleteBatch
+
+		// sinkTail will save sql to the slice
+		err := c.sinkTail(ctx, insertBatch, deleteBatch)
+		if err != nil {
+			// error out
+			errch <- err
+			noMoreData = true
+		}
 
 	}
+
+	wg.Wait()
+
+	if len(errch) > 0 {
+		return <-errch
+	}
+
 	return nil
 }
 
@@ -144,4 +211,142 @@ func (c *IndexConsumer) Reset() {
 
 func (c *IndexConsumer) Close() {
 	logutil.Infof("IndexConsumer.Close")
+}
+
+// upsertBatch and deleteBatch is sorted by ts
+// for the same ts, delete first, then upsert
+func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *AtomicBatch) error {
+	var err error
+
+	upsertIter := upsertBatch.GetRowIterator().(*atomicBatchRowIter)
+	deleteIter := deleteBatch.GetRowIterator().(*atomicBatchRowIter)
+	defer func() {
+		upsertIter.Close()
+		deleteIter.Close()
+	}()
+
+	// output sql until one iterator reach the end
+	upsertIterHasNext, deleteIterHasNext := upsertIter.Next(), deleteIter.Next()
+	for upsertIterHasNext && deleteIterHasNext {
+		upsertItem, deleteItem := upsertIter.Item(), deleteIter.Item()
+		// compare ts, ignore pk
+		if upsertItem.Ts.LT(&deleteItem.Ts) {
+			if err = c.sinkUpsert(ctx, upsertIter); err != nil {
+				return err
+			}
+			// get next item
+			upsertIterHasNext = upsertIter.Next()
+		} else {
+			if err = c.sinkDelete(ctx, deleteIter); err != nil {
+				return err
+			}
+			// get next item
+			deleteIterHasNext = deleteIter.Next()
+		}
+	}
+
+	// output the rest of upsert iterator
+	for upsertIterHasNext {
+		if err = c.sinkUpsert(ctx, upsertIter); err != nil {
+			return err
+		}
+		// get next item
+		upsertIterHasNext = upsertIter.Next()
+	}
+
+	// output the rest of delete iterator
+	for deleteIterHasNext {
+		if err = c.sinkDelete(ctx, deleteIter); err != nil {
+			return err
+		}
+		// get next item
+		deleteIterHasNext = deleteIter.Next()
+	}
+	c.flushCdc()
+	return nil
+}
+
+func (c *IndexConsumer) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
+
+	// get row from the batch
+	if err = upsertIter.Row(ctx, c.rowdata); err != nil {
+		return err
+	}
+
+	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_UPSERT) {
+		// last op is not UPSERT, sendSql first
+		// send SQL
+		err = c.sendSql(c.sqlWriter)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	c.sqlWriter.Upsert(ctx, c.rowdata)
+
+	if c.sqlWriter.Full() {
+		// send SQL
+		err = c.sendSql(c.sqlWriter)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
+
+	// get row from the batch
+	if err = deleteIter.Row(ctx, c.rowdelete); err != nil {
+		return err
+	}
+
+	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_DELETE) {
+		// last op is not DELETE, sendSql first
+		// send SQL
+		err = c.sendSql(c.sqlWriter)
+		if err != nil {
+			return err
+		}
+
+	}
+
+	c.sqlWriter.Delete(ctx, c.rowdelete)
+
+	if c.sqlWriter.Full() {
+		// send SQL
+		err = c.sendSql(c.sqlWriter)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
+	if writer.Empty() {
+		return nil
+	}
+
+	// generate sql from cdc
+	sql, err := writer.ToSql()
+	if err != nil {
+		return err
+	}
+
+	c.sqlBufSendCh <- sql
+	os.Stderr.WriteString(string(sql))
+	os.Stderr.WriteString("\n")
+
+	// reset
+	writer.Reset()
+
+	return nil
+}
+
+func (c *IndexConsumer) flushCdc() error {
+	return c.sendSql(c.sqlWriter)
 }

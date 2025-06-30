@@ -15,6 +15,7 @@
 package cdc
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,6 +24,9 @@ import (
 )
 
 func TestConsumer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
 
@@ -34,7 +38,7 @@ func TestConsumer(t *testing.T) {
 
 	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
 	require.NoError(t, err)
-	err = consumer.Consume(r)
+	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
 	consumer.Reset()
 	consumer.Close()
