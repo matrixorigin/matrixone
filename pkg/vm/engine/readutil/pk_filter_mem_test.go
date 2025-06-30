@@ -34,6 +34,9 @@ func TestNewMemPKFilter(t *testing.T) {
 
 	lb, ub := 10, 20
 
+	lbUUID := encodeIntToUUID(int32(lb))
+	ubUUID := encodeIntToUUID(int32(ub))
+
 	baseFilters := []BasePKFilter{
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int8, LB: types.EncodeFixed(int8(lb)), UB: types.EncodeFixed(int8(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_int16, LB: types.EncodeFixed(int16(lb)), UB: types.EncodeFixed(int16(ub))},
@@ -45,8 +48,9 @@ func TestNewMemPKFilter(t *testing.T) {
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_uint64, LB: types.EncodeFixed(uint64(lb)), UB: types.EncodeFixed(uint64(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_float32, LB: types.EncodeFixed(float32(lb)), UB: types.EncodeFixed(float32(ub))},
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_float64, LB: types.EncodeFixed(float64(lb)), UB: types.EncodeFixed(float64(ub))},
-
 		{Op: function.BETWEEN, Valid: true, Oid: types.T_enum, LB: types.EncodeFixed(types.Enum(lb)), UB: types.EncodeFixed(types.Enum(ub))},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_uuid, LB: lbUUID[:], UB: ubUUID[:]},
+		{Op: function.BETWEEN, Valid: true, Oid: types.T_blob, LB: types.EncodeFixed(int32(lb)), UB: types.EncodeFixed(int32(ub))},
 	}
 
 	tableDef := &plan.TableDef{
@@ -85,10 +89,14 @@ func TestNewMemPKFilter(t *testing.T) {
 			ts,
 			packerPool,
 			baseFilters[i],
-			engine.FilterHint{})
-		assert.Nil(t, err)
-		assert.True(t, filter.isValid)
-		assert.Equal(t, function.BETWEEN, filter.op)
+			engine.FilterHint{},
+		)
+
+		if baseFilters[i].Oid != types.T_blob {
+			assert.Nil(t, err)
+			assert.True(t, filter.isValid)
+			assert.Equal(t, function.BETWEEN, filter.op)
+		}
 	}
 }
 
