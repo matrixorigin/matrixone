@@ -17,6 +17,8 @@ package readutil
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
@@ -170,7 +172,15 @@ func NewMemPKFilter(
 			if len(basePKFilter.UB) > 0 {
 				ubVal = types.DecodeEnum(basePKFilter.UB)
 			}
+		case types.T_uuid:
+			lbVal = types.DecodeUuid(basePKFilter.LB)
+			if len(basePKFilter.UB) > 0 {
+				ubVal = types.DecodeUuid(basePKFilter.UB)
+			}
 		default:
+			logutil.Warn("NewMemPKFilter skipped data type",
+				zap.Int("expr op", basePKFilter.Op),
+				zap.String("data type", basePKFilter.Oid.String()))
 			return
 			//panic(basePKFilter.Oid.String())
 		}
