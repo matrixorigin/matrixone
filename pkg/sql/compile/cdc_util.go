@@ -38,7 +38,7 @@ func RegisterJob(ctx context.Context, txn client.TxnOperator, pitr_name string, 
 	return true, nil
 }
 
-func DeregisterJob(ctx context.Context, txn client.TxnOperator, info *SinkerInfo) (bool, error) {
+func UnregisterJob(ctx context.Context, txn client.TxnOperator, info *SinkerInfo) (bool, error) {
 
 	return true, nil
 }
@@ -52,7 +52,7 @@ func CreateCdcTask(c *Compile, pitr_name string, sinkerinfo SinkerInfo) (bool, e
 
 func DeleteCdcTask(c *Compile, sinkerinfo SinkerInfo) (bool, error) {
 	logutil.Infof("Delete Index Task %v", sinkerinfo)
-	return DeregisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), &sinkerinfo)
+	return UnregisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), &sinkerinfo)
 }
 
 func getIndexPitrName(dbname string, tablename string) string {
