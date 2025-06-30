@@ -757,6 +757,17 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func encodeIntToUUID(x int32) types.Uuid {
+	hex := types.EncodeInt32(&x)
+	for i := 16 - len(hex); i > 0; i-- {
+		hex = append(hex, 0)
+	}
+
+	u := types.Uuid(hex)
+
+	return u
+}
+
 func TestConstructBlockPKFilter(t *testing.T) {
 	mp, err := mpool.NewMPool("", mpool.GB*2, 0)
 	require.NoError(t, err)
@@ -792,21 +803,6 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		return op == function.PREFIX_IN ||
 			op == function.PREFIX_EQ ||
 			op == function.PREFIX_BETWEEN
-	}
-
-	intToUUID := func(x int32) types.Uuid {
-		hex := types.EncodeInt32(&x)
-		for i := 16 - len(hex); i > 0; i-- {
-			hex = append(hex, 0)
-		}
-
-		var u types.Uuid
-		require.NoError(t, err)
-		require.Equal(t, 16, len(hex))
-
-		u = types.Uuid(hex)
-
-		return u
 	}
 
 	var msg string
@@ -1045,7 +1041,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 				case types.T_uuid:
 					if needVec(op) {
 						for x := lb; x <= ub; x++ {
-							u := intToUUID(int32(x))
+							u := encodeIntToUUID(int32(x))
 							if opOnBinary(op) {
 								vector.AppendBytes(vec, types.EncodeUuid(&u), false, mp)
 							} else {
@@ -1055,11 +1051,11 @@ func TestConstructBlockPKFilter(t *testing.T) {
 						vec.InplaceSort()
 					}
 
-					u := intToUUID(int32(lb))
+					u := encodeIntToUUID(int32(lb))
 					llb = make([]byte, len(u))
 					copy(llb[:], u[:])
 
-					u = intToUUID(int32(ub))
+					u = encodeIntToUUID(int32(ub))
 					uub = make([]byte, len(u))
 					copy(uub[:], u[:])
 				}
@@ -1224,7 +1220,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 
 				case types.T_uuid:
 					for x := lb - 1; x <= ub+1; x++ {
-						xx := intToUUID(int32(x))
+						xx := encodeIntToUUID(int32(x))
 						if opOnBinary(op) {
 							vector.AppendBytes(inputVec, types.EncodeUuid(&xx), false, mp)
 						} else {

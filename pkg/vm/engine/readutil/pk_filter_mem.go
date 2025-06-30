@@ -18,9 +18,8 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
