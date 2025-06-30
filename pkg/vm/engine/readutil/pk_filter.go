@@ -16,14 +16,13 @@ package readutil
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"go.uber.org/zap"
 )
 
 /* Don't remove me. will be used lated
@@ -122,9 +121,6 @@ func ConstructBlockPKFilter(
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Uuid{types.Uuid(basePKFilter.LB)}, types.CompareUuid)
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory([]types.Uuid{types.Uuid(basePKFilter.LB)}, types.CompareUuid)
 		default:
-			logutil.Warn("ConstructBlockPKFilter skipped data type",
-				zap.Int("expr op", basePKFilter.Op),
-				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.PREFIX_EQ:
@@ -201,9 +197,6 @@ func ConstructBlockPKFilter(
 			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Uuid](vec), types.CompareUuid)
 			unSortedSearchFunc = vector.FixedSizeLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Uuid](vec), types.CompareUuid)
 		default:
-			logutil.Warn("ConstructBlockPKFilter skipped data type",
-				zap.Int("expr op", basePKFilter.Op),
-				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.PREFIX_IN:
@@ -273,9 +266,6 @@ func ConstructBlockPKFilter(
 			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.Uuid(basePKFilter.LB), closed, true, types.CompareUuid)
 			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(types.Uuid(basePKFilter.LB), closed, false, types.CompareUuid)
 		default:
-			logutil.Warn("ConstructBlockPKFilter skipped data type",
-				zap.Int("expr op", basePKFilter.Op),
-				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.GREAT_EQUAL, function.GREAT_THAN:
@@ -339,9 +329,6 @@ func ConstructBlockPKFilter(
 			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.Uuid(basePKFilter.LB), closed, true, types.CompareUuid)
 			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(types.Uuid(basePKFilter.LB), closed, false, types.CompareUuid)
 		default:
-			logutil.Warn("ConstructBlockPKFilter skipped data type",
-				zap.Int("expr op", basePKFilter.Op),
-				zap.String("data type", basePKFilter.Oid.String()))
 		}
 
 	case function.BETWEEN, RangeLeftOpen, RangeRightOpen, RangeBothOpen:
@@ -457,9 +444,6 @@ func ConstructBlockPKFilter(
 			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareFactory(val1, val2, types.CompareUuid)
 			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenFactory(val1, val2, types.CompareUuid)
 		default:
-			logutil.Warn("ConstructBlockPKFilter skipped data type",
-				zap.Int("expr op", basePKFilter.Op),
-				zap.String("data type", basePKFilter.Oid.String()))
 		}
 	}
 
@@ -468,7 +452,12 @@ func ConstructBlockPKFilter(
 		readFilter.UnSortedSearchFunc = unSortedSearchFunc
 		readFilter.Valid = true
 		return readFilter, nil
+	} else {
+		logutil.Warn("ConstructBlockPKFilter skipped data type",
+			zap.Int("expr op", basePKFilter.Op),
+			zap.String("data type", basePKFilter.Oid.String()))
 	}
+
 	return readFilter, nil
 }
 
