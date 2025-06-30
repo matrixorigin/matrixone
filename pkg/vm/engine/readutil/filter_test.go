@@ -777,6 +777,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		types.T_float32, types.T_float64,
 		types.T_date, types.T_timestamp,
 		types.T_decimal128, types.T_varchar, types.T_uuid,
+		types.T_char, types.T_json, types.T_binary,
 	}
 
 	needVec := func(op int) bool {
@@ -970,7 +971,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					if needVec(op) {
 						//vec = vector.NewVec(ty.ToType())
 						for x := lb; x <= ub; x++ {
-							xx := float64(x)
+							xx := x
 							if opOnBinary(op) {
 								vector.AppendBytes(vec, types.EncodeFloat64(&xx), false, mp)
 							} else {
@@ -978,9 +979,9 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							}
 						}
 					}
-					llb = types.EncodeValue(float64(lb), ty)
-					uub = types.EncodeValue(float64(ub), ty)
-				case types.T_varchar, types.T_binary:
+					llb = types.EncodeValue(lb, ty)
+					uub = types.EncodeValue(ub, ty)
+				case types.T_varchar, types.T_binary, types.T_char, types.T_json:
 					if needVec(op) {
 						for x := lb; x <= ub; x++ {
 							vector.AppendBytes(vec, []byte(strconv.Itoa(int(x))), false, mp)
@@ -1181,7 +1182,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							vector.AppendFixed(inputVec, xx, false, mp)
 						}
 					}
-				case types.T_varchar:
+				case types.T_varchar, types.T_binary, types.T_char, types.T_json:
 					for x := lb - 1; x <= ub+1; x++ {
 						xx := strconv.Itoa(int(x))
 						vector.AppendBytes(inputVec, []byte(xx), false, mp)
