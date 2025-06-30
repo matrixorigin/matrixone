@@ -15,11 +15,13 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 /* CDC APIs */
@@ -30,16 +32,27 @@ type SinkerInfo struct {
 	IndexName  string
 }
 
-func CreateCdcTask(c *Compile, pitr_name string, sinkerinfo SinkerInfo) (bool, error) {
-	logutil.Infof("Create Index Task %v", sinkerinfo)
+func RegisterJob(ctx context.Context, txn client.TxnOperator, pitr_name string, info *SinkerInfo) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
 	return true, nil
 }
 
+func DeregisterJob(ctx context.Context, txn client.TxnOperator, info *SinkerInfo) (bool, error) {
+
+	return true, nil
+}
+
+/* start here */
+func CreateCdcTask(c *Compile, pitr_name string, sinkerinfo SinkerInfo) (bool, error) {
+	logutil.Infof("Create Index Task %v", sinkerinfo)
+
+	return RegisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), pitr_name, &sinkerinfo)
+}
+
 func DeleteCdcTask(c *Compile, sinkerinfo SinkerInfo) (bool, error) {
 	logutil.Infof("Delete Index Task %v", sinkerinfo)
-	return true, nil
+	return DeregisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), &sinkerinfo)
 }
 
 func getIndexPitrName(dbname string, tablename string) string {
