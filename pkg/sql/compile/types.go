@@ -66,6 +66,7 @@ const (
 	DropSequence
 	AlterSequence
 	Replace
+	TableClone
 )
 
 func (m magicType) String() string {

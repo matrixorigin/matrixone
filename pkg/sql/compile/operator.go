@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -83,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
@@ -95,10 +95,12 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 var constBat *batch.Batch
@@ -2276,4 +2278,89 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 	op := postdml.NewArgument()
 	op.PostDmlCtx = delCtx
 	return op
+}
+
+func constructTableClone(
+	c *Compile,
+	n *plan.Node,
+) (*table_clone.TableClone, error) {
+
+	metaCopy := table_clone.NewTableClone()
+
+	metaCopy.Ctx = &table_clone.TableCloneCtx{
+		Eng:       c.e,
+		SrcTblDef: n.TableDef,
+		SrcObjDef: n.ObjRef,
+
+		ScanSnapshot:    n.ScanSnapshot,
+		DstTblName:      n.InsertCtx.TableDef.Name,
+		DstDatabaseName: n.InsertCtx.TableDef.DbName,
+	}
+
+	var (
+		err error
+		ret executor.Result
+		sql string
+
+		account     = uint32(math.MaxUint32)
+		colOffset   map[int32]uint64
+		hasAutoIncr bool
+	)
+
+	for _, colDef := range n.TableDef.Cols {
+		if colDef.Typ.AutoIncr {
+			hasAutoIncr = true
+			break
+		}
+	}
+
+	if !hasAutoIncr {
+		return metaCopy, nil
+	}
+
+	sql = fmt.Sprintf(
+		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d", n.TableDef.TblId)
+
+	if n.ScanSnapshot != nil {
+		if n.ScanSnapshot.Tenant != nil {
+			account = n.ScanSnapshot.Tenant.TenantID
+		}
+
+		if n.ScanSnapshot.TS != nil {
+			sql = fmt.Sprintf(
+				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
+				n.ScanSnapshot.TS.PhysicalTime, n.TableDef.TblId)
+		}
+	}
+
+	if account == math.MaxUint32 {
+		if account, err = defines.GetAccountId(c.proc.Ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	if ret, err = c.runSqlWithResult(sql, int32(account)); err != nil {
+		return nil, err
+	}
+
+	ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if colOffset == nil {
+			colOffset = make(map[int32]uint64)
+		}
+
+		colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
+		offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+
+		for i := 0; i < rows; i++ {
+			colOffset[colIdxes[i]] = offsets[i]
+		}
+
+		return true
+	})
+
+	ret.Close()
+
+	metaCopy.Ctx.SrcAutoIncrOffsets = colOffset
+
+	return metaCopy, nil
 }
