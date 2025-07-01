@@ -351,7 +351,8 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	//open table
 	table, err := db.Relation(tempCtx, tableName, nil)
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		eng := tcc.GetTxnHandler().GetStorage()
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) && eng.HasTempEngine() {
 			tmpTableName := engine.GetTempTableName(dbName, tableName)
 			tmpTable, e := tcc.getTmpRelation(tempCtx, tmpTableName)
 			if e != nil {
