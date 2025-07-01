@@ -191,7 +191,7 @@ func NewCdcActiveRoutine() *ActiveRoutine {
 	}
 }
 
-type OutputType int
+type OutputType int8
 
 const (
 	OutputTypeSnapshot OutputType = iota

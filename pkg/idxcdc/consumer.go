@@ -124,7 +124,7 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 
 	datatype := r.GetDataType()
 
-	if datatype == 0 {
+	if datatype == int8(OutputTypeSnapshot) {
 		// SNAPSHOT
 		for {
 			select {
@@ -229,7 +229,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 
 		// update index
 
-		if datatype == 0 {
+		if datatype == int8(OutputTypeSnapshot) {
 			// SNAPSHOT
 			err := c.sinkSnapshot(ctx, insertBatch)
 			if err != nil {
