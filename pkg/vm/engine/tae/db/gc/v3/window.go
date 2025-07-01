@@ -156,7 +156,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	}
 
 	vecToGC, filesNotGC := job.Result()
-	vecToGC.Free(w.mp)
+	defer vecToGC.Free(w.mp)
 	var metaFile string
 	var err error
 	var bf *bloomfilter.BloomFilter
