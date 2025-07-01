@@ -150,8 +150,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 					case sql, ok := <-c.sqlBufSendCh:
 						if !ok {
 							// channel closed
-							r.UpdateWatermark(exec)
-							return nil
+							return r.UpdateWatermark(exec)
 						}
 
 						// update SQL
