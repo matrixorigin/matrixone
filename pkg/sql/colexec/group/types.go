@@ -161,6 +161,10 @@ type container struct {
 	result1 GroupResultBuffer
 	// result if NeedEval is false.
 	result2 GroupResultNoneBlock
+
+	spiller        *Spiller
+	spilled        bool
+	spillThreshold int64
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
