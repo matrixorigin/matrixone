@@ -73,7 +73,15 @@ var NewTableReader = func(
 	runningReaders *sync.Map,
 	startTs, endTs types.TS,
 	noFull bool,
+	frequency string,
 ) Reader {
+	var tick *time.Ticker
+	if frequency != "" {
+		dur := parseFrequencyToDuration(frequency)
+		tick = time.NewTicker(dur)
+	} else {
+		tick = time.NewTicker(200 * time.Millisecond)
+	}
 	reader := &tableReader{
 		cnTxnClient:          cnTxnClient,
 		cnEngine:             cnEngine,
@@ -84,7 +92,7 @@ var NewTableReader = func(
 		info:                 info,
 		sinker:               sinker,
 		wMarkUpdater:         wMarkUpdater,
-		tick:                 time.NewTicker(200 * time.Millisecond),
+		tick:                 tick,
 		initSnapshotSplitTxn: initSnapshotSplitTxn,
 		runningReaders:       runningReaders,
 		startTs:              startTs,
