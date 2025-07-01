@@ -164,7 +164,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	// This batch can be obtained by 'insert into db.t1 select result from generate_series(1, 67117056) g;'
 	s3Bat := batch.NewWithSize(2)
 	s3Bat.SetRowCount(8193)
-	s3Bat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
+	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,
