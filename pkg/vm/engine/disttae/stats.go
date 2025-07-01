@@ -760,7 +760,13 @@ func UpdateStats(ctx context.Context, req *updateStatsRequest, executor Concurre
 			overlap = req.statsInfo.ShuffleRangeMap[colName].Overlap
 		}
 		if req.statsInfo.MaxValMap[colName] < req.statsInfo.MinValMap[colName] {
-			logutil.Errorf("error happended in stats!")
+			logutil.Error(
+				"UpdateStats-Error",
+				zap.String("table", baseTableDef.Name),
+				zap.String("col", colName),
+				zap.Float64("max", req.statsInfo.MaxValMap[colName]),
+				zap.Float64("min", req.statsInfo.MinValMap[colName]),
+			)
 		}
 		logutil.Debugf("debug: table %v tablecnt %v  col %v max %v min %v ndv %v overlap %v maxndv %v maxobj %v ndvinmaxobj %v minobj %v ndvinminobj %v",
 			baseTableDef.Name, info.TableCnt, colName, req.statsInfo.MaxValMap[colName], req.statsInfo.MinValMap[colName],
