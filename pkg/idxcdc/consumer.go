@@ -91,7 +91,6 @@ type Consumer interface {
 type IndexConsumer struct {
 	cnUUID       string
 	info         *ConsumerInfo
-	dbTblInfo    *DbTableInfo
 	tableDef     *plan.TableDef
 	sqlWriter    IndexSqlWriter
 	exec         executor.SQLExecutor
@@ -111,8 +110,6 @@ func NewIndexConsumer(cnUUID string,
 		return nil, err
 	}
 
-	dbTblInfo := &DbTableInfo{SinkDbName: info.DbName, SinkTblName: info.TableName}
-
 	ie := &IndexEntry{indexes: make([]*plan.IndexDef, 0, 3)}
 
 	for _, idx := range tableDef.Indexes {
@@ -128,11 +125,10 @@ func NewIndexConsumer(cnUUID string,
 
 	}
 
-	sqlwriter, err := NewIndexSqlWriter(ie.algo, dbTblInfo, tableDef, ie.indexes)
+	sqlwriter, err := NewIndexSqlWriter(ie.algo, info, tableDef, ie.indexes)
 
 	c := &IndexConsumer{cnUUID: cnUUID,
 		info:      info,
-		dbTblInfo: dbTblInfo,
 		tableDef:  tableDef,
 		sqlWriter: sqlwriter,
 		exec:      exec,
@@ -168,7 +164,7 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 					opts := executor.Options{}
 					res, err := c.exec.Exec(newctx, string(sql), opts)
 					if err != nil {
-						logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.dbTblInfo, err, string(sql))
+						logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
 						os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
 						os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
 						errch <- err

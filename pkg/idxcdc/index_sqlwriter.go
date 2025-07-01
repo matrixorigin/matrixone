@@ -51,7 +51,7 @@ type BaseIndexSqlWriter struct {
 	param     string
 	tabledef  *plan.TableDef
 	indexdef  []*plan.IndexDef
-	dbTblInfo *DbTableInfo
+	info      *ConsumerInfo
 	algo      string
 	pkPos     int32
 	pkType    *types.Type
@@ -83,7 +83,7 @@ type HnswSqlWriter[T types.RealNumbers] struct {
 	meta      vectorindex.HnswCdcParam
 	tabledef  *plan.TableDef
 	indexdef  []*plan.IndexDef
-	dbTblInfo *DbTableInfo
+	info      *ConsumerInfo
 	pkPos     int32
 	pkType    *types.Type
 	partsPos  []int32
@@ -99,15 +99,15 @@ var _ IndexSqlWriter = new(IvfflatSqlWriter)
 var _ IndexSqlWriter = new(HnswSqlWriter[float32])
 
 // check algo type to return the correct sql writer
-func NewIndexSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+func NewIndexSqlWriter(algo string, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
 	algo = catalog.ToLower(algo)
 	switch algo {
 	case catalog.MOIndexFullTextAlgo.ToString():
-		return NewFulltextSqlWriter(algo, dbTblInfo, tabledef, indexdef)
+		return NewFulltextSqlWriter(algo, info, tabledef, indexdef)
 	case catalog.MoIndexIvfFlatAlgo.ToString():
-		return NewIvfflatSqlWriter(algo, dbTblInfo, tabledef, indexdef)
+		return NewIvfflatSqlWriter(algo, info, tabledef, indexdef)
 	case catalog.MoIndexHnswAlgo.ToString():
-		return NewHnswSqlWriter(algo, dbTblInfo, tabledef, indexdef)
+		return NewHnswSqlWriter(algo, info, tabledef, indexdef)
 	default:
 		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
 
@@ -244,8 +244,8 @@ func (w *BaseIndexSqlWriter) Empty() bool {
 }
 
 // New Fulltext Sql Writer
-func NewFulltextSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &FulltextSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, vbuf: make([]byte, 0, 1024)}}
+func NewFulltextSqlWriter(algo string, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	w := &FulltextSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, info: info, vbuf: make([]byte, 0, 1024)}}
 
 	w.pkPos = tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	typ := tabledef.Cols[w.pkPos].Typ
@@ -300,7 +300,7 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 }
 
 func (w *FulltextSqlWriter) toFulltextDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.dbTblInfo.SinkDbName, w.indexTableName, catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DbName, w.indexTableName, catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
 	return []byte(sql), nil
 }
 
@@ -332,8 +332,8 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 }
 
 // Implementation of HNSW Sql writer
-func NewHnswSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &HnswSqlWriter[float32]{tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, cdc: vectorindex.NewVectorIndexCdc[float32]()}
+func NewHnswSqlWriter(algo string, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	w := &HnswSqlWriter[float32]{tabledef: tabledef, indexdef: indexdef, info: info, cdc: vectorindex.NewVectorIndexCdc[float32]()}
 
 	// check the tabledef and indexdef
 	if len(tabledef.Pkey.Names) != 1 {
@@ -409,8 +409,8 @@ func NewHnswSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableD
 	w.meta = vectorindex.HnswCdcParam{
 		MetaTbl:   meta,
 		IndexTbl:  storage,
-		DbName:    dbTblInfo.SinkDbName,
-		Table:     dbTblInfo.SinkTblName,
+		DbName:    info.DbName,
+		Table:     info.TableName,
 		Params:    hnswparam,
 		Dimension: tabledef.Cols[w.partsPos[0]].Typ.Width,
 	}
@@ -498,8 +498,8 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 }
 
 // Implementation of Ivfflat Sql writer
-func NewIvfflatSqlWriter(algo string, dbTblInfo *DbTableInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &IvfflatSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, dbTblInfo: dbTblInfo, vbuf: make([]byte, 0, 1024)}}
+func NewIvfflatSqlWriter(algo string, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+	w := &IvfflatSqlWriter{BaseIndexSqlWriter: BaseIndexSqlWriter{algo: algo, tabledef: tabledef, indexdef: indexdef, info: info, vbuf: make([]byte, 0, 1024)}}
 
 	if len(indexdef) != 3 {
 		return nil, moerr.NewInternalErrorNoCtx("ivf index table must have 3 secondary tables")
@@ -596,7 +596,7 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 // catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
 // catalog.CPrimaryKeyColName
 func (w *IvfflatSqlWriter) toIvfflatDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.dbTblInfo.SinkDbName, w.entries_tbl,
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DbName, w.entries_tbl,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		string(w.vbuf))
 	return []byte(sql), nil
@@ -619,9 +619,9 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	cnames_str := strings.Join(cnames, ", ")
 
 	if !upsert {
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbTblInfo.SinkDbName, w.entries_tbl)
+		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DbName, w.entries_tbl)
 	} else {
-		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbTblInfo.SinkDbName, w.entries_tbl)
+		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.info.DbName, w.entries_tbl)
 	}
 
 	sql += fmt.Sprintf("(`%s`, `%s`, `%s`, `%s`) ",
@@ -631,9 +631,9 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
 
 	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		w.dbTblInfo.SinkDbName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
+		w.info.DbName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
-	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = (%s) ), ", w.dbTblInfo.SinkDbName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
+	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = (%s) ), ", w.info.DbName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
 	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (`%s`, `%s`)",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
