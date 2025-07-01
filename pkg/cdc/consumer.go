@@ -31,7 +31,7 @@ import (
 
 type DataRetriever interface {
 	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
-	UpdateWatermark(executor.TxnExecutor) error
+	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
 	GetDataType() int8
 }
 
@@ -43,7 +43,7 @@ func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatc
 	return nil, nil, true, nil
 }
 
-func (r *TxnRetriever) UpdateWatermark(executor.TxnExecutor) error {
+func (r *TxnRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
 	return nil
 }
@@ -188,7 +188,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 						case sql, ok := <-c.sqlBufSendCh:
 							if !ok {
 								// channel closed
-								return r.UpdateWatermark(exec)
+								return r.UpdateWatermark(exec, opts.StatementOption())
 							}
 
 							// update SQL
