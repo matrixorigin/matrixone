@@ -206,6 +206,10 @@ func (exec *groupConcatExec) Free() {
 	exec.ret.free()
 }
 
+func (exec *groupConcatExec) Size() int64 {
+	return exec.ret.Size() + exec.distinctHash.Size() + int64(cap(exec.separator))
+}
+
 var GroupConcatUnsupportedTypes = []types.T{
 	types.T_tuple,
 }

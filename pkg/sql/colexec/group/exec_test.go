@@ -15,6 +15,8 @@
 package group
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // hackAggExecToTest 是一个不带任何逻辑的AggExec,主要用于单测中检查各种接口的调用次数。
@@ -40,6 +41,12 @@ type hackAggExecToTest struct {
 	doBatchFillRow int
 	doFlushTime    int
 	isFree         bool
+}
+
+var _ aggexec.AggFuncExec = new(hackAggExecToTest)
+
+func (h *hackAggExecToTest) Size() int64 {
+	return 0
 }
 
 func (h *hackAggExecToTest) GetOptResult() aggexec.SplitResult {
