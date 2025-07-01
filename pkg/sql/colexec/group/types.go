@@ -20,11 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -147,7 +149,7 @@ type container struct {
 	dataSourceIsEmpty bool
 
 	// hash.
-	hr          ResHashRelated
+	hashMap     HashMap
 	mtyp        int
 	keyWidth    int
 	keyNullable bool
@@ -158,9 +160,16 @@ type container struct {
 	aggregateEvaluate []ExprEvalVector
 
 	// result if NeedEval is true.
-	result1 GroupResultBuffer
+	finalResults GroupResultBuffer
 	// result if NeedEval is false.
-	result2 GroupResultNoneBlock
+	intermediateResults GroupResultNoneBlock
+
+	spiller        *Spiller
+	spilled        bool
+	spillThreshold int64
+	// recalling indicates that the operator is currently recalling spilled data.
+	// During this phase, no new data should be consumed from the child operator.
+	recalling bool
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
@@ -178,6 +187,18 @@ func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	group.freeCannotReuse(proc.Mp())
 
+	// clean up spill files
+	if group.ctr.spiller != nil {
+		if spillErr := group.ctr.spiller.clean(); spillErr != nil {
+			logutil.Error("failed to clean up spill files during reset", zap.Error(spillErr))
+		}
+		// After cleaning, the spiller is no longer needed for this operator instance.
+		// It will be re-initialized if the operator is prepared again.
+		group.ctr.spiller = nil
+	}
+	group.ctr.spilled = false
+	group.ctr.recalling = false
+
 	group.ctr.groupByEvaluate.ResetForNextQuery()
 	for i := range group.ctr.aggregateEvaluate {
 		group.ctr.aggregateEvaluate[i].ResetForNextQuery()
@@ -186,9 +207,24 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (group *Group) freeCannotReuse(mp *mpool.MPool) {
-	group.ctr.hr.Free0()
-	group.ctr.result1.Free0(mp)
-	group.ctr.result2.Free0(mp)
+	group.ctr.hashMap.Free0()
+	group.ctr.finalResults.Free0(mp)
+	group.ctr.intermediateResults.Free0(mp)
+	if group.ctr.spiller != nil {
+		group.ctr.spiller.clean()
+	}
+	group.ctr.spilled = false
+	group.ctr.spiller = nil
+	group.ctr.recalling = false
+}
+
+func (group *Group) initSpiller(proc *process.Process) (err error) {
+	group.ctr.spiller, err = NewSpiller(proc)
+	if err != nil {
+		return err
+	}
+	group.ctr.spillThreshold = proc.Mp().Cap() / 2 //TODO configurable
+	return nil
 }
 
 func (ctr *container) freeAggEvaluate() {

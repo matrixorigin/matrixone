@@ -23,17 +23,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type ResHashRelated struct {
+type HashMap struct {
 	Hash     hashmap.HashMap
-	Itr      hashmap.Iterator
+	Iter     hashmap.Iterator
 	inserted []uint8
 }
 
-func (hr *ResHashRelated) IsEmpty() bool {
-	return hr.Hash == nil || hr.Itr == nil
+func (hr *HashMap) IsEmpty() bool {
+	return hr.Hash == nil || hr.Iter == nil
 }
 
-func (hr *ResHashRelated) BuildHashTable(
+func (hr *HashMap) BuildHashTable(
 	rebuild bool,
 	isStrHash bool, keyNullable bool, preAllocated uint64) error {
 
@@ -55,10 +55,10 @@ func (hr *ResHashRelated) BuildHashTable(
 		}
 		hr.Hash = h
 
-		if hr.Itr == nil {
-			hr.Itr = h.NewIterator()
+		if hr.Iter == nil {
+			hr.Iter = h.NewIterator()
 		} else {
-			hashmap.IteratorChangeOwner(hr.Itr, hr.Hash)
+			hashmap.IteratorChangeOwner(hr.Iter, hr.Hash)
 		}
 		if preAllocated > 0 {
 			if err = h.PreAlloc(preAllocated); err != nil {
@@ -74,10 +74,10 @@ func (hr *ResHashRelated) BuildHashTable(
 	}
 	hr.Hash = h
 
-	if hr.Itr == nil {
-		hr.Itr = h.NewIterator()
+	if hr.Iter == nil {
+		hr.Iter = h.NewIterator()
 	} else {
-		hashmap.IteratorChangeOwner(hr.Itr, hr.Hash)
+		hashmap.IteratorChangeOwner(hr.Iter, hr.Hash)
 	}
 	if preAllocated > 0 {
 		if err = h.PreAlloc(preAllocated); err != nil {
@@ -87,7 +87,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	return nil
 }
 
-func (hr *ResHashRelated) GetBinaryInsertList(vals []uint64, before uint64) (insertList []uint8, insertCount uint64) {
+func (hr *HashMap) GetBinaryInsertList(vals []uint64, before uint64) (insertList []uint8, insertCount uint64) {
 	if cap(hr.inserted) < len(vals) {
 		hr.inserted = make([]uint8, len(vals))
 	} else {
@@ -108,7 +108,7 @@ func (hr *ResHashRelated) GetBinaryInsertList(vals []uint64, before uint64) (ins
 	return hr.inserted, insertCount
 }
 
-func (hr *ResHashRelated) Free0() {
+func (hr *HashMap) Free0() {
 	if hr.Hash != nil {
 		hr.Hash.Free()
 		hr.Hash = nil
@@ -167,6 +167,50 @@ func (buf *GroupResultBuffer) InitWithGroupBy(
 
 	buf.ToPopped = buf.ToPopped[:1]
 	return preExtendAggExecs(buf.AggList, preAllocated)
+}
+
+// distributeBatchData is a helper function to append data from inBatch to the buffer,
+// potentially creating new batches if the current last batch is full.
+// It does not take ownership of inBatch (i.e., it does not clean inBatch).
+func (buf *GroupResultBuffer) distributeBatchData(mpool *mpool.MPool, inBatch *batch.Batch) error {
+	currentInputRow := 0
+	inputRowCount := inBatch.RowCount()
+
+	for currentInputRow < inputRowCount {
+		var targetBat *batch.Batch
+		lastBatIdx := len(buf.ToPopped) - 1
+
+		if buf.ToPopped[lastBatIdx].RowCount() < buf.ChunkSize {
+			targetBat = buf.ToPopped[lastBatIdx]
+		} else {
+			targetBat = getInitialBatchWithSameTypeVecs(inBatch.Vecs)
+			buf.ToPopped = append(buf.ToPopped, targetBat)
+		}
+		rowsToFill := min(inputRowCount-currentInputRow, buf.ChunkSize-targetBat.RowCount())
+		if err := targetBat.UnionWindow(inBatch, currentInputRow, rowsToFill, mpool); err != nil {
+			return err
+		}
+		currentInputRow += rowsToFill
+	}
+	return nil
+}
+
+// AppendRecalledBatches appends a list of recalled batches to the GroupResultBuffer,
+// attempting to fill the last existing batch first.
+// It takes ownership of the input recalledBatches and cleans them after processing.
+func (buf *GroupResultBuffer) AppendRecalledBatches(mpool *mpool.MPool, recalledBatches []*batch.Batch) error {
+	if len(recalledBatches) == 0 {
+		return nil
+	}
+	// If the last batch in ToPopped is not full, try to fill it with the first recalled batch.
+	if len(buf.ToPopped) > 0 && buf.ToPopped[len(buf.ToPopped)-1].RowCount() < buf.ChunkSize {
+		if err := buf.distributeBatchData(mpool, recalledBatches[0]); err != nil {
+			return err
+		}
+		recalledBatches = recalledBatches[1:]
+	}
+	buf.ToPopped = append(buf.ToPopped, recalledBatches...)
+	return nil
 }
 
 func (buf *GroupResultBuffer) InitWithBatch(chunkSize int, aggList []aggexec.AggFuncExec, vecExampleBatch *batch.Batch) {
