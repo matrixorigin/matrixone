@@ -3461,9 +3461,9 @@ func (builder *QueryBuilder) bindValues(
 		return
 	}
 
-	colCount := len(valuesClause.Rows[0])
+	colCnt := len(valuesClause.Rows[0])
 	for j := 1; j < rowCount; j++ {
-		if len(valuesClause.Rows[j]) != colCount {
+		if len(valuesClause.Rows[j]) != colCnt {
 			err = moerr.NewInternalError(builder.GetContext(), fmt.Sprintf("have different column count in row '%v'", j))
 			return
 		}
@@ -3471,15 +3471,15 @@ func (builder *QueryBuilder) bindValues(
 
 	ctx.hasSingleRow = rowCount == 1
 	rowSetData := &plan.RowsetData{
-		Cols: make([]*plan.ColData, colCount),
+		Cols: make([]*plan.ColData, colCnt),
 	}
 	tableDef := &plan.TableDef{
 		TblId: 0,
 		Name:  "",
-		Cols:  make([]*plan.ColDef, colCount),
+		Cols:  make([]*plan.ColDef, colCnt),
 	}
 	ctx.binder = NewWhereBinder(builder, ctx)
-	for i := 0; i < colCount; i++ {
+	for i := 0; i < colCnt; i++ {
 		rowSetData.Cols[i] = &plan.ColData{}
 
 		colName := fmt.Sprintf("column_%d", i) // like MySQL
