@@ -66,6 +66,14 @@ func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType t
 	}
 }
 
+func newTestConsumerInfo() *ConsumerInfo {
+	return &ConsumerInfo{
+		DbName:    "test_db",
+		TableName: "test_tbl",
+		IndexName: "hnsw_idx",
+	}
+}
+
 type MockSQLExecutor struct {
 }
 
