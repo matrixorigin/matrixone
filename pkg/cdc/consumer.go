@@ -29,33 +29,27 @@ import (
 )
 
 type DataRetriever interface {
-	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
-	UpdateWatermark() error
-	GetTxn() client.TxnOperator
+	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, datatype int8, err error)
+	UpdateWatermark(executor.TxnExecutor) error
 }
 
 type TxnRetriever struct {
-	Txn client.TxnOperator
 }
 
-func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
+func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, datatype int8, err error) {
 	logutil.Infof("TxRetriever Next()")
-	return nil, nil, true, nil
+	return nil, nil, true, 0, nil
 }
 
-func (r *TxnRetriever) UpdateWatermark() error {
+func (r *TxnRetriever) UpdateWatermark(executor.TxnExecutor) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
 	return nil
-}
-
-func (r *TxnRetriever) GetTxn() client.TxnOperator {
-	return r.Txn
 }
 
 var _ DataRetriever = new(TxnRetriever)
 
 func NewTxnRetriever(txn client.TxnOperator) DataRetriever {
-	return &TxnRetriever{Txn: txn}
+	return &TxnRetriever{}
 }
 
 type ConsumerInfo struct {
@@ -134,6 +128,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	var insertBatch, deleteBatch *AtomicBatch
 	errch := make(chan error, 2)
 	var err error
+	datatype := int8(0)
 
 	// create thread to poll sql
 	var wg sync.WaitGroup
@@ -144,7 +139,6 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 		newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 		opts := executor.Options{}
-		opts.WithTxn(r.GetTxn())
 		err := c.exec.ExecTxn(newctx,
 			func(exec executor.TxnExecutor) error {
 				for {
@@ -156,6 +150,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 					case sql, ok := <-c.sqlBufSendCh:
 						if !ok {
 							// channel closed
+							r.UpdateWatermark(exec)
 							return nil
 						}
 
@@ -178,7 +173,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	// read data
 	for !noMoreData {
 
-		insertBatch, deleteBatch, noMoreData, err = r.Next()
+		insertBatch, deleteBatch, noMoreData, datatype, err = r.Next()
 		if err != nil {
 			errch <- err
 			noMoreData = true
@@ -192,12 +187,16 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 
 		// update index
 
-		// sinkTail will save sql to the slice
-		err := c.sinkTail(ctx, insertBatch, deleteBatch)
-		if err != nil {
-			// error out
-			errch <- err
-			noMoreData = true
+		if datatype == 0 {
+
+		} else {
+			// sinkTail will save sql to the slice
+			err := c.sinkTail(ctx, insertBatch, deleteBatch)
+			if err != nil {
+				// error out
+				errch <- err
+				noMoreData = true
+			}
 		}
 
 	}
