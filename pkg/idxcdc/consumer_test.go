@@ -16,15 +16,23 @@ package idxcdc
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/btree"
 )
 
 type MockRetriever struct {
@@ -108,6 +116,7 @@ type MockSQLExecutor struct {
 // Exec exec a sql in a exists txn.
 func (exec MockSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
 
+	//fmt.Println(sql)
 	return executor.Result{}, nil
 }
 
@@ -117,12 +126,53 @@ func mockSqlExecutorFactory(uuid string) (executor.SQLExecutor, error) {
 	return MockSQLExecutor{}, nil
 }
 
+type MockErrorTxnExecutor struct {
+	database string
+	ctx      context.Context
+}
+
+func (exec *MockErrorTxnExecutor) Use(db string) {
+	exec.database = db
+}
+
+func (exec *MockErrorTxnExecutor) Exec(
+	sql string,
+	statementOption executor.StatementOption,
+) (executor.Result, error) {
+	if strings.Contains(sql, "FAILSQL") {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("db error")
+	} else if strings.Contains(sql, "MULTI_ERROR_NO_ROLLBACK") {
+		var errs error
+		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error"))
+		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error 2"))
+		return executor.Result{}, errs
+	} else if strings.Contains(sql, "MULTI_ERROR_ROLLBACK") {
+		var errs error
+		errs = errors.Join(errs, moerr.NewInternalErrorNoCtx("db error"))
+		errs = errors.Join(errs, moerr.NewQueryInterrupted(exec.ctx))
+		return executor.Result{}, errs
+	}
+
+	//fmt.Println(sql)
+	return executor.Result{}, nil
+}
+
+func (exec *MockErrorTxnExecutor) LockTable(table string) error {
+	return nil
+}
+
+func (exec *MockErrorTxnExecutor) Txn() client.TxnOperator {
+	return nil
+}
+
 // ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
 // in a transaction.
 // NOTE: Pass SQL stmts one by one to TxnExecutor.Exec(). If you pass multiple SQL stmts to
 // TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
 func (exec MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
-	return nil
+	txnexec := &MockErrorTxnExecutor{ctx: ctx}
+	err := execFunc(txnexec)
+	return err
 }
 
 func TestConsumer(t *testing.T) {
@@ -147,4 +197,53 @@ func TestConsumer(t *testing.T) {
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
+}
+
+func TestHnswSnapshot(t *testing.T) {
+
+	proc := testutil.NewProcess()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
+	defer sqlexecstub.Reset()
+
+	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
+	cnUUID := "a-b-c-d"
+	info := &ConsumerInfo{DbName: "db", TableName: "tbl", IndexName: "hnsw_idx"}
+
+	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
+	require.NoError(t, err)
+
+	t.Run("snapshot", func(t *testing.T) {
+
+		bat := testutil.NewBatchWithVectors(
+			[]*vector.Vector{
+				testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+				testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+				testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
+			}, nil)
+
+		defer bat.Clean(testutil.TestUtilMp)
+
+		insertAtomicBat := &AtomicBatch{
+			Mp:      nil,
+			Batches: []*batch.Batch{bat},
+			Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+		}
+
+		output := &MockRetriever{
+			dtype:       int8(OutputTypeSnapshot),
+			insertBatch: insertAtomicBat,
+			deleteBatch: nil,
+			noMoreData:  false,
+		}
+		err := consumer.Consume(ctx, output)
+		require.NoError(t, err)
+		//sql, err := c.sqlWriters[0].ToSql()
+		//require.NoError(t, err)
+		//require.Equal(t, string(sql), `SELECT hnsw_cdc_update('sink_db', 'sink_tbl', 2, '{"cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}');`)
+	})
+
 }

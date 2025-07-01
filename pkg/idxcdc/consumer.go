@@ -223,6 +223,10 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 		}
 
 		if noMoreData {
+			err := c.flushCdc()
+			if err != nil {
+				errch <- err
+			}
 			close(c.sqlBufSendCh)
 			continue
 		}
