@@ -79,7 +79,6 @@ type IndexConsumer struct {
 	rowdata      []any
 	rowdelete    []any
 	sqlBufSendCh chan []byte
-	done         chan bool
 }
 
 var _ Consumer = new(IndexConsumer)
@@ -113,15 +112,14 @@ func NewIndexConsumer(cnUUID string,
 	sqlwriter, err := NewIndexSqlWriter(ie.algo, dbTblInfo, tableDef, ie.indexes)
 
 	c := &IndexConsumer{cnUUID: cnUUID,
-		info:         info,
-		dbTblInfo:    dbTblInfo,
-		tableDef:     tableDef,
-		sqlWriter:    sqlwriter,
-		exec:         exec,
-		rowdata:      make([]any, len(tableDef.Cols)),
-		rowdelete:    make([]any, 1),
-		sqlBufSendCh: make(chan []byte),
-		done:         make(chan bool),
+		info:      info,
+		dbTblInfo: dbTblInfo,
+		tableDef:  tableDef,
+		sqlWriter: sqlwriter,
+		exec:      exec,
+		rowdata:   make([]any, len(tableDef.Cols)),
+		rowdelete: make([]any, 1),
+		//sqlBufSendCh: make(chan []byte),
 	}
 
 	return c, nil
@@ -202,6 +200,13 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	var insertBatch, deleteBatch *AtomicBatch
 	errch := make(chan error, 2)
 	var err error
+
+	c.sqlBufSendCh = make(chan []byte)
+	defer func() {
+		c.sqlBufSendCh = nil
+		c.sqlWriter.Reset()
+	}()
+
 	datatype := r.GetDataType()
 
 	// create thread to poll sql
