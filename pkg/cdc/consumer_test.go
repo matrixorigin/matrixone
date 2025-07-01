@@ -40,6 +40,4 @@ func TestConsumer(t *testing.T) {
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
-	consumer.Reset()
-	consumer.Close()
 }

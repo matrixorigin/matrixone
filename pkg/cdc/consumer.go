@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -67,8 +68,6 @@ type ConsumerInfo struct {
 
 type Consumer interface {
 	Consume(context.Context, DataRetriever) error
-	Reset()
-	Close()
 }
 
 type IndexConsumer struct {
@@ -227,6 +226,12 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 
 		if datatype == 0 {
 			// SNAPSHOT
+			err := c.sinkSnapshot(ctx, insertBatch)
+			if err != nil {
+				// error out
+				errch <- err
+				noMoreData = true
+			}
 
 		} else {
 			// sinkTail will save sql to the slice
@@ -249,12 +254,26 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	return nil
 }
 
-func (c *IndexConsumer) Reset() {
-	logutil.Infof("IndexConsumer.Reset")
-}
+func (c *IndexConsumer) sinkSnapshot(ctx context.Context, bat *batch.Batch) error {
+	var err error
 
-func (c *IndexConsumer) Close() {
-	logutil.Infof("IndexConsumer.Close")
+	for i := 0; i < batchRowCount(bat); i++ {
+		if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata); err != nil {
+			return err
+		}
+
+		err = c.sqlWriter.Upsert(ctx, c.rowdata)
+		if err != nil {
+			return err
+		}
+
+		if c.sqlWriter.Full() {
+			err = c.sendSql(c.sqlWriter)
+			if err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // upsertBatch and deleteBatch is sorted by ts
