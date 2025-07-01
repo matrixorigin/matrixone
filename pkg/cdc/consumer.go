@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -254,26 +253,30 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	return nil
 }
 
-func (c *IndexConsumer) sinkSnapshot(ctx context.Context, bat *batch.Batch) error {
+func (c *IndexConsumer) sinkSnapshot(ctx context.Context, upsertBatch *AtomicBatch) error {
 	var err error
 
-	for i := 0; i < batchRowCount(bat); i++ {
-		if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata); err != nil {
-			return err
-		}
+	for _, bat := range upsertBatch.Batches {
+		for i := 0; i < batchRowCount(bat); i++ {
+			if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata); err != nil {
+				return err
+			}
 
-		err = c.sqlWriter.Upsert(ctx, c.rowdata)
-		if err != nil {
-			return err
-		}
-
-		if c.sqlWriter.Full() {
-			err = c.sendSql(c.sqlWriter)
+			err = c.sqlWriter.Upsert(ctx, c.rowdata)
 			if err != nil {
 				return err
 			}
+
+			if c.sqlWriter.Full() {
+				err = c.sendSql(c.sqlWriter)
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
+
+	return nil
 }
 
 // upsertBatch and deleteBatch is sorted by ts
