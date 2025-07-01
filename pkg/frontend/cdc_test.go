@@ -409,7 +409,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stubOpenDbConn.Reset()
 
-	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -448,7 +448,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	pu.TaskService = &testTaskService{}
 	setPu("", &pu)
 
-	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -2901,6 +2901,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
 			cdc.CDCTaskExtraOptions_SendSqlTimeout:       cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
+			cdc.CDCTaskExtraOptions_Frequency:            "",
 		},
 		spec: &task.CreateCdcDetails{
 			Accounts: []*task.Account{{Id: 0}},
@@ -2964,6 +2965,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 			types.TS,
 			types.TS,
 			bool,
+			string,
 		) cdc.Reader {
 			return &mockReader{}
 		})
@@ -3001,7 +3003,7 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			return 0, "", level == "table", nil
 		},
 	)
-	err := CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts)
+	err := CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts, 0)
 	assert.Error(t, err)
 	stubGetPitrLength.Reset()
 
@@ -3174,4 +3176,85 @@ func TestCDCCreateTaskOptions_handleLevel(t *testing.T) {
 	level := cdc.CDCPitrGranularity_Table
 	err = opts.handleLevel(context.Background(), nil, req, level)
 	assert.Error(t, err)
+}
+
+func TestCDCCreateTaskOptions_handleFrequency(t *testing.T) {
+	opts := &CDCCreateTaskOptions{}
+	err := opts.handleFrequency(context.Background(), nil, nil, "db", "1m")
+	assert.Error(t, err)
+
+	req := &CDCCreateTaskRequest{
+		Tables: "db1.t1:db2.t2,db1.t1:db4.t4",
+	}
+	level := cdc.CDCPitrGranularity_Table
+	err = opts.handleFrequency(context.Background(), nil, req, level, "abc")
+	assert.Error(t, err)
+	err = opts.handleFrequency(context.Background(), nil, req, level, "1h")
+	assert.Error(t, err)
+}
+
+func TestIsValidFrequency(t *testing.T) {
+	tests := []struct {
+		freq  string
+		valid bool
+	}{
+		{"15m", true},
+		{"1h", true},
+		{"60h", true},
+
+		{"", false},
+		{"01m", false},
+		{"001m", false},
+		{"0m", false},
+		{"00m", false},
+		{"-1h", false},
+		{"2.5h", false},
+		{"1s", false},
+		{"1", false},
+		{"m", false},
+		{"h", false},
+		{"abc", false},
+		{"10min", false},
+		{" 1h", false},
+		{"1h ", false},
+		{"1H", false},
+		{"1M", false},
+		{"10000001m", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.freq, func(t *testing.T) {
+			if got := isValidFrequency(tt.freq); got != tt.valid {
+				t.Errorf("isValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
+			}
+		})
+	}
+}
+
+func TestTransformIntoHours(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"15m", 1},
+		{"30m", 1},
+		{"59m", 1},
+		{"60m", 1},
+		{"61m", 2},
+		{"120m", 2},
+		{"121m", 3},
+
+		{"1h", 1},
+		{"24h", 24},
+
+		{"", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := transformIntoHours(tt.input); got != tt.want {
+				t.Errorf("transformIntoHours(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
 }

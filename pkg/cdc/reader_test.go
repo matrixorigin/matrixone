@@ -93,6 +93,7 @@ func TestNewTableReader(t *testing.T) {
 				types.TS{},
 				types.TS{},
 				false,
+				"",
 			),
 				"NewTableReader(%v,%v,%v,%v,%v,%v,%v,%v)",
 				tt.args.cnTxnClient,

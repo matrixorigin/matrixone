@@ -75,12 +75,14 @@ const (
 	CDCRequestOptions_MaxSqlLength         = "MaxSqlLength"
 	CDCRequestOptions_NoFull               = "NoFull"
 	CDCRequestOptions_ConfigFile           = "ConfigFile"
+	CDCRequestOptions_Frequency            = "Frequency"
 )
 
 const (
 	CDCTaskExtraOptions_MaxSqlLength         = CDCRequestOptions_MaxSqlLength
 	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
 	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
+	CDCTaskExtraOptions_Frequency            = CDCRequestOptions_Frequency
 )
 
 var CDCRequestOptions = []string{
@@ -93,12 +95,14 @@ var CDCRequestOptions = []string{
 	CDCRequestOptions_InitSnapshotSplitTxn,
 	CDCRequestOptions_ConfigFile,
 	CDCRequestOptions_NoFull,
+	CDCRequestOptions_Frequency,
 }
 
 var CDCTaskExtraOptions = []string{
 	CDCTaskExtraOptions_MaxSqlLength,
 	CDCTaskExtraOptions_SendSqlTimeout,
 	CDCTaskExtraOptions_InitSnapshotSplitTxn,
+	CDCTaskExtraOptions_Frequency,
 }
 
 var (
