@@ -257,13 +257,13 @@ func TestWatermarkUpdater_MockSQLExecutor(t *testing.T) {
 // 7. start the CDCWatermarkUpdater
 func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 	ie := newWmMockSQLExecutor()
-	cronJobExecNum := 0
+	var cronJobExecNum atomic.Int32
 	var wg1 sync.WaitGroup
 	wg1.Add(1)
 	cronJob := func(ctx context.Context) {
-		cronJobExecNum++
-		t.Logf("cronJobExecNum: %d", cronJobExecNum)
-		if cronJobExecNum == 3 {
+		now := cronJobExecNum.Add(1)
+		t.Logf("cronJobExecNum: %d", now)
+		if now == 3 {
 			wg1.Done()
 		}
 	}
@@ -277,11 +277,11 @@ func TestCDCWatermarkUpdater_Basic1(t *testing.T) {
 	)
 	u.Start()
 	wg1.Wait()
-	assert.GreaterOrEqual(t, cronJobExecNum, 3)
+	assert.GreaterOrEqual(t, cronJobExecNum.Load(), int32(3))
 	u.Stop()
-	prevNum := cronJobExecNum
+	prevNum := cronJobExecNum.Load()
 	time.Sleep(time.Millisecond * 5)
-	assert.Equal(t, prevNum, cronJobExecNum)
+	assert.Equal(t, prevNum, cronJobExecNum.Load())
 }
 
 func TestCDCWatermarkUpdater_cronRun(t *testing.T) {
