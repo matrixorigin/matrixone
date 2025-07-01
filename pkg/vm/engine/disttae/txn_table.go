@@ -2006,58 +2006,51 @@ func (tbl *txnTable) getPartitionState(
 	if ps != nil {
 		start, end = ps.GetDuration()
 	}
-	errStr := ""
-	if err != nil {
-		errStr = err.Error()
-	}
-	logutil.Infof(
-		"xxxx Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		ps,
-		start.ToString(),
-		end.ToString(),
-		errStr,
+	logutil.Info(
+		"Txn-Table-GetSSPS",
+		zap.String("table-name", tbl.tableName),
+		zap.Uint64("table-id", tbl.tableId),
+		zap.String("txn", tbl.db.op.Txn().DebugString()),
+		zap.String("ps", fmt.Sprintf("%p", ps)),
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Bool("is-snapshot", tbl.db.op.IsSnapOp()),
+		zap.Error(err),
 	)
 
 	//If ps == nil, it indicates that subscribe failed due to 1: network timeout,
 	//2:table id is too old for snapshot read,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
 
 	// To get a partition state for snapshot read, we need to consume the history checkpoints.
+	var (
+		logger = logutil.Info
+		msg    string
+	)
 	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
 		ctx,
 		tbl,
 		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 
 	start, end = types.MaxTs(), types.MinTs()
-	if ps != nil {
+	if ps != nil || err != nil {
 		start, end = ps.GetDuration()
+		msg = "Txn-Table-GetSSPS-Succeed"
+	} else {
+		logger = logutil.Error
+		msg = "Txn-Table-GetSSPS-Failed"
 	}
-	if ps != nil {
-		logutil.Infof(
-			"xxxx Get snapshot partition state succeed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s]",
-			tbl,
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString(),
-			tbl.db.op.IsSnapOp(),
-			ps,
-			start.ToString(),
-			end.ToString(),
-		)
-		return
-	}
-	logutil.Errorf(
-		"xxxx Get partition state failed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v,err:%s",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		err.Error())
+
+	logger(
+		msg,
+		zap.String("table-name", tbl.tableName),
+		zap.Uint64("table-id", tbl.tableId),
+		zap.String("txn", tbl.db.op.Txn().DebugString()),
+		zap.String("ps", fmt.Sprintf("%p", ps)),
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Bool("is-snapshot", tbl.db.op.IsSnapOp()),
+		zap.Error(err),
+	)
 	return
 }
 
