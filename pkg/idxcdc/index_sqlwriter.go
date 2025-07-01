@@ -319,7 +319,7 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
-	if !upsert {
+	if upsert {
 		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.dbName, w.indexTableName)
 	} else {
 		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.dbName, w.indexTableName)
@@ -618,7 +618,7 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	cols := strings.Join(coldefs, ", ")
 	cnames_str := strings.Join(cnames, ", ")
 
-	if !upsert {
+	if upsert {
 		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DbName, w.entries_tbl)
 	} else {
 		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.info.DbName, w.entries_tbl)

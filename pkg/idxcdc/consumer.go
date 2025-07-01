@@ -323,7 +323,7 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 		upsertItem, deleteItem := upsertIter.Item(), deleteIter.Item()
 		// compare ts, ignore pk
 		if upsertItem.Ts.LT(&deleteItem.Ts) {
-			if err = c.sinkUpsert(ctx, upsertIter); err != nil {
+			if err = c.sinkInsert(ctx, upsertIter); err != nil {
 				return err
 			}
 			// get next item
@@ -339,7 +339,7 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 
 	// output the rest of upsert iterator
 	for upsertIterHasNext {
-		if err = c.sinkUpsert(ctx, upsertIter); err != nil {
+		if err = c.sinkInsert(ctx, upsertIter); err != nil {
 			return err
 		}
 		// get next item
@@ -358,15 +358,15 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, upsertBatch, deleteBatch *
 	return nil
 }
 
-func (c *IndexConsumer) sinkUpsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
+func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
 	if err = upsertIter.Row(ctx, c.rowdata); err != nil {
 		return err
 	}
 
-	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_UPSERT) {
-		// last op is not UPSERT, sendSql first
+	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_INSERT) {
+		// last op is not INSERT, sendSql first
 		// send SQL
 		err = c.sendSql(c.sqlWriter)
 		if err != nil {
@@ -375,7 +375,7 @@ func (c *IndexConsumer) sinkUpsert(ctx context.Context, upsertIter *atomicBatchR
 
 	}
 
-	c.sqlWriter.Upsert(ctx, c.rowdata)
+	c.sqlWriter.Insert(ctx, c.rowdata)
 
 	if c.sqlWriter.Full() {
 		// send SQL
