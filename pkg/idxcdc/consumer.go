@@ -30,6 +30,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
+/* CDC API */
+type DataRetriever interface {
+	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
+	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
+	GetDataType() int8
+}
+
+type ConsumerInfo struct {
+	ConsumerType int8
+	TableName    string
+	DbName       string
+	IndexName    string
+}
+
+type Consumer interface {
+	Consume(context.Context, DataRetriever) error
+}
+
+/* IndexConsumer */
 type IndexEntry struct {
 	algo    string
 	indexes []*plan.IndexDef
@@ -48,46 +67,7 @@ func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
 	return exec, nil
 }
 
-type DataRetriever interface {
-	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
-	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
-	GetDataType() int8
-}
-
-type TxnRetriever struct {
-}
-
-func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
-	logutil.Infof("TxRetriever Next()")
-	return nil, nil, true, nil
-}
-
-func (r *TxnRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
-	logutil.Infof("TxnRetriever.UpdateWatermark()")
-	return nil
-}
-
-func (r *TxnRetriever) GetDataType() int8 {
-	return 0
-}
-
-var _ DataRetriever = new(TxnRetriever)
-
-func NewTxnRetriever() DataRetriever {
-	return &TxnRetriever{}
-}
-
-type ConsumerInfo struct {
-	ConsumerType int8
-	TableName    string
-	DbName       string
-	IndexName    string
-}
-
-type Consumer interface {
-	Consume(context.Context, DataRetriever) error
-}
-
+/* IndexConsumer */
 type IndexConsumer struct {
 	cnUUID       string
 	info         *ConsumerInfo

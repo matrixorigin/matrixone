@@ -20,11 +20,35 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
+
+type TxnRetriever struct {
+}
+
+func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
+	logutil.Infof("TxRetriever Next()")
+	return nil, nil, true, nil
+}
+
+func (r *TxnRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
+	logutil.Infof("TxnRetriever.UpdateWatermark()")
+	return nil
+}
+
+func (r *TxnRetriever) GetDataType() int8 {
+	return 0
+}
+
+var _ DataRetriever = new(TxnRetriever)
+
+func NewTxnRetriever() DataRetriever {
+	return &TxnRetriever{}
+}
 
 func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
 	return &plan.TableDef{
