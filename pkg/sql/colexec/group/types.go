@@ -193,6 +193,7 @@ func (group *Group) freeCannotReuse(mp *mpool.MPool) {
 	group.ctr.hr.Free0()
 	group.ctr.result1.Free0(mp)
 	group.ctr.result2.Free0(mp)
+	group.ctr.spiller.clean()
 }
 
 func (ctr *container) freeAggEvaluate() {

@@ -63,6 +63,10 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroup(proc); err != nil {
 		return err
 	}
+	group.ctr.spiller, err = NewSpiller(proc)
+	if err != nil {
+		return err
+	}
 	return group.PrepareProjection(proc)
 }
 
