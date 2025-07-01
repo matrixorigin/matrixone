@@ -31,10 +31,11 @@ import (
 type DataRetriever interface {
 	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
 	UpdateWatermark() error
+	GetTxn() client.TxnOperator
 }
 
 type TxnRetriever struct {
-	Txn *client.TxnOperator
+	Txn client.TxnOperator
 }
 
 func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
@@ -47,9 +48,13 @@ func (r *TxnRetriever) UpdateWatermark() error {
 	return nil
 }
 
+func (r *TxnRetriever) GetTxn() client.TxnOperator {
+	return r.Txn
+}
+
 var _ DataRetriever = new(TxnRetriever)
 
-func NewTxnRetriever(txn *client.TxnOperator) DataRetriever {
+func NewTxnRetriever(txn client.TxnOperator) DataRetriever {
 	return &TxnRetriever{Txn: txn}
 }
 
@@ -139,6 +144,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 		newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 		opts := executor.Options{}
+		opts.WithTxn(r.GetTxn())
 		err := c.exec.ExecTxn(newctx,
 			func(exec executor.TxnExecutor) error {
 				for {
