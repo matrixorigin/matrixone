@@ -27,28 +27,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type TxnRetriever struct {
+type MockRetriever struct {
+	insertBatch *AtomicBatch
+	deleteBatch *AtomicBatch
+	noMoreData  bool
+	dtype       int8
 }
 
-func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
+func (r *MockRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
 	logutil.Infof("TxRetriever Next()")
-	return nil, nil, true, nil
+	if !r.noMoreData {
+		r.noMoreData = true
+		return r.insertBatch, r.deleteBatch, false, nil
+	}
+	return nil, nil, r.noMoreData, nil
 }
 
-func (r *TxnRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
+func (r *MockRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
 	return nil
 }
 
-func (r *TxnRetriever) GetDataType() int8 {
-	return 0
+func (r *MockRetriever) GetDataType() int8 {
+	return r.dtype
 }
 
-var _ DataRetriever = new(TxnRetriever)
-
-func NewTxnRetriever() DataRetriever {
-	return &TxnRetriever{}
-}
+var _ DataRetriever = new(MockRetriever)
 
 func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
 	return &plan.TableDef{
@@ -128,7 +132,12 @@ func TestConsumer(t *testing.T) {
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
 
-	r := NewTxnRetriever()
+	r := &MockRetriever{
+		insertBatch: nil,
+		deleteBatch: nil,
+		noMoreData:  true,
+		dtype:       int8(OutputTypeSnapshot),
+	}
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
 	cnUUID := "a-b-c-d"
