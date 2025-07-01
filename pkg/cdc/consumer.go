@@ -127,6 +127,76 @@ func NewIndexConsumer(cnUUID string,
 	return c, nil
 }
 
+func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriever) {
+
+	datatype := r.GetDataType()
+
+	if datatype == 0 {
+		// SNAPSHOT
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e2 := <-errch:
+				errch <- e2
+				return
+			case sql, ok := <-c.sqlBufSendCh:
+				if !ok {
+					return
+				}
+				func() {
+					newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+					defer cancel()
+					//os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
+					opts := executor.Options{}
+					res, err := c.exec.Exec(newctx, string(sql), opts)
+					if err != nil {
+						logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.dbTblInfo, err, string(sql))
+						os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
+						os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
+						errch <- err
+					}
+					res.Close()
+				}()
+			}
+		}
+
+	} else {
+		// TAIL
+		newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		opts := executor.Options{}
+		err := c.exec.ExecTxn(newctx,
+			func(exec executor.TxnExecutor) error {
+				for {
+					select {
+					case <-ctx.Done():
+						return nil
+					case e2 := <-errch:
+						return e2
+					case sql, ok := <-c.sqlBufSendCh:
+						if !ok {
+							// channel closed
+							return r.UpdateWatermark(exec, opts.StatementOption())
+						}
+
+						// update SQL
+						res, err := exec.Exec(string(sql), opts.StatementOption())
+						if err != nil {
+							return err
+						}
+						res.Close()
+					}
+				}
+			}, opts)
+		if err != nil {
+			errch <- err
+			return
+		}
+	}
+
+}
+
 func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	noMoreData := false
 	var insertBatch, deleteBatch *AtomicBatch
@@ -139,71 +209,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
-		if datatype == 0 {
-			// SNAPSHOT
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case e2 := <-errch:
-					errch <- e2
-					return
-				case sql, ok := <-c.sqlBufSendCh:
-					if !ok {
-						return
-					}
-					func() {
-						newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-						defer cancel()
-						//os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
-						opts := executor.Options{}
-						res, err := c.exec.Exec(newctx, string(sql), opts)
-						if err != nil {
-							logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.dbTblInfo, err, string(sql))
-							os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
-							os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
-							errch <- err
-						}
-						res.Close()
-					}()
-				}
-			}
-
-		} else {
-			// TAIL
-			newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-			defer cancel()
-			opts := executor.Options{}
-			err := c.exec.ExecTxn(newctx,
-				func(exec executor.TxnExecutor) error {
-					for {
-						select {
-						case <-ctx.Done():
-							return nil
-						case e2 := <-errch:
-							return e2
-						case sql, ok := <-c.sqlBufSendCh:
-							if !ok {
-								// channel closed
-								return r.UpdateWatermark(exec, opts.StatementOption())
-							}
-
-							// update SQL
-							res, err := exec.Exec(string(sql), opts.StatementOption())
-							if err != nil {
-								return err
-							}
-							res.Close()
-						}
-					}
-				}, opts)
-			if err != nil {
-				errch <- err
-				return
-			}
-		}
-
+		c.run(ctx, errch, r)
 	}()
 
 	// read data
