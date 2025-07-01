@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -29,21 +30,26 @@ import (
 )
 
 type DataRetriever interface {
-	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, datatype int8, err error)
+	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
 	UpdateWatermark(executor.TxnExecutor) error
+	GetDataType() int8
 }
 
 type TxnRetriever struct {
 }
 
-func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, datatype int8, err error) {
+func (r *TxnRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
 	logutil.Infof("TxRetriever Next()")
-	return nil, nil, true, 0, nil
+	return nil, nil, true, nil
 }
 
 func (r *TxnRetriever) UpdateWatermark(executor.TxnExecutor) error {
 	logutil.Infof("TxnRetriever.UpdateWatermark()")
 	return nil
+}
+
+func (r *TxnRetriever) GetDataType() int8 {
+	return 0
 }
 
 var _ DataRetriever = new(TxnRetriever)
@@ -128,7 +134,7 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	var insertBatch, deleteBatch *AtomicBatch
 	errch := make(chan error, 2)
 	var err error
-	datatype := int8(0)
+	datatype := r.GetDataType()
 
 	// create thread to poll sql
 	var wg sync.WaitGroup
@@ -136,35 +142,68 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	go func() {
 		defer wg.Done()
 
-		newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-		defer cancel()
-		opts := executor.Options{}
-		err := c.exec.ExecTxn(newctx,
-			func(exec executor.TxnExecutor) error {
-				for {
-					select {
-					case <-ctx.Done():
-						return nil
-					case e2 := <-errch:
-						return e2
-					case sql, ok := <-c.sqlBufSendCh:
-						if !ok {
-							// channel closed
-							return r.UpdateWatermark(exec)
-						}
-
-						// update SQL
-						res, err := exec.Exec(string(sql), opts.StatementOption())
+		if datatype == 0 {
+			// SNAPSHOT
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case e2 := <-errch:
+					errch <- e2
+					return
+				case sql, ok := <-c.sqlBufSendCh:
+					if !ok {
+						return
+					}
+					func() {
+						newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+						defer cancel()
+						//os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
+						opts := executor.Options{}
+						res, err := c.exec.Exec(newctx, string(sql), opts)
 						if err != nil {
-							return err
+							logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.dbTblInfo, err, string(sql))
+							os.Stderr.WriteString(fmt.Sprintf("sql  executor run failed. %s\n", string(sql)))
+							os.Stderr.WriteString(fmt.Sprintf("err :%v\n", err))
+							errch <- err
 						}
 						res.Close()
-					}
+					}()
 				}
-			}, opts)
-		if err != nil {
-			errch <- err
-			return
+			}
+
+		} else {
+			// TAIL
+			newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			defer cancel()
+			opts := executor.Options{}
+			err := c.exec.ExecTxn(newctx,
+				func(exec executor.TxnExecutor) error {
+					for {
+						select {
+						case <-ctx.Done():
+							return nil
+						case e2 := <-errch:
+							return e2
+						case sql, ok := <-c.sqlBufSendCh:
+							if !ok {
+								// channel closed
+								return r.UpdateWatermark(exec)
+							}
+
+							// update SQL
+							res, err := exec.Exec(string(sql), opts.StatementOption())
+							if err != nil {
+								return err
+							}
+							res.Close()
+						}
+					}
+				}, opts)
+			if err != nil {
+				errch <- err
+				return
+			}
 		}
 
 	}()
@@ -172,21 +211,22 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	// read data
 	for !noMoreData {
 
-		insertBatch, deleteBatch, noMoreData, datatype, err = r.Next()
+		insertBatch, deleteBatch, noMoreData, err = r.Next()
 		if err != nil {
 			errch <- err
 			noMoreData = true
-			return err
+			continue
 		}
 
 		if noMoreData {
 			close(c.sqlBufSendCh)
-			return nil
+			continue
 		}
 
 		// update index
 
 		if datatype == 0 {
+			// SNAPSHOT
 
 		} else {
 			// sinkTail will save sql to the slice
