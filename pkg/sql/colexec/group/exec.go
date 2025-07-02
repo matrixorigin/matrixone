@@ -17,11 +17,14 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -67,6 +70,10 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
+
+	mpCap := proc.Mp().Cap()
+	group.ctr.spillThreshold = mpCap / 2 //TODO other policy
+
 	return group.PrepareProjection(proc)
 }
 
@@ -222,6 +229,15 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
 			return nil, err
 		}
+
+		// Check memory usage and spill if necessary
+		if group.getSize() > group.ctr.spillThreshold && group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 {
+			group.ctr.spilled = true
+			if err := group.spillCurrentState(proc); err != nil {
+				return nil, err
+			}
+		}
+
 	}
 }
 
@@ -408,6 +424,15 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 			if next {
 				continue
 			}
+
+			// Check memory usage and spill if necessary
+			if group.getSize() > group.ctr.spillThreshold && group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 {
+				group.ctr.spilled = true
+				if err := group.spillCurrentState(proc); err != nil {
+					return nil, err
+				}
+			}
+
 			return r, nil
 		}
 	}
@@ -498,4 +523,19 @@ func (group *Group) consumeBatchToRes(
 
 		return res.RowCount() < intermediateResultSendActionTrigger, nil
 	}
+}
+
+func (group *Group) spillCurrentState(proc *process.Process) error {
+	// TODO: Implement actual spilling logic here.
+	return nil
+}
+
+func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
+	// TODO: Implement actual recall and merge logic here.
+	return nil
+}
+
+func (group *Group) getSize() int64 {
+	//TODO
+	return 0
 }
