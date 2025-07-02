@@ -63,14 +63,9 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroup(proc); err != nil {
 		return err
 	}
-	group.ctr.spiller, err = NewSpiller(proc)
-	if err != nil {
+	if err := group.initSpiller(proc); err != nil {
 		return err
 	}
-
-	mpCap := proc.Mp().Cap()
-	group.ctr.spillThreshold = mpCap / 2 //TODO other policy
-
 	return group.PrepareProjection(proc)
 }
 
