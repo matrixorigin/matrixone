@@ -1177,7 +1177,7 @@ func (p *launchPad) Reset() {
 	p.table = nil
 }
 
-var ReleaseDate int64 = 1748412184166943572 //  2025-05-28 14:03:04.166943572 +0800 CST
+var ReleaseDate int64 = 1751439605237702877 //  2025-07-02 15:00:05.237702877 +0800 CST
 
 func (p *launchPad) InitWithTrigger(trigger *MMsgTaskTrigger, lastMergeTime time.Time) {
 	p.table = trigger.table
