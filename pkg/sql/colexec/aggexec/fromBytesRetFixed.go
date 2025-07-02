@@ -647,3 +647,7 @@ func (exec *aggregatorFromBytesToFixed[to]) Free() {
 	exec.ret.free()
 	exec.distinctHash.free()
 }
+
+func (exec *aggregatorFromBytesToFixed[to]) Size() int64 {
+	return exec.ret.Size() + exec.distinctHash.Size() + exec.execContext.Size()
+}

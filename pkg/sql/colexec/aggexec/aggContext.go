@@ -118,6 +118,10 @@ func (a *AggContext) decodeGroupContexts(encodings [][]byte, resultType types.Ty
 	}
 }
 
+func (a *AggContext) Size() int64 {
+	return 0
+}
+
 // AggCommonExecContext stores the common context for all the groups.
 // like the type scale, timezone and so on.
 type AggCommonExecContext interface {

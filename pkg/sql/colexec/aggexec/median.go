@@ -353,6 +353,16 @@ func (exec *medianColumnExecSelf[T, R]) Free() {
 	exec.distinctHash.free()
 }
 
+func (exec *medianColumnExecSelf[T, R]) Size() int64 {
+	var size int64
+	for _, v := range exec.groups {
+		if v != nil {
+			size += int64(v.Length()) * int64(exec.singleAggInfo.argType.TypeSize())
+		}
+	}
+	return exec.ret.Size() + exec.distinctHash.Size() + size
+}
+
 type medianColumnNumericExec[T numeric] struct {
 	medianColumnExecSelf[T, float64]
 }
