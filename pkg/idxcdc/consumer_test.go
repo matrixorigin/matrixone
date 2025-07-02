@@ -17,6 +17,7 @@ package idxcdc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -173,7 +174,7 @@ func (exec *MockErrorTxnExecutor) Txn() client.TxnOperator {
 // in a transaction.
 // NOTE: Pass SQL stmts one by one to TxnExecutor.Exec(). If you pass multiple SQL stmts to
 // TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
-func (exec MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
+func (exec *MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
 	exec.txnexec = &MockErrorTxnExecutor{ctx: ctx}
 	err := execFunc(exec.txnexec)
 	exec.sqls = exec.txnexec.(*MockErrorTxnExecutor).sqls
@@ -197,8 +198,7 @@ func TestConsumer(t *testing.T) {
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
 	cnUUID := "a-b-c-d"
-	info := newTestConsumerInfo() // &ConsumerInfo{DbName: "sink_db", TableName: "sink_tbl", IndexName: "hnsw_idx"}
-	//info := &ConsumerInfo{DbName: "db", TableName: "tbl", IndexName: "hnsw_idx"}
+	info := newTestConsumerInfo()
 
 	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestHnswSnapshot(t *testing.T) {
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	cnUUID := "a-b-c-d"
-	info := newTestConsumerInfo() // &ConsumerInfo{DbName: "sink_db", TableName: "sink_tbl", IndexName: "hnsw_idx"}
+	info := newTestConsumerInfo()
 
 	t.Run("snapshot", func(t *testing.T) {
 		consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
@@ -270,4 +270,88 @@ func TestHnswSnapshot(t *testing.T) {
 		sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls
 		require.Equal(t, len(sqls), 0)
 	})
+}
+
+func TestHnswTail(t *testing.T) {
+
+	proc := testutil.NewProcess()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
+	defer sqlexecstub.Reset()
+
+	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	cnUUID := "a-b-c-d"
+	info := newTestConsumerInfo()
+
+	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
+	require.NoError(t, err)
+
+	bat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+			testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int64{1, 2}),
+		}, nil)
+	defer bat.Clean(testutil.TestUtilMp)
+
+	fromTs := types.BuildTS(1, 0)
+	insertAtomicBat := &AtomicBatch{
+		Mp:      nil,
+		Batches: []*batch.Batch{bat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	insertAtomicBat.Rows.Set(AtomicBatchRow{Ts: fromTs, Pk: []byte{1}, Offset: 0, Src: bat})
+	insertAtomicBat.Rows.Set(AtomicBatchRow{Ts: fromTs, Pk: []byte{2}, Offset: 1, Src: bat})
+
+	delbat := testutil.NewBatchWithVectors(
+		[]*vector.Vector{
+			testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+			testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+			testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int64{1, 2}),
+		}, nil)
+
+	defer delbat.Clean(testutil.TestUtilMp)
+
+	delfromTs := types.BuildTS(2, 0)
+	delAtomicBat := &AtomicBatch{
+		Mp:      nil,
+		Batches: []*batch.Batch{delbat},
+		Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+	}
+	delAtomicBat.Rows.Set(AtomicBatchRow{Ts: delfromTs, Pk: []byte{1}, Offset: 0, Src: bat})
+	delAtomicBat.Rows.Set(AtomicBatchRow{Ts: delfromTs, Pk: []byte{2}, Offset: 1, Src: bat})
+
+	output := &MockRetriever{
+		dtype:       int8(OutputTypeTail),
+		insertBatch: insertAtomicBat,
+		deleteBatch: delAtomicBat,
+		noMoreData:  false,
+	}
+
+	err = consumer.Consume(ctx, output)
+	require.NoError(t, err)
+	sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).txnexec.(*MockErrorTxnExecutor).sqls
+
+	require.Equal(t, len(sqls), 1)
+	fmt.Printf("RES: %v\n", sqls)
+
+	row1 := []any{int64(1), []float32{0.1, 0.2}}
+	row2 := []any{int64(2), []float32{0.3, 0.4}}
+
+	writer, _ := NewHnswSqlWriter("hnsw", info, tblDef, tblDef.Indexes)
+	writer.Insert(ctx, row1)
+	writer.Insert(ctx, row2)
+	writer.Delete(ctx, row1)
+	writer.Delete(ctx, row2)
+	/*
+		cdcForJson.Start = "1-0"
+		cdcForJson.End = "2-0"
+	*/
+	expectedSqlBytes, _ := writer.ToSql()
+
+	require.Equal(t, string(expectedSqlBytes), sqls[0])
+
 }
