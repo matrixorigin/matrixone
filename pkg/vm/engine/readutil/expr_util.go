@@ -16,8 +16,9 @@ package readutil
 
 import (
 	"context"
-	"fmt"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -60,7 +61,7 @@ func ConstructInExpr(
 	)
 }
 
-func getColDefByName(name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
+func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
 	idx := strings.Index(name, ".")
 	var pos int32
 	if idx >= 0 {
@@ -70,7 +71,13 @@ func getColDefByName(name string, colPos int32, tableDef *plan.TableDef) *plan.C
 		pos = tableDef.Name2ColIndex[name]
 	}
 	if name != tableDef.Cols[colPos].Name {
-		panic(fmt.Sprintf("Bad-ColExpr: %s, %d, %d", name, colPos, pos))
+		logutil.Error(
+			"Bad-ColExpr",
+			zap.String("col-name", name),
+			zap.Int32("col-actual-pos", colPos),
+			zap.Int32("col-expected-pos", pos),
+			zap.String("col-expr", plan2.FormatExpr(expr)),
+		)
 	}
 	return tableDef.Cols[pos]
 }
@@ -82,6 +89,7 @@ func compPkCol(colName string, pkName string) bool {
 }
 
 func evalValue(
+	expr *plan.Expr,
 	exprImpl *plan.Expr_F,
 	tblDef *plan.TableDef,
 	isVec bool,
@@ -108,7 +116,13 @@ func evalValue(
 		colName = tblDef.Cols[pkColId].Name
 	} else {
 		if col.Col.ColPos != pkColId {
-			panic(fmt.Sprintf("Bad-ColExpr: %s, %d, %d", colName, col.Col.ColPos, pkColId))
+			logutil.Error(
+				"Bad-ColExpr",
+				zap.String("col-name", colName),
+				zap.Int32("col-actual-pos", col.Col.ColPos),
+				zap.Int32("col-expected-pos", pkColId),
+				zap.String("col-expr", plan2.FormatExpr(expr)),
+			)
 		}
 	}
 	if !compPkCol(colName, pkName) {

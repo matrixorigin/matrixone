@@ -1959,7 +1959,7 @@ func doFormatExpr(expr *plan.Expr, out *bytes.Buffer, depth int) {
 	prefix := strings.Repeat("\t", depth)
 	switch t := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		out.WriteString(fmt.Sprintf("%sExpr_Col(%s)", prefix, t.Col.Name))
+		out.WriteString(fmt.Sprintf("%sExpr_Col(%s.%d)", prefix, t.Col.Name, t.Col.ColPos))
 	case *plan.Expr_Lit:
 		out.WriteString(fmt.Sprintf("%sExpr_C(%s)", prefix, t.Lit.String()))
 	case *plan.Expr_F:
