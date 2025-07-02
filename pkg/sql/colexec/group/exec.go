@@ -520,36 +520,31 @@ func (group *Group) consumeBatchToRes(
 
 func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 	// hashmap
-	//TODO
-	var hashmapData []byte
-	//hashmapData, err = group.ctr.hr.Hash.MarshalBinary()
-	//if err != nil {
-	//	return err
-	//}
+	var hashmapData []byte = nil
+	if group.ctr.hr.Hash != nil {
+		hashmapData, err = group.ctr.hr.Hash.MarshalBinary()
+		if err != nil {
+			return err
+		}
+	}
 
 	// aggregation states
 	var aggStatesData [][]byte
 	if group.NeedEval {
 		aggStatesData = make([][]byte, len(group.ctr.result1.AggList))
 		for i, agg := range group.ctr.result1.AggList {
-			//TODO
-			_ = i
-			_ = agg
-			//aggStatesData[i], err = agg.Marshal()
-			//if err != nil {
-			//	return err
-			//}
+			aggStatesData[i], err = aggexec.MarshalAggFuncExec(agg)
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		aggStatesData = make([][]byte, len(group.ctr.result2.res.Aggs))
 		for i, agg := range group.ctr.result2.res.Aggs {
-			//TODO
-			_ = i
-			_ = agg
-			//aggStatesData[i], err = agg.Marshal()
-			//if err != nil {
-			//	return err
-			//}
+			aggStatesData[i], err = aggexec.MarshalAggFuncExec(agg)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
