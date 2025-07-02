@@ -18,6 +18,8 @@ import (
 	"context"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -82,6 +84,7 @@ func evalValue(
 	tblDef *plan.TableDef,
 	isVec bool,
 	pkName string,
+	pkColId int32,
 ) (
 	ok bool, oid types.T, vals [][]byte,
 ) {
@@ -97,27 +100,28 @@ func evalValue(
 	if !ok {
 		return false, 0, nil
 	}
-	if !compPkCol(col.Col.Name, pkName) {
+
+	colName := col.Col.Name
+	if colName == "" {
+		colName = tblDef.Cols[pkColId].Name
+	} else {
+		if col.Col.ColPos != pkColId {
+			logutil.Warn(
+				"Bad-ColExpr",
+				zap.String("col-name", colName),
+				zap.Int32("col-actual-pos", col.Col.ColPos),
+				zap.Int32("col-expected-pos", pkColId),
+			)
+		}
+	}
+	if !compPkCol(colName, pkName) {
 		return false, 0, nil
 	}
 
-	var colPos int32
-	if col.Col.Name == "" {
-		colPos = col.Col.ColPos
-		logutil.Warnf("colExpr.Col.Name is empty")
-	} else {
-		idx := strings.Index(col.Col.Name, ".")
-		if idx == -1 {
-			colPos = tblDef.Name2ColIndex[col.Col.Name]
-		} else {
-			colPos = tblDef.Name2ColIndex[col.Col.Name[idx+1:]]
-		}
-	}
-
 	if isVec {
-		return true, types.T(tblDef.Cols[colPos].Typ.Id), [][]byte{val}
+		return true, types.T(tblDef.Cols[pkColId].Typ.Id), [][]byte{val}
 	}
-	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
+	return true, types.T(tblDef.Cols[pkColId].Typ.Id), vals
 }
 
 func mustColConstValueFromBinaryFuncExpr(
