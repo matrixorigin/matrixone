@@ -15,10 +15,12 @@
 package hashtable
 
 import (
+	"bytes"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type StringRef struct {
@@ -328,4 +330,80 @@ func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
 	it.pos++
 
 	return
+}
+
+func (ht *StringHashMap) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	// Write basic metadata
+	buf.Write(types.EncodeUint64(&ht.elemCnt))
+	buf.Write(types.EncodeUint64(&ht.cellCnt))
+	buf.Write(types.EncodeUint64(&ht.blockCellCnt))
+	buf.Write(types.EncodeUint64(&ht.blockMaxElemCnt))
+	buf.Write(types.EncodeUint64(&ht.cellCntMask))
+
+	// Count active cells and write them
+	var activeCells []StringHashMapCell
+	for _, block := range ht.cells {
+		for _, cell := range block {
+			if cell.Mapped != 0 {
+				activeCells = append(activeCells, cell)
+			}
+		}
+	}
+
+	numActiveCells := uint64(len(activeCells))
+	buf.Write(types.EncodeUint64(&numActiveCells))
+
+	for _, cell := range activeCells {
+		buf.Write(types.EncodeUint64(&cell.HashState[0]))
+		buf.Write(types.EncodeUint64(&cell.HashState[1]))
+		buf.Write(types.EncodeUint64(&cell.HashState[2]))
+		buf.Write(types.EncodeUint64(&cell.Mapped))
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (ht *StringHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
+	r := bytes.NewBuffer(data)
+
+	// Read basic metadata
+	ht.elemCnt = types.DecodeUint64(r.Next(8))
+	ht.cellCnt = types.DecodeUint64(r.Next(8))
+	ht.blockCellCnt = types.DecodeUint64(r.Next(8))
+	ht.blockMaxElemCnt = types.DecodeUint64(r.Next(8))
+	ht.cellCntMask = types.DecodeUint64(r.Next(8))
+
+	ht.allocator = allocator
+	if ht.allocator == nil {
+		ht.allocator = defaultAllocator()
+	}
+
+	// Initialize internal structures based on deserialized metadata
+	numBlocks := int(ht.cellCnt / ht.blockCellCnt)
+	if ht.cellCnt%ht.blockCellCnt != 0 {
+		numBlocks++
+	}
+	ht.rawData = make([][]byte, numBlocks)
+	ht.rawDataDeallocators = make([]malloc.Deallocator, numBlocks)
+	ht.cells = make([][]StringHashMapCell, numBlocks)
+
+	for i := 0; i < numBlocks; i++ {
+		if err := ht.allocate(i, ht.blockCellCnt*strCellSize); err != nil {
+			return err
+		}
+	}
+
+	// Read active cells and re-insert them
+	numActiveCells := types.DecodeUint64(r.Next(8))
+	for i := uint64(0); i < numActiveCells; i++ {
+		var cell StringHashMapCell
+		cell.HashState[0] = types.DecodeUint64(r.Next(8))
+		cell.HashState[1] = types.DecodeUint64(r.Next(8))
+		cell.HashState[2] = types.DecodeUint64(r.Next(8))
+		cell.Mapped = types.DecodeUint64(r.Next(8))
+		*ht.findEmptyCell(&cell.HashState) = cell
+	}
+	return nil
 }
