@@ -167,6 +167,7 @@ type container struct {
 	spiller        *Spiller
 	spilled        bool
 	spillThreshold int64
+	recalling      bool
 }
 
 func (ctr *container) isDataSourceEmpty() bool {

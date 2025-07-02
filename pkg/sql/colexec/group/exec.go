@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -517,13 +518,94 @@ func (group *Group) consumeBatchToRes(
 	}
 }
 
-func (group *Group) spillCurrentState(proc *process.Process) error {
-	// TODO: Implement actual spilling logic here.
+func (group *Group) spillCurrentState(proc *process.Process) (err error) {
+	// hashmap
+	//TODO
+	var hashmapData []byte
+	//hashmapData, err = group.ctr.hr.Hash.MarshalBinary()
+	//if err != nil {
+	//	return err
+	//}
+
+	// aggregation states
+	var aggStatesData [][]byte
+	if group.NeedEval {
+		aggStatesData = make([][]byte, len(group.ctr.result1.AggList))
+		for i, agg := range group.ctr.result1.AggList {
+			//TODO
+			_ = i
+			_ = agg
+			//aggStatesData[i], err = agg.Marshal()
+			//if err != nil {
+			//	return err
+			//}
+		}
+	} else {
+		aggStatesData = make([][]byte, len(group.ctr.result2.res.Aggs))
+		for i, agg := range group.ctr.result2.res.Aggs {
+			//TODO
+			_ = i
+			_ = agg
+			//aggStatesData[i], err = agg.Marshal()
+			//if err != nil {
+			//	return err
+			//}
+		}
+	}
+
+	// group-by batch
+	var groupByBatchData []byte
+	if group.NeedEval {
+		if len(group.ctr.result1.ToPopped) > 0 {
+			tempGroupByBatch := batch.NewOffHeapWithSize(len(group.ctr.groupByEvaluate.Vec))
+			tempGroupByBatch.Attrs = group.ctr.result1.ToPopped[0].Attrs
+			for i, vecType := range group.ctr.groupByEvaluate.Typ {
+				tempGroupByBatch.Vecs[i] = vector.NewOffHeapVecWithType(vecType)
+			}
+			for _, b := range group.ctr.result1.ToPopped {
+				for i, vec := range b.Vecs {
+					if err := tempGroupByBatch.Vecs[i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+						tempGroupByBatch.Clean(proc.Mp())
+						return err
+					}
+				}
+			}
+			tempGroupByBatch.SetRowCount(tempGroupByBatch.Vecs[0].Length())
+			groupByBatchData, err = tempGroupByBatch.MarshalBinary()
+			if err != nil {
+				tempGroupByBatch.Clean(proc.Mp())
+				return err
+			}
+			tempGroupByBatch.Clean(proc.Mp())
+		}
+
+	} else {
+		groupByBatchData, err = group.ctr.result2.res.MarshalBinary()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Spill to disk
+	if err := group.ctr.spiller.spillState(hashmapData, aggStatesData, groupByBatchData); err != nil {
+		return err
+	}
+
+	// clear in-memory state
+	group.ctr.hr.Free0()
+	if group.NeedEval {
+		group.ctr.result1.Free0(proc.Mp())
+		group.ctr.result1 = GroupResultBuffer{}
+	} else {
+		group.ctr.result2.Free0(proc.Mp())
+		group.ctr.result2 = GroupResultNoneBlock{}
+	}
+	group.ctr.dataSourceIsEmpty = true
 	return nil
 }
 
 func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
-	// TODO: Implement actual recall and merge logic here.
+	// TODO: implement
 	return nil
 }
 
@@ -537,21 +619,27 @@ func (group *Group) getSize() int64 {
 
 	// Aggregation results size
 	if group.NeedEval {
-		// result1 (GroupResultBuffer)
 		for _, bat := range group.ctr.result1.ToPopped {
-			size += int64(bat.Allocated())
+			if bat != nil {
+				size += int64(bat.Allocated())
+			}
 		}
 		for _, agg := range group.ctr.result1.AggList {
-			size += agg.Size()
-		}
-	} else {
-		// result2 (GroupResultNoneBlock)
-		if group.ctr.result2.res != nil {
-			size += int64(group.ctr.result2.res.Allocated())
-			for _, agg := range group.ctr.result2.res.Aggs {
+			if agg != nil {
 				size += agg.Size()
 			}
 		}
+
+	} else {
+		if group.ctr.result2.res != nil {
+			size += int64(group.ctr.result2.res.Allocated())
+			for _, agg := range group.ctr.result2.res.Aggs {
+				if agg != nil {
+					size += agg.Size()
+				}
+			}
+		}
 	}
+
 	return size
 }
