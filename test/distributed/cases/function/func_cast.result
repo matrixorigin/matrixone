@@ -35,6 +35,10 @@ select 10E+0+'10';
 select CAST(0xb3 as signed);
 cast(0xb3 as signed)
 179
+SELECT CAST(X'' AS SIGNED);
+invalid argument cast to int, bad value []
+SELECT CAST(X'11111111111111111111111111' AS SIGNED);
+Data truncation: data out of range: data type int, 
 select CAST(0x8fffffffffffffff as signed);
 Data truncation: data out of range: data type int, 
 select CAST(0xffffffffffffffff as unsigned);
