@@ -4070,6 +4070,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				updateSqls,
 				getSqlForRenameTable(databaseName, oldName, newName)...,
 			)
+		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
+			continue
 
 		case *tree.AlterTableModifyColumnClause:
 			ok, _ := isVarcharLengthBumped(ctx.GetContext(), opt, tableDef)

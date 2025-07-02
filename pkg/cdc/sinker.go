@@ -56,8 +56,10 @@ var (
 var NewSinker = func(
 	cnUUID string,
 	sinkUri UriInfo,
+	accountId uint64,
+	taskId string,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater IWatermarkUpdater,
+	watermarkUpdater *CDCWatermarkUpdater,
 	tableDef *plan.TableDef,
 	retryTimes int,
 	retryDuration time.Duration,
@@ -71,7 +73,7 @@ var NewSinker = func(
 	}
 
 	if sinkUri.SinkTyp == CDCSinkType_IndexSync {
-		return NewIndexSyncSinker(cnUUID, sinkUri, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
+		return NewIndexSyncSinker(cnUUID, sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
 	}
 
 	var (
@@ -110,19 +112,29 @@ var NewSinker = func(
 	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceTblName, dbTblInfo.SinkTblName)
 	_ = sink.Send(ctx, ar, []byte(padding+createSql), false)
 
-	return NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, maxSqlLength, sinkUri.SinkTyp == CDCSinkType_MO), nil
+	return NewMysqlSinker(
+		sink,
+		accountId,
+		taskId,
+		dbTblInfo,
+		watermarkUpdater,
+		tableDef,
+		ar,
+		maxSqlLength,
+		sinkUri.SinkTyp == CDCSinkType_MO,
+	), nil
 }
 
 var _ Sinker = new(consoleSinker)
 
 type consoleSinker struct {
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater IWatermarkUpdater
+	watermarkUpdater *CDCWatermarkUpdater
 }
 
 func NewConsoleSinker(
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater IWatermarkUpdater,
+	watermarkUpdater *CDCWatermarkUpdater,
 ) Sinker {
 	return &consoleSinker{
 		dbTblInfo:        dbTblInfo,
@@ -184,9 +196,13 @@ func (s *consoleSinker) Close() {}
 var _ Sinker = new(mysqlSinker)
 
 type mysqlSinker struct {
-	mysql            Sink
+	mysql Sink
+	// account id of the cdc task
+	accountId uint64
+	// task id of the cdc task
+	taskId           string
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater IWatermarkUpdater
+	watermarkUpdater *CDCWatermarkUpdater
 	ar               *ActiveRoutine
 
 	// buf of sql statement
@@ -243,8 +259,10 @@ type mysqlSinker struct {
 
 var NewMysqlSinker = func(
 	mysql Sink,
+	accountId uint64,
+	taskId string,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater IWatermarkUpdater,
+	watermarkUpdater *CDCWatermarkUpdater,
 	tableDef *plan.TableDef,
 	ar *ActiveRoutine,
 	maxSqlLength uint64,
@@ -252,6 +270,8 @@ var NewMysqlSinker = func(
 ) Sinker {
 	s := &mysqlSinker{
 		mysql:            mysql,
+		accountId:        accountId,
+		taskId:           taskId,
 		dbTblInfo:        dbTblInfo,
 		watermarkUpdater: watermarkUpdater,
 		ar:               ar,
@@ -386,10 +406,31 @@ func (s *mysqlSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 }
 
 func (s *mysqlSinker) Sink(ctx context.Context, data *DecoderOutput) {
-	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
+	key := WatermarkKey{
+		AccountId: s.accountId,
+		TaskId:    s.taskId,
+		DBName:    s.dbTblInfo.SourceDbName,
+		TableName: s.dbTblInfo.SourceTblName,
+	}
+	watermark, err := s.watermarkUpdater.GetFromCache(ctx, &key)
+	if err != nil {
+		logutil.Error(
+			"CDC-MySQLSinker-GetWatermarkFailed",
+			zap.String("info", s.dbTblInfo.String()),
+			zap.String("key", key.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
 	if data.toTs.LE(&watermark) {
-		logutil.Errorf("cdc mysqlSinker(%v): unexpected watermark: %s, current watermark: %s",
-			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
+		logutil.Error(
+			"CDC-MySQLSinker-UnexpectedWatermark",
+			zap.String("info", s.dbTblInfo.String()),
+			zap.String("to-ts", data.toTs.ToString()),
+			zap.String("watermark", watermark.ToString()),
+			zap.String("key", key.String()),
+		)
 		return
 	}
 

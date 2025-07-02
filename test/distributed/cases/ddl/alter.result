@@ -352,6 +352,7 @@ alter table t2 drop primary key;
 Can't DROP 'PRIMARY'; check that column/key exists
 alter table t2 AUTO_INCREMENT=10;
 invalid input: unsupported alter option in inplace mode: auto_increment = 10
+alter table t2 disable keys;
 CREATE TABLE `t3` (
 `a` INT NOT NULL,
 PRIMARY KEY (`a`)

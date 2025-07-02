@@ -275,6 +275,7 @@ CREATE TABLE `t2` (
 
 alter table t2 drop primary key;
 alter table t2 AUTO_INCREMENT=10;
+alter table t2 disable keys;
 
 CREATE TABLE `t3` (
 `a` INT NOT NULL,

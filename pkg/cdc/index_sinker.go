@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"go.uber.org/zap"
 )
 
 var _ Sinker = &indexSyncSinker{}
@@ -45,8 +46,10 @@ var sqlExecutorFactory = _sqlExecutorFactory
 
 type indexSyncSinker struct {
 	cnUUID           string
+	accountId        uint64
+	taskId           string
 	dbTblInfo        *DbTableInfo
-	watermarkUpdater IWatermarkUpdater
+	watermarkUpdater *CDCWatermarkUpdater
 	ar               *ActiveRoutine
 	tableDef         *plan.TableDef
 	err              atomic.Value
@@ -76,8 +79,10 @@ func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
 var NewIndexSyncSinker = func(
 	cnUUID string,
 	sinkUri UriInfo,
+	accountId uint64,
+	taskId string,
 	dbTblInfo *DbTableInfo,
-	watermarkUpdater IWatermarkUpdater,
+	watermarkUpdater *CDCWatermarkUpdater,
 	tableDef *plan.TableDef,
 	retryTimes int,
 	retryDuration time.Duration,
@@ -122,6 +127,8 @@ var NewIndexSyncSinker = func(
 	s := &indexSyncSinker{
 		cnUUID:           cnUUID,
 		dbTblInfo:        dbTblInfo,
+		accountId:        accountId,
+		taskId:           taskId,
 		watermarkUpdater: watermarkUpdater,
 		ar:               ar,
 		tableDef:         tableDef,
@@ -262,7 +269,23 @@ func (s *indexSyncSinker) Run(ctx context.Context, ar *ActiveRoutine) {
 func (s *indexSyncSinker) Sink(ctx context.Context, data *DecoderOutput) {
 	// TODO: IMPORTANT: check the indexdef here so that Add/Drop index can be reflected here
 
-	watermark := s.watermarkUpdater.GetFromMem(s.dbTblInfo.SourceDbName, s.dbTblInfo.SourceTblName)
+	key := WatermarkKey{
+		AccountId: s.accountId,
+		TaskId:    s.taskId,
+		DBName:    s.dbTblInfo.SourceDbName,
+		TableName: s.dbTblInfo.SourceTblName,
+	}
+	watermark, err := s.watermarkUpdater.GetFromCache(ctx, &key)
+	if err != nil {
+		logutil.Error(
+			"CDC-MySQLSinker-GetWatermarkFailed",
+			zap.String("info", s.dbTblInfo.String()),
+			zap.String("key", key.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
 	if data.toTs.LE(&watermark) {
 		logutil.Errorf("cdc indexSyncSinker(%v): unexpected watermark: %s, current watermark: %s",
 			s.dbTblInfo, data.toTs.ToString(), watermark.ToString())
