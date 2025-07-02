@@ -15,16 +15,20 @@
 package group
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -182,6 +186,15 @@ func (group *Group) Free(proc *process.Process, _ bool, _ error) {
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	group.freeCannotReuse(proc.Mp())
 
+	// clean up spill files
+	if group.ctr.spiller != nil {
+		if spillErr := group.ctr.spiller.clean(); spillErr != nil {
+			logutil.Error("failed to clean up spill files during reset", zap.Error(spillErr))
+		}
+		group.ctr.spiller = nil
+	}
+	group.ctr.spilled = false
+
 	group.ctr.groupByEvaluate.ResetForNextQuery()
 	for i := range group.ctr.aggregateEvaluate {
 		group.ctr.aggregateEvaluate[i].ResetForNextQuery()
@@ -194,6 +207,17 @@ func (group *Group) freeCannotReuse(mp *mpool.MPool) {
 	group.ctr.result1.Free0(mp)
 	group.ctr.result2.Free0(mp)
 	group.ctr.spiller.clean()
+	group.ctr.spilled = false
+	group.ctr.spiller = nil
+}
+
+func (group *Group) initSpiller(proc *process.Process) (err error) {
+	group.ctr.spiller, err = NewSpiller(proc)
+	if err != nil {
+		return err
+	}
+	group.ctr.spillThreshold = proc.Mp().Cap() / 2
+	return nil
 }
 
 func (ctr *container) freeAggEvaluate() {
