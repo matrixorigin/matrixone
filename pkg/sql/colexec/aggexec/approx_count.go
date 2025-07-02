@@ -330,7 +330,9 @@ func (exec *approxCountFixedExec[T]) Free() {
 func (exec *approxCountFixedExec[T]) Size() int64 {
 	var size int64
 	for _, s := range exec.groups {
-		size += int64(s.Size())
+		//TODO how?
+		_ = s
+		//size += int64(s.Size())
 	}
 	return exec.ret.Size() + size
 }
@@ -477,7 +479,9 @@ func (exec *approxCountVarExec) Free() {
 func (exec *approxCountVarExec) Size() int64 {
 	var size int64
 	for _, s := range exec.groups {
-		size += int64(s.Size())
+		//TODO how?
+		_ = s
+		//size += int64(s.Size())
 	}
 	return exec.ret.Size() + size
 }
