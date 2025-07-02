@@ -228,7 +228,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		}
 
 		// Check memory usage and spill if necessary
-		if group.getSize() > group.ctr.spillThreshold && group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 {
+		if group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 && group.getSize() > group.ctr.spillThreshold {
 			group.ctr.spilled = true
 			if err := group.spillCurrentState(proc); err != nil {
 				return nil, err
@@ -423,7 +423,7 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 			}
 
 			// Check memory usage and spill if necessary
-			if group.getSize() > group.ctr.spillThreshold && group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 {
+			if group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 && group.getSize() > group.ctr.spillThreshold {
 				group.ctr.spilled = true
 				if err := group.spillCurrentState(proc); err != nil {
 					return nil, err
