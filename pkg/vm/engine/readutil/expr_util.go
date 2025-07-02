@@ -16,9 +16,8 @@ package readutil
 
 import (
 	"context"
+	"fmt"
 	"strings"
-
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -61,7 +60,7 @@ func ConstructInExpr(
 	)
 }
 
-func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
+func getColDefByName(name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
 	idx := strings.Index(name, ".")
 	var pos int32
 	if idx >= 0 {
@@ -69,6 +68,9 @@ func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 		pos = tableDef.Name2ColIndex[subName]
 	} else {
 		pos = tableDef.Name2ColIndex[name]
+	}
+	if name != tableDef.Cols[colPos].Name {
+		panic(fmt.Sprintf("Bad-ColExpr: %s, %d, %d", name, colPos, pos))
 	}
 	return tableDef.Cols[pos]
 }
@@ -106,12 +108,7 @@ func evalValue(
 		colName = tblDef.Cols[pkColId].Name
 	} else {
 		if col.Col.ColPos != pkColId {
-			logutil.Warn(
-				"Bad-ColExpr",
-				zap.String("col-name", colName),
-				zap.Int32("col-actual-pos", col.Col.ColPos),
-				zap.Int32("col-expected-pos", pkColId),
-			)
+			panic(fmt.Sprintf("Bad-ColExpr: %s, %d, %d", colName, col.Col.ColPos, pkColId))
 		}
 	}
 	if !compPkCol(colName, pkName) {
