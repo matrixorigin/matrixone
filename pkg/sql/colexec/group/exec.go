@@ -533,6 +533,30 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 }
 
 func (group *Group) getSize() int64 {
-	//TODO
-	return 0
+	var size int64
+
+	// Hash table size
+	if group.ctr.hr.Hash != nil {
+		size += group.ctr.hr.Hash.Size()
+	}
+
+	// Aggregation results size
+	if group.NeedEval {
+		// result1 (GroupResultBuffer)
+		for _, bat := range group.ctr.result1.ToPopped {
+			size += int64(bat.Allocated())
+		}
+		for _, agg := range group.ctr.result1.AggList {
+			size += agg.Size()
+		}
+	} else {
+		// result2 (GroupResultNoneBlock)
+		if group.ctr.result2.res != nil {
+			size += int64(group.ctr.result2.res.Allocated())
+			for _, agg := range group.ctr.result2.res.Aggs {
+				size += agg.Size()
+			}
+		}
+	}
+	return size
 }
