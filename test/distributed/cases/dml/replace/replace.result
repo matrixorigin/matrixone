@@ -66,8 +66,8 @@ Dylan    20
 drop table if exists c;
 create table c(a int primary key , b int, v vecf32(3));
 replace into c values(1,1,'[1,2,3]');
-drop table c;
 select * from c;
 a   b   v
 1   1   [1, 2, 3]
+drop table c;
 drop database replace_db;
