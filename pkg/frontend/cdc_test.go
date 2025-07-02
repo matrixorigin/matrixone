@@ -3012,7 +3012,7 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			return 0, "", false, moerr.NewInternalErrorNoCtx("")
 		},
 	)
-	err = CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts)
+	err = CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts, 0, 1)
 	assert.Error(t, err)
 	stubGetPitrLength.Reset()
 

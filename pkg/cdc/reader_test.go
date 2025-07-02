@@ -106,6 +106,36 @@ func TestNewTableReader(t *testing.T) {
 				tt.args.sinker,
 				tt.args.wMarkUpdater,
 				tt.args.tableDef)
+
+			assert.NotNilf(t, NewTableReader(
+				tt.args.cnTxnClient,
+				tt.args.cnEngine,
+				tt.args.mp,
+				tt.args.packerPool,
+				tt.args.accountId,
+				tt.args.taskId,
+				tt.args.info,
+				tt.args.sinker,
+				tt.args.wMarkUpdater,
+				tt.args.tableDef,
+				true,
+				tt.args.runningReaders,
+				types.TS{},
+				types.TS{},
+				false,
+				"1h",
+			),
+				"NewTableReader(%v,%v,%v,%v,%v,%v,%v,%v)",
+				tt.args.cnTxnClient,
+				tt.args.cnEngine,
+				tt.args.mp,
+				tt.args.packerPool,
+				tt.args.accountId,
+				tt.args.taskId,
+				tt.args.info,
+				tt.args.sinker,
+				tt.args.wMarkUpdater,
+				tt.args.tableDef)
 		})
 	}
 }
