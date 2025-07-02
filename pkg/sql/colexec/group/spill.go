@@ -15,7 +15,10 @@
 package group
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,7 +51,7 @@ func NewSpiller(proc *process.Process) (*Spiller, error) {
 }
 
 // spill writes a batch to a new temporary spill file.
-func (s *Spiller) spill(bat *batch.Batch) error {
+func (s *Spiller) spillBatch(bat *batch.Batch) error {
 	if bat.IsEmpty() {
 		return nil
 	}
@@ -94,4 +97,102 @@ func (s *Spiller) clean() error {
 	}
 	s.spillFiles = nil
 	return lastErr
+}
+
+// spillState writes the serialized hashmap, aggregation states, and group-by batch to a new temporary spill file.
+func (s *Spiller) spillState(hashmapData []byte, aggStates [][]byte, groupByBatchData []byte) error {
+	filePath := fmt.Sprintf("group_spill_state_%d_%d.bin", s.proc.QueryId(), spillFileCounter.Add(1))
+
+	var buffer bytes.Buffer
+	// Write lengths of each component
+	if err := binary.Write(&buffer, binary.LittleEndian, uint64(len(hashmapData))); err != nil {
+		return moerr.NewInternalErrorf(s.proc.Ctx, "failed to write hashmapData length for spilling: %v", err)
+	}
+	if err := binary.Write(&buffer, binary.LittleEndian, uint64(len(aggStates))); err != nil {
+		return moerr.NewInternalErrorf(s.proc.Ctx, "failed to write aggStates count for spilling: %v", err)
+	}
+	for _, aggData := range aggStates {
+		if err := binary.Write(&buffer, binary.LittleEndian, uint64(len(aggData))); err != nil {
+			return moerr.NewInternalErrorf(s.proc.Ctx, "failed to write aggData length for spilling: %v", err)
+		}
+	}
+	if err := binary.Write(&buffer, binary.LittleEndian, uint64(len(groupByBatchData))); err != nil {
+		return moerr.NewInternalErrorf(s.proc.Ctx, "failed to write groupByBatchData length for spilling: %v", err)
+	}
+
+	// Write data of each component
+	buffer.Write(hashmapData)
+	for _, aggData := range aggStates {
+		buffer.Write(aggData)
+	}
+	buffer.Write(groupByBatchData)
+
+	vec := fileservice.IOVector{
+		FilePath: filePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   int64(buffer.Len()),
+				Data:   buffer.Bytes(),
+			},
+		},
+	}
+
+	if err := s.fs.Write(s.proc.Ctx, vec); err != nil {
+		return moerr.NewInternalErrorf(s.proc.Ctx, "failed to write spill file %s: %v", filePath, err)
+	}
+
+	s.spillFiles = append(s.spillFiles, filePath)
+	return nil
+}
+
+// recallState reads a spill file and returns the serialized hashmap, aggregation states, and group-by batch.
+func (s *Spiller) recallState(filePath string) ([]byte, [][]byte, []byte, error) {
+	var vec fileservice.IOVector
+	vec.FilePath = filePath
+	vec.Entries = []fileservice.IOEntry{{Offset: 0, Size: -1}} // Read entire file
+
+	if err := s.fs.Read(s.proc.Ctx, &vec); err != nil {
+		return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read spill file %s: %v", filePath, err)
+	}
+
+	reader := bytes.NewReader(vec.Entries[0].Data)
+
+	var hashmapLen, aggStatesCount, groupByBatchLen uint64
+	if err := binary.Read(reader, binary.LittleEndian, &hashmapLen); err != nil {
+		return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read hashmap length from spill file: %v", err)
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &aggStatesCount); err != nil {
+		return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read aggStates count from spill file: %v", err)
+	}
+
+	aggLens := make([]uint64, aggStatesCount)
+	for i := range aggLens {
+		if err := binary.Read(reader, binary.LittleEndian, &aggLens[i]); err != nil {
+			return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read aggData length from spill file: %v", err)
+		}
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &groupByBatchLen); err != nil {
+		return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read groupByBatch length from spill file: %v", err)
+	}
+
+	hashmapData := make([]byte, hashmapLen)
+	if _, err := io.ReadFull(reader, hashmapData); err != nil {
+		return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read hashmap data from spill file: %v", err)
+	}
+
+	aggStates := make([][]byte, aggStatesCount)
+	for i, l := range aggLens {
+		aggStates[i] = make([]byte, l)
+		if _, err := io.ReadFull(reader, aggStates[i]); err != nil {
+			return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read aggStates data from spill file: %v", err)
+		}
+	}
+
+	groupByBatchData := make([]byte, groupByBatchLen)
+	if _, err := io.ReadFull(reader, groupByBatchData); err != nil {
+		return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read groupByBatch data from spill file: %v", err)
+	}
+
+	return hashmapData, aggStates, groupByBatchData, nil
 }
