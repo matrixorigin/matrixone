@@ -16,10 +16,15 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/require"
 	"os"
@@ -274,8 +279,8 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 	dir := InitTestEnv(ModuleName, t.Name())
 	defer RemoveDefaultTestPath(ModuleName, t.Name())
 
-	// Create necessary services - needed for test setup
-	_, err := fileservice.NewFileService(
+	// Create necessary services
+	fs, err := fileservice.NewFileService(
 		ctx,
 		fileservice.Config{
 			Name:    "test-fs",
@@ -308,76 +313,204 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 	objectio.SetObjectStatsObjectName(stats2, objName2)
 	objectio.SetObjectStatsObjectName(stats3, objName3)
 
-	// Define table IDs
+	// Define table IDs and timestamps
 	table1Id := uint64(101)
 	table2Id := uint64(102)
 
-	// Create a simplified structure to represent object references
-	type ObjRef struct {
-		objName   string
-		tableID   uint64
-		isDropped bool
+	// Define timestamps
+	createTS1 := types.BuildTS(10, 0)
+	createTS2 := types.BuildTS(15, 0)
+	dropTS1 := types.BuildTS(20, 0) // Drop timestamp for table1
+
+	// Create batch buffer
+	buffer := containers.NewOneSchemaBatchBuffer(16*mpool.MB, ObjectTableAttrs, ObjectTableTypes)
+	defer buffer.Close(mp)
+
+	// Create batch
+	newBat := buffer.Fetch()
+	defer buffer.Putback(newBat, mp)
+
+	// Add test data to batch
+	// 1. object1 referenced by table1 (dropped)
+	if err := vector.AppendBytes(newBat.Vecs[0], stats1[:], false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[1], createTS1, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[2], dropTS1, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[3], uint64(1), false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[4], table1Id, false, mp); err != nil {
+		t.Fatal(err)
 	}
 
-	// Create object references
-	objRefs := []ObjRef{
-		{objName1.String(), table1Id, true},  // object1 from table1 (dropped)
-		{objName1.String(), table2Id, false}, // object1 from table2 (not dropped)
-		{objName2.String(), table1Id, true},  // object2 from table1 (dropped)
-		{objName3.String(), table1Id, true},  // object3 from table1 (dropped)
+	// 2. object1 referenced by table2 (not dropped)
+	if err := vector.AppendBytes(newBat.Vecs[0], stats1[:], false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[1], createTS2, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[2], types.TS{}, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[3], uint64(1), false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[4], table2Id, false, mp); err != nil {
+		t.Fatal(err)
 	}
 
-	// Create a map to track table references for each object
-	objToTableRefs := make(map[string]map[uint64]bool)
+	// 3. object2 referenced by table1 (dropped)
+	if err := vector.AppendBytes(newBat.Vecs[0], stats2[:], false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[1], createTS1, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[2], dropTS1, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[3], uint64(1), false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[4], table1Id, false, mp); err != nil {
+		t.Fatal(err)
+	}
 
-	// Log test setup
-	t.Log("DEBUG: Test setup - Object references:")
+	// 4. object3 referenced by table1 (dropped)
+	if err := vector.AppendBytes(newBat.Vecs[0], stats3[:], false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[1], createTS1, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[2], dropTS1, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[3], uint64(1), false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(newBat.Vecs[4], table1Id, false, mp); err != nil {
+		t.Fatal(err)
+	}
 
-	// Fill the reference map and log
-	for _, ref := range objRefs {
-		if objToTableRefs[ref.objName] == nil {
-			objToTableRefs[ref.objName] = make(map[uint64]bool)
+	newBat.SetRowCount(newBat.Vecs[0].Length())
+
+	// Create a GC executor
+	executor := NewGCExecutor(buffer, false, 1000, mp, fs)
+	defer executor.Close()
+
+	// Create a simple data source function
+	sourceFn := func(ctx context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch) (bool, error) {
+		// Copy original batch to target batch
+		if bat.Vecs[0].Length() > 0 {
+			return true, nil // Already added, don't add again
 		}
-		objToTableRefs[ref.objName][ref.tableID] = ref.isDropped
-		t.Logf("  - Object: %s, Table: %d, Is dropped: %v", ref.objName, ref.tableID, ref.isDropped)
+
+		for i := 0; i < len(newBat.Vecs); i++ {
+			err = newBat.Vecs[i].CloneWindowTo(bat.Vecs[i], 0, newBat.Vecs[i].Length(), mp)
+			if err != nil {
+				return false, err
+			}
+		}
+		bat.SetRowCount(newBat.Vecs[0].Length())
+		return true, nil
 	}
 
-	// Expected GC results
+	// Object GC status tracking
 	shouldGC := map[string]bool{
 		objName2.String(): true,  // Only referenced by table1, and marked as dropped
 		objName3.String(): true,  // Only referenced by table1, and marked as dropped
 		objName1.String(): false, // Should not be GC'd because table2 still references it
 	}
 
-	// Perform the GC logic directly
-	t.Log("DEBUG: Performing GC logic:")
-	gcObjects := make(map[string]bool)
+	// Create object name to row index mapping
+	objNameToRows := make(map[string][]int)
+	for i := 0; i < newBat.RowCount(); i++ {
+		stats := (objectio.ObjectStats)(newBat.Vecs[0].GetRawBytesAt(i))
+		name := stats.ObjectName().String()
+		objNameToRows[name] = append(objNameToRows[name], i)
+	}
 
-	// Process each object and determine if it should be GC'd
-	for objName, tableRefs := range objToTableRefs {
-		// Check if all references are dropped
-		allDropped := true
-		for _, isDropped := range tableRefs {
-			if !isDropped {
-				allDropped = false
-				break
+	// Create a filter that implements multi-table reference GC logic
+	fineFilter := func(ctx context.Context, bm *bitmap.Bitmap, bat *batch.Batch, mp *mpool.MPool) error {
+		// Create a table reference map for each object
+		objRefs := make(map[string]map[uint64]bool)
+
+		// First pass: collect reference information for all objects
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			stats := (objectio.ObjectStats)(bat.Vecs[0].GetRawBytesAt(i))
+			objName := stats.ObjectName().String()
+			tableID := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])[i]
+			dropTS := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])[i]
+
+			if objRefs[objName] == nil {
+				objRefs[objName] = make(map[uint64]bool)
+			}
+
+			// true means this object has been dropped in this table
+			objRefs[objName][tableID] = !dropTS.IsEmpty()
+		}
+
+		// Second pass: mark objects where all referencing tables have dropped them
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			stats := (objectio.ObjectStats)(bat.Vecs[0].GetRawBytesAt(i))
+			objName := stats.ObjectName().String()
+
+			allDropped := true
+			for _, isDropped := range objRefs[objName] {
+				if !isDropped {
+					allDropped = false
+					break
+				}
+			}
+
+			// If all references are dropped, add this object to GC list
+			if allDropped {
+				bm.Add(uint64(i))
 			}
 		}
 
-		// If all references are dropped, mark for GC
-		if allDropped {
-			gcObjects[objName] = true
-			t.Logf("  - Object %s: All references dropped, should be GC'd", objName)
-		} else {
-			t.Logf("  - Object %s: Some references not dropped, should NOT be GC'd", objName)
-		}
+		return nil
 	}
 
-	// Check results
-	t.Log("DEBUG: GC Results:")
-	for objName, expected := range shouldGC {
-		actual := gcObjects[objName]
-		t.Logf("  - Object %s: Expected GC: %v, Actual GC: %v", objName, expected, actual)
-		require.Equal(t, expected, actual, "Object %s GC status mismatch", objName)
+	// Track GC'd objects
+	gcObjects := make(map[string]bool)
+	finalSinker := func(ctx context.Context, bat *batch.Batch) error {
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			stats := (objectio.ObjectStats)(bat.Vecs[0].GetRawBytesAt(i))
+			objName := stats.ObjectName().String()
+			gcObjects[objName] = true
+		}
+		return nil
+	}
+
+	// Empty filter - does no filtering
+	noFilter := func(ctx context.Context, bm *bitmap.Bitmap, bat *batch.Batch, mp *mpool.MPool) error {
+		return nil
+	}
+
+	// Run GC executor
+	_, err = executor.Run(
+		ctx,
+		sourceFn,
+		noFilter,   // Coarse filter
+		fineFilter, // Fine filter
+		finalSinker,
+	)
+	require.NoError(t, err)
+
+	// Verify results
+	for objName, shouldBeGCd := range shouldGC {
+		if shouldBeGCd {
+			require.True(t, gcObjects[objName], "Object %s should have been GC'd", objName)
+		} else {
+			require.False(t, gcObjects[objName], "Object %s should NOT have been GC'd", objName)
+		}
 	}
 }
