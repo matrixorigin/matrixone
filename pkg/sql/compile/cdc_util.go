@@ -19,40 +19,34 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/idxcdc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 /* CDC APIs */
-type SinkerInfo struct {
-	SinkerType int8
-	DBName     string
-	TableName  string
-	IndexName  string
-}
-
-func RegisterJob(ctx context.Context, txn client.TxnOperator, pitr_name string, info *SinkerInfo) (bool, error) {
+func RegisterJob(ctx context.Context, txn client.TxnOperator, pitr_name string, info *idxcdc.ConsumerInfo) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
 	return true, nil
 }
 
-func UnregisterJob(ctx context.Context, txn client.TxnOperator, info *SinkerInfo) (bool, error) {
+func UnregisterJob(ctx context.Context, txn client.TxnOperator, info *idxcdc.ConsumerInfo) (bool, error) {
 
 	return true, nil
 }
 
 /* start here */
-func CreateCdcTask(c *Compile, pitr_name string, sinkerinfo SinkerInfo) (bool, error) {
-	logutil.Infof("Create Index Task %v", sinkerinfo)
+func CreateCdcTask(c *Compile, pitr_name string, consumerinfo idxcdc.ConsumerInfo) (bool, error) {
+	logutil.Infof("Create Index Task %v", consumerinfo)
 
-	return RegisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), pitr_name, &sinkerinfo)
+	return RegisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), pitr_name, &consumerinfo)
 }
 
-func DeleteCdcTask(c *Compile, sinkerinfo SinkerInfo) (bool, error) {
-	logutil.Infof("Delete Index Task %v", sinkerinfo)
-	return UnregisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), &sinkerinfo)
+func DeleteCdcTask(c *Compile, consumerinfo idxcdc.ConsumerInfo) (bool, error) {
+	logutil.Infof("Delete Index Task %v", consumerinfo)
+	return UnregisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), &consumerinfo)
 }
 
 func getIndexPitrName(dbname string, tablename string) string {
@@ -130,7 +124,7 @@ func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tabl
 	}
 
 	// create index cdc task
-	ok, err := CreateCdcTask(c, pitr_name, SinkerInfo{SinkerType: sinker_type, DBName: dbname, TableName: tablename, IndexName: indexname})
+	ok, err := CreateCdcTask(c, pitr_name, idxcdc.ConsumerInfo{ConsumerType: sinker_type, DbName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
@@ -152,7 +146,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	}
 
 	// delete index cdc task
-	_, err = DeleteCdcTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: indexname})
+	_, err = DeleteCdcTask(c, idxcdc.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
@@ -206,7 +200,7 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 					}
 				}
 				if async {
-					_, e := DeleteCdcTask(c, SinkerInfo{DBName: dbname, TableName: tablename, IndexName: idx.IndexName})
+					_, e := DeleteCdcTask(c, idxcdc.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: idx.IndexName})
 					if e != nil {
 						return e
 					}
