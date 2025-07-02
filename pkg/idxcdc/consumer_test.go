@@ -111,24 +111,27 @@ func newTestConsumerInfo() *ConsumerInfo {
 }
 
 type MockSQLExecutor struct {
+	txnexec executor.TxnExecutor
+	sqls    []string
 }
 
 // Exec exec a sql in a exists txn.
-func (exec MockSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-
-	//fmt.Println(sql)
+func (exec *MockSQLExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+	exec.sqls = append(exec.sqls, sql)
+	//fmt.Printf("Exec %p %v\n", exec.sqls, exec.sqls)
 	return executor.Result{}, nil
 }
 
 var _ executor.SQLExecutor = new(MockSQLExecutor)
 
 func mockSqlExecutorFactory(uuid string) (executor.SQLExecutor, error) {
-	return MockSQLExecutor{}, nil
+	return &MockSQLExecutor{}, nil
 }
 
 type MockErrorTxnExecutor struct {
 	database string
 	ctx      context.Context
+	sqls     []string
 }
 
 func (exec *MockErrorTxnExecutor) Use(db string) {
@@ -153,7 +156,8 @@ func (exec *MockErrorTxnExecutor) Exec(
 		return executor.Result{}, errs
 	}
 
-	//fmt.Println(sql)
+	exec.sqls = append(exec.sqls, sql)
+	//fmt.Printf("APPEND %s", sql)
 	return executor.Result{}, nil
 }
 
@@ -170,8 +174,10 @@ func (exec *MockErrorTxnExecutor) Txn() client.TxnOperator {
 // NOTE: Pass SQL stmts one by one to TxnExecutor.Exec(). If you pass multiple SQL stmts to
 // TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
 func (exec MockSQLExecutor) ExecTxn(ctx context.Context, execFunc func(txn executor.TxnExecutor) error, opts executor.Options) error {
-	txnexec := &MockErrorTxnExecutor{ctx: ctx}
-	err := execFunc(txnexec)
+	exec.txnexec = &MockErrorTxnExecutor{ctx: ctx}
+	err := execFunc(exec.txnexec)
+	exec.sqls = exec.txnexec.(*MockErrorTxnExecutor).sqls
+	//fmt.Printf("ExecTxn %v\n", exec.sqls)
 	return err
 }
 
@@ -191,7 +197,8 @@ func TestConsumer(t *testing.T) {
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
 	cnUUID := "a-b-c-d"
-	info := &ConsumerInfo{DbName: "db", TableName: "tbl", IndexName: "hnsw_idx"}
+	info := newTestConsumerInfo() // &ConsumerInfo{DbName: "sink_db", TableName: "sink_tbl", IndexName: "hnsw_idx"}
+	//info := &ConsumerInfo{DbName: "db", TableName: "tbl", IndexName: "hnsw_idx"}
 
 	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
 	require.NoError(t, err)
@@ -209,9 +216,9 @@ func TestHnswSnapshot(t *testing.T) {
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
 
-	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
+	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	cnUUID := "a-b-c-d"
-	info := &ConsumerInfo{DbName: "db", TableName: "tbl", IndexName: "hnsw_idx"}
+	info := newTestConsumerInfo() // &ConsumerInfo{DbName: "sink_db", TableName: "sink_tbl", IndexName: "hnsw_idx"}
 
 	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
 	require.NoError(t, err)
@@ -241,9 +248,43 @@ func TestHnswSnapshot(t *testing.T) {
 		}
 		err := consumer.Consume(ctx, output)
 		require.NoError(t, err)
+		sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls
+		require.Equal(t, len(sqls), 1)
+		sql := sqls[0]
+		require.Equal(t, string(sql), `SELECT hnsw_cdc_update('test_db', 'test_tbl', 2, '{"cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}');`)
+
+		//fmt.Printf("Consume %p %v\n", consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls, consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls)
+	})
+
+	t.Run("noMoreData", func(t *testing.T) {
+
+		/*
+			bat := testutil.NewBatchWithVectors(
+				[]*vector.Vector{
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2}),
+					testutil.NewVector(2, types.T_array_float32.ToType(), proc.Mp(), false, [][]float32{{0.1, 0.2}, {0.3, 0.4}}),
+					testutil.NewVector(2, types.T_int32.ToType(), proc.Mp(), false, []int32{1, 2}),
+				}, nil)
+
+			defer bat.Clean(testutil.TestUtilMp)
+
+			insertAtomicBat := &AtomicBatch{
+				Mp:      nil,
+				Batches: []*batch.Batch{bat},
+				Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+			}
+		*/
+
+		output := &MockRetriever{
+			dtype:       int8(OutputTypeSnapshot),
+			insertBatch: nil,
+			deleteBatch: nil,
+			noMoreData:  true,
+		}
+		err := consumer.Consume(ctx, output)
+		require.NoError(t, err)
 		//sql, err := c.sqlWriters[0].ToSql()
 		//require.NoError(t, err)
 		//require.Equal(t, string(sql), `SELECT hnsw_cdc_update('sink_db', 'sink_tbl', 2, '{"cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}');`)
 	})
-
 }
