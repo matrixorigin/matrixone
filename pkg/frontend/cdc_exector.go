@@ -581,6 +581,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		exec.startTs,
 		exec.endTs,
 		exec.noFull,
+		exec.additionalConfig[cdc.CDCTaskExtraOptions_Frequency].(string),
 	)
 	go reader.Run(ctx, exec.activeRoutine)
 

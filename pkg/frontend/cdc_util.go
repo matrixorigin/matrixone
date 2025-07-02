@@ -17,6 +17,9 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -183,6 +186,7 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 // - bh: Background handler for executing database queries.
 // - accName: The account name associated with the CDC task.
 // - pts: Pattern tuples representing the database and table patterns to be checked.
+// - minLength: the minimum time requirement of pitr
 //
 // Returns:
 // - error: Returns an error if no PITR configuration meets the minimum requirement, otherwise nil.
@@ -191,8 +195,15 @@ var CDCCheckPitrGranularity = func(
 	bh BackgroundExec,
 	accName string,
 	pts *cdc.PatternTuples,
+	minLength ...int64,
 ) error {
-	const minPitrLen = int64(2)
+	var minPitrLen int64 = 2
+	if len(minLength) > 1 {
+		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
+	}
+	if len(minLength) > 0 {
+		minPitrLen = max(minLength[0]+1, minPitrLen)
+	}
 
 	// Helper function to get PITR config for a specific level
 	getPitrConfig := func(level, dbName, tblName string) (*PitrConfig, error) {
@@ -469,4 +480,59 @@ func CDCParseGranularityTuple(
 		pt.Sink.Table = pt.Source.Table
 	}
 	return
+}
+
+// only accept positive integers that end with m or h
+func isValidFrequency(freq string) bool {
+	if !strings.HasSuffix(freq, "m") && !strings.HasSuffix(freq, "h") {
+		return false
+	}
+
+	numPart := strings.TrimSuffix(strings.TrimSuffix(freq, "m"), "h")
+
+	matched, _ := regexp.MatchString(`^[1-9]\d*$`, numPart)
+	if !matched {
+		return false
+	}
+
+	num, err := strconv.Atoi(numPart)
+	if err != nil {
+		return false
+	}
+
+	if num < 0 {
+		return false
+	}
+
+	if num > 10000000 {
+		return false
+	}
+
+	return true
+}
+
+// e.g. 1h -> 1
+//
+//	30m -> 1
+//	60m -> 1
+//	61m -> 2
+//
+// call isValidFrequency before calling this function
+func transformIntoHours(freq string) int64 {
+	if strings.HasSuffix(freq, "h") {
+		hoursStr := strings.TrimSuffix(freq, "h")
+		hours, _ := strconv.Atoi(hoursStr)
+		return int64(hours)
+	}
+
+	if strings.HasSuffix(freq, "m") {
+		minStr := strings.TrimSuffix(freq, "m")
+		minutes, _ := strconv.Atoi(minStr)
+
+		hours := int(math.Ceil(float64(minutes) / 60.0))
+
+		return int64(hours)
+	}
+
+	return 0
 }
