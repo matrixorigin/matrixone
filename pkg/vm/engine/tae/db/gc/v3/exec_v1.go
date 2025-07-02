@@ -89,6 +89,7 @@ func NewCheckpointBasedGCJob(
 	isOwner bool,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
