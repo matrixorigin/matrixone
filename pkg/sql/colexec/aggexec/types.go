@@ -109,6 +109,8 @@ type AggFuncExec interface {
 	// Flush return the aggregation result.
 	Flush() ([]*vector.Vector, error)
 
+	Size() int64
+
 	// Free clean the resource and reuse the aggregation if possible.
 	Free()
 }

@@ -546,6 +546,17 @@ func (r *optSplitResult) free() {
 	r.emptyList = nil
 }
 
+func (r *optSplitResult) Size() int64 {
+	var size int64
+	for _, v := range r.resultList {
+		if v != nil {
+			size += int64(v.Allocated())
+		}
+	}
+	size += int64(len(r.emptyList) * int(types.T_bool.ToType().TypeSize()))
+	return size
+}
+
 func setValueFromX1Y1ToX2Y2[T types.FixedSizeTExceptStrType](
 	src [][]T, x1, y1 int, x2, y2 int, value T) {
 

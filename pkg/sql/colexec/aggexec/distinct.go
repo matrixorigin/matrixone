@@ -153,3 +153,13 @@ func (d *distinctHash) free() {
 		}
 	}
 }
+
+func (d *distinctHash) Size() int64 {
+	var size int64
+	for _, m := range d.maps {
+		if m != nil {
+			size += m.Size()
+		}
+	}
+	return size
+}
