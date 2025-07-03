@@ -30,24 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
-/* CDC API */
-type DataRetriever interface {
-	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
-	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
-	GetDataType() int8
-}
-
-type ConsumerInfo struct {
-	ConsumerType int8
-	TableName    string
-	DbName       string
-	IndexName    string
-}
-
-type Consumer interface {
-	Consume(context.Context, DataRetriever) error
-}
-
 /* IndexConsumer */
 type IndexEntry struct {
 	algo    string
