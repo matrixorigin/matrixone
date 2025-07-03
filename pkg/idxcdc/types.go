@@ -42,8 +42,10 @@ const (
 	CDCState_Error  = "error"
 )
 
+type ConsumerType int8
+
 const (
-	ConsumerType_IndexSync = 0
+	ConsumerType_IndexSync ConsumerType = iota
 )
 
 const (

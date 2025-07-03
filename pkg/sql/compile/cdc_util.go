@@ -215,11 +215,11 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 
 func getSinkerTypeFromAlgo(algo string) int8 {
 	if catalog.IsHnswIndexAlgo(algo) {
-		return int8(0)
+		return int8(idxcdc.ConsumerType_IndexSync)
 	} else if catalog.IsIvfIndexAlgo(algo) {
-		return int8(0)
+		return int8(idxcdc.ConsumerType_IndexSync)
 	} else if catalog.IsFullTextIndexAlgo(algo) {
-		return int8(0)
+		return int8(idxcdc.ConsumerType_IndexSync)
 	}
 	return int8(0)
 }
