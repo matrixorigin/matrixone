@@ -209,8 +209,8 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 				if err = opts.handleFrequency(ctx, ses, req, level, value); err != nil {
 					return
 				}
-				extraOpts[cdc.CDCTaskExtraOptions_Frequency] = value
 			}
+			extraOpts[cdc.CDCTaskExtraOptions_Frequency] = value
 		}
 	}
 
