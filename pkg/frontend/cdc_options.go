@@ -205,6 +205,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 				opts.ConfigFile = value
 			}
 		case cdc.CDCRequestOptions_Frequency:
+			extraOpts[cdc.CDCTaskExtraOptions_Frequency] = ""
 			if value != "" {
 				if err = opts.handleFrequency(ctx, ses, req, level, value); err != nil {
 					return
