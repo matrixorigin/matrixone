@@ -78,7 +78,7 @@ func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.
 				zap.String("col-name", name),
 				zap.Int32("col-actual-pos", colPos),
 				zap.Int32("col-expected-pos", pos),
-				zap.String("col-expr", plan2.FormatExpr(expr)),
+				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
 			)
 		}
 	})
@@ -121,7 +121,7 @@ func evalValue(
 				"Bad-ColExpr",
 				zap.String("col-name", colName),
 				zap.String("pk-name", pkName),
-				zap.String("col-expr", plan2.FormatExpr(expr)),
+				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
 			)
 		}
 	})
@@ -146,7 +146,7 @@ func evalValue(
 				zap.String("col-name", colName),
 				zap.Int32("col-actual-pos", col.Col.ColPos),
 				zap.Int32("col-expected-pos", colPos),
-				zap.String("col-expr", plan2.FormatExpr(expr)),
+				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
 			)
 		}
 	})
@@ -222,7 +222,7 @@ func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 			vals[idx] = nil
 			vals[idx] = append(vals[idx], fExpr.Fold.Data...)
 		} else {
-			logutil.Warnf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx]))
+			logutil.Warnf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx], plan2.FormatOption{}))
 			return nil, false
 		}
 	}
@@ -271,7 +271,7 @@ func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byt
 			return colExpr, fExpr.Fold.Data, ok
 		}
 
-		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr, plan2.FormatOption{}))
 		return nil, nil, false
 	}
 
