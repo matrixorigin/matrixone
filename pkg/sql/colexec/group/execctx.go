@@ -23,17 +23,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type ResHashRelated struct {
+type HashMap struct {
 	Hash     hashmap.HashMap
 	Itr      hashmap.Iterator
 	inserted []uint8
 }
 
-func (hr *ResHashRelated) IsEmpty() bool {
+func (hr *HashMap) IsEmpty() bool {
 	return hr.Hash == nil || hr.Itr == nil
 }
 
-func (hr *ResHashRelated) BuildHashTable(
+func (hr *HashMap) BuildHashTable(
 	rebuild bool,
 	isStrHash bool, keyNullable bool, preAllocated uint64) error {
 
@@ -87,7 +87,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	return nil
 }
 
-func (hr *ResHashRelated) GetBinaryInsertList(vals []uint64, before uint64) (insertList []uint8, insertCount uint64) {
+func (hr *HashMap) GetBinaryInsertList(vals []uint64, before uint64) (insertList []uint8, insertCount uint64) {
 	if cap(hr.inserted) < len(vals) {
 		hr.inserted = make([]uint8, len(vals))
 	} else {
@@ -108,7 +108,7 @@ func (hr *ResHashRelated) GetBinaryInsertList(vals []uint64, before uint64) (ins
 	return hr.inserted, insertCount
 }
 
-func (hr *ResHashRelated) Free0() {
+func (hr *HashMap) Free0() {
 	if hr.Hash != nil {
 		hr.Hash.Free()
 		hr.Hash = nil
