@@ -193,6 +193,7 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 		group.ctr.spiller = nil
 	}
 	group.ctr.spilled = false
+	group.ctr.recalling = false
 
 	group.ctr.groupByEvaluate.ResetForNextQuery()
 	for i := range group.ctr.aggregateEvaluate {
@@ -208,6 +209,7 @@ func (group *Group) freeCannotReuse(mp *mpool.MPool) {
 	group.ctr.spiller.clean()
 	group.ctr.spilled = false
 	group.ctr.spiller = nil
+	group.ctr.recalling = false
 }
 
 func (group *Group) initSpiller(proc *process.Process) (err error) {

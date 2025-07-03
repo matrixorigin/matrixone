@@ -190,6 +190,14 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		return nil, nil
 	}
 
+	// If spilling occurred, recall and merge all spilled data first.
+	if group.ctr.spilled {
+		if err := group.recallAndMergeSpilledData(proc); err != nil {
+			return nil, err
+		}
+		group.ctr.spilled = false
+	}
+
 	for {
 		if group.ctr.state == vm.Eval {
 			if group.ctr.result1.IsEmpty() {
@@ -221,14 +229,6 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 		group.ctr.dataSourceIsEmpty = false
 		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
 			return nil, err
-		}
-
-		// Check memory usage and spill if necessary
-		if group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 && group.getSize() > group.ctr.spillThreshold {
-			group.ctr.spilled = true
-			if err := group.spillCurrentState(proc); err != nil {
-				return nil, err
-			}
 		}
 
 	}
@@ -384,6 +384,14 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 		return nil, err
 	}
 
+	// If spilling occurred, recall and merge all spilled data first.
+	if group.ctr.spilled {
+		if err := group.recallAndMergeSpilledData(proc); err != nil {
+			return nil, err
+		}
+		group.ctr.spilled = false // All spilled data merged
+	}
+
 	var input *batch.Batch
 	for {
 		if group.ctr.state == vm.End {
@@ -414,19 +422,10 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 		if next, er := group.consumeBatchToRes(proc, input, r); er != nil {
 			return nil, er
 		} else {
-			if next {
-				continue
+			if !next {
+				// intermediate result is ready
+				return r, nil
 			}
-
-			// Check memory usage and spill if necessary
-			if group.ctr.hr.Hash != nil && group.ctr.hr.Hash.GroupCount() > 0 && group.getSize() > group.ctr.spillThreshold {
-				group.ctr.spilled = true
-				if err := group.spillCurrentState(proc); err != nil {
-					return nil, err
-				}
-			}
-
-			return r, nil
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -195,4 +196,16 @@ func (s *Spiller) recallState(filePath string) ([]byte, [][]byte, []byte, error)
 	}
 
 	return hashmapData, aggStates, groupByBatchData, nil
+}
+
+// DeleteFile deletes a specific temporary spill file.
+func (s *Spiller) DeleteFile(filePath string) error {
+	if err := s.fs.Delete(s.proc.Ctx, filePath); err != nil {
+		return moerr.NewInternalErrorf(s.proc.Ctx, "failed to delete spill file %s: %v", filePath, err)
+	}
+	// Remove the file from the list of spilled files
+	s.spillFiles = slices.DeleteFunc(s.spillFiles, func(f string) bool {
+		return f == filePath
+	})
+	return nil
 }
