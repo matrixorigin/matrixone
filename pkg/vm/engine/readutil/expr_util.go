@@ -97,7 +97,6 @@ func evalValue(
 	tblDef *plan.TableDef,
 	isVec bool,
 	pkName string,
-	pkColId int32,
 ) (
 	ok bool, oid types.T, vals [][]byte,
 ) {
@@ -117,13 +116,11 @@ func evalValue(
 	colName := col.Col.Name
 
 	common.DoIfDebugEnabled(func() {
-		if colName == "" || pkColId != col.Col.ColPos {
+		if colName == "" {
 			logutil.Error(
 				"Bad-ColExpr",
 				zap.String("col-name", colName),
 				zap.String("pk-name", pkName),
-				zap.Int32("col-actual-pos", col.Col.ColPos),
-				zap.Int32("col-expected-pos", pkColId),
 				zap.String("col-expr", plan2.FormatExpr(expr)),
 			)
 		}
@@ -132,10 +129,32 @@ func evalValue(
 		return false, 0, nil
 	}
 
-	if isVec {
-		return true, types.T(tblDef.Cols[pkColId].Typ.Id), [][]byte{val}
+	var (
+		colPos int32
+		idx    = strings.Index(colName, ".")
+	)
+	if idx == -1 {
+		colPos = tblDef.Name2ColIndex[colName]
+	} else {
+		colPos = tblDef.Name2ColIndex[colName[idx+1:]]
 	}
-	return true, types.T(tblDef.Cols[pkColId].Typ.Id), vals
+
+	common.DoIfDebugEnabled(func() {
+		if colPos != col.Col.ColPos {
+			logutil.Error(
+				"Bad-ColExpr",
+				zap.String("col-name", colName),
+				zap.Int32("col-actual-pos", col.Col.ColPos),
+				zap.Int32("col-expected-pos", colPos),
+				zap.String("col-expr", plan2.FormatExpr(expr)),
+			)
+		}
+	})
+
+	if isVec {
+		return true, types.T(tblDef.Cols[colPos].Typ.Id), [][]byte{val}
+	}
+	return true, types.T(tblDef.Cols[colPos].Typ.Id), vals
 }
 
 func mustColConstValueFromBinaryFuncExpr(
