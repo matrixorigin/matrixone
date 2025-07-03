@@ -25,12 +25,12 @@ import (
 
 type HashMap struct {
 	Hash     hashmap.HashMap
-	Itr      hashmap.Iterator
+	Iter     hashmap.Iterator
 	inserted []uint8
 }
 
 func (hr *HashMap) IsEmpty() bool {
-	return hr.Hash == nil || hr.Itr == nil
+	return hr.Hash == nil || hr.Iter == nil
 }
 
 func (hr *HashMap) BuildHashTable(
@@ -55,10 +55,10 @@ func (hr *HashMap) BuildHashTable(
 		}
 		hr.Hash = h
 
-		if hr.Itr == nil {
-			hr.Itr = h.NewIterator()
+		if hr.Iter == nil {
+			hr.Iter = h.NewIterator()
 		} else {
-			hashmap.IteratorChangeOwner(hr.Itr, hr.Hash)
+			hashmap.IteratorChangeOwner(hr.Iter, hr.Hash)
 		}
 		if preAllocated > 0 {
 			if err = h.PreAlloc(preAllocated); err != nil {
@@ -74,10 +74,10 @@ func (hr *HashMap) BuildHashTable(
 	}
 	hr.Hash = h
 
-	if hr.Itr == nil {
-		hr.Itr = h.NewIterator()
+	if hr.Iter == nil {
+		hr.Iter = h.NewIterator()
 	} else {
-		hashmap.IteratorChangeOwner(hr.Itr, hr.Hash)
+		hashmap.IteratorChangeOwner(hr.Iter, hr.Hash)
 	}
 	if preAllocated > 0 {
 		if err = h.PreAlloc(preAllocated); err != nil {
