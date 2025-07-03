@@ -40,8 +40,12 @@ func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
 }
 
 func describeColRef(col *plan.ColRef, buf *bytes.Buffer) {
-	if len(col.Name) > 0 && !strings.HasPrefix(col.Name, catalog.PrefixIndexTableName) {
-		buf.WriteString(col.Name)
+	if len(col.Name) > 0 {
+		if strings.HasPrefix(col.Name, catalog.PrefixIndexTableName) {
+			buf.WriteString(strings.Split(col.Name, ".")[1])
+		} else {
+			buf.WriteString(col.Name)
+		}
 	} else {
 		buf.WriteString("#[")
 		buf.WriteString(strconv.Itoa(int(col.RelPos)))
