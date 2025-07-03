@@ -160,9 +160,9 @@ type container struct {
 	aggregateEvaluate []ExprEvalVector
 
 	// result if NeedEval is true.
-	result1 GroupResultBuffer
+	finalResults GroupResultBuffer
 	// result if NeedEval is false.
-	result2 GroupResultNoneBlock
+	intermediateResults GroupResultNoneBlock
 
 	spiller        *Spiller
 	spilled        bool
@@ -204,8 +204,8 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 
 func (group *Group) freeCannotReuse(mp *mpool.MPool) {
 	group.ctr.hashMap.Free0()
-	group.ctr.result1.Free0(mp)
-	group.ctr.result2.Free0(mp)
+	group.ctr.finalResults.Free0(mp)
+	group.ctr.intermediateResults.Free0(mp)
 	group.ctr.spiller.clean()
 	group.ctr.spilled = false
 	group.ctr.spiller = nil
