@@ -1993,7 +1993,7 @@ func FormatExprInConsole(expr *plan.Expr, option FormatOption) string {
 func doFormatExprInConsole(expr *plan.Expr, out *bytes.Buffer, depth int, option FormatOption) {
 	out.WriteByte('\n')
 	prefix := strings.Repeat("\t", depth)
-	if depth > option.MaxDepth && option.MaxDepth > 0 {
+	if depth >= option.MaxDepth && option.MaxDepth > 0 {
 		out.WriteString(fmt.Sprintf("%s...", prefix))
 		return
 	}
