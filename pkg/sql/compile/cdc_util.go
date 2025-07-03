@@ -26,13 +26,13 @@ import (
 )
 
 /* CDC APIs */
-func RegisterJob(ctx context.Context, txn client.TxnOperator, pitr_name string, info *idxcdc.ConsumerInfo) (bool, error) {
+func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, pitr_name string, info *idxcdc.ConsumerInfo) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
 	return true, nil
 }
 
-func UnregisterJob(ctx context.Context, txn client.TxnOperator, info *idxcdc.ConsumerInfo) (bool, error) {
+func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, info *idxcdc.ConsumerInfo) (bool, error) {
 
 	return true, nil
 }
@@ -41,12 +41,12 @@ func UnregisterJob(ctx context.Context, txn client.TxnOperator, info *idxcdc.Con
 func CreateCdcTask(c *Compile, pitr_name string, consumerinfo idxcdc.ConsumerInfo) (bool, error) {
 	logutil.Infof("Create Index Task %v", consumerinfo)
 
-	return RegisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), pitr_name, &consumerinfo)
+	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), pitr_name, &consumerinfo)
 }
 
 func DeleteCdcTask(c *Compile, consumerinfo idxcdc.ConsumerInfo) (bool, error) {
 	logutil.Infof("Delete Index Task %v", consumerinfo)
-	return UnregisterJob(c.proc.Ctx, c.proc.GetTxnOperator(), &consumerinfo)
+	return UnregisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), &consumerinfo)
 }
 
 func getIndexPitrName(dbname string, tablename string) string {
