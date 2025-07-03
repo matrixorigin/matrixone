@@ -221,7 +221,7 @@ func (b *bufferHolder) loopAggr() {
 		lastPrintTime time.Time
 		logger        = b.c.logger.With(zap.String("name", b.name)).Named("bufferHolder")
 		loopInterval  = time.Second
-		printInterval = time.Minute * 2
+		printInterval = time.Minute * 10
 		recordCnt     = 0
 	)
 	if b.aggr == nil {
@@ -431,7 +431,7 @@ func NewMOCollector(
 		generatorCntP:  20,
 		exporterCntP:   80,
 		pipeImplHolder: newPipeImplHolder(),
-		statsInterval:  time.Minute,
+		statsInterval:  5 * time.Minute,
 		maxBufferCnt:   int32(runtime.NumCPU()),
 	}
 	c.bufferCond = sync.NewCond(&c.bufferMux)
