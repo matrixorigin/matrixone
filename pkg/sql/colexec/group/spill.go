@@ -149,9 +149,10 @@ func (s *Spiller) spillState(hashmapData []byte, aggStates [][]byte, groupByBatc
 
 // recallState reads a spill file and returns the serialized hashmap, aggregation states, and group-by batch.
 func (s *Spiller) recallState(filePath string) ([]byte, [][]byte, []byte, error) {
-	var vec fileservice.IOVector
-	vec.FilePath = filePath
-	vec.Entries = []fileservice.IOEntry{{Offset: 0, Size: -1}} // Read entire file
+	vec := fileservice.IOVector{
+		FilePath: filePath,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1}}, // Read entire file
+	}
 
 	if err := s.fs.Read(s.proc.Ctx, &vec); err != nil {
 		return nil, nil, nil, moerr.NewInternalErrorf(s.proc.Ctx, "failed to read spill file %s: %v", filePath, err)
