@@ -293,7 +293,6 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 	require.NoError(t, err)
 
 	mp := mpool.MustNewZeroNoFixed()
-	defer mp.Free([]byte{})
 
 	// Create test objects
 	objUUID1 := types.Uuid{0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x1a, 0x1b, 0x1c, 0x1f}
@@ -404,11 +403,11 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 	// Create a GC executor
 	executor := NewGCExecutor(buffer, false, 1000, mp, fs)
 	defer executor.Close()
-
+	done := false
 	// Create a simple data source function
 	sourceFn := func(ctx context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch) (bool, error) {
 		// Copy original batch to target batch
-		if bat.Vecs[0].Length() > 0 {
+		if done {
 			return true, nil // Already added, don't add again
 		}
 
@@ -419,7 +418,8 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 			}
 		}
 		bat.SetRowCount(newBat.Vecs[0].Length())
-		return true, nil
+		done = true
+		return false, nil
 	}
 
 	// Object GC status tracking
@@ -441,7 +441,6 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 	fineFilter := func(ctx context.Context, bm *bitmap.Bitmap, bat *batch.Batch, mp *mpool.MPool) error {
 		// Create a table reference map for each object
 		objRefs := make(map[string]map[uint64]bool)
-
 		// First pass: collect reference information for all objects
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			stats := (objectio.ObjectStats)(bat.Vecs[0].GetRawBytesAt(i))
@@ -492,6 +491,9 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 
 	// Empty filter - does no filtering
 	noFilter := func(ctx context.Context, bm *bitmap.Bitmap, bat *batch.Batch, mp *mpool.MPool) error {
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			bm.Add(uint64(i))
+		}
 		return nil
 	}
 
