@@ -279,6 +279,293 @@ func Test_tableReader_Run(t *testing.T) {
 	}
 }
 
+func Test_tableReader_Run_DuplicateReader(t *testing.T) {
+	type fields struct {
+		cnTxnClient           client.TxnClient
+		cnEngine              engine.Engine
+		mp                    *mpool.MPool
+		packerPool            *fileservice.Pool[*types.Packer]
+		info                  *DbTableInfo
+		sinker                Sinker
+		wMarkUpdater          *CDCWatermarkUpdater
+		tick                  *time.Ticker
+		insTsColIdx           int
+		insCompositedPkColIdx int
+		delTsColIdx           int
+		delCompositedPkColIdx int
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer {
+			return types.NewPacker()
+		},
+		func(packer *types.Packer) {
+			packer.Reset()
+		},
+		func(packer *types.Packer) {
+			packer.Close()
+		},
+	)
+
+	type args struct {
+		ctx context.Context
+		ar  *ActiveRoutine
+	}
+
+	stub1 := gostub.Stub(&GetTxnOp,
+		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&FinishTxnOp,
+		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
+
+		})
+	defer stub2.Reset()
+
+	stub3 := gostub.Stub(&GetTxn,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
+			return nil
+		})
+	defer stub3.Reset()
+
+	stub4 := gostub.Stub(&GetRelationById,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+			return "", "", nil, nil
+		})
+	defer stub4.Reset()
+
+	stub5 := gostub.Stub(&GetSnapshotTS,
+		func(txnOp client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{
+				PhysicalTime: 100,
+				LogicalTime:  0,
+			}
+		})
+	defer stub5.Reset()
+
+	var packer *types.Packer
+	put := pool.Get(&packer)
+	defer put.Put()
+
+	mp := mpool.MustNewZero()
+
+	stub6 := gostub.Stub(&CollectChanges,
+		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+			return newTestChangesHandle("test", "t1", 20, 23, types.TS{}, mp, packer),
+				nil
+		})
+	defer stub6.Reset()
+
+	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
+	defer stub7.Reset()
+
+	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
+	defer stub8.Reset()
+
+	u, _ := InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
+
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+	}{
+		{
+			name: "t1",
+			fields: fields{
+				info: &DbTableInfo{
+					SourceDbName:  "db1",
+					SourceTblName: "t1",
+				},
+				tick:                  time.NewTicker(time.Millisecond * 300),
+				packerPool:            pool,
+				wMarkUpdater:          u,
+				mp:                    mp,
+				insTsColIdx:           0,
+				insCompositedPkColIdx: 3,
+				sinker:                NewConsoleSinker(nil, nil),
+			},
+			args: args{
+				ctx: ctx,
+				ar:  NewCdcActiveRoutine(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &tableReader{
+				cnTxnClient:           tt.fields.cnTxnClient,
+				cnEngine:              tt.fields.cnEngine,
+				mp:                    tt.fields.mp,
+				packerPool:            tt.fields.packerPool,
+				info:                  tt.fields.info,
+				sinker:                tt.fields.sinker,
+				wMarkUpdater:          tt.fields.wMarkUpdater,
+				tick:                  tt.fields.tick,
+				insTsColIdx:           tt.fields.insTsColIdx,
+				insCompositedPkColIdx: tt.fields.insCompositedPkColIdx,
+				delTsColIdx:           tt.fields.delTsColIdx,
+				delCompositedPkColIdx: tt.fields.delCompositedPkColIdx,
+				runningReaders:        &sync.Map{},
+			}
+			key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
+			reader.runningReaders.LoadOrStore(key, reader)
+			reader.Run(tt.args.ctx, tt.args.ar)
+		})
+	}
+}
+
+func Test_tableReader_Run_FailAndClose(t *testing.T) {
+	type fields struct {
+		cnTxnClient           client.TxnClient
+		cnEngine              engine.Engine
+		mp                    *mpool.MPool
+		packerPool            *fileservice.Pool[*types.Packer]
+		info                  *DbTableInfo
+		sinker                Sinker
+		wMarkUpdater          *CDCWatermarkUpdater
+		tick                  *time.Ticker
+		insTsColIdx           int
+		insCompositedPkColIdx int
+		delTsColIdx           int
+		delCompositedPkColIdx int
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	pool := fileservice.NewPool(
+		128,
+		func() *types.Packer {
+			return types.NewPacker()
+		},
+		func(packer *types.Packer) {
+			packer.Reset()
+		},
+		func(packer *types.Packer) {
+			packer.Close()
+		},
+	)
+
+	type args struct {
+		ctx context.Context
+		ar  *ActiveRoutine
+	}
+
+	stub1 := gostub.Stub(&GetTxnOp,
+		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&FinishTxnOp,
+		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
+
+		})
+	defer stub2.Reset()
+
+	stub3 := gostub.Stub(&GetTxn,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
+			return nil
+		})
+	defer stub3.Reset()
+
+	stub4 := gostub.Stub(&GetRelationById,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
+			return "", "", nil, nil
+		})
+	defer stub4.Reset()
+
+	stub5 := gostub.Stub(&GetSnapshotTS,
+		func(txnOp client.TxnOperator) timestamp.Timestamp {
+			return timestamp.Timestamp{
+				PhysicalTime: 100,
+				LogicalTime:  0,
+			}
+		})
+	defer stub5.Reset()
+
+	var packer *types.Packer
+	put := pool.Get(&packer)
+	defer put.Put()
+
+	mp := mpool.MustNewZero()
+
+	stub6 := gostub.Stub(&CollectChanges,
+		func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+			return nil, moerr.NewInternalErrorNoCtx("test error")
+		})
+	defer stub6.Reset()
+
+	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
+	defer stub7.Reset()
+
+	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
+	defer stub8.Reset()
+
+	u, _ := InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
+
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+	}{
+		{
+			name: "t1",
+			fields: fields{
+				info: &DbTableInfo{
+					SourceDbName:  "db1",
+					SourceTblName: "t1",
+				},
+				tick:                  time.NewTicker(time.Millisecond * 300),
+				packerPool:            pool,
+				wMarkUpdater:          u,
+				mp:                    mp,
+				insTsColIdx:           0,
+				insCompositedPkColIdx: 3,
+				sinker:                NewConsoleSinker(nil, nil),
+			},
+			args: args{
+				ctx: ctx,
+				ar:  NewCdcActiveRoutine(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &tableReader{
+				cnTxnClient:           tt.fields.cnTxnClient,
+				cnEngine:              tt.fields.cnEngine,
+				mp:                    tt.fields.mp,
+				packerPool:            tt.fields.packerPool,
+				info:                  tt.fields.info,
+				sinker:                tt.fields.sinker,
+				wMarkUpdater:          tt.fields.wMarkUpdater,
+				tick:                  tt.fields.tick,
+				insTsColIdx:           tt.fields.insTsColIdx,
+				insCompositedPkColIdx: tt.fields.insCompositedPkColIdx,
+				delTsColIdx:           tt.fields.delTsColIdx,
+				delCompositedPkColIdx: tt.fields.delCompositedPkColIdx,
+				runningReaders:        &sync.Map{},
+			}
+			reader.Run(tt.args.ctx, tt.args.ar)
+			count := 0
+			reader.runningReaders.Range(func(_, _ interface{}) bool {
+				count++
+				return true
+			})
+			assert.Zero(t, count, "runningReaders should be empty after Run exits")
+		})
+	}
+}
+
 func Test_tableReader_readTable(t *testing.T) {
 	stub1 := gostub.Stub(&GetTxnOp,
 		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
