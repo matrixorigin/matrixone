@@ -231,6 +231,14 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 			return nil, err
 		}
 
+		// check for spill
+		currentSize := group.getSize()
+		if currentSize > group.ctr.spillThreshold {
+			if err := group.spillCurrentState(proc); err != nil {
+				return nil, err
+			}
+		}
+
 	}
 }
 
@@ -510,6 +518,19 @@ func (group *Group) consumeBatchToRes(
 				if err = ag.BatchFill(i, vals[:n], group.ctr.aggregateEvaluate[j].Vec); err != nil {
 					return false, err
 				}
+			}
+		}
+
+		// check for spill
+		currentSize := group.getSize()
+		if currentSize > group.ctr.spillThreshold {
+			if err := group.spillCurrentState(proc); err != nil {
+				return false, err
+			}
+			// need to re-initialize it for the next iteration or final flush
+			_, err := group.initCtxToGetIntermediateResult(proc)
+			if err != nil {
+				return false, err
 			}
 		}
 

@@ -217,7 +217,7 @@ func (group *Group) initSpiller(proc *process.Process) (err error) {
 	if err != nil {
 		return err
 	}
-	group.ctr.spillThreshold = proc.Mp().Cap() / 2
+	group.ctr.spillThreshold = proc.Mp().Cap() / 2 //TODO configurable
 	return nil
 }
 
