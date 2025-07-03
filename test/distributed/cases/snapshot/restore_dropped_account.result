@@ -18,58 +18,36 @@ acc01    test_account    2025-01-06 06:52:50    open    null    5    65    0.0  
 drop account acc01;
 drop snapshot spsp01;
 drop account if exists acc02;
-[unknown result because it is related to issue#21092]
 create account acc02 admin_name = 'test_account' identified by '111';
-[unknown result because it is related to issue#21092]
 drop database if exists test01;
-[unknown result because it is related to issue#21092]
 create database test01;
-[unknown result because it is related to issue#21092]
 use test01;
-[unknown result because it is related to issue#21092]
 drop table if exists rs01;
-[unknown result because it is related to issue#21092]
 create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
-[unknown result because it is related to issue#21092]
 insert into rs01 values (1, null, 'database');
-[unknown result because it is related to issue#21092]
 insert into rs01 values (2, 38291.32132, 'database');
-[unknown result because it is related to issue#21092]
 insert into rs01 values (3, null, 'database management system');
-[unknown result because it is related to issue#21092]
 insert into rs01 values (4, 10, null);
-[unknown result because it is related to issue#21092]
 insert into rs01 values (1, -321.321, null);
-[unknown result because it is related to issue#21092]
 insert into rs01 values (2, -1, null);
-[unknown result because it is related to issue#21092]
 select count(*) from rs01;
-[unknown result because it is related to issue#21092]
+count(*)
+6
 drop database if exists test03;
-[unknown result because it is related to issue#21092]
 create database test03;
-[unknown result because it is related to issue#21092]
 use test03;
-[unknown result because it is related to issue#21092]
 drop table if exists pri01;
-[unknown result because it is related to issue#21092]
 create table pri01(
 deptno int unsigned comment '部门编号',
 dname varchar(15) comment '部门名称',
 loc varchar(50)  comment '部门所在位置',
 primary key(deptno)
 ) comment='部门表';
-[unknown result because it is related to issue#21092]
 insert into pri01 values (10,'ACCOUNTING','NEW YORK');
-[unknown result because it is related to issue#21092]
 insert into pri01 values (20,'RESEARCH','DALLAS');
-[unknown result because it is related to issue#21092]
 insert into pri01 values (30,'SALES','CHICAGO');
-[unknown result because it is related to issue#21092]
 insert into pri01 values (40,'OPERATIONS','BOSTON');
-[unknown result because it is related to issue#21092]
 drop table if exists aff01;
-[unknown result because it is related to issue#21092]
 create table aff01(
 empno int unsigned auto_increment COMMENT '雇员编号',
 ename varchar(15) comment '雇员姓名',
@@ -82,23 +60,14 @@ deptno int unsigned comment '所在部门',
 primary key(empno),
 constraint `c1` foreign key (deptno) references pri01 (deptno)
 );
-[unknown result because it is related to issue#21092]
 insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
-[unknown result because it is related to issue#21092]
 insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
-[unknown result because it is related to issue#21092]
 insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
-[unknown result because it is related to issue#21092]
 insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
-[unknown result because it is related to issue#21092]
 drop database if exists test04;
-[unknown result because it is related to issue#21092]
 create database test04;
-[unknown result because it is related to issue#21092]
 use test04;
-[unknown result because it is related to issue#21092]
 drop table if exists partition01;
-[unknown result because it is related to issue#21092]
 create table partition01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -113,20 +82,13 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
-[unknown result because it is related to issue#21092]
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
-[unknown result because it is related to issue#21092]
 drop database if exists test06;
-[unknown result because it is related to issue#21092]
 create database test06;
-[unknown result because it is related to issue#21092]
 use test06;
-[unknown result because it is related to issue#21092]
 set experimental_fulltext_index=1;
-[unknown result because it is related to issue#21092]
 create table src (id bigint primary key, body varchar, title text);
-[unknown result because it is related to issue#21092]
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
 (4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
 (5, '每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。', '遠東兒童中文'),
@@ -135,108 +97,143 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (8, NULL, 'NOT INCLUDED'),
 (9, 'NOT INCLUDED BODY', NULL),
 (10, NULL, NULL);
-[unknown result because it is related to issue#21092]
 create fulltext index ftidx on src (body, title);
-[unknown result because it is related to issue#21092]
 select * from src;
-[unknown result because it is related to issue#21092]
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
 drop view if exists view01;
-[unknown result because it is related to issue#21092]
 create view v01 as select * from src;
-[unknown result because it is related to issue#21092]
 select * from v01;
-[unknown result because it is related to issue#21092]
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
 show create table v01;
-[unknown result because it is related to issue#21092]
+View    Create View    character_set_client    collation_connection
+v01    create view v01 as select * from src;    utf8mb4    utf8mb4_general_ci
 drop snapshot if exists spsp02;
-[unknown result because it is related to issue#21092]
 create snapshot spsp02 for account acc02;
-[unknown result because it is related to issue#21092]
 drop account acc02;
-[unknown result because it is related to issue#21092]
 restore account acc02 from snapshot spsp02;
-[unknown result because it is related to issue#21092]
 show accounts;
-[unknown result because it is related to issue#21092]
+account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
+acc02    test_account    2025-07-03 05:09:30    open    null    9    71    0.0    0.0
+sys    root    2025-07-03 04:00:34    open    null    8    110    36.113428    0.0    system account
 show databases;
-[unknown result because it is related to issue#21092]
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+test01
+test03
+test04
+test06
 use test01;
-[unknown result because it is related to issue#21092]
 select * from rs01;
-[unknown result because it is related to issue#21092]
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
 show create table rs01;
-[unknown result because it is related to issue#21092]
+Table    Create Table
+rs01    CREATE TABLE `rs01` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(6,0) DEFAULT NULL,\n  `col3` varchar(30) DEFAULT NULL\n)
 use test03;
-[unknown result because it is related to issue#21092]
 select * from pri01;
-[unknown result because it is related to issue#21092]
+deptno    dname    loc
+10    ACCOUNTING    NEW YORK
+20    RESEARCH    DALLAS
+30    SALES    CHICAGO
+40    OPERATIONS    BOSTON
 select * from aff01;
-[unknown result because it is related to issue#21092]
+empno    ename    job    mgr    hiredate    sal    comm    deptno
+7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
+7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
 delete from aff01;
-[unknown result because it is related to issue#21092]
 use test04;
-[unknown result because it is related to issue#21092]
 select * from partition01;
-[unknown result because it is related to issue#21092]
+emp_no    birth_date    first_name    last_name    gender    hire_date
+9001    1980-12-17    SMITH    CLERK    F    2008-12-17
+9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 use test06;
-[unknown result because it is related to issue#21092]
 select * from src;
-[unknown result because it is related to issue#21092]
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
 truncate src;
-[unknown result because it is related to issue#21092]
 drop account acc02;
-[unknown result because it is related to issue#21092]
 drop snapshot spsp02;
-[unknown result because it is related to issue#21092]
 drop account if exists acc03;
-[unknown result because it is related to issue#21092]
 create account acc03 admin_name = 'test_account' identified by '111';
-[unknown result because it is related to issue#21092]
 drop database if exists udf_db;
-[unknown result because it is related to issue#21092]
 create database udf_db;
-[unknown result because it is related to issue#21092]
 use udf_db;
-[unknown result because it is related to issue#21092]
 select name, db from mo_catalog.mo_user_defined_function;
-[unknown result because it is related to issue#21092]
+name    db
 create function `addab`(x int, y int) returns int
 language sql as
 '$1 + $2';
-[unknown result because it is related to issue#21092]
 select addab(10, 5);
-[unknown result because it is related to issue#21092]
+addab(10, 5)
+15
 select name, db from mo_catalog.mo_user_defined_function;
-[unknown result because it is related to issue#21092]
+name    db
+addab    udf_db
 create function`concatenate`(str1 varchar(255), str2 varchar(255)) returns varchar(255)
 language sql as
 '$1 + $2';
-[unknown result because it is related to issue#21092]
 select concatenate('Hello, ', 'World!');
-[unknown result because it is related to issue#21092]
+concatenate(Hello, , World!)
+Hello, World!
 drop database if exists test01;
-[unknown result because it is related to issue#21092]
 create database test01;
-[unknown result because it is related to issue#21092]
 use test01;
-[unknown result because it is related to issue#21092]
 drop table if exists EmployeeSalaries;
-[unknown result because it is related to issue#21092]
 create table EmployeeSalaries (
 EmployeeID INT,
 EmployeeName VARCHAR(100),
 Salary DECIMAL(10, 2)
 );
-[unknown result because it is related to issue#21092]
 insert into EmployeeSalaries (EmployeeID, EmployeeName, Salary) VALUES
 (1, 'Alice', 70000),
 (2, 'Bob', 80000),
 (3, 'Charlie', 90000),
 (4, 'David', 65000),
 (5, 'Eva', 75000);
-[unknown result because it is related to issue#21092]
 drop view if exists EmployeeSalaryRanking;
-[unknown result because it is related to issue#21092]
 create view EmployeeSalaryRanking AS
 select
 EmployeeID,
@@ -245,59 +242,40 @@ Salary,
 rank() over (order by Salary desc) as SalaryRank
 from
 EmployeeSalaries;
-[unknown result because it is related to issue#21092]
 select * from EmployeeSalaryRanking;
-[unknown result because it is related to issue#21092]
+employeeid    employeename    salary    salaryrank
+3    Charlie    90000.00    1
+2    Bob    80000.00    2
+5    Eva    75000.00    3
+1    Alice    70000.00    4
+4    David    65000.00    5
 drop database if exists procedure_test;
-[unknown result because it is related to issue#21092]
 create database procedure_test;
-[unknown result because it is related to issue#21092]
 use procedure_test;
-[unknown result because it is related to issue#21092]
 drop database if exists test02;
-[unknown result because it is related to issue#21092]
 create database test02;
-[unknown result because it is related to issue#21092]
 use test02;
-[unknown result because it is related to issue#21092]
 drop table if exists tbh1;
-[unknown result because it is related to issue#21092]
 drop table if exists tbh2;
-[unknown result because it is related to issue#21092]
 drop table if exists tbh2;
-[unknown result because it is related to issue#21092]
 create table tbh1(id int primary key, val int);
-[unknown result because it is related to issue#21092]
 create table tbh2(id int primary key, val char);
-[unknown result because it is related to issue#21092]
 create table tbh3(id int primary key, val float);
-[unknown result because it is related to issue#21092]
 insert into tbh1(id, val) values(1,10),(2,20),(3,30);
-[unknown result because it is related to issue#21092]
 insert into tbh2(id, val) values(1,'a'),(2,'b'),(3,'c');
-[unknown result because it is related to issue#21092]
 insert into tbh3(id, val) values(1,1.5),(2,2.5),(3,3.5);
-[unknown result because it is related to issue#21092]
 drop procedure if exists test_if_hit_second_elseif;
-[unknown result because it is related to issue#21092]
 create procedure test_if_hit_second_elseif() 'begin DECLARE v1 INT; SET v1 = 4; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 order by id limit 1; ELSE select * from tbh3; END IF; end';
-[unknown result because it is related to issue#21092]
 call test_if_hit_second_elseif();
-[unknown result because it is related to issue#21092]
+id    val
+1    a
 drop snapshot if exists spsp03;
-[unknown result because it is related to issue#21092]
 create snapshot spsp03 for account acc03;
-[unknown result because it is related to issue#21092]
 drop account acc03;
-[unknown result because it is related to issue#21092]
 create account acc03 admin_name = 'test_account' identified by '111';
-[unknown result because it is related to issue#21092]
 restore account acc03 from snapshot spsp03;
-[unknown result because it is related to issue#21092]
 drop account acc03;
-[unknown result because it is related to issue#21092]
 drop snapshot spsp03;
-[unknown result because it is related to issue#21092]
 drop account if exists acc04;
 create account acc04 admin_name = 'test_account' identified by '111';
 drop account if exists acc05;
@@ -505,16 +483,18 @@ drop account acc05;
 drop account acc06;
 drop snapshot spsp06;
 drop account if exists acc07;
-
 create account acc07 admin_name = 'test_account' identified by '111';
-
 drop snapshot if exists spsp07;
-
-create snapshot spsp07 for account spsp07;
-
+create snapshot spsp07 for account acc07;
 drop account acc07;
-
 restore account acc07 from snapshot spsp07;
-
-show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+drop account acc07;
+drop snapshot spsp07;
+drop database restore_dropped_account;
