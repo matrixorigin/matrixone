@@ -185,7 +185,7 @@ func (group *Group) getInputBatch(proc *process.Process) (*batch.Batch, error) {
 // To avoid a single batch being too large,
 // we split the result as many part of vector, and send them in order.
 func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, error) {
-	group.ctr.result1.CleanLastPopped(proc.Mp())
+	group.ctr.finalResults.CleanLastPopped(proc.Mp())
 	if group.ctr.state == vm.End {
 		return nil, nil
 	}
@@ -200,11 +200,11 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 
 	for {
 		if group.ctr.state == vm.Eval {
-			if group.ctr.result1.IsEmpty() {
+			if group.ctr.finalResults.IsEmpty() {
 				group.ctr.state = vm.End
 				return nil, nil
 			}
-			return group.ctr.result1.PopResult(proc.Mp())
+			return group.ctr.finalResults.PopResult(proc.Mp())
 		}
 
 		res, err := group.getInputBatch(proc)
@@ -218,7 +218,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 				if err = group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 					return nil, err
 				}
-				group.ctr.result1.ToPopped[0].SetRowCount(1)
+				group.ctr.finalResults.ToPopped[0].SetRowCount(1)
 			}
 			continue
 		}
@@ -240,9 +240,9 @@ func (group *Group) generateInitialResult1WithoutGroupBy(proc *process.Process) 
 		return err
 	}
 
-	group.ctr.result1.InitOnlyAgg(aggexec.GetMinAggregatorsChunkSize(nil, aggs), aggs)
-	for i := range group.ctr.result1.AggList {
-		if err = group.ctr.result1.AggList[i].GroupGrow(1); err != nil {
+	group.ctr.finalResults.InitOnlyAgg(aggexec.GetMinAggregatorsChunkSize(nil, aggs), aggs)
+	for i := range group.ctr.finalResults.AggList {
+		if err = group.ctr.finalResults.AggList[i].GroupGrow(1); err != nil {
 			return err
 		}
 	}
@@ -259,22 +259,22 @@ func (group *Group) consumeBatchToGetFinalResult(
 	switch group.ctr.mtyp {
 	case H0:
 		// without group by.
-		if group.ctr.result1.IsEmpty() {
+		if group.ctr.finalResults.IsEmpty() {
 			if err := group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 				return err
 			}
 		}
 
-		group.ctr.result1.ToPopped[0].SetRowCount(1)
-		for i := range group.ctr.result1.AggList {
-			if err := group.ctr.result1.AggList[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
+		group.ctr.finalResults.ToPopped[0].SetRowCount(1)
+		for i := range group.ctr.finalResults.AggList {
+			if err := group.ctr.finalResults.AggList[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
 				return err
 			}
 		}
 
 	default:
 		// with group by.
-		if group.ctr.result1.IsEmpty() {
+		if group.ctr.finalResults.IsEmpty() {
 			err := group.ctr.hashMap.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
 			if err != nil {
 				return err
@@ -284,7 +284,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 			if err != nil {
 				return err
 			}
-			if err = group.ctr.result1.InitWithGroupBy(
+			if err = group.ctr.finalResults.InitWithGroupBy(
 				proc.Mp(),
 				aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, group.PreAllocSize); err != nil {
 				return err
@@ -293,7 +293,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 		count := bat.RowCount()
 		more := 0
-		aggList := group.ctr.result1.GetAggList()
+		aggList := group.ctr.finalResults.GetAggList()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
@@ -307,7 +307,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 			}
 			insertList, _ := group.ctr.hashMap.GetBinaryInsertList(vals, originGroupCount)
 
-			more, err = group.ctr.result1.AppendBatch(proc.Mp(), group.ctr.groupByEvaluate.Vec, i, insertList)
+			more, err = group.ctr.finalResults.AppendBatch(proc.Mp(), group.ctr.groupByEvaluate.Vec, i, insertList)
 			if err != nil {
 				return err
 			}
@@ -374,7 +374,7 @@ func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err er
 //
 // this function will be only called when there is one MergeGroup operator was behind.
 func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
-	group.ctr.result2.resetLastPopped()
+	group.ctr.intermediateResults.resetLastPopped()
 	if group.ctr.state == vm.End {
 		return nil, nil
 	}
@@ -433,7 +433,7 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 func (group *Group) initCtxToGetIntermediateResult(
 	proc *process.Process) (*batch.Batch, error) {
 
-	r, err := group.ctr.result2.getResultBatch(
+	r, err := group.ctr.intermediateResults.getResultBatch(
 		proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
 	if err != nil {
 		return nil, err
@@ -530,16 +530,16 @@ func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 	// aggregation states
 	var aggStatesData [][]byte
 	if group.NeedEval {
-		aggStatesData = make([][]byte, len(group.ctr.result1.AggList))
-		for i, agg := range group.ctr.result1.AggList {
+		aggStatesData = make([][]byte, len(group.ctr.finalResults.AggList))
+		for i, agg := range group.ctr.finalResults.AggList {
 			aggStatesData[i], err = aggexec.MarshalAggFuncExec(agg)
 			if err != nil {
 				return err
 			}
 		}
 	} else {
-		aggStatesData = make([][]byte, len(group.ctr.result2.res.Aggs))
-		for i, agg := range group.ctr.result2.res.Aggs {
+		aggStatesData = make([][]byte, len(group.ctr.intermediateResults.res.Aggs))
+		for i, agg := range group.ctr.intermediateResults.res.Aggs {
 			aggStatesData[i], err = aggexec.MarshalAggFuncExec(agg)
 			if err != nil {
 				return err
@@ -550,13 +550,13 @@ func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 	// group-by batch
 	var groupByBatchData []byte
 	if group.NeedEval {
-		if len(group.ctr.result1.ToPopped) > 0 {
+		if len(group.ctr.finalResults.ToPopped) > 0 {
 			tempGroupByBatch := batch.NewOffHeapWithSize(len(group.ctr.groupByEvaluate.Vec))
-			tempGroupByBatch.Attrs = group.ctr.result1.ToPopped[0].Attrs
+			tempGroupByBatch.Attrs = group.ctr.finalResults.ToPopped[0].Attrs
 			for i, vecType := range group.ctr.groupByEvaluate.Typ {
 				tempGroupByBatch.Vecs[i] = vector.NewOffHeapVecWithType(vecType)
 			}
-			for _, b := range group.ctr.result1.ToPopped {
+			for _, b := range group.ctr.finalResults.ToPopped {
 				for i, vec := range b.Vecs {
 					if err := tempGroupByBatch.Vecs[i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
 						tempGroupByBatch.Clean(proc.Mp())
@@ -574,7 +574,7 @@ func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 		}
 
 	} else {
-		groupByBatchData, err = group.ctr.result2.res.MarshalBinary()
+		groupByBatchData, err = group.ctr.intermediateResults.res.MarshalBinary()
 		if err != nil {
 			return err
 		}
@@ -588,11 +588,11 @@ func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 	// clear in-memory state
 	group.ctr.hashMap.Free0()
 	if group.NeedEval {
-		group.ctr.result1.Free0(proc.Mp())
-		group.ctr.result1 = GroupResultBuffer{}
+		group.ctr.finalResults.Free0(proc.Mp())
+		group.ctr.finalResults = GroupResultBuffer{}
 	} else {
-		group.ctr.result2.Free0(proc.Mp())
-		group.ctr.result2 = GroupResultNoneBlock{}
+		group.ctr.intermediateResults.Free0(proc.Mp())
+		group.ctr.intermediateResults = GroupResultNoneBlock{}
 	}
 	group.ctr.dataSourceIsEmpty = true
 	return nil
@@ -613,21 +613,21 @@ func (group *Group) getSize() int64 {
 
 	// Aggregation results size
 	if group.NeedEval {
-		for _, bat := range group.ctr.result1.ToPopped {
+		for _, bat := range group.ctr.finalResults.ToPopped {
 			if bat != nil {
 				size += int64(bat.Allocated())
 			}
 		}
-		for _, agg := range group.ctr.result1.AggList {
+		for _, agg := range group.ctr.finalResults.AggList {
 			if agg != nil {
 				size += agg.Size()
 			}
 		}
 
 	} else {
-		if group.ctr.result2.res != nil {
-			size += int64(group.ctr.result2.res.Allocated())
-			for _, agg := range group.ctr.result2.res.Aggs {
+		if group.ctr.intermediateResults.res != nil {
+			size += int64(group.ctr.intermediateResults.res.Allocated())
+			for _, agg := range group.ctr.intermediateResults.res.Aggs {
 				if agg != nil {
 					size += agg.Size()
 				}
