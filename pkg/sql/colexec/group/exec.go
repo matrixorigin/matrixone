@@ -620,7 +620,171 @@ func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 }
 
 func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
-	// TODO: implement
+	group.ctr.recalling = true
+	defer func() {
+		group.ctr.recalling = false
+		group.ctr.spilled = false
+	}()
+
+	if group.ctr.hashMap.Hash == nil {
+		if err := group.ctr.hashMap.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
+			return err
+		}
+	}
+
+	var currentAggs []aggexec.AggFuncExec
+	var currentGroupByBatch *batch.Batch
+
+	if group.NeedEval {
+		if group.ctr.finalResults.IsEmpty() {
+			aggs, err := group.generateAggExec(proc)
+			if err != nil {
+				return err
+			}
+			if err = group.ctr.finalResults.InitWithGroupBy(
+				proc.Mp(),
+				aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, 0); err != nil {
+				return err
+			}
+		}
+		currentAggs = group.ctr.finalResults.AggList
+
+	} else {
+		if group.ctr.intermediateResults.res == nil {
+			r, err := group.ctr.intermediateResults.getResultBatch(
+				proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
+			if err != nil {
+				return err
+			}
+			currentGroupByBatch = r
+		} else {
+			currentGroupByBatch = group.ctr.intermediateResults.res
+		}
+		currentAggs = currentGroupByBatch.Aggs
+	}
+
+	spillFiles := group.ctr.spiller.getSpillFiles()
+	for _, filePath := range spillFiles {
+		hashmapData, aggStatesData, groupByBatchData, err := group.ctr.spiller.recallState(filePath)
+		if err != nil {
+			return err
+		}
+
+		var recalledHM hashmap.HashMap
+		if group.ctr.mtyp == HStr {
+			recalledHM, err = hashmap.NewStrMap(group.ctr.keyNullable)
+		} else {
+			recalledHM, err = hashmap.NewIntHashMap(group.ctr.keyNullable)
+		}
+		if err != nil {
+			return err
+		}
+		//TODO allocator
+		if err := recalledHM.UnmarshalBinary(hashmapData, nil); err != nil {
+			recalledHM.Free()
+			return err
+		}
+
+		recalledAggs := make([]aggexec.AggFuncExec, len(aggStatesData))
+		aggMemoryManager := aggexec.NewSimpleAggMemoryManager(proc.Mp())
+		for i, aggData := range aggStatesData {
+			recalledAggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, aggData)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					recalledAggs[j].Free()
+				}
+				recalledHM.Free()
+				return err
+			}
+		}
+
+		recalledGroupByBatch := batch.NewOffHeapWithSize(len(group.ctr.groupByEvaluate.Vec))
+		//TODO
+		//recalledGroupByBatch.Attrs = group.ctr.groupByEvaluate.Vec[0].Attrs // Assuming attrs are consistent
+		if err := recalledGroupByBatch.UnmarshalBinaryWithAnyMp(groupByBatchData, proc.Mp()); err != nil {
+			for _, agg := range recalledAggs {
+				agg.Free()
+			}
+			recalledHM.Free()
+			recalledGroupByBatch.Clean(proc.Mp())
+			return err
+		}
+
+		recalledToCurrentGroupMap := make([]uint64, recalledHM.GroupCount()+1)
+		newGroupsToAppendSels := make([]int32, 0)
+		oldCurrentGroupCount := group.ctr.hashMap.Hash.GroupCount()
+
+		tempSingleRowBatch := batch.NewOffHeapWithSize(len(recalledGroupByBatch.Vecs))
+		for i := range tempSingleRowBatch.Vecs {
+			tempSingleRowBatch.Vecs[i] = vector.NewOffHeapVecWithType(*recalledGroupByBatch.Vecs[i].GetType())
+		}
+
+		for i := 0; i < recalledGroupByBatch.RowCount(); i++ {
+			for j := range recalledGroupByBatch.Vecs {
+				if err := tempSingleRowBatch.Vecs[j].UnionOne(recalledGroupByBatch.Vecs[j], int64(i), proc.Mp()); err != nil {
+					tempSingleRowBatch.Clean(proc.Mp())
+					return err
+				}
+			}
+			tempSingleRowBatch.SetRowCount(1)
+
+			vals, _, err := group.ctr.hashMap.Iter.Insert(0, 1, tempSingleRowBatch.Vecs)
+			if err != nil {
+				tempSingleRowBatch.Clean(proc.Mp())
+				return err
+			}
+			newID := vals[0]
+			recalledToCurrentGroupMap[uint64(i+1)] = newID
+
+			if newID > oldCurrentGroupCount {
+				newGroupsToAppendSels = append(newGroupsToAppendSels, int32(i))
+			}
+			tempSingleRowBatch.CleanOnlyData()
+		}
+		//TODO
+		//tempSingleRowBatch.Free(proc.Mp()) // Free the temporary batch
+
+		if len(newGroupsToAppendSels) > 0 {
+			if group.NeedEval {
+				newlyAddedGroupByBatch, err := recalledGroupByBatch.Window(0, recalledGroupByBatch.RowCount())
+				if err != nil {
+					return err
+				}
+				newlyAddedGroupByBatch.Shrink(int32SliceToInt64(newGroupsToAppendSels), false)
+				//TODO
+				//if err := group.ctr.finalResults.Push(proc.Mp(), newlyAddedGroupByBatch); err != nil {
+				//	return err
+				//}
+			} else {
+				if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
+					return err
+				}
+			}
+		}
+
+		for aggIdx := range currentAggs {
+			recalledAgg := recalledAggs[aggIdx]
+			if err := currentAggs[aggIdx].BatchMerge(recalledAgg, 0, recalledToCurrentGroupMap[1:]); err != nil {
+				for j := aggIdx; j < len(currentAggs); j++ {
+					recalledAggs[j].Free()
+				}
+				recalledHM.Free()
+				recalledGroupByBatch.Clean(proc.Mp())
+				return err
+			}
+		}
+
+		recalledHM.Free()
+		for _, agg := range recalledAggs {
+			agg.Free()
+		}
+		recalledGroupByBatch.Clean(proc.Mp())
+		if err := group.ctr.spiller.DeleteFile(filePath); err != nil {
+			return err
+		}
+
+	}
+
 	return nil
 }
 
