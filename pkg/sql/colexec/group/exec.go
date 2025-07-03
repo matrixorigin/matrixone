@@ -301,7 +301,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 			}
 
 			originGroupCount := group.ctr.hashMap.Hash.GroupCount()
-			vals, _, err := group.ctr.hashMap.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			vals, _, err := group.ctr.hashMap.Iter.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err != nil {
 				return err
 			}
@@ -484,7 +484,7 @@ func (group *Group) consumeBatchToRes(
 			}
 
 			originGroupCount := group.ctr.hashMap.Hash.GroupCount()
-			vals, _, err1 := group.ctr.hashMap.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			vals, _, err1 := group.ctr.hashMap.Iter.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err1 != nil {
 				return false, err1
 			}
