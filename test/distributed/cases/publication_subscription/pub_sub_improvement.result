@@ -233,9 +233,7 @@ drop database sub_database01;
 drop database sub_database02;
 drop database sub_database03;
 drop database sub_database01;
-Can't drop database 'sub_database01'; database doesn't exist
 drop database sub_database02;
-Can't drop database 'sub_database02'; database doesn't exist
 drop database database01;
 drop database database02;
 drop database database03;

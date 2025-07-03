@@ -88,8 +88,6 @@ show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
 show databases like 'db%';
 Database
-db09
-db10
 restore account acc01 from snapshot pub_sp to account acc03;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
