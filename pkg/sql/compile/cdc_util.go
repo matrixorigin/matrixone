@@ -29,12 +29,11 @@ import (
 func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, pitr_name string, info *idxcdc.ConsumerInfo) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
-	return true, nil
+	return idxcdc.RegisterJob(ctx, cnUUID, txn, pitr_name, info)
 }
 
 func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, info *idxcdc.ConsumerInfo) (bool, error) {
-
-	return true, nil
+	return idxcdc.UnregisterJob(ctx, cnUUID, txn, info)
 }
 
 /* start here */
