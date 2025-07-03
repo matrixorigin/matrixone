@@ -275,7 +275,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 	default:
 		// with group by.
 		if group.ctr.result1.IsEmpty() {
-			err := group.ctr.hr.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
+			err := group.ctr.hashMap.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
 			if err != nil {
 				return err
 			}
@@ -300,12 +300,12 @@ func (group *Group) consumeBatchToGetFinalResult(
 				n = hashmap.UnitLimit
 			}
 
-			originGroupCount := group.ctr.hr.Hash.GroupCount()
-			vals, _, err := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			originGroupCount := group.ctr.hashMap.Hash.GroupCount()
+			vals, _, err := group.ctr.hashMap.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err != nil {
 				return err
 			}
-			insertList, _ := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
+			insertList, _ := group.ctr.hashMap.GetBinaryInsertList(vals, originGroupCount)
 
 			more, err = group.ctr.result1.AppendBatch(proc.Mp(), group.ctr.groupByEvaluate.Vec, i, insertList)
 			if err != nil {
@@ -447,7 +447,7 @@ func (group *Group) initCtxToGetIntermediateResult(
 		}
 	} else {
 		allocated := max(min(group.PreAllocSize, uint64(intermediateResultSendActionTrigger)), 0)
-		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, allocated); err != nil {
+		if err = group.ctr.hashMap.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, allocated); err != nil {
 			return nil, err
 		}
 		err = preExtendAggExecs(r.Aggs, allocated)
@@ -483,12 +483,12 @@ func (group *Group) consumeBatchToRes(
 				n = hashmap.UnitLimit
 			}
 
-			originGroupCount := group.ctr.hr.Hash.GroupCount()
-			vals, _, err1 := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			originGroupCount := group.ctr.hashMap.Hash.GroupCount()
+			vals, _, err1 := group.ctr.hashMap.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err1 != nil {
 				return false, err1
 			}
-			insertList, more := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
+			insertList, more := group.ctr.hashMap.GetBinaryInsertList(vals, originGroupCount)
 
 			cnt := int(more)
 			if cnt > 0 {
@@ -520,8 +520,8 @@ func (group *Group) consumeBatchToRes(
 func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 	// hashmap
 	var hashmapData []byte = nil
-	if group.ctr.hr.Hash != nil {
-		hashmapData, err = group.ctr.hr.Hash.MarshalBinary()
+	if group.ctr.hashMap.Hash != nil {
+		hashmapData, err = group.ctr.hashMap.Hash.MarshalBinary()
 		if err != nil {
 			return err
 		}
@@ -586,7 +586,7 @@ func (group *Group) spillCurrentState(proc *process.Process) (err error) {
 	}
 
 	// clear in-memory state
-	group.ctr.hr.Free0()
+	group.ctr.hashMap.Free0()
 	if group.NeedEval {
 		group.ctr.result1.Free0(proc.Mp())
 		group.ctr.result1 = GroupResultBuffer{}
@@ -607,8 +607,8 @@ func (group *Group) getSize() int64 {
 	var size int64
 
 	// Hash table size
-	if group.ctr.hr.Hash != nil {
-		size += group.ctr.hr.Hash.Size()
+	if group.ctr.hashMap.Hash != nil {
+		size += group.ctr.hashMap.Hash.Size()
 	}
 
 	// Aggregation results size

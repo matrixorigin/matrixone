@@ -49,7 +49,7 @@ type container struct {
 	state vm.CtrState
 
 	// hash.
-	hr group.ResHashRelated
+	hr group.HashMap
 	// res.
 	result group.GroupResultBuffer
 }

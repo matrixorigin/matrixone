@@ -149,7 +149,7 @@ type container struct {
 	dataSourceIsEmpty bool
 
 	// hash.
-	hr          ResHashRelated
+	hashMap     HashMap
 	mtyp        int
 	keyWidth    int
 	keyNullable bool
@@ -203,7 +203,7 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (group *Group) freeCannotReuse(mp *mpool.MPool) {
-	group.ctr.hr.Free0()
+	group.ctr.hashMap.Free0()
 	group.ctr.result1.Free0(mp)
 	group.ctr.result2.Free0(mp)
 	group.ctr.spiller.clean()
