@@ -30,6 +30,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -70,15 +71,17 @@ func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.
 	} else {
 		pos = tableDef.Name2ColIndex[name]
 	}
-	if name != tableDef.Cols[colPos].Name {
-		logutil.Error(
-			"Bad-ColExpr",
-			zap.String("col-name", name),
-			zap.Int32("col-actual-pos", colPos),
-			zap.Int32("col-expected-pos", pos),
-			zap.String("col-expr", plan2.FormatExpr(expr)),
-		)
-	}
+	common.DoIfDebugEnabled(func() {
+		if name != tableDef.Cols[colPos].Name {
+			logutil.Error(
+				"Bad-ColExpr",
+				zap.String("col-name", name),
+				zap.Int32("col-actual-pos", colPos),
+				zap.Int32("col-expected-pos", pos),
+				zap.String("col-expr", plan2.FormatExpr(expr)),
+			)
+		}
+	})
 	return tableDef.Cols[pos]
 }
 
@@ -112,19 +115,19 @@ func evalValue(
 	}
 
 	colName := col.Col.Name
-	if colName == "" {
-		colName = tblDef.Cols[pkColId].Name
-	} else {
-		if col.Col.ColPos != pkColId {
+
+	common.DoIfDebugEnabled(func() {
+		if colName == "" || pkColId != col.Col.ColPos {
 			logutil.Error(
 				"Bad-ColExpr",
 				zap.String("col-name", colName),
+				zap.String("pk-name", pkName),
 				zap.Int32("col-actual-pos", col.Col.ColPos),
 				zap.Int32("col-expected-pos", pkColId),
 				zap.String("col-expr", plan2.FormatExpr(expr)),
 			)
 		}
-	}
+	})
 	if !compPkCol(colName, pkName) {
 		return false, 0, nil
 	}
