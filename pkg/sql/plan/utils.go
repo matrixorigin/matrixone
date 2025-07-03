@@ -1946,33 +1946,14 @@ type FormatOption struct {
 
 	// <=0 means no limit
 	MaxDepth int
-
-	// "json" or "console"
-	// if not set, use "console"
-	Formatter string
 }
 
 func FormatExprs(exprs []*plan.Expr, option FormatOption) string {
-	if option.Formatter == "json" {
-		return FormatExprsInJson(exprs, option)
-	}
-
 	return FormatExprsInConsole(exprs, option)
 }
 
 func FormatExpr(expr *plan.Expr, option FormatOption) string {
-	if option.Formatter == "json" {
-		return FormatExprInJson(expr, option)
-	}
 	return FormatExprInConsole(expr, option)
-}
-
-func FormatExprInJson(expr *plan.Expr, option FormatOption) string {
-	return ""
-}
-
-func FormatExprsInJson(exprs []*plan.Expr, option FormatOption) string {
-	return ""
 }
 
 func FormatExprsInConsole(exprs []*plan.Expr, option FormatOption) string {
