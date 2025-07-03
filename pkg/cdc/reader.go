@@ -137,6 +137,7 @@ func (reader *tableReader) Run(
 			zap.String("task-id", reader.taskId),
 			zap.Uint64("account-id", reader.accountId),
 		)
+		reader.Close()
 		return
 	}
 	logutil.Info(
@@ -150,19 +151,19 @@ func (reader *tableReader) Run(
 	reader.wg.Add(1)
 	defer func() {
 		defer reader.wg.Done()
-		key := WatermarkKey{
+		wKey := WatermarkKey{
 			AccountId: reader.accountId,
 			TaskId:    reader.taskId,
 			DBName:    reader.info.SourceDbName,
 			TableName: reader.info.SourceTblName,
 		}
-		defer reader.wMarkUpdater.RemoveCachedWM(ctx, &key)
+		defer reader.wMarkUpdater.RemoveCachedWM(ctx, &wKey)
 
 		if err != nil {
 			errMsg := err.Error()
 			if err = reader.wMarkUpdater.UpdateWatermarkErrMsg(
 				ctx,
-				&key,
+				&wKey,
 				errMsg,
 			); err != nil {
 				logutil.Error(
