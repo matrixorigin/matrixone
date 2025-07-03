@@ -253,7 +253,7 @@ create user user1 identified by '12345678',user2 identified by '12345678',user3 
 grant r1,r2,r3,r4,r5 to user1,user2,user3,user4,user5;
 select count(*) from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r1','r2','r3','r4','r5');
 -- @session:id=13&user=sys:user1:r1&password=12345678
-create table grant_table_10(a int);
+create table testdb5.grant_table_10(a int);
 -- @session
 
 --一个role授权给多个用户
@@ -261,8 +261,8 @@ grant create role on account * to r5;
 grant r5 to user1,user2,user3,user4,user5;
 select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r5');
 -- @session:id=14&user=sys:user3:r5&password=12345678
-create role test_role;
-select count(*) from mo_catalog.mo_role where role_name='test_role';
+create role test_role_2;
+select count(*) from mo_catalog.mo_role where role_name='test_role_2';
 -- @session
 
 --多个role授权给多个role
@@ -288,7 +288,7 @@ grant r1,r2 to r6,r7;
 select mr.role_name,mp.role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_role_grant mg,mo_catalog.mo_role mr ,mo_catalog.mo_role_privs mp where  mg.grantee_id=mr.role_id and mg.granted_id = mp.role_id and mr.role_name in ('r6','r7');
 
 drop user if exists user1,user2,user3,user4,user5,user11,user12,testuser,user_grant_1,user_grant_3,user_grant_4,user_grant_5,user_grant_6,user_grant_7,user_grant_8,user_grant_9,user_grant_10,user_prepare_01;
-drop role if exists u_role,test_role,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
+drop role if exists u_role,test_role,test_role_2,grant_role_1,role_sys_priv,role_account_priv_2,role_account_priv_3,role_account_priv_4,role_account_priv_5,role_account_priv_6,role_account_priv_7,role_account_priv_8,role_account_priv_9,role_account_priv_10,role_prepare_1;
 drop database if exists grant_db;
 drop database if exists testdb;
 drop database if exists testdb4;
