@@ -135,8 +135,8 @@ drop account acc02;
 restore account acc02 from snapshot spsp02;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-sys    root    2025-07-02 06:01:47    open    null    8    110    7.726499    0.0    system account
-acc02    test_account    2025-07-02 06:20:33    open    null    9    71    0.0    0.0
+acc02    test_account    2025-07-03 05:09:30    open    null    9    71    0.0    0.0
+sys    root    2025-07-03 04:00:34    open    null    8    110    36.113428    0.0    system account
 show databases;
 Database
 information_schema
@@ -495,6 +495,6 @@ mo_catalog
 mysql
 system
 system_metrics
-drop snapshot if exists spsp07;
-drop account if exists acc07;
-drop database if exists restore_dropped_account;
+drop account acc07;
+drop snapshot spsp07;
+drop database restore_dropped_account;
