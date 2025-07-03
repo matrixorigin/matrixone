@@ -181,7 +181,7 @@ func ConstructBasePKFilter(
 
 		case ">=":
 			//a >= ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -192,7 +192,7 @@ func ConstructBasePKFilter(
 
 		case "<=":
 			//a <= ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -203,7 +203,7 @@ func ConstructBasePKFilter(
 
 		case ">":
 			//a > ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -214,7 +214,7 @@ func ConstructBasePKFilter(
 
 		case "<":
 			//a < ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -225,7 +225,7 @@ func ConstructBasePKFilter(
 
 		case "=":
 			// a = ?
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -235,7 +235,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_eq":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -245,7 +245,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "in":
-			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -261,7 +261,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_in":
-			ok, oid, vals := evalValue(exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, true, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -277,7 +277,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "between":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
@@ -288,7 +288,7 @@ func ConstructBasePKFilter(
 			filter.Oid = oid
 
 		case "prefix_between":
-			ok, oid, vals := evalValue(exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
+			ok, oid, vals := evalValue(expr, exprImpl, tblDef, false, tblDef.Pkey.PkeyColName)
 			if !ok {
 				return
 			}
