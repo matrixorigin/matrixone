@@ -754,8 +754,21 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 				if err := group.ctr.finalResults.PushBatch(proc.Mp(), newlyAddedGroupByBatch); err != nil {
 					return err
 				}
-			} else {
-				if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
+				// Grow aggregators for newly added groups
+				for _, agg := range currentAggs {
+					if err := agg.GroupGrow(len(newGroupsToAppendSels)); err != nil {
+						return err
+					}
+				}
+				return err
+			}
+		} else {
+			if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
+				return err
+			}
+			// Grow aggregators for newly added groups
+			for _, agg := range currentAggs {
+				if err := agg.GroupGrow(len(newGroupsToAppendSels)); err != nil {
 					return err
 				}
 			}
