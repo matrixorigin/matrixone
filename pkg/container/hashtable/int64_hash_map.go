@@ -78,7 +78,7 @@ func (ht *Int64HashMap) allocate(index int, size uint64) error {
 
 func (ht *Int64HashMap) Init(allocator malloc.Allocator) (err error) {
 	if allocator == nil {
-		allocator = defaultAllocator()
+		allocator = DefaultAllocator()
 	}
 	ht.allocator = allocator
 	ht.blockCellCnt = kInitialCellCnt
@@ -377,7 +377,7 @@ func (ht *Int64HashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator)
 
 	ht.allocator = allocator
 	if ht.allocator == nil {
-		ht.allocator = defaultAllocator()
+		ht.allocator = DefaultAllocator()
 	}
 
 	// Initialize internal structures based on deserialized metadata

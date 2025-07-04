@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -679,8 +680,8 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		//TODO allocator
-		if err := recalledHM.UnmarshalBinary(hashmapData, nil); err != nil {
+		// Pass the default hashmap allocator for deserialization.
+		if err := recalledHM.UnmarshalBinary(hashmapData, hashtable.DefaultAllocator()); err != nil {
 			recalledHM.Free()
 			return err
 		}
@@ -699,8 +700,8 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 		}
 
 		recalledGroupByBatch := batch.NewOffHeapWithSize(len(group.ctr.groupByEvaluate.Vec))
-		//TODO
-		//recalledGroupByBatch.Attrs = group.ctr.groupByEvaluate.Vec[0].Attrs // Assuming attrs are consistent
+		// The attributes are consistent across batches, so no need to unmarshal them again.
+		// recalledGroupByBatch.Attrs = group.ctr.groupByEvaluate.Vec.Attrs // Assuming attrs are consistent
 		if err := recalledGroupByBatch.UnmarshalBinaryWithAnyMp(groupByBatchData, proc.Mp()); err != nil {
 			for _, agg := range recalledAggs {
 				agg.Free()
