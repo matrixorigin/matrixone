@@ -741,8 +741,7 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 			}
 			tempSingleRowBatch.CleanOnlyData()
 		}
-		//TODO
-		//tempSingleRowBatch.Free(proc.Mp()) // Free the temporary batch
+		tempSingleRowBatch.Clean(proc.Mp()) // Free the temporary batch
 
 		if len(newGroupsToAppendSels) > 0 {
 			if group.NeedEval {
