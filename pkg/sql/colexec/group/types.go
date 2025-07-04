@@ -167,7 +167,9 @@ type container struct {
 	spiller        *Spiller
 	spilled        bool
 	spillThreshold int64
-	recalling      bool
+	// recalling indicates that the operator is currently recalling spilled data.
+	// During this phase, no new data should be consumed from the child operator.
+	recalling bool
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
@@ -190,6 +192,8 @@ func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error)
 		if spillErr := group.ctr.spiller.clean(); spillErr != nil {
 			logutil.Error("failed to clean up spill files during reset", zap.Error(spillErr))
 		}
+		// After cleaning, the spiller is no longer needed for this operator instance.
+		// It will be re-initialized if the operator is prepared again.
 		group.ctr.spiller = nil
 	}
 	group.ctr.spilled = false
