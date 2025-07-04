@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -64,6 +65,10 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	}
 	if err = group.prepareGroup(proc); err != nil {
 		return err
+	}
+	// If there are any distinct aggregations, spilling is not supported with the current design.
+	if group.AnyDistinctAgg() {
+		group.ctr.spillThreshold = math.MaxInt64
 	}
 	if err := group.initSpiller(proc); err != nil {
 		return err
