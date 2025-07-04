@@ -2047,7 +2047,10 @@ func (m *MockEngine) HasTempEngine() bool {
 	return ret0
 }
 
-
+func (mr *MockEngineMockRecorder) HasTempEngine() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTempEngine", reflect.TypeOf((*MockEngine)(nil).HasTempEngine))
+}
 
 // New mocks base method.
 func (m *MockEngine) New(ctx context.Context, op client.TxnOperator) error {
