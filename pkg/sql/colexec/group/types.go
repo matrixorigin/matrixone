@@ -210,7 +210,9 @@ func (group *Group) freeCannotReuse(mp *mpool.MPool) {
 	group.ctr.hashMap.Free0()
 	group.ctr.finalResults.Free0(mp)
 	group.ctr.intermediateResults.Free0(mp)
-	group.ctr.spiller.clean()
+	if group.ctr.spiller != nil {
+		group.ctr.spiller.clean()
+	}
 	group.ctr.spilled = false
 	group.ctr.spiller = nil
 	group.ctr.recalling = false
