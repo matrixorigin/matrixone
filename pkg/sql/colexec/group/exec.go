@@ -750,11 +750,10 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 				if err != nil {
 					return err
 				}
-				newlyAddedGroupByBatch.Shrink(int32SliceToInt64(newGroupsToAppendSels), false)
-				//TODO
-				//if err := group.ctr.finalResults.Push(proc.Mp(), newlyAddedGroupByBatch); err != nil {
-				//	return err
-				//}
+				newlyAddedGroupByBatch.Shrink(int32SliceToInt64(newGroupsToAppendSels), false) // Shrink to only new groups
+				if err := group.ctr.finalResults.PushBatch(proc.Mp(), newlyAddedGroupByBatch); err != nil {
+					return err
+				}
 			} else {
 				if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
 					return err
