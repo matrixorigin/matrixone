@@ -227,6 +227,8 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 			continue
 		}
 
+		// If we received data, the data source is no longer considered empty for the overall operator.
+		// This flag should not be reset to true after a spill, as it indicates if *any* data has been processed.
 		group.ctr.dataSourceIsEmpty = false
 		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
 			return nil, err
@@ -426,6 +428,8 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 		if input.IsEmpty() {
 			continue
 		}
+		// If we received data, the data source is no longer considered empty for the overall operator.
+		// This flag should not be reset to true after a spill, as it indicates if *any* data has been processed.
 		group.ctr.dataSourceIsEmpty = false
 
 		if next, er := group.consumeBatchToRes(proc, input, r); er != nil {
@@ -762,14 +766,15 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 				}
 				return err
 			}
-		} else {
-			if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
-				return err
-			}
-			// Grow aggregators for newly added groups
-			for _, agg := range currentAggs {
-				if err := agg.GroupGrow(len(newGroupsToAppendSels)); err != nil {
+		} else { // !group.NeedEval
+			if len(newGroupsToAppendSels) > 0 {
+				if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
 					return err
+				}
+				for _, agg := range currentAggs {
+					if err := agg.GroupGrow(len(newGroupsToAppendSels)); err != nil {
+						return err
+					}
 				}
 			}
 		}
