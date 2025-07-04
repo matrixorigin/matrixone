@@ -371,7 +371,7 @@ func (tcc *TxnCompilerContext) getRelation(
 		// get from the temp engine
 		tmpTableName := engine.GetTempTableName(dbName, tableName)
 		if tmpTable, err2 := tcc.getTmpRelation(tempCtx, tmpTableName); err2 != nil {
-			return nil, nil, err
+			return nil, nil, nil
 		} else {
 			table = tmpTable
 		}
