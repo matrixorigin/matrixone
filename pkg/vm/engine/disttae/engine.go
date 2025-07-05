@@ -820,3 +820,7 @@ func (e *Engine) PackerPool() *fileservice.Pool[*types.Packer] {
 func (e *Engine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return e.pClient.LatestLogtailAppliedTime()
 }
+
+func (e *Engine) HasTempEngine() bool {
+	return false
+}

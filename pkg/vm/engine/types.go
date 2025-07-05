@@ -1165,6 +1165,8 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+
+	HasTempEngine() bool
 }
 
 type VectorPool interface {
