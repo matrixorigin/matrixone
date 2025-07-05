@@ -315,7 +315,6 @@ func restoreToAccountFromTS(
 	if dbNames, err = showDatabasesFromTS(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
 		return
 	}
-
 	for _, dbName := range dbNames {
 		if needSkipDb(dbName) {
 			getLogger(sid).Info(fmt.Sprintf("[%d:%d] skip restore db: %v", restoreAccount, snapshotTs, dbName))
@@ -346,6 +345,7 @@ func restoreToAccountFromTS(
 	); err != nil {
 		return
 	}
+
 	return
 }
 
@@ -537,10 +537,12 @@ func recreateTableFromTS(
 		return
 	}
 
-	// create table
-	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
-	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-		return
+	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
+		// create table
+		getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to create table: %v, create table sql: %s", restoreAccount, snapshotTs, tblInfo.tblName, tblInfo.createSql))
+		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+			return
+		}
 	}
 
 	insertIntoSql := fmt.Sprintf(restoreTableDataByTsFmt, tblInfo.dbName, tblInfo.tblName, tblInfo.dbName, tblInfo.tblName, snapshotTs)

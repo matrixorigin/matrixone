@@ -518,6 +518,19 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleSetLogserviceSettings(execCtx, ses, st); err != nil {
 			return
 		}
+	case *tree.CloneDatabase:
+		ses.EnterFPrint(FPCloneDatabase)
+		defer ses.ExitFPrint(FPCloneDatabase)
+		if err = handleCloneDatabase(execCtx, ses, st); err != nil {
+			return
+		}
+
+	case *tree.CloneTable:
+		ses.EnterFPrint(FPCloneTable)
+		defer ses.ExitFPrint(FPCloneTable)
+		if err = handleCloneTableAcrossAccounts(execCtx, ses, st); err != nil {
+			return
+		}
 	}
 	return
 }
