@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -155,16 +155,41 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		return nil, "", err
 	}
 
-	filesToGC, filesNotGC := job.Result()
+	vecToGC, filesNotGC := job.Result()
+	defer vecToGC.Free(w.mp)
 	var metaFile string
 	var err error
+	var bf *bloomfilter.BloomFilter
 	if metaFile, err = w.writeMetaForRemainings(
 		ctx, filesNotGC,
 	); err != nil {
 		return nil, "", err
 	}
-
 	w.files = filesNotGC
+	sourcer = w.MakeFilesReader(ctx, fs)
+	bf, err = BuildBloomfilter(
+		ctx,
+		Default_Coarse_EstimateRows,
+		Default_Coarse_Probility,
+		0,
+		sourcer.Read,
+		buffer,
+		w.mp,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	filesToGC := make([]string, 0, 20)
+	bf.Test(vecToGC,
+		func(exists bool, i int) {
+			if !exists {
+				buf := vecToGC.GetRawBytesAt(i)
+				stats := (objectio.ObjectStats)(buf)
+				name := stats.ObjectName().UnsafeString()
+				filesToGC = append(filesToGC, name)
+				return
+			}
+		})
 	return filesToGC, metaFile, nil
 }
 
@@ -202,7 +227,7 @@ func (w *GCWindow) ScanCheckpoints(
 				return false, err
 			}
 		}
-		objects := make(map[string]*ObjectEntry)
+		objects := make(map[string]map[uint64]*ObjectEntry)
 		collectObjectsFromCheckpointData(ctx, ckpReader, objects)
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
@@ -320,7 +345,7 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]*ObjectEntry) {
+func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) {
 	ckpReader.ForEachRow(
 		ctx,
 		func(
@@ -332,6 +357,9 @@ func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CK
 			rowID types.Rowid,
 		) error {
 			name := stats.ObjectName().String()
+			if objects[name] == nil {
+				objects[name] = make(map[uint64]*ObjectEntry)
+			}
 			object := &ObjectEntry{
 				stats:    &stats,
 				createTS: createTS,
@@ -339,7 +367,7 @@ func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CK
 				db:       dbid,
 				table:    tid,
 			}
-			objects[name] = object
+			objects[name][tid] = object
 			return nil
 		},
 	)
@@ -351,17 +379,19 @@ func (w *GCWindow) Close() {
 
 // collectData collects data from memory that can be written to s3
 func collectMapData(
-	objects map[string]*ObjectEntry,
+	objects map[string]map[uint64]*ObjectEntry,
 	bat *batch.Batch,
 	mp *mpool.MPool,
 ) error {
 	if len(objects) == 0 {
 		return nil
 	}
-	for _, entry := range objects {
-		err := addObjectToBatch(bat, entry.stats, entry, mp)
-		if err != nil {
-			return err
+	for _, tables := range objects {
+		for _, entry := range tables {
+			err := addObjectToBatch(bat, entry.stats, entry, mp)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	batch.SetLength(bat, len(objects))
