@@ -327,6 +327,16 @@ func (exec *approxCountFixedExec[T]) Free() {
 	exec.groups = nil
 }
 
+func (exec *approxCountFixedExec[T]) Size() int64 {
+	var size int64
+	for _, s := range exec.groups {
+		//TODO how?
+		_ = s
+		//size += int64(s.Size())
+	}
+	return exec.ret.Size() + size
+}
+
 func (exec *approxCountVarExec) GroupGrow(more int) error {
 	oldLen, newLen := len(exec.groups), len(exec.groups)+more
 	if cap(exec.groups) >= newLen {
@@ -464,4 +474,14 @@ func (exec *approxCountVarExec) Flush() ([]*vector.Vector, error) {
 func (exec *approxCountVarExec) Free() {
 	exec.ret.free()
 	exec.groups = nil
+}
+
+func (exec *approxCountVarExec) Size() int64 {
+	var size int64
+	for _, s := range exec.groups {
+		//TODO how?
+		_ = s
+		//size += int64(s.Size())
+	}
+	return exec.ret.Size() + size
 }
