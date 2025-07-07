@@ -49,8 +49,14 @@ func init() {
 }
 
 func (tc *TableClone) Free(proc *process.Process, pipelineFailed bool, err error) {
-	tc.dataObjBat.Clean(proc.Mp())
-	tc.tombstoneObjBat.Clean(proc.Mp())
+	if tc.dataObjBat != nil {
+		tc.dataObjBat.Clean(proc.Mp())
+	}
+
+	if tc.tombstoneObjBat != nil {
+		tc.tombstoneObjBat.Clean(proc.Mp())
+	}
+
 	tc.idxNameToReader = nil
 	tc.dstIdxNameToRel = nil
 }

@@ -45,6 +45,11 @@ func buildCloneTable(
 	builder = NewQueryBuilder(plan.Query_INSERT, ctx, false, true)
 	bindCtx = NewBindContext(builder, nil)
 
+	old := builder.compCtx.GetSnapshot()
+	defer func() {
+		builder.compCtx.SetSnapshot(old)
+	}()
+
 	if stmt.IsRestore {
 		snapshot := &Snapshot{
 			Tenant: &SnapshotTenant{
@@ -52,15 +57,9 @@ func buildCloneTable(
 			},
 		}
 
-		old := builder.compCtx.GetSnapshot()
-
 		builder.compCtx.SetSnapshot(snapshot)
 		builder.isRestore = stmt.IsRestore
 		builder.isRestoreByTs = stmt.IsRestoreByTS
-
-		defer func() {
-			builder.compCtx.SetSnapshot(old)
-		}()
 	}
 
 	if IsSnapshotValid(ctx.GetSnapshot()) {
