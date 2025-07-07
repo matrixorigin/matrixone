@@ -1200,6 +1200,7 @@ func (w *WinSpecDescribeImpl) GetDescription(ctx context.Context, options *Expla
 }
 
 type RowsetDataDescribeImpl struct {
+	TableDef   *plan.TableDef
 	RowsetData *plan.RowsetData
 }
 
@@ -1210,12 +1211,12 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	}
 
 	first := true
-	for index := range r.RowsetData.Cols {
+	for _, col := range r.TableDef.Cols {
 		if !first {
 			buf.WriteString(", ")
 		}
 		first = false
-		buf.WriteString("\"*VALUES*\".column" + strconv.Itoa(index+1))
+		buf.WriteString("\"*VALUES*\"." + col.Name)
 	}
 	return nil
 }
