@@ -118,8 +118,6 @@ type CreatePitr struct {
 
 	PitrValue int64
 	PitrUnit  string
-
-	ExecLocation ExecLocation // 执行位置：EXEC_IN_FRONTEND 或 EXEC_IN_ENGINE
 }
 
 func (node *CreatePitr) Format(ctx *FmtCtx) {
@@ -153,10 +151,6 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("%v ", node.PitrValue))
 	ctx.WriteString(" ")
 	ctx.WriteString(node.PitrUnit)
-
-	if node.ExecLocation == EXEC_IN_ENGINE {
-		ctx.WriteString(" in engine")
-	}
 }
 
 func (node *CreatePitr) GetStatementType() string { return "Create PITR" }
