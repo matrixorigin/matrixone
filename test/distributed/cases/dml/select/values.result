@@ -22,3 +22,9 @@ select * from (values row(1,"1",1.0), row(abs(-2),"2",2.0)) a;
 column_0    column_1    column_2
 1    1    1.0
 2    2    2.0
+select column_1 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3))));
+column_1
+1
+select column_2 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3))));
+column_2
+[3, 4, 5]

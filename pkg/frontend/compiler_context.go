@@ -287,20 +287,27 @@ func ShouldSwitchToSysAccount(dbName string, tableName string) bool {
 }
 
 // getRelation returns the context (maybe updated) and the relation
-func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub *plan.SubscriptionMeta, snapshot *plan2.Snapshot) (context.Context, engine.Relation, error) {
+func (tcc *TxnCompilerContext) getRelation(
+	dbName string,
+	tableName string,
+	sub *plan.SubscriptionMeta,
+	snapshot *plan2.Snapshot,
+) (context.Context, engine.Relation, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	start := time.Now()
+	var (
+		start   = time.Now()
+		ses     = tcc.GetSession()
+		txn     = tcc.GetTxnHandler().GetTxn()
+		tempCtx = tcc.execCtx.reqCtx
+	)
+
 	defer func() {
 		v2.GetRelationDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-
-	ses := tcc.GetSession()
-	txn := tcc.GetTxnHandler().GetTxn()
-	tempCtx := tcc.execCtx.reqCtx
 
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
@@ -326,49 +333,50 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 		tempCtx = defines.AttachAccountId(tempCtx, uint32(sysAccountID))
 	}
 
-	start1 := time.Now()
+	start = time.Now()
+
+	var (
+		db    engine.Database
+		table engine.Relation
+	)
 
 	//open database
-	db, err := tcc.GetTxnHandler().GetStorage().Database(tempCtx, dbName, txn)
-	if err != nil {
-		ses.Error(tempCtx,
-			"Failed to get database",
-			zap.String("databaseName", dbName),
-			zap.Error(err))
+	if db, err = tcc.GetTxnHandler().GetStorage().Database(
+		tempCtx, dbName, txn,
+	); err != nil {
+		ses.Error(
+			tempCtx,
+			"fe-get-database-failed",
+			zap.String("db-name", dbName),
+			zap.Error(err),
+		)
 		return nil, nil, err
+	} else {
+		v2.OpenDBDurationHistogram.Observe(time.Since(start).Seconds())
 	}
 
-	v2.OpenDBDurationHistogram.Observe(time.Since(start1).Seconds())
+	start = time.Now()
 
-	// tableNames, err := db.Relations(ctx)
-	// if err != nil {
-	// 	return nil, nil, err
-	// }
-	// logDebugf(ses.GetDebugString(), "dbName %v tableNames %v", dbName, tableNames)
-
-	start2 := time.Now()
-
-	//open table
-	table, err := db.Relation(tempCtx, tableName, nil)
-	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-			tmpTableName := engine.GetTempTableName(dbName, tableName)
-			tmpTable, e := tcc.getTmpRelation(tempCtx, tmpTableName)
-			if e != nil {
-				ses.Error(tempCtx,
-					"Failed to get table",
-					zap.String("tableName", tableName),
-					zap.Error(err))
-				return nil, nil, nil
-			} else {
-				table = tmpTable
-			}
-		} else {
+	if table, err = db.Relation(tempCtx, tableName, nil); err != nil {
+		// quick return if the error is not ErrNoSuchTable
+		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
 			return nil, nil, err
 		}
+		// for ErrNoSuchTable, try to get from the temp engine
+		eng := tcc.GetTxnHandler().GetStorage()
+		if !eng.HasTempEngine() {
+			// PXU: why not return err???
+			return nil, nil, nil
+		}
+		// get from the temp engine
+		tmpTableName := engine.GetTempTableName(dbName, tableName)
+		if tmpTable, err2 := tcc.getTmpRelation(tempCtx, tmpTableName); err2 != nil {
+			return nil, nil, nil
+		} else {
+			table = tmpTable
+		}
 	}
-
-	v2.OpenTableDurationHistogram.Observe(time.Since(start2).Seconds())
+	v2.OpenTableDurationHistogram.Observe(time.Since(start).Seconds())
 
 	return tempCtx, table, nil
 }
