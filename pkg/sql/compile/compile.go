@@ -2129,10 +2129,9 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
-	filterExpr := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(n.FilterList))
 	var op *filter.Filter
 	for i := range ss {
-		op = constructRestrict(n, filterExpr)
+		op = constructRestrict(n, plan2.DeepCopyExprList(n.FilterList))
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}

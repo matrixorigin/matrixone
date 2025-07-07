@@ -255,6 +255,7 @@ func explainStep(ctx context.Context, step *plan.Node, nodes []*plan.Node, setti
 			if nodedescImpl.Node.NodeType == plan.Node_VALUE_SCAN {
 				if nodedescImpl.Node.RowsetData != nil {
 					rowsetDataDescImpl := &RowsetDataDescribeImpl{
+						TableDef:   nodedescImpl.Node.TableDef,
 						RowsetData: nodedescImpl.Node.RowsetData,
 					}
 					// Provide a relatively balanced initial capacity [360] for byte slice to prevent multiple memory requests

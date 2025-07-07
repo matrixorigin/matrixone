@@ -700,9 +700,9 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 			panic("only support col in runtime filter's left child!")
 		}
 		if rfSpecs[i].NotOnPk {
-			nonPkFilters = append(nonPkFilters, plan2.DeepCopyExpr(runtimeInExprList[i]))
+			nonPkFilters = append(nonPkFilters, runtimeInExprList[i])
 		} else {
-			pkFilters = append(pkFilters, plan2.DeepCopyExpr(runtimeInExprList[i]))
+			pkFilters = append(pkFilters, runtimeInExprList[i])
 		}
 	}
 
@@ -717,10 +717,7 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		err := arg.SetRuntimeExpr(s.Proc, nonPkFilters)
-		if err != nil {
-			return nil, err
-		}
+		arg.RuntimeFilterExprs = nonPkFilters
 	}
 
 	// reset datasource
@@ -738,10 +735,7 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr)
 		}
 	}
 
-	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-	newExprList = append(newExprList, s.DataSource.BlockFilterList...)
-
-	return newExprList, nil
+	return append(runtimeInExprList, s.DataSource.BlockFilterList...), nil
 }
 
 func (s *Scope) isTableScan() bool {
