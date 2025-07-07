@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/prashantv/gostub"
@@ -963,4 +964,13 @@ func Test_uriHasPrefix(t *testing.T) {
 func Test_extractUriInfo(t *testing.T) {
 	_, _, err := ExtractUriInfo(context.Background(), "abc", "t")
 	assert.Error(t, err)
+}
+
+func TestParseFrequencyToDuration(t *testing.T) {
+	if got := parseFrequencyToDuration("1h"); got != 1*time.Hour {
+		t.Errorf("1h: got %v, want %v", got, 1*time.Hour)
+	}
+	if got := parseFrequencyToDuration("30m"); got != 30*time.Minute {
+		t.Errorf("30m: got %v, want %v", got, 30*time.Minute)
+	}
 }
