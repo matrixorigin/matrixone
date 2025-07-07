@@ -142,6 +142,13 @@ func (job *Job) DoneWithErr(err error) {
 	}
 }
 
+func (job *Job) DoneWithResult(res any) {
+	defer job.wg.Done()
+	job.result = &JobResult{
+		Res: res,
+	}
+}
+
 func (job *Job) Close() {
 	job.result = nil
 }

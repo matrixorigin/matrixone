@@ -124,7 +124,7 @@ const (
 	// Watermark Related SQL
 	CDCInsertWatermarkSqlTemplate = "INSERT INTO " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
-		"VALUES (%d, '%s', '%s', '%s', '%s', '%s')"
+		"VALUES %s"
 
 	CDCDeleteWatermarkSqlTemplate = "DELETE FROM " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
@@ -152,6 +152,24 @@ const (
 		"WHERE " +
 		"account_id = %d AND " +
 		"task_id = '%s'"
+
+	CDCGetWatermarkWhereSqlTemplate = "SELECT " +
+		"%s " +
+		"FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE %s"
+
+	CDCOnDuplicateUpdateWatermarkTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, watermark) " +
+		"VALUES %s " +
+		"ON DUPLICATE KEY UPDATE watermark = VALUES(watermark)"
+
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate = "INSERT INTO " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"(account_id, task_id, db_name, table_name, err_msg) " +
+		"VALUES %s " +
+		"ON DUPLICATE KEY UPDATE err_msg = VALUES(err_msg)"
 
 	CDCUpdateWatermarkSqlTemplate = "UPDATE " +
 		"`mo_catalog`.`mo_cdc_watermark` " +
@@ -189,29 +207,35 @@ const (
 		" account_id " +
 		"FROM `mo_catalog`.`mo_tables` " +
 		"WHERE " +
-		" relkind = '%s' " +
+		" account_id IN (%s) " +
+		"%s" +
+		"%s" +
+		" AND relkind = '%s' " +
 		" AND reldatabase NOT IN (%s)"
 )
 
 const (
-	CDCInsertTaskSqlTemplate_Idx             = 0
-	CDCGetTaskSqlTemplate_Idx                = 1
-	CDCShowTaskSqlTemplate_Idx               = 2
-	CDCGetTaskIdSqlTemplate_Idx              = 3
-	CDCDeleteTaskSqlTemplate_Idx             = 4
-	CDCUpdateTaskStateSQL_Idx                = 5
-	CDCUpdateTaskStateAndErrMsgSQL_Idx       = 6
-	CDCInsertWatermarkSqlTemplate_Idx        = 7
-	CDCGetWatermarkSqlTemplate_Idx           = 8
-	CDCGetTableWatermarkSQL_Idx              = 9
-	CDCUpdateWatermarkSQL_Idx                = 10
-	CDCUpdateWatermarkErrMsgSQL_Idx          = 11
-	CDCDeleteWatermarkSqlTemplate_Idx        = 12
-	CDCDeleteWatermarkByTableSqlTemplate_Idx = 13
-	CDCGetDataKeySQL_Idx                     = 14
-	CDCCollectTableInfoSqlTemplate_Idx       = 15
+	CDCInsertTaskSqlTemplate_Idx                    = 0
+	CDCGetTaskSqlTemplate_Idx                       = 1
+	CDCShowTaskSqlTemplate_Idx                      = 2
+	CDCGetTaskIdSqlTemplate_Idx                     = 3
+	CDCDeleteTaskSqlTemplate_Idx                    = 4
+	CDCUpdateTaskStateSQL_Idx                       = 5
+	CDCUpdateTaskStateAndErrMsgSQL_Idx              = 6
+	CDCInsertWatermarkSqlTemplate_Idx               = 7
+	CDCGetWatermarkSqlTemplate_Idx                  = 8
+	CDCGetTableWatermarkSQL_Idx                     = 9
+	CDCUpdateWatermarkSQL_Idx                       = 10
+	CDCUpdateWatermarkErrMsgSQL_Idx                 = 11
+	CDCDeleteWatermarkSqlTemplate_Idx               = 12
+	CDCDeleteWatermarkByTableSqlTemplate_Idx        = 13
+	CDCGetDataKeySQL_Idx                            = 14
+	CDCCollectTableInfoSqlTemplate_Idx              = 15
+	CDCGetWatermarkWhereSqlTemplate_Idx             = 16
+	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
 
-	CDCSqlTemplateCount = 16
+	CDCSqlTemplateCount = 19
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -294,11 +318,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 		OutputAttrs: []string{"encrypted_key"},
 	},
 	CDCCollectTableInfoSqlTemplate_Idx: {
-		SQL: fmt.Sprintf(
-			CDCCollectTableInfoSqlTemplate,
-			catalog.SystemOrdinaryRel,
-			AddSingleQuotesJoin(catalog.SystemDatabases),
-		),
+		SQL: CDCCollectTableInfoSqlTemplate,
 		OutputAttrs: []string{
 			"rel_id",
 			"relname",
@@ -307,6 +327,15 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"rel_createsql",
 			"account_id",
 		},
+	},
+	CDCGetWatermarkWhereSqlTemplate_Idx: {
+		SQL: CDCGetWatermarkWhereSqlTemplate,
+	},
+	CDCOnDuplicateUpdateWatermarkTemplate_Idx: {
+		SQL: CDCOnDuplicateUpdateWatermarkTemplate,
+	},
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
+		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
 	},
 }
 
@@ -478,14 +507,27 @@ func (b cdcSQLBuilder) InsertWatermarkSQL(
 	tableName string,
 	watermark string,
 ) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCInsertWatermarkSqlTemplate_Idx].SQL,
+	values := fmt.Sprintf(
+		"(%d, '%s', '%s', '%s', '%s', '%s')",
 		accountId,
 		taskId,
 		dbName,
 		tableName,
 		watermark,
 		"",
+	)
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCInsertWatermarkSqlTemplate_Idx].SQL,
+		values,
+	)
+}
+
+func (b cdcSQLBuilder) InsertWatermarkWithValuesSQL(
+	values string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCInsertWatermarkSqlTemplate_Idx].SQL,
+		values,
 	)
 }
 
@@ -508,6 +550,17 @@ func (b cdcSQLBuilder) GetWatermarkSQL(
 		CDCSQLTemplates[CDCGetWatermarkSqlTemplate_Idx].SQL,
 		accountId,
 		taskId,
+	)
+}
+
+func (b cdcSQLBuilder) GetWatermarkWhereSQL(
+	projectionStr string,
+	whereStr string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetWatermarkWhereSqlTemplate_Idx].SQL,
+		projectionStr,
+		whereStr,
 	)
 }
 
@@ -586,9 +639,44 @@ func (b cdcSQLBuilder) UpdateWatermarkSQL(
 	)
 }
 
+func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkSQL(
+	values string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCOnDuplicateUpdateWatermarkTemplate_Idx].SQL,
+		values,
+	)
+}
+
+func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
+	values string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx].SQL,
+		values,
+	)
+}
+
 // ------------------------------------------------------------------------------------------------
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
-func (b cdcSQLBuilder) CollectTableInfoSQL() string {
-	return CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL
+func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, tableNames string) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL,
+		accountIDs,
+		func() string {
+			if dbNames == "*" {
+				return ""
+			}
+			return " AND reldatabase IN (" + dbNames + ") "
+		}(),
+		func() string {
+			if tableNames == "*" {
+				return ""
+			}
+			return " AND relname IN (" + tableNames + ") "
+		}(),
+		catalog.SystemOrdinaryRel,
+		AddSingleQuotesJoin(catalog.SystemDatabases),
+	)
 }

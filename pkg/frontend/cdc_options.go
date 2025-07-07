@@ -144,6 +144,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	var (
 		startTs, endTs time.Time
 		extraOpts      = make(map[string]any)
+		level          string
 	)
 
 	for _, key := range cdc.CDCRequestOptions {
@@ -155,6 +156,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			if err = opts.handleLevel(ctx, ses, req, value); err != nil {
 				return
 			}
+			level = value
 		case cdc.CDCRequestOptions_Exclude:
 			if _, err = regexp.Compile(value); err != nil {
 				err = moerr.NewInternalErrorf(ctx, "invalid exclude: %s, err: %v", value, err)
@@ -202,6 +204,14 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			if value != "" {
 				opts.ConfigFile = value
 			}
+		case cdc.CDCRequestOptions_Frequency:
+			extraOpts[cdc.CDCTaskExtraOptions_Frequency] = ""
+			if value != "" {
+				if err = opts.handleFrequency(ctx, ses, req, level, value); err != nil {
+					return
+				}
+			}
+			extraOpts[cdc.CDCTaskExtraOptions_Frequency] = value
 		}
 	}
 
@@ -342,5 +352,42 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 		return
 	}
 	opts.PitrTables, err = cdc.JsonEncode(patterTupples)
+	return
+}
+
+// handleFrequency validates the format of frequency
+// It also ensures that there exists a pitr that support this frequency
+// For example, if frequency is 24h, pitr should be >= 24 + 2 = 26h
+func (opts *CDCCreateTaskOptions) handleFrequency(
+	ctx context.Context,
+	ses *Session,
+	req *CDCCreateTaskRequest,
+	level string,
+	frequency string,
+) (err error) {
+	if level != cdc.CDCPitrGranularity_Account && level != cdc.CDCPitrGranularity_DB && level != cdc.CDCPitrGranularity_Table {
+		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
+		return
+	}
+	if !isValidFrequency(frequency) {
+		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
+	}
+	normalized := transformIntoHours(frequency)
+	var patterTupples *cdc.PatternTuples
+	if patterTupples, err = CDCParsePitrGranularity(
+		ctx, level, req.Tables,
+	); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
+		return
+	}
+	if err = WithBackgroundExec(
+		ctx,
+		ses,
+		func(ctx context.Context, ses *Session, bh BackgroundExec) error {
+			return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples, normalized)
+		},
+	); err != nil {
+		return
+	}
 	return
 }
