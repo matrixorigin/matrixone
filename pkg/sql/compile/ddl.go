@@ -1003,22 +1003,30 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
-	if err == nil {
-		exists, err := tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "check temporary table relation exists failed",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", tblName),
-				zap.Error(err),
-			)
-			return err
-		}
-		if exists {
-			if qry.GetIfNotExists() {
-				return nil
+	if c.e.HasTempEngine() {
+		var tmpDBSource engine.Database
+		if tmpDBSource, err = c.e.Database(
+			c.proc.Ctx,
+			defines.TEMPORARY_DBNAME,
+			c.proc.GetTxnOperator(),
+		); err == nil {
+			exists, err := tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
+			if err != nil {
+				c.proc.Error(
+					c.proc.Ctx,
+					"temp-table-exists-check-failed",
+					zap.String("db-name", dbName),
+					zap.String("table-name", tblName),
+					zap.Error(err),
+				)
+				return err
 			}
-			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
+			if exists {
+				if qry.GetIfNotExists() {
+					return nil
+				}
+				return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", tblName))
+			}
 		}
 	}
 
@@ -1559,22 +1567,34 @@ func (s *Scope) CreateView(c *Compile) error {
 	}
 
 	// check in EntireEngine.TempEngine, notice that TempEngine may not init
-	tmpDBSource, err := c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
-	if err == nil {
-		exists, err = tmpDBSource.RelationExists(c.proc.Ctx, engine.GetTempTableName(dbName, viewName), nil)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "check temporary table relation exists failed",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", viewName),
-				zap.Error(err),
+	if c.e.HasTempEngine() {
+		var tmpDBSource engine.Database
+		if tmpDBSource, err = c.e.Database(
+			c.proc.Ctx,
+			defines.TEMPORARY_DBNAME,
+			c.proc.GetTxnOperator(),
+		); err == nil {
+			exists, err := tmpDBSource.RelationExists(
+				c.proc.Ctx,
+				engine.GetTempTableName(dbName, viewName),
+				nil,
 			)
-			return err
-		}
-		if exists {
-			if qry.GetIfNotExists() {
-				return nil
+			if err != nil {
+				c.proc.Error(
+					c.proc.Ctx,
+					"temp-table-exists-check-failed",
+					zap.String("db-name", dbName),
+					zap.String("table-name", viewName),
+					zap.Error(err),
+				)
+				return err
 			}
-			return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
+			if exists {
+				if qry.GetIfNotExists() {
+					return nil
+				}
+				return moerr.NewTableAlreadyExists(c.proc.Ctx, fmt.Sprintf("temporary '%s'", viewName))
+			}
 		}
 	}
 

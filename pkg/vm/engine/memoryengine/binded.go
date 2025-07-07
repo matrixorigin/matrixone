@@ -42,6 +42,10 @@ func (b *BindedEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return b.engine.LatestLogtailAppliedTime()
 }
 
+func (b *BindedEngine) HasTempEngine() bool {
+	return b.engine.HasTempEngine()
+}
+
 func (b *BindedEngine) Commit(ctx context.Context, _ client.TxnOperator) error {
 	return b.engine.Commit(ctx, b.txnOp)
 }
