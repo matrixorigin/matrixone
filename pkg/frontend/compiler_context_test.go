@@ -64,6 +64,7 @@ func TestGetConfig(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tt.expected, val)
 			}
+			require.True(t, len(tcc.GetAccountName()) > 0)
 		})
 	}
 }
