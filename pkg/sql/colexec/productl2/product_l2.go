@@ -255,11 +255,11 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 	for n := 0; n < ncpu; n++ {
 
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 			for j := 0; j < probeCount; j++ {
 
-				if j%ncpu != n {
+				if j%ncpu != tid {
 					continue
 				}
 
@@ -306,7 +306,7 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 					return
 				}
 			}
-		}()
+		}(n)
 	}
 
 	wg.Wait()
