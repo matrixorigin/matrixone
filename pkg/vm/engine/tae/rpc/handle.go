@@ -970,7 +970,8 @@ func (h *Handle) HandleWrite(
 			}
 		}
 
-		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) {
+		_, _, injected := fault.TriggerFault(objectio.FJ_CommitInsert)
+		if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) || injected {
 			schema := tb.Schema(false).(*catalog.Schema)
 			if schema.HasPK() {
 				pkDef := schema.GetSingleSortKey()

@@ -28,6 +28,7 @@ const (
 
 const (
 	FJ_CommitDelete  = "fj/commit/delete"
+	FJ_CommitInsert  = "fj/commit/insert"
 	FJ_CommitSlowLog = "fj/commit/slowlog"
 	FJ_CommitWait    = "fj/commit/wait"
 	FJ_TransferSlow  = "fj/transfer/slow"
