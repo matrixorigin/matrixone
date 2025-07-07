@@ -310,6 +310,10 @@ func (e *testEngine) Hints() (h Hints) {
 	return
 }
 
+func (e *testEngine) HasTempEngine() bool {
+	return false
+}
+
 func (e *testEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
 	return "", "", nil
 }

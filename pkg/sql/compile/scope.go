@@ -622,7 +622,8 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
 	if commited.DataCnt() < int(average*0.8) ||
 		commited.DataCnt() > int(average*1.2) {
-		logutil.Warnf("workload  table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
+		logutil.Warnf(
+			"workload table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
 			s.DataSource.TableDef.Name,
 			s.DataSource.node.Stats.BlockNum,
 			s.NodeInfo.CNCNT,
