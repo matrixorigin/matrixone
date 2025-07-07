@@ -17,11 +17,11 @@ UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
 # Usearch source code is from https://github.com/cpegeric/usearch/tree/bug564
 # There is a fix for concurrent search issue.
-USEARCH_DIR=usearch-2.17.1
+USEARCH_DIR=usearch-2.18.0
 USEARCH_TAR=$(USEARCH_DIR).tar.gz
-STRINGZILLA_DIR=StringZilla-3.11.3
+STRINGZILLA_DIR=StringZilla-3.12.5
 STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
-SIMSIMD_DIR=SimSIMD-6.2.3
+SIMSIMD_DIR=SimSIMD-6.5.0
 SIMSIMD_TAR=$(SIMSIMD_DIR).tar.gz
 FP16_DIR=fp16
 FP16_TAR=$(FP16_DIR).tar.gz
