@@ -423,13 +423,13 @@ func (pool *FixedBytePool) Spill() error {
 	for i := 0; i < int(nspill); i++ {
 		wg.Add(1)
 
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
-			err := pool.partitions[lru[i].id].Spill()
+			err := pool.partitions[lru[tid].id].Spill()
 			if err != nil {
 				errs = errors.Join(errs, err)
 			}
-		}()
+		}(i)
 	}
 
 	wg.Wait()
