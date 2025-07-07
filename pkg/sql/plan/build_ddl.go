@@ -4603,10 +4603,7 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
 		}
-		objRef, tableDef, err := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
-		if err != nil {
-			return nil, err
-		}
+		objRef, tableDef := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
 		if objRef == nil || tableDef == nil {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "table "+string(stmt.DatabaseName)+"."+string(stmt.TableName)+" does not exist")
 		}
