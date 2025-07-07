@@ -211,7 +211,7 @@ func (c *CompilerContext) GetAccountId() (uint32, error) {
 }
 
 func (c *CompilerContext) GetAccountName() string {
-	return ""
+	return "sys"
 }
 
 func (c *CompilerContext) GetContext() context.Context {

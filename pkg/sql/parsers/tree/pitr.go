@@ -88,6 +88,9 @@ func (node *DropPitr) Format(ctx *FmtCtx) {
 		ctx.WriteString("if exists ")
 	}
 	node.Name.Format(ctx)
+	if node.Internal {
+		ctx.WriteString(" internal")
+	}
 }
 
 func (node *DropPitr) reset() { *node = DropPitr{} }
@@ -151,6 +154,10 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("%v ", node.PitrValue))
 	ctx.WriteString(" ")
 	ctx.WriteString(node.PitrUnit)
+
+	if node.Internal {
+		ctx.WriteString(" internal")
+	}
 }
 
 func (node *CreatePitr) GetStatementType() string { return "Create PITR" }

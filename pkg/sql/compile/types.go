@@ -90,8 +90,6 @@ func (m magicType) String() string {
 		return "DropDatabase"
 	case DropTable:
 		return "DropTable"
-	case DropPitr:
-		return "DropPitr"
 	case DropIndex:
 		return "DropIndex"
 	case TruncateTable:

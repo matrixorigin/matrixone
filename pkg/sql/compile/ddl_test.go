@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -653,4 +654,50 @@ func TestScope_Database(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.DropDatabase(c))
 	})
+}
+
+func Test_addTimeSpan(t *testing.T) {
+	cases := []struct {
+		name    string
+		len     int
+		unit    string
+		wantOk  bool
+		wantMsg string
+	}{
+		{"hour", 1, "h", true, ""},
+		{"day", 2, "d", true, ""},
+		{"month", 3, "mo", true, ""},
+		{"year", 4, "y", true, ""},
+		{"invalid", 5, "xx", false, "unknown unit"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := addTimeSpan(c.len, c.unit)
+			if c.wantOk {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), c.wantMsg)
+			}
+		})
+	}
+}
+
+func Test_getSqlForCheckPitrDup(t *testing.T) {
+	mk := func(level int32, origin bool) *plan2.CreatePitr {
+		return &plan2.CreatePitr{
+			Level:             level,
+			CurrentAccountId:  1,
+			AccountName:       "acc",
+			CurrentAccount:    "curacc",
+			DatabaseName:      "db",
+			TableName:         "tb",
+			OriginAccountName: origin,
+		}
+	}
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELCLUSTER), false)), "obj_id")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), true)), "account_name = 'acc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), false)), "account_name = 'curacc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false)), "database_name = 'db'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
 }

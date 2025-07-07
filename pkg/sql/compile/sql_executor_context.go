@@ -248,7 +248,7 @@ func (c *compilerContext) GetAccountId() (uint32, error) {
 }
 
 func (c *compilerContext) GetAccountName() string {
-	return ""
+	return "sys"
 }
 func (c *compilerContext) GetContext() context.Context {
 	return c.proc.GetTopContext()
