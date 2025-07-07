@@ -15,7 +15,6 @@
 package fulltext
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -419,7 +418,7 @@ func (pool *FixedBytePool) Spill() error {
 
 	// concurrent spill partitions
 	var wg sync.WaitGroup
-	var errs error
+	errchan := make(chan error, nspill)
 	for i := 0; i < int(nspill); i++ {
 		wg.Add(1)
 
@@ -427,15 +426,15 @@ func (pool *FixedBytePool) Spill() error {
 			defer wg.Done()
 			err := pool.partitions[lru[tid].id].Spill()
 			if err != nil {
-				errs = errors.Join(errs, err)
+				errchan <- err
 			}
 		}(i)
 	}
 
 	wg.Wait()
 
-	if errs != nil {
-		return errs
+	if len(errchan) > 0 {
+		return <-errchan
 	}
 
 	pool.mem_in_use -= uint64(nspill) * pool.partition_cap
