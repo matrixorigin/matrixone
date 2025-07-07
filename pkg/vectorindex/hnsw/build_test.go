@@ -78,15 +78,15 @@ func TestBuildMulti(t *testing.T) {
 	var wg sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 
 			for i := 0; i < nitem; i++ {
-				key := j*nitem + i
+				key := tid*nitem + i
 				err := build.Add(int64(key), sample[key])
 				require.Nil(t, err)
 			}
-		}()
+		}(j)
 	}
 	wg.Wait()
 
@@ -133,10 +133,10 @@ func TestBuildMulti(t *testing.T) {
 	var wg2 sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg2.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
-				key := int64(j*nitem + i)
+				key := int64(tid*nitem + i)
 				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
@@ -149,7 +149,7 @@ func TestBuildMulti(t *testing.T) {
 					require.True(t, found)
 				}
 			}
-		}()
+		}(j)
 	}
 
 	wg2.Wait()
@@ -231,15 +231,15 @@ func TestBuildSingleThread(t *testing.T) {
 	var wg sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 
 			for i := 0; i < nitem; i++ {
-				key := j*nitem + i
+				key := tid*nitem + i
 				err := build.Add(int64(key), sample[key])
 				require.Nil(t, err)
 			}
-		}()
+		}(j)
 	}
 	wg.Wait()
 
@@ -299,10 +299,10 @@ func TestBuildSingleThread(t *testing.T) {
 	var wg2 sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg2.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
-				key := int64(j*nitem + i)
+				key := int64(tid*nitem + i)
 				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
@@ -315,7 +315,7 @@ func TestBuildSingleThread(t *testing.T) {
 					require.True(t, found)
 				}
 			}
-		}()
+		}(j)
 	}
 
 	wg2.Wait()
