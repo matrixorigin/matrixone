@@ -393,6 +393,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 			fs:              r.fs,
 			ctx:             ctx,
 			mp:              mp,
+			snapshotTS:      r.snapshot,
 			rangeSlice:      objRelData.GetBlockInfoSlice(),
 			tombstonePolicy: engine.Policy_SkipUncommitedInMemory,
 		}
