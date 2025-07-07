@@ -720,40 +720,30 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 			return err
 		}
 
-		recalledToCurrentGroupMap := make([]uint64, recalledHM.GroupCount()+1)
-		newGroupsToAppendSels := make([]int32, 0)
+		// Bulk insert recalled group-by keys into the current hashmap
 		oldCurrentGroupCount := group.ctr.hashMap.Hash.GroupCount()
-
-		tempSingleRowBatch := batch.NewOffHeapWithSize(len(recalledGroupByBatch.Vecs))
-		for i := range tempSingleRowBatch.Vecs {
-			tempSingleRowBatch.Vecs[i] = vector.NewOffHeapVecWithType(*recalledGroupByBatch.Vecs[i].GetType())
+		vals, _, err := group.ctr.hashMap.Iter.Insert(0, recalledGroupByBatch.RowCount(), recalledGroupByBatch.Vecs)
+		if err != nil {
+			recalledHM.Free()
+			recalledGroupByBatch.Clean(proc.Mp())
+			return err
 		}
 
-		for i := 0; i < recalledGroupByBatch.RowCount(); i++ {
-			for j := range recalledGroupByBatch.Vecs {
-				if err := tempSingleRowBatch.Vecs[j].UnionOne(recalledGroupByBatch.Vecs[j], int64(i), proc.Mp()); err != nil {
-					tempSingleRowBatch.Clean(proc.Mp())
-					return err
-				}
-			}
-			tempSingleRowBatch.SetRowCount(1)
+		// Identify newly added groups and map recalled group IDs to current group IDs
+		recalledToCurrentGroupMap := make([]uint64, recalledHM.GroupCount()+1) // +1 for 1-based indexing
+		newGroupsToAppendSels := make([]int32, 0)
 
-			vals, _, err := group.ctr.hashMap.Iter.Insert(0, 1, tempSingleRowBatch.Vecs)
-			if err != nil {
-				tempSingleRowBatch.Clean(proc.Mp())
-				return err
-			}
-			newID := vals[0]
+		for i := 0; i < recalledGroupByBatch.RowCount(); i++ {
+			newID := vals[i]
 			recalledToCurrentGroupMap[uint64(i+1)] = newID
 
 			if newID > oldCurrentGroupCount {
 				newGroupsToAppendSels = append(newGroupsToAppendSels, int32(i))
 			}
-			tempSingleRowBatch.CleanOnlyData()
 		}
-		tempSingleRowBatch.Clean(proc.Mp()) // Free the temporary batch
 
 		if len(newGroupsToAppendSels) > 0 {
+			// If there are new groups, append their data to the current group-by batch and grow aggregators
 			if group.NeedEval {
 				newlyAddedGroupByBatch, err := recalledGroupByBatch.Window(0, recalledGroupByBatch.RowCount())
 				if err != nil {
@@ -770,10 +760,9 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 					}
 				}
 				return err
-			}
-		} else { // !group.NeedEval
-			if len(newGroupsToAppendSels) > 0 {
+			} else { // !group.NeedEval
 				if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
+					recalledHM.Free()
 					return err
 				}
 				for _, agg := range currentAggs {
@@ -784,6 +773,7 @@ func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
 			}
 		}
 
+		// Merge aggregation states
 		for aggIdx := range currentAggs {
 			recalledAgg := recalledAggs[aggIdx]
 			if err := currentAggs[aggIdx].BatchMerge(recalledAgg, 0, recalledToCurrentGroupMap[1:]); err != nil {
