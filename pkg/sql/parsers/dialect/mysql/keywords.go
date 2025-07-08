@@ -251,6 +251,7 @@ func init() {
 		"issuer":                     ISSUER,
 		"isolation":                  ISOLATION,
 		"iterate":                    ITERATE,
+		"internal":                   INTERNAL,
 		"join":                       JOIN,
 		"json":                       JSON,
 		"jsontype":                   JSONTYPE,
