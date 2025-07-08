@@ -2039,6 +2039,19 @@ func (mr *MockEngineMockRecorder) LatestLogtailAppliedTime() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LatestLogtailAppliedTime", reflect.TypeOf((*MockEngine)(nil).LatestLogtailAppliedTime))
 }
 
+// HasTempEngine mocks base method.
+func (m *MockEngine) HasTempEngine() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasTempEngine")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+func (mr *MockEngineMockRecorder) HasTempEngine() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTempEngine", reflect.TypeOf((*MockEngine)(nil).HasTempEngine))
+}
+
 // New mocks base method.
 func (m *MockEngine) New(ctx context.Context, op client.TxnOperator) error {
 	m.ctrl.T.Helper()

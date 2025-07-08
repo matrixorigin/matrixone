@@ -16,13 +16,10 @@ drop account acc01;
 drop snapshot spsp01;
 
 
-
-
--- @bvt:issue#21092
 -- sys level snapshot restore nonsys dropped account
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
--- @session:id=2&user=acc02:test_account&password=111
+-- @session:id=1&user=acc02:test_account&password=111
 drop database if exists test01;
 create database test01;
 use test01;
@@ -222,10 +219,6 @@ create account acc03 admin_name = 'test_account' identified by '111';
 restore account acc03 from snapshot spsp03;
 drop account acc03;
 drop snapshot spsp03;
--- @bvt:issue
-
-
-
 
 
 -- cluster level snapshot restore cluster which contains dropped account
@@ -363,7 +356,7 @@ drop account acc06;
 
 restore cluster from snapshot spsp06;
 
--- @session:id=8&user=acc04:test_account&password=111
+-- @session:id=7&user=acc04:test_account&password=111
 use test04;
 select * from t1;
 -- @ignore:1
@@ -372,7 +365,7 @@ select * from vtab32;
 select * from vtab64;
 -- @session
 
--- @session:id=9&user=acc05:test_account&password=111
+-- @session:id=8&user=acc05:test_account&password=111
 use test05;
 select * from length01;
 select * from t1;
@@ -380,7 +373,7 @@ select * from t1;
 select * from test02;
 -- @session
 
--- @session:id=10&user=acc06:test_account&password=111
+-- @session:id=9&user=acc06:test_account&password=111
 use test06;
 select * from table01;
 select * from t2;
@@ -393,18 +386,21 @@ drop account acc06;
 drop snapshot spsp06;
 
 
-
--- @bvt:issue#21092
 -- abnormal test: nonsys restore the deleted account
 drop account if exists acc07;
 create account acc07 admin_name = 'test_account' identified by '111';
--- @session:id=11&user=acc07:test_account&password=111
+
 drop snapshot if exists spsp07;
-create snapshot spsp07 for account spsp07;
--- @session
+create snapshot spsp07 for account acc07;
+
 drop account acc07;
--- @session:id=11&user=acc07:test_account&password=111
+
 restore account acc07 from snapshot spsp07;
+
+-- @session:id=11&user=acc07:test_account&password=111
+show databases;
 -- @session
--- @bvt:issue
-show snapshots;
+
+drop account acc07;
+drop snapshot spsp07;
+drop database restore_dropped_account;
