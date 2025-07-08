@@ -9,8 +9,6 @@ create table t1(a bigint primary key, b vecf32(3),c int,key c_k(c));
 
 -- empty data
 create index idx01 using hnsw on t1(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
-drop pitr if exists `__mo_table_pitr_t1`;
-create pitr `__mo_table_pitr_t1` for table hnsw_cdc t1 range 2 'h';
 create cdc `__mo_cdc_t1_idx01` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t1' {'Level'='table'};
 
 -- show cdc all;
@@ -41,14 +39,11 @@ select * from t1 order by  L2_DISTANCE(b,"[4,5,6]") ASC LIMIT 10;
 select * from t1 order by  L2_DISTANCE(b,"[2,3,4]") ASC LIMIT 10;
 
 drop cdc task `__mo_cdc_t1_idx01`;
-drop pitr if exists `__mo_table_pitr_t1`;
 drop table t1;
 
 -- t2
 create table t2(a bigint primary key, b vecf32(128));
 create index idx2 using hnsw on t2(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
-drop pitr if exists `__mo_table_pitr_t2`;
-create pitr `__mo_table_pitr_t2` for table hnsw_cdc t2 range 2 'h';
 create cdc `__mo_cdc_hnsw_cdc_t2_idx2` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t2' {'Level'='table'};
 -- select sleep(30);
 
@@ -69,7 +64,6 @@ select * from t2 order by L2_DISTANCE(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78,
 
 
 drop cdc task `__mo_cdc_hnsw_cdc_t2_idx2`;
-drop pitr if exists `__mo_table_pitr_t2`;
 drop table t2;
 
 -- end t2
@@ -83,8 +77,6 @@ select count(*) from t3;
 
 create index idx3 using hnsw on t3(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
 
-drop pitr if exists `__mo_table_pitr_hnsw_cdc_t3`;
-create pitr `__mo_table_pitr_hnsw_cdc_t3` for table hnsw_cdc t3 range 2 'h';
 create cdc `__mo_cdc_hnsw_cdc_t3_idx3` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t3' {'Level'='table'};
 
 -- select sleep(30);
@@ -105,7 +97,6 @@ select * from t3 order by L2_DISTANCE(b, "[59, 0, 0, 1, 1, 1, 5, 100, 41, 0, 0, 
 select * from t3 order by L2_DISTANCE(b, "[0, 0, 0, 0, 0, 101, 82, 4, 2, 0, 0, 0, 3, 133, 133, 8, 46, 1, 2, 13, 15, 29, 87, 50, 22, 1, 0, 16, 25, 6, 18, 49, 5, 2, 0, 2, 3, 59, 70, 19, 18, 2, 0, 11, 42, 37, 30, 13, 133, 13, 4, 53, 28, 3, 8, 42, 77, 6, 11, 103, 36, 0, 0, 32, 7, 15, 59, 27, 2, 0, 2, 5, 14, 5, 55, 52, 51, 3, 2, 5, 133, 21, 10, 38, 26, 1, 0, 64, 71, 3, 10, 118, 53, 5, 6, 28, 33, 26, 73, 15, 0, 0, 0, 22, 13, 15, 133, 133, 4, 0, 0, 15, 107, 62, 46, 91, 9, 1, 7, 16, 28, 4, 0, 27, 33, 4, 15, 25]") ASC LIMIT 1;
 
 drop cdc task `__mo_cdc_hnsw_cdc_t3_idx3`;
-drop pitr if exists `__mo_table_pitr_hnsw_cdc_t3`;
 drop table t3;
 
 -- end t3

@@ -4,8 +4,6 @@ create database if not exists hnsw_cdc;
 use hnsw_cdc;
 create table t1(a bigint primary key, b vecf32(3),c int,key c_k(c));
 create index idx01 using hnsw on t1(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
-drop pitr if exists `__mo_table_pitr_t1`;
-create pitr `__mo_table_pitr_t1` for table hnsw_cdc t1 range 2 'h';
 create cdc `__mo_cdc_t1_idx01` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t1' {'Level'='table'};
 insert into t1 values (0, "[1,2,3]", 1);
 UPDATE t1 set b = '[4,5,6]' where a = 0;
@@ -24,12 +22,9 @@ select * from t1 order by  L2_DISTANCE(b,"[2,3,4]") ASC LIMIT 10;
 a    b    c
 0    [4, 5, 6]    1
 drop cdc task `__mo_cdc_t1_idx01`;
-drop pitr if exists `__mo_table_pitr_t1`;
 drop table t1;
 create table t2(a bigint primary key, b vecf32(128));
 create index idx2 using hnsw on t2(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
-drop pitr if exists `__mo_table_pitr_t2`;
-create pitr `__mo_table_pitr_t2` for table hnsw_cdc t2 range 2 'h';
 create cdc `__mo_cdc_hnsw_cdc_t2_idx2` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t2' {'Level'='table'};
 load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t2 fields terminated by ':' parallel 'true';
 select count(*) from t2;
@@ -45,7 +40,6 @@ select * from t2 order by L2_DISTANCE(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78,
 a    b
 0    [0, 16, 35, 5, 32, 31, 14, 10, 11, 78, 55, 10, 45, 83, 11, 6, 14, 57, 102, 75, 20, 8, 3, 5, 67, 17, 19, 26, 5, 0, 1, 22, 60, 26, 7, 1, 18, 22, 84, 53, 85, 119, 119, 4, 24, 18, 7, 7, 1, 81, 106, 102, 72, 30, 6, 0, 9, 1, 9, 119, 72, 1, 4, 33, 119, 29, 6, 1, 0, 1, 14, 52, 119, 30, 3, 0, 0, 55, 92, 111, 2, 5, 4, 9, 22, 89, 96, 14, 1, 0, 1, 82, 59, 16, 20, 5, 25, 14, 11, 4, 0, 0, 1, 26, 47, 23, 4, 0, 0, 4, 38, 83, 30, 14, 9, 4, 9, 17, 23, 41, 0, 0, 2, 8, 19, 25, 23, 1]
 drop cdc task `__mo_cdc_hnsw_cdc_t2_idx2`;
-drop pitr if exists `__mo_table_pitr_t2`;
 drop table t2;
 create table t3(a bigint primary key, b vecf32(128));
 load data infile {'filepath'='$resources/vector/sift128_base_10k.csv.gz', 'compression'='gzip'} into table t3 fields terminated by ':' parallel 'true';
@@ -53,8 +47,6 @@ select count(*) from t3;
 count(*)
 10000
 create index idx3 using hnsw on t3(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
-drop pitr if exists `__mo_table_pitr_hnsw_cdc_t3`;
-create pitr `__mo_table_pitr_hnsw_cdc_t3` for table hnsw_cdc t3 range 2 'h';
 create cdc `__mo_cdc_hnsw_cdc_t3_idx3` 'mysql://root:111@127.0.0.1:6001' 'indexsync' 'mysql://root:111@127.0.0.1:6001' 'hnsw_cdc.t3' {'Level'='table'};
 load data infile {'filepath'='$resources/vector/sift128_base_10k_2.csv.gz', 'compression'='gzip'} into table t3 fields terminated by ':' parallel 'true';
 select count(*) from t3;
@@ -76,6 +68,5 @@ select * from t3 order by L2_DISTANCE(b, "[0, 0, 0, 0, 0, 101, 82, 4, 2, 0, 0, 0
 a    b
 19999    [0, 0, 0, 0, 0, 101, 82, 4, 2, 0, 0, 0, 3, 133, 133, 8, 46, 1, 2, 13, 15, 29, 87, 50, 22, 1, 0, 16, 25, 6, 18, 49, 5, 2, 0, 2, 3, 59, 70, 19, 18, 2, 0, 11, 42, 37, 30, 13, 133, 13, 4, 53, 28, 3, 8, 42, 77, 6, 11, 103, 36, 0, 0, 32, 7, 15, 59, 27, 2, 0, 2, 5, 14, 5, 55, 52, 51, 3, 2, 5, 133, 21, 10, 38, 26, 1, 0, 64, 71, 3, 10, 118, 53, 5, 6, 28, 33, 26, 73, 15, 0, 0, 0, 22, 13, 15, 133, 133, 4, 0, 0, 15, 107, 62, 46, 91, 9, 1, 7, 16, 28, 4, 0, 27, 33, 4, 15, 25]
 drop cdc task `__mo_cdc_hnsw_cdc_t3_idx3`;
-drop pitr if exists `__mo_table_pitr_hnsw_cdc_t3`;
 drop table t3;
 drop database hnsw_cdc;
