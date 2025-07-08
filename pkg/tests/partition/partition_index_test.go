@@ -15,10 +15,14 @@
 package partition
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -33,12 +37,14 @@ func TestInsertAndDeleteWithIndex(
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
+			eng := cn.RawService().(cnservice.Service).GetEngine()
+			exec := testutils.GetSQLExecutor(cn)
 
 			db := testutils.GetDatabaseName(t)
 			testutils.CreateTestDatabase(t, db, cn)
 
 			sql := fmt.Sprintf(
-				"create table %s (c int comment 'abc') partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
+				"create table %s (c int primary key, d int, unique key(d)) partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
 				t.Name(),
 			)
 
@@ -49,71 +55,62 @@ func TestInsertAndDeleteWithIndex(
 				sql,
 			)
 
-			fn := func() int64 {
-				n := int64(0)
-				for i := 0; i < partitionCount[idx]; i++ {
-					testutils.ExecSQLWithReadResult(
+			sql = fmt.Sprintf("insert into %s values (1,1), (2,2), (3,3), (4,4)", t.Name())
+			testutils.ExecSQL(
+				t,
+				db,
+				cn,
+				sql,
+			)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					metadata := getMetadata(
 						t,
+						0,
 						db,
+						t.Name(),
 						cn,
-						func(i int, s string, r executor.Result) {
-							r.ReadRows(
-								func(rows int, cols []*vector.Vector) bool {
-									n += executor.GetFixedRows[int64](cols[0])[0]
-									return true
-								},
-							)
-						},
-						fmt.Sprintf("select count(1) from %s_p%d", table, i),
 					)
-				}
-				return n
-			}
 
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				insert,
-			)
-			require.Equal(t, int64(results[idx][0]), fn())
+					for _, p := range metadata.Partitions {
+						_, _, r, err := eng.GetRelationById(
+							defines.AttachAccountId(ctx, 0),
+							txn.Txn(),
+							p.PartitionID,
+						)
+						require.NoError(t, err)
 
-			testutils.ExecSQLWithReadResult(
-				t,
-				db,
-				cn,
-				func(i int, s string, r executor.Result) {
-					r.ReadRows(
-						func(rows int, cols []*vector.Vector) bool {
-							require.Equal(t, int64(results[idx][0]), executor.GetFixedRows[int64](cols[0])[0])
-							return true
-						},
-					)
+						_, _, indexR, err := eng.GetRelationById(
+							defines.AttachAccountId(ctx, 0),
+							txn.Txn(),
+							r.GetExtraInfo().IndexTables[0],
+						)
+						require.NoError(t, err)
+
+						txn.Use(db)
+						rs, err := txn.Exec(
+							fmt.Sprintf("select count(1) from `%s`", indexR.GetTableName()),
+							executor.StatementOption{},
+						)
+						require.NoError(t, err)
+						n := int64(0)
+						rs.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								n += executor.GetFixedRows[int64](cols[0])[0]
+								return true
+							},
+						)
+						rs.Close()
+						require.Equal(t, int64(2), n)
+					}
+
+					return nil
 				},
-				fmt.Sprintf("select count(1) from %s", table),
-			)
-
-			testutils.ExecSQL(
-				t,
-				db,
-				cn,
-				delete,
-			)
-			require.Equal(t, int64(results[idx][1]), fn())
-
-			testutils.ExecSQLWithReadResult(
-				t,
-				db,
-				cn,
-				func(i int, s string, r executor.Result) {
-					r.ReadRows(
-						func(rows int, cols []*vector.Vector) bool {
-							require.Equal(t, int64(results[idx][1]), executor.GetFixedRows[int64](cols[0])[0])
-							return true
-						},
-					)
-				},
-				fmt.Sprintf("select count(1) from %s", table),
+				executor.Options{},
 			)
 		},
 	)
