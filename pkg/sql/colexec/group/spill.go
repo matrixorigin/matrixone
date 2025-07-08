@@ -57,7 +57,7 @@ func (s *Spiller) spillBatch(bat *batch.Batch) error {
 		return nil
 	}
 
-	filePath := fmt.Sprintf("group_spill_%d_%d.bin", s.proc.QueryId(), spillFileCounter.Add(1))
+	filePath := fmt.Sprintf("group_spill_%s_%d.bin", s.proc.QueryId(), spillFileCounter.Add(1))
 
 	data, err := bat.MarshalBinary()
 	if err != nil {
@@ -102,7 +102,7 @@ func (s *Spiller) clean() error {
 
 // spillState writes the serialized hashmap, aggregation states, and group-by batch to a new temporary spill file.
 func (s *Spiller) spillState(hashmapData []byte, aggStates [][]byte, groupByBatchData []byte) error {
-	filePath := fmt.Sprintf("group_spill_state_%d_%d.bin", s.proc.QueryId(), spillFileCounter.Add(1))
+	filePath := fmt.Sprintf("group_spill_state_%s_%d.bin", s.proc.QueryId(), spillFileCounter.Add(1))
 
 	var buffer bytes.Buffer
 	// Write lengths of each component
