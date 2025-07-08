@@ -130,6 +130,7 @@ func TestBuildAlterView(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt1.(*tree.AlterView), ctx)
 	assert.NoError(t, err)
+	require.Equal(t, ctx.GetAccountName(), "")
 
 	//direct recursive refrence
 	ctx.EXPECT().GetRootSql().Return(sql2).AnyTimes()
@@ -671,7 +672,7 @@ func TestBuildCreatePitr(t *testing.T) {
 		stmt.DatabaseName = "db1"
 		stmt.TableName = "tb1"
 		plan, err := buildCreatePitr(stmt, ctx)
-		assert.NoError(t, err)
-		assert.NotNil(t, plan)
+		assert.Error(t, err)
+		assert.Nil(t, plan)
 	})
 }
