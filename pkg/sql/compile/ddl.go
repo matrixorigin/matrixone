@@ -2161,12 +2161,11 @@ func (s *Scope) DropIndex(c *Compile) error {
 			return err
 		}
 
-	}
-
-	//3. HNSWCDC delete cdc table task for vector, fulltext index
-	err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
-	if err != nil {
-		return err
+		//3. HNSWCDC delete cdc table task for vector, fulltext index
+		err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
+		if err != nil {
+			return err
+		}
 	}
 
 	//4. delete index object from mo_catalog.mo_indexes

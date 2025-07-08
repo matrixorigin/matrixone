@@ -176,6 +176,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
 	var err error
+	hasindex := false
 	for _, idx := range tabledef.Indexes {
 		if idx.TableExist &&
 			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
@@ -195,6 +196,7 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 					}
 				}
 				if async {
+					hasindex = true
 					_, e := DeleteCdcTask(c, idxcdc.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: idx.IndexName})
 					if e != nil {
 						return e
@@ -205,7 +207,10 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 	}
 
 	// remove pitr
-	return DeleteIndexPitr(c, dbname, tablename)
+	if hasindex {
+		return DeleteIndexPitr(c, dbname, tablename)
+	}
+	return nil
 }
 
 func getSinkerTypeFromAlgo(algo string) int8 {

@@ -394,6 +394,7 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 	return buf
 }
 
+/*
 func floatArrayToString[T float32 | float64](arr []T) string {
 	str := "'["
 	for i, v := range arr {
@@ -406,6 +407,7 @@ func floatArrayToString[T float32 | float64](arr []T) string {
 	str += "]'"
 	return str
 }
+*/
 
 //func getPkIdxesAndTypes(ctx context.Context, tableDef *plan.TableDef) (pkIdxes []int, pkAndTsTypes []*types.Type, err error) {
 //	pkIdxes = make([]int, 0, len(tableDef.Pkey.Names))
@@ -761,6 +763,7 @@ func SplitDbTblKey(dbTblKey string) (dbName, tblName string) {
 	return s[0], s[1]
 }
 
+/*
 func addStartMetrics(insertData, deleteData *batch.Batch) {
 	count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
 	allocated := float64(insertData.Allocated() + deleteData.Allocated())
@@ -784,6 +787,7 @@ func addTailEndMetrics(bat *AtomicBatch) {
 	v2.CdcHoldChangesBytesGauge.Sub(allocated)
 	v2.CdcSinkRecordCounter.Add(count)
 }
+*/
 
 // uriHasPrefix
 func uriHasPrefix(uri string, prefix string) bool {
