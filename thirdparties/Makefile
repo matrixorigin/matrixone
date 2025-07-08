@@ -87,6 +87,10 @@ ifeq ($(UNAME_S),linux)
 endif
 	cp $(USEARCH_DIR)/build/libusearch_static_c.a install/lib/libusearch_c.a
 	cp $(USEARCH_DIR)/c/usearch.h install/include
+	rm -rf $(FP16_DIR)
+	rm -rf $(SIMSIMD_DIR)
+	rm -rf $(STRINGZILLA_DIR)
+	rm -rf $(USEARCH_DIR)
 
 clean:
 	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR)
