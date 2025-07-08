@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -977,24 +976,15 @@ func (h *Handle) HandleWrite(
 				pkDef := schema.GetSingleSortKey()
 				idx := pkDef.Idx
 				isCompositeKey := pkDef.IsCompositeColumn()
-				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-					if isCompositeKey {
-						pkbuf := req.Batch.Vecs[idx].GetBytesAt(i)
-						tuple, _ := types.Unpack(pkbuf)
-						logutil.Info(
-							"op1",
-							zap.String("txn", txn.String()),
-							zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[idx].GetType(), pkbuf, false)),
-							zap.Any("detail", tuple.SQLStrings(nil)),
-						)
-					} else {
-						logutil.Info(
-							"op1",
-							zap.String("txn", txn.String()),
-							zap.String("pk", common.MoVectorToString(req.Batch.Vecs[idx], i)),
-						)
-					}
+				var opts []common.TypePrintOpt
+				if isCompositeKey {
+					opts = append(opts, common.WithIsComposite{})
 				}
+				logutil.Info(
+					"op1",
+					zap.String("txn", txn.String()),
+					zap.String("pks", common.MoVectorToString(req.Batch.Vecs[idx], 100, opts...)),
+				)
 			}
 
 		}
@@ -1078,28 +1068,17 @@ func (h *Handle) HandleWrite(
 	if h.IsInterceptTable(tb.Schema(false).(*catalog.Schema).Name) || injected {
 		schema := tb.Schema(false).(*catalog.Schema)
 		if schema.HasPK() {
-			rowids := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())
 			isCompositeKey := schema.GetSingleSortKey().IsCompositeColumn()
-			for i := 0; i < len(rowids); i++ {
-				if isCompositeKey {
-					pkbuf := req.Batch.Vecs[1].GetBytesAt(i)
-					tuple, _ := types.Unpack(pkbuf)
-					logutil.Info(
-						"op2",
-						zap.String("txn", txn.String()),
-						zap.String("pk", common.TypeStringValue(*req.Batch.Vecs[1].GetType(), pkbuf, false)),
-						zap.String("rowid", rowids[i].String()),
-						zap.Any("detail", tuple.SQLStrings(nil)),
-					)
-				} else {
-					logutil.Info(
-						"op2",
-						zap.String("txn", txn.String()),
-						zap.String("pk", common.MoVectorToString(req.Batch.Vecs[1], i)),
-						zap.String("rowid", rowids[i].String()),
-					)
-				}
+			var opts []common.TypePrintOpt
+			if isCompositeKey {
+				opts = append(opts, common.WithIsComposite{})
 			}
+			logutil.Info(
+				"op2",
+				zap.String("txn", txn.String()),
+				zap.String("pks", common.MoVectorToString(req.Batch.Vecs[1], 100, opts...)),
+				zap.String("rowids", common.MoVectorToString(req.Batch.Vecs[0], 100, opts...)),
+			)
 		}
 	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
