@@ -108,8 +108,15 @@ var NewSinker = func(
 	if len(createSql) < len(createTableIfNotExists) || !strings.EqualFold(createSql[:len(createTableIfNotExists)], createTableIfNotExists) {
 		createSql = createTableIfNotExists + createSql[len(createTable):]
 	}
-	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceDbName, dbTblInfo.SinkDbName)
-	createSql = strings.ReplaceAll(createSql, dbTblInfo.SourceTblName, dbTblInfo.SinkTblName)
+	tableStart := len(createTableIfNotExists)
+	tableEnd := strings.Index(createSql, "(")
+	newTablePart := ""
+	if dbTblInfo.SinkDbName != "" {
+		newTablePart = dbTblInfo.SinkDbName + "." + dbTblInfo.SinkTblName
+	} else {
+		newTablePart = dbTblInfo.SinkTblName
+	}
+	createSql = createSql[:tableStart] + " " + newTablePart + createSql[tableEnd:]
 	_ = sink.Send(ctx, ar, []byte(padding+createSql), false)
 
 	return NewMysqlSinker(

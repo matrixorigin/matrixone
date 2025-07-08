@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
@@ -27,11 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -214,6 +219,7 @@ func TestScope_CreateTable(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		mockDbMeta.EXPECT().RelationExists(gomock.Any(), "dept", gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
@@ -252,6 +258,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta2.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(true).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, name string, arg any) (engine.Database, error) {
 			if name == defines.TEMPORARY_DBNAME {
 				return mockDbMeta2, nil
@@ -284,6 +291,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(_ *plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
@@ -317,6 +325,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
@@ -356,6 +365,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(moerr.NewInternalErrorNoCtx("test err")).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
@@ -404,6 +414,7 @@ func TestScope_CreateTable(t *testing.T) {
 		}).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(tbl *plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
@@ -647,4 +658,121 @@ func TestScope_Database(t *testing.T) {
 		c := NewCompile("test", "test", sql, "", "", eng, proc, nil, false, nil, time.Now())
 		assert.Error(t, s.DropDatabase(c))
 	})
+}
+
+func Test_addTimeSpan(t *testing.T) {
+	cases := []struct {
+		name    string
+		len     int
+		unit    string
+		wantOk  bool
+		wantMsg string
+	}{
+		{"hour", 1, "h", true, ""},
+		{"day", 2, "d", true, ""},
+		{"month", 3, "mo", true, ""},
+		{"year", 4, "y", true, ""},
+		{"invalid", 5, "xx", false, "unknown unit"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := addTimeSpan(c.len, c.unit)
+			if c.wantOk {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), c.wantMsg)
+			}
+		})
+	}
+}
+
+func Test_getSqlForCheckPitrDup(t *testing.T) {
+	mk := func(level int32, origin bool) *plan2.CreatePitr {
+		return &plan2.CreatePitr{
+			Level:             level,
+			CurrentAccountId:  1,
+			AccountName:       "acc",
+			CurrentAccount:    "curacc",
+			DatabaseName:      "db",
+			TableName:         "tb",
+			OriginAccountName: origin,
+		}
+	}
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELCLUSTER), false)), "obj_id")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), true)), "account_name = 'acc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELACCOUNT), false)), "account_name = 'curacc'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELDATABASE), false)), "database_name = 'db'")
+	assert.Contains(t, getSqlForCheckPitrDup(mk(int32(tree.PITRLEVELTABLE), false)), "table_name = 'tb'")
+}
+
+func TestCheckSysMoCatalogPitrResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	ctx := context.Background()
+
+	t.Run("empty vecs", func(t *testing.T) {
+		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{}, 10, "d")
+		assert.Error(t, err)
+		assert.False(t, needInsert)
+		assert.False(t, needUpdate)
+	})
+
+	t.Run("insert needed", func(t *testing.T) {
+		v1 := vector.NewVec(types.T_uint64.ToType())
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		// no data in vectors
+		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		assert.NoError(t, err)
+		assert.True(t, needInsert)
+		assert.False(t, needUpdate)
+	})
+
+	t.Run("update needed", func(t *testing.T) {
+		v1 := vector.NewVec(types.T_uint64.ToType())
+		_ = vector.AppendFixed(v1, uint64(5), false, mp)
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
+		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		assert.NoError(t, err)
+		assert.False(t, needInsert)
+		assert.True(t, needUpdate)
+	})
+
+	t.Run("no update needed", func(t *testing.T) {
+		v1 := vector.NewVec(types.T_uint64.ToType())
+		_ = vector.AppendFixed(v1, uint64(20), false, mp)
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		_ = vector.AppendBytes(v2, []byte("d"), false, mp)
+		needInsert, needUpdate, err := CheckSysMoCatalogPitrResult(ctx, []*vector.Vector{v1, v2}, 10, "d")
+		assert.NoError(t, err)
+		assert.False(t, needInsert)
+		assert.False(t, needUpdate)
+	})
+}
+
+func TestPitrExistsError(t *testing.T) {
+	compile := &Compile{proc: testutil.NewProc()}
+	cases := []struct {
+		level       int32
+		accountName string
+		dbName      string
+		tableName   string
+		expect      string
+	}{
+		{int32(tree.PITRLEVELCLUSTER), "", "", "", "cluster level pitr already exists"},
+		{int32(tree.PITRLEVELACCOUNT), "acc", "", "", "account acc does not exist"},
+		{int32(tree.PITRLEVELDATABASE), "", "db", "", "database `db` already has a pitr"},
+		{int32(tree.PITRLEVELTABLE), "", "db", "tb", "table db.tb does not exist"},
+	}
+	for _, c := range cases {
+		p := &plan2.CreatePitr{
+			Level:        c.level,
+			AccountName:  c.accountName,
+			DatabaseName: c.dbName,
+			TableName:    c.tableName,
+		}
+		err := pitrExistsError(compile, p)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), c.expect)
+	}
 }

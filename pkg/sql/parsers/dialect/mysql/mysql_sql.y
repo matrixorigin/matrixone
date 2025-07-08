@@ -485,7 +485,7 @@ import (
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR RECOVERY_WINDOW
+%token <str> PITR RECOVERY_WINDOW INTERNAL
 
 // CDC
 %token <str> CDC
@@ -587,7 +587,7 @@ import (
 %type <funcArg> func_arg
 %type <funcArgDecl> func_arg_decl
 %type <funcReturn> func_return
-%type <boolVal> func_body_import
+%type <boolVal> func_body_import internal_opt
 %type <str> func_lang extension_lang extension_name
 
 %type <procName> proc_name
@@ -1145,7 +1145,7 @@ snapshot_object_opt:
     }
 
 create_pitr_stmt:
-    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING
+    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1153,9 +1153,10 @@ create_pitr_stmt:
             Level: tree.PITRLEVELACCOUNT,
             PitrValue: $8,
             PitrUnit: $9,
+            Internal: $10,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING internal_opt
     {
        $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1163,9 +1164,10 @@ create_pitr_stmt:
             Level: tree.PITRLEVELCLUSTER,
             PitrValue: $8,
             PitrUnit: $9,
+            Internal: $10,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR ACCOUNT ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR ACCOUNT ident RANGE pitr_value STRING internal_opt
     {
        $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1174,9 +1176,10 @@ create_pitr_stmt:
             AccountName: tree.Identifier($7.Compare()),
             PitrValue: $9,
             PitrUnit: $10,
+            Internal: $11,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR DATABASE ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1185,9 +1188,10 @@ create_pitr_stmt:
             DatabaseName: tree.Identifier($7.Compare()),
             PitrValue: $9,
             PitrUnit: $10,
+            Internal: $11,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR TABLE ident ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR TABLE ident ident RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1197,9 +1201,10 @@ create_pitr_stmt:
             TableName: tree.Identifier($8.Compare()),
             PitrValue: $10,
             PitrUnit: $11,
+            Internal: $12,
         }
     }
-|   CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1207,9 +1212,10 @@ create_pitr_stmt:
             Level: tree.PITRLEVELACCOUNT,
             PitrValue: $6,
             PitrUnit: $7,
+            Internal: $8,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING internal_opt
     {
          $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1219,6 +1225,7 @@ create_pitr_stmt:
             TableName: tree.Identifier($9.Compare()),
             PitrValue: $11,
             PitrUnit: $12,
+            Internal: $13,
         }
     }
 
@@ -7172,11 +7179,16 @@ drop_snapshot_stmt:
     }
 
 drop_pitr_stmt:
-   DROP PITR exists_opt ident
+   DROP PITR exists_opt ident internal_opt
    {
        var ifExists = $3
        var name = tree.Identifier($4.Compare())
-       $$ = tree.NewDropPitr(ifExists, name)
+       $$ = &tree.DropPitr {
+	   		IfExists: ifExists,
+			Name: name,
+			Internal: $5,
+       }
+
    }
 
 account_role_name:
@@ -7750,6 +7762,15 @@ not_exists_opt:
         $$ = false
     }
 |   IF NOT EXISTS
+    {
+        $$ = true
+    }
+
+internal_opt:
+    {
+        $$ = false
+    }
+|   INTERNAL
     {
         $$ = true
     }
@@ -12911,6 +12932,7 @@ non_reserved_keyword:
 |   CUBE
 |   RETRY
 |   SQL_BUFFER_RESULT
+|	INTERNAL
 
 func_not_keyword:
     DATE_ADD

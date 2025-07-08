@@ -3894,15 +3894,23 @@ func strToSigned[T constraints.Signed](
 			}
 		} else {
 			if isBinary {
-				r, err := strconv.ParseInt(
-					hex.EncodeToString(v), 16, 64)
-				if err != nil {
-					if strings.Contains(err.Error(), "value out of range") {
-						// the string maybe non-visible,don't print it
+				var r int64
+				var num uint64
+				if len(v) == 0 {
+					return moerr.NewInvalidArg(ctx, "cast to int", v)
+				}
+				if len(v) > 8 {
+					return moerr.NewOutOfRange(ctx, "int", "")
+				}
+				for j := 0; j < len(v); j++ {
+					highNib := v[j] >> 4
+					lowNib := v[j] & 0x0F
+					num = (num << 8) | uint64(highNib)<<4 | uint64(lowNib)
+					if num > math.MaxInt64 {
 						return moerr.NewOutOfRange(ctx, "int", "")
 					}
-					return moerr.NewInvalidArg(ctx, "cast to int", r)
 				}
+				r = int64(num)
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))

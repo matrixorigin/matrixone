@@ -715,7 +715,13 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			logutil.Info(
 				"TXN-FILTER-RANGE-LOG",
 				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+				zap.String("exprs", plan2.FormatExprs(
+					rangesParam.BlockFilters, plan2.FormatOption{
+						ExpandVec:       true,
+						ExpandVecMaxLen: 2,
+						MaxDepth:        5,
+					},
+				)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.Int("blocks", blocks.Len()),
@@ -839,7 +845,14 @@ func (tbl *txnTable) rangesOnePart(
 		logutil.Info(
 			"SLOW-RANGES:",
 			zap.String("table", tbl.tableDef.Name),
-			zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+			zap.String("exprs", plan2.FormatExprs(
+				rangesParam.BlockFilters,
+				plan2.FormatOption{
+					ExpandVec:       true,
+					ExpandVecMaxLen: 2,
+					MaxDepth:        5,
+				},
+			)),
 		)
 	}
 
