@@ -3849,16 +3849,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	// If pitr exists and IfNotExists is false, return error
 	if len(res.Batches) > 0 && res.Batches[0].RowCount() > 0 {
 		if !createPitr.GetIfNotExists() {
-			switch pitrLevel {
-			case tree.PITRLEVELCLUSTER:
-				return moerr.NewInternalError(c.proc.Ctx, "cluster level pitr already exists")
-			case tree.PITRLEVELACCOUNT:
-				return moerr.NewInternalErrorf(c.proc.Ctx, "account %s does not exist", createPitr.AccountName)
-			case tree.PITRLEVELDATABASE:
-				return moerr.NewInternalErrorf(c.proc.Ctx, "database `%s` already has a pitr", createPitr.DatabaseName)
-			case tree.PITRLEVELTABLE:
-				return moerr.NewInternalErrorf(c.proc.Ctx, "table %s.%s does not exist", createPitr.DatabaseName, createPitr.TableName)
-			}
+			return pitrExistsError(c, createPitr)
 		}
 		return nil
 	}
@@ -3918,35 +3909,11 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	var needInsertSysPitr = true
 	var needUpdateSysPitr = false
-	var sysPitrLength uint64
-	var sysPitrUnit string
 	if len(sysRes.Batches) > 0 && sysRes.Batches[0].RowCount() > 0 {
 		// sys_mo_catalog_pitr exists
-		needInsertSysPitr = false
-		vecs := sysRes.Batches[0].Vecs
-		if len(vecs) < 2 {
-			return moerr.NewInternalErrorf(c.proc.Ctx, "unexpected sys_mo_catalog_pitr result columns")
-		}
-		// pitr_length is uint64, pitr_unit is string (varlena)
-		if vecs[0].Length() > 0 {
-			col := vector.MustFixedColNoTypeCheck[uint64](vecs[0])
-			sysPitrLength = col[0]
-		}
-		if vecs[1].Length() > 0 {
-			col := vector.MustFixedColNoTypeCheck[types.Varlena](vecs[1])
-			sysPitrUnit = col[0].GetString(vecs[1].GetArea())
-		}
-		// Compare time ranges
-		oldMinTs, err := addTimeSpan(int(sysPitrLength), sysPitrUnit)
+		needInsertSysPitr, needUpdateSysPitr, err = CheckSysMoCatalogPitrResult(c.proc.Ctx, sysRes.Batches[0].Vecs, uint64(createPitr.GetPitrValue()), createPitr.GetPitrUnit())
 		if err != nil {
 			return err
-		}
-		newMinTs, err := addTimeSpan(int(createPitr.GetPitrValue()), createPitr.GetPitrUnit())
-		if err != nil {
-			return err
-		}
-		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
-			needUpdateSysPitr = true
 		}
 	}
 
@@ -4086,6 +4053,20 @@ func (s *Scope) DropPitr(c *Compile) error {
 	return nil
 }
 
+func pitrExistsError(c *Compile, createPitr *plan.CreatePitr) error {
+	pitrLevel := tree.PitrLevel(createPitr.Level)
+	switch pitrLevel {
+	case tree.PITRLEVELCLUSTER:
+		return moerr.NewInternalError(c.proc.Ctx, "cluster level pitr already exists")
+	case tree.PITRLEVELACCOUNT:
+		return moerr.NewInternalErrorf(c.proc.Ctx, "account %s does not exist", createPitr.AccountName)
+	case tree.PITRLEVELDATABASE:
+		return moerr.NewInternalErrorf(c.proc.Ctx, "database `%s` already has a pitr", createPitr.DatabaseName)
+	default:
+		return moerr.NewInternalErrorf(c.proc.Ctx, "table %s.%s does not exist", createPitr.DatabaseName, createPitr.TableName)
+	}
+}
+
 func getSqlForCheckPitrDup(
 	createPitr *plan.CreatePitr,
 ) string {
@@ -4125,4 +4106,52 @@ func getPitrObjectId(createPitr *plan.CreatePitr) uint64 {
 		objectId = createPitr.TableId
 	}
 	return objectId
+}
+
+// CheckSysMoCatalogPitrResult parses the sys_mo_catalog_pitr query result and determines whether to insert or update.
+// Arguments:
+//
+//	ctx: context for error reporting
+//	vecs: the vectors from the query result (should have at least 2 columns)
+//	newLength: the new PITR length to compare
+//	newUnit: the new PITR unit to compare
+//
+// Returns:
+//
+//	needInsert: true if sys_mo_catalog_pitr does not exist
+//	needUpdate: true if it exists and needs update
+//	oldLength, oldUnit: the old values if exist (for debug)
+//	err: error if any
+func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, newLength uint64, newUnit string) (needInsert, needUpdate bool, err error) {
+	needInsert = true
+	needUpdate = false
+	var oldLength uint64
+	oldUnit := ""
+	if len(vecs) < 2 {
+		return false, false, moerr.NewInternalErrorf(ctx, "unexpected sys_mo_catalog_pitr result columns")
+	}
+	if vecs[0].Length() > 0 {
+		col := vector.MustFixedColNoTypeCheck[uint64](vecs[0])
+		oldLength = col[0]
+	}
+	if vecs[1].Length() > 0 {
+		col := vector.MustFixedColNoTypeCheck[types.Varlena](vecs[1])
+		oldUnit = col[0].GetString(vecs[1].GetArea())
+	}
+	if vecs[0].Length() > 0 && vecs[1].Length() > 0 {
+		needInsert = false
+		// Compare time ranges
+		oldMinTs, err1 := addTimeSpan(int(oldLength), oldUnit)
+		if err1 != nil {
+			return false, false, err1
+		}
+		newMinTs, err2 := addTimeSpan(int(newLength), newUnit)
+		if err2 != nil {
+			return false, false, err2
+		}
+		if newMinTs.UnixNano() < oldMinTs.UnixNano() {
+			needUpdate = true
+		}
+	}
+	return needInsert, needUpdate, nil
 }
