@@ -217,18 +217,23 @@ func (b *bufferHolder) Add(item batchpipe.HasName, needAggr bool) {
 }
 
 func (b *bufferHolder) loopAggr() {
-	logger := b.c.logger.With(zap.String("name", b.name)).Named("bufferHolder")
-	interval := time.Second
+	var (
+		lastPrintTime time.Time
+		logger        = b.c.logger.With(zap.String("name", b.name)).Named("bufferHolder")
+		loopInterval  = time.Second
+		printInterval = time.Minute * 10
+		recordCnt     = 0
+	)
 	if b.aggr == nil {
 		logger.Warn("no aggregator available, just quit this loop")
 		return
 	}
 	counter := v2.GetTraceMOLoggerAggrCounter(b.name)
-	logger.Info("start")
+	logutil.Info("handle-aggr-start")
 mainL:
 	for {
 		select {
-		case <-time.After(interval):
+		case <-time.After(loopInterval):
 			// handle aggr
 			end := time.Now().Truncate(b.aggr.GetWindow())
 			results := b.aggr.PopResultsBeforeWindow(end)
@@ -237,19 +242,28 @@ mainL:
 				b.Add(item, false)
 				counter.Inc()
 			}
-			logger.Info("handle aggr", zap.Int("records", len(results)), zap.Time("end", end))
+			recordCnt += len(results)
+			if time.Since(lastPrintTime) > printInterval {
+				logutil.Info(
+					"handle-aggr",
+					zap.Int("records", recordCnt),
+					zap.Time("end", end),
+				)
+				recordCnt = 0
+				lastPrintTime = time.Now()
+			}
 			// END> handle aggr
 
 		case <-b.bgCtx.Done():
 			// trigger by b.bgCancel
-			logger.Info("exiting loopAggr", zap.String("cause", "bgCtx.Done"))
+			logger.Info("handle-aggr-bgctx-done")
 			break mainL
 		case <-b.ctx.Done():
-			logger.Info("exiting loopAggr", zap.String("cause", "ctx.Done"))
+			logutil.Info("handle-aggr-ctx-done")
 			break mainL
 		}
 	}
-	logger.Info("exit loopAggr")
+	logutil.Info("handle-aggr-exit")
 }
 
 var _ generateReq = (*bufferGenerateReq)(nil)
