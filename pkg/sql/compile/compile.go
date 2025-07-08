@@ -395,6 +395,8 @@ func (c *Compile) run(s *Scope) error {
 		} else {
 			return s.CreateTable(c)
 		}
+	case CreatePitr:
+		return s.CreatePitr(c)
 	case CreateView:
 		return s.CreateView(c)
 	case AlterView:
@@ -405,6 +407,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.RenameTable(c)
 	case DropTable:
 		return s.DropTable(c)
+	case DropPitr:
+		return s.DropPitr(c)
 	case DropSequence:
 		return s.DropSequence(c)
 	case CreateSequence:
@@ -636,6 +640,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 				newScope(DropDatabase).
 					withPlan(pn),
 			}, nil
+		case plan.DataDefinition_CREATE_PITR:
+			return []*Scope{
+				newScope(CreatePitr).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return []*Scope{
 				newScope(CreateTable).
@@ -664,6 +673,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 		case plan.DataDefinition_DROP_TABLE:
 			return []*Scope{
 				newScope(DropTable).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_DROP_PITR:
+			return []*Scope{
+				newScope(DropPitr).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:

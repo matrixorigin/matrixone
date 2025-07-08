@@ -185,6 +185,10 @@ func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
 	return tcc.execCtx.ses.GetAccountId(), nil
 }
 
+func (tcc *TxnCompilerContext) GetAccountName() string {
+	return tcc.execCtx.ses.GetTenantName()
+}
+
 func (tcc *TxnCompilerContext) GetContext() context.Context {
 	return tcc.execCtx.reqCtx
 }

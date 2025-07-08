@@ -134,6 +134,10 @@ func (m *MockCompilerContext2) GetAccountId() (uint32, error) {
 	return ret0, ret1
 }
 
+func (m *MockCompilerContext2) GetAccountName() string {
+	return ""
+}
+
 // GetAccountId indicates an expected call of GetAccountId.
 func (mr *MockCompilerContext2MockRecorder) GetAccountId() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
