@@ -55,22 +55,6 @@ func getIndexPitrName(dbname string, tablename string) string {
 func CreateIndexPitr(c *Compile, dbname string, tablename string) (string, error) {
 	var sql string
 	pitr_name := getIndexPitrName(dbname, tablename)
-
-	// check pitr exists before create
-	sql = fmt.Sprintf("SHOW PITR  WHERE pitr_name = '%s'", pitr_name)
-	/*
-		res, err := c.runSqlWithResult(sql, NoAccountId)
-		if err != nil {
-			return pitr_name, err
-		}
-		defer res.Close()
-
-		if len(res.Batches) > 0 && res.Batches[0].RowCount() > 0 {
-			// pitr already exists
-			return pitr_name, nil
-		}
-	*/
-
 	sql = fmt.Sprintf("CREATE PITR IF NOT EXISTS `%s` FOR TABLE `%s` `%s` range 2 'h' INTERNAL;", pitr_name, dbname, tablename)
 	logutil.Infof("Create Index Pitr %s. sql: %s:", pitr_name, sql)
 	err := c.runSql(sql)
