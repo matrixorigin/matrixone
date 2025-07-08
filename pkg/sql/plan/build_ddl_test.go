@@ -672,7 +672,7 @@ func TestBuildCreatePitr(t *testing.T) {
 		stmt.DatabaseName = "db1"
 		stmt.TableName = "tb1"
 		plan, err := buildCreatePitr(stmt, ctx)
-		assert.Error(t, err)
-		assert.Nil(t, plan)
+		assert.NoError(t, err)
+		assert.NotNil(t, plan)
 	})
 }
