@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -339,6 +340,12 @@ func (h *Handle) handleRequests(
 		postFuncs                 []func()
 	)
 
+	defer func() {
+		if err != nil {
+			txn.Rollback(ctx)
+		}
+	}()
+
 	if iter = h.newTxnCommitRequestsIter(commitRequests, txnMeta); iter == nil {
 		return
 	}
@@ -384,10 +391,10 @@ func (h *Handle) handleRequests(
 				var f []func()
 				if f, err = h.tryLockMergeForBulkDelete([]any{req}, txn); err != nil {
 					logutil.Warn("failed to lock merging", zap.Error(err))
-					return
+					err = nil
+				} else {
+					releaseF = append(releaseF, f...)
 				}
-
-				releaseF = append(releaseF, f...)
 			}
 
 			var r1, r2, r3, r4 int
@@ -404,14 +411,16 @@ func (h *Handle) handleRequests(
 		default:
 			err = moerr.NewNotSupportedf(ctx, "unknown txn request type: %T", req)
 		}
-
-		//Need to roll back the txn.
 		if err != nil {
-			txn.Rollback(ctx)
 			return
 		}
 	}
-	if inMemoryInsertRows+inMemoryTombstoneRows+persistedTombstoneRows+persistedMemoryInsertRows > 100000 {
+
+	totalAffectedRows := inMemoryInsertRows +
+		persistedMemoryInsertRows +
+		inMemoryTombstoneRows +
+		persistedTombstoneRows
+	if totalAffectedRows > 100000 {
 		logutil.Info(
 			"BIG-COMMIT-TRACE-LOG",
 			zap.Int("in-memory-rows", inMemoryInsertRows),
@@ -753,9 +762,10 @@ func (h *Handle) HandleDropDatabase(
 	// Delete in mo_database table
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	databaseTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_DATABASE_ID)
-	rowIDVec := containers.ToTNVector(req.Bat.GetVector(0), common.WorkspaceAllocator)
+	mp := common.WorkspaceAllocator
+	rowIDVec := containers.ToTNVector(req.Bat.GetVector(0), mp)
 	defer rowIDVec.Close()
-	pkVec := containers.ToTNVector(req.Bat.GetVector(1), common.WorkspaceAllocator)
+	pkVec := containers.ToTNVector(req.Bat.GetVector(1), mp)
 	defer pkVec.Close()
 	err = databaseTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal)
 
@@ -832,20 +842,22 @@ func (h *Handle) HandleDropRelation(
 
 	catalog, _ := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 	tablesTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_TABLES_ID)
-	rowIDVec := containers.ToTNVector(req.TableBat.GetVector(0), common.WorkspaceAllocator)
+	mp := common.WorkspaceAllocator
+	dt := handle.DT_Normal
+	rowIDVec := containers.ToTNVector(req.TableBat.GetVector(0), mp)
 	defer rowIDVec.Close()
-	pkVec := containers.ToTNVector(req.TableBat.GetVector(1), common.WorkspaceAllocator)
+	pkVec := containers.ToTNVector(req.TableBat.GetVector(1), mp)
 	defer pkVec.Close()
-	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
+	if err := tablesTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, dt); err != nil {
 		return err
 	}
 	columnsTbl, _ := catalog.GetRelationByID(pkgcatalog.MO_COLUMNS_ID)
 	for _, bat := range req.ColumnBat {
-		rowIDVec := containers.ToTNVector(bat.GetVector(0), common.WorkspaceAllocator)
+		rowIDVec := containers.ToTNVector(bat.GetVector(0), mp)
 		defer rowIDVec.Close()
-		pkVec := containers.ToTNVector(bat.GetVector(1), common.WorkspaceAllocator)
+		pkVec := containers.ToTNVector(bat.GetVector(1), mp)
 		defer pkVec.Close()
-		if err := columnsTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, handle.DT_Normal); err != nil {
+		if err := columnsTbl.DeleteByPhyAddrKeys(rowIDVec, pkVec, dt); err != nil {
 			return err
 		}
 	}
@@ -900,11 +912,17 @@ func (h *Handle) HandleWrite(
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)
 	if err != nil {
+		err = errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
+			req.DatabaseId,
+			req.DatabaseName)))
 		return
 	}
 
 	tb, err := dbase.GetRelationByID(req.TableID)
 	if err != nil {
+		err = errors.Join(err, moerr.NewBadDB(ctx, fmt.Sprintf("%d-%s",
+			req.TableID,
+			req.TableName)))
 		return
 	}
 
@@ -1088,7 +1106,10 @@ func (h *Handle) HandleWrite(
 	return
 }
 
-func parse_merge_settings_set(bat *batch.Batch, scheduler *merge.MergeScheduler) func() {
+func parse_merge_settings_set(
+	bat *batch.Batch,
+	scheduler *merge.MergeScheduler,
+) func() {
 	settings := make([]*merge.MergeSettings, 0, 1)
 	tids := make([]uint64, 0, 1)
 	merge.DecodeMergeSettingsBatchAnd(bat, func(tid uint64, setting *merge.MergeSettings) {
@@ -1110,7 +1131,10 @@ func parse_merge_settings_set(bat *batch.Batch, scheduler *merge.MergeScheduler)
 	}
 }
 
-func parse_merge_settings_unset(pkVec containers.Vector, scheduler *merge.MergeScheduler) func() {
+func parse_merge_settings_unset(
+	pkVec containers.Vector,
+	scheduler *merge.MergeScheduler,
+) func() {
 	tids := make([]uint64, 0, 1)
 	for i := 0; i < pkVec.Length(); i++ {
 		bs := pkVec.Get(i).([]byte)

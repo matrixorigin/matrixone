@@ -19,7 +19,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -30,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/prashantv/gostub"
@@ -41,8 +39,10 @@ import (
 func TestNewSinker(t *testing.T) {
 	type args struct {
 		sinkUri          UriInfo
+		accountId        uint64
+		taskId           string
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater IWatermarkUpdater
+		watermarkUpdater *CDCWatermarkUpdater
 		tableDef         *plan.TableDef
 		retryTimes       int
 		retryDuration    time.Duration
@@ -130,14 +130,26 @@ func TestNewSinker(t *testing.T) {
 	})
 	defer sinkStub.Reset()
 
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, *DbTableInfo, IWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
+	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, uint64, string, *DbTableInfo, *CDCWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
 		return nil
 	})
 	defer sinkerStub.Reset()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewSinker(tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration, tt.args.ar, CDCDefaultTaskExtra_MaxSQLLen, CDCDefaultSendSqlTimeout)
+			got, err := NewSinker(
+				tt.args.sinkUri,
+				tt.args.accountId,
+				tt.args.taskId,
+				tt.args.dbTblInfo,
+				tt.args.watermarkUpdater,
+				tt.args.tableDef,
+				tt.args.retryTimes,
+				tt.args.retryDuration,
+				tt.args.ar,
+				CDCDefaultTaskExtra_MaxSQLLen,
+				CDCDefaultSendSqlTimeout,
+			)
 			if !tt.wantErr(t, err, fmt.Sprintf("NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)) {
 				return
 			}
@@ -149,7 +161,7 @@ func TestNewSinker(t *testing.T) {
 func TestNewConsoleSinker(t *testing.T) {
 	type args struct {
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater IWatermarkUpdater
+		watermarkUpdater *CDCWatermarkUpdater
 	}
 	tests := []struct {
 		name string
@@ -190,7 +202,7 @@ func Test_consoleSinker_Sink(t *testing.T) {
 
 	type fields struct {
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater *WatermarkUpdater
+		watermarkUpdater *CDCWatermarkUpdater
 	}
 	type args struct {
 		ctx  context.Context
@@ -360,7 +372,17 @@ func TestNewMysqlSinker(t *testing.T) {
 			Names: []string{"pk"},
 		},
 	}
-	NewMysqlSinker(sink, dbTblInfo, nil, tableDef, NewCdcActiveRoutine(), CDCDefaultTaskExtra_MaxSQLLen, false)
+	NewMysqlSinker(
+		sink,
+		1,
+		"task-1",
+		dbTblInfo,
+		nil,
+		tableDef,
+		NewCdcActiveRoutine(),
+		CDCDefaultTaskExtra_MaxSQLLen,
+		false,
+	)
 }
 
 func Test_mysqlSinker_appendSqlBuf(t *testing.T) {
@@ -530,10 +552,15 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 		SinkTblName: "tblName",
 	}
 
-	watermarkUpdater := &WatermarkUpdater{
-		watermarkMap: &sync.Map{},
-	}
-	watermarkUpdater.UpdateMem("db1", "t1", t0)
+	u, _ := InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
+	u.UpdateWatermarkOnly(context.Background(), &WatermarkKey{
+		AccountId: 1,
+		TaskId:    "taskID-1",
+		DBName:    "db1",
+		TableName: "t1",
+	}, &t0)
 
 	tableDef := &plan.TableDef{
 		Cols: []*plan.ColDef{
@@ -550,7 +577,17 @@ func Test_mysqlSinker_Sink(t *testing.T) {
 
 	ar := NewCdcActiveRoutine()
 
-	s := NewMysqlSinker(sink, dbTblInfo, watermarkUpdater, tableDef, ar, CDCDefaultTaskExtra_MaxSQLLen, false)
+	s := NewMysqlSinker(
+		sink,
+		1,
+		"task-1",
+		dbTblInfo,
+		u,
+		tableDef,
+		ar,
+		CDCDefaultTaskExtra_MaxSQLLen,
+		false,
+	)
 	s.ClearError()
 	go s.Run(ctx, ar)
 	defer func() {
@@ -657,10 +694,23 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 		SourceTblName: "t1",
 	}
 
-	watermarkUpdater := &WatermarkUpdater{
-		watermarkMap: &sync.Map{},
+	watermarkUpdater, _ := InitCDCWatermarkUpdaterForTest(t)
+	watermarkUpdater.Start()
+	defer watermarkUpdater.Stop()
+	wmTS := types.BuildTS(0, 1)
+	wmKey := WatermarkKey{
+		AccountId: 0,
+		TaskId:    "taskID-1",
+		DBName:    "db1",
+		TableName: "t1",
 	}
-	watermarkUpdater.UpdateMem("db1", "t1", types.BuildTS(0, 1))
+	getTS, err := watermarkUpdater.GetOrAddCommitted(
+		context.Background(),
+		&wmKey,
+		&wmTS,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, wmTS, getTS)
 
 	ar := NewCdcActiveRoutine()
 
@@ -671,10 +721,12 @@ func Test_mysqlSinker_Sink_NoMoreData(t *testing.T) {
 			ip:            "127.0.0.1",
 			port:          3306,
 			retryTimes:    3,
-			retryDuration: 3 * time.Second,
+			retryDuration: 5 * time.Millisecond,
 			conn:          db,
 		},
 		ar:               ar,
+		accountId:        wmKey.AccountId,
+		taskId:           wmKey.TaskId,
 		dbTblInfo:        dbTblInfo,
 		watermarkUpdater: watermarkUpdater,
 		preRowType:       DeleteRow,
@@ -731,7 +783,7 @@ func Test_mysqlSinker_sinkDelete(t *testing.T) {
 	type fields struct {
 		mysql            Sink
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater *WatermarkUpdater
+		watermarkUpdater *CDCWatermarkUpdater
 		sqlBuf           []byte
 		rowBuf           []byte
 		insertPrefix     []byte
@@ -783,7 +835,7 @@ func Test_mysqlSinker_sinkInsert(t *testing.T) {
 	type fields struct {
 		mysql            Sink
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater *WatermarkUpdater
+		watermarkUpdater *CDCWatermarkUpdater
 		sqlBuf           []byte
 		rowBuf           []byte
 		insertPrefix     []byte
@@ -832,7 +884,16 @@ func Test_mysqlSinker_sinkInsert(t *testing.T) {
 }
 
 func Test_mysqlsink(t *testing.T) {
-	wmark := NewWatermarkUpdater(0, "taskID-1", nil)
+	wmark, _ := InitCDCWatermarkUpdaterForTest(t)
+	wmark.Start()
+	defer wmark.Stop()
+	ts := types.BuildTS(100, 100)
+	wmark.UpdateWatermarkOnly(context.Background(), &WatermarkKey{
+		AccountId: 0,
+		TaskId:    "taskID-1",
+		DBName:    "db1",
+		TableName: "t1",
+	}, &ts)
 	sink := &mysqlSinker{
 		watermarkUpdater: wmark,
 		dbTblInfo: &DbTableInfo{
@@ -841,11 +902,15 @@ func Test_mysqlsink(t *testing.T) {
 			SourceDbName:  "db1",
 		},
 	}
-	tts := timestamp.Timestamp{
-		PhysicalTime: 100,
-		LogicalTime:  100,
-	}
-	sink.watermarkUpdater.UpdateMem("db1", "t1", types.TimestampToTS(tts))
+	ts = types.BuildTS(100, 100)
+	sink.watermarkUpdater.UpdateWatermarkOnly(context.Background(), &WatermarkKey{
+		AccountId: 0,
+		TaskId:    "taskID-1",
+		DBName:    "db1",
+		TableName: "t1",
+	},
+		&ts,
+	)
 	sink.Sink(context.Background(), &DecoderOutput{})
 }
 
@@ -901,7 +966,7 @@ func Test_mysqlSinker_sinkTail(t *testing.T) {
 func Test_consoleSinker_Close(t *testing.T) {
 	type fields struct {
 		dbTblInfo        *DbTableInfo
-		watermarkUpdater *WatermarkUpdater
+		watermarkUpdater *CDCWatermarkUpdater
 	}
 	tests := []struct {
 		name   string

@@ -214,6 +214,7 @@ func TestScope_CreateTable(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		mockDbMeta := mock_frontend.NewMockDatabase(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		mockDbMeta.EXPECT().RelationExists(gomock.Any(), "dept", gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
@@ -252,6 +253,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta2.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, moerr.NewInternalErrorNoCtx("test"))
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(true).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, name string, arg any) (engine.Database, error) {
 			if name == defines.TEMPORARY_DBNAME {
 				return mockDbMeta2, nil
@@ -284,6 +286,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta.EXPECT().Relation(gomock.Any(), catalog.MO_DATABASE, gomock.Any()).Return(relation, nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(_ *plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
@@ -317,6 +320,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta.EXPECT().RelationExists(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
@@ -356,6 +360,7 @@ func TestScope_CreateTable(t *testing.T) {
 		mockDbMeta.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Return(moerr.NewInternalErrorNoCtx("test err")).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error {
@@ -404,6 +409,7 @@ func TestScope_CreateTable(t *testing.T) {
 		}).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().HasTempEngine().Return(false).AnyTimes()
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(mockDbMeta, nil).AnyTimes()
 
 		planDef2ExecDef := gostub.Stub(&engine.PlanDefsToExeDefs, func(tbl *plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {

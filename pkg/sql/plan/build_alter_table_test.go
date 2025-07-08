@@ -22,8 +22,10 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func TestAlterTable1(t *testing.T) {
@@ -119,4 +121,294 @@ func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 		testDeepCopy(plan)
 	}
 	return plan, err
+}
+
+// TestAlterTableVarcharLengthBumped tests the isVarcharLengthBumped function.
+func TestAlterTableVarcharLengthBumped(t *testing.T) {
+	tests := []struct {
+		name     string
+		clause   *tree.AlterTableModifyColumnClause
+		tableDef *TableDef
+		wantOk   bool
+		wantErr  bool
+	}{
+		{
+			name: "varchar length increased",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+					},
+				},
+			},
+			wantOk:  true,
+			wantErr: false,
+		},
+		{
+			name: "varchar length decreased",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  50,
+						},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+					},
+				},
+			},
+			wantOk:  false,
+			wantErr: false,
+		},
+		{
+			name: "column not found",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col_not_exist"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+					},
+				},
+			},
+			wantOk:  false,
+			wantErr: true,
+		},
+		{
+			name: "different type",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "char",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+					},
+				},
+			},
+			wantOk:  false,
+			wantErr: false,
+		},
+		{
+			name: "position changed",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+				},
+				Position: &tree.ColumnPosition{
+					Typ:            tree.ColumnPositionAfter,
+					RelativeColumn: tree.NewUnresolvedColName("col2"),
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+					},
+					{
+						Name:  "col2",
+						ColId: 2,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+					},
+				},
+			},
+			wantOk:  false,
+			wantErr: false,
+		},
+		{
+			name: "with null attribute matching",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+					Attributes: []tree.ColumnAttribute{
+						&tree.AttributeNull{Is: false},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+						Default: &plan.Default{
+							NullAbility: false,
+						},
+					},
+				},
+			},
+			wantOk:  true,
+			wantErr: false,
+		},
+		{
+			name: "with null attribute not matching",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+					Attributes: []tree.ColumnAttribute{
+						&tree.AttributeNull{Is: true},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+						Default: &plan.Default{
+							NullAbility: false,
+						},
+					},
+				},
+			},
+			wantOk:  false,
+			wantErr: false,
+		},
+
+		{
+			name: "with more than one null attribute not matching",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+					Attributes: []tree.ColumnAttribute{
+						&tree.AttributeNull{Is: true},
+						&tree.AttributeKey{},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+						Default: &plan.Default{
+							NullAbility: true,
+						},
+					},
+				},
+			},
+			wantOk:  false,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			ok, err := isVarcharLengthBumped(ctx, tt.clause, tt.tableDef)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("isVarcharLengthBumped() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if ok != tt.wantOk {
+				t.Errorf("isVarcharLengthBumped() = %v, want %v", ok, tt.wantOk)
+			}
+		})
+	}
 }

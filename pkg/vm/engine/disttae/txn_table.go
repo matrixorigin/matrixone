@@ -695,16 +695,16 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			slowStep = uint64(1)
 		}
 		tbl.enableLogFilterExpr.Store(false)
-		if traceFilterExprInterval.Add(step) >= 1000000 {
+		if traceFilterExprInterval.Add(step) >= 2000000 {
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 60 {
+		if traceFilterExprInterval2.Add(slowStep) >= 100 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if rangesLen >= 80 {
+		if rangesLen >= 100 {
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
@@ -715,7 +715,13 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			logutil.Info(
 				"TXN-FILTER-RANGE-LOG",
 				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+				zap.String("exprs", plan2.FormatExprs(
+					rangesParam.BlockFilters, plan2.FormatOption{
+						ExpandVec:       true,
+						ExpandVecMaxLen: 2,
+						MaxDepth:        5,
+					},
+				)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.Int("blocks", blocks.Len()),
@@ -839,7 +845,14 @@ func (tbl *txnTable) rangesOnePart(
 		logutil.Info(
 			"SLOW-RANGES:",
 			zap.String("table", tbl.tableDef.Name),
-			zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+			zap.String("exprs", plan2.FormatExprs(
+				rangesParam.BlockFilters,
+				plan2.FormatOption{
+					ExpandVec:       true,
+					ExpandVecMaxLen: 2,
+					MaxDepth:        5,
+				},
+			)),
 		)
 	}
 
@@ -1665,13 +1678,9 @@ func (tbl *txnTable) Delete(
 		tbl.getTxn().hasS3Op.Store(true)
 		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
 		fileName := stats.ObjectLocation().String()
-		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
-		if err != nil {
-			return err
-		}
 
 		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0]); err != nil {
 			return err
 		}
 
@@ -2006,58 +2015,51 @@ func (tbl *txnTable) getPartitionState(
 	if ps != nil {
 		start, end = ps.GetDuration()
 	}
-	errStr := ""
-	if err != nil {
-		errStr = err.Error()
-	}
-	logutil.Infof(
-		"xxxx Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		ps,
-		start.ToString(),
-		end.ToString(),
-		errStr,
+	logutil.Info(
+		"Txn-Table-GetSSPS",
+		zap.String("table-name", tbl.tableName),
+		zap.Uint64("table-id", tbl.tableId),
+		zap.String("txn", tbl.db.op.Txn().DebugString()),
+		zap.String("ps", fmt.Sprintf("%p", ps)),
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Bool("is-snapshot", tbl.db.op.IsSnapOp()),
+		zap.Error(err),
 	)
 
 	//If ps == nil, it indicates that subscribe failed due to 1: network timeout,
 	//2:table id is too old for snapshot read,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
 
 	// To get a partition state for snapshot read, we need to consume the history checkpoints.
+	var (
+		logger = logutil.Info
+		msg    string
+	)
 	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
 		ctx,
 		tbl,
 		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 
 	start, end = types.MaxTs(), types.MinTs()
-	if ps != nil {
+	if ps != nil || err != nil {
 		start, end = ps.GetDuration()
+		msg = "Txn-Table-GetSSPS-Succeed"
+	} else {
+		logger = logutil.Error
+		msg = "Txn-Table-GetSSPS-Failed"
 	}
-	if ps != nil {
-		logutil.Infof(
-			"xxxx Get snapshot partition state succeed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s]",
-			tbl,
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString(),
-			tbl.db.op.IsSnapOp(),
-			ps,
-			start.ToString(),
-			end.ToString(),
-		)
-		return
-	}
-	logutil.Errorf(
-		"xxxx Get partition state failed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v,err:%s",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		err.Error())
+
+	logger(
+		msg,
+		zap.String("table-name", tbl.tableName),
+		zap.Uint64("table-id", tbl.tableId),
+		zap.String("txn", tbl.db.op.Txn().DebugString()),
+		zap.String("ps", fmt.Sprintf("%p", ps)),
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Bool("is-snapshot", tbl.db.op.IsSnapOp()),
+		zap.Error(err),
+	)
 	return
 }
 

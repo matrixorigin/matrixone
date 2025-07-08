@@ -78,15 +78,15 @@ func TestBuildMulti(t *testing.T) {
 	var wg sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 
 			for i := 0; i < nitem; i++ {
-				key := j*nitem + i
+				key := tid*nitem + i
 				err := build.Add(int64(key), sample[key])
 				require.Nil(t, err)
 			}
-		}()
+		}(j)
 	}
 	wg.Wait()
 
@@ -133,10 +133,10 @@ func TestBuildMulti(t *testing.T) {
 	var wg2 sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg2.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
-				key := int64(j*nitem + i)
+				key := int64(tid*nitem + i)
 				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
@@ -149,7 +149,7 @@ func TestBuildMulti(t *testing.T) {
 					require.True(t, found)
 				}
 			}
-		}()
+		}(j)
 	}
 
 	wg2.Wait()
@@ -231,15 +231,15 @@ func TestBuildSingleThread(t *testing.T) {
 	var wg sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 
 			for i := 0; i < nitem; i++ {
-				key := j*nitem + i
+				key := tid*nitem + i
 				err := build.Add(int64(key), sample[key])
 				require.Nil(t, err)
 			}
-		}()
+		}(j)
 	}
 	wg.Wait()
 
@@ -295,27 +295,27 @@ func TestBuildSingleThread(t *testing.T) {
 
 	fmt.Println("start recall")
 	// check recall
-	failed := 0
+	var failed atomic.Int64
 	var wg2 sync.WaitGroup
 	for j := 0; j < nthread; j++ {
 		wg2.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg2.Done()
 			for i := 0; i < nitem; i++ {
-				key := int64(j*nitem + i)
+				key := int64(tid*nitem + i)
 				anykeys, distances, err := search.Search(nil, sample[key], vectorindex.RuntimeConfig{Limit: 10})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
 				_ = distances
 				if keys[0] != key {
-					failed++
+					failed.Add(1)
 					found, err := search.Contains(key)
 					require.Nil(t, err)
 					require.True(t, found)
 				}
 			}
-		}()
+		}(j)
 	}
 
 	wg2.Wait()
@@ -325,8 +325,8 @@ func TestBuildSingleThread(t *testing.T) {
 	require.Nil(t, err)
 	require.False(t, found)
 
-	recall := float32(nthread*nitem-failed) / float32(nthread*nitem)
-	fmt.Printf("Recall %f\n", float32(nthread*nitem-failed)/float32(nthread*nitem))
+	recall := float32(nthread*nitem-int(failed.Load())) / float32(nthread*nitem)
+	fmt.Printf("Recall %f\n", float32(nthread*nitem-int(failed.Load()))/float32(nthread*nitem))
 	require.True(t, (recall > 0.96))
 
 }

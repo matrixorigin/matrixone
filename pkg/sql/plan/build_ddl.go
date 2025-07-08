@@ -3498,19 +3498,6 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func getTableComment(tableDef *plan.TableDef) string {
-	var comment string
-	for _, def := range tableDef.Defs {
-		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
-			for _, kv := range proDef.Properties.Properties {
-				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = kv.Value
-				}
-			}
-		}
-	}
-	return comment
-}
 func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error) {
 
 	alterTables := stmt.AlterTables
@@ -3636,10 +3623,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, err
 	}
 	if alterTable.IsClusterTable && accountId != catalog.System_Account {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
+		return nil, moerr.NewInternalError(
+			ctx.GetContext(),
+			"only the sys account can alter the cluster table",
+		)
 	}
 
-	comment := getTableComment(tableDef)
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
@@ -3648,8 +3637,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	if tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil {
 		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
 	}
+	unsupportedErrFmt := "unsupported alter option in inplace mode: %s"
+	unsupportedErrorStr := func(opt tree.NodeFormatter) string {
+		// get callsite
+		ft := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		opt.Format(ft)
+		return ft.String()
+	}
 
-	var primaryKeys []string
 	var detectSqls []string
 	var updateSqls []string
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
@@ -3661,24 +3656,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// lower case
 			constraintName := string(opt.Name)
 			if constraintNameAreWhiteSpaces(constraintName) {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"Can't DROP '%s'; check that column/key exists",
+					constraintName,
+				)
 			}
 			alterTableDrop.Name = constraintName
 			name_not_found := true
 			switch opt.Typ {
-			case tree.AlterTableDropColumn:
-				alterTableDrop.Typ = plan.AlterTableDrop_COLUMN
-				err := checkIsDroppableColumn(tableDef, constraintName, ctx)
-				if err != nil {
-					return nil, err
-				}
-				for _, col := range tableDef.Cols {
-					if col.Name == constraintName {
-						name_not_found = false
-						break
-					}
-				}
-			case tree.AlterTableDropIndex:
+			case tree.AlterTableDropIndex, tree.AlterTableDropKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_INDEX
 				// check index
 				for _, indexdef := range tableDef.Indexes {
@@ -3687,26 +3674,35 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						break
 					}
 				}
-			case tree.AlterTableDropKey:
-				alterTableDrop.Typ = plan.AlterTableDrop_KEY
-			case tree.AlterTableDropPrimaryKey:
-				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
-				if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
-				}
-				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP exists Primary Key")
 			case tree.AlterTableDropForeignKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_FOREIGN_KEY
 				for _, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
 						name_not_found = false
-						updateSqls = append(updateSqls, getSqlForDeleteConstraint(databaseName, tableName, constraintName))
+						updateSqls = append(
+							updateSqls,
+							getSqlForDeleteConstraint(
+								databaseName,
+								tableName,
+								constraintName,
+							),
+						)
 						break
 					}
 				}
+			default:
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					unsupportedErrorStr(opt),
+				)
 			}
 			if name_not_found {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Can't DROP '%s'; check that column/key exists", constraintName)
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"Can't DROP '%s'; check that column/key exists",
+					constraintName,
+				)
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_Drop{
@@ -3745,23 +3741,42 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					if err != nil {
 						return nil, err
 					}
-					sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(), databaseName, tableDef.Name, tableDef.Cols, []*plan.ForeignKeyDef{fkData.Def})
+					sqls, err := genSqlsForCheckFKSelfRefer(
+						ctx.GetContext(),
+						databaseName,
+						tableDef.Name,
+						tableDef.Cols,
+						[]*plan.ForeignKeyDef{fkData.Def},
+					)
 					if err != nil {
 						return nil, err
 					}
 					detectSqls = append(detectSqls, sqls...)
 				} else {
 					//get table def of parent table
-					_, parentTableDef, err := ctx.Resolve(fkData.ParentDbName, fkData.ParentTableName, nil)
+					_, parentTableDef, err := ctx.Resolve(
+						fkData.ParentDbName,
+						fkData.ParentTableName,
+						nil,
+					)
 					if err != nil {
 						return nil, err
 					}
 					if parentTableDef == nil {
-						return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkData.ParentDbName, fkData.ParentTableName)
+						return nil, moerr.NewNoSuchTable(
+							ctx.GetContext(),
+							fkData.ParentDbName,
+							fkData.ParentTableName,
+						)
 					}
-					sql, err := genSqlForCheckFKConstraints(ctx.GetContext(), fkData.Def,
+					sql, err := genSqlForCheckFKConstraints(
+						ctx.GetContext(),
+						fkData.Def,
 						databaseName, tableDef.Name, tableDef.Cols,
-						fkData.ParentDbName, fkData.ParentTableName, parentTableDef.Cols)
+						fkData.ParentDbName,
+						fkData.ParentTableName,
+						parentTableDef.Cols,
+					)
 					if err != nil {
 						return nil, err
 					}
@@ -3769,8 +3784,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
-				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
-				if err != nil {
+				if err := checkIndexKeypartSupportability(
+					ctx.GetContext(),
+					def.KeyParts,
+				); err != nil {
 					return nil, err
 				}
 
@@ -3782,8 +3799,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					constrNames[nameLower] = true
 				}
 
-				err = checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
-				if err != nil {
+				if err := checkDuplicateConstraint(
+					constrNames,
+					indexName,
+					false,
+					ctx.GetContext(),
+				); err != nil {
 					return nil, err
 				}
 				if len(indexName) == 0 {
@@ -3793,7 +3814,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if err = buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{def}, colMap, oriPriKeyName, ctx); err != nil {
+				if err := buildUniqueIndexTable(
+					indexInfo,
+					[]*tree.UniqueIndex{def},
+					colMap,
+					oriPriKeyName,
+					ctx,
+				); err != nil {
 					return nil, err
 				}
 
@@ -3809,8 +3836,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.FullTextIndex:
-				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
-				if err != nil {
+				if err := checkIndexKeypartSupportability(
+					ctx.GetContext(),
+					def.KeyParts,
+				); err != nil {
 					return nil, err
 				}
 
@@ -3822,8 +3851,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					constrNames[nameLower] = true
 				}
 
-				err = checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
-				if err != nil {
+				if err := checkDuplicateConstraint(
+					constrNames,
+					indexName,
+					false,
+					ctx.GetContext(),
+				); err != nil {
 					return nil, err
 				}
 
@@ -3834,7 +3867,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if err = buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{def}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
+				if err := buildFullTextIndexTable(
+					indexInfo,
+					[]*tree.FullTextIndex{def},
+					colMap,
+					tableDef.Indexes,
+					oriPriKeyName,
+					ctx,
+				); err != nil {
 					return nil, err
 				}
 
@@ -3850,8 +3890,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				}
 			case *tree.Index:
-				err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
-				if err != nil {
+				if err := checkIndexKeypartSupportability(
+					ctx.GetContext(),
+					def.KeyParts,
+				); err != nil {
 					return nil, err
 				}
 
@@ -3864,8 +3906,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					constrNames[nameLower] = true
 				}
 
-				err = checkDuplicateConstraint(constrNames, indexName, false, ctx.GetContext())
-				if err != nil {
+				if err := checkDuplicateConstraint(
+					constrNames,
+					indexName,
+					false,
+					ctx.GetContext(),
+				); err != nil {
 					return nil, err
 				}
 
@@ -3877,7 +3923,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				oriPriKeyName := getTablePriKeyName(tableDef.Pkey)
 
 				indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
-				if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{def}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
+				if err := buildSecondaryIndexDef(
+					indexInfo,
+					[]*tree.Index{def},
+					colMap,
+					tableDef.Indexes,
+					oriPriKeyName,
+					ctx,
+				); err != nil {
 					return nil, err
 				}
 
@@ -3892,28 +3945,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
-			case *tree.CheckIndex:
-				alterTable.Actions[i] = &plan.AlterTable_Action{
-					Action: &plan.AlterTable_Action_AlterComment{
-						AlterComment: &plan.AlterTableComment{
-							NewComment: comment,
-						},
-					},
-				}
 			default:
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported alter option: %T", def)
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					unsupportedErrorStr(def),
+				)
 			}
 
 		case *tree.AlterOptionAlterIndex:
 			alterTableIndex := new(plan.AlterTableAlterIndex)
 			constraintName := string(opt.Name)
 			alterTableIndex.IndexName = constraintName
-
-			if opt.Visibility == tree.VISIBLE_TYPE_VISIBLE {
-				alterTableIndex.Visible = true
-			} else {
-				alterTableIndex.Visible = false
-			}
+			alterTableIndex.Visible = opt.Visibility == tree.VISIBLE_TYPE_VISIBLE
 
 			name_not_found := true
 			// check index
@@ -3924,7 +3968,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 			}
 			if name_not_found {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Can't ALTER '%s'; check that column/key exists", constraintName)
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"Can't ALTER '%s'; check that column/key exists",
+					constraintName,
+				)
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterIndex{
@@ -3940,13 +3988,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			switch opt.KeyType {
 			case tree.INDEX_TYPE_IVFFLAT:
 				if opt.AlgoParamList <= 0 {
-					return nil, moerr.NewInternalError(ctx.GetContext(), "lists should be > 0.")
+					return nil, moerr.NewInternalErrorf(
+						ctx.GetContext(),
+						"lists should be > 0.",
+					)
 				}
 				alterTableReIndex.IndexAlgoParamList = opt.AlgoParamList
 			case tree.INDEX_TYPE_HNSW:
 				// PASS: keep options on change for incremental update
 			default:
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "unsupported index type: %v", opt.KeyType)
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					opt.KeyType.ToString(),
+				)
 			}
 
 			name_not_found := true
@@ -3958,7 +4013,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				}
 			}
 			if name_not_found {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "Can't REINDEX '%s'; check that column/key exists", constraintName)
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(),
+					"Can't REINDEX '%s'; check that column/key exists",
+					constraintName,
+				)
 			}
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterReindex{
@@ -3968,9 +4027,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 
 		case *tree.TableOptionComment:
 			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "comment for field '%s' is too long", alterTable.TableDef.Name)
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"comment for field '%s' is too long",
+					alterTable.TableDef.Name,
+				)
 			}
-			comment = opt.Comment
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterComment{
 					AlterComment: &plan.AlterTableComment{
@@ -3982,15 +4044,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
-			if oldName != newName {
-				_, tableDef, err := ctx.Resolve(databaseName, newName, nil)
-				if err != nil {
-					return nil, err
-				}
-				if tableDef != nil {
-					return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
-				}
+			if oldName == newName {
+				continue
 			}
+
+			// TODO ONLY Check
+			_, tableDef, err := ctx.Resolve(databaseName, newName, nil)
+			if err != nil {
+				return nil, err
+			}
+			if tableDef != nil {
+				return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+			}
+
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AlterName{
 					AlterName: &plan.AlterTableName{
@@ -3999,143 +4065,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
-			updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
 
-		case *tree.AlterAddCol:
-			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
-			if err != nil {
-				return nil, err
-			}
-			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
-				colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
-				if colType.GetWidth() > types.MaxStringSize {
-					return nil, moerr.NewInvalidInputf(ctx.GetContext(), "string width (%d) is too long", colType.GetWidth())
-				}
-			}
-
-			if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
-				if colType.GetWidth() > types.MaxArrayDimension {
-					return nil, moerr.NewInvalidInputf(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
-				}
-			}
-			var pks []string
-			var comment string
-			var auto_incr bool
-			colName := opt.Column.Name.ColName()
-			colNameOrigin := opt.Column.Name.ColNameOrigin()
-			for _, attr := range opt.Column.Attributes {
-				switch attribute := attr.(type) {
-				case *tree.AttributePrimaryKey, *tree.AttributeKey:
-					if colType.GetId() == int32(types.T_blob) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "blob type in primary key")
-					}
-					if colType.GetId() == int32(types.T_text) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "text type in primary key")
-					}
-					if colType.GetId() == int32(types.T_datalink) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "datalink type in primary key")
-					}
-					if colType.GetId() == int32(types.T_json) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
-					}
-					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
-					}
-					pks = append(pks, colName)
-				case *tree.AttributeComment:
-					comment = attribute.CMT.String()
-					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-						return nil, moerr.NewInvalidInputf(ctx.GetContext(), "comment for column '%s' is too long", colNameOrigin)
-					}
-				case *tree.AttributeAutoIncrement:
-					auto_incr = true
-					if !types.T(colType.GetId()).IsInteger() {
-						return nil, moerr.NewNotSupported(ctx.GetContext(), "the auto_incr column is only support integer type now")
-					}
-				case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-					return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport add unique index constraints when adding new column")
-					//uniqueIndexInfos = append(uniqueIndexInfos, &tree.UniqueIndex{
-					//	KeyParts: []*tree.KeyPart{
-					//		{
-					//			ColName: opt.Column.Name,
-					//		},
-					//	},
-					//	Name: opt.Column.Name.Parts[0],
-					//})
-					//indexs = append(indexs, opt.Column.Name.Parts[0])
-				}
-			}
-			if len(pks) > 0 {
-				if len(primaryKeys) > 0 {
-					return nil, moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
-				}
-				primaryKeys = pks
-			}
-
-			defaultValue, err := buildDefaultExpr(opt.Column, colType, ctx.GetProcess())
-			if err != nil {
-				return nil, err
-			}
-			if auto_incr && defaultValue.Expr != nil {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
-			}
-
-			onUpdateExpr, err := buildOnUpdate(opt.Column, colType, ctx.GetProcess())
-			if err != nil {
-				return nil, err
-			}
-
-			if !checkTableColumnNameValid(colName) {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "table column name '%s' is illegal and conflicts with internal keyword", colNameOrigin)
-			}
-
-			colType.AutoIncr = auto_incr
-			col := &ColDef{
-				Name:       colName,
-				OriginName: colNameOrigin,
-				Alg:        plan.CompressType_Lz4,
-				Typ:        colType,
-				Default:    defaultValue,
-				OnUpdate:   onUpdateExpr,
-				Comment:    comment,
-			}
-			colMap[col.Name] = col
-			preName := ""
-			if opt.Position.RelativeColumn != nil {
-				preName = opt.Position.RelativeColumn.ColName()
-			}
-			err = checkIsAddableColumn(tableDef, colName, &colType, ctx)
-			if err != nil {
-				return nil, err
-			}
-			alterTable.Actions[i] = &plan.AlterTable_Action{
-				Action: &plan.AlterTable_Action_AddColumn{
-					AddColumn: &plan.AlterAddColumn{
-						Name:    colNameOrigin,
-						PreName: preName,
-						Type:    colType,
-						Pos:     int32(opt.Position.Typ),
-					},
-				},
-			}
-		case *tree.TableOptionAutoIncrement:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Can't set AutoIncr column value.")
+			updateSqls = append(
+				updateSqls,
+				getSqlForRenameTable(databaseName, oldName, newName)...,
+			)
 		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
-			alterTable.Actions[i] = &plan.AlterTable_Action{
-				Action: &plan.AlterTable_Action_AlterComment{
-					AlterComment: &plan.AlterTableComment{
-						NewComment: comment,
-					},
-				},
-			}
+			continue
+
 		case *tree.AlterTableModifyColumnClause:
-			if isVarcharLengthModified(ctx.GetContext(), opt, tableDef) {
+			ok, _ := isVarcharLengthBumped(ctx.GetContext(), opt, tableDef)
+			if ok {
 				colName := opt.NewColumn.Name.ColName()
 				oldCol := FindColumn(tableDef.Cols, colName)
-				if oldCol == nil {
-					return nil, moerr.NewBadFieldError(ctx.GetContext(), opt.NewColumn.Name.ColNameOrigin(), tableDef.Name)
-				}
-
 				newColType, err := getTypeFromAst(ctx.GetContext(), opt.NewColumn.Type)
 				if err != nil {
 					return nil, err
@@ -4156,30 +4098,32 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Currently only varchar length modification is supported for INPLACE algorithm")
 			}
 		default:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
+			return nil, moerr.NewInvalidInputf(
+				ctx.GetContext(),
+				unsupportedErrFmt,
+				unsupportedErrorStr(opt),
+			)
 		}
 	}
 
 	if stmt.PartitionOption != nil {
-		alterPartitionOption := stmt.PartitionOption
-		switch alterPartitionOption.(type) {
-		case *tree.AlterPartitionAddPartitionClause:
-			// TODO: reimplement partition
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table add partition clause")
-		case *tree.AlterPartitionDropPartitionClause:
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table drop partition clause")
-		case *tree.AlterPartitionTruncatePartitionClause:
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table truncate partition clause")
-		case *tree.AlterPartitionRedefinePartitionClause:
-			return nil, moerr.NewNotSupported(ctx.GetContext(), "alter table partition by clause")
-		}
+		// TODO: reimplement partition
+		return nil, moerr.NewNotSupportedf(
+			ctx.GetContext(),
+			unsupportedErrFmt,
+			unsupportedErrorStr(stmt.PartitionOption),
+		)
 	}
 
 	// check Constraint Name (include index/ unique)
-	err = checkConstraintNames(uniqueIndexInfos, secondaryIndexInfos, ctx.GetContext())
-	if err != nil {
+	if err := checkConstraintNames(
+		uniqueIndexInfos,
+		secondaryIndexInfos,
+		ctx.GetContext(),
+	); err != nil {
 		return nil, err
 	}
+
 	alterTable.DetectSqls = detectSqls
 	alterTable.UpdateFkSqls = updateSqls
 	return &Plan{
