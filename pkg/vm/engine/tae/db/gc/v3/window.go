@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
@@ -167,6 +166,20 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	}
 	w.files = filesNotGC
 	sourcer = w.MakeFilesReader(ctx, fs)
+	process := func(b *bloomfilter.BloomFilter, vec *vector.Vector, pool *mpool.MPool) error {
+		gcVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		for i := 0; i < vec.Length(); i++ {
+			stats := objectio.ObjectStats(vec.GetBytesAt(i))
+			if err = vector.AppendBytes(
+				gcVec, []byte(stats.ObjectName().UnsafeString()), false, pool,
+			); err != nil {
+				return err
+			}
+		}
+		b.Add(gcVec)
+		gcVec.Free(pool)
+		return nil
+	}
 	bf, err = BuildBloomfilter(
 		ctx,
 		Default_Coarse_EstimateRows,
@@ -175,6 +188,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		sourcer.Read,
 		buffer,
 		w.mp,
+		process,
 	)
 	if err != nil {
 		return nil, "", err
@@ -183,10 +197,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	bf.Test(vecToGC,
 		func(exists bool, i int) {
 			if !exists {
-				buf := vecToGC.GetRawBytesAt(i)
-				stats := (objectio.ObjectStats)(buf)
-				name := stats.ObjectName().UnsafeString()
-				filesToGC = append(filesToGC, name)
+				filesToGC = append(filesToGC, string(vecToGC.GetBytesAt(i)))
 				return
 			}
 		})
