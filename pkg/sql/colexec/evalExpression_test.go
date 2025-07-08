@@ -29,7 +29,7 @@ import (
 )
 
 func TestListExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	bat := testutil.NewBatch(
 		[]types.Type{types.T_int64.ToType()},
@@ -92,7 +92,7 @@ func TestListExpressionExecutor(t *testing.T) {
 }
 
 func TestFixedExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	// Expr_C
 	con := makePlan2Int64ConstExprWithType(218311)
@@ -153,7 +153,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 }
 
 func TestVarExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	// Create a variable expression
 	varExpr := &plan.Expr{
@@ -210,7 +210,7 @@ func TestVarExpressionExecutor(t *testing.T) {
 }
 
 func TestColumnExpressionExecutor(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	col := &plan.Expr{
 		Expr: &plan.Expr_Col{
@@ -249,7 +249,7 @@ func TestColumnExpressionExecutor(t *testing.T) {
 
 func TestFunctionExpressionExecutor(t *testing.T) {
 	{
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 
 		bat := testutil.NewBatchWithVectors(
 			[]*vector.Vector{
@@ -330,7 +330,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 
 	// test memory leak if constant fold happens
 	{
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 
 		col1 := makePlan2BoolConstExprWithType(true)
 		col2 := makePlan2BoolConstExprWithType(true)
@@ -362,7 +362,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 }
 
 func TestExpressionReset(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	// functions will be folded.
 	{

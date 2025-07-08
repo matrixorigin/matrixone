@@ -48,7 +48,7 @@ func Test_handleRemoveRemoteLockTable(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.QueryClient = &testQClient{}
 	_, err := handleRemoveRemoteLockTable(
 		proc,
@@ -80,7 +80,7 @@ func Test_handleGetLatestBind(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.QueryClient = &testQClient{}
 	_, err := handleGetLatestBind(
 		proc,

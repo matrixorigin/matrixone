@@ -59,8 +59,8 @@ var (
 	}
 )
 
-func newFTTestCase(m *mpool.MPool, attrs []string, algo fulltext.FullTextScoreAlgo) fulltextTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newFTTestCase(t *testing.T, m *mpool.MPool, attrs []string, algo fulltext.FullTextScoreAlgo) fulltextTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		if varName == fulltext.FulltextRelevancyAlgo {
 			if algo == fulltext.ALGO_BM25 {
@@ -129,7 +129,7 @@ func fake_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCall(t *testing.T) {
 
-	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs, fulltext.ALGO_TFIDF)
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -184,7 +184,7 @@ func TestFullTextCall(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextCallOneAttr(t *testing.T) {
 
-	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
 
 	inbat := makeBatchFT(ut.proc)
 
@@ -239,7 +239,7 @@ func TestFullTextCallOneAttr(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextEarlyFree(t *testing.T) {
 
-	ut := newFTTestCase(mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
+	ut := newFTTestCase(t, mpool.MustNewZero(), ftdefaultAttrs[0:1], fulltext.ALGO_TFIDF)
 
 	inbat := makeBatchFT(ut.proc)
 

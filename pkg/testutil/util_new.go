@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -59,9 +60,9 @@ func WithQueryClient(queryClient client.QueryClient) ProcOptions {
 	}
 }
 
-func NewProcess(opts ...ProcOptions) *process.Process {
+func NewProcess(t testing.TB, opts ...ProcOptions) *process.Process {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := NewProcessWithMPool("", mp)
+	proc := NewProcessWithMPool(t, "", mp)
 	for _, opt := range opts {
 		opt(proc)
 	}
@@ -82,7 +83,7 @@ func SetupAutoIncrService(sid string) {
 			incrservice.Config{}))
 }
 
-func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
+func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Process {
 	SetupAutoIncrService(sid)
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := process.NewTopProcess(
@@ -90,7 +91,7 @@ func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
 		mp,
 		nil, // no txn client can be set
 		nil, // no txn operator can be set
-		NewFS(),
+		NewFS(t),
 		nil,
 		nil,
 		nil,
@@ -108,23 +109,77 @@ func NewProcessWithMPool(sid string, mp *mpool.MPool) *process.Process {
 
 var NewProc = NewProcess
 
-func NewFS() *fileservice.FileServices {
-	local, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
+func NewFS(t testing.TB) *fileservice.FileServices {
+	if t == nil {
+		// use memory
+		local, err := fileservice.NewMemoryFS(
+			defines.LocalFileServiceName,
+			fileservice.DisabledCacheConfig,
+			nil,
+		)
+		if err != nil {
+			panic(err)
+		}
+		shared, err := fileservice.NewMemoryFS(
+			defines.SharedFileServiceName,
+			fileservice.DisabledCacheConfig,
+			nil,
+		)
+		if err != nil {
+			panic(err)
+		}
+		etl, err := fileservice.NewMemoryFS(
+			defines.ETLFileServiceName,
+			fileservice.DisabledCacheConfig,
+			nil,
+		)
+		if err != nil {
+			panic(err)
+		}
+		fs, err := fileservice.NewFileServices(
+			"",
+			local,
+			shared,
+			etl,
+		)
+		if err != nil {
+			panic(err)
+		}
+		return fs
+	}
+
+	// use t.TempDir
+	local, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.LocalFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
 	if err != nil {
 		panic(err)
 	}
-	s3, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	shared, err := fileservice.NewLocalFS(
+		context.Background(),
+		defines.SharedFileServiceName,
+		t.TempDir(),
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
 	if err != nil {
 		panic(err)
 	}
-	etl, err := fileservice.NewMemoryFS(defines.ETLFileServiceName, fileservice.DisabledCacheConfig, nil)
+	etl, err := fileservice.NewLocalETLFS(
+		defines.ETLFileServiceName,
+		t.TempDir(),
+	)
 	if err != nil {
 		panic(err)
 	}
 	fs, err := fileservice.NewFileServices(
 		"",
 		local,
-		s3,
+		shared,
 		etl,
 	)
 	if err != nil {

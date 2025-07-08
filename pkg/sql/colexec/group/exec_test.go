@@ -128,7 +128,7 @@ func hackMakeAggToTest(cnt int) (*hackAggExecToTest, func()) {
 // 3. batch list : nil.
 
 func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	// datasource.
 	{
@@ -236,7 +236,7 @@ func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
 }
 
 func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	// datasource.
 	{
@@ -342,7 +342,7 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 }
 
 func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	intermediateResultSendActionTrigger = 0
 
 	// datasource.
@@ -444,7 +444,7 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 }
 
 func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	intermediateResultSendActionTrigger = 0
 
 	// datasource.

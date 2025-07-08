@@ -32,19 +32,19 @@ type testCase struct {
 	proc  *process.Process
 }
 
-func newTestCase(m *mpool.MPool, ts []types.Type) testCase {
+func newTestCase(t *testing.T, m *mpool.MPool, ts []types.Type) testCase {
 	return testCase{
 		types: ts,
-		proc:  testutil.NewProcessWithMPool("", m),
+		proc:  testutil.NewProcessWithMPool(t, "", m),
 		arg:   &UnionAll{},
 	}
 }
 
-func genTestCases() []testCase {
+func genTestCases(t *testing.T) []testCase {
 	return []testCase{
-		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}),
-		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}),
-		newTestCase(mpool.MustNewZero(), []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}),
+		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}),
+		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int8.ToType()}),
+		newTestCase(t, mpool.MustNewZero(), []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}),
 	}
 }
 
@@ -52,7 +52,7 @@ func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 func TestUnionall(t *testing.T) {
-	for _, tc := range genTestCases() {
+	for _, tc := range genTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		bats := []*batch.Batch{

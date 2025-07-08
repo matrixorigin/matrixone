@@ -29,7 +29,7 @@ import (
 )
 
 func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Ctx = defines.AttachAccountId(proc.Ctx, 246)
 	proc.Ctx = defines.AttachRoleId(proc.Ctx, 147)
 	proc.Ctx = defines.AttachUserId(proc.Ctx, 135)
@@ -133,7 +133,7 @@ func Test_BuiltIn_CurrentSessionInfo(t *testing.T) {
 }
 
 func Test_BuiltIn_Rpad(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			info: "test rpad('hello', num, '#') with num = 0, 1, 10",
@@ -212,7 +212,7 @@ func Test_BuiltIn_Rpad(t *testing.T) {
 }
 
 func Test_BuiltIn_Lpad(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			info: "test lpad('hello', num, '#') with num = 1, 10 \n" +
@@ -273,7 +273,7 @@ func Test_BuiltIn_Lpad(t *testing.T) {
 }
 
 func Test_BuiltIn_Repeat(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			info: "test repeat('ab', num) with num = -1, 0, 1, 3, null, 1000000000000",
@@ -310,7 +310,7 @@ func Test_BuiltIn_Repeat(t *testing.T) {
 }
 
 func Test_BuiltIn_Serial(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	{
 		input1 := []bool{true, false}
@@ -452,7 +452,7 @@ func Test_BuiltIn_Serial(t *testing.T) {
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	{
 		// serial_full functionality (preserving nulls)
@@ -676,7 +676,7 @@ func initSerialExtractTestCase() []tcTemp {
 func TestSerialExtract(t *testing.T) {
 	testCases := initSerialExtractTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSerialExtract)
 		s, info := fcTC.Run()
@@ -685,7 +685,7 @@ func TestSerialExtract(t *testing.T) {
 }
 
 func Test_BuiltIn_Math(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			info: "test ln",

@@ -31,7 +31,7 @@ func TestHandleMoTableStatsCtl(t *testing.T) {
 	qc, err := client.NewQueryClient("", morpc.Config{})
 	require.NoError(t, err)
 
-	proc := testutil.NewProc(testutil.WithQueryClient(qc))
+	proc := testutil.NewProc(t, testutil.WithQueryClient(qc))
 
 	result, err := handleMoTableStats(proc, tn, "xxx", nil)
 	require.Equal(t, Result{}, result)

@@ -119,7 +119,7 @@ func (m *MockSearchSearchError) UpdateConfig(newalgo VectorIndexSearchIf) error 
 }
 
 func TestCacheServe(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	Cache = NewVectorIndexCache()
 	Cache.serve()
 	Cache.serve()
@@ -142,7 +142,7 @@ func TestCacheServe(t *testing.T) {
 }
 
 func TestCacheAny(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	Cache = NewVectorIndexCache()
 	Cache.serve()
 	Cache.serve()
@@ -165,7 +165,7 @@ func TestCacheAny(t *testing.T) {
 }
 
 func TestCache(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 	VectorIndexCacheTTL = 5 * time.Second
 	VectorIndexCacheTTL = 5 * time.Second
@@ -215,7 +215,7 @@ func TestCache(t *testing.T) {
 }
 
 func TestCacheConcurrent(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 	VectorIndexCacheTTL = 2 * time.Second
 	VectorIndexCacheTTL = 2 * time.Second
@@ -264,7 +264,7 @@ func TestCacheConcurrent(t *testing.T) {
 }
 
 func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 	VectorIndexCacheTTL = 2 * time.Second
 	VectorIndexCacheTTL = 2 * time.Second
@@ -320,7 +320,7 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 }
 
 func TestCacheLoadError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 	VectorIndexCacheTTL = 5 * time.Second
 	Cache = NewVectorIndexCache()
@@ -349,7 +349,7 @@ func TestCacheLoadError(t *testing.T) {
 }
 
 func TestCacheSearchError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 	VectorIndexCacheTTL = 5 * time.Second
 	Cache = NewVectorIndexCache()

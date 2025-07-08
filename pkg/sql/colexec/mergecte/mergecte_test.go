@@ -33,14 +33,10 @@ type mergeCTETestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs []mergeCTETestCase
-)
-
-func init() {
-	tcs = []mergeCTETestCase{
+func makeTestCases(t *testing.T) []mergeCTETestCase {
+	return []mergeCTETestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg:  &MergeCTE{},
 		},
 	}
@@ -48,20 +44,20 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestMergeCTE(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)

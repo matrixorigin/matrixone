@@ -77,7 +77,7 @@ func Test_handleCoreDump(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.QueryClient = &testQClient{}
 	_, err := handleCoreDump(proc, cn, "do", nil)
 	assert.Error(t, err)
