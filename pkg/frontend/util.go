@@ -366,38 +366,40 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 }
 
 // only support single value and unary minus
-func GetSimpleExprValue(ctx context.Context, e tree.Expr, ses *Session) (interface{}, error) {
+func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (interface{}, error) {
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
 		return v.ColName(), nil
 	default:
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
+		builder := plan2.NewQueryBuilder(plan.Query_SELECT, feSes.GetTxnCompileCtx(), false, false)
 		bindContext := plan2.NewBindContext(builder, nil)
 		binder := plan2.NewSetVarBinder(builder, bindContext)
 		planExpr, err := binder.BindExpr(e, 0, false)
 		if err != nil {
 			return nil, err
 		}
+
+		txnCompileCtx := feSes.GetTxnCompileCtx()
 		// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
 		// Here the evalExpr may execute some function that needs engine.Engine.
-		ses.txnCompileCtx.GetProcess().ReplaceTopCtx(
-			attachValue(ses.txnCompileCtx.GetProcess().GetTopContext(),
+		txnCompileCtx.GetProcess().ReplaceTopCtx(
+			attachValue(txnCompileCtx.GetProcess().GetTopContext(),
 				defines.EngineKey{},
-				ses.GetTxnHandler().GetStorage()))
+				feSes.GetTxnHandler().GetStorage()))
 
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(ses.txnCompileCtx.GetProcess(), planExpr)
+		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
 		if err != nil {
 			return nil, err
 		}
 
-		value, err := getValueFromVector(ctx, vec, ses, planExpr)
+		value, err := getValueFromVector(ctx, vec, feSes, planExpr)
 		free()
 		return value, err
 	}
 }
 
-func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, expr *plan2.Expr) (interface{}, error) {
+func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession, expr *plan2.Expr) (interface{}, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(0) {
 		return nil, nil
 	}
@@ -456,7 +458,7 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, ses *Session, e
 		return val.String(), nil
 	case types.T_timestamp:
 		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
-		return val.String2(ses.GetTimeZone(), vec.GetType().Scale), nil
+		return val.String2(feSes.GetTimeZone(), vec.GetType().Scale), nil
 	case types.T_enum:
 		return vector.MustFixedColNoTypeCheck[types.Enum](vec)[0], nil
 	default:

@@ -39,7 +39,7 @@ const (
 
 type Interpreter struct {
 	ctx         context.Context
-	ses         *Session
+	ses         FeSession
 	bh          BackgroundExec
 	varScope    *[]map[string]interface{}
 	fmtctx      *tree.FmtCtx

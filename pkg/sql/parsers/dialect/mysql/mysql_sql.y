@@ -683,6 +683,7 @@ import (
 %type <sourceOptional> replace_opt
 %type <str> database_or_schema
 %type <indexType> using_opt
+%type <str> opt_lang
 %type <indexCategory> index_prefix
 %type <keyParts> index_column_list index_column_list_opt
 %type <keyPart> index_column
@@ -6489,15 +6490,10 @@ extension_name:
     }
 
 create_procedure_stmt:
-    CREATE PROCEDURE proc_name '(' proc_args_list_opt ')' STRING
+    CREATE replace_opt PROCEDURE proc_name '(' proc_args_list_opt ')' opt_lang STRING
     {
-        var Name = $3
-        var Args = $5
-        var Body = $7
         $$ = tree.NewCreateProcedure(
-            Name,
-            Args,
-            Body,
+            $2, $4, $6, $8, $9,
         )
     }
 
@@ -6557,6 +6553,15 @@ proc_arg_in_out_type:
 |   INOUT
     {
         $$ = tree.TYPE_INOUT
+    }
+
+opt_lang:
+    {
+        $$ = "sql"
+    }
+|   LANGUAGE STRING
+    {   
+        $$ = $2
     }
 
 

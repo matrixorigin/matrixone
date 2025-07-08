@@ -1486,8 +1486,8 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 	return doDropProcedure(execCtx.reqCtx, ses.(*Session), dp)
 }
 
-func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt) error {
-	results, err := doInterpretCall(execCtx.reqCtx, ses.(*Session), call)
+func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, bg bool) error {
+	results, err := doInterpretCall(execCtx.reqCtx, ses, call, bg)
 	if err != nil {
 		return err
 	}

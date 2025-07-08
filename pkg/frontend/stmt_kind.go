@@ -231,6 +231,10 @@ func statementCanBeExecutedInUncommittedTransaction(
 		return true, nil
 	case *tree.CloneTable:
 		return true, nil
+	case *tree.CallStmt:
+		// Call procedure can be executed in an uncommitted transaction, usually used in
+		// nested procedure call.
+		return true, nil
 	}
 
 	return false, nil

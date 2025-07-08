@@ -11,6 +11,7 @@ y.go
 **/.DS_Store
 **/cover.out
 .vscode
+.env
 *.iml
 tags
 coverage.txt
