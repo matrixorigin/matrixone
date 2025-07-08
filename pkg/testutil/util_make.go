@@ -295,3 +295,23 @@ func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
 	}
 	return v
 }
+
+func MakeVarlenaVector(data [][]byte, nulls []uint64, mp *mpool.MPool) *vector.Vector {
+	vec := vector.NewVec(types.T_blob.ToType())
+	for _, d := range data {
+		if d != nil {
+			vector.AppendBytes(vec, d, false, mp)
+		} else {
+			vector.AppendBytes(vec, nil, true, mp)
+		}
+	}
+
+	if len(nulls) > 0 {
+		vecNsp := vec.GetNulls()
+		for _, row := range nulls {
+			vecNsp.Add(row)
+		}
+	}
+
+	return vec
+}

@@ -43,6 +43,14 @@ type MockCompilerContext struct {
 
 	// ctx default: nil
 	ctx context.Context
+
+	// Add function fields for test overrides
+	GetAccountNameFunc    func() string
+	GetAccountIdFunc      func() (uint32, error)
+	DatabaseExistsFunc    func(string, *Snapshot) bool
+	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc func([]string) ([]uint32, error)
+	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -85,6 +93,9 @@ func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*functi
 }
 
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+	if m.ResolveAccountIdsFunc != nil {
+		return m.ResolveAccountIdsFunc(accountNames)
+	}
 	return []uint32{catalog.System_Account}, nil
 }
 
@@ -1164,6 +1175,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) DatabaseExists(name string, snapshot *Snapshot) bool {
+	if m.DatabaseExistsFunc != nil {
+		return m.DatabaseExistsFunc(name, snapshot)
+	}
 	if _, ok := m.dbs[strings.ToLower(name)]; ok {
 		return true
 	}
@@ -1171,6 +1185,9 @@ func (m *MockCompilerContext) DatabaseExists(name string, snapshot *Snapshot) bo
 }
 
 func (m *MockCompilerContext) GetDatabaseId(dbName string, snapshot *Snapshot) (uint64, error) {
+	if m.GetDatabaseIdFunc != nil {
+		return m.GetDatabaseIdFunc(dbName, snapshot)
+	}
 	return 0, nil
 }
 
@@ -1233,7 +1250,17 @@ func (m *MockCompilerContext) GetStatsCache() *StatsCache {
 	return nil
 }
 
+func (m *MockCompilerContext) GetAccountName() string {
+	if m.GetAccountNameFunc != nil {
+		return m.GetAccountNameFunc()
+	}
+	return ""
+}
+
 func (m *MockCompilerContext) GetAccountId() (uint32, error) {
+	if m.GetAccountIdFunc != nil {
+		return m.GetAccountIdFunc()
+	}
 	return 0, nil
 }
 
