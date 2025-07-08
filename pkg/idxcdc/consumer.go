@@ -88,6 +88,9 @@ func NewIndexConsumer(cnUUID string,
 	}
 
 	sqlwriter, err := NewIndexSqlWriter(ie.algo, info, tableDef, ie.indexes)
+	if err != nil {
+		return nil, err
+	}
 
 	c := &IndexConsumer{cnUUID: cnUUID,
 		info:      info,

@@ -1465,6 +1465,21 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+
+		// TODO: HNSWCDC create PITR and CDC for index async update
+		ct, err := GetConstraintDef(c.proc.Ctx, newRelation)
+		if err != nil {
+			return err
+		}
+		for _, constraint := range ct.Cts {
+			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
+				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
 	}
 
 	err = maybeCreateAutoIncrement(
@@ -2085,7 +2100,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	if async {
 		logutil.Infof("Ivfflat index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
-		err = CreateIndexCdcTask(c, originalTableDef, qryDatabase, originalTableDef.Name,
+		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
 			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, sinker_type)
 		if err != nil {
 			return err
@@ -2114,6 +2129,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	// old tabledef
+	oldTableDef := r.GetTableDef(c.proc.Ctx)
 
 	//1. build and update constraint def
 	oldCt, err := GetConstraintDef(c.proc.Ctx, r)
@@ -2146,8 +2164,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 
 	//3. HNSWCDC delete cdc table task for vector, fulltext index
-	tableDef := r.GetTableDef(c.proc.Ctx)
-	err = DropIndexCdcTask(c, tableDef, qry.Database, qry.Table, qry.IndexName)
+	err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
 	if err != nil {
 		return err
 	}
@@ -2552,7 +2569,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	// TODO: HNSWCDC create CDC task with new table Id
 	if !isTemp {
 		tabledef := rel.GetTableDef(c.proc.Ctx)
-		e := CreateAllIndexCdcTasks(c, tabledef, dbName, tblName)
+		e := CreateAllIndexCdcTasks(c, tabledef.Indexes, dbName, tblName)
 		if e != nil {
 			return e
 		}

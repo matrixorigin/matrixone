@@ -71,14 +71,12 @@ func CreateIndexPitr(c *Compile, dbname string, tablename string) (string, error
 		}
 	*/
 
-	sql = fmt.Sprintf("CREATE PITR `%s` FOR TABLE `%s` `%s` range 2 'h';", pitr_name, dbname, tablename)
+	sql = fmt.Sprintf("CREATE PITR IF NOT EXISTS `%s` FOR TABLE `%s` `%s` range 2 'h' INTERNAL;", pitr_name, dbname, tablename)
 	logutil.Infof("Create Index Pitr %s. sql: %s:", pitr_name, sql)
-	/*
-		err := c.runSql(sql)
-		if err != nil {
-			return pitr_name, err
-		}
-	*/
+	err := c.runSql(sql)
+	if err != nil {
+		return pitr_name, err
+	}
 
 	return pitr_name, nil
 }
@@ -86,14 +84,12 @@ func CreateIndexPitr(c *Compile, dbname string, tablename string) (string, error
 func DeleteIndexPitr(c *Compile, dbname string, tablename string) error {
 	pitr_name := getIndexPitrName(dbname, tablename)
 	// remove pitr
-	sql := fmt.Sprintf("DROP PITR IF EXISTS `%s`;", pitr_name)
+	sql := fmt.Sprintf("DROP PITR IF EXISTS `%s` INTERNAL;", pitr_name)
 	logutil.Infof("Delete Index Pitr %s: %s", pitr_name, sql)
-	/*
-		err := c.runSql(sql)
-		if err != nil {
-			return err
-		}
-	*/
+	err := c.runSql(sql)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -113,7 +109,7 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) bool {
 }
 
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
-func CreateIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string, sinker_type int8) error {
+func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname string, sinker_type int8) error {
 	var err error
 
 	// create table pitr if not exists and return pitr_name
@@ -224,10 +220,10 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 }
 
 // NOTE: CreateAllIndexCdcTasks will create CDC task according to existing tableDef
-func CreateAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
+func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
 	var err error
-	for _, idx := range tabledef.Indexes {
+	for _, idx := range indexes {
 		if idx.TableExist &&
 			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
 				catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
@@ -247,7 +243,7 @@ func CreateAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, 
 				}
 				if async {
 					sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
-					e := CreateIndexCdcTask(c, tabledef, dbname, tablename, idx.IndexName, sinker_type)
+					e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type)
 					if e != nil {
 						return e
 					}
