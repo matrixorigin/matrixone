@@ -3902,19 +3902,30 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		return err
 	}
 
-	// Check if pitr exists
+	// check pitr if exists（pitr_name + create_account）
+	checkExistSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id", pitrName, accountId)
+	existRes, err := c.runSqlWithResult(checkExistSql, int32(accountId))
+	if err != nil {
+		return err
+	}
+	defer existRes.Close()
+	if len(existRes.Batches) > 0 && existRes.Batches[0].RowCount() > 0 {
+		if !createPitr.GetIfNotExists() {
+			return moerr.NewInternalErrorf(c.proc.Ctx, "pitr %s already exists", pitrName)
+		} else {
+			return nil
+		}
+	}
+
+	// Check if pitr dup
 	checkSql := getSqlForCheckPitrDup(createPitr)
 	res, err := c.runSqlWithResult(checkSql, int32(accountId))
 	if err != nil {
 		return err
 	}
-
-	// If pitr exists and IfNotExists is false, return error
+	defer res.Close()
 	if len(res.Batches) > 0 && res.Batches[0].RowCount() > 0 {
-		if !createPitr.GetIfNotExists() {
-			return pitrExistsError(c, createPitr)
-		}
-		return nil
+		return pitrDupError(c, createPitr)
 	}
 
 	// get pitr id
@@ -4116,7 +4127,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 	return nil
 }
 
-func pitrExistsError(c *Compile, createPitr *plan.CreatePitr) error {
+func pitrDupError(c *Compile, createPitr *plan.CreatePitr) error {
 	pitrLevel := tree.PitrLevel(createPitr.Level)
 	switch pitrLevel {
 	case tree.PITRLEVELCLUSTER:
