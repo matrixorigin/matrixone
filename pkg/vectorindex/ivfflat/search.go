@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"sync"
@@ -94,7 +95,8 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 }
 
 // load chunk from database
-func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T, distfn metric.DistanceFunction[T], heap *vectorindex.SearchResultSafeHeap,
+func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *process.Process,
+	query []T, distfn metric.DistanceFunction[T], heap *vectorindex.SearchResultSafeHeap,
 	stream_chan chan executor.Result, error_chan chan error) (stream_closed bool, err error) {
 
 	var res executor.Result
@@ -109,6 +111,9 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T
 		return false, err
 	case <-proc.Ctx.Done():
 		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	case <-lctx.Done():
+		// local context cancelled. something went wrong with other threads
+		return true, nil
 	}
 
 	bat := res.Batches[0]
@@ -190,7 +195,8 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
-	errs := make(chan error, nthread)
+	lctx := context.Background()
+	lctx, cancel := context.WithCancelCause(lctx)
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
@@ -225,9 +231,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
 		if err != nil {
 			// send multiple errors to stop the nworker threads
-			for i := int64(0); i < nthread; i++ {
-				error_chan <- err
-			}
+			cancel(err)
 			return
 		}
 	}()
@@ -246,9 +250,9 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 			sql_closed := false
 			var err2 error
 			for !sql_closed {
-				sql_closed, err2 = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
+				sql_closed, err2 = idx.searchEntries(lctx, proc, query, distfn, heap, stream_chan, error_chan)
 				if err2 != nil {
-					errs <- err2
+					cancel(err2)
 					return
 				}
 			}
@@ -257,8 +261,12 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	wg.Wait()
 
-	if len(errs) > 0 {
-		return nil, nil, <-errs
+	// check local context cancelled
+	select {
+	case <-lctx.Done():
+		err := context.Cause(lctx)
+		return nil, nil, err
+	default:
 	}
 
 	resid := make([]any, 0, rt.Limit)

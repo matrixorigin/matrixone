@@ -29,10 +29,14 @@ import (
 
 // give blob
 func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
-
-	defer close(ch)
+	// don't close channel because it may run faster than err_chan
+	//defer close(ch)
 	err_chan <- moerr.NewInternalErrorNoCtx("sql error")
 	return executor.Result{}, nil
+}
+
+func mock_runSql_streaming_parser_error(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")
 }
 
 func TestIvfSearchRace(t *testing.T) {
@@ -55,4 +59,25 @@ func TestIvfSearchRace(t *testing.T) {
 	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
 	require.NotNil(t, err)
 
+}
+
+func TestIvfSearchParserError(t *testing.T) {
+
+	runSql_streaming = mock_runSql_streaming_parser_error
+
+	var idxcfg vectorindex.IndexConfig
+	var tblcfg vectorindex.IndexTableConfig
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool("", m)
+
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+
+	v := []float32{0, 1, 2}
+	rt := vectorindex.RuntimeConfig{}
+
+	idx := &IvfflatSearchIndex[float32]{}
+
+	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
+	require.NotNil(t, err)
 }
