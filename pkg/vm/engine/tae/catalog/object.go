@@ -728,3 +728,36 @@ func (entry *ObjectEntry) ForeachMVCCNodeInRange(start, end types.TS, f func(*tx
 	}
 	return nil
 }
+
+func (entry *ObjectEntry) ForeachMVCCNodeInRange2(start, end types.TS, f func(*txnbase.TxnMVCCNode) error) error {
+	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
+	if needWait {
+		txn.GetTxnState(true)
+	}
+
+	var createIn, deleteIn bool
+	createIn, _ = entry.CreateNode.PreparedIn(start, end)
+	if createIn {
+		if err := f(&entry.CreateNode); err != nil {
+			return err
+		}
+	}
+	deleteIn, _ = entry.DeleteNode.PreparedIn(start, end)
+	if !deleteIn {
+		if !entry.IsAppendable() {
+			return nil
+		}
+		if !createIn {
+			return nil
+		}
+		if !entry.DeleteNode.IsCommitted() {
+			return nil
+		}
+	}
+	logutil.Infof("ForeachMVCCNodeInRange2 start name %v - %v -%v; start %v, end %v",
+		entry.ObjectName().String(), entry.CreateNode.String(), entry.DeleteNode.String(), start.ToString(), end.ToString())
+	if err := f(&entry.DeleteNode); err != nil {
+		return err
+	}
+	return nil
+}
