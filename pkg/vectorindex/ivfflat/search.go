@@ -227,9 +227,12 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		instr,
 	)
-
 	//os.Stderr.WriteString(sql)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
 		if err != nil {
 			// send multiple errors to stop the nworker threads
@@ -239,7 +242,6 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	}()
 
 	heap := vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
-	var wg sync.WaitGroup
 
 	for n := int64(0); n < nthread; n++ {
 
