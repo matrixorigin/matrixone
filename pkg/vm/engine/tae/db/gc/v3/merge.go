@@ -140,6 +140,7 @@ func MergeCheckpoint(
 	if err = sinker.Write(ctx, ckpData); err != nil {
 		return
 	}
+	defer sinker.Close()
 	ckpWriter := logtail.NewCheckpointDataWithSinker(sinker, pool)
 	var location objectio.Location
 	var files []string
