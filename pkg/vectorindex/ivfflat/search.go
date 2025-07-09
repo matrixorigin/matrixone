@@ -110,11 +110,10 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *proc
 	case err = <-error_chan:
 		return false, err
 	case <-proc.Ctx.Done():
-		// don't return error and make sure local context cancel once
-		return true, nil
+		return false, proc.Ctx.Err()
 	case <-lctx.Done():
 		// local context cancelled. something went wrong with other threads
-		return true, nil
+		return false, context.Cause(lctx)
 	}
 
 	bat := res.Batches[0]
