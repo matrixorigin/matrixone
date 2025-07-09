@@ -241,11 +241,11 @@ func (s *HnswSync) checkContains(proc *process.Process) (maxcap uint, midx []int
 		nthread := int(s.tblcfg.ThreadsBuild)
 		for k := 0; k < nthread; k++ {
 			wg.Add(1)
-			go func() {
+			go func(tid int) {
 				defer wg.Done()
 				for j, row := range s.cdc.Data {
 
-					if j%nthread != k {
+					if j%nthread != tid {
 						continue
 					}
 
@@ -271,7 +271,7 @@ func (s *HnswSync) checkContains(proc *process.Process) (maxcap uint, midx []int
 					}
 
 				}
-			}()
+			}(k)
 		}
 
 		wg.Wait()
@@ -293,12 +293,12 @@ func (s *HnswSync) insertAllInParallel(proc *process.Process, maxcap uint) error
 	nthread := int(s.tblcfg.ThreadsBuild)
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 
 			for j, row := range s.cdc.Data {
 
-				if j%nthread != i {
+				if j%nthread != tid {
 					continue
 				}
 
@@ -319,7 +319,7 @@ func (s *HnswSync) insertAllInParallel(proc *process.Process, maxcap uint) error
 				// Len counter already incremented.  Just add to last model
 				last.AddWithoutIncr(row.PKey, row.Vec)
 			}
-		}()
+		}(i)
 	}
 
 	wg.Wait()
