@@ -265,7 +265,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	// check local context cancelled
 	select {
 	case <-proc.Ctx.Done():
-		return nil, nil, moerr.NewInternalError(proc.Ctx, "context cancelled")
+		return nil, nil, proc.Ctx.Err()
 	case <-lctx.Done():
 		err := context.Cause(lctx)
 		return nil, nil, err
