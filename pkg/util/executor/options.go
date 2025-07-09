@@ -271,22 +271,26 @@ func (opts Options) Streaming() (chan Result, chan error, bool) {
 	return opts.stream_chan, opts.error_chan, opts.streaming
 }
 
-func (opts StatementOption) Params() *vector.Vector {
-	return opts.params
+func (opts StatementOption) HasParams() bool {
+	return len(opts.params) > 0
+}
+
+func (opts StatementOption) Params(
+	mp *mpool.MPool,
+) *vector.Vector {
+	vec := vector.NewVec(types.T_varchar.ToType())
+	vector.AppendStringList(
+		vec,
+		opts.params,
+		make([]bool, len(opts.params)),
+		mp,
+	)
+	return vec
 }
 
 func (opts StatementOption) WithParams(
-	value string,
+	values []string,
 ) StatementOption {
-	if opts.params == nil {
-		opts.params = vector.NewVec(types.T_varchar.ToType())
-	}
-	vector.AppendBytes(
-		opts.params,
-		[]byte(value),
-		false,
-		mpool.MustNew("test"),
-	)
-	// opts.params.SetLength(opts.params.Length() + 1)
+	opts.params = values
 	return opts
 }

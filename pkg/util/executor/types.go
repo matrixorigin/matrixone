@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -76,7 +75,7 @@ type StatementOption struct {
 	userId           uint32
 	disableLog       bool
 	ignoreForeignKey bool
-	params           *vector.Vector
+	params           []string
 }
 
 // Result exec sql result

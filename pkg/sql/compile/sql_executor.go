@@ -311,9 +311,11 @@ func (exec *txnExecutor) Exec(
 	)
 
 	prepared := false
-	if statementOption.Params() != nil {
-		proc.SetPrepareParams(statementOption.Params())
+	if statementOption.HasParams() {
+		vec := statementOption.Params(exec.s.mp)
+		proc.SetPrepareParams(vec)
 		prepared = true
+		defer vec.Free(proc.Mp())
 	}
 
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
@@ -339,7 +341,19 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c := NewCompile(
+		exec.s.addr,
+		exec.getDatabase(),
+		sql,
+		"",
+		"",
+		exec.s.eng,
+		proc,
+		stmts[0],
+		false,
+		nil,
+		receiveAt,
+	)
 	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
@@ -348,16 +362,14 @@ func (exec *txnExecutor) Exec(
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
 			pn, err := plan.BuildPlan(
 				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-				stmts[0], true)
-
+				stmts[0], true,
+			)
 			if err != nil {
 				return pn, err
 			}
-			if prepared {
-				_, _, err := plan.ResetPreparePlan(compileContext, pn)
-				if err != nil {
-					return pn, err
-				}
+			_, _, err = plan.ResetPreparePlan(compileContext, pn)
+			if err != nil {
+				return pn, err
 			}
 			return pn, nil
 		})
