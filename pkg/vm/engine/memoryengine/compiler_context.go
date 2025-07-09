@@ -210,6 +210,10 @@ func (c *CompilerContext) GetAccountId() (uint32, error) {
 	return defines.GetAccountId(c.ctx)
 }
 
+func (c *CompilerContext) GetAccountName() string {
+	return "sys"
+}
+
 func (c *CompilerContext) GetContext() context.Context {
 	return c.ctx
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -47,6 +48,10 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	if update.ctr.updateCtxInfos == nil {
 		update.ctr.updateCtxInfos = make(map[string]*updateCtxInfo)
 		for _, updateCtx := range update.MultiUpdateCtx {
+			if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) {
+				update.mainTable = updateCtx.TableDef.TblId
+			}
+
 			info := new(updateCtxInfo)
 			for _, col := range updateCtx.TableDef.Cols {
 				if col.Name != catalog.Row_ID {
