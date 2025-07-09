@@ -332,16 +332,42 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+	if prepared {
+		_, _, err := plan.ResetPreparePlan(compileContext, pn)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
 
 	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.s.eng, proc, stmts[0], false, nil, receiveAt)
 	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
-	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-		return plan.BuildPlan(
-			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-			stmts[0], false)
-	})
+
+	if prepared {
+		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+			pn, err := plan.BuildPlan(
+				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
+				stmts[0], true)
+
+			if err != nil {
+				return pn, err
+			}
+			if prepared {
+				_, _, err := plan.ResetPreparePlan(compileContext, pn)
+				if err != nil {
+					return pn, err
+				}
+			}
+			return pn, nil
+		})
+	} else {
+		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+			return plan.BuildPlan(
+				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
+				stmts[0], false)
+		})
+	}
 
 	result := executor.NewResult(exec.s.mp)
 
