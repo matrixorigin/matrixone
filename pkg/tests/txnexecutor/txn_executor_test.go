@@ -47,3 +47,33 @@ func Test_TxnExecutorExec(t *testing.T) {
 	}, executor.Options{}.WithWaitCommittedLogApplied())
 	require.NoError(t, err)
 }
+
+func TestPreparedParams(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			exec := testutils.GetSQLExecutor(cn)
+			require.NotNil(t, exec)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+			defer cancel()
+			exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					txn.Use("mo_catalog")
+
+					res, err := txn.Exec(
+						"select count(*) from mo_catalog.mo_tables where relname = ?",
+						executor.StatementOption{}.WithParams("mo_version"),
+					)
+					require.NoError(t, err)
+					res.Close()
+					return nil
+				},
+				executor.Options{},
+			)
+		},
+	)
+}

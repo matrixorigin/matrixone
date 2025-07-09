@@ -309,17 +309,14 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
-	//accId, err := defines.GetAccountId(proc.Ctx)
-	//if err != nil {
-	//	return executor.Result{}, err
-	//}
-	//useId := defines.GetUserId(proc.Ctx)
-	//roleId := defines.GetRoleId(proc.Ctx)
+
+	prepared := false
+	if statementOption.Params() != nil {
+		proc.SetPrepareParams(statementOption.Params())
+		prepared = true
+	}
 
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
-	//proc.Base.SessionInfo.AccountId = accId
-	//proc.Base.SessionInfo.UserId = useId
-	//proc.Base.SessionInfo.RoleId = roleId
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
@@ -331,7 +328,7 @@ func (exec *txnExecutor) Exec(
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
-	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
+	pn, err := plan.BuildPlan(compileContext, stmts[0], prepared)
 	if err != nil {
 		return executor.Result{}, err
 	}

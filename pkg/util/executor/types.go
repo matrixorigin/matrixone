@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -34,8 +35,6 @@ type SQLExecutor interface {
 	Exec(ctx context.Context, sql string, opts Options) (Result, error)
 	// ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
 	// in a transaction.
-	// NOTE: Pass SQL stmts one by one to TxnExecutor.Exec(). If you pass multiple SQL stmts to
-	// TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
 	ExecTxn(ctx context.Context, execFunc func(txn TxnExecutor) error, opts Options) error
 }
 
@@ -77,6 +76,7 @@ type StatementOption struct {
 	userId           uint32
 	disableLog       bool
 	ignoreForeignKey bool
+	params           *vector.Vector
 }
 
 // Result exec sql result

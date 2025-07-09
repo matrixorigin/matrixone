@@ -17,6 +17,9 @@ package executor
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -266,4 +269,24 @@ func (opts Options) WithStreaming(stream_chan chan Result, error_chan chan error
 
 func (opts Options) Streaming() (chan Result, chan error, bool) {
 	return opts.stream_chan, opts.error_chan, opts.streaming
+}
+
+func (opts StatementOption) Params() *vector.Vector {
+	return opts.params
+}
+
+func (opts StatementOption) WithParams(
+	value string,
+) StatementOption {
+	if opts.params == nil {
+		opts.params = vector.NewVec(types.T_varchar.ToType())
+	}
+	vector.AppendBytes(
+		opts.params,
+		[]byte(value),
+		false,
+		mpool.MustNew("test"),
+	)
+	// opts.params.SetLength(opts.params.Length() + 1)
+	return opts
 }
