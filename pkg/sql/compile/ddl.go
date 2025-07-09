@@ -3840,7 +3840,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	}
 
 	// check pitr if exists（pitr_name + create_account）
-	checkExistSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id", pitrName, accountId)
+	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
 	existRes, err := c.runSqlWithResult(checkExistSql, int32(accountId))
 	if err != nil {
 		return err
@@ -4165,4 +4165,8 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 		}
 	}
 	return needInsert, needUpdate, nil
+}
+
+func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
+	return fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id", pitrName, accountId)
 }
