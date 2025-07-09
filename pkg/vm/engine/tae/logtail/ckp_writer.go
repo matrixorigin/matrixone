@@ -90,7 +90,7 @@ func (collector *BaseCollector_V2) Collect(c *catalog.Catalog) (err error) {
 }
 
 func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error {
-	return entry.ForeachMVCCNodeInRange2(collector.start, collector.end, func(node *txnbase.TxnMVCCNode) error {
+	return entry.ForeachMVCCSpecificNodeInRange(collector.start, collector.end, func(node *txnbase.TxnMVCCNode) error {
 		if node.IsAborted() {
 			return nil
 		}

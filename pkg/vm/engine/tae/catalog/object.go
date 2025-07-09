@@ -729,7 +729,9 @@ func (entry *ObjectEntry) ForeachMVCCNodeInRange(start, end types.TS, f func(*tx
 	return nil
 }
 
-func (entry *ObjectEntry) ForeachMVCCNodeInRange2(start, end types.TS, f func(*txnbase.TxnMVCCNode) error) error {
+// ForeachMVCCSpecificNodeInRange is used by "do checkpoint".
+// The purpose is to ensure that the checkpoint contains all data before the end timestamp.
+func (entry *ObjectEntry) ForeachMVCCSpecificNodeInRange(start, end types.TS, f func(*txnbase.TxnMVCCNode) error) error {
 	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
 	if needWait {
 		txn.GetTxnState(true)
@@ -754,8 +756,6 @@ func (entry *ObjectEntry) ForeachMVCCNodeInRange2(start, end types.TS, f func(*t
 			return nil
 		}
 	}
-	logutil.Infof("ForeachMVCCNodeInRange2 start name %v - %v -%v; start %v, end %v",
-		entry.ObjectName().String(), entry.CreateNode.String(), entry.DeleteNode.String(), start.ToString(), end.ToString())
 	if err := f(&entry.DeleteNode); err != nil {
 		return err
 	}
