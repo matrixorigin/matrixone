@@ -69,6 +69,7 @@ type MultiUpdate struct {
 	input          vm.CallResult
 	ctr            container
 	MultiUpdateCtx []*MultiUpdateCtx
+	mainTable      uint64
 
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
