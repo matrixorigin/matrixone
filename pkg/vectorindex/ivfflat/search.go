@@ -110,7 +110,8 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *proc
 	case err = <-error_chan:
 		return false, err
 	case <-proc.Ctx.Done():
-		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+		// don't return error and make sure local context cancel once
+		return true, nil
 	case <-lctx.Done():
 		// local context cancelled. something went wrong with other threads
 		return true, nil
@@ -263,6 +264,8 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	// check local context cancelled
 	select {
+	case <-proc.Ctx.Done():
+		return nil, nil, moerr.NewInternalError(proc.Ctx, "context cancelled")
 	case <-lctx.Done():
 		err := context.Cause(lctx)
 		return nil, nil, err
