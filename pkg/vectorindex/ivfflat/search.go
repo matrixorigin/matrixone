@@ -198,6 +198,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	error_chan := make(chan error, nthread)
 	lctx := context.Background()
 	lctx, cancel := context.WithCancelCause(lctx)
+	defer cancel(nil)
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
