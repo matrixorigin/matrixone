@@ -127,13 +127,32 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 					Name:   "col1",
 				},
 			},
-			Typ: plan.Type{
+			Typ: plan.Type{ // col1 is int64
+				Id: int32(types.T_int64),
+			},
+		},
+		{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 1,
+					Name:   "col2",
+				},
+			},
+			Typ: plan.Type{ // col2 is int64
 				Id: int32(types.T_int64),
 			},
 		},
 	}
 	groupOp.Aggs = []aggexec.AggFuncExecExpression{
-		//TODO Group by col1, count(*)
+		aggexec.MakeAggFunctionExpression(
+			-2, // count star
+			false,
+			[]*plan.Expr{
+				newColumnExpression(0),
+			},
+			nil,
+		),
 	}
 	groupOp.PreAllocSize = 0
 	groupOp.ctr.spillThreshold = 100 // Small threshold to force spill
@@ -146,7 +165,7 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 
 	// Input data: (1, 10), (2, 20), (1, 15), (3, 30)
 	// Group by col1, count(*)
-	// Expected: (1, 2), (2, 1), (3, 1)
+	// Expected result: (col1, count(*)) -> (1, 2), (2, 1), (3, 1)
 	bat1 := testutil.NewBatchWithVectors(
 		[]*vector.Vector{
 			testutil.MakeInt64Vector([]int64{1, 2}, nil),
@@ -196,6 +215,7 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 	}
 
 	//TODO
+	//require.NotNil(t, finalResult)
 	//testutil.CompareBatches(t, expected, finalResult)
 
 	groupOp.Free(proc, false, nil)
@@ -220,9 +240,28 @@ func TestGroupOperatorBasicSpillAndRecallIntermediateResult(t *testing.T) {
 				Id: int32(types.T_int64),
 			},
 		},
+		{
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 1,
+					Name:   "col2",
+				},
+			},
+			Typ: plan.Type{ // col2 is int64
+				Id: int32(types.T_int64),
+			},
+		},
 	}
 	groupOp.Aggs = []aggexec.AggFuncExecExpression{
-		//TODO Group by col1, count(*)
+		aggexec.MakeAggFunctionExpression(
+			-2, // count star
+			false,
+			[]*plan.Expr{
+				newColumnExpression(0),
+			},
+			nil,
+		),
 	}
 	groupOp.PreAllocSize = 0
 	groupOp.ctr.spillThreshold = 100 // Small threshold to force spill
@@ -256,14 +295,30 @@ func TestGroupOperatorBasicSpillAndRecallIntermediateResult(t *testing.T) {
 	res, err := groupOp.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, res.Batch)
-	require.Equal(t, 2, res.Batch.RowCount()) // (1,1), (2,1)
+	require.Equal(t, 2, res.Batch.RowCount()) // Expected 2 groups: (1, count=1), (2, count=1)
+	require.Len(t, res.Batch.Aggs, 1)
+	require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](res.Batch.Vecs[0]))
+
+	flushedVectors, flushErr := res.Batch.Aggs[0].Flush()
+	require.NoError(t, flushErr)
+	require.Len(t, flushedVectors, 1)
+	require.Equal(t, []int64{1, 1}, vector.MustFixedColWithTypeCheck[int64](flushedVectors[0]))
+	flushedVectors[0].Free(proc.Mp()) // Clean up flushed vector
 	res.Batch.Clean(proc.Mp())
 
 	// Send bat2 - this should trigger spill and then recall and merge, producing another intermediate result
 	res, err = groupOp.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, res.Batch)
-	require.Equal(t, 3, res.Batch.RowCount()) // (1,2), (2,1), (3,1)
+	require.Equal(t, 3, res.Batch.RowCount()) // Expected 3 groups: (1, count=2), (2, count=1), (3, count=1)
+	require.Len(t, res.Batch.Aggs, 1)
+	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColWithTypeCheck[int64](res.Batch.Vecs[0]))
+
+	flushedVectors, flushErr = res.Batch.Aggs[0].Flush()
+	require.NoError(t, flushErr)
+	require.Len(t, flushedVectors, 1)
+	require.Equal(t, []int64{2, 1, 1}, vector.MustFixedColWithTypeCheck[int64](flushedVectors[0]))
+	flushedVectors[0].Free(proc.Mp()) // Clean up flushed vector
 	res.Batch.Clean(proc.Mp())
 
 	// Signal end of input, no more output

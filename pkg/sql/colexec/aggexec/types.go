@@ -152,7 +152,8 @@ func (m SimpleAggMemoryManager) Mp() *mpool.MPool {
 func MakeAgg(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
-	param ...types.Type) (AggFuncExec, error) {
+	param ...types.Type,
+) (AggFuncExec, error) {
 	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
 	if err != nil {
 		return nil, err
@@ -216,7 +217,8 @@ func makeSingleAgg(
 
 func makeSpecialAggExec(
 	mg AggMemoryManager,
-	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool, error) {
+	id int64, isDistinct bool, params ...types.Type,
+) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
 		case aggIdOfCountColumn:
