@@ -48,12 +48,12 @@ type _CacheItem[K comparable, V any] struct {
 	value V
 	size  int64
 
+	// check item is already deleted by either hashtable or evict
+	deleted atomic.Bool
+
 	// mutex protect the freq and postFn
 	mu   sync.Mutex
 	freq int8
-
-	// deleted is protected by shardmap
-	deleted atomic.Bool
 }
 
 func (c *_CacheItem[K, V]) inc() {
@@ -178,7 +178,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	}
 
 	// TODO: FSCACHEDATA RETAIN
-	// increment the ref counter first no matter what otherwise there is a risk that value is deleted
+	// increment the ref counter first no matter what to make sure the memory is occupied before hashtable.Set
 	item.retainValue()
 
 	ok := c.htab.Set(key, item, nil)
