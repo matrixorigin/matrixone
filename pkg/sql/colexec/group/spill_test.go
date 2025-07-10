@@ -34,9 +34,10 @@ import (
 // newTestProcess creates a new process with a temporary file service for spilling.
 func newTestProcess(t *testing.T) *process.Process {
 	mp := mpool.MustNewZero()
-	fs := testutil.NewFS()
+	fs := testutil.NewFS(t)
 
 	proc := testutil.NewProcess(
+		t,
 		testutil.WithMPool(mp),
 		testutil.WithFileService(fs),
 	)
