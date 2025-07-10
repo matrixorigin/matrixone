@@ -223,7 +223,7 @@ func makeSpecialAggExec(
 		switch id {
 		case aggIdOfCountColumn:
 			return makeCount(mg, false, id, isDistinct, params[0]), true, nil
-		case aggIdOfCountStar:
+		case AggIdOfCountStar:
 			return makeCount(mg, true, id, isDistinct, params[0]), true, nil
 		case aggIdOfMedian:
 			exec, err := makeMedian(mg, id, isDistinct, params[0])

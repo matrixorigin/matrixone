@@ -146,7 +146,7 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 	}
 	groupOp.Aggs = []aggexec.AggFuncExecExpression{
 		aggexec.MakeAggFunctionExpression(
-			-2, // count star
+			aggexec.AggIdOfCountStar,
 			false,
 			[]*plan.Expr{
 				newColumnExpression(0),
@@ -181,8 +181,6 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 		[]int64{2},
 	)
 	mockOp.WithBatchs([]*batch.Batch{bat1, bat2})
-
-	aggexec.RegisterCountStarAgg(-2) // don't know why it was de-registered.
 
 	// Collect results after spill and recall
 	var resultBatches []*batch.Batch
@@ -257,7 +255,7 @@ func TestGroupOperatorBasicSpillAndRecallIntermediateResult(t *testing.T) {
 	}
 	groupOp.Aggs = []aggexec.AggFuncExecExpression{
 		aggexec.MakeAggFunctionExpression(
-			-2, // count star
+			aggexec.AggIdOfCountStar,
 			false,
 			[]*plan.Expr{
 				newColumnExpression(0),

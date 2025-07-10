@@ -34,7 +34,7 @@ func RegisterCountColumnAgg(id int64) {
 
 func RegisterCountStarAgg(id int64) {
 	specialAgg[id] = true
-	aggIdOfCountStar = id
+	AggIdOfCountStar = id
 }
 
 func RegisterGroupConcatAgg(id int64, sep string) {
@@ -90,7 +90,7 @@ var (
 
 	// list of special aggregation function IDs.
 	aggIdOfCountColumn = int64(-1)
-	aggIdOfCountStar   = int64(-2)
+	AggIdOfCountStar   = int64(-2)
 	aggIdOfGroupConcat = int64(-3)
 	aggIdOfApproxCount = int64(-4)
 	aggIdOfMedian      = int64(-5)
