@@ -2087,7 +2087,7 @@ func (tbl *txnTable) getPartitionState(
 		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 
 	start, end = types.MaxTs(), types.MinTs()
-	if ps != nil || err != nil {
+	if ps != nil {
 		start, end = ps.GetDuration()
 		msg = "Txn-Table-GetSSPS-Succeed"
 	} else {
