@@ -53,9 +53,6 @@ func NewMemCache(
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
 
-		// retain
-		value.Retain()
-
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
 		inuseBytes.Add(float64(size))
@@ -77,9 +74,6 @@ func NewMemCache(
 		LogEvent(ctx, str_memory_cache_post_get_begin)
 		defer LogEvent(ctx, str_memory_cache_post_get_end)
 
-		// retain
-		value.Retain()
-
 		// callbacks
 		if callbacks != nil {
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
@@ -94,9 +88,6 @@ func NewMemCache(
 		// events
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
-
-		// release after all callbacks executed
-		defer value.Release()
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)

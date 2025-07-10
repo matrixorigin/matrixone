@@ -48,12 +48,12 @@ type _CacheItem[K comparable, V any] struct {
 	value V
 	size  int64
 
-	// mutex only protect the freq
+	// mutex protect the freq and postFn
 	mu   sync.Mutex
 	freq int8
 
 	// deleted is protected by shardmap
-	deleted bool
+	deleted atomic.Bool
 }
 
 func (c *_CacheItem[K, V]) inc() {
@@ -82,16 +82,46 @@ func (c *_CacheItem[K, V]) getFreq() int8 {
 
 // protected by shardmap
 func (c *_CacheItem[K, V]) isDeleted() bool {
-	return c.deleted
+	return c.deleted.Load()
 }
 
 // protected by shardmap
 func (c *_CacheItem[K, V]) setDeleted() bool {
-	if !c.deleted {
-		c.deleted = true
+	return c.deleted.CompareAndSwap(false, true)
+}
+
+func (c *_CacheItem[K, V]) postFn(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
+	if fn != nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		fn(ctx, c.key, c.value, c.size)
+	}
+}
+
+// increment the reference counter
+func (c *_CacheItem[K, V]) retainValue() bool {
+	cdata, ok := any(c.value).(fscache.Data)
+	if !ok {
 		return true
 	}
-	return false
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.isDeleted() {
+		return false
+	}
+	cdata.Retain()
+	return true
+}
+
+// decrement the reference counter
+func (c *_CacheItem[K, V]) releaseValue() {
+	cdata, ok := any(c.value).(fscache.Data)
+	if !ok {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cdata.Release()
 }
 
 // assume cache size is 128K
@@ -140,23 +170,28 @@ func New[K comparable, V any](
 }
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
+
 	item := &_CacheItem[K, V]{
 		key:   key,
 		value: value,
 		size:  size,
 	}
 
-	ok := c.htab.Set(key, item, func(v *_CacheItem[K, V]) {
-		// call Bytes.Retain() to increment the ref counter and protected by shardmap mutex
-		if c.postSet != nil {
-			c.postSet(ctx, v.key, v.value, v.size)
-		}
+	// TODO: FSCACHEDATA RETAIN
+	// increment the ref counter first no matter what otherwise there is a risk that value is deleted
+	item.retainValue()
 
-	})
+	ok := c.htab.Set(key, item, nil)
 	if !ok {
 		// existed
+		// TODO: FSCACHEDATA RELEASE
+		// decrement the ref counter if not set to release the resource
+		item.releaseValue()
 		return
 	}
+
+	// postSet
+	item.postFn(ctx, c.postSet)
 
 	// evict
 	c.evictAll(ctx, nil, 0)
@@ -181,35 +216,45 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	var item *_CacheItem[K, V]
 
-	item, ok = c.htab.Get(key, func(v *_CacheItem[K, V]) {
-		// call Bytes.Retain() to increment the ref counter and protected by shardmap mutex
-		if c.postGet != nil {
-			c.postGet(ctx, v.key, v.value, v.size)
-		}
-	})
+	item, ok = c.htab.Get(key, func(v *_CacheItem[K, V]) {})
 	if !ok {
 		return
+	}
+
+	// TODO: FSCACHEDATA RETAIN
+	ok = item.retainValue()
+	if !ok {
+		return item.value, false
 	}
 
 	// increment
 	item.inc()
 
+	// postGet
+	item.postFn(ctx, c.postGet)
+
 	return item.value, true
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
-	c.htab.GetAndDelete(key, func(v *_CacheItem[K, V]) {
+	needsDelete := false
+
+	item, ok := c.htab.GetAndDelete(key, func(v *_CacheItem[K, V]) {
+		needsDelete = v.setDeleted()
+
+	})
+
+	if ok && needsDelete {
 		// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
 		// item.deleted makes sure postEvict only call once.
-		needsPostEvict := v.setDeleted()
 
-		// post evict
-		if needsPostEvict {
-			if c.postEvict != nil {
-				c.postEvict(ctx, v.key, v.value, v.size)
-			}
-		}
-	})
+		// deleted from hashtable
+		item.postFn(ctx, c.postEvict)
+
+		// TODO: FSCACHEDATA RELEASE
+		item.releaseValue()
+	}
+
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
@@ -265,11 +310,7 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			return
 		}
 
-		deleted := c.htab.ValueIsDeleted(item.key, item, func(v *_CacheItem[K, V]) bool {
-			// check item is deleted and protected by shardmap mutex.
-			return v.isDeleted()
-		})
-
+		deleted := item.isDeleted()
 		if deleted {
 			c.usedSmall.Add(-item.size)
 			return
@@ -282,16 +323,20 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			c.usedMain.Add(item.size)
 		} else {
 			// evict
+			needsDelete := false
 			c.htab.GetAndDelete(item.key, func(v *_CacheItem[K, V]) {
-				// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
 				// item.deleted makes sure postEvict only call once.
 				// post evict
-				if v.setDeleted() {
-					if c.postEvict != nil {
-						c.postEvict(ctx, v.key, v.value, v.size)
-					}
-				}
+				needsDelete = v.setDeleted()
 			})
+
+			if needsDelete {
+				// call Bytes.Release() to decrement the ref counter
+				// postEvict
+				item.postFn(ctx, c.postEvict)
+				// TODO: FSCACHEDATA RELEASE
+				item.releaseValue()
+			}
 
 			c.usedSmall.Add(-item.size)
 			if !c.disable_s3fifo {
@@ -311,10 +356,7 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			return
 		}
 
-		deleted := c.htab.ValueIsDeleted(item.key, item, func(v *_CacheItem[K, V]) bool {
-			// check item is deleted and protected by shardmap mutex.
-			return v.isDeleted()
-		})
+		deleted := item.isDeleted()
 		if deleted {
 			c.usedMain.Add(-item.size)
 			return
@@ -326,17 +368,20 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 			c.main.enqueue(item)
 		} else {
 			// evict
+			needsDelete := false
 			c.htab.GetAndDelete(item.key, func(v *_CacheItem[K, V]) {
-				// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
 				// item.deleted makes sure postEvict only call once.
 				// post evict
-				if v.setDeleted() {
-					if c.postEvict != nil {
-						c.postEvict(ctx, v.key, v.value, v.size)
-					}
-				}
-
+				needsDelete = v.setDeleted()
 			})
+			if needsDelete {
+				// call Bytes.Release() to decrement the ref counter
+				// postEvict
+				item.postFn(ctx, c.postEvict)
+				// TODO: FSCACHEDATA RELEASE
+				item.releaseValue()
+			}
+
 			c.usedMain.Add(-item.size)
 			return
 		}

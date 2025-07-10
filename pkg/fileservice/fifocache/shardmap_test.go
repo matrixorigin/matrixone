@@ -35,11 +35,11 @@ func TestShardMap(t *testing.T) {
 	assert.Equal(t, ok, true)
 	assert.Equal(t, v, "1")
 
-	ok = m.GetAndDelete(0, func(v string) {
+	_, ok = m.GetAndDelete(0, func(v string) {
 	})
 	assert.Equal(t, ok, false)
 
-	ok = m.GetAndDelete(1, func(v string) {
+	_, ok = m.GetAndDelete(1, func(v string) {
 	})
 	assert.Equal(t, ok, true)
 

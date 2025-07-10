@@ -111,7 +111,7 @@ func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn 
 	}
 }
 
-func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) bool {
+func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) (V, bool) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
 	s.Lock()
@@ -119,7 +119,7 @@ func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) bool {
 
 	v, ok := s.values[key]
 	if !ok {
-		return ok
+		return v, ok
 	}
 
 	delete(s.values, key)
@@ -129,7 +129,7 @@ func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) bool {
 		postfn(v)
 	}
 
-	return ok
+	return v, ok
 }
 
 func (m *ShardMap[K, V]) ValueIsDeleted(key K, value V, isDeleted func(V) bool) bool {
