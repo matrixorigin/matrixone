@@ -118,6 +118,8 @@ func (r *runner) ForceGCKP(
 		force:            true,
 		end:              maxEntry.end,
 		histroyRetention: histroyRetention,
+		truncateLSN:      maxEntry.truncateLSN,
+		ckpLSN:           maxEntry.ckpLSN,
 	}
 
 	if err = r.TryTriggerExecuteGCKP(request); err != nil {
