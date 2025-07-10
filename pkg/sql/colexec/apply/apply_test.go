@@ -29,19 +29,15 @@ type applyTestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs []applyTestCase
-)
-
-func init() {
-	tcs = []applyTestCase{
-		newTestCase(CROSS),
+func makeTestCases(t *testing.T) []applyTestCase {
+	return []applyTestCase{
+		newTestCase(t, CROSS),
 	}
 }
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
@@ -49,8 +45,8 @@ func TestString(t *testing.T) {
 func TestApply(t *testing.T) {
 }
 
-func newTestCase(applyType int) applyTestCase {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+func newTestCase(t *testing.T, applyType int) applyTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument()
 	arg.ApplyType = applyType
 	arg.TableFunction = table_function.NewArgument()

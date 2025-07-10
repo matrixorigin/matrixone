@@ -53,12 +53,11 @@ type antiTestCase struct {
 
 var (
 	tag int32
-	tcs []antiTestCase
 )
 
-func init() {
-	tcs = []antiTestCase{
-		newTestCase(mpool.MustNewZero(), []bool{false}, []types.Type{types.T_int32.ToType()}, []int32{0},
+func makeTestCases(t *testing.T) []antiTestCase {
+	return []antiTestCase{
+		newTestCase(t, mpool.MustNewZero(), []bool{false}, []types.Type{types.T_int32.ToType()}, []int32{0},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -72,13 +71,13 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestAnti(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
@@ -200,8 +199,8 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) antiTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newTestCase(t *testing.T, m *mpool.MPool, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) antiTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
 	fr, _ := function.GetFunctionByName(ctx, "=", ts)

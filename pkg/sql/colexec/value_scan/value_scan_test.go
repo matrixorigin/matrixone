@@ -35,14 +35,10 @@ type valueScanTestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs []valueScanTestCase
-)
-
-func init() {
-	tcs = []valueScanTestCase{
+func makeTestCases(t *testing.T) []valueScanTestCase {
+	return []valueScanTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &ValueScan{
 				OperatorBase: vm.OperatorBase{
 					OperatorInfo: vm.OperatorInfo{
@@ -58,20 +54,20 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestValueScan(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetBatchs(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -108,7 +104,7 @@ func TestGenSubBatchFromOriginBatch(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 			vs := &ValueScan{
 				Batchs: make([]*batch.Batch, 2),
 			}

@@ -53,7 +53,7 @@ func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	// stub runSql function
 	runSql = mock_runSql

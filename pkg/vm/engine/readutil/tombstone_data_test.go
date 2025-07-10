@@ -43,7 +43,7 @@ func TestTombstoneData1(t *testing.T) {
 	ioutil.Start(name)
 	defer ioutil.Stop(name)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)

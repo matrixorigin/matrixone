@@ -85,7 +85,7 @@ func TestGetNonIntPkValueByExpr(t *testing.T) {
 
 func TestGetPKExpr(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	type myCase struct {
 		desc     []string
 		exprs    []*plan.Expr
@@ -309,7 +309,7 @@ func TestGetPKExpr(t *testing.T) {
 
 func TestGetPkExprValue(t *testing.T) {
 	m := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	type testCase struct {
 		desc       []string
 		exprs      []*plan.Expr
@@ -471,7 +471,7 @@ func TestGetPkExprValue(t *testing.T) {
 
 func TestEvalExprListToVec(t *testing.T) {
 	m := mpool.MustNewZeroNoFixed()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	type testCase struct {
 		desc     []string
 		oids     []types.T

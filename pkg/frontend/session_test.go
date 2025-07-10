@@ -559,7 +559,7 @@ func TestSession_Migrate(t *testing.T) {
 			Tenant:   GetDefaultTenant(),
 			TenantID: GetSysTenantId(),
 		}
-		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(), ses: session}
+		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: session}
 		proto.ses = session
 		session.setRoutineManager(rm)
 		return session

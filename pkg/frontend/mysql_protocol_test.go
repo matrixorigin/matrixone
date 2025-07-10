@@ -2357,7 +2357,7 @@ func TestSendPrepareResponse(t *testing.T) {
 
 func FuzzParseExecuteData(f *testing.F) {
 	ctx := context.TODO()
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(f)
 	sv, err := getSystemVariables("test/system_vars_config.toml")
 	if err != nil {
 		f.Error(err)

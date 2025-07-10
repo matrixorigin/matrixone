@@ -514,7 +514,7 @@ func (f fakeTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 }
 
 func Test_prepareRemoteRunSendingData(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
 
@@ -590,7 +590,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 }
 
 func Test_ReceiveMessageFromCnServer(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	sender := messageSenderOnClient{
 		ctx:          context.Background(),
 		streamSender: &fakeStreamSender{},
@@ -661,7 +661,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 }
 
 func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = fakeTxnOperator{}
 	// a standalone pipeline tree should return true.
 	{
