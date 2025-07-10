@@ -1264,7 +1264,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	defer c.StopMutationTask()
 
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
-	compacted := c.checkpointCli.GetCompacted()
+	cpt := c.checkpointCli.GetCompacted()
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 	// no scan watermark, GC has not yet run
 	var scanWaterMark *checkpoint.CheckpointEntry
@@ -1416,12 +1416,12 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		)
 	}
 
-	if compacted == nil {
+	if cpt == nil {
 		return nil
 	}
-	cptEnd := compacted.GetEnd()
-	dend := debugCandidates[0].GetEnd()
-	if dend.GT(&cptEnd) {
+	cptEnd := cpt.GetEnd()
+	debugEnd := debugCandidates[0].GetEnd()
+	if debugEnd.GT(&cptEnd) {
 		return nil
 	}
 	ickpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
@@ -1453,7 +1453,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects)
 	}
 	cptCkpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
-	ckpReader, err := c.getCkpReader(c.ctx, compacted)
+	ckpReader, err := c.getCkpReader(c.ctx, cpt)
 	if err != nil {
 		return err
 	}
