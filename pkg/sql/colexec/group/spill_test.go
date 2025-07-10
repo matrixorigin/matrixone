@@ -182,6 +182,8 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 	)
 	mockOp.WithBatchs([]*batch.Batch{bat1, bat2})
 
+	aggexec.RegisterCountStarAgg(-2) // don't know why it was de-registered.
+
 	// Collect results after spill and recall
 	var resultBatches []*batch.Batch
 	for {
