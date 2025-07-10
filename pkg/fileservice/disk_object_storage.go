@@ -95,7 +95,7 @@ func (d *diskObjectStorage) Exists(ctx context.Context, key string) (bool, error
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, err
+		return false, wrapError("diskObjectStorage.Exists", err)
 	}
 	return true, nil
 }
