@@ -36,7 +36,7 @@ import (
 
 func Test_Sinker(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil3.NewProcessWithMPool("", mp)
+	proc := testutil3.NewProcessWithMPool(t, "", mp)
 	pkType := types.T_int32.ToType()
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)

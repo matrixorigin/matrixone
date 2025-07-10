@@ -56,7 +56,7 @@ func TestBuildIndexTableName(t *testing.T) {
 }
 
 func TestBuildUniqueKeyBatch(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	tests := []struct {
 		vecs  []*vector.Vector
 		attrs []string
@@ -123,7 +123,7 @@ func TestBuildUniqueKeyBatch(t *testing.T) {
 }
 
 func TestCompactUniqueKeyBatch(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	tests := []struct {
 		vecs  []*vector.Vector
 		attrs []string

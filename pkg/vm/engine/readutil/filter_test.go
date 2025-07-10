@@ -36,7 +36,7 @@ import (
 
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	exprStrings := []string{
 		"a=10",
 		"a=20 and a=10",
@@ -1253,7 +1253,7 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 	mp, err := mpool.NewMPool("", mpool.GB, 0)
 	require.NoError(t, err)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	tys := []types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,

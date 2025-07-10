@@ -56,7 +56,7 @@ func TestSystemVariable(t *testing.T) {
 		}
 
 		for _, sv := range svs {
-			fmt.Sprintln(sv.String(), sv.Type(), sv.MysqlType(), sv.Zero())
+			_ = fmt.Sprintln(sv.String(), sv.Type(), sv.MysqlType(), sv.Zero())
 		}
 
 		btrt, err := nt.Convert(nil)

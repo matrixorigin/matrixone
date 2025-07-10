@@ -55,7 +55,7 @@ func TestPreInsertNormal(t *testing.T) {
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Base.SessionInfo.StorageEngine = eng
 	argument1 := PreInsert{
@@ -116,7 +116,7 @@ func TestPreInsertNullCheck(t *testing.T) {
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.Base.SessionInfo.StorageEngine = eng
@@ -185,7 +185,7 @@ func TestPreInsertHasAutoCol(t *testing.T) {
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
 	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Base.IncrService = incrService
 	proc.Base.SessionInfo.StorageEngine = eng
@@ -251,7 +251,7 @@ func TestPreInsertIsUpdate(t *testing.T) {
 	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
 	incrService.EXPECT().InsertValues(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(111111), nil).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Base.IncrService = incrService
 	proc.Base.SessionInfo.StorageEngine = eng

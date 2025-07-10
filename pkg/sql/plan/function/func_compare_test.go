@@ -38,7 +38,7 @@ func TestOperatorOpBitAndInt64Fn(t *testing.T) {
 			[]int64{0, 2, 0}, []bool{false, false, true}),
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitAndInt64Fn)
 	s, info := fcTC.Run()
@@ -61,7 +61,7 @@ func TestOperatorOpBitOrInt64Fn(t *testing.T) {
 			[]int64{3, -1, 0}, []bool{false, false, true}),
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitOrInt64Fn)
 	s, info := fcTC.Run()
@@ -84,7 +84,7 @@ func TestOperatorOpBitXorInt64Fn(t *testing.T) {
 			[]int64{3, -3, 0}, []bool{false, false, true}),
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitXorInt64Fn)
 	s, info := fcTC.Run()
@@ -108,7 +108,7 @@ func TestOperatorOpBitRightShiftInt64Fn(t *testing.T) {
 			[]int64{256, -2, 0, 0}, []bool{false, false, false, true}),
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitShiftRightInt64Fn)
 	s, info := fcTC.Run()
@@ -132,7 +132,7 @@ func TestOperatorOpBitLeftShiftInt64Fn(t *testing.T) {
 			[]int64{4, -4, 0, 0}, []bool{false, false, false, true}),
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,
 		tc.inputs, tc.expect, operatorOpBitShiftLeftInt64Fn)
 	s, info := fcTC.Run()

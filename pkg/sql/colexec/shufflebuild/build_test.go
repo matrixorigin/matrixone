@@ -49,17 +49,13 @@ type buildTestCase struct {
 	cancel context.CancelFunc
 }
 
-var (
-	tcs []buildTestCase
-)
-
-func init() {
-	tcs = []buildTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()},
+func makeTestCases(t *testing.T) []buildTestCase {
+	return []buildTestCase{
+		newTestCase(t, []bool{false}, []types.Type{types.T_int8.ToType()},
 			[]*plan.Expr{
 				newExpr(0, types.T_int8.ToType()),
 			}),
-		newTestCase([]bool{true}, []types.Type{types.T_int8.ToType()},
+		newTestCase(t, []bool{true}, []types.Type{types.T_int8.ToType()},
 			[]*plan.Expr{
 				newExpr(0, types.T_int8.ToType()),
 			}),
@@ -68,13 +64,13 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestBuild(t *testing.T) {
-	for _, tc := range tcs[:1] {
+	for _, tc := range makeTestCases(t)[:1] {
 		err := tc.marg.Prepare(tc.proc)
 		require.NoError(t, err)
 		err = tc.arg.Prepare(tc.proc)
@@ -96,8 +92,8 @@ func TestBuild(t *testing.T) {
 
 func BenchmarkBuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []buildTestCase{
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()},
+		tcs := []buildTestCase{
+			newTestCase(b, []bool{false}, []types.Type{types.T_int8.ToType()},
 				[]*plan.Expr{
 					newExpr(0, types.T_int8.ToType()),
 				}),
@@ -136,8 +132,8 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+func newTestCase(t testing.TB, flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	_, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

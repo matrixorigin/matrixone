@@ -53,13 +53,12 @@ type externalTestCase struct {
 }
 
 var (
-	cases         []externalTestCase
 	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
-func newTestCase(format, jsondata string) externalTestCase {
-	proc := testutil.NewProcess()
-	proc.Base.FileService = testutil.NewFS()
+func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
+	proc := testutil.NewProcess(t)
+	proc.Base.FileService = testutil.NewFS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -89,20 +88,22 @@ func newTestCase(format, jsondata string) externalTestCase {
 	}
 }
 
-func init() {
-	cases = []externalTestCase{
-		newTestCase(tree.CSV, ""),
-		newTestCase(tree.JSONLINE, tree.OBJECT),
-		newTestCase(tree.JSONLINE, tree.ARRAY),
+func makeCases(t *testing.T) []externalTestCase {
+	return []externalTestCase{
+		newTestCase(t, tree.CSV, ""),
+		newTestCase(t, tree.JSONLINE, tree.OBJECT),
+		newTestCase(t, tree.JSONLINE, tree.ARRAY),
 	}
 }
 
 func Test_String(t *testing.T) {
 	buf := new(bytes.Buffer)
+	cases := makeCases(t)
 	cases[0].arg.String(buf)
 }
 
 func Test_Prepare(t *testing.T) {
+	cases := makeCases(t)
 	convey.Convey("external Prepare", t, func() {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
@@ -172,6 +173,7 @@ func Test_Prepare(t *testing.T) {
 }
 
 func Test_Call(t *testing.T) {
+	cases := makeCases(t)
 	convey.Convey("external Call", t, func() {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
@@ -224,9 +226,9 @@ func Test_Call(t *testing.T) {
 
 func Test_Call2(t *testing.T) {
 	cases2 := []externalTestCase{
-		newTestCase(tree.CSV, ""),
-		newTestCase(tree.JSONLINE, tree.OBJECT),
-		newTestCase(tree.JSONLINE, tree.ARRAY),
+		newTestCase(t, tree.CSV, ""),
+		newTestCase(t, tree.JSONLINE, tree.OBJECT),
+		newTestCase(t, tree.JSONLINE, tree.ARRAY),
 	}
 	convey.Convey("external Call", t, func() {
 		for _, tcs := range cases2 {
@@ -297,7 +299,7 @@ func Test_Call2(t *testing.T) {
 }
 
 func Test_CALL3(t *testing.T) {
-	case3 := newTestCase(tree.CSV, "")
+	case3 := newTestCase(t, tree.CSV, "")
 
 	convey.Convey("external Call", t, func() {
 		tcs := case3
@@ -675,7 +677,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 						},
 					},
 				}),
-				proc:     testutil.NewProc(),
+				proc:     testutil.NewProc(t),
 				fileList: fileList,
 				fileSize: fileSize,
 			},
@@ -694,7 +696,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 						},
 					},
 				}),
-				proc:     testutil.NewProc(),
+				proc:     testutil.NewProc(t),
 				fileList: fileList,
 				fileSize: fileSize,
 			},
@@ -713,7 +715,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 						},
 					},
 				}),
-				proc:     testutil.NewProc(),
+				proc:     testutil.NewProc(t),
 				fileList: fileList,
 				fileSize: fileSize,
 			},
@@ -734,7 +736,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 // test load data local infile with a compress file which not exists
 // getUnCompressReader will return EOF err in that case, and getMOCSVReader should handle EOF, and return nil err
 func Test_getMOCSVReader(t *testing.T) {
-	case1 := newTestCase(tree.CSV, "")
+	case1 := newTestCase(t, tree.CSV, "")
 	param := case1.arg.Es
 	extern := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{

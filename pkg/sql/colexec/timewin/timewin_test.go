@@ -38,15 +38,10 @@ type timeWinTestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs               []timeWinTestCase
-	tcs_prepare_error []timeWinTestCase
-)
-
-func init() {
-	tcs = []timeWinTestCase{
+func makeTestCases(t *testing.T) []timeWinTestCase {
+	return []timeWinTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: true,
 				WEnd:   true,
@@ -63,7 +58,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: true,
 				WEnd:   false,
@@ -80,7 +75,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: false,
 				WEnd:   false,
@@ -97,9 +92,12 @@ func init() {
 			},
 		},
 	}
-	tcs_prepare_error = []timeWinTestCase{
+}
+
+func makePrepareErrorCases(t *testing.T) []timeWinTestCase {
+	return []timeWinTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &TimeWin{
 				WStart: true,
 				WEnd:   true,
@@ -124,14 +122,14 @@ func init() {
 }
 
 func TestPrepareError(t *testing.T) {
-	for _, tc := range tcs_prepare_error {
+	for _, tc := range makePrepareErrorCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.Error(t, err)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
@@ -139,13 +137,13 @@ func TestPrepare(t *testing.T) {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestTimeWin(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)

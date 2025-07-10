@@ -1106,7 +1106,7 @@ func Test_buildInM0ExplainPhy(t *testing.T) {
 	testCases := initMoExplainPhyTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, buildInM0ExplainPhy)
 		s, info := fcTC.Run()

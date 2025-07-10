@@ -129,7 +129,7 @@ func checkScopeRoot(t *testing.T, s *Scope) {
 }
 
 func TestScopeSerialization2(t *testing.T) {
-	testCompile := NewMockCompile()
+	testCompile := NewMockCompile(t)
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
 
@@ -159,7 +159,7 @@ func TestScopeSerialization2(t *testing.T) {
 func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 		ctrl := gomock.NewController(t)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
@@ -262,7 +262,7 @@ func TestMessageSenderOnClientReceive(t *testing.T) {
 
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
-	testCompile := NewMockCompile()
+	testCompile := NewMockCompile(t)
 
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
@@ -312,7 +312,7 @@ func TestNewParallelScope(t *testing.T) {
 }
 
 func TestCompileExternValueScan(t *testing.T) {
-	testCompile := NewMockCompile()
+	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001"}, engine.Node{Addr: "cn2:6001"}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -332,7 +332,7 @@ func TestCompileExternValueScan(t *testing.T) {
 }
 
 func TestCompileExternScanParallelWrite(t *testing.T) {
-	testCompile := NewMockCompile()
+	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -353,7 +353,7 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 }
 
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
-	testCompile := NewMockCompile()
+	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
 	testCompile.addr = "cn1:6001"
 	testCompile.execType = plan2.ExecTypeAP_MULTICN
@@ -500,7 +500,7 @@ func (s *fakeStreamSender2) Close(_ bool) error {
 }
 
 func TestNotifyMessageClean(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	ff := &fakeStreamSender2{
 		number: 0,
@@ -545,7 +545,7 @@ func TestScopeHoldAnyCannotRemoteOperator(t *testing.T) {
 
 func TestCleanPipelineWitchStartFail(t *testing.T) {
 	s := &Scope{
-		Proc: testutil.NewProcess(),
+		Proc: testutil.NewProcess(t),
 	}
 	s.Proc.BuildPipelineContext(context.Background())
 	op := connector.NewArgument()
@@ -565,7 +565,7 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 func TestScopeGetRelDataError(t *testing.T) {
 	// Create a new scope
 	s := newScope(Normal)
-	s.Proc = testutil.NewProcess()
+	s.Proc = testutil.NewProcess(t)
 	s.NodeInfo = engine.Node{
 		Mcpu: 1,
 	}
@@ -583,7 +583,7 @@ func TestScopeGetRelDataError(t *testing.T) {
 
 	// Create a mock compile with engine
 	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	c := NewMockCompile()
+	c := NewMockCompile(t)
 	c.proc = s.Proc
 	c.e = e
 
