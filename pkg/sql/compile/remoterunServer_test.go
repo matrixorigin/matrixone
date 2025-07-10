@@ -31,7 +31,7 @@ func Test_handlePipelineMessage(t *testing.T) {
 	_ = colexec.NewServer(nil)
 	srv := colexec.Get()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	withTimeoutCauseAdapter := func(parent context.Context, timeout time.Duration, cause error) (context.Context, context.CancelCauseFunc) {
 		ctx, cancel := context.WithTimeout(parent, timeout)

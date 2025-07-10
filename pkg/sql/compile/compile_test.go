@@ -159,9 +159,9 @@ func (w *Ws) PPString() string {
 	return ""
 }
 
-func NewMockCompile() *Compile {
+func NewMockCompile(t *testing.T) *Compile {
 	return &Compile{
-		proc: testutil.NewProcess(),
+		proc: testutil.NewProcess(t),
 		ncpu: system.GoMaxProcs(),
 	}
 }
@@ -261,7 +261,7 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 }
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().Buf = buffer.New()
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		return "STRICT_TRANS_TABLES", nil
@@ -351,7 +351,7 @@ func TestDebugLogFor19288(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			c := NewMockCompile()
+			c := NewMockCompile(t)
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
 				Isolation: txn.TxnIsolation_RC,
@@ -378,7 +378,7 @@ func TestLockMeta_doLock(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.Buf = buffer.New()
 	proc.Ctx = context.Background()
 	eng := mock_frontend.NewMockEngine(ctrl)

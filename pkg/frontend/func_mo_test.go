@@ -40,7 +40,7 @@ func TestGetVariables(t *testing.T) {
 	defer tempExecCtx.Close()
 	ses.txnCompileCtx.SetExecCtx(&tempExecCtx)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	{

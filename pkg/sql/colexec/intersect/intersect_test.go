@@ -33,7 +33,7 @@ type intersectTestCase struct {
 }
 
 func TestIntersect(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	// [2 rows + 2 row, 3 columns] intersect [1 row + 1 rows, 3 columns]
 	/*
 		{1, 2, 3}	    {1, 2, 3}

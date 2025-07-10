@@ -63,8 +63,8 @@ var (
 	}
 )
 
-func newFTTTestCase(m *mpool.MPool, attrs []string, param string) fulltextTokenizeTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newFTTTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) fulltextTokenizeTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range fftdefaultColdefs {
@@ -97,7 +97,7 @@ func newFTTTestCase(m *mpool.MPool, attrs []string, param string) fulltextTokeni
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCall(t *testing.T) {
 
-	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "")
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, "")
 
 	inbat := makeBatchFTT(ut.proc)
 
@@ -135,7 +135,7 @@ func TestFullTextTokenizeCall(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCallJSON(t *testing.T) {
 
-	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json\"}")
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json\"}")
 
 	inbat := makeBatchJSONFTT(ut.proc)
 
@@ -173,7 +173,7 @@ func TestFullTextTokenizeCallJSON(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCallJSONValue(t *testing.T) {
 
-	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json_value\"}")
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json_value\"}")
 
 	inbat := makeBatchJSONFTT(ut.proc)
 
