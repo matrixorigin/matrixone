@@ -1419,14 +1419,14 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	if compacted == nil {
 		return nil
 	}
-	cend := compacted.GetEnd()
+	cptEnd := compacted.GetEnd()
 	dend := debugCandidates[0].GetEnd()
-	if dend.GT(&cend) {
+	if dend.GT(&cptEnd) {
 		return nil
 	}
 	ickpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
 	ok := false
-	gcWaterMark := cend
+	gcWaterMark := cptEnd
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
 		if end.GE(&gcWaterMark) {
@@ -1468,7 +1468,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 			if logtail.ObjectIsSnapshotRefers(
 				entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
 			) {
-				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cend) {
+				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cptEnd) {
 					continue
 				}
 				logutil.Error(
