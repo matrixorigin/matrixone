@@ -688,3 +688,17 @@ func newTNRequest(op uint32, tn uint64) txn.TxnRequest {
 		},
 	})
 }
+
+func TestCommitSendErrorSetsCommitTSWorkaround(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			return nil, assert.AnError
+		})
+		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
+		start := time.Now().UnixNano()
+		err := tc.Commit(ctx)
+		assert.Error(t, err)
+		commitTS := tc.mu.txn.CommitTS.PhysicalTime
+		assert.InDelta(t, start+10000000000, commitTS, 1e9, "CommitTS should be set to now+10s on send error")
+	})
+}

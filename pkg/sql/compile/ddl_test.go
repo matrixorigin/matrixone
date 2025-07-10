@@ -750,7 +750,7 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	})
 }
 
-func TestPitrExistsError(t *testing.T) {
+func TestPitrDupError(t *testing.T) {
 	compile := &Compile{proc: testutil.NewProc()}
 	cases := []struct {
 		level       int32
@@ -771,7 +771,7 @@ func TestPitrExistsError(t *testing.T) {
 			DatabaseName: c.dbName,
 			TableName:    c.tableName,
 		}
-		err := pitrExistsError(compile, p)
+		err := pitrDupError(compile, p)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), c.expect)
 	}

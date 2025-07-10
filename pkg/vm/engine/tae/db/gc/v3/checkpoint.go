@@ -1468,15 +1468,18 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 			if logtail.ObjectIsSnapshotRefers(
 				entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
 			) {
-				logutil.Error(
-					"GC-SNAPSHOT-REFERS-ERROR",
-					zap.String("task", c.TaskNameLocked()),
-					zap.String("name", entry.stats.ObjectName().String()),
-					zap.String("pitr", pList[entry.table].ToString()),
-					zap.String("create-ts", entry.createTS.ToString()),
-					zap.String("drop-ts", entry.dropTS.ToString()),
-				)
-				return moerr.NewInternalError(c.ctx, "snapshot refers")
+				end := compacted.GetEnd()
+				if !entry.dropTS.IsEmpty() && entry.dropTS.LT(&end) {
+					logutil.Error(
+						"GC-SNAPSHOT-REFERS-ERROR",
+						zap.String("task", c.TaskNameLocked()),
+						zap.String("name", entry.stats.ObjectName().String()),
+						zap.String("pitr", pList[entry.table].ToString()),
+						zap.String("create-ts", entry.createTS.ToString()),
+						zap.String("drop-ts", entry.dropTS.ToString()),
+					)
+					return moerr.NewInternalError(c.ctx, "snapshot refers")
+				}
 			}
 		}
 	}
