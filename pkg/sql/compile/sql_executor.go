@@ -388,6 +388,13 @@ func (exec *txnExecutor) Exec(
 		defer close(stream_chan)
 	}
 
+	if exec.opts.ForceRebuildPlan() {
+		pn, err = c.buildPlanFunc(proc.Ctx)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
+
 	var batches []*batch.Batch
 	err = c.Compile(
 		exec.ctx,

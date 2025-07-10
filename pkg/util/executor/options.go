@@ -294,3 +294,12 @@ func (opts StatementOption) WithParams(
 	opts.params = values
 	return opts
 }
+
+func (opts Options) WithForceRebuildPlan() Options {
+	opts.forceRebuildPlan = true
+	return opts
+}
+
+func (opts Options) ForceRebuildPlan() bool {
+	return opts.forceRebuildPlan
+}

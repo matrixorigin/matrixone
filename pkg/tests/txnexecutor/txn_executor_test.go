@@ -73,8 +73,8 @@ func TestPreparedParams(t *testing.T) {
 					require.NoError(t, err)
 
 					_, err = txn.Exec(
-						"insert into t values (?, ?)",
-						executor.StatementOption{}.WithParams([]string{"1", "test"}),
+						"insert into t values (?, ?), (?, ?)",
+						executor.StatementOption{}.WithParams([]string{"1", "test", "3", "test3"}),
 					)
 					require.NoError(t, err)
 
@@ -83,7 +83,7 @@ func TestPreparedParams(t *testing.T) {
 						executor.StatementOption{},
 					)
 					require.NoError(t, err)
-					require.Equal(t, 1, testutils.ReadCount(res))
+					require.Equal(t, 2, testutils.ReadCount(res))
 					res.Close()
 					return nil
 				},
@@ -93,7 +93,7 @@ func TestPreparedParams(t *testing.T) {
 			_, err = exec.Exec(
 				ctx,
 				"insert into t values (?, ?)",
-				executor.Options{}.WithDatabase(db).WithStatementOption(
+				executor.Options{}.WithDatabase(db).WithForceRebuildPlan().WithStatementOption(
 					executor.StatementOption{}.WithParams([]string{"2", "test2"}),
 				),
 			)
@@ -105,7 +105,7 @@ func TestPreparedParams(t *testing.T) {
 				executor.Options{}.WithDatabase(db),
 			)
 			require.NoError(t, err)
-			require.Equal(t, 2, testutils.ReadCount(res))
+			require.Equal(t, 3, testutils.ReadCount(res))
 			res.Close()
 		},
 	)
