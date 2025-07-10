@@ -1264,7 +1264,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	defer c.StopMutationTask()
 
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
-	compacted := c.checkpointCli.GetCompacted()
+	cpt := c.checkpointCli.GetCompacted()
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 	// no scan watermark, GC has not yet run
 	var scanWaterMark *checkpoint.CheckpointEntry
@@ -1416,17 +1416,17 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		)
 	}
 
-	if compacted == nil {
+	if cpt == nil {
 		return nil
 	}
-	cend := compacted.GetEnd()
-	dend := debugCandidates[0].GetEnd()
-	if dend.GT(&cend) {
+	cptEnd := cpt.GetEnd()
+	debugEnd := debugCandidates[0].GetEnd()
+	if debugEnd.GT(&cptEnd) {
 		return nil
 	}
 	ickpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
 	ok := false
-	gcWaterMark := cend
+	gcWaterMark := cptEnd
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
 		if end.GE(&gcWaterMark) {
@@ -1435,6 +1435,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	}
 	for i, ckp := range debugCandidates {
 		end := ckp.GetEnd()
+		end = end.Next()
 		if end.Equal(&gcWaterMark) {
 			debugCandidates = debugCandidates[:i+1]
 			ok = true
@@ -1452,7 +1453,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects)
 	}
 	cptCkpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
-	ckpReader, err := c.getCkpReader(c.ctx, compacted)
+	ckpReader, err := c.getCkpReader(c.ctx, cpt)
 	if err != nil {
 		return err
 	}
@@ -1467,6 +1468,9 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 			if logtail.ObjectIsSnapshotRefers(
 				entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
 			) {
+				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cptEnd) {
+					continue
+				}
 				logutil.Error(
 					"GC-SNAPSHOT-REFERS-ERROR",
 					zap.String("task", c.TaskNameLocked()),
