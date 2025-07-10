@@ -133,14 +133,7 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 		},
 	}
 	groupOp.Aggs = []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(
-			0,
-			false,
-			[]*plan.Expr{
-				//TODO COUNT(*)
-			},
-			nil,
-		),
+		//TODO Group by col1, count(*)
 	}
 	groupOp.PreAllocSize = 0
 	groupOp.ctr.spillThreshold = 100 // Small threshold to force spill
@@ -229,14 +222,7 @@ func TestGroupOperatorBasicSpillAndRecallIntermediateResult(t *testing.T) {
 		},
 	}
 	groupOp.Aggs = []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(
-			0,
-			false,
-			[]*plan.Expr{
-				//TODO COUNT(*)
-			},
-			nil,
-		),
+		//TODO Group by col1, count(*)
 	}
 	groupOp.PreAllocSize = 0
 	groupOp.ctr.spillThreshold = 100 // Small threshold to force spill
