@@ -771,7 +771,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -817,7 +817,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		ses := NewSession(ctx, "", proto, nil)
 		ses.respr = &MysqlResp{mysqlRrWr: proto}
 		ses.mrs = &MysqlResultSet{}
-		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(), ses: ses}
+		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: ses}
 
 		convey.So(handleFun(ses), convey.ShouldBeNil)
 	})
@@ -1075,7 +1075,7 @@ func TestProcessLoadLocal(t *testing.T) {
 				Filepath: "test.csv",
 			},
 		}
-		proc := testutil.NewProc()
+		proc := testutil.NewProc(t)
 		var writer *io.PipeWriter
 		proc.Base.LoadLocalReader, writer = io.Pipe()
 		ctrl := gomock.NewController(t)

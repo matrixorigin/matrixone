@@ -62,8 +62,8 @@ var (
 	}
 )
 
-func newHnswSearchTestCase(m *mpool.MPool, attrs []string, param string) hnswSearchTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newHnswSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) hnswSearchTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range hnswsearchdefaultColdefs {
@@ -124,7 +124,7 @@ func TestHnswSearch(t *testing.T) {
 	newHnswAlgo = newMockAlgoFn
 
 	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswSearchTestCase(mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	ut := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
 
 	inbat := makeBatchHnswSearch(ut.proc)
 
@@ -172,7 +172,7 @@ func TestHnswSearchParamFail(t *testing.T) {
 	newHnswAlgo = newMockAlgoFn
 
 	for _, param := range failedsearchparam {
-		ut := newHnswSearchTestCase(mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+		ut := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
 
 		inbat := makeBatchHnswSearch(ut.proc)
 
@@ -216,7 +216,7 @@ func TestHnswSearchIndexTableConfigFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 
-	ut := newHnswSearchTestCase(mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	ut := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
 	failbatches := makeBatchHnswSearchFail(ut.proc)
 	for _, b := range failbatches {
 

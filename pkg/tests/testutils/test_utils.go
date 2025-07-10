@@ -347,6 +347,19 @@ func MustParseMOCtlResult(t *testing.T, result string) string {
 	return r.Result
 }
 
+func ReadCount(
+	res executor.Result,
+) int {
+	n := int64(0)
+	res.ReadRows(
+		func(rows int, cols []*vector.Vector) bool {
+			n += executor.GetFixedRows[int64](cols[0])[0]
+			return true
+		},
+	)
+	return int(n)
+}
+
 type ctlResult struct {
 	Result string `json:"result"`
 }

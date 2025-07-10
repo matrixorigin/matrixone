@@ -1749,7 +1749,7 @@ func TestCast(t *testing.T) {
 	testCases := initCastTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, NewCast)
@@ -1760,7 +1760,7 @@ func TestCast(t *testing.T) {
 
 func BenchmarkCast(b *testing.B) {
 	testCases := initCastTestCase()
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 
 	b.StartTimer()
 	for _, tc := range testCases {

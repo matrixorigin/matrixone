@@ -35,14 +35,10 @@ type projectionTestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs []projectionTestCase
-)
-
-func init() {
-	tcs = []projectionTestCase{
+func makeTestCases(t *testing.T) []projectionTestCase {
+	return []projectionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			Projection: Projection{
 				ProjectList: []*plan.Expr{
 					{
@@ -82,7 +78,7 @@ func init() {
 }
 
 func TestProjection(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		bat := MakeMockBatchs()
 		err := tc.PrepareProjection(tc.proc)
 		require.NoError(t, err)
