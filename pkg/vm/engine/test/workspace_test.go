@@ -1487,16 +1487,9 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 
-				locstr := string(entry.Bat().GetVector(0).GetBytesAt(0))
-				loc, _ := objectio.StringToLocation(locstr)
-				sid := loc.Name().SegmentId()
-				bid := objectio.NewBlockid(
-					&sid,
-					loc.Name().Num(),
-					loc.ID(),
-				)
+				blk := objectio.DecodeBlockInfo(entry.Bat().GetVector(0).GetBytesAt(0))
 				for i := 0; i < deleteCnt; i++ {
-					rid := types.NewRowid(bid, uint32(i))
+					rid := types.NewRowid(&blk.BlockID, uint32(i))
 					require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rid, false, mp))
 				}
 				bat2.SetRowCount(deleteCnt)

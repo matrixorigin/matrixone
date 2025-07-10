@@ -148,10 +148,10 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 	var wg sync.WaitGroup
 	for n := 0; n < nworker; n++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 			for i, c := range idx.Centroids {
-				if i%nworker != n {
+				if i%nworker != tid {
 					continue
 				}
 				dist, err := distfn(query, c.Vec)
@@ -161,7 +161,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				}
 				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
 			}
-		}()
+		}(n)
 	}
 
 	wg.Wait()
@@ -244,10 +244,11 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 			// brute force search with selected centroids
 			sql_closed := false
+			var err2 error
 			for !sql_closed {
-				sql_closed, err = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
-				if err != nil {
-					errs <- err
+				sql_closed, err2 = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
+				if err2 != nil {
+					errs <- err2
 					return
 				}
 			}

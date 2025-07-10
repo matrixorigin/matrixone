@@ -73,6 +73,15 @@ func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
 	return objs[:i]
 }
 
+type rscController interface {
+	refresh()
+	printMemUsage()
+	reserveResources(estMem int64)
+	releaseResources(estMem int64)
+	availableMem() int64
+	resourceAvailable(estMem int64) bool
+}
+
 type resourceController struct {
 	proc *process.Process
 
@@ -92,16 +101,6 @@ func (c *resourceController) setMemLimit(total uint64) {
 	} else {
 		panic("failed to get system total memory")
 	}
-
-	// if c.limit > 200*common.Const1GBytes {
-	// 	c.transferPageLimit = c.limit / 25 * 2 // 8%
-	// } else if c.limit > 100*common.Const1GBytes {
-	// 	c.transferPageLimit = c.limit / 25 * 3 // 12%
-	// } else if c.limit > 40*common.Const1GBytes {
-	// 	c.transferPageLimit = c.limit / 25 * 4 // 16%
-	// } else {
-	// 	c.transferPageLimit = math.MaxInt64 // no limit
-	// }
 
 	logutil.Info(
 		"MergeExecutorMemoryInfo",

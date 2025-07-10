@@ -141,6 +141,7 @@ func Open(
 		dbutils.WithRuntimeTransferTable(transferTable),
 		dbutils.WithRuntimeObjectFS(opts.Fs),
 		dbutils.WithRuntimeLocalFS(opts.LocalFs),
+		dbutils.WithRuntimeTmpFS(opts.TmpFs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),

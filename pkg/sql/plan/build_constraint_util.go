@@ -247,7 +247,10 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		dbName = ctx.DefaultDatabase()
 	}
 
-	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return err
+	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -1526,7 +1529,7 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}},
-				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
+				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
 			}
 
 			if builder.isRestore {
@@ -1576,7 +1579,7 @@ func appendPrimaryConstraintPlan(
 						},
 					},
 				}
-				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr)}
+				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)}
 				recalcStatsByRuntimeFilter(scanNode, fuzzyFilterNode, builder)
 			}
 
@@ -1634,7 +1637,7 @@ func appendPrimaryConstraintPlan(
 					ObjRef:                 objRef,
 					TableDef:               scanTableDef,
 					ProjectList:            []*Expr{scanPkExpr, scanRowIdExpr},
-					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
+					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
 
@@ -1695,7 +1698,7 @@ func appendPrimaryConstraintPlan(
 					JoinType:               plan.Node_RIGHT,
 					OnList:                 []*Expr{condExpr},
 					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
-					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr)},
+					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, scanNode.Stats.TableCnt), buildExpr, false)},
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
 				recalcStatsByRuntimeFilter(scanNode, joinNode, builder)

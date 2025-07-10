@@ -109,7 +109,7 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 
 	source := tf.ctr.argVecs[0]
 	col := tf.ctr.argVecs[1]
-	dbname, tablename, indexname, colname, err := handleDataSource(source, col)
+	dbname, tablename, indexname, colname, visitTombstone, err := handleDataSource(source, col)
 	logutil.Infof("db: %s, table: %s, index: %s, col: %s in metadataScan", dbname, tablename, indexname, colname)
 	if err != nil {
 		return err
@@ -139,7 +139,7 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname)
+	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname, visitTombstone)
 	if err != nil {
 		return err
 	}
@@ -157,9 +157,9 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 	return nil
 }
 
-func handleDataSource(source, col *vector.Vector) (string, string, string, string, error) {
+func handleDataSource(source, col *vector.Vector) (string, string, string, string, bool, error) {
 	if source.Length() != 1 || col.Length() != 1 {
-		return "", "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
+		return "", "", "", "", false, moerr.NewInternalErrorNoCtx("wrong input len")
 	}
 	sourceStr := source.GetStringAt(0)
 	parts := strings.Split(sourceStr, ".")
@@ -167,18 +167,33 @@ func handleDataSource(source, col *vector.Vector) (string, string, string, strin
 	// Old source format: db_name.table_name
 	case 2:
 		dbname, tablename := parts[0], parts[1]
-		return dbname, tablename, "", col.GetStringAt(0), nil
-	// Newly supported source format: db_name.table_name.?index_name
+		return dbname, tablename, "", col.GetStringAt(0), false, nil
+	// Newly supported source format:
+	// db_name.table_name.?index_name
+	// or db_name.table_name.#
 	case 3:
-		dbname, tablename, indexPart := parts[0], parts[1], parts[2]
+		dbname, tablename, thirdPart := parts[0], parts[1], parts[2]
+		if len(thirdPart) == 1 && thirdPart[0] == '#' {
+			return dbname, tablename, "", col.GetStringAt(0), true, nil
+		}
+		if len(thirdPart) == 0 || thirdPart[0] != '?' {
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("index name must start with ? and follow identifier rules")
+		}
+		indexName := thirdPart[1:]
+		return dbname, tablename, indexName, col.GetStringAt(0), false, nil
+	// db_name.table_name.?index_name.#
+	case 4:
+		dbname, tablename, indexPart, tombstonePart := parts[0], parts[1], parts[2], parts[3]
+		if len(tombstonePart) != 1 || tombstonePart[0] != '#' {
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("invalid tombstone identifier: must be #")
+		}
 		if len(indexPart) == 0 || indexPart[0] != '?' {
-			return "", "", "", "", moerr.NewInternalErrorNoCtx("index name must start with ? and follow identifier rules")
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("index name must start with ? and follow identifier rules")
 		}
 		indexName := indexPart[1:]
-		return dbname, tablename, indexName, col.GetStringAt(0), nil
-
+		return dbname, tablename, indexName, col.GetStringAt(0), true, nil
 	default:
-		return "", "", "", "", moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.?index_name format")
+		return "", "", "", "", false, moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.?index_name or db_name.table_name.# or db_name.table_name.?index_name.# format")
 	}
 }
 

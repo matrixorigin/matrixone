@@ -118,3 +118,46 @@ drop table t1;
 SELECT char_length("你好")+char_length("再见");
 char_length("你好")+char_length("再见")
 4
+drop database if exists char_length_test;
+create database char_length_test;
+use char_length_test;
+drop table if exists kb_portal_article_order;
+CREATE TABLE kb_portal_article_order (
+id INT AUTO_INCREMENT PRIMARY KEY,
+uniqueCode VARCHAR(50) NOT NULL UNIQUE,
+esId VARCHAR(50),
+originalName VARCHAR(255),
+title VARCHAR(255) NOT NULL,
+spaceId INT NOT NULL,
+folderFullPath VARCHAR(500)
+);
+drop table if exists kb_portal_article_item;
+CREATE TABLE kb_portal_article_item (
+itemId INT AUTO_INCREMENT PRIMARY KEY,
+uniqueCode VARCHAR(50) NOT NULL UNIQUE,
+rtfContent TEXT,
+FOREIGN KEY (uniqueCode) REFERENCES kb_portal_article_order(uniqueCode)
+);
+INSERT INTO kb_portal_article_order (uniqueCode, esId, originalName, title, spaceId, folderFullPath) VALUES
+('UC001', 'ES_123', '原始文档1', 'SQL基础教程', 12, '技术/SQL'),
+('UC002', 'ES_456', '原始文档2', '数据库设计', 12, '技术/数据库');
+INSERT INTO kb_portal_article_item (uniqueCode, rtfContent) VALUES
+('UC001', '本文介绍SQL语句的创建表、插入数据等操作...'), -- 富文本内容示例
+('UC002', '数据库设计的三范式与ER图详解...');
+SELECT
+a.title AS question,
+a.id,
+a.uniqueCode,
+a.esId,
+a.originalName,
+CHAR_LENGTH(i.rtfContent) AS article_length,
+a.spaceId,
+a.folderFullPath AS category,
+'标题' AS data_source
+FROM kb_portal_article_order a
+LEFT JOIN kb_portal_article_item i ON i.uniqueCode = a.uniqueCode
+WHERE a.spaceId = 12;
+question    id    uniqueCode    esId    originalName    article_length    spaceId    category    data_source
+SQL基础教程    1    UC001    ES_123    原始文档1    24    12    技术/SQL    标题
+数据库设计    2    UC002    ES_456    原始文档2    18    12    技术/数据库    标题
+drop database char_length_test;

@@ -91,22 +91,23 @@ func newTxnTable(
 	}
 	tbl.isLocal = tbl.isLocalFunc
 
-	ps := process.GetPartitionService()
-	if ps != nil && db.databaseId != catalog.MO_CATALOG_ID {
-
-		is, metadata, err := ps.Is(ctx, item.Id, txn.op)
-		if err != nil {
-			return nil, err
-		}
-		if is {
-			p, err := newPartitionTxnTable(
-				tbl.origin,
-				metadata,
-				ps,
+	if db.databaseId != catalog.MO_CATALOG_ID {
+		ps := process.GetPartitionService()
+		if ps.Enabled() && item.IsPartitionTable() {
+			metadata, err := ps.GetPartitionMetadata(
+				ctx,
+				item.Id,
+				process.GetTxnOperator(),
 			)
 			if err != nil {
 				return nil, err
 			}
+
+			p := newPartitionTxnTable(
+				tbl.origin,
+				metadata,
+				ps,
+			)
 			tbl.partition.tbl = p
 			tbl.partition.is = true
 			tbl.partition.service = ps
@@ -270,8 +271,9 @@ func ForeachVisibleDataObject(
 	ts types.TS,
 	fn func(obj objectio.ObjectEntry) error,
 	executor ConcurrentExecutor,
+	visitTombstone bool,
 ) (err error) {
-	iter, err := state.NewObjectsIter(ts, true, false)
+	iter, err := state.NewObjectsIter(ts, true, visitTombstone)
 	if err != nil {
 		return err
 	}
@@ -366,6 +368,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
 		nil,
+		false,
 	); err != nil {
 		return nil, nil, err
 	}
@@ -381,7 +384,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	return tableVal, tableTypes, nil
 }
 
-func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
@@ -481,6 +484,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
 		nil,
+		visitTombstone,
 	); err != nil {
 		return nil, err
 	}
@@ -691,16 +695,16 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			slowStep = uint64(1)
 		}
 		tbl.enableLogFilterExpr.Store(false)
-		if traceFilterExprInterval.Add(step) >= 1000000 {
+		if traceFilterExprInterval.Add(step) >= 2000000 {
 			traceFilterExprInterval.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
-		if traceFilterExprInterval2.Add(slowStep) >= 60 {
+		if traceFilterExprInterval2.Add(slowStep) >= 100 {
 			traceFilterExprInterval2.Store(0)
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
-		if rangesLen >= 80 {
+		if rangesLen >= 100 {
 			tbl.enableLogFilterExpr.Store(true)
 		}
 
@@ -711,7 +715,13 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			logutil.Info(
 				"TXN-FILTER-RANGE-LOG",
 				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+				zap.String("exprs", plan2.FormatExprs(
+					rangesParam.BlockFilters, plan2.FormatOption{
+						ExpandVec:       true,
+						ExpandVecMaxLen: 2,
+						MaxDepth:        5,
+					},
+				)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.Int("blocks", blocks.Len()),
@@ -835,7 +845,14 @@ func (tbl *txnTable) rangesOnePart(
 		logutil.Info(
 			"SLOW-RANGES:",
 			zap.String("table", tbl.tableDef.Name),
-			zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+			zap.String("exprs", plan2.FormatExprs(
+				rangesParam.BlockFilters,
+				plan2.FormatOption{
+					ExpandVec:       true,
+					ExpandVecMaxLen: 2,
+					MaxDepth:        5,
+				},
+			)),
 		)
 	}
 
@@ -1074,6 +1091,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var indexes []*plan.IndexDef
 		var refChildTbls []uint64
 		var hasRowId bool
+		var partition *plan.Partition
 
 		i := int32(0)
 		name2index := make(map[string]int32)
@@ -1119,6 +1137,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: tbl.comment,
 			})
+		}
+
+		if tbl.partitioned > 0 {
+			partition = &plan.Partition{}
+			err := partition.Unmarshal(([]byte)(tbl.partition))
+			if err != nil {
+				//panic(fmt.Sprintf("cannot unmarshal partition metadata information: %s", err))
+				return nil
+			}
 		}
 
 		if tbl.viewdef != "" {
@@ -1202,6 +1229,10 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Indexes:       indexes,
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
+			Partition:     partition,
+		}
+		if tbl.extraInfo != nil {
+			tbl.tableDef.FeatureFlag = tbl.extraInfo.FeatureFlag
 		}
 	}
 	return tbl.tableDef
@@ -1284,6 +1315,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
+			case api.AlterKind_ReplaceDef:
+				// Rollback for ReplaceDef is handled by restoring defs
 			}
 		}
 		tbl.defs = olddefs
@@ -1295,6 +1328,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	txn.Unlock()
 
 	// update tbl properties and reconstruct supplement TableDef
+	var hasReplaceDef bool
+	var replaceDefReq *api.AlterTableReq
 	for _, req := range reqs {
 		switch req.GetKind() {
 		case api.AlterKind_AddPartition:
@@ -1311,6 +1346,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			appendDef = append(appendDef, c)
 		case api.AlterKind_RenameTable:
 			tbl.tableName = req.GetRenameTable().NewName
+		case api.AlterKind_ReplaceDef:
+			hasReplaceDef = true
+			replaceDefReq = req
 		default:
 			panic("not supported")
 		}
@@ -1327,7 +1365,21 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 
 	// update TableDef
-	tbl.defs = append(tbl.defs, appendDef...)
+	if hasReplaceDef {
+		// When ReplaceDef exists, replace the entire table definition
+		replaceDef := replaceDefReq.GetReplaceDef()
+		defs, _, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
+		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
+		tbl.defs = defs
+		tbl.tableDef = nil
+
+		// Apply other modifications on top of the replaced definition
+		if len(appendDef) > 0 {
+			tbl.defs = append(tbl.defs, appendDef...)
+		}
+	} else {
+		tbl.defs = append(tbl.defs, appendDef...)
+	}
 	tbl.tableDef = nil
 	tbl.GetTableDef(ctx)
 
@@ -1368,7 +1420,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
-	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn); err != nil {
+	if err := tbl.db.createWithID(ctx, tbl.tableName, tbl.tableId, tbl.defs, !createdInTxn, tbl.extraInfo); err != nil {
 		return err
 	}
 	if createdInTxn {
@@ -1626,19 +1678,10 @@ func (tbl *txnTable) Delete(
 		tbl.getTxn().hasS3Op.Store(true)
 		stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(0))
 		fileName := stats.ObjectLocation().String()
-		copBat, err := util.CopyBatch(bat, tbl.getTxn().proc)
-		if err != nil {
-			return err
-		}
 
 		if err := tbl.getTxn().WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.getTxn().tnStores[0]); err != nil {
+			tbl.db.databaseName, tbl.tableName, fileName, bat, tbl.getTxn().tnStores[0]); err != nil {
 			return err
-		}
-
-		for i := range bat.Vecs[0].Length() {
-			ss := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
-			tbl.getTxn().StashFlushedTombstones(ss)
 		}
 
 		return nil
@@ -1802,8 +1845,7 @@ func (tbl *txnTable) buildLocalDataSource(
 		}
 
 		ranges := relData.GetBlockInfoSlice()
-		skipReadMem := !bytes.Equal(
-			objectio.EncodeBlockInfo(ranges.Get(0)), objectio.EmptyBlockInfoBytes)
+		skipReadMem := !ranges.Get(0).IsMemBlk()
 
 		if tbl.db.op.IsSnapOp() {
 			txnOffset = tbl.getTxn().GetSnapshotWriteOffset()
@@ -1973,27 +2015,26 @@ func (tbl *txnTable) getPartitionState(
 	if ps != nil {
 		start, end = ps.GetDuration()
 	}
-	errStr := ""
-	if err != nil {
-		errStr = err.Error()
-	}
-	logutil.Infof(
-		"xxxx Try to get snapshot partition state, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s], err:%s",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		ps,
-		start.ToString(),
-		end.ToString(),
-		errStr,
+	logutil.Info(
+		"Txn-Table-GetSSPS",
+		zap.String("table-name", tbl.tableName),
+		zap.Uint64("table-id", tbl.tableId),
+		zap.String("txn", tbl.db.op.Txn().DebugString()),
+		zap.String("ps", fmt.Sprintf("%p", ps)),
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Bool("is-snapshot", tbl.db.op.IsSnapOp()),
+		zap.Error(err),
 	)
 
 	//If ps == nil, it indicates that subscribe failed due to 1: network timeout,
 	//2:table id is too old for snapshot read,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
 
 	// To get a partition state for snapshot read, we need to consume the history checkpoints.
+	var (
+		logger = logutil.Info
+		msg    string
+	)
 	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
 		ctx,
 		tbl,
@@ -2002,29 +2043,23 @@ func (tbl *txnTable) getPartitionState(
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {
 		start, end = ps.GetDuration()
+		msg = "Txn-Table-GetSSPS-Succeed"
+	} else {
+		logger = logutil.Error
+		msg = "Txn-Table-GetSSPS-Failed"
 	}
-	if ps != nil {
-		logutil.Infof(
-			"xxxx Get snapshot partition state succeed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v, ps:%p[%s_%s]",
-			tbl,
-			tbl.tableName,
-			tbl.tableId,
-			tbl.db.op.Txn().DebugString(),
-			tbl.db.op.IsSnapOp(),
-			ps,
-			start.ToString(),
-			end.ToString(),
-		)
-		return
-	}
-	logutil.Errorf(
-		"xxxx Get partition state failed, tbl:%p, table name:%s, tid:%v, txn:%s, isSnspshot:%v,err:%s",
-		tbl,
-		tbl.tableName,
-		tbl.tableId,
-		tbl.db.op.Txn().DebugString(),
-		tbl.db.op.IsSnapOp(),
-		err.Error())
+
+	logger(
+		msg,
+		zap.String("table-name", tbl.tableName),
+		zap.Uint64("table-id", tbl.tableId),
+		zap.String("txn", tbl.db.op.Txn().DebugString()),
+		zap.String("ps", fmt.Sprintf("%p", ps)),
+		zap.String("start", start.ToString()),
+		zap.String("end", end.ToString()),
+		zap.Bool("is-snapshot", tbl.db.op.IsSnapOp()),
+		zap.Error(err),
+	)
 	return
 }
 
@@ -2216,6 +2251,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	to types.TS,
 	batch *batch.Batch,
 	pkIndex int32,
+	_ int32,
 ) (bool, error) {
 	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, true)
@@ -2339,7 +2375,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 		}
 		objStats = append(objStats, obj.ObjectStats)
 		return nil
-	}, nil)
+	}, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2596,4 +2632,8 @@ func (tbl *txnTable) getCommittedRows(
 		return rows, nil
 	}
 	return uint64(s.TableCnt) + rows, nil
+}
+
+func (tbl *txnTable) GetExtraInfo() *api.SchemaExtra {
+	return tbl.extraInfo
 }

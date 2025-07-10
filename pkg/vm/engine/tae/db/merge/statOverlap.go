@@ -17,12 +17,14 @@ package merge
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/openacid/slimarray/polyfit"
 	"github.com/tidwall/btree"
 )
@@ -85,7 +87,8 @@ type OverlapStats struct {
 	PolynomialCoefficients []float64
 
 	// intermediate results
-	PointEvents *btree.BTreeG[*pointEvent]
+	PointEvents  *btree.BTreeG[*pointEvent]
+	StatsRecords []objOverlapRecord
 }
 
 func (o *OverlapStats) String() string {
@@ -98,14 +101,24 @@ func (o *OverlapStats) String() string {
 		processed := o.ScanObj - o.ConstantObj - o.UniniteddObj
 		coffs = fmt.Sprintf("%v-%d", o.PolynomialCoefficients, processed)
 	}
-	s := fmt.Sprintf("AvgPointDepth: %.2f, AvgOverlapCnt: %.2f, Obj(s,c,u): %d-%d-%d, EventsCnt: %d, Clusters: %v", o.AvgPointDepth, o.AvgOverlapCnt, o.ScanObj, o.ConstantObj, o.UniniteddObj, pointsCnt, o.Clusters)
+	s := fmt.Sprintf("AvgPointDepth: %.2f, AvgOverlapCnt: %.2f, "+
+		"Obj(s,c,u): %d-%d-%d, EventsCnt: %d, Clusters: %v",
+		o.AvgPointDepth,
+		o.AvgOverlapCnt,
+		o.ScanObj,
+		o.ConstantObj,
+		o.UniniteddObj,
+		pointsCnt,
+		o.Clusters,
+	)
 	if coffs != "" {
 		s += fmt.Sprintf(", PolynomialCoefficients: %s", coffs)
 	}
 	return s
 }
 
-// GetScaleAndType returns the scale and type of the statsList, the first valid scale and type will be returned
+// GetScaleAndType returns the scale and type of the statsList,
+// the first valid scale and type will be returned
 func GetScaleAndType(statsList []*objectio.ObjectStats) (scale int32, typ types.T) {
 	for _, stats := range statsList {
 		zm := stats.SortKeyZoneMap()
@@ -119,7 +132,10 @@ func GetScaleAndType(statsList []*objectio.ObjectStats) (scale int32, typ types.
 	return
 }
 
-func MakePointEventsSortedMap(ctx context.Context, statsList []*objectio.ObjectStats) (*btree.BTreeG[*pointEvent], int, int, error) {
+func MakePointEventsSortedMap(
+	ctx context.Context,
+	statsList []*objectio.ObjectStats,
+) (*btree.BTreeG[*pointEvent], int, int, error) {
 
 	scale, typ := GetScaleAndType(statsList)
 	if typ == types.T_any {
@@ -163,15 +179,24 @@ func MakePointEventsSortedMap(ctx context.Context, statsList []*objectio.ObjectS
 }
 
 func IsConstantObj(stats *objectio.ObjectStats) bool {
-	zm := stats.SortKeyZoneMap()
-	if zm == nil || !zm.IsInited() || stats.OriginSize() < common.DefaultMinOsizeQualifiedBytes {
+	if stats.OriginSize() < common.DefaultMinOsizeQualifiedBytes {
 		return false
 	}
-	// the max is 0xfffffffff..., which has no valuable information, so we treat it as constant and it is not a good candidate for merge
+	return IsConstantZM(stats.SortKeyZoneMap())
+}
+
+func IsConstantZM(zm index.ZM) bool {
+	if zm == nil || !zm.IsInited() {
+		return false
+	}
+	// the max is 0xfffffffff..., which has no valuable information,
+	// so we treat it as constant and it is not a good candidate for merge
 	if zm.MaxTruncated() {
 		return true
 	}
-	if minBuf, maxBuf := zm.GetMinBuf(), zm.GetMaxBuf(); zm.IsString() && len(minBuf) == 30 && len(maxBuf) == 30 {
+
+	minBuf, maxBuf := zm.GetMinBuf(), zm.GetMaxBuf()
+	if zm.IsString() && len(minBuf) == 30 && len(maxBuf) == 30 {
 		var diffi int
 		for diffi = 0; diffi < 30; diffi++ {
 			if minBuf[diffi] != maxBuf[diffi] {
@@ -183,7 +208,8 @@ func IsConstantObj(stats *objectio.ObjectStats) bool {
 		}
 
 		// if maxBuf = minBuf + 1, we also treat it as constant object
-		// If the logic of bumping one is removed, the following code should be removed
+		// If the logic of bumping one is removed,
+		// the following code should be removed
 		for i := 29; i >= 0; i-- {
 			x := minBuf[i] + 1
 			if x != 0 {
@@ -195,8 +221,13 @@ func IsConstantObj(stats *objectio.ObjectStats) bool {
 		}
 	}
 
-	// for those that are not string, or string without any truncation, if the min and max are the same, it is a constant object and not a good candidate for merge
-	return compute.Compare(zm.GetMinBuf(), zm.GetMaxBuf(), zm.GetType(), zm.GetScale(), zm.GetScale()) == 0
+	// for those non-string types, or string without any truncation,
+	// if the min and max are the same,
+	// it is a constant object and not a good candidate for merge
+	return compute.Compare(
+		zm.GetMinBuf(), zm.GetMaxBuf(),
+		zm.GetType(), zm.GetScale(), zm.GetScale(),
+	) == 0
 }
 
 type OverlapOpts struct {
@@ -238,7 +269,11 @@ func (o *OverlapOpts) WithFurtherStat(furtherStat bool) *OverlapOpts {
 }
 
 // CalculateOverlapStats calculates average overlap depth and average overlap count
-func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStats, opts *OverlapOpts) (ret *OverlapStats, err error) {
+func CalculateOverlapStats(
+	ctx context.Context,
+	statsList []*objectio.ObjectStats,
+	opts *OverlapOpts,
+) (ret *OverlapStats, err error) {
 	if len(statsList) == 0 {
 		return nil, nil
 	}
@@ -252,9 +287,9 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 	ret.UniniteddObj = uninitialized
 	ret.ScanObj = len(statsList)
 	ret.PointEvents = events
+	ret.StatsRecords = make([]objOverlapRecord, len(statsList))
 
 	openingObjs := make(map[int]objOverlapRecord)
-	determinedObject := make([]objOverlapRecord, 0, events.Len()/2)
 	openAndCloseInSamePoint := make([]int, 0)
 
 	idx := -1
@@ -266,12 +301,13 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 		idx++
 		event := iter.Item()
 
-		// remove the closing objects from openingObjs first, avoiding the impact of point stack on point depth
+		// remove the closing objects from openingObjs first,
+		// avoiding the impact of point stack on point depth.
 		//   point stack: a value point is responsible for multiple objects' opening and closing.
 		for _, idx := range event.close {
 			record, exists := openingObjs[idx]
 			if exists {
-				determinedObject = append(determinedObject, record)
+				ret.StatsRecords[idx] = record
 				delete(openingObjs, idx)
 			} else {
 				openAndCloseInSamePoint = append(openAndCloseInSamePoint, idx)
@@ -327,7 +363,7 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 		// handle special case: open and close in the same point
 		for _, idx := range openAndCloseInSamePoint {
 			record := openingObjs[idx]
-			determinedObject = append(determinedObject, record)
+			ret.StatsRecords[idx] = record
 			delete(openingObjs, idx)
 		}
 		if len(openAndCloseInSamePoint) > 0 {
@@ -354,7 +390,7 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 	processed := ret.ScanObj - ret.ConstantObj - ret.UniniteddObj
 	totalOverlap := 0
 	totalPointDepth := 0
-	for _, record := range determinedObject {
+	for _, record := range ret.StatsRecords {
 		totalOverlap += record.overlap
 		totalPointDepth += record.depth
 	}
@@ -362,10 +398,10 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 	ret.AvgOverlapCnt = float64(totalOverlap) / float64(processed)
 
 	// Skip polynomial fitting if we don't have enough data points
-	if opts.FitPolynomialDegree > 0 && len(determinedObject) > opts.FitPolynomialDegree {
-		pointDepths := make([]float64, len(determinedObject))
-		xValues := make([]float64, len(determinedObject))
-		for i, record := range determinedObject {
+	if opts.FitPolynomialDegree > 0 && len(ret.StatsRecords) > opts.FitPolynomialDegree {
+		pointDepths := make([]float64, len(ret.StatsRecords))
+		xValues := make([]float64, len(ret.StatsRecords))
+		for i, record := range ret.StatsRecords {
 			pointDepths[i] = float64(record.depth)
 			xValues[i] = float64(i)
 		}
@@ -377,7 +413,81 @@ func CalculateOverlapStats(ctx context.Context, statsList []*objectio.ObjectStat
 	return
 }
 
-func GatherOverlapMergeTasks(ctx context.Context, statsList []*objectio.ObjectStats, overlapOpts *OverlapOpts, level int8) ([]mergeTask, error) {
+func splitTasksOnSpan(
+	statsList []*objectio.ObjectStats,
+	candidatesIdx []int,
+	opts *OverlapOpts,
+	overlapStats *OverlapStats,
+	level int8,
+) (tasks []mergeTask) {
+	records := overlapStats.StatsRecords
+
+	// sort by overlap ratio descending
+	sort.Slice(candidatesIdx, func(i, j int) bool {
+		r1, r2 := records[candidatesIdx[i]], records[candidatesIdx[j]]
+		overlapRatio1 := float64(r1.overlap) / float64(r1.depth)
+		overlapRatio2 := float64(r2.overlap) / float64(r2.depth)
+		return overlapRatio1 > overlapRatio2
+	})
+
+	pushToRationLessThan := func(idx int, ration float64) int {
+		for ; idx < len(candidatesIdx); idx++ {
+			record := records[candidatesIdx[idx]]
+			spanRatio := float64(record.overlap) / float64(record.depth)
+			if spanRatio < ration {
+				break
+			}
+		}
+		return idx
+	}
+	notesFmt := []string{
+		"pointDepth %v >= %v, wide span",
+		"pointDepth %v >= %v, medium span",
+		"pointDepth %v >= %v, narrow span",
+	}
+	start := 0
+	pos := 0
+	for i, ration := range []float64{10.0, 2.0, -1.0} {
+		pos = pushToRationLessThan(pos, ration)
+		if cnt := pos - start; cnt >= opts.MinPointDepthPerCluster {
+			stats := make([]*objectio.ObjectStats, 0, cnt)
+			for k := start; k < pos; k++ {
+				stats = append(stats, statsList[candidatesIdx[k]])
+			}
+
+			note := fmt.Sprintf(
+				notesFmt[i], cnt, opts.MinPointDepthPerCluster,
+			)
+
+			lv := level
+			// for medium & wide span, try to keep them in the current lv
+			if i < 2 && lv >= 2 {
+				lv -= 1
+				note += "(keep in current level)"
+			}
+			tasks = append(tasks, mergeTask{
+				objs:        stats,
+				note:        note,
+				level:       lv,
+				kind:        taskHostDN,
+				isTombstone: false,
+			})
+			// wider span take higher priority to be merged,
+			// because they are about to produce thinner span.
+			break
+		}
+		start = pos
+	}
+
+	return
+}
+
+func GatherOverlapMergeTasks(
+	ctx context.Context,
+	statsList []*objectio.ObjectStats,
+	overlapOpts *OverlapOpts,
+	level int8,
+) ([]mergeTask, error) {
 	if len(statsList) == 0 {
 		return nil, nil
 	}
@@ -418,17 +528,17 @@ func GatherOverlapMergeTasks(ctx context.Context, statsList []*objectio.ObjectSt
 		if groupidx < group &&
 			pd == overlapStats.Clusters[groupidx].pointDepth &&
 			idx == overlapStats.Clusters[groupidx].idx {
-			stats := make([]*objectio.ObjectStats, 0, pd)
+			keys := make([]int, 0, len(openingObjs))
 			for k := range openingObjs {
-				stats = append(stats, statsList[k])
+				keys = append(keys, k)
 			}
-			targetedStats = append(targetedStats, mergeTask{
-				objs:        stats,
-				note:        fmt.Sprintf("pointDepth: %d", overlapStats.Clusters[groupidx].pointDepth),
-				level:       level,
-				kind:        taskHostDN,
-				isTombstone: false,
-			})
+			targetedStats = append(targetedStats, splitTasksOnSpan(
+				statsList,
+				keys,
+				overlapOpts,
+				overlapStats,
+				level,
+			)...)
 			groupidx++
 		}
 

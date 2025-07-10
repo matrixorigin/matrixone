@@ -298,9 +298,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 
-	if !isInExecutor {
-		c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
-	}
+	//if !isInExecutor {
+	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
+	//}
 
 	return queryResult, err
 }

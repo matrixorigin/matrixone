@@ -55,7 +55,7 @@ insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-1
 drop snapshot if exists pub_sp;
 create snapshot pub_sp for account acc01;
 
--- @session:id=1&user=acc01:test_account&password=111
+-- @session:id=2&user=acc01:test_account&password=111
 drop publication if exists pub05;
 create publication pub05 database db09 account acc02 comment 'publish db09';
 drop publication if exists pub06;
@@ -64,7 +64,7 @@ create publication pub06 database db10 account acc02 comment 'publish db10';
 show publications;
 -- @session
 
--- @session:id=2&user=acc02:test_account&password=111
+-- @session:id=3&user=acc02:test_account&password=111
 drop database if exists sub05;
 create database sub05 from acc01 publication pub05;
 show databases;
@@ -83,7 +83,7 @@ show databases like 'db%';
 
 drop account if exists acc03;
 create account acc03 admin_name 'test_account' identified by '111';
--- @session:id=36&user=acc03:test_account&password=111
+-- @session:id=4&user=acc03:test_account&password=111
 -- @ignore:5,6
 show publications;
 show databases like 'db%';
@@ -91,7 +91,7 @@ show databases like 'db%';
 
 restore account acc01 from snapshot pub_sp to account acc03;
 
--- @session:id=3&user=acc03:test_account&password=111
+-- @session:id=5&user=acc03:test_account&password=111
 -- @ignore:5,6
 show publications;
 show databases like 'db%';

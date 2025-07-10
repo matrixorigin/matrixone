@@ -130,8 +130,6 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCTransferTable,
 			db.Opts.CheckpointCfg.TransferInterval,
 			func(context.Context) {
-				db.Runtime.PoolUsageReport()
-				// dbutils.PrintMemStats()
 				db.Runtime.TransferDelsMap.Prune(db.Opts.TransferTableTTL)
 				db.Runtime.TransferTable.RunTTL()
 			},
@@ -178,11 +176,23 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if db.Opts.CatalogCfg.DisableGC {
 					return
 				}
-				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if gcWaterMark == nil {
+				scanWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
+				if scanWaterMark == nil {
 					return
 				}
-				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
+				ts := scanWaterMark.GetEnd()
+				// If gcWaterMark has not been updated for a long time
+				// exceeding GlobalVersionInterval, use GlobalVersionInterval
+				// must be more than 10 minutes to be effective,
+				// because in some cases of ut, GlobalVersionInterval will be very short
+				if db.Opts.CheckpointCfg.GlobalVersionInterval > 10*time.Minute {
+					interval := types.BuildTS(time.Now().UTC().UnixNano()-
+						int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
+					if ts.LE(&interval) {
+						ts = interval
+					}
+				}
+				db.Catalog.GCByTS(ctx, ts)
 			},
 			1,
 		)
@@ -211,6 +221,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCLockMerge,
 			options.DefaultLockMergePruneInterval,
 			func(ctx context.Context) {
+				db.Runtime.PoolUsageReport()
 				db.Runtime.LockMergeService.Prune()
 			},
 			1,
@@ -236,19 +247,6 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			1,
 		)
 		return
-		// case CronJobs_Name_Scanner:
-		// scanner := NewDBScanner(db, nil)
-		// db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(db.Opts.TaskServiceGetter))
-		// scanner.RegisterOp(db.MergeScheduler)
-		// err = db.CronJobs.AddJob(
-		// 	CronJobs_Name_Scanner,
-		// 	db.Opts.CheckpointCfg.ScanInterval,
-		// 	func(ctx context.Context) {
-		// 		scanner.OnExec()
-		// 	},
-		// 	1,
-		// )
-		// return
 	}
 	err = moerr.NewInternalErrorNoCtxf(
 		"unknown cron job name: %s", name,

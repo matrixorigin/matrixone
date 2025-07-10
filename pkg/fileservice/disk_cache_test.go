@@ -40,9 +40,22 @@ func TestDiskCache(t *testing.T) {
 
 	// counter
 	numWritten := 0
+	numEvict := 0
 	ctx = OnDiskCacheWritten(ctx, func(path string, entry IOEntry) {
 		numWritten++
 	})
+	ctx = OnDiskCacheWritten(ctx, nil) // for coverage
+	ctx = OnDiskCacheEvict(ctx, func(path string) {
+		numEvict++
+	})
+	ctx = OnDiskCacheEvict(ctx, nil) // for coverage
+
+	// DiskCacheCallback context
+	_, set := ctx.Deadline()
+	assert.False(t, set)
+	if err := ctx.Err(); err != nil {
+		t.Fatal(err)
+	}
 
 	// new
 	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(1<<20), nil, false, nil, "", false)
@@ -158,6 +171,12 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 	ctx := context.Background()
 	var counterSet perfcounter.CounterSet
 	ctx = perfcounter.WithCounterSet(ctx, &counterSet)
+
+	numEvict := 0
+	ctx = OnDiskCacheEvict(ctx, func(path string) {
+		numEvict++
+	})
+	ctx = OnDiskCacheEvict(ctx, nil) // for coverage
 
 	cache, err := NewDiskCache(ctx, dir, fscache.ConstCapacity(4096), nil, false, nil, "", false)
 	assert.Nil(t, err)

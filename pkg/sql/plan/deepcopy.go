@@ -64,10 +64,11 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	result := make([]*plan.UpdateCtx, len(updateCtxList))
 	for i, ctx := range updateCtxList {
 		result[i] = &plan.UpdateCtx{
-			ObjRef:     DeepCopyObjectRef(ctx.ObjRef),
-			TableDef:   DeepCopyTableDef(ctx.TableDef, true),
-			InsertCols: slices.Clone(ctx.InsertCols),
-			DeleteCols: slices.Clone(ctx.DeleteCols),
+			ObjRef:        DeepCopyObjectRef(ctx.ObjRef),
+			TableDef:      DeepCopyTableDef(ctx.TableDef, true),
+			InsertCols:    slices.Clone(ctx.InsertCols),
+			DeleteCols:    slices.Clone(ctx.DeleteCols),
+			PartitionCols: slices.Clone(ctx.PartitionCols),
 		}
 	}
 
@@ -441,6 +442,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		AutoIncrOffset: table.AutoIncrOffset,
 		DbName:         table.DbName,
 		DbId:           table.DbId,
+		FeatureFlag:    table.FeatureFlag,
 	}
 
 	if withCols {
@@ -495,6 +497,17 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 	if table.Indexes != nil {
 		for i, indexdef := range table.Indexes {
 			newTable.Indexes[i] = DeepCopyIndexDef(indexdef)
+		}
+	}
+
+	if table.Partition != nil {
+		newTable.Partition = &plan.Partition{
+			PartitionDefs: make([]*plan.PartitionDef, len(table.Partition.PartitionDefs)),
+		}
+		for i, def := range table.Partition.PartitionDefs {
+			newTable.Partition.PartitionDefs[i] = &plan.PartitionDef{
+				Def: DeepCopyExpr(def.Def),
+			}
 		}
 	}
 
@@ -783,6 +796,7 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		MatchPrefix: rf.MatchPrefix,
 		UpperLimit:  rf.UpperLimit,
 		Expr:        DeepCopyExpr(rf.Expr),
+		NotOnPk:     rf.NotOnPk,
 	}
 }
 
@@ -963,6 +977,15 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			Vec: &plan.LiteralVec{
 				Len:  item.Vec.Len,
 				Data: bytes.Clone(item.Vec.Data),
+			},
+		}
+
+	case *plan.Expr_Fold:
+		newExpr.Expr = &plan.Expr_Fold{
+			Fold: &plan.FoldVal{
+				Id:      item.Fold.Id,
+				IsConst: item.Fold.IsConst,
+				Data:    bytes.Clone(item.Fold.Data),
 			},
 		}
 	}

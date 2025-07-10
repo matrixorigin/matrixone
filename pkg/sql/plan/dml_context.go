@@ -17,7 +17,6 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -202,7 +201,10 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		dbName = ctx.DefaultDatabase()
 	}
 
-	objRef, tableDef := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return err
+	}
 	if tableDef == nil {
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -217,7 +219,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
-	var err error
 	checkFK := true
 	if respectFKCheck {
 		checkFK, err = IsForeignKeyChecksEnabled(ctx)
@@ -228,12 +229,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 
 	if checkFK && (len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0) {
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "foreign key constraint")
-	}
-
-	for _, col := range tableDef.Cols {
-		if types.T(col.Typ.Id).IsArrayRelate() {
-			return moerr.NewUnsupportedDML(ctx.GetContext(), "vector column")
-		}
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())

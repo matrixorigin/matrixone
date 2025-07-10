@@ -16,7 +16,9 @@ package plan
 
 import (
 	"sort"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -293,6 +295,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 			visited[nextSibling] = true
 
 			children := []int32{nodeID, subTrees[nextSibling].NodeId}
+			if builder.isIndexTableWithoutFilters(children[1]) {
+				children[0], children[1] = children[1], children[0]
+			}
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -306,9 +311,13 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 		for i := range visited {
 			if !visited[i] {
+				children := []int32{nodeID, subTrees[i].NodeId}
+				if builder.isIndexTableWithoutFilters(children[1]) {
+					children[0], children[1] = children[1], children[0]
+				}
 				nodeID = builder.appendNode(&plan.Node{
 					NodeType: plan.Node_JOIN,
-					Children: []int32{nodeID, subTrees[i].NodeId},
+					Children: children,
 					JoinType: plan.Node_INNER,
 				}, nil)
 			}
@@ -319,6 +328,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 
 		for i := 1; i < len(subTrees); i++ {
 			children := []int32{nodeID, subTrees[i].NodeId}
+			if builder.isIndexTableWithoutFilters(children[1]) {
+				children[0], children[1] = children[1], children[0]
+			}
 			nodeID = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				Children: children,
@@ -336,6 +348,17 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}, nil)
 	}
 	return nodeID
+}
+
+func (builder *QueryBuilder) isIndexTableWithoutFilters(nodeId int32) bool {
+	node := builder.qry.Nodes[nodeId]
+	if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
+		return false
+	}
+	if len(node.FilterList) > 0 {
+		return false
+	}
+	return strings.HasPrefix(node.TableDef.Name, catalog.PrefixIndexTableName)
 }
 
 func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {

@@ -16,6 +16,7 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -121,6 +122,28 @@ func InheritCheckpointEntry(
 		opt(e)
 	}
 	return e
+}
+
+func (e *CheckpointEntry) MarshalJSON() ([]byte, error) {
+	e.RLock()
+	defer e.RUnlock()
+	return json.Marshal(&struct {
+		Start       string `json:"start"`
+		End         string `json:"end"`
+		State       State  `json:"state"`
+		EntryType   string `json:"entry_type"`
+		Location    string `json:"location"`
+		CKPLSN      uint64 `json:"ckp_lsn"`
+		TruncateLSN uint64 `json:"truncate_lsn"`
+	}{
+		Start:       e.start.ToString(),
+		End:         e.end.ToString(),
+		State:       e.state,
+		EntryType:   e.entryType.String(),
+		Location:    e.cnLocation.String(),
+		CKPLSN:      e.ckpLSN,
+		TruncateLSN: e.truncateLSN,
+	})
 }
 
 // ================================================================
@@ -369,14 +392,19 @@ func (e *CheckpointEntry) LSNString() string {
 	return fmt.Sprintf("%d-%d", e.ckpLSN, e.truncateLSN)
 }
 
+func (e *CheckpointEntry) JsonString() string {
+	json, err := e.MarshalJSON()
+	if err != nil {
+		return fmt.Sprintf("bad entry: %s:%v", e.String(), err)
+	}
+	return string(json)
+}
+
 func (e *CheckpointEntry) String() string {
 	if e == nil {
 		return "nil"
 	}
-	t := "I"
-	if !e.IsIncremental() {
-		t = "G"
-	}
+	t := e.GetType().String()
 	state := e.GetState()
 	return fmt.Sprintf(
 		"CKP[%s][%v][%v:%v][%s](%s->%s)",
@@ -393,6 +421,31 @@ func (e *CheckpointEntry) String() string {
 //===============================================================
 // read related
 //===============================================================
+
+func (e *CheckpointEntry) GetTableRangesByID(
+	ctx context.Context,
+	tableID uint64,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (ranges []ckputil.TableRange, err error) {
+	reader := logtail.NewCKPReaderWithTableID_V2(e.version, e.cnLocation, tableID, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
+	}
+	return reader.GetTableRanges(ctx)
+}
+
+func (e *CheckpointEntry) GetTableRanges(
+	ctx context.Context,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (ranges []ckputil.TableRange, err error) {
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
+	}
+	return reader.GetTableRanges(ctx)
+}
 
 // Only for test
 // Only fill in columns ObjectID, CreateTS and DeleteTS

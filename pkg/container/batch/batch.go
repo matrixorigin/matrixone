@@ -223,9 +223,10 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	data = data[8:]
 
 	l := types.DecodeInt32(data[:4])
-	// reuse bat mem
-	firstTime := bat.Vecs == nil
-	if firstTime {
+	if int(l) != len(bat.Vecs) {
+		if len(bat.Vecs) > 0 {
+			bat.Clean(mp)
+		}
 		bat.Vecs = make([]*vector.Vector, l)
 		for i := range bat.Vecs {
 			if bat.offHeap {
@@ -235,6 +236,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 			}
 		}
 	}
+
 	vecs := bat.Vecs
 	data = data[4:]
 
@@ -250,7 +252,7 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 	}
 
 	l = types.DecodeInt32(data[:4])
-	if firstTime {
+	if int(l) != len(bat.Attrs) {
 		bat.Attrs = make([]string, l)
 	}
 	data = data[4:]

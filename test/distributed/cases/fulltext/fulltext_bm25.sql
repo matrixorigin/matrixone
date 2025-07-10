@@ -319,6 +319,8 @@ create table src2 (id1 varchar, id2 bigint, body char(128), title text, primary 
 insert into src2 values ('id0', 0, 'red', 't1'), ('id1', 1, 'yellow', 't2'), ('id2', 2, 'blue', 't3'), ('id3', 3, 'blue red', 't4');
 
 select * from src2 where match(body, title) against('red');
+select *, match(body, title) against('+red' in boolean mode)  from src2 where match(body, title) against('+red' in boolean mode);
+select *, match(body, title) against('+red' in boolean mode)  from src2 where match(body, title) against('+red' in boolean mode) limit 1;
 select src2.*, match(body, title) against('blue') from src2;
 
 desc src2;

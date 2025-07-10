@@ -360,7 +360,7 @@ func Test_processPhyScope(t *testing.T) {
 
 			explainPhyPlan := models.ExplainPhyPlan(phyPlan, statsInfo, models.NormalOption)
 			t.Logf("%s", explainPhyPlan)
-			processPhyScope(&tt.args.scope, tt.args.nodes, new(statistic.StatsInfo))
+			processPhyScope(&tt.args.scope, nil, tt.args.nodes, new(statistic.StatsInfo))
 		})
 	}
 }

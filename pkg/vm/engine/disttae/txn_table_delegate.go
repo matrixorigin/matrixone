@@ -71,6 +71,8 @@ func newTxnTableWithItem(
 		comment:       item.Comment,
 		createSql:     item.CreateSql,
 		constraint:    item.Constraint,
+		partitioned:   item.Partitioned,
+		partition:     item.Partition,
 		extraInfo:     item.ExtraInfo,
 		lastTS:        db.op.SnapshotTS(),
 		eng:           eng,
@@ -386,9 +388,10 @@ func (tbl *txnTableDelegate) CollectTombstones(
 func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 	ctx context.Context,
 	name string,
+	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
 	if tbl.partition.is {
-		return tbl.partition.tbl.GetColumMetadataScanInfo(ctx, name)
+		return tbl.partition.tbl.GetColumMetadataScanInfo(ctx, name, visitTombstone)
 	}
 
 	is, err := tbl.isLocal()
@@ -399,6 +402,7 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 		return tbl.origin.GetColumMetadataScanInfo(
 			ctx,
 			name,
+			visitTombstone,
 		)
 	}
 
@@ -659,6 +663,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 	to types.TS,
 	bat *batch.Batch,
 	pkIndex int32,
+	partitionIndex int32,
 ) (bool, error) {
 	if tbl.partition.is {
 		return tbl.partition.tbl.PrimaryKeysMayBeModified(
@@ -667,6 +672,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 			to,
 			bat,
 			pkIndex,
+			partitionIndex,
 		)
 	}
 
@@ -681,6 +687,7 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 			to,
 			bat,
 			pkIndex,
+			partitionIndex,
 		)
 	}
 
@@ -1030,6 +1037,10 @@ func (tbl *txnTableDelegate) GetProcess() any {
 		return tbl.partition.tbl.GetProcess()
 	}
 	return tbl.origin.GetProcess()
+}
+
+func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
+	return tbl.origin.extraInfo
 }
 
 func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {

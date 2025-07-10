@@ -31,6 +31,8 @@ func getLogger(sid string) *log.MOLogger {
 	return runtime.ServiceRuntime(sid).Logger().Named("lockservice")
 }
 
+const maxLogRowCnt = 100
+
 func logLocalLock(
 	logger *log.MOLogger,
 	txn *activeTxn,
@@ -143,12 +145,17 @@ func logLocalLockFailed(
 	}
 
 	if logger.Enabled(zap.ErrorLevel) {
+		var rs [][]byte
+		if len(rows) > maxLogRowCnt {
+			rs = rows[:100]
+		}
 		logger.Log(
 			"failed to lock on local",
 			getLogOptions(zap.ErrorLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
-			bytesArrayField("rows", rows),
+			bytesArrayField("rows", rs),
+			zap.Int("row count", len(rows)),
 			zap.String("opts", options.DebugString()),
 			zap.Error(err),
 		)
@@ -271,12 +278,16 @@ func logRemoteLockFailed(
 	if logger == nil {
 		return
 	}
-
+	var rs [][]byte
+	if len(rows) > maxLogRowCnt {
+		rs = rows[:100]
+	}
 	logger.Log(
 		"failed to lock on remote",
 		getLogOptions(zap.ErrorLevel),
 		txnField(txn),
-		bytesArrayField("rows", rows),
+		bytesArrayField("rows", rs),
+		zap.Int("row count", len(rows)),
 		zap.String("opts", opts.DebugString()),
 		zap.String("remote", remote.DebugString()),
 		zap.Error(err),

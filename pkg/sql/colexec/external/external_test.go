@@ -476,6 +476,19 @@ func TestReadDirSymlink(t *testing.T) {
 	)
 	assert.Nil(t, err)
 
+	// sync root dir
+	f, err := os.Open(root)
+	assert.Nil(t, err)
+	err = f.Sync()
+	assert.Nil(t, err)
+	err = f.Close()
+	assert.Nil(t, err)
+
+	// ensure symlink is valid
+	actual, err := filepath.EvalSymlinks(filepath.Join(root, "a", "b", "d"))
+	assert.Nil(t, err)
+	assert.Equal(t, filepath.Join(root, "a", "b", "c"), actual)
+
 	// read a/b/d/foo
 	fooPathInB := filepath.Join(root, "a", "b", "d", "foo")
 	files, _, err := plan2.ReadDir(&tree.ExternParam{

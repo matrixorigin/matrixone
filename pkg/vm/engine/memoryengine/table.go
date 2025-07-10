@@ -469,11 +469,11 @@ func (t *Table) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, error) 
 	return nil, nil, nil
 }
 
-func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	return nil, nil
 }
 
-func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx int32) (bool, error) {
+func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, bat *batch.Batch, idx, _ int32) (bool, error) {
 	return true, nil
 }
 
@@ -494,5 +494,9 @@ func (t *Table) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.Obj
 }
 
 func (t *Table) Reset(op client.TxnOperator) error {
+	return nil
+}
+
+func (t *Table) GetExtraInfo() *api.SchemaExtra {
 	return nil
 }

@@ -87,14 +87,15 @@ func (h *hackAggExecToTest) Free() {
 	h.isFree = true
 }
 
-func hackMakeAggToTest(cnt int) *hackAggExecToTest {
+func hackMakeAggToTest(cnt int) (*hackAggExecToTest, func()) {
+	originalMakeAggExec := makeAggExec
 	exec := &hackAggExecToTest{
 		toFlush: cnt,
 	}
-	makeAggExec = func(_ aggexec.AggMemoryManager, _ int64, _ bool, _ ...types.Type) aggexec.AggFuncExec {
-		return exec
+	makeAggExec = func(_ aggexec.AggMemoryManager, _ int64, _ bool, _ ...types.Type) (aggexec.AggFuncExec, error) {
+		return exec, nil
 	}
-	return exec
+	return exec, func() { makeAggExec = originalMakeAggExec }
 }
 
 // Group算子的单元测试需要验证以下内容：
@@ -133,7 +134,8 @@ func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
 	{
 		before := proc.Mp().CurrNB()
 
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		datas := []*batch.Batch{
 			getGroupTestBatch(proc.Mp(), [][2]int64{
 				{1, 1},
@@ -193,7 +195,8 @@ func TestGroup_GetFinalEvaluation_NoneGroupBy(t *testing.T) {
 	{
 		before := proc.Mp().CurrNB()
 
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		datas := []*batch.Batch{
 			nil,
 		}
@@ -239,7 +242,8 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 	{
 		before := proc.Mp().CurrNB()
 
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		datas := []*batch.Batch{
 			getGroupTestBatch(proc.Mp(), [][2]int64{
 				{1, 1},
@@ -310,7 +314,8 @@ func TestGroup_GetFinalEvaluation_WithGroupBy(t *testing.T) {
 	// datasource is empty.
 	{
 		before := proc.Mp().CurrNB()
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		datas := []*batch.Batch{
 			nil,
 		}
@@ -344,7 +349,8 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 	{
 		before := proc.Mp().CurrNB()
 
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		datas := []*batch.Batch{
 			getGroupTestBatch(proc.Mp(), [][2]int64{
 				{1, 1},
@@ -376,7 +382,8 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 		}
 
 		// return nothing for EmptyBatch and return nil.
-		exec2 := hackMakeAggToTest(1)
+		exec2, restore := hackMakeAggToTest(1)
+		defer restore()
 		r, err = g.Call(proc)
 		require.NoError(t, err)
 		require.Nil(t, r.Batch)
@@ -394,7 +401,8 @@ func TestGroup_GetIntermediateResult_NoneGroupBy(t *testing.T) {
 	{
 		before := proc.Mp().CurrNB()
 
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		datas := []*batch.Batch{
 			batch.EmptyBatch,
 			nil,
@@ -463,7 +471,8 @@ func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
 			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(1)}, nil),
 		}
 
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		require.NoError(t, src.Prepare(proc))
 		require.NoError(t, g.Prepare(proc))
 
@@ -481,7 +490,8 @@ func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
 		}
 
 		// get from datas[1]
-		exec2 := hackMakeAggToTest(1)
+		exec2, restore := hackMakeAggToTest(1)
+		defer restore()
 		r, err = g.Call(proc)
 		require.NoError(t, err)
 		require.NotNil(t, r.Batch)
@@ -521,7 +531,8 @@ func TestGroup_GetIntermediateResult_WithGroupBy(t *testing.T) {
 			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newColumnExpression(1)}, nil),
 		}
 
-		exec := hackMakeAggToTest(1)
+		exec, restore := hackMakeAggToTest(1)
+		defer restore()
 		require.NoError(t, src.Prepare(proc))
 		require.NoError(t, g.Prepare(proc))
 

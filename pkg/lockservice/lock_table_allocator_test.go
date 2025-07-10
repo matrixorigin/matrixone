@@ -320,6 +320,68 @@ func TestCtlCanRemovedByNotActiveTxn(t *testing.T) {
 		})
 }
 
+func TestTryRebindLocked(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			// Test case 1: New service has newer timestamp and same UUID
+			oldServiceID := "1234567890123456789uuid1"
+			newServiceID := "1234567890123456790uuid1" // newer timestamp
+			old := pb.LockTable{
+				Table:     1,
+				ServiceID: oldServiceID,
+				Valid:     true,
+				Version:   1,
+			}
+			binds := a.registerService(newServiceID)
+			result := a.tryRebindLocked(binds, 0, old, 1)
+			assert.True(t, result.Valid)
+			assert.Equal(t, newServiceID, result.ServiceID)
+			assert.Equal(t, uint64(2), result.Version)
+
+			// Test case 2: Old binding is still valid
+			old = pb.LockTable{
+				Table:     2,
+				ServiceID: "s1",
+				Valid:     true,
+				Version:   1,
+			}
+			binds = a.registerService("s2")
+			result = a.tryRebindLocked(binds, 0, old, 2)
+			assert.True(t, result.Valid)
+			assert.Equal(t, "s1", result.ServiceID)
+			assert.Equal(t, uint64(1), result.Version)
+
+			// Test case 3: Old binding is invalid and new service can bind
+			old = pb.LockTable{
+				Table:     3,
+				ServiceID: "s3",
+				Valid:     false,
+				Version:   1,
+			}
+			binds = a.registerService("s4")
+			result = a.tryRebindLocked(binds, 0, old, 3)
+			assert.True(t, result.Valid)
+			assert.Equal(t, "s4", result.ServiceID)
+			assert.Equal(t, uint64(2), result.Version)
+
+			// Test case 4: Old binding is invalid and new service cannot bind
+			old = pb.LockTable{
+				Table:     4,
+				ServiceID: "s5",
+				Valid:     false,
+				Version:   1,
+			}
+			binds = a.registerService("s6")
+			binds.disable() // Make the new service unable to bind
+			result = a.tryRebindLocked(binds, 0, old, 4)
+			assert.False(t, result.Valid)
+			assert.Equal(t, "s5", result.ServiceID)
+			assert.Equal(t, uint64(1), result.Version)
+		})
+}
+
 func BenchmarkValid(b *testing.B) {
 	runValidBenchmark(b, "1-table", 1)
 	runValidBenchmark(b, "10-table", 10)

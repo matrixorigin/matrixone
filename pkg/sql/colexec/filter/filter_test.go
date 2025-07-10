@@ -18,8 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 type filterTestCase struct {
@@ -45,9 +44,6 @@ func init() {
 	boolType := types.T_bool.ToType()
 	int32Type := types.T_int32.ToType()
 
-	fr0, _ := function.GetFunctionByName(context.TODO(), "and", []types.Type{boolType, boolType})
-	fid0 := fr0.GetEncodedOverloadID()
-
 	fr1, _ := function.GetFunctionByName(context.TODO(), ">", []types.Type{int32Type, int32Type})
 	fid1 := fr1.GetEncodedOverloadID()
 
@@ -59,27 +55,29 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Filter{
-				E: &plan.Expr{
-					Typ: plan2.MakePlan2Type(&boolType),
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: &plan.ObjectRef{
-								ObjName: ">",
-								Obj:     fid1,
-							},
+				FilterExprs: []*plan.Expr{
+					{
+						Typ: plan2.MakePlan2Type(&boolType),
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: ">",
+									Obj:     fid1,
+								},
 
-							Args: []*plan.Expr{
-								{
-									Typ: plan2.MakePlan2Type(&int32Type),
-									Expr: &plan.Expr_Col{
-										Col: &plan.ColRef{
-											RelPos: 0,
-											ColPos: 0,
-											Name:   "a",
+								Args: []*plan.Expr{
+									{
+										Typ: plan2.MakePlan2Type(&int32Type),
+										Expr: &plan.Expr_Col{
+											Col: &plan.ColRef{
+												RelPos: 0,
+												ColPos: 0,
+												Name:   "a",
+											},
 										},
 									},
+									makePlan2Int32ConstExprWithType(10),
 								},
-								makePlan2Int32ConstExprWithType(10),
 							},
 						},
 					},
@@ -98,64 +96,53 @@ func init() {
 		{
 			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
 			arg: &Filter{
-				E: &plan.Expr{
-					Typ: plan2.MakePlan2Type(&boolType),
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: &plan.ObjectRef{
-								ObjName: "and",
-								Obj:     fid0,
-							},
-							Args: []*plan.Expr{
-								{
-									Typ: plan2.MakePlan2Type(&boolType),
-									Expr: &plan.Expr_F{
-										F: &plan.Function{
-											Func: &plan.ObjectRef{
-												ObjName: ">",
-												Obj:     fid1,
-											},
-
-											Args: []*plan.Expr{
-												{
-													Typ: plan2.MakePlan2Type(&int32Type),
-													Expr: &plan.Expr_Col{
-														Col: &plan.ColRef{
-															RelPos: 0,
-															ColPos: 0,
-															Name:   "a",
-														},
-													},
-												},
-												makePlan2Int32ConstExprWithType(10),
-											},
-										},
-									},
+				FilterExprs: []*plan.Expr{
+					{
+						Typ: plan2.MakePlan2Type(&boolType),
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: ">",
+									Obj:     fid1,
 								},
-								{
-									Typ: plan2.MakePlan2Type(&boolType),
-									Expr: &plan.Expr_F{
-										F: &plan.Function{
-											Func: &plan.ObjectRef{
-												ObjName: "<",
-												Obj:     fid2,
-											},
 
-											Args: []*plan.Expr{
-												{
-													Typ: plan2.MakePlan2Type(&int32Type),
-													Expr: &plan.Expr_Col{
-														Col: &plan.ColRef{
-															RelPos: 0,
-															ColPos: 1,
-															Name:   "b",
-														},
-													},
-												},
-												makePlan2Int32ConstExprWithType(40),
+								Args: []*plan.Expr{
+									{
+										Typ: plan2.MakePlan2Type(&int32Type),
+										Expr: &plan.Expr_Col{
+											Col: &plan.ColRef{
+												RelPos: 0,
+												ColPos: 0,
+												Name:   "a",
 											},
 										},
 									},
+									makePlan2Int32ConstExprWithType(10),
+								},
+							},
+						},
+					},
+					{
+						Typ: plan2.MakePlan2Type(&boolType),
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: "<",
+									Obj:     fid2,
+								},
+
+								Args: []*plan.Expr{
+									{
+										Typ: plan2.MakePlan2Type(&int32Type),
+										Expr: &plan.Expr_Col{
+											Col: &plan.ColRef{
+												RelPos: 0,
+												ColPos: 1,
+												Name:   "b",
+											},
+										},
+									},
+									makePlan2Int32ConstExprWithType(40),
 								},
 							},
 						},

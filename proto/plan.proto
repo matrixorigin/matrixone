@@ -367,6 +367,15 @@ message CheckDef {
 	Expr check	= 2;
 }
 
+
+message Partition {
+	repeated PartitionDef PartitionDefs = 1;
+}
+
+message PartitionDef {
+	Expr def	= 1;
+}
+
 message ClusterByDef {
 	// XXX: Deprecated and to be removed soon. letter case: lower ?
 	string name = 1;
@@ -432,6 +441,10 @@ message TableDef {
 
 	string db_name = 32;
 	uint64 db_id = 33;
+
+	Partition partition = 34;
+
+	uint64 FeatureFlag = 35;
 }
 
 message TableFunction{
@@ -585,6 +598,7 @@ message UpdateCtx {
 
 	repeated ColRef insert_cols	= 7 [(gogoproto.nullable) = false];
 	repeated ColRef delete_cols	= 8 [(gogoproto.nullable) = false];
+	repeated ColRef partition_cols	= 9 [(gogoproto.nullable) = false];
 }
 
 message InsertCtx {
@@ -908,8 +922,10 @@ message LockTarget {
 	int32 primary_col_rel_pos  = 11;
 	int32 filter_col_rel_pos  = 12;
 	Expr lock_rows = 13;
-    bool lock_table_at_the_end = 14;
-    ObjectRef obj_ref = 15;
+	bool lock_table_at_the_end = 14;
+	ObjectRef obj_ref = 15;
+	int32 partition_col_idx_in_bat = 16;
+	bool has_partition_col = 17;
 }
 
 message PreInsertUkCtx {
@@ -936,6 +952,7 @@ message RuntimeFilterSpec {
 	bool match_prefix = 2;
 	int32 upper_limit = 3;
 	Expr expr = 4;
+	bool not_on_pk = 5;
 }
 
 message IdList {
@@ -980,7 +997,7 @@ message Query {
 		UNKNOWN		= 0;
 		SELECT		= 1;
 		INSERT		= 2;
-		REPLACE   = 3;
+		REPLACE     = 3;
 		DELETE		= 4;
 		UPDATE		= 5;
 		MERGE		= 6;
@@ -1016,6 +1033,8 @@ message Query {
 
 	//detectSqls are sqls detect fk self refer constraint
 	repeated string detectSqls= 8;
+
+	repeated Query background_queries = 9;
 }
 
 message TransationControl {
@@ -1131,6 +1150,8 @@ message DataDefinition {
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
 		RENAME_TABLE = 35;
+		CREATE_PITR = 36;
+		DROP_PITR = 37;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1160,6 +1181,8 @@ message DataDefinition {
 		AlterSequence  alter_sequence   = 19;
 		CreateView  create_view         = 20;
 		RenameTable rename_table 	    = 21;
+		CreatePitr create_pitr = 100;
+		DropPitr drop_pitr = 101;
 	}
 }
 
@@ -1243,7 +1266,6 @@ message CreateTable {
 
 	int64 retention_deadline = 14;
 	string RawSQL            = 15;
-	bool   IsPartition       = 16;
 }
 
 message AlterTableDrop {
@@ -1321,6 +1343,12 @@ message RenameTable {
 	repeated AlterTable alter_tables = 1;
 }
 
+message AlterVarcharLength {
+	string column_name = 1;
+	int32 new_length = 2;
+	int32 old_length = 3;
+}
+
 message AlterTable {
 	enum AlgorithmType {
 		DEFAULT = 0;
@@ -1339,6 +1367,7 @@ message AlterTable {
 			AlterAddColumn add_column = 7;
 			AlterDropColumn drop_column = 8;
 			AlterTableAlterReIndex alter_reindex = 9;
+			AlterVarcharLength alter_varchar_length = 10;
 		};
 	}
 	string database			      = 1;
@@ -1355,6 +1384,7 @@ message AlterTable {
 	// alter table may insert fk records related to this table
 	// into mo_foreign_keys
 	repeated string updateFkSqls = 11;
+	string RawSQL            = 12;
 }
 
 message DropTable {
@@ -1529,4 +1559,26 @@ message MetadataScanInfo {
 	int64 compress_size = 9;
 	int64 origin_size   = 10;
 	bytes zone_map      = 11;
+}
+
+message CreatePitr {
+  bool if_not_exists = 1;
+  string name = 2;
+  int32 level = 3;
+  string account_name = 4;
+  string database_name = 5;
+  string table_name = 6;
+  int64 pitr_value = 7;
+  string pitr_unit = 8;
+	uint64 database_id = 9;
+	uint64 table_id = 10;
+	uint32 account_id = 11;
+	uint32 current_account_id = 12;
+	string current_account = 13;
+	bool origin_account_name = 14;
+}
+
+message DropPitr {
+  bool if_exists = 1;
+  string name = 2;
 }

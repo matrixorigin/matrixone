@@ -109,6 +109,7 @@ type lockTarget struct {
 	primaryColumnIndexInBatch    int32
 	refreshTimestampIndexInBatch int32
 	primaryColumnType            types.Type
+	partitionColumnIndexInBatch  int32
 	filter                       RowsFilter
 	filterColIndexInBatch        int32
 	lockTable                    bool
@@ -129,6 +130,7 @@ type hasNewVersionInRangeFunc func(
 	eng engine.Engine,
 	bat *batch.Batch,
 	idx int32,
+	partitionIdx int32,
 	from, to timestamp.Timestamp) (bool, error)
 
 type state struct {

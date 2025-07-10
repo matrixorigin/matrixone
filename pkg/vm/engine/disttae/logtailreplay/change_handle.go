@@ -464,7 +464,9 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 		}
 	} else {
 		for i, vec := range (*bat).Vecs {
-			appendFromEntry(h.currentBatch.Vecs[i], vec, h.rowOffsetCursor, mp)
+			for rowOffset := start; rowOffset < end; rowOffset++ {
+				appendFromEntry(h.currentBatch.Vecs[i], vec, rowOffset, mp)
+			}
 		}
 	}
 	(*bat).SetRowCount((*bat).Vecs[0].Length())

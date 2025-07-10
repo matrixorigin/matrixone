@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (s *service) getMetadataByListType(
+func (s *Service) getMetadataByListType(
 	option *tree.PartitionOption,
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
@@ -48,6 +48,7 @@ func (s *service) getMetadataByListType(
 
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
 			tree.WithEscapeSingleQuoteString(),
 		)
 		method.Expr.Format(ctx)
@@ -75,6 +76,7 @@ func (s *service) getMetadataByListType(
 		func(p *tree.Partition) string {
 			ctx := tree.NewFmtCtx(
 				dialect.MYSQL,
+				tree.WithQuoteIdentifier(),
 				tree.WithEscapeSingleQuoteString(),
 			)
 			p.Values.Format(ctx)

@@ -17,10 +17,12 @@ package test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand"
+	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -55,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -64,6 +67,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	taerpc "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -4807,6 +4811,18 @@ func TestReadCheckpoint(t *testing.T) {
 	entries := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
 		t.Log(entry.String())
+		t.Log(entry.JsonString())
+		ranges, err := entry.GetTableRanges(ctx, common.CheckpointAllocator, tae.Runtime.Fs)
+		assert.NoError(t, err)
+		rangeJson, err := json.Marshal(ranges)
+		assert.NoError(t, err)
+		t.Log(string(rangeJson))
+
+		ranges, err = entry.GetTableRangesByID(ctx, 1000, common.CheckpointAllocator, tae.Runtime.Fs)
+		assert.NoError(t, err)
+		rangeJson, err = json.Marshal(ranges)
+		assert.NoError(t, err)
+		t.Log(string(rangeJson))
 	}
 	for _, entry := range entries {
 		for _, tid := range tids {
@@ -6735,6 +6751,7 @@ func TestAppendAndGC2(t *testing.T) {
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	opts.CheckpointCfg.MinCount = 3
 	opts.CheckpointCfg.GlobalMinCount = 5
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 10
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	db := tae.DB
@@ -6846,6 +6863,7 @@ func TestSnapshotGC(t *testing.T) {
 
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
+	opts.CheckpointCfg.GlobalVersionInterval = 20 * time.Minute
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
@@ -7163,7 +7181,11 @@ func TestSnapshotMeta(t *testing.T) {
 		data1.Vecs[0].Append(uint64(0), false)
 		data1.Vecs[1].Append(uint64(0), false)
 		data1.Vecs[2].Append(snapshot, false)
-		data1.Vecs[3].Append(types.Enum(1), false)
+		if i == 0 {
+			data1.Vecs[3].Append(types.Enum(2), false)
+		} else {
+			data1.Vecs[3].Append(types.Enum(1), false)
+		}
 		data1.Vecs[4].Append(uint64(0), false)
 		data1.Vecs[5].Append(uint64(0), false)
 		data1.Vecs[6].Append(uint64(0), false)
@@ -10273,7 +10295,7 @@ func TestPersistTransferTable(t *testing.T) {
 	createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 	now := time.Now()
-	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs, time.Second, time.Minute, createdObjs)
+	page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, time.Minute, createdObjs)
 	ids := make([]types.Rowid, 10)
 	transferMap := make(api.TransferMap)
 	for i := 0; i < 10; i++ {
@@ -10286,9 +10308,8 @@ func TestPersistTransferTable(t *testing.T) {
 	page.Train(transferMap)
 	tae.Runtime.TransferTable.AddPage(page)
 
-	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 	ioVector := fileservice.IOVector{
-		FilePath: name.String(),
+		FilePath: model.GetTransferFileName(),
 	}
 	offset := int64(0)
 	data := page.Marshal()
@@ -10299,7 +10320,11 @@ func TestPersistTransferTable(t *testing.T) {
 	}
 	ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-	err := tae.Runtime.Fs.Write(context.Background(), ioVector)
+	transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{Name: "transfer"})
+	if err != nil {
+		return
+	}
+	err = transferFS.Write(context.Background(), ioVector)
 	if err != nil {
 		return
 	}
@@ -10341,7 +10366,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 			createdObjs := []*objectio.ObjectId{objectio.NewObjectidWithSegmentIDAndNum(sid, 2)}
 
 			now := time.Now()
-			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.LocalFs, time.Second, 2*time.Second, createdObjs)
+			page := model.NewTransferHashPage(&id1, now, false, tae.Runtime.TmpFS, time.Second, 2*time.Second, createdObjs)
 			ids := make([]types.Rowid, 10)
 			transferMap := make(api.TransferMap)
 			for i := 0; i < 10; i++ {
@@ -10355,9 +10380,8 @@ func TestClearPersistTransferTable(t *testing.T) {
 			page.Train(transferMap)
 			tae.Runtime.TransferTable.AddPage(page)
 
-			name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
 			ioVector := fileservice.IOVector{
-				FilePath: name.String(),
+				FilePath: model.GetTransferFileName(),
 			}
 			offset := int64(0)
 			data := page.Marshal()
@@ -10368,7 +10392,11 @@ func TestClearPersistTransferTable(t *testing.T) {
 			}
 			ioVector.Entries = append(ioVector.Entries, ioEntry)
 
-			err := tae.Runtime.Fs.Write(context.Background(), ioVector)
+			transferFS, err := tae.Runtime.TmpFS.GetOrCreateApp(&fileservice.AppConfig{Name: "transfer"})
+			if err != nil {
+				return
+			}
+			err = transferFS.Write(context.Background(), ioVector)
 			if err != nil {
 				return
 			}
@@ -12070,4 +12098,367 @@ func Test_ReplayGlobalCheckpoint(t *testing.T) {
 	bat2, err := reader.GetCheckpointData(ctx)
 	assert.NoError(t, err)
 	defer bat2.Clean(common.DebugAllocator)
+}
+
+func Test_ApplyTableData(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	tae.CompactBlocks(true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dir := "Test_ApplyTableData"
+
+	dumpArg := taerpc.NewDumpTableArg(
+		ctx,
+		tableEntry,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err := dumpArg.Run()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	applyArg, err := taerpc.NewApplyTableDataArg(
+		ctx,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		"db2",
+		"table2",
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	err = applyArg.Run()
+	assert.NoError(t, err)
+
+	txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
+	assert.NoError(t, txn.Commit(ctx))
+	for i := 0; i < colCount; i++ {
+		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
+		assert.Equal(t, 2, rows)
+	}
+
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func Test_ApplyTableData2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	tae.DoAppend(bat)
+	tae.DeleteAll(true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dir := "Test_ApplyTableData"
+
+	dumpArg := taerpc.NewDumpTableArg(
+		ctx,
+		tableEntry,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err := dumpArg.Run()
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	applyArg, err := taerpc.NewApplyTableDataArg(
+		ctx,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		"db2",
+		"table2",
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectGCDumpTable("")
+	assert.NoError(t, err)
+	err = applyArg.Run()
+	assert.Error(t, err)
+	rmFn()
+
+	applyArg, err = taerpc.NewApplyTableDataArg(
+		ctx,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		"db2",
+		"table2",
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	err = applyArg.Run()
+	assert.NoError(t, err)
+
+	txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
+	newDBID := rel.GetMeta().(*catalog.TableEntry).GetDB().ID
+	newTableID := rel.GetMeta().(*catalog.TableEntry).ID
+
+	assert.NoError(t, txn.Commit(ctx))
+	for i := 0; i < colCount; i++ {
+		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
+		assert.Equal(t, 0, rows)
+	}
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	_, close, err := logtail.HandleSyncLogTailReq(context.TODO(), new(dummyCpkGetter), tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
+		CnHave: totsp(types.TS{}),
+		CnWant: totsp(types.MaxTs()),
+		Table:  &api.TableID{DbId: newDBID, TbId: newTableID},
+	}, false)
+	assert.Nil(t, err)
+	close()
+}
+
+func TestDumpTableFileNameDecode(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.EnableApplyTableData = true
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	colCount := 2
+	schema := catalog.MockSchema(colCount, -1)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 2)
+
+	tae.CreateRelAndAppend2(bat, true)
+	txn, table := tae.GetRelation()
+	tableEntry := table.GetMeta().(*catalog.TableEntry)
+	assert.NoError(t, txn.Commit(ctx))
+
+	dir := taerpc.GetDumpTableDir(tableEntry.ID, tae.TxnMgr.Now())
+
+	dumpArg := taerpc.NewDumpTableArg(
+		ctx,
+		tableEntry,
+		dir,
+		taerpc.MockInspectContext(tae.DB),
+		common.DebugAllocator,
+		tae.Opts.Fs,
+	)
+	err := dumpArg.Run()
+	assert.NoError(t, err)
+
+	needGC, err := taerpc.GCDumpTableFiles(dir, tae.Opts.Fs)
+	assert.NoError(t, err)
+	assert.False(t, needGC)
+
+	_, _, _, err = taerpc.DecodeDumpTableDir("a_b")
+	assert.Error(t, err)
+	_, _, _, err = taerpc.DecodeDumpTableDir("a_b_c")
+	assert.Error(t, err)
+	_, _, _, err = taerpc.DecodeDumpTableDir("1000_b_c")
+	assert.Error(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(3))
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectGCDumpTable("")
+	assert.NoError(t, err)
+	defer rmFn()
+	needGC, err = taerpc.GCDumpTableFiles(dir, tae.Opts.Fs)
+	assert.NoError(t, err)
+	assert.True(t, needGC)
+}
+func Test_TmpFileService1(t *testing.T) {
+	ctx := context.Background()
+
+	dir := testutils.InitTestEnv(ModuleName, t)
+	tmpFS, err := fileservice.NewTestTmpFileService("TMP", path.Join(dir, "tmp"), time.Millisecond*100)
+	assert.NoError(t, err)
+	defer tmpFS.Close(ctx)
+
+	getNameFn := func() string {
+		now := time.Now()
+		return fmt.Sprintf("test_%v", now.Format("2006-01-02.15.04.05.000.MST"))
+	}
+	decodeNameFn := func(name string) (time.Time, error) {
+		strs := strings.Split(name, "_")
+		return time.Parse("2006-01-02.15.04.05.000.MST", strs[1])
+	}
+
+	testFS, err := tmpFS.GetOrCreateApp(&fileservice.AppConfig{
+		Name: "test",
+		GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
+			createTime, err := decodeNameFn(filePath)
+			if err != nil {
+				return
+			}
+			if time.Since(createTime) > time.Millisecond*100 {
+				neesGC = true
+				if err = fs.Delete(context.Background(), filePath); err != nil {
+					return
+				}
+				return
+			}
+			return
+		},
+	})
+	assert.NoError(t, err)
+
+	testFS.Name()
+	{
+		name := model.GetTransferFileName()
+		_, err = model.DecodeTransferFileName(name)
+		assert.NoError(t, err)
+	}
+	data := []byte("test")
+	ioEntry := fileservice.IOEntry{
+		Offset: 0,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+
+	filePath := getNameFn()
+	err = testFS.Write(
+		ctx,
+		fileservice.IOVector{
+			FilePath: filePath,
+			Entries:  []fileservice.IOEntry{ioEntry},
+		},
+	)
+	assert.NoError(t, err)
+	_, err = testFS.StatFile(ctx, filePath)
+	assert.NoError(t, err)
+	listFn := func() []string {
+		entries := testFS.List(ctx, "")
+		files := make([]string, 0)
+		for entry, err := range entries {
+			if err != nil {
+				continue
+			}
+			files = append(files, entry.Name)
+		}
+		return files
+	}
+
+	files := listFn()
+	assert.Equal(t, 1, len(files), "files are %v", files)
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			files := listFn()
+			return len(files) == 0
+		},
+	)
+
+	files = listFn()
+	assert.Equal(t, 0, len(files), "files are %v", files)
+
+}
+
+func Test_TmpFileService2(t *testing.T) {
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	tae.Runtime.TmpFS.Delete(ctx, "transfer")
+	transferFS, err := model.GetTransferFS(tae.Runtime.TmpFS)
+	assert.NoError(t, err)
+
+	name := model.GetTransferFileName()
+	data := []byte("test")
+	ioEntry := fileservice.IOEntry{
+		Offset: 0,
+		Size:   int64(len(data)),
+		Data:   data,
+	}
+	err = transferFS.Write(
+		ctx,
+		fileservice.IOVector{
+			FilePath: name,
+			Entries:  []fileservice.IOEntry{ioEntry},
+		},
+	)
+	assert.NoError(t, err)
+
+	listFn := func() []string {
+		entries := transferFS.List(ctx, "")
+		files := make([]string, 0)
+		for entry, err := range entries {
+			if err != nil {
+				continue
+			}
+			files = append(files, entry.Name)
+		}
+		return files
+	}
+
+	files := listFn()
+	assert.Equal(t, 1, len(files), "files are %v", files)
+
+	neesGC, err := model.TransferFileGCFn(name, transferFS)
+	assert.NoError(t, err)
+	assert.False(t, neesGC)
+}
+
+func TestTNCatalogEventSource(t *testing.T) {
+	ctx := context.Background()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+
+	source := &merge.TNCatalogEventSource{
+		Catalog:    tae.Catalog,
+		TxnManager: tae.TxnMgr,
+	}
+
+	require.Nil(t, source.GetMergeSettingsBatchFn()) // no mo_merge_settings table
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+	assert.NoError(t, err)
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.Name = pkgcatalog.MO_MERGE_SETTINGS
+	initData := catalog.MockBatch(schema, 1)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	rel.Append(ctx, initData)
+	assert.NoError(t, txn.Commit(ctx))
+
+	bat, free := source.GetMergeSettingsBatchFn()()
+	defer free()
+	require.NotNil(t, bat)
+
 }

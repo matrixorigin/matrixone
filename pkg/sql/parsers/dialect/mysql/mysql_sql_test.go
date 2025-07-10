@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -78,6 +79,64 @@ func TestOriginSQL(t *testing.T) {
 	out := tree.String(ast, dialect.MYSQL)
 	if orginSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", orginSQL.output, out)
+	}
+}
+
+var (
+	partitionSQL = struct {
+		input  string
+		output string
+	}{
+		input:  "create table `db_testalterpartitiontablewithaddcolumn_702488000`.`testalterpartitiontablewithaddcolumn_copy_01979b62-2421-7956-81bf-53bb3b5a0090` (`c` int default null comment 'abc', `b` int default null, `d` int default null) partition by hash (c) partitions 2",
+		output: "create table `db_testalterpartitiontablewithaddcolumn_702488000`.`testalterpartitiontablewithaddcolumn_copy_01979b62-2421-7956-81bf-53bb3b5a0090` (`c` int default null comment abc, `b` int default null, `d` int default null) partition by hash (`c`) partitions 2",
+	}
+)
+
+func TestQuoteIdentifer(t *testing.T) {
+	if partitionSQL.output == "" {
+		partitionSQL.output = partitionSQL.input
+	}
+	ast, err := ParseOne(context.TODO(), partitionSQL.input, 1)
+	if err != nil {
+		t.Errorf("Parse(%q) err: %v", partitionSQL.input, err)
+		return
+	}
+	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier())
+	if partitionSQL.output != out {
+		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
+	}
+}
+
+var (
+	pitrSQLs = []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create pitr pitr_d for database db1 range 1 'd' internal",
+			output: "create pitr pitr_d for database db1 range 1  d internal",
+		}, {
+			input:  "drop pitr pitr_d internal",
+			output: "drop pitr pitr_d internal",
+		},
+	}
+)
+
+func TestPitrInternal(t *testing.T) {
+	for _, pitrSQL := range pitrSQLs {
+		if pitrSQL.output == "" {
+			pitrSQL.output = pitrSQL.input
+		}
+		ast, err := ParseOne(context.TODO(), pitrSQL.input, 1)
+		if err != nil {
+			t.Errorf("Parse(%q) err: %v", pitrSQL.input, err)
+			return
+		}
+		out := tree.String(ast, dialect.MYSQL)
+		if pitrSQL.output != out {
+			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", pitrSQL.output, out)
+		}
+		require.Equal(t, ast.StmtKind().ExecLocation(), tree.EXEC_IN_ENGINE)
 	}
 }
 

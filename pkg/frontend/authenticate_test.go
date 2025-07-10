@@ -6440,6 +6440,12 @@ func Test_doAlterUser(t *testing.T) {
 			})
 			bh.sql2result[sql] = mrs
 
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "u1", moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
+				{0, 0},
+			})
+			bh.sql2result[sql] = mrs
+
 			sql = getSqlForUpdateStatusLockOfUserForever(userStatusLockForever, user.Username)
 			bh.sql2result[sql] = &MysqlResultSet{}
 		}
@@ -6487,6 +6493,12 @@ func Test_doAlterUser(t *testing.T) {
 			bh.sql2result[sql] = mrs
 
 			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "root", moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
+				{0, 0},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "u1", moAdminRoleID)
 			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
 				{0, 0},
 			})

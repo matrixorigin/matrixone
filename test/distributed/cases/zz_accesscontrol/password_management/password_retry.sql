@@ -39,7 +39,7 @@ alter user alter_user1 unlock;
 alter user alter_user1 identified by '1234';
 -- @session
 
--- @session:id=4&user=sys:alter_user1:role1&password=123
+-- @session:id=4&user=sys:alter_user1:role1&password=1234
 alter user alter_user1 unlock;
 alter user alter_user1 identified by '1234';
 -- @session

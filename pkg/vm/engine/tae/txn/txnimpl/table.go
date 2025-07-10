@@ -996,6 +996,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_UpdatePolicy,
 		apipb.AlterKind_AddPartition,
 		apipb.AlterKind_RenameColumn:
+	case apipb.AlterKind_ReplaceDef:
+		return nil
 	default:
 		return moerr.NewNYIf(ctx, "alter table %s", req.Kind.String())
 	}

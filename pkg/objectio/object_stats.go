@@ -179,7 +179,7 @@ func (des *ObjectStats) ObjectLocation() Location {
 
 func (des *ObjectStats) ConstructBlockId(id uint16) Blockid {
 	var blockId Blockid
-	BuildObjectBlockidTo(des.ObjectName(), id, blockId[:])
+	FillBlockidWithNameAndSeq(des.ObjectName(), id, blockId[:])
 	return blockId
 }
 

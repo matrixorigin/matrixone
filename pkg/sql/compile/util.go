@@ -92,6 +92,7 @@ var (
 	updateMoIndexesVisibleFormat                        = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
 	updateMoIndexesTruncateTableFormat                  = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
 	updateMoIndexesAlgoParams                           = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
+	updateMoMergeSettings                               = `update mo_catalog.mo_merge_settings set tid = %v where account_id = %v and tid = %v;`
 )
 
 var (
@@ -124,9 +125,9 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			pKeyMsg = "serial("
 			for i, part := range originTableDef.Pkey.Names {
 				if i == 0 {
-					pKeyMsg += part
+					pKeyMsg += "`" + part + "`"
 				} else {
-					pKeyMsg += "," + part
+					pKeyMsg += "," + "`" + part + "`"
 				}
 			}
 			pKeyMsg += ")"

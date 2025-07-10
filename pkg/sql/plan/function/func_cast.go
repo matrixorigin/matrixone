@@ -299,6 +299,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
 		types.T_datalink,
+		types.T_TS,
 	},
 
 	types.T_binary: {
@@ -392,6 +393,9 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_TS: {
 		types.T_TS,
+		types.T_varchar,
+		types.T_timestamp,
+		types.T_int64,
 	},
 
 	types.T_Rowid: {
@@ -501,7 +505,7 @@ func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = uuidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_TS:
 		s := vector.GenerateFunctionFixedTypeParameter[types.TS](from)
-		err = tsToOthers(proc.Ctx, s, *toType, result, length, selectList)
+		err = tsToOthers(proc, s, *toType, result, length, selectList)
 	case types.T_Rowid:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Rowid](from)
 		err = rowidToOthers(proc.Ctx, s, *toType, result, length, selectList)
@@ -1740,14 +1744,24 @@ func uuidToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uuid to %s", toType))
 }
 
-func tsToOthers(ctx context.Context,
+func tsToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.TS],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
-	if toType.Oid == types.T_TS {
+	switch toType.Oid {
+	case types.T_TS:
 		rs := vector.MustFunctionResult[types.TS](result)
 		return rs.DupFromParameter(source, length)
+	case types.T_varchar:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return tsToStr(proc.Ctx, source, rs, length, toType)
+	case types.T_timestamp:
+		rs := vector.MustFunctionResult[types.Timestamp](result)
+		return tsToTimestamp(proc, source, rs, length, toType)
+	case types.T_int64:
+		rs := vector.MustFunctionResult[int64](result)
+		return tsToInt64(proc.Ctx, source, rs, length, toType)
 	}
-	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
+	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from ts to %s", toType))
 }
 
 func rowidToOthers(ctx context.Context,
@@ -3880,15 +3894,23 @@ func strToSigned[T constraints.Signed](
 			}
 		} else {
 			if isBinary {
-				r, err := strconv.ParseInt(
-					hex.EncodeToString(v), 16, 64)
-				if err != nil {
-					if strings.Contains(err.Error(), "value out of range") {
-						// the string maybe non-visible,don't print it
+				var r int64
+				var num uint64
+				if len(v) == 0 {
+					return moerr.NewInvalidArg(ctx, "cast to int", v)
+				}
+				if len(v) > 8 {
+					return moerr.NewOutOfRange(ctx, "int", "")
+				}
+				for j := 0; j < len(v); j++ {
+					highNib := v[j] >> 4
+					lowNib := v[j] & 0x0F
+					num = (num << 8) | uint64(highNib)<<4 | uint64(lowNib)
+					if num > math.MaxInt64 {
 						return moerr.NewOutOfRange(ctx, "int", "")
 					}
-					return moerr.NewInvalidArg(ctx, "cast to int", r)
 				}
+				r = int64(num)
 				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
@@ -4538,6 +4560,82 @@ func uuidToStr(
 			}
 		}
 	}
+	return nil
+}
+
+func tsToStr(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.TS],
+	to *vector.FunctionResult[types.Varlena],
+	length int,
+	toType types.Type) error {
+
+	for i := 0; i < length; i++ {
+		tsVal, _ := from.GetValue(uint64(i))
+		str := tsVal.ToString()
+		result := []byte(str)
+
+		if err := to.AppendBytes(result, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+func tsToTimestamp(
+	proc *process.Process,
+	from vector.FunctionParameterWrapper[types.TS],
+	to *vector.FunctionResult[types.Timestamp],
+	length int,
+	toType types.Type) error {
+
+	for i := 0; i < length; i++ {
+		tsVal, _ := from.GetValue(uint64(i))
+
+		physical := tsVal.Physical()
+		seconds := int64(physical / 1e9)
+		nanos := int64(physical % 1e9)
+		t := time.Unix(seconds, nanos).UTC()
+		timeStr := t.Format("2006-01-02 15:04:05.999999")
+
+		zone := time.Local
+		if proc != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		val, err := types.ParseTimestamp(zone, timeStr, toType.Scale)
+
+		if err != nil {
+			return err
+		}
+
+		if err = to.Append(val, false); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func tsToInt64(
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.TS],
+	to *vector.FunctionResult[int64],
+	length int,
+	toType types.Type) error {
+
+	for i := 0; i < length; i++ {
+		tsVal, _ := from.GetValue(uint64(i))
+
+		physical := tsVal.Physical()
+		seconds := int64(physical / 1e9)
+
+		if err := to.Append(seconds, false); err != nil {
+			return err
+		}
+
+	}
+
 	return nil
 }
 

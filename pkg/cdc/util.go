@@ -859,3 +859,12 @@ func compositedUriInfo(uri string, uriPrefix string) (bool, UriInfo) {
 		PasswordEnd:   passwordEnd,
 	}
 }
+
+func parseFrequencyToDuration(freq string) time.Duration {
+	if strings.HasSuffix(freq, "h") {
+		hours, _ := strconv.Atoi(strings.TrimSuffix(freq, "h"))
+		return time.Duration(hours) * time.Hour
+	}
+	minutes, _ := strconv.Atoi(strings.TrimSuffix(freq, "m"))
+	return time.Duration(minutes) * time.Minute
+}

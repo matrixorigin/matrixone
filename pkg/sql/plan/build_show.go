@@ -112,7 +112,10 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}()
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -169,7 +172,10 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		return nil, err
 	}
 
-	_, tableDef := ctx.Resolve(dbName, tblName, snapshot)
+	_, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInputf(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
@@ -408,7 +414,10 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -453,7 +462,10 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -513,7 +525,10 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	obj, tableDef := ctx.Resolve(dbName, tblName, nil)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
@@ -803,13 +818,17 @@ func buildShowTriggers(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	var snapshot *Snapshot
-	dbName, err := databaseIsValid(getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName), ctx, snapshot)
+	tmpDbName := getSuitableDBName(stmt.TableName.GetDBName(), stmt.DbName)
+	dbName, err := databaseIsValid(tmpDbName, ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
 
 	tblName := stmt.TableName.GetTableName()
-	obj, tableDef := ctx.Resolve(dbName, tblName, snapshot)
+	obj, tableDef, err := ctx.Resolve(dbName, tblName, snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}

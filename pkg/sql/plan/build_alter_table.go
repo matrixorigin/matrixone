@@ -38,7 +38,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	}
 
 	var snapshot *Snapshot
-	_, tableDef := ctx.Resolve(schemaName, tableName, snapshot)
+	_, tableDef, err := ctx.Resolve(schemaName, tableName, snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -279,7 +282,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -310,7 +316,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
-	algorithm := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options)
+	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
+	if err != nil {
+		return nil, err
+	}
 	if algorithm == plan.AlterTable_COPY {
 		return buildAlterTableCopy(stmt, ctx)
 	} else {
@@ -318,7 +327,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 }
 
-func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.AlterTableOption) (algorithm plan.AlterTable_AlgorithmType) {
+func ResolveAlterTableAlgorithm(
+	ctx context.Context,
+	validAlterSpecs []tree.AlterTableOption,
+	tableDef *TableDef,
+) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
@@ -331,8 +344,6 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			case *tree.UniqueIndex:
 				algorithm = plan.AlterTable_INPLACE
 			case *tree.Index:
-				algorithm = plan.AlterTable_INPLACE
-			case *tree.ColumnTableDef:
 				algorithm = plan.AlterTable_INPLACE
 			default:
 				algorithm = plan.AlterTable_INPLACE
@@ -364,6 +375,14 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
+			var ok bool
+			ok, err = isVarcharLengthBumped(ctx, option, tableDef)
+			if err != nil {
+				return
+			}
+			if ok {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableRenameColumnClause:
@@ -378,10 +397,96 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_INPLACE
 		}
 		if algorithm != plan.AlterTable_COPY {
-			return algorithm
+			return
 		}
 	}
-	return algorithm
+	return
+}
+
+func isVarcharLengthBumped(
+	ctx context.Context,
+	clause *tree.AlterTableModifyColumnClause,
+	tableDef *TableDef,
+) (ok bool, err error) {
+	oCol := FindColumn(tableDef.Cols, clause.NewColumn.Name.ColName())
+	if oCol == nil {
+		err = moerr.NewBadFieldError(
+			ctx, clause.NewColumn.Name.ColNameOrigin(), tableDef.Name)
+		return
+	}
+
+	if clause.Position != nil &&
+		clause.Position.Typ != tree.ColumnPositionNone {
+		var newPos int
+		newPos, err = findPositionRelativeColumn(
+			ctx, tableDef.Cols, clause.Position)
+		if err != nil {
+			return
+		}
+		if newPos != int(oCol.ColId-1) {
+			return
+		}
+	}
+
+	ok, err = onlyVarcharLengthModified(ctx, clause.NewColumn, oCol)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func onlyVarcharLengthModified(
+	ctx context.Context,
+	newColumn *tree.ColumnTableDef,
+	oCol *ColDef,
+) (ok bool, err error) {
+
+	name := newColumn.Name.ColName()
+	newColType, err := getTypeFromAst(ctx, newColumn.Type)
+	if err != nil {
+		return
+	}
+
+	oldColType := oCol.Typ
+
+	if oldColType.Id != newColType.Id ||
+		newColType.Id != int32(types.T_varchar) {
+		return
+	}
+
+	scaleMatch := oldColType.Scale == newColType.Scale
+	autoIncrMatch := oldColType.AutoIncr == newColType.AutoIncr
+	nameMatch := strings.EqualFold(oCol.Name, name)
+	enumMatch := oldColType.Enumvalues == newColType.Enumvalues
+
+	if !scaleMatch || !autoIncrMatch || !nameMatch || !enumMatch {
+		return
+	}
+
+	widthIncrease := oldColType.Width < newColType.Width
+	if !widthIncrease {
+		return
+	}
+
+	onlyNullMatched := true
+	for _, attr := range newColumn.Attributes {
+		switch a := attr.(type) {
+		case *tree.AttributeNull:
+			origIsNotNull := oCol.Default != nil && !oCol.Default.NullAbility
+			newIsNotNull := !a.Is
+			if origIsNotNull != newIsNotNull {
+				onlyNullMatched = false
+			}
+		default:
+			onlyNullMatched = false
+		}
+		if !onlyNullMatched {
+			return
+		}
+	}
+
+	ok = true
+	return
 }
 
 func buildNotNullColumnVal(col *ColDef) string {

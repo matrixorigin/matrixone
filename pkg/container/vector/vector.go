@@ -588,7 +588,14 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 //
 //	a + Null, and the vector of right part will return true
 func (v *Vector) IsConstNull() bool {
-	return v.IsConst() && len(v.data) == 0
+	if !v.IsConst() {
+		return false
+	}
+	if len(v.data) == 0 {
+		return true
+	}
+
+	return v.nsp.Count() > 0 && v.nsp.Contains(0)
 }
 
 func (v *Vector) GetArea() []byte {
@@ -809,9 +816,6 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ToConst() {
-	if v.nsp.Contains(0) {
-		v.data = v.data[:0]
-	}
 	v.class = CONSTANT
 }
 

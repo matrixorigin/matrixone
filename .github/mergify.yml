@@ -9,7 +9,7 @@ queue_rules:
       {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
       Approved by: @{{ approved_reviews_by | join(', @') }}
-  - name: release-2.0
+  - name: release-2.2
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
@@ -40,14 +40,15 @@ pull_request_rules:
       queue:
         name: main
 
-  - name: Automatic queue on approval for release-2.0
+  - name: Automatic queue on approval for release-2.2
     conditions:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
-      - base=2.0-dev
+      - base=2.2-dev
+      - approved-reviews-by=XuPeng-SH
     actions:
       queue:
-        name: release-2.0
+        name: release-2.2
 
   - name: Automatic queue on approval for release-2.1
     conditions:

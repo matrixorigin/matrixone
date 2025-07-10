@@ -90,6 +90,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -343,7 +344,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Filter:
 		t := sourceOp.(*filter.Filter)
 		op := filter.NewArgument()
-		op.E = t.E
+		op.FilterExprs = t.FilterExprs
+		op.RuntimeFilterExprs = t.RuntimeFilterExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Semi:
@@ -663,14 +665,18 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
+func constructRestrict(n *plan.Node, filterExprs []*plan.Expr) *filter.Filter {
 	op := filter.NewArgument()
-	op.E = filterExpr
+	op.FilterExprs = filterExprs
 	op.IsEnd = n.IsEnd
 	return op
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (vm.Operator, error) {
+func constructDeletion(
+	proc *process.Process,
+	n *plan.Node,
+	eg engine.Engine,
+) (vm.Operator, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		Ref:             oldCtx.Ref,
@@ -685,19 +691,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (v
 	op.DeleteCtx = delCtx
 
 	ps := proc.GetPartitionService()
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		oldCtx.TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return op, nil
 	}
-
 	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
 }
 
@@ -842,8 +838,12 @@ func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
+		partitionColPos := int32(-1)
+		if target.HasPartitionCol {
+			partitionColPos = target.PartitionColIdxInBat
+		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range n.LockTargets {
 		if target.LockTable {
@@ -876,26 +876,23 @@ func constructMultiUpdate(
 			deleteCols[j] = int(col.ColPos)
 		}
 
+		partitionCols := make([]int, len(updateCtx.PartitionCols))
+		for j, col := range updateCtx.PartitionCols {
+			partitionCols[j] = int(col.ColPos)
+		}
+
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-			ObjRef:     updateCtx.ObjRef,
-			TableDef:   updateCtx.TableDef,
-			InsertCols: insertCols,
-			DeleteCols: deleteCols,
+			ObjRef:        updateCtx.ObjRef,
+			TableDef:      updateCtx.TableDef,
+			InsertCols:    insertCols,
+			DeleteCols:    deleteCols,
+			PartitionCols: partitionCols,
 		}
 	}
 	arg.Action = action
 
 	ps := proc.GetPartitionService()
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		n.UpdateCtxList[0].TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(n.UpdateCtxList[0].TableDef.FeatureFlag) {
 		return arg, nil
 	}
 
@@ -930,20 +927,7 @@ func constructInsert(
 	arg.ToWriteS3 = toS3
 
 	ps := proc.GetPartitionService()
-	if ps == nil {
-		return arg, nil
-	}
-
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		oldCtx.TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return arg, nil
 	}
 
@@ -1001,7 +985,7 @@ func constructStream(n *plan.Node, p [2]int64) *source.Source {
 	return arg
 }
 
-func constructTableFunction(n *plan.Node) *table_function.TableFunction {
+func constructTableFunction(n *plan.Node, qry *plan.Query) *table_function.TableFunction {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.GetOriginCaseName()
@@ -2175,7 +2159,7 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right)
+	arg.TableFunction = constructTableFunction(right, nil)
 	return arg
 }
 

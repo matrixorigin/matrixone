@@ -298,7 +298,7 @@ func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
 		}
 		count += result.Batch.RowCount()
 	}
-	require.Equal(t, count, 16*Rows)
+	require.Equal(t, count, 16*Rows+1)
 	tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 	tc.arg.Reset(tc.proc, false, nil)
 	require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
@@ -362,8 +362,15 @@ func getInputBats(tc shuffleTestCase, hasnull bool) []*batch.Batch {
 		newBatch(tc.types, tc.proc, Rows, hasnull),
 		newBatch(tc.types, tc.proc, Rows, hasnull),
 		newBatch(tc.types, tc.proc, Rows, hasnull),
+		newLastBatch(),
 		batch.EmptyBatch,
 	}
+}
+
+func newLastBatch() *batch.Batch {
+	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 1, mpool.MustNewZero())
+	bat.SetLast()
+	return bat
 }
 
 // create a new block based on the type information

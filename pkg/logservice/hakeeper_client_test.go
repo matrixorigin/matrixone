@@ -516,6 +516,50 @@ func TestHAKeeperClientUpdateCNLabel(t *testing.T) {
 	runServiceTest(t, true, true, fn)
 }
 
+func TestAllocateIDError(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c, err := NewCNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+		// inject bad address to make the client fail
+		inner := c.(*managedHAKeeperClient)
+		inner.mu.client.addr = "127.0.0.1:12345"
+
+		_, err = c.AllocateID(ctx)
+		require.Error(t, err)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
+func TestAllocateBatchIDError(t *testing.T) {
+	fn := func(t *testing.T, s *Service) {
+		cfg := HAKeeperClientConfig{
+			ServiceAddresses: []string{s.cfg.LogServiceServiceAddr()},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		c, err := NewCNHAKeeperClient(ctx, "", cfg)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+		// inject bad address to make the client fail
+		inner := c.(*managedHAKeeperClient)
+		inner.mu.client.addr = "127.0.0.1:12345"
+
+		_, err = c.AllocateIDByKeyWithBatch(ctx, "x", 2)
+		require.Error(t, err)
+	}
+	runServiceTest(t, true, true, fn)
+}
+
 func TestHAKeeperClientUpdateCNWorkState(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cfg := HAKeeperClientConfig{

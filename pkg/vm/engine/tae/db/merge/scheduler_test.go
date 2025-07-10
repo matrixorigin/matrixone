@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -39,6 +41,7 @@ func (e *dummyExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) boo
 }
 
 type dummyCatalogSource struct {
+	settingsFn func() (*batch.Batch, func())
 	initTables []catalog.MergeTable
 }
 
@@ -54,6 +57,35 @@ func (c *dummyCatalogSource) InitSource() iter.Seq[catalog.MergeTable] {
 
 func (c *dummyCatalogSource) SetMergeNotifier(catalog.MergeNotifierOnCatalog) {}
 
+var oneGoodOneBad = func() (*batch.Batch, func()) {
+	bat := batch.New([]string{"account_id", "tid", "version", "settings"})
+	// first row with bad settings leading to parse error
+	bat.Vecs[0] = vector.NewVec(types.T_uint32.ToType())
+	vector.AppendFixed[uint32](bat.Vecs[0], 0, false, common.MergeAllocator)
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())
+	vector.AppendFixed[uint64](bat.Vecs[1], 1000, false, common.MergeAllocator)
+	bat.Vecs[2] = vector.NewVec(types.T_uint32.ToType())
+	vector.AppendFixed[uint32](bat.Vecs[2], 0, false, common.MergeAllocator)
+	bat.Vecs[3] = vector.NewVec(types.T_json.ToType())
+	json, _ := types.ParseStringToByteJson(`{"bad_settings": 100}`)
+	vector.AppendByteJson(bat.Vecs[3], json, false, common.MergeAllocator)
+
+	// second row with good default settings
+	vector.AppendFixed[uint32](bat.Vecs[0], 0, false, common.MergeAllocator)
+	vector.AppendFixed[uint64](bat.Vecs[1], 1001, false, common.MergeAllocator)
+	vector.AppendFixed[uint32](bat.Vecs[2], 0, false, common.MergeAllocator)
+	json, _ = types.ParseStringToByteJson(DefaultMergeSettings.String())
+	vector.AppendByteJson(bat.Vecs[3], json, false, common.MergeAllocator)
+
+	bat.SetRowCount(2)
+
+	return bat, func() { bat.Clean(common.MergeAllocator) }
+}
+
+func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func()) {
+	return c.settingsFn
+}
+
 type droppedMergeTable struct {
 	catalog.MergeTable
 }
@@ -64,12 +96,9 @@ func (t *droppedMergeTable) HasDropCommitted() bool {
 
 func TestScheduler(t *testing.T) {
 
-	cata := catalog.MockCatalog(nil)
 	newTestTable := func(did, tid uint64) catalog.MergeTable {
 		db := catalog.MockDBEntryWithAccInfo(1, tid)
 		table := catalog.MockTableEntryWithDB(db, tid)
-		db.TestSetCatalog(cata)
-		table.HasDropCommitted()
 		return catalog.ToMergeTable(table)
 	}
 
@@ -80,10 +109,17 @@ func TestScheduler(t *testing.T) {
 	}
 
 	dummySource := &dummyCatalogSource{
+		settingsFn: oneGoodOneBad,
 		initTables: tables,
 	}
 
-	sched := NewMergeScheduler(1*time.Millisecond, dummySource, &dummyExecutor{})
+	sched := NewMergeScheduler(
+		1*time.Millisecond,
+		dummySource,
+		&dummyExecutor{},
+		NewStdClock(),
+	)
+
 	sched.Start()
 	defer sched.Stop()
 
@@ -181,6 +217,7 @@ func TestScheduler(t *testing.T) {
 		}
 
 		opts2 := NewVacuumOpts()
+		opts2.HollowTopK = 1
 		opts2.testInject = &vacuumTestInject{
 			compactTask: []mergeTask{
 				{
@@ -245,7 +282,7 @@ func TestScheduler(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		require.Equal(t, answer.DataMergeCnt, t1002TaskCnt)
-		require.Equal(t, answer.BigDataAcc, 1)
+		require.Equal(t, answer.VaccumTrigCount, 1)
 
 		for i := 0; i < 100; i++ {
 			answer = sched.Query(tables[0])
@@ -260,7 +297,7 @@ func TestScheduler(t *testing.T) {
 }
 
 func TestLaunchPad(t *testing.T) {
-	pad := newLaunchPad()
+	pad := newLaunchPad(NewStdClock())
 	cata := catalog.MockCatalog(nil)
 	db := catalog.MockDBEntryWithAccInfo(1, 1000)
 	table := catalog.MockTableEntryWithDB(db, 1001)

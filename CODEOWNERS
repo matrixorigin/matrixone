@@ -42,7 +42,7 @@
 /pkg/catalog @XuPeng-SH
 
 #pkg/cdc
-/pkg/cdc @daviszhen @ck89119
+/pkg/cdc @ck89119 @jiangxinmeng1
 
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
@@ -97,7 +97,7 @@
 /pkg/frontend @daviszhen @qingxinhome
 
 # pkg/hakeeper
-/pkg/hakeeper @zhangxu19830126 @w-zr
+/pkg/hakeeper @zhangxu19830126 @volgariver6
 
 # pkg/incrservice
 /pkg/incrservice @zhangxu19830126
@@ -211,8 +211,8 @@
 /pkg/vm/pipeline @ouyuanning @aunjgr
 /pkg/vm/process @reusee @aunjgr @XuPeng-SH
 /pkg/vm/message @aunjgr
-/pkg/vm/engine/disttae @XuPeng-SH @triump2020
-/pkg/vm/engine/disttae/logtailreplay @triump2020 @XuPeng-SH
+/pkg/vm/engine/disttae @XuPeng-SH @gouhongshen
+/pkg/vm/engine/disttae/logtailreplay @XuPeng-SH @gouhongshen
 /pkg/vm/engine/tae @XuPeng-SH
 /pkg/vm/engine/memoryengine @reusee
 /pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6

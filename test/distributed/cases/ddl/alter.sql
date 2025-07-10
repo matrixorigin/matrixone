@@ -275,6 +275,7 @@ CREATE TABLE `t2` (
 
 alter table t2 drop primary key;
 alter table t2 AUTO_INCREMENT=10;
+alter table t2 disable keys;
 
 CREATE TABLE `t3` (
 `a` INT NOT NULL,
@@ -394,3 +395,105 @@ insert into s3t select result, 2, 12 from generate_series(1, 30000, 1) g;
 delete from s3t where a < 1000;
 commit;
 drop database test;
+
+
+-- Functional test for varchar column length modification
+drop database if exists varchar_test;
+create database varchar_test;
+use varchar_test;
+
+-- Test 1: Simple varchar length increase
+create table t1 (
+    id int primary key,
+    name varchar(20),
+    email varchar(50)
+);
+
+insert into t1 values (1, 'Alice', 'alice@example.com');
+insert into t1 values (2, 'Bob', 'bob@example.com');
+
+-- Should use INPLACE algorithm for simple length increase
+alter table t1 modify column name varchar(80);
+alter table t1 modify column email varchar(150);
+
+select * from t1;
+show create table t1;
+
+-- Test 2: Varchar length increase with NOT NULL constraint
+create table t2 (
+    id int primary key,
+    name varchar(20) not null,
+    description varchar(100)
+);
+
+insert into t2 values (1, 'Test1', 'Description1');
+insert into t2 values (2, 'Test2', 'Description2');
+
+-- Should use INPLACE algorithm for length increase with consistent NOT NULL
+alter table t2 modify column name varchar(80) not null;
+alter table t2 modify column description varchar(200);
+
+select * from t2;
+show create table t2;
+
+-- Test 3: Multiple varchar columns modification in single statement
+create table t3 (
+    id int primary key,
+    col1 varchar(10),
+    col2 varchar(20) not null,
+    col3 varchar(30)
+);
+
+insert into t3 values (1, 'a', 'bb', 'ccc');
+insert into t3 values (2, 'aa', 'bbbb', 'cccccc');
+
+-- Should use INPLACE algorithm for multiple varchar length increases
+alter table t3 
+modify column col1 varchar(50),
+modify column col2 varchar(100) not null,
+modify column col3 varchar(150);
+
+select * from t3;
+show create table t3;
+
+-- Test 4: Varchar with other constraints (should still work with relaxed checks)
+create table t4 (
+    id int primary key,
+    name varchar(20) not null,
+    email varchar(50),
+    status varchar(10) default 'active'
+);
+
+insert into t4 (id, name, email) values (1, 'User1', 'user1@test.com');
+insert into t4 (id, name, email, status) values (2, 'User2', 'user2@test.com', 'inactive');
+
+-- Should handle varchar length increase with NOT NULL constraint
+alter table t4 modify column name varchar(100) not null;
+alter table t4 modify column email varchar(200);
+
+select * from t4;
+show create table t4;
+
+-- Test 5: Large varchar length increase
+create table t5 (
+    id int primary key,
+    content varchar(100)
+);
+
+insert into t5 values (1, 'Short content');
+insert into t5 values (2, 'This is a longer content that tests the varchar modification functionality');
+
+-- Should handle large length increases
+alter table t5 modify column content varchar(1000);
+
+select * from t5;
+show create table t5;
+
+-- Cleanup
+drop table t1;
+drop table t2;
+drop table t3;
+drop table t4;
+drop table t5;
+drop database varchar_test;
+

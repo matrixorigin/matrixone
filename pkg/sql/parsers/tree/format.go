@@ -29,6 +29,7 @@ type FmtCtx struct {
 	quoteString             bool
 	singleQuoteString       bool
 	escapeSingleQuoteString bool
+	quoteIdentifier         bool
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -63,6 +64,12 @@ func WithSingleQuoteString() FmtCtxOption {
 func WithEscapeSingleQuoteString() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.escapeSingleQuoteString = true
+	})
+}
+
+func WithQuoteIdentifier() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.quoteIdentifier = true
 	})
 }
 

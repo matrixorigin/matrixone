@@ -545,6 +545,17 @@ func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *Ex
 					describeColRef(&updateCtx.DeleteCols[i], buf)
 				}
 			}
+			if len(updateCtx.PartitionCols) > 0 {
+				buf.WriteString(" Partition Columns: ")
+				first := true
+				for i := range updateCtx.PartitionCols {
+					if !first {
+						buf.WriteString(", ")
+					}
+					first = false
+					describeColRef(&updateCtx.PartitionCols[i], buf)
+				}
+			}
 			lines = append(lines, buf.String())
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
@@ -1189,6 +1200,7 @@ func (w *WinSpecDescribeImpl) GetDescription(ctx context.Context, options *Expla
 }
 
 type RowsetDataDescribeImpl struct {
+	TableDef   *plan.TableDef
 	RowsetData *plan.RowsetData
 }
 
@@ -1199,12 +1211,12 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	}
 
 	first := true
-	for index := range r.RowsetData.Cols {
+	for _, col := range r.TableDef.Cols {
 		if !first {
 			buf.WriteString(", ")
 		}
 		first = false
-		buf.WriteString("\"*VALUES*\".column" + strconv.Itoa(index+1))
+		buf.WriteString("\"*VALUES*\"." + col.Name)
 	}
 	return nil
 }

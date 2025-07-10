@@ -1042,6 +1042,7 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 			return 0, err
 		}
 	}
+	logutil.Infof("debug_21848, cdcTaskRowsAffected: %d", cdcTaskRowsAffected)
 
 	daemonTaskRowsAffected, err := m.RunAddDaemonTask(ctx, tx, dt)
 	if err != nil {
