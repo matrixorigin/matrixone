@@ -214,9 +214,8 @@ func TestGroupOperatorBasicSpillAndRecall(t *testing.T) {
 		}
 	}
 
-	//TODO
-	//require.NotNil(t, finalResult)
-	//testutil.CompareBatches(t, expected, finalResult)
+	require.NotNil(t, finalResult)
+	testutil.CompareBatches(t, expected, finalResult)
 
 	groupOp.Free(proc, false, nil)
 	proc.Free()
