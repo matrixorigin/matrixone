@@ -42,14 +42,10 @@ type offsetTestCase struct {
 	proc  *process.Process
 }
 
-var (
-	tcs []offsetTestCase
-)
-
-func init() {
-	tcs = []offsetTestCase{
+func makeTestCases(t *testing.T) []offsetTestCase {
+	return []offsetTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -65,7 +61,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -81,7 +77,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -101,13 +97,13 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
@@ -115,7 +111,7 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestOffset(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		bats := []*batch.Batch{
@@ -146,9 +142,9 @@ func TestOffset(t *testing.T) {
 
 func BenchmarkOffset(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []offsetTestCase{
+		tcs := []offsetTestCase{
 			{
-				proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+				proc: testutil.NewProcessWithMPool(b, "", mpool.MustNewZero()),
 				types: []types.Type{
 					types.T_int8.ToType(),
 				},

@@ -97,7 +97,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 	pState := logtailreplay.NewPartitionState("", true, 0)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)

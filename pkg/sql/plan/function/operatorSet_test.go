@@ -23,7 +23,7 @@ import (
 )
 
 func Test_Operator_Unary_Tilde(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	tc := tcTemp{
 		info: "select unary_tilde(num) with num = 5, -5, null",
 		inputs: []FunctionTestInput{
@@ -39,7 +39,7 @@ func Test_Operator_Unary_Tilde(t *testing.T) {
 }
 
 func Test_Operator_Unary_Minus(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			info: "select -(num) with num = 5, -5, null",
@@ -99,7 +99,7 @@ func Test_Operator_Unary_Minus(t *testing.T) {
 }
 
 func Test_Operator_Unary_Plus(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			info: "select +(num) with num = 5, -5, null",
@@ -117,7 +117,7 @@ func Test_Operator_Unary_Plus(t *testing.T) {
 }
 
 func Test_Operator_Is(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -152,7 +152,7 @@ func Test_Operator_Is(t *testing.T) {
 }
 
 func Test_Operator_Is_Not(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -203,7 +203,7 @@ func Test_Operator_Is_Not(t *testing.T) {
 }
 
 func Test_Operator_Is_True(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -220,7 +220,7 @@ func Test_Operator_Is_True(t *testing.T) {
 }
 
 func Test_Operator_Is_Not_True(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -237,7 +237,7 @@ func Test_Operator_Is_Not_True(t *testing.T) {
 }
 
 func Test_Operator_Is_False(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -254,7 +254,7 @@ func Test_Operator_Is_False(t *testing.T) {
 }
 
 func Test_Operator_Is_Not_False(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -271,7 +271,7 @@ func Test_Operator_Is_Not_False(t *testing.T) {
 }
 
 func Test_Operator_Is_Null(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -288,7 +288,7 @@ func Test_Operator_Is_Null(t *testing.T) {
 }
 
 func Test_Operator_Is_Not_Null(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -305,7 +305,7 @@ func Test_Operator_Is_Not_Null(t *testing.T) {
 }
 
 func Test_Operator_And(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -333,7 +333,7 @@ func Test_Operator_And(t *testing.T) {
 }
 
 func Test_Operator_Or(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{
@@ -361,7 +361,7 @@ func Test_Operator_Or(t *testing.T) {
 }
 
 func Test_Operator_Xor(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	{
 		tc := tcTemp{
 			inputs: []FunctionTestInput{

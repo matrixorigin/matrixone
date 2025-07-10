@@ -131,7 +131,7 @@ func numTest[T int32 | int64](t *testing.T, typ types.T) {
 		},
 	}
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	for _, kase := range kases {
 		var gs genNumState[int64]
 		startVec, _ := vector.NewConstFixed[T](typ.ToType(), kase.start, 1, proc.Mp())
@@ -253,7 +253,7 @@ func TestGenerateTimestamp(t *testing.T) {
 		},
 	}
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	for _, kase := range kases {
 		var err error
 		var gs genDatetimeState
@@ -311,7 +311,7 @@ func TestGenerateTimestamp(t *testing.T) {
 }
 
 func TestInitStartAndEndNumNoTypeCheck(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	tests := []struct {
 		name    string
 		start   interface{}

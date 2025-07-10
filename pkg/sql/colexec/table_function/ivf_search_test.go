@@ -63,8 +63,8 @@ var (
 	}
 )
 
-func newIvfSearchTestCase(m *mpool.MPool, attrs []string, param string) ivfSearchTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) ivfSearchTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range ivfsearchdefaultColdefs {
@@ -135,7 +135,7 @@ func TestIvfSearch(t *testing.T) {
 	getVersion = mockVersion
 
 	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
-	ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
 
 	inbat := makeBatchIvfSearch(ut.proc)
 
@@ -182,7 +182,7 @@ func TestIvfSearchParamFail(t *testing.T) {
 	getVersion = mockVersion
 
 	for _, param := range failedivfsearchparam {
-		ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+		ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
 
 		inbat := makeBatchIvfSearch(ut.proc)
 
@@ -228,7 +228,7 @@ func TestIvfSearchIndexTableConfigFail(t *testing.T) {
 	getVersion = mockVersion
 	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
 
-	ut := newIvfSearchTestCase(mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
 	failbatches := makeBatchIvfSearchFail(ut.proc)
 	for _, b := range failbatches {
 

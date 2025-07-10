@@ -34,7 +34,7 @@ const MaxIndexCapacity = 100000
 
 func TestBuildMulti(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	ndim := 32
 	nthread := 8
@@ -192,7 +192,7 @@ func TestBuildIndex(t *testing.T) {
 
 func TestBuildSingleThread(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	ndim := 32
 	nthread := 2
