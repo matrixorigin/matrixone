@@ -138,6 +138,7 @@ func TestNewSinker(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := NewSinker(
+				"",
 				tt.args.sinkUri,
 				tt.args.accountId,
 				tt.args.taskId,

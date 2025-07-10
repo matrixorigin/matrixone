@@ -393,7 +393,9 @@ var predefinedFunids = map[int]int{
 
 	TS_TO_TIME: 343,
 
-	FUNCTION_END_NUMBER: 344,
+	HNSW_CDC_UPDATE: 344,
+
+	FUNCTION_END_NUMBER: 345,
 }
 
 func Test_funids(t *testing.T) {
