@@ -66,6 +66,7 @@ func (d *DataCache) Capacity() int64 {
 }
 
 func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
+	deletes := make([]*_CacheItem[fscache.CacheKey, fscache.Data], 0, 10)
 	for _, path := range paths {
 
 		key := fscache.CacheKey{Path: path}
@@ -73,11 +74,15 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 			return key1.Path == key2.Path
 		}, func(value *_CacheItem[fscache.CacheKey, fscache.Data]) {
 			if value.setDeleted() {
-				if d.fifo.postEvict != nil {
-					d.fifo.postEvict(ctx, value.key, value.value, value.size)
-				}
+				deletes = append(deletes, value)
 			}
 		})
+	}
+
+	// FSCACHEDATA RELEASE
+	for _, item := range deletes {
+		item.postFn(ctx, d.fifo.postEvict)
+		item.releaseValue()
 	}
 }
 
