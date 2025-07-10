@@ -256,6 +256,10 @@ func (exec *countColumnExec) Free() {
 	exec.distinctHash.free()
 }
 
+func (exec *countColumnExec) Size() int64 {
+	return exec.ret.Size() + exec.distinctHash.Size()
+}
+
 type countStarExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
@@ -358,4 +362,8 @@ func (exec *countStarExec) Flush() ([]*vector.Vector, error) {
 
 func (exec *countStarExec) Free() {
 	exec.ret.free()
+}
+
+func (exec *countStarExec) Size() int64 {
+	return exec.ret.Size()
 }

@@ -15,10 +15,13 @@
 package hashtable
 
 import (
+	"bytes"
+	"io"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type Int64HashMapCell struct {
@@ -76,7 +79,7 @@ func (ht *Int64HashMap) allocate(index int, size uint64) error {
 
 func (ht *Int64HashMap) Init(allocator malloc.Allocator) (err error) {
 	if allocator == nil {
-		allocator = defaultAllocator()
+		allocator = DefaultAllocator()
 	}
 	ht.allocator = allocator
 	ht.blockCellCnt = kInitialCellCnt
@@ -330,4 +333,202 @@ func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	it.pos++
 
 	return
+}
+
+func (ht *Int64HashMap) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	// Write basic metadata
+	buf.Write(types.EncodeUint64(&ht.elemCnt))
+	buf.Write(types.EncodeUint64(&ht.cellCnt))
+	buf.Write(types.EncodeUint64(&ht.blockCellCnt))
+	buf.Write(types.EncodeUint64(&ht.blockMaxElemCnt))
+	buf.Write(types.EncodeUint64(&ht.cellCntMask))
+
+	// Count active cells and write them
+	var activeCells []Int64HashMapCell
+	for _, block := range ht.cells {
+		for _, cell := range block {
+			if cell.Mapped != 0 {
+				activeCells = append(activeCells, cell)
+			}
+		}
+	}
+
+	numActiveCells := uint64(len(activeCells))
+	buf.Write(types.EncodeUint64(&numActiveCells))
+
+	for _, cell := range activeCells {
+		buf.Write(types.EncodeUint64(&cell.Key))
+		buf.Write(types.EncodeUint64(&cell.Mapped))
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (ht *Int64HashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
+	r := bytes.NewBuffer(data)
+
+	// Read basic metadata
+	ht.elemCnt = types.DecodeUint64(r.Next(8))
+	ht.cellCnt = types.DecodeUint64(r.Next(8))
+	ht.blockCellCnt = types.DecodeUint64(r.Next(8))
+	ht.blockMaxElemCnt = types.DecodeUint64(r.Next(8))
+	ht.cellCntMask = types.DecodeUint64(r.Next(8))
+
+	ht.allocator = allocator
+	if ht.allocator == nil {
+		ht.allocator = DefaultAllocator()
+	}
+
+	// Initialize internal structures based on deserialized metadata
+	numBlocks := int(ht.cellCnt / ht.blockCellCnt)
+	if ht.cellCnt%ht.blockCellCnt != 0 {
+		numBlocks++
+	}
+	ht.rawData = make([][]byte, numBlocks)
+	ht.rawDataDeallocators = make([]malloc.Deallocator, numBlocks)
+	ht.cells = make([][]Int64HashMapCell, numBlocks)
+
+	for i := 0; i < numBlocks; i++ {
+		if err := ht.allocate(i, ht.blockCellCnt*intCellSize); err != nil {
+			return err
+		}
+	}
+
+	// Read active cells and re-insert them
+	numActiveCells := types.DecodeUint64(r.Next(8))
+	for i := uint64(0); i < numActiveCells; i++ {
+		var cell Int64HashMapCell
+		cell.Key = types.DecodeUint64(r.Next(8))
+		cell.Mapped = types.DecodeUint64(r.Next(8))
+		*ht.findEmptyCell(cell.Key) = cell
+	}
+	return nil
+}
+
+func (ht *Int64HashMap) MarshalTo(w io.Writer) (n int64, err error) {
+	var wn int
+
+	// Write basic metadata
+	wn, err = w.Write(types.EncodeUint64(&ht.elemCnt))
+	n += int64(wn)
+	if err != nil {
+		return
+	}
+	wn, err = w.Write(types.EncodeUint64(&ht.cellCnt))
+	n += int64(wn)
+	if err != nil {
+		return
+	}
+	wn, err = w.Write(types.EncodeUint64(&ht.blockCellCnt))
+	n += int64(wn)
+	if err != nil {
+		return
+	}
+	wn, err = w.Write(types.EncodeUint64(&ht.blockMaxElemCnt))
+	n += int64(wn)
+	if err != nil {
+		return
+	}
+	wn, err = w.Write(types.EncodeUint64(&ht.cellCntMask))
+	n += int64(wn)
+	if err != nil {
+		return
+	}
+
+	// Count active cells and write them
+	var activeCells []Int64HashMapCell
+	for _, block := range ht.cells {
+		for _, cell := range block {
+			if cell.Mapped != 0 {
+				activeCells = append(activeCells, cell)
+			}
+		}
+	}
+
+	numActiveCells := uint64(len(activeCells))
+	wn, err = w.Write(types.EncodeUint64(&numActiveCells))
+	n += int64(wn)
+	if err != nil {
+		return
+	}
+
+	for _, cell := range activeCells {
+		wn, err = w.Write(types.EncodeUint64(&cell.Key))
+		n += int64(wn)
+		if err != nil {
+			return
+		}
+		wn, err = w.Write(types.EncodeUint64(&cell.Mapped))
+		n += int64(wn)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (ht *Int64HashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (err error) {
+	// Read basic metadata
+	buf := make([]byte, 8)
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return err
+	}
+	ht.elemCnt = types.DecodeUint64(buf)
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return err
+	}
+	ht.cellCnt = types.DecodeUint64(buf)
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return err
+	}
+	ht.blockCellCnt = types.DecodeUint64(buf)
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return err
+	}
+	ht.blockMaxElemCnt = types.DecodeUint64(buf)
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return err
+	}
+	ht.cellCntMask = types.DecodeUint64(buf)
+
+	ht.allocator = allocator
+	if ht.allocator == nil {
+		ht.allocator = DefaultAllocator()
+	}
+
+	// Initialize internal structures based on deserialized metadata
+	numBlocks := int(ht.cellCnt / ht.blockCellCnt)
+	if ht.cellCnt%ht.blockCellCnt != 0 {
+		numBlocks++
+	}
+	ht.rawData = make([][]byte, numBlocks)
+	ht.rawDataDeallocators = make([]malloc.Deallocator, numBlocks)
+	ht.cells = make([][]Int64HashMapCell, numBlocks)
+
+	for i := 0; i < numBlocks; i++ {
+		if err = ht.allocate(i, ht.blockCellCnt*intCellSize); err != nil {
+			return err
+		}
+	}
+
+	// Read active cells and re-insert them
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return err
+	}
+	numActiveCells := types.DecodeUint64(buf)
+	for i := uint64(0); i < numActiveCells; i++ {
+		var cell Int64HashMapCell
+		if _, err = io.ReadFull(r, buf); err != nil {
+			return err
+		}
+		cell.Key = types.DecodeUint64(buf)
+		if _, err = io.ReadFull(r, buf); err != nil {
+			return err
+		}
+		cell.Mapped = types.DecodeUint64(buf)
+		*ht.findEmptyCell(cell.Key) = cell
+	}
+	return nil
 }

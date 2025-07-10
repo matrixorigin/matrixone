@@ -178,7 +178,7 @@ func (mergeGroup *MergeGroup) consumeBatch(proc *process.Process, b *batch.Batch
 		}
 
 		origin := mergeGroup.ctr.hr.Hash.GroupCount()
-		vals, _, err := mergeGroup.ctr.hr.Itr.Insert(i, n, b.Vecs)
+		vals, _, err := mergeGroup.ctr.hr.Iter.Insert(i, n, b.Vecs)
 		if err != nil {
 			return err
 		}

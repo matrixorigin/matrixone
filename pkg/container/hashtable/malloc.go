@@ -75,6 +75,6 @@ func newAllocator() malloc.Allocator {
 	)
 }
 
-var defaultAllocator = sync.OnceValue(func() malloc.Allocator {
+var DefaultAllocator = sync.OnceValue(func() malloc.Allocator {
 	return newAllocator()
 })

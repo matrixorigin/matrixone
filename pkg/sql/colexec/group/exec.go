@@ -17,10 +17,13 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -61,6 +64,13 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		return err
 	}
 	if err = group.prepareGroup(proc); err != nil {
+		return err
+	}
+	// If there are any distinct aggregations, spilling is not supported with the current design.
+	if group.AnyDistinctAgg() {
+		group.ctr.spillThreshold = math.MaxInt64
+	}
+	if err := group.initSpiller(proc); err != nil {
 		return err
 	}
 	return group.PrepareProjection(proc)
@@ -181,18 +191,26 @@ func (group *Group) getInputBatch(proc *process.Process) (*batch.Batch, error) {
 // To avoid a single batch being too large,
 // we split the result as many part of vector, and send them in order.
 func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, error) {
-	group.ctr.result1.CleanLastPopped(proc.Mp())
+	group.ctr.finalResults.CleanLastPopped(proc.Mp())
 	if group.ctr.state == vm.End {
 		return nil, nil
 	}
 
+	// If spilling occurred, recall and merge all spilled data first.
+	if group.ctr.spilled {
+		if err := group.recallAndMergeSpilledData(proc); err != nil {
+			return nil, err
+		}
+		group.ctr.spilled = false
+	}
+
 	for {
 		if group.ctr.state == vm.Eval {
-			if group.ctr.result1.IsEmpty() {
+			if group.ctr.finalResults.IsEmpty() {
 				group.ctr.state = vm.End
 				return nil, nil
 			}
-			return group.ctr.result1.PopResult(proc.Mp())
+			return group.ctr.finalResults.PopResult(proc.Mp())
 		}
 
 		res, err := group.getInputBatch(proc)
@@ -206,7 +224,7 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 				if err = group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 					return nil, err
 				}
-				group.ctr.result1.ToPopped[0].SetRowCount(1)
+				group.ctr.finalResults.ToPopped[0].SetRowCount(1)
 			}
 			continue
 		}
@@ -214,10 +232,21 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 			continue
 		}
 
+		// If we received data, the data source is no longer considered empty for the overall operator.
+		// This flag should not be reset to true after a spill, as it indicates if *any* data has been processed.
 		group.ctr.dataSourceIsEmpty = false
 		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
 			return nil, err
 		}
+
+		// check for spill
+		currentSize := group.getSize()
+		if currentSize > group.ctr.spillThreshold {
+			if err := group.spillCurrentState(proc); err != nil {
+				return nil, err
+			}
+		}
+
 	}
 }
 
@@ -227,9 +256,9 @@ func (group *Group) generateInitialResult1WithoutGroupBy(proc *process.Process) 
 		return err
 	}
 
-	group.ctr.result1.InitOnlyAgg(aggexec.GetMinAggregatorsChunkSize(nil, aggs), aggs)
-	for i := range group.ctr.result1.AggList {
-		if err = group.ctr.result1.AggList[i].GroupGrow(1); err != nil {
+	group.ctr.finalResults.InitOnlyAgg(aggexec.GetMinAggregatorsChunkSize(nil, aggs), aggs)
+	for i := range group.ctr.finalResults.AggList {
+		if err = group.ctr.finalResults.AggList[i].GroupGrow(1); err != nil {
 			return err
 		}
 	}
@@ -246,23 +275,23 @@ func (group *Group) consumeBatchToGetFinalResult(
 	switch group.ctr.mtyp {
 	case H0:
 		// without group by.
-		if group.ctr.result1.IsEmpty() {
+		if group.ctr.finalResults.IsEmpty() {
 			if err := group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 				return err
 			}
 		}
 
-		group.ctr.result1.ToPopped[0].SetRowCount(1)
-		for i := range group.ctr.result1.AggList {
-			if err := group.ctr.result1.AggList[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
+		group.ctr.finalResults.ToPopped[0].SetRowCount(1)
+		for i := range group.ctr.finalResults.AggList {
+			if err := group.ctr.finalResults.AggList[i].BulkFill(0, group.ctr.aggregateEvaluate[i].Vec); err != nil {
 				return err
 			}
 		}
 
 	default:
 		// with group by.
-		if group.ctr.result1.IsEmpty() {
-			err := group.ctr.hr.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
+		if group.ctr.finalResults.IsEmpty() {
+			err := group.ctr.hashMap.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
 			if err != nil {
 				return err
 			}
@@ -271,7 +300,7 @@ func (group *Group) consumeBatchToGetFinalResult(
 			if err != nil {
 				return err
 			}
-			if err = group.ctr.result1.InitWithGroupBy(
+			if err = group.ctr.finalResults.InitWithGroupBy(
 				proc.Mp(),
 				aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, group.PreAllocSize); err != nil {
 				return err
@@ -280,21 +309,21 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 		count := bat.RowCount()
 		more := 0
-		aggList := group.ctr.result1.GetAggList()
+		aggList := group.ctr.finalResults.GetAggList()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := count - i
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
 
-			originGroupCount := group.ctr.hr.Hash.GroupCount()
-			vals, _, err := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			originGroupCount := group.ctr.hashMap.Hash.GroupCount()
+			vals, _, err := group.ctr.hashMap.Iter.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err != nil {
 				return err
 			}
-			insertList, _ := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
+			insertList, _ := group.ctr.hashMap.GetBinaryInsertList(vals, originGroupCount)
 
-			more, err = group.ctr.result1.AppendBatch(proc.Mp(), group.ctr.groupByEvaluate.Vec, i, insertList)
+			more, err = group.ctr.finalResults.AppendBatch(proc.Mp(), group.ctr.groupByEvaluate.Vec, i, insertList)
 			if err != nil {
 				return err
 			}
@@ -361,7 +390,7 @@ func preExtendAggExecs(execs []aggexec.AggFuncExec, preAllocated uint64) (err er
 //
 // this function will be only called when there is one MergeGroup operator was behind.
 func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.Batch, error) {
-	group.ctr.result2.resetLastPopped()
+	group.ctr.intermediateResults.resetLastPopped()
 	if group.ctr.state == vm.End {
 		return nil, nil
 	}
@@ -369,6 +398,14 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 	r, err := group.initCtxToGetIntermediateResult(proc)
 	if err != nil {
 		return nil, err
+	}
+
+	// If spilling occurred, recall and merge all spilled data first.
+	if group.ctr.spilled {
+		if err := group.recallAndMergeSpilledData(proc); err != nil {
+			return nil, err
+		}
+		group.ctr.spilled = false // All spilled data merged
 	}
 
 	var input *batch.Batch
@@ -396,15 +433,17 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 		if input.IsEmpty() {
 			continue
 		}
+		// If we received data, the data source is no longer considered empty for the overall operator.
+		// This flag should not be reset to true after a spill, as it indicates if *any* data has been processed.
 		group.ctr.dataSourceIsEmpty = false
 
 		if next, er := group.consumeBatchToRes(proc, input, r); er != nil {
 			return nil, er
 		} else {
-			if next {
-				continue
+			if !next {
+				// intermediate result is ready
+				return r, nil
 			}
-			return r, nil
 		}
 	}
 }
@@ -412,7 +451,7 @@ func (group *Group) callToGetIntermediateResult(proc *process.Process) (*batch.B
 func (group *Group) initCtxToGetIntermediateResult(
 	proc *process.Process) (*batch.Batch, error) {
 
-	r, err := group.ctr.result2.getResultBatch(
+	r, err := group.ctr.intermediateResults.getResultBatch(
 		proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
 	if err != nil {
 		return nil, err
@@ -426,7 +465,7 @@ func (group *Group) initCtxToGetIntermediateResult(
 		}
 	} else {
 		allocated := max(min(group.PreAllocSize, uint64(intermediateResultSendActionTrigger)), 0)
-		if err = group.ctr.hr.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, allocated); err != nil {
+		if err = group.ctr.hashMap.BuildHashTable(true, group.ctr.mtyp == HStr, group.ctr.keyNullable, allocated); err != nil {
 			return nil, err
 		}
 		err = preExtendAggExecs(r.Aggs, allocated)
@@ -462,12 +501,12 @@ func (group *Group) consumeBatchToRes(
 				n = hashmap.UnitLimit
 			}
 
-			originGroupCount := group.ctr.hr.Hash.GroupCount()
-			vals, _, err1 := group.ctr.hr.Itr.Insert(i, n, group.ctr.groupByEvaluate.Vec)
+			originGroupCount := group.ctr.hashMap.Hash.GroupCount()
+			vals, _, err1 := group.ctr.hashMap.Iter.Insert(i, n, group.ctr.groupByEvaluate.Vec)
 			if err1 != nil {
 				return false, err1
 			}
-			insertList, more := group.ctr.hr.GetBinaryInsertList(vals, originGroupCount)
+			insertList, more := group.ctr.hashMap.GetBinaryInsertList(vals, originGroupCount)
 
 			cnt := int(more)
 			if cnt > 0 {
@@ -492,6 +531,306 @@ func (group *Group) consumeBatchToRes(
 			}
 		}
 
+		// check for spill
+		currentSize := group.getSize()
+		if currentSize > group.ctr.spillThreshold {
+			if err := group.spillCurrentState(proc); err != nil {
+				return false, err
+			}
+			// need to re-initialize it for the next iteration or final flush
+			_, err := group.initCtxToGetIntermediateResult(proc)
+			if err != nil {
+				return false, err
+			}
+		}
+
 		return res.RowCount() < intermediateResultSendActionTrigger, nil
 	}
+}
+
+func (group *Group) spillCurrentState(proc *process.Process) (err error) {
+	// hashmap
+	var hashmapData []byte = nil
+	if group.ctr.hashMap.Hash != nil {
+		hashmapData, err = group.ctr.hashMap.Hash.MarshalBinary()
+		if err != nil {
+			return err
+		}
+	}
+
+	// aggregation states
+	var aggStatesData [][]byte
+	if group.NeedEval {
+		aggStatesData = make([][]byte, len(group.ctr.finalResults.AggList))
+		for i, agg := range group.ctr.finalResults.AggList {
+			aggStatesData[i], err = aggexec.MarshalAggFuncExec(agg)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		aggStatesData = make([][]byte, len(group.ctr.intermediateResults.res.Aggs))
+		for i, agg := range group.ctr.intermediateResults.res.Aggs {
+			aggStatesData[i], err = aggexec.MarshalAggFuncExec(agg)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// group-by batch
+	var groupByBatchData []byte
+	if group.NeedEval {
+		if len(group.ctr.finalResults.ToPopped) > 0 {
+			tempGroupByBatch := batch.NewOffHeapWithSize(len(group.ctr.groupByEvaluate.Vec))
+			tempGroupByBatch.Attrs = group.ctr.finalResults.ToPopped[0].Attrs
+			for i, vecType := range group.ctr.groupByEvaluate.Typ {
+				tempGroupByBatch.Vecs[i] = vector.NewOffHeapVecWithType(vecType)
+			}
+			for _, b := range group.ctr.finalResults.ToPopped {
+				for i, vec := range b.Vecs {
+					if err := tempGroupByBatch.Vecs[i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+						tempGroupByBatch.Clean(proc.Mp())
+						return err
+					}
+				}
+			}
+			tempGroupByBatch.SetRowCount(tempGroupByBatch.Vecs[0].Length())
+			groupByBatchData, err = tempGroupByBatch.MarshalBinary()
+			if err != nil {
+				tempGroupByBatch.Clean(proc.Mp())
+				return err
+			}
+			tempGroupByBatch.Clean(proc.Mp())
+		}
+
+	} else {
+		groupByBatchData, err = group.ctr.intermediateResults.res.MarshalBinary()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Spill to disk
+	if err := group.ctr.spiller.spillState(hashmapData, aggStatesData, groupByBatchData); err != nil {
+		return err
+	}
+
+	// clear in-memory state
+	group.ctr.hashMap.Free0()
+	if group.NeedEval {
+		group.ctr.finalResults.Free0(proc.Mp())
+		group.ctr.finalResults = GroupResultBuffer{}
+	} else {
+		group.ctr.intermediateResults.Free0(proc.Mp())
+		group.ctr.intermediateResults = GroupResultNoneBlock{}
+	}
+	group.ctr.dataSourceIsEmpty = true
+	return nil
+}
+
+func (group *Group) recallAndMergeSpilledData(proc *process.Process) error {
+	group.ctr.recalling = true
+	defer func() {
+		group.ctr.recalling = false
+		group.ctr.spilled = false
+	}()
+
+	if group.ctr.hashMap.Hash == nil {
+		if err := group.ctr.hashMap.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, 0); err != nil {
+			return err
+		}
+	}
+
+	var currentAggs []aggexec.AggFuncExec
+	var currentGroupByBatch *batch.Batch
+
+	if group.NeedEval {
+		if group.ctr.finalResults.IsEmpty() {
+			aggs, err := group.generateAggExec(proc)
+			if err != nil {
+				return err
+			}
+			if err = group.ctr.finalResults.InitWithGroupBy(
+				proc.Mp(),
+				aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, 0); err != nil {
+				return err
+			}
+		}
+		currentAggs = group.ctr.finalResults.AggList
+
+	} else {
+		if group.ctr.intermediateResults.res == nil {
+			r, err := group.ctr.intermediateResults.getResultBatch(
+				proc, &group.ctr.groupByEvaluate, group.ctr.aggregateEvaluate, group.Aggs)
+			if err != nil {
+				return err
+			}
+			currentGroupByBatch = r
+		} else {
+			currentGroupByBatch = group.ctr.intermediateResults.res
+		}
+		currentAggs = currentGroupByBatch.Aggs
+	}
+
+	spillFiles := group.ctr.spiller.getSpillFiles()
+	for _, filePath := range spillFiles {
+		hashmapData, aggStatesData, groupByBatchData, err := group.ctr.spiller.recallState(filePath)
+		if err != nil {
+			return err
+		}
+
+		var recalledHM hashmap.HashMap
+		if group.ctr.mtyp == HStr {
+			recalledHM, err = hashmap.NewStrMap(group.ctr.keyNullable)
+		} else {
+			recalledHM, err = hashmap.NewIntHashMap(group.ctr.keyNullable)
+		}
+		if err != nil {
+			return err
+		}
+		// Pass the default hashmap allocator for deserialization.
+		if err := recalledHM.UnmarshalBinary(hashmapData, hashtable.DefaultAllocator()); err != nil {
+			recalledHM.Free()
+			return err
+		}
+
+		recalledAggs := make([]aggexec.AggFuncExec, len(aggStatesData))
+		aggMemoryManager := aggexec.NewSimpleAggMemoryManager(proc.Mp())
+		for i, aggData := range aggStatesData {
+			recalledAggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, aggData)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					recalledAggs[j].Free()
+				}
+				recalledHM.Free()
+				return err
+			}
+		}
+
+		recalledGroupByBatch := batch.NewOffHeapWithSize(len(group.ctr.groupByEvaluate.Vec))
+		// The attributes are consistent across batches, so no need to unmarshal them again.
+		// recalledGroupByBatch.Attrs = group.ctr.groupByEvaluate.Vec.Attrs // Assuming attrs are consistent
+		if err := recalledGroupByBatch.UnmarshalBinaryWithAnyMp(groupByBatchData, proc.Mp()); err != nil {
+			for _, agg := range recalledAggs {
+				agg.Free()
+			}
+			recalledHM.Free()
+			recalledGroupByBatch.Clean(proc.Mp())
+			return err
+		}
+
+		// Bulk insert recalled group-by keys into the current hashmap
+		oldCurrentGroupCount := group.ctr.hashMap.Hash.GroupCount()
+		vals, _, err := group.ctr.hashMap.Iter.Insert(0, recalledGroupByBatch.RowCount(), recalledGroupByBatch.Vecs)
+		if err != nil {
+			recalledHM.Free()
+			recalledGroupByBatch.Clean(proc.Mp())
+			return err
+		}
+
+		// Identify newly added groups and map recalled group IDs to current group IDs
+		recalledToCurrentGroupMap := make([]uint64, recalledHM.GroupCount()+1) // +1 for 1-based indexing
+		newGroupsToAppendSels := make([]int32, 0)
+
+		for i := 0; i < recalledGroupByBatch.RowCount(); i++ {
+			newID := vals[i]
+			recalledToCurrentGroupMap[uint64(i+1)] = newID
+
+			if newID > oldCurrentGroupCount {
+				newGroupsToAppendSels = append(newGroupsToAppendSels, int32(i))
+			}
+		}
+
+		if len(newGroupsToAppendSels) > 0 {
+			// If there are new groups, append their data to the current group-by batch and grow aggregators
+			if group.NeedEval {
+				newlyAddedGroupByBatch, err := recalledGroupByBatch.Window(0, recalledGroupByBatch.RowCount())
+				if err != nil {
+					return err
+				}
+				newlyAddedGroupByBatch.Shrink(int32SliceToInt64(newGroupsToAppendSels), false) // Shrink to only new groups
+				if err := group.ctr.finalResults.PushBatch(proc.Mp(), newlyAddedGroupByBatch); err != nil {
+					return err
+				}
+				// Grow aggregators for newly added groups
+				for _, agg := range currentAggs {
+					if err := agg.GroupGrow(len(newGroupsToAppendSels)); err != nil {
+						return err
+					}
+				}
+				return err
+			} else { // !group.NeedEval
+				if err := currentGroupByBatch.Union(recalledGroupByBatch, int32SliceToInt64(newGroupsToAppendSels), proc.Mp()); err != nil {
+					recalledHM.Free()
+					return err
+				}
+				for _, agg := range currentAggs {
+					if err := agg.GroupGrow(len(newGroupsToAppendSels)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		// Merge aggregation states
+		for aggIdx := range currentAggs {
+			recalledAgg := recalledAggs[aggIdx]
+			if err := currentAggs[aggIdx].BatchMerge(recalledAgg, 0, recalledToCurrentGroupMap[1:]); err != nil {
+				for j := aggIdx; j < len(currentAggs); j++ {
+					recalledAggs[j].Free()
+				}
+				recalledHM.Free()
+				recalledGroupByBatch.Clean(proc.Mp())
+				return err
+			}
+		}
+
+		recalledHM.Free()
+		for _, agg := range recalledAggs {
+			agg.Free()
+		}
+		recalledGroupByBatch.Clean(proc.Mp())
+		if err := group.ctr.spiller.DeleteFile(filePath); err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func (group *Group) getSize() int64 {
+	var size int64
+
+	// Hash table size
+	if group.ctr.hashMap.Hash != nil {
+		size += group.ctr.hashMap.Hash.Size()
+	}
+
+	// Aggregation results size
+	if group.NeedEval {
+		for _, bat := range group.ctr.finalResults.ToPopped {
+			if bat != nil {
+				size += int64(bat.Allocated())
+			}
+		}
+		for _, agg := range group.ctr.finalResults.AggList {
+			if agg != nil {
+				size += agg.Size()
+			}
+		}
+
+	} else {
+		if group.ctr.intermediateResults.res != nil {
+			size += int64(group.ctr.intermediateResults.res.Allocated())
+			for _, agg := range group.ctr.intermediateResults.res.Aggs {
+				if agg != nil {
+					size += agg.Size()
+				}
+			}
+		}
+	}
+
+	return size
 }
