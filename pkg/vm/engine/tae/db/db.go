@@ -236,6 +236,8 @@ func (db *DB) ForceCheckpointForBackup(
 	ts types.TS,
 ) (location string, err error) {
 	t0 := time.Now()
+	err = db.ForceCheckpoint(ctx, ts)
+	t1 := time.Now()
 
 	defer func() {
 		logger := logutil.Info
@@ -245,7 +247,8 @@ func (db *DB) ForceCheckpointForBackup(
 		logger(
 			"Force-Backup-CKP",
 			zap.Duration("total-cost", time.Since(t0)),
-			zap.Duration("create-backup-cost", time.Since(t0)),
+			zap.Duration("force-ickp-cost", t1.Sub(t0)),
+			zap.Duration("create-backup-cost", time.Since(t1)),
 			zap.String("location", location),
 			zap.Error(err),
 		)
