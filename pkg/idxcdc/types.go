@@ -46,6 +46,7 @@ type ConsumerType int8
 
 const (
 	ConsumerType_IndexSync ConsumerType = iota
+	ConsumerType_CNConsumer
 )
 
 const (
@@ -103,6 +104,7 @@ const (
 	NoOp RowType = iota
 	InsertRow
 	DeleteRow
+	UpsertRow
 )
 
 type RowIterator interface {

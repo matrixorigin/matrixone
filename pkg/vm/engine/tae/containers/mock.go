@@ -19,6 +19,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -208,7 +209,11 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 		}
 	case types.T_timestamp:
 		for i := int32(1); i <= int32(rows); i++ {
-			vec.Append(types.Timestamp(common.NextGlobalSeqNum()), false)
+			ts, err := types.ParseTimestamp(time.UTC, time.Now().Format(time.DateTime), t.Scale)
+			if err != nil {
+				panic(err)
+			}
+			vec.Append(ts, false)
 		}
 	case types.T_decimal64:
 		for i := int32(1); i <= int32(rows); i++ {

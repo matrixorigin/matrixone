@@ -1108,10 +1108,10 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 			typ.Width = 8
 		case 18:
 			typ = types.T_array_float32.ToType()
-			typ.Width = 100
+			typ.Width = 2
 		case 19:
 			typ = types.T_array_float64.ToType()
-			typ.Width = 100
+			typ.Width = 2
 		}
 
 		if pkIdx == i {

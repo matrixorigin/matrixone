@@ -1406,7 +1406,7 @@ func TestCDCExecutor(t *testing.T) {
 	ok, err := idxcdc.RegisterJob(
 		ctx, "", txn, "pitr",
 		&idxcdc.ConsumerInfo{
-			ConsumerType: int8(idxcdc.ConsumerType_IndexSync),
+			ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
 			IndexName:    "hnsw_idx",
