@@ -17,7 +17,6 @@ package fileservice
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -27,7 +26,6 @@ type Bytes struct {
 	mu          sync.Mutex
 	bytes       []byte
 	deallocator malloc.Deallocator
-	deallocated uint32
 	_refs       int32
 	refs        *int32
 }
@@ -91,8 +89,7 @@ func (b *Bytes) Release() bool {
 			}
 		}
 	} else {
-		if b.deallocator != nil &&
-			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+		if b.deallocator != nil {
 			b.deallocator.Deallocate(malloc.NoHints)
 			b.bytes = nil
 			return true
