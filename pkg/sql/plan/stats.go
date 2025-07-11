@@ -1266,6 +1266,23 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 	return ret, true
 }
 
+func transposeTableScanFilters(proc *process.Process, qry *Query, nodeId int32) {
+	node := qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
+		for i, e := range node.FilterList {
+			//logutil.Info("*[transposeTableScanFilters]", zap.String("originalExpr", e.String()))
+			transposedExpr, err := ConstantTranspose(e)
+			if err == nil && transposedExpr != nil {
+				node.FilterList[i] = transposedExpr
+			}
+			//logutil.Info("*[transposeTableScanFilters]", zap.String("transposedExpr", transposedExpr.String()))
+		}
+	}
+	for _, childId := range node.Children {
+		transposeTableScanFilters(proc, qry, childId)
+	}
+}
+
 func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldInExpr bool) {
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
@@ -1274,6 +1291,7 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldI
 			if err == nil && foldedExpr != nil {
 				node.FilterList[i] = foldedExpr
 			}
+			//logutil.Info("*[foldTableScanFilters]", zap.String("foldedExpr", foldedExpr.String()))
 		}
 	}
 	for _, childId := range node.Children {

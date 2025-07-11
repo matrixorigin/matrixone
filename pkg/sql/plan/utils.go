@@ -1138,6 +1138,155 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
+func combineTwo(left, right *plan.Expr, op string) *plan.Expr {
+	if left == nil && right == nil {
+		return nil
+	}
+
+	if right == nil {
+		return left
+	}
+
+	if left == nil {
+		if op == "-" {
+			zeroExpr := &plan.Expr{
+				Typ: right.Typ,
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_I64Val{I64Val: 0},
+					},
+				},
+			}
+
+			return &plan.Expr{
+				Typ: right.Typ,
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							ObjName: "-",
+							Obj:     47244640256,
+						},
+						Args: []*plan.Expr{
+							zeroExpr,
+							right,
+						},
+					},
+				},
+			}
+		}
+		return right
+	}
+
+	if op == "+" {
+		return &plan.Expr{
+			Typ: left.Typ,
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: &plan.ObjectRef{
+						ObjName: "+",
+						Obj:     42949672960,
+					},
+					Args: []*plan.Expr{left, right},
+				},
+			},
+		}
+	}
+
+	return &plan.Expr{
+		Typ: left.Typ,
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "-",
+					Obj:     47244640256,
+				},
+				Args: []*plan.Expr{left, right},
+			},
+		},
+	}
+}
+
+func splitOutConst(expr *plan.Expr) (newExpr *plan.Expr, constExpr *plan.Expr) {
+	if lit := expr.GetLit(); lit != nil {
+		return nil, expr
+	}
+
+	if colRef := expr.GetCol(); colRef != nil {
+		return expr, nil
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		return expr, nil
+	}
+
+	op := fn.Func.GetObjName()
+	if op != "+" && op != "-" {
+		return expr, nil
+	}
+
+	left, leftConst := splitOutConst(fn.Args[0])
+	right, rightConst := splitOutConst(fn.Args[1])
+
+	return combineTwo(left, right, op), combineTwo(leftConst, rightConst, op)
+}
+
+func ConstantTranspose(expr *plan.Expr) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if fn == nil {
+		return expr, nil
+	}
+	if fn.Func.ObjName != "=" {
+		return expr, nil
+	}
+	if len(fn.Args) != 2 {
+		return expr, nil
+	}
+	// 其他情况，直接在这里return
+
+	left, right := fn.Args[0], fn.Args[1]
+	newLeft, constExpr := splitOutConst(left)
+
+	if constExpr == nil {
+		return expr, nil
+	}
+
+	newRight := &plan.Expr{
+		// 所有这些Typ可能需要一个类型提升?
+		Typ: right.Typ,
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					ObjName: "-",
+					Obj:     47244640256,
+				},
+				Args: []*plan.Expr{right, constExpr},
+			},
+		},
+	}
+
+	if newLeft == nil {
+		newLeft = &plan.Expr{
+			Typ: constExpr.Typ,
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_I64Val{I64Val: 0},
+				},
+			},
+		}
+	}
+
+	return &plan.Expr{
+		Typ: expr.Typ,
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: fn.Func,
+				Args: []*plan.Expr{newLeft, newRight},
+			},
+		},
+	}, nil
+}
+
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
@@ -1239,7 +1388,6 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			},
 		}, nil
 	}
-
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return expr, nil
