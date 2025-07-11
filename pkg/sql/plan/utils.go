@@ -1138,13 +1138,13 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
-func combineTwo(left, right *plan.Expr, op string) *plan.Expr {
+func combineTwo(left, right *plan.Expr, op string, proc *process.Process) (*plan.Expr, error) {
 	if left == nil && right == nil {
-		return nil
+		return nil, nil
 	}
 
 	if right == nil {
-		return left
+		return left, nil
 	}
 
 	if left == nil {
@@ -1157,112 +1157,167 @@ func combineTwo(left, right *plan.Expr, op string) *plan.Expr {
 					},
 				},
 			}
-
-			return &plan.Expr{
-				Typ: right.Typ,
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: &plan.ObjectRef{
-							ObjName: "-",
-							Obj:     47244640256,
-						},
-						Args: []*plan.Expr{
-							zeroExpr,
-							right,
-						},
-					},
-				},
+			res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{zeroExpr, right})
+			if err != nil {
+				return nil, err
 			}
+			return res, nil
 		}
-		return right
+		return right, nil
 	}
 
 	if op == "+" {
-		return &plan.Expr{
-			Typ: left.Typ,
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: &plan.ObjectRef{
-						ObjName: "+",
-						Obj:     42949672960,
-					},
-					Args: []*plan.Expr{left, right},
-				},
-			},
+		res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{left, right})
+		if err != nil {
+			return nil, err
 		}
+		return res, nil
 	}
 
-	return &plan.Expr{
-		Typ: left.Typ,
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					ObjName: "-",
-					Obj:     47244640256,
-				},
-				Args: []*plan.Expr{left, right},
-			},
-		},
+	res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{left, right})
+	if err != nil {
+		return nil, err
 	}
+	return res, nil
 }
 
-func splitOutConst(expr *plan.Expr) (newExpr *plan.Expr, constExpr *plan.Expr) {
+func splitOutConst(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr, error) {
 	if lit := expr.GetLit(); lit != nil {
-		return nil, expr
+		return nil, expr, nil
 	}
 
 	if colRef := expr.GetCol(); colRef != nil {
-		return expr, nil
+		return expr, nil, nil
 	}
 
 	fn := expr.GetF()
 	if fn == nil {
-		return expr, nil
+		return expr, nil, nil
 	}
 
 	op := fn.Func.GetObjName()
 	if op != "+" && op != "-" {
-		return expr, nil
+		return expr, nil, nil
 	}
 
-	left, leftConst := splitOutConst(fn.Args[0])
-	right, rightConst := splitOutConst(fn.Args[1])
+	left, leftConst, err := splitOutConst(fn.Args[0], proc)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	return combineTwo(left, right, op), combineTwo(leftConst, rightConst, op)
+	right, rightConst, err := splitOutConst(fn.Args[1], proc)
+	if err != nil {
+		return nil, nil, err
+	}
+	
+	newExpr, err := combineTwo(left, right, op, proc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	constExpr, err := combineTwo(leftConst, rightConst, op, proc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return newExpr, constExpr, nil
 }
 
-func ConstantTranspose(expr *plan.Expr) (*plan.Expr, error) {
+func checkOp(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetCol() != nil || expr.GetLit() != nil {
+		return true
+	}
+
 	fn := expr.GetF()
 	if fn == nil {
-		return expr, nil
+		return false
 	}
-	if fn.Func.ObjName != "=" {
-		return expr, nil
-	}
-	if len(fn.Args) != 2 {
-		return expr, nil
-	}
-	// 其他情况，直接在这里return
 
+	switch fn.Func.ObjName {
+	case "+", "-":
+		for _, childExpr := range fn.Args {
+			if !checkOp(childExpr) {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+
+	return true
+}
+
+func getColRefCnt(expr *plan.Expr) int {
+	if expr == nil {
+		return 0
+	}
+
+	if colRef := expr.GetCol(); colRef != nil {
+		return 1
+	}
+
+	if fn := expr.GetF(); fn != nil {
+		cnt := 0
+		for _, arg := range fn.Args {
+			cnt += getColRefCnt(arg)
+		}
+		return cnt
+	}
+
+	return 0
+}
+
+func canTranspose(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+
+	switch fn.Func.ObjName {
+	case "=", "<", "<=", ">", ">=", "<>":
+		if len(fn.Args) != 2 {
+			return false
+		}
+
+		left, right := fn.Args[0], fn.Args[1]
+
+		if !checkOp(left) || !checkOp(right) {
+			return false
+		}
+
+		if !(getColRefCnt(left) == 1 && getColRefCnt(right) == 0) {
+			return false
+		}
+
+	default:
+		return false
+	}
+
+	return true
+}
+
+func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	if !canTranspose(expr) {
+		return expr, nil
+	}
+
+	fn := expr.GetF()
 	left, right := fn.Args[0], fn.Args[1]
-	newLeft, constExpr := splitOutConst(left)
+	newLeft, constExpr, err := splitOutConst(left, proc)
+	if err != nil {
+		return nil, err
+	}
 
 	if constExpr == nil {
 		return expr, nil
 	}
 
-	newRight := &plan.Expr{
-		// 所有这些Typ可能需要一个类型提升?
-		Typ: right.Typ,
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					ObjName: "-",
-					Obj:     47244640256,
-				},
-				Args: []*plan.Expr{right, constExpr},
-			},
-		},
+	newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{right, constExpr})
+	if err != nil {
+		return nil, err
 	}
 
 	if newLeft == nil {
@@ -1276,15 +1331,12 @@ func ConstantTranspose(expr *plan.Expr) (*plan.Expr, error) {
 		}
 	}
 
-	return &plan.Expr{
-		Typ: expr.Typ,
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: fn.Func,
-				Args: []*plan.Expr{newLeft, newRight},
-			},
-		},
-	}, nil
+	res, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{newLeft, newRight})
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {

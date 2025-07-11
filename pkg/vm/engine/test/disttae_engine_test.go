@@ -1631,7 +1631,7 @@ func TestConstFold(t *testing.T) {
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	txnop = p.StartCNTxn()
-	query := `SELECT * FROM db.t WHERE -1 + mock_3 + 1 + mock_9 + 1.2 = 5`
+	query := `SELECT * FROM db.t WHERE mock_3 + (1 + 2) = 3`
 	_, err := exec.Exec(p.Ctx, query, executor.Options{}.WithTxn(txnop))
 	require.NoError(t, err)
 	require.NoError(t, txnop.Commit(p.Ctx))
