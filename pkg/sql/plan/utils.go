@@ -1209,7 +1209,7 @@ func splitOutConst(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Ex
 	if err != nil {
 		return nil, nil, err
 	}
-	
+
 	newExpr, err := combineTwo(left, right, op, proc)
 	if err != nil {
 		return nil, nil, err
