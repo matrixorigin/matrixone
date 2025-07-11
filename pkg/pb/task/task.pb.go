@@ -115,6 +115,8 @@ const (
 	TaskCode_InitCdc TaskCode = 7
 	// MO Table Stats Task
 	TaskCode_MOTableStats TaskCode = 8
+	// Async index cdc Task
+	TaskCode_AsyncIndexCdc TaskCode = 9
 )
 
 var TaskCode_name = map[int32]string{
@@ -127,6 +129,7 @@ var TaskCode_name = map[int32]string{
 	6: "Retention",
 	7: "InitCdc",
 	8: "MOTableStats",
+	9: "AsyncIndexCdc",
 }
 
 var TaskCode_value = map[string]int32{
@@ -139,6 +142,7 @@ var TaskCode_value = map[string]int32{
 	"Retention":          6,
 	"InitCdc":            7,
 	"MOTableStats":       8,
+	"AsyncIndexCdc":      9,
 }
 
 func (x TaskCode) String() string {

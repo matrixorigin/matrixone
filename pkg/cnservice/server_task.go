@@ -225,6 +225,17 @@ func (s *service) startTaskRunner() {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))
 	}
+	if err := s.initAsyncTasks(); err != nil {
+		s.logger.Error("init async tasks failed", zap.Error(err))
+	}
+}
+
+func (s *service) initAsyncTasks() error {
+	ts, ok := s.task.holder.Get()
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("task service not ok")
+	}
+	return frontend.AddAsyncIndexCdcTaskIfNotExists(context.Background(), ts)
 }
 
 func (s *service) GetTaskRunner() taskservice.TaskRunner {
@@ -390,12 +401,12 @@ func (s *service) registerExecutorsLocked() {
 		),
 	)
 
-	cdcTask := idxcdc.NewCDCTaskExecutor2(
-		context.Background(),
-		s.storeEngine,
-		s._txnClient,
-		s.cfg.UUID,
-		common.DebugAllocator,
+	s.task.runner.RegisterExecutor(task.TaskCode_AsyncIndexCdc,
+		idxcdc.AsyncIndexCdcTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.cfg.UUID,
+			common.AsyncIndexCdcAllocator,
+		),
 	)
-	cdcTask.Start()
 }

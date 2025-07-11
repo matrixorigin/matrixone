@@ -33,6 +33,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -117,6 +118,22 @@ func GetTxnFactory(
 ) func() (client.TxnOperator, error) {
 	return func() (client.TxnOperator, error) {
 		return GetTxnOp(ctx, cnEngine, cnTxnClient, "debug cdc")
+	}
+}
+
+func AsyncIndexCdcTaskExecutorFactory(
+	txnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	cdUUID string,
+	mp *mpool.MPool,
+) func(ctx context.Context, task task.Task) (err error) {
+	return func(ctx context.Context, task task.Task) (err error) {
+		exec, err := NewCDCTaskExecutor2(ctx, txnEngine, cnTxnClient, cdUUID,nil, mp)
+		if err != nil {
+			return err
+		}
+		exec.Start()
+		return nil
 	}
 }
 
