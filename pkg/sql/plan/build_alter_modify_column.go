@@ -25,73 +25,109 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// ModifyColumn Can change a column definition but not its name.
-// More convenient than CHANGE to change a column definition without renaming it.
-// With FIRST or AFTER, can reorder columns.
-func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterTableModifyColumnClause, alterCtx *AlterTableContext) error {
-	tableDef := alterPlan.CopyTableDef
+func updateNewColumnInTableDef(
+	cctx CompilerContext,
+	tableDef *TableDef,
+	oCol *ColDef,
+	nColSpec *tree.ColumnTableDef,
+	nPos *tree.ColumnPosition,
+) error {
+	ctx := cctx.GetContext()
 
-	specNewColumn := spec.NewColumn
-	colName := specNewColumn.Name.ColName()
-
-	// Check whether added column has existed.
-	//col is the old column
-	col := FindColumn(tableDef.Cols, colName)
-	if col == nil || col.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), specNewColumn.Name.ColNameOrigin(), alterPlan.TableDef.Name)
-	}
-
-	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
+	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), &colType, colName); err != nil {
+
+	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
 		return err
 	}
-	//colType is the type of the new column
-	newCol, err := buildChangeColumnAndConstraint(ctx, alterPlan, col, specNewColumn, colType)
+
+	// check if the type of the new column is compatible with the old column
+	if err = checkChangeTypeCompatible(ctx, &oCol.Typ, &nTy); err != nil {
+		return err
+	}
+
+	nCol, err := buildColumnAndConstraint(cctx, tableDef, oCol, nColSpec, nTy)
 	if err != nil {
 		return err
 	}
 
 	// Check new column foreign key constraints
-	if err = CheckModifyColumnForeignkeyConstraint(ctx, tableDef, col, newCol); err != nil {
+	if err = checkColumnForeignkeyConstraint(cctx, tableDef, oCol, nCol); err != nil {
 		return err
 	}
 
-	if err = checkChangeTypeCompatible(ctx.GetContext(), &col.Typ, &newCol.Typ); err != nil {
+	if err = modifyColPosition(ctx, tableDef, oCol, nCol, nPos); err != nil {
 		return err
 	}
 
-	if err = checkModifyNewColumn(ctx.GetContext(), tableDef, col, newCol, spec.Position); err != nil {
+	return nil
+
+}
+
+// ModifyColumn Can change a column definition but not its name.
+// More convenient than CHANGE to change a column definition without renaming it.
+// With FIRST or AFTER, can reorder columns.
+func ModifyColumn(
+	cctx CompilerContext,
+	alterPlan *plan.AlterTable,
+	spec *tree.AlterTableModifyColumnClause,
+	alterCtx *AlterTableContext,
+) error {
+	tableDef := alterPlan.CopyTableDef
+	nColSpec := spec.NewColumn
+	nPos := spec.Position
+	nColName := nColSpec.Name.ColName()
+
+	// Check whether added column has existed.
+	oCol := FindColumn(tableDef.Cols, nColName)
+	if oCol == nil || oCol.Hidden {
+		return moerr.NewBadFieldError(
+			cctx.GetContext(),
+			nColSpec.Name.ColNameOrigin(),
+			alterPlan.TableDef.Name,
+		)
+	}
+	err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
+	if err != nil {
 		return err
 	}
 
-	alterCtx.alterColMap[newCol.Name] = selectExpr{
-		sexprType: columnName,
-		sexprStr:  col.Name,
+	alterCtx.alterColMap[nColName] = selectExpr{
+		sexprType: exprColumnName,
+		sexprStr:  oCol.Name,
 	}
 
 	return nil
 }
 
-// checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
-func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCol *ColDef, pos *tree.ColumnPosition) error {
+// modifyColPosition Check the position information of the newly formed column
+// and place the new column in the target location
+func modifyColPosition(
+	ctx context.Context,
+	tableDef *TableDef,
+	oCol, nCol *ColDef,
+	pos *tree.ColumnPosition,
+) error {
 	if pos != nil && pos.Typ != tree.ColumnPositionNone {
 		// detete old column
 		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
-			return strings.EqualFold(col.Name, oldCol.Name)
+			return strings.EqualFold(col.Name, oCol.Name)
 		})
 
 		targetPos, err := findPositionRelativeColumn(ctx, tableDef.Cols, pos)
 		if err != nil {
 			return err
 		}
-		tableDef.Cols = append(tableDef.Cols[:targetPos], append([]*ColDef{newCol}, tableDef.Cols[targetPos:]...)...)
+		tableDef.Cols = append(
+			tableDef.Cols[:targetPos],
+			append([]*ColDef{nCol}, tableDef.Cols[targetPos:]...)...,
+		)
 	} else {
 		for i, col := range tableDef.Cols {
-			if strings.EqualFold(col.Name, oldCol.Name) {
-				tableDef.Cols[i] = newCol
+			if strings.EqualFold(col.Name, oCol.Name) {
+				tableDef.Cols[i] = nCol
 				break
 			}
 		}
@@ -100,26 +136,35 @@ func checkModifyNewColumn(ctx context.Context, tableDef *TableDef, oldCol, newCo
 }
 
 // checkChangeTypeCompatible checks whether changes column type to another is compatible and can be changed.
-func checkChangeTypeCompatible(ctx context.Context, origin *plan.Type, to *plan.Type) error {
+func checkChangeTypeCompatible(
+	ctx context.Context,
+	origin *plan.Type,
+	to *plan.Type,
+) error {
 	// Deal with the same type.
 	if origin.Id == to.Id {
 		return nil
-	} else {
-		// The enumeration type has an independent cast function to handle it
-		if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) {
-			return nil
-		}
+	}
+	// The enumeration type has an independent cast function to handle it
+	if origin.Id == int32(types.T_enum) || to.Id == int32(types.T_enum) {
+		return nil
+	}
 
-		if supported := function.IfTypeCastSupported(types.T(origin.GetId()), types.T(to.GetId())); !supported {
-			return moerr.NewNotSupportedf(ctx, "currently unsupport change from original type %v to %v ", types.T(origin.Id).String(), types.T(to.Id).String())
-		}
+	oTy := types.T(origin.GetId())
+	nTy := types.T(to.GetId())
+	if supported := function.IfTypeCastSupported(oTy, nTy); !supported {
+		return moerr.NewNotSupportedf(ctx,
+			"currently unsupport change from original type %v to %v ",
+			oTy.String(),
+			nTy.String(),
+		)
 	}
 	return nil
 }
 
-// CheckModifyColumnForeignkeyConstraint check for table column foreign key dependencies, including
+// checkColumnForeignkeyConstraint check for table column foreign key dependencies, including
 // the foreign keys of the table itself and being dependent on foreign keys of other tables
-func CheckModifyColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, originalCol, newCol *ColDef) error {
+func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, originalCol, newCol *ColDef) error {
 	if newCol.Typ.GetId() == originalCol.Typ.GetId() &&
 		newCol.Typ.GetWidth() == originalCol.Typ.GetWidth() &&
 		newCol.Typ.GetAutoIncr() == originalCol.Typ.GetAutoIncr() {

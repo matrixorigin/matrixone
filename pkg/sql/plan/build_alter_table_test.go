@@ -325,7 +325,7 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "with null attribute not matching",
+			name: "with null attribute dropped",
 			clause: &tree.AlterTableModifyColumnClause{
 				NewColumn: &tree.ColumnTableDef{
 					Name: tree.NewUnresolvedColName("col1"),
@@ -356,12 +356,130 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 					},
 				},
 			},
+			wantOk:  true,
+			wantErr: false,
+		},
+
+		{
+			name: "with null attribute add not null",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+					Attributes: []tree.ColumnAttribute{
+						&tree.AttributeNull{Is: false},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+						Default: &plan.Default{
+							NullAbility: true,
+						},
+					},
+				},
+			},
 			wantOk:  false,
 			wantErr: false,
 		},
 
 		{
-			name: "with more than one null attribute not matching",
+			name: "with comment or default attributes",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+					Attributes: []tree.ColumnAttribute{
+						&tree.AttributeComment{
+							CMT: tree.NewStrVal("default value: test"),
+						},
+						&tree.AttributeDefault{
+							Expr: tree.NewStrVal("test"),
+						},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+						Default: &plan.Default{
+							NullAbility: true,
+						},
+					},
+				},
+			},
+			wantOk:  true,
+			wantErr: false,
+		},
+
+		{
+			name: "with on update attribute",
+			clause: &tree.AlterTableModifyColumnClause{
+				NewColumn: &tree.ColumnTableDef{
+					Name: tree.NewUnresolvedColName("col1"),
+					Type: &tree.T{
+						InternalType: tree.InternalType{
+							FamilyString: "varchar",
+							Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+							DisplayWith:  200,
+						},
+					},
+					Attributes: []tree.ColumnAttribute{
+						&tree.AttributeOnUpdate{
+							Expr: tree.NewStrVal("CURRENT_TIMESTAMP"),
+						},
+					},
+				},
+			},
+			tableDef: &TableDef{
+				Cols: []*ColDef{
+					{
+						Name:  "col1",
+						ColId: 1,
+						Typ: plan.Type{
+							Id:    int32(types.T_varchar),
+							Width: 100,
+						},
+						Default: &plan.Default{
+							NullAbility: true,
+						},
+						OnUpdate: &plan.OnUpdate{
+							OriginString: "CURRENT_TIMESTAMP",
+						},
+					},
+				},
+			},
+			wantOk:  true,
+			wantErr: false,
+		},
+
+		{
+			name: "with key attribute",
 			clause: &tree.AlterTableModifyColumnClause{
 				NewColumn: &tree.ColumnTableDef{
 					Name: tree.NewUnresolvedColName("col1"),
@@ -401,7 +519,7 @@ func TestAlterTableVarcharLengthBumped(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			ok, err := isVarcharLengthBumped(ctx, tt.clause, tt.tableDef)
+			ok, err := isInplaceModifyColumn(ctx, tt.clause, tt.tableDef)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("isVarcharLengthBumped() error = %v, wantErr %v", err, tt.wantErr)
 				return

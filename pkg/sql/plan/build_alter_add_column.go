@@ -47,7 +47,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), &colType, newColName); err != nil {
+	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
 		return err
 	}
 	newCol, err := buildAddColumnAndConstraint(ctx, alterPlan, specNewColumn, colType)
@@ -60,7 +60,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 
 	if !newCol.Default.NullAbility && len(newCol.Default.OriginString) == 0 {
 		alterCtx.alterColMap[newCol.Name] = selectExpr{
-			sexprType: constValue,
+			sexprType: exprConstValue,
 			sexprStr:  buildNotNullColumnVal(newCol),
 		}
 	}
@@ -86,7 +86,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	newColName := specNewColumn.Name.ColName()
 	newColNameOrigin := specNewColumn.Name.ColNameOrigin()
 	// Check if the new column name is valid and conflicts with internal hidden columns
-	err := CheckColumnNameValid(ctx.GetContext(), newColName)
+	err := checkColumnNameValid(ctx.GetContext(), newColName)
 	if err != nil {
 		return nil, err
 	}
@@ -198,18 +198,29 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	return newCol, nil
 }
 
-// checkAddColumnType check type for add single column.
-func checkAddColumnType(ctx context.Context, colType *plan.Type, columnName string) error {
-	if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
-		colType.Id == int32(types.T_binary) || colType.Id == int32(types.T_varbinary) {
-		if colType.GetWidth() > types.MaxStringSize {
-			return moerr.NewInvalidInputf(ctx, "string width (%d) is too long", colType.GetWidth())
+// checkTypeCapSize check type for add single column.
+func checkTypeCapSize(ctx context.Context, ty *plan.Type, name string) error {
+	if ty.Id == int32(types.T_char) ||
+		ty.Id == int32(types.T_varchar) ||
+		ty.Id == int32(types.T_binary) ||
+		ty.Id == int32(types.T_varbinary) {
+		if ty.GetWidth() > types.MaxStringSize {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"string width (%d) is too long",
+				ty.GetWidth(),
+			)
 		}
 	}
 
-	if colType.Id == int32(types.T_array_float32) || colType.Id == int32(types.T_array_float64) {
-		if colType.GetWidth() > types.MaxArrayDimension {
-			return moerr.NewInvalidInputf(ctx, "vector width (%d) is too long", colType.GetWidth())
+	if ty.Id == int32(types.T_array_float32) ||
+		ty.Id == int32(types.T_array_float64) {
+		if ty.GetWidth() > types.MaxArrayDimension {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"vector width (%d) is too long",
+				ty.GetWidth(),
+			)
 		}
 	}
 	return nil
@@ -286,7 +297,11 @@ func checkAddColumWithUniqueKey(ctx context.Context, tableDef *TableDef, uniKey 
 }
 
 // findPositionRelativeColumn returns a position relative to the position of the add/modify/change column.
-func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.ColumnPosition) (int, error) {
+func findPositionRelativeColumn(
+	ctx context.Context,
+	cols []*ColDef,
+	pos *tree.ColumnPosition,
+) (int, error) {
 	position := len(cols)
 	// gets the position of the column, which defaults to the length of the column indicating appending.
 	if pos == nil {
@@ -303,7 +318,11 @@ func findPositionRelativeColumn(ctx context.Context, cols []*ColDef, pos *tree.C
 			}
 		}
 		if relcolIndex == -1 {
-			return -1, moerr.NewBadFieldError(ctx, pos.RelativeColumn.ColNameOrigin(), "Columns Set")
+			return -1, moerr.NewBadFieldError(
+				ctx,
+				pos.RelativeColumn.ColNameOrigin(),
+				"Columns Set",
+			)
 		}
 		// the insertion position is after the above column.
 		position = relcolIndex + 1
