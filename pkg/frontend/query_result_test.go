@@ -139,7 +139,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 				TenantID: sysAccountID,
 			}
 			ses.SetTenantInfo(tenant)
-			proc := testutil.NewProcess()
+			proc := testutil.NewProcess(t)
 			proc.Base.FileService = getPu("").FileService
 
 			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}

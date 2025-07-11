@@ -71,7 +71,7 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 }
 
 func Test_BatchAllocNewRowIds(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	t.Run("A", func(t *testing.T) {
 		txn := Transaction{

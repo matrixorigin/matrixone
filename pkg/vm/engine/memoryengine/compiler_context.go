@@ -143,7 +143,7 @@ func (c *CompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snap
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(nil)
 	return proc
 }
 

@@ -38,7 +38,7 @@ func TestInsertIndexMetadata(t *testing.T) {
 	defer ctrl.Finish()
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnOperator = txnOperator
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
@@ -129,7 +129,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnOperator = txnOperator
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)

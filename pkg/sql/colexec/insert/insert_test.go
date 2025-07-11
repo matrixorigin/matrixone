@@ -60,7 +60,7 @@ func TestInsertOperator(t *testing.T) {
 	relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	batch1 := &batch.Batch{
@@ -69,7 +69,7 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarInt64(3, 3),
 			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
 			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(types.T_int64, 3),
+			testutil.MakeScalarNull(t, types.T_int64, 3),
 		},
 		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 	}

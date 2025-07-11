@@ -28,7 +28,7 @@ import (
 const nullFlag = int64(-65535)
 
 func TestSamplePool(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	// data source :
 	// (1, 1), (2, 2), (3, 3), (3, 4), (4, 4),
