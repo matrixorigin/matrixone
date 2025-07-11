@@ -1138,6 +1138,201 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
+func combineTwo(left, right *plan.Expr, op string, proc *process.Process) (*plan.Expr, error) {
+	if left == nil && right == nil {
+		return nil, nil
+	}
+
+	if right == nil {
+		return left, nil
+	}
+
+	if left == nil {
+		if op == "-" {
+			res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "unary_minus", []*plan.Expr{right})
+			if err != nil {
+				return nil, err
+			}
+			return res, nil
+		}
+		return right, nil
+	}
+
+	if op == "+" {
+		res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{left, right})
+		if err != nil {
+			return nil, err
+		}
+		return res, nil
+	}
+
+	res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{left, right})
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func splitOutConst(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr, error) {
+	if lit := expr.GetLit(); lit != nil {
+		return nil, expr, nil
+	}
+
+	if colRef := expr.GetCol(); colRef != nil {
+		return expr, nil, nil
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		return expr, nil, nil
+	}
+
+	op := fn.Func.GetObjName()
+	if op != "+" && op != "-" {
+		return expr, nil, nil
+	}
+
+	left, leftConst, err := splitOutConst(fn.Args[0], proc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	right, rightConst, err := splitOutConst(fn.Args[1], proc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	newExpr, err := combineTwo(left, right, op, proc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	constExpr, err := combineTwo(leftConst, rightConst, op, proc)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return newExpr, constExpr, nil
+}
+
+func checkOp(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetCol() != nil || expr.GetLit() != nil {
+		return true
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+
+	switch fn.Func.ObjName {
+	case "+", "-":
+		for _, childExpr := range fn.Args {
+			if !checkOp(childExpr) {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+
+	return true
+}
+
+func getColRefCnt(expr *plan.Expr) int {
+	if expr == nil {
+		return 0
+	}
+
+	if colRef := expr.GetCol(); colRef != nil {
+		return 1
+	}
+
+	if fn := expr.GetF(); fn != nil {
+		cnt := 0
+		for _, arg := range fn.Args {
+			cnt += getColRefCnt(arg)
+		}
+		return cnt
+	}
+
+	return 0
+}
+
+func canTranspose(expr *plan.Expr) (can bool, leftCnt int, rightCnt int) {
+	fn := expr.GetF()
+	if fn == nil {
+		return false, 0, 0
+	}
+
+	switch fn.Func.ObjName {
+	case "=":
+		if len(fn.Args) != 2 {
+			return false, 0, 0
+		}
+
+		left, right := fn.Args[0], fn.Args[1]
+
+		if !checkOp(left) || !checkOp(right) {
+			return false, 0, 0
+		}
+
+		leftCnt = getColRefCnt(left)
+		rightCnt = getColRefCnt(right)
+		if !((leftCnt == 1 && rightCnt == 0) || (leftCnt == 0 && rightCnt == 1)) {
+			return false, 0, 0
+		}
+
+	default:
+		return false, 0, 0
+	}
+
+	return true, leftCnt, rightCnt
+}
+
+func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	can, leftCnt, rightCnt := canTranspose(expr)
+	if !can {
+		return expr, nil
+	}
+
+	if leftCnt == 0 && rightCnt == 1 {
+		fn := expr.GetF()
+		left, right := fn.Args[0], fn.Args[1]
+		exchangedExpr, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{right, left})
+		if err != nil {
+			return nil, err
+		}
+		expr = exchangedExpr
+	}
+
+	fn := expr.GetF()
+	left, right := fn.Args[0], fn.Args[1]
+	newLeft, constExpr, err := splitOutConst(left, proc)
+	if err != nil {
+		return nil, err
+	}
+
+	if constExpr == nil {
+		return expr, nil
+	}
+
+	newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{right, constExpr})
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{newLeft, newRight})
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
@@ -1239,7 +1434,6 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			},
 		}, nil
 	}
-
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return expr, nil
