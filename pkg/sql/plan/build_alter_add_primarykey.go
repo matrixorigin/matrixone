@@ -39,7 +39,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 		if col == nil {
 			return moerr.NewErrKeyColumnDoesNotExist(ctx.GetContext(), colName)
 		}
-		if err := CheckColumnNameValid(ctx.GetContext(), colName); err != nil {
+		if err := checkColumnNameValid(ctx.GetContext(), colName); err != nil {
 			return err
 		}
 		if err := checkPrimaryKeyPartType(ctx.GetContext(), col.Typ, colName); err != nil {
