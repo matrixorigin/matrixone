@@ -130,7 +130,11 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 
 	{
 		tc.Ctx.SrcCtx = proc.Ctx
-		if tc.Ctx.ScanSnapshot != nil && tc.Ctx.ScanSnapshot.Tenant != nil {
+		if tc.Ctx.SrcObjDef.PubInfo != nil {
+			// the src table is a publication
+			tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, uint32(tc.Ctx.SrcObjDef.PubInfo.TenantId))
+
+		} else if tc.Ctx.ScanSnapshot != nil && tc.Ctx.ScanSnapshot.Tenant != nil {
 			// the source data may be coming from a different account.
 			tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, tc.Ctx.ScanSnapshot.Tenant.TenantID)
 		}

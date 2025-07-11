@@ -39,8 +39,42 @@ a    b
 3    3
 4    4
 5    5
+drop database if exists db2;
+create database db2;
+use db2;
+create table r1 (a int);
+insert into r1 values(1),(2),(3),(4);
+create publication sys_pub database db2 account acc2;
+drop database if exists db3;
+create database db3;
+use db3;
+create table r2 (a int);
+insert into r2 values(1),(2),(3),(4);
+create publication acc1_pub database db3 account acc2;
+create database sub_sys from sys publication sys_pub;
+create database sub_acc1 from acc1 publication acc1_pub;
+show subscriptions;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+acc1_pub    acc1    db3    *        2025-07-11 11:42:24    sub_acc1    2025-07-11 11:42:24    0
+sys_pub    sys    db2    *        2025-07-11 11:42:24    sub_sys    2025-07-11 11:42:24    0
+create database db4 clone sub_sys;
+select * from db4.r1 order by a asc;
+a
+1
+2
+3
+4
+create database db5 clone sub_acc1;
+select * from db5.r2 order by a asc;
+a
+1
+2
+3
+4
 drop snapshot if exists sp0;
 drop snapshot if exists sp1;
 drop account if exists acc1;
 drop account if exists acc2;
 drop database if exists db1;
+drop publication if exists sys_pub;
+drop database if exists db2;
