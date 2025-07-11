@@ -150,6 +150,7 @@ message ObjectRef {
 	string obj_name		= 8;
 	string subscription_name = 9;
 	PubInfo pub_info = 10;
+	bool not_lock_meta = 11;
 }
 
 message PubInfo {
