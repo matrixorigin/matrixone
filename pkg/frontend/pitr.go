@@ -1456,14 +1456,16 @@ func reCreateTableWithPitr(
 		return
 	}
 
-	// create table
-	getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: '%v', create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
-	if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
-		if strings.Contains(err.Error(), "no such table") {
-			getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", pitrName, tblInfo.tblName))
-			err = nil
+	if !isRestoreByCloneSql.MatchString(restoreTableDataByTsFmt) {
+		// create table
+		getLogger(sid).Info(fmt.Sprintf("[%s]  start to create table: '%v', create table sql: %s", pitrName, tblInfo.tblName, tblInfo.createSql))
+		if err = bh.Exec(ctx, tblInfo.createSql); err != nil {
+			if strings.Contains(err.Error(), "no such table") {
+				getLogger(sid).Info(fmt.Sprintf("[%s] foreign key table %v referenced table not exists, skip restore", pitrName, tblInfo.tblName))
+				err = nil
+			}
+			return
 		}
-		return
 	}
 
 	// insert data
@@ -1606,7 +1608,7 @@ func deleteCurFkTableInPitrRestore(ctx context.Context,
 		return
 	}
 	// collect table infos which need to be dropped in current state; snapshotName must set to empty
-	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, "", dbName, tblName, sortedFkTbls)
+	curFkTableMap, err = getTableInfoMap(ctx, sid, bh, nil, dbName, tblName, sortedFkTbls)
 	if err != nil {
 		return
 	}

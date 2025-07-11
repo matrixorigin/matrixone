@@ -189,6 +189,8 @@ const (
 	FPShowCDC
 	FPCommitUnsafeBeforeRollbackWhenCommitPanic
 	FPShowRecoveryWindow
+	FPCloneDatabase
+	FPCloneTable
 )
 
 type (

@@ -974,6 +974,7 @@ func (txn *Transaction) WriteFileLocked(
 	}
 
 	txn.writes = append(txn.writes, entry)
+
 	return nil
 }
 

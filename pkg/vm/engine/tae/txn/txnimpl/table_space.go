@@ -50,7 +50,9 @@ type tableSpace struct {
 	tableHandle data.TableHandle
 	nobj        handle.Object
 
-	stats []objectio.ObjectStats
+	stats    []objectio.ObjectStats
+	statsMap map[objectio.ObjectNameShort]struct{}
+
 	// for tombstone table space
 	objs []*objectio.ObjectId
 }
@@ -70,20 +72,21 @@ func newTableSpace(table *txnTable, isTombstone bool) *tableSpace {
 }
 
 // register a non-appendable insertNode.
-func (space *tableSpace) registerStats(stats objectio.ObjectStats) {
+func (space *tableSpace) registerStats(statsList ...objectio.ObjectStats) {
 	if space.stats == nil {
 		space.stats = make([]objectio.ObjectStats, 0)
+		space.statsMap = make(map[objectio.ObjectNameShort]struct{})
 	}
-	space.stats = append(space.stats, stats)
+
+	space.stats = append(space.stats, statsList...)
+	for _, stats := range statsList {
+		space.statsMap[*stats.ObjectShortName()] = struct{}{}
+	}
 }
 
 func (space *tableSpace) isStatsExisted(o objectio.ObjectStats) bool {
-	for _, stats := range space.stats {
-		if stats.ObjectName().Equal(o.ObjectName()) {
-			return true
-		}
-	}
-	return false
+	_, ok := space.statsMap[*o.ObjectShortName()]
+	return ok
 }
 
 // register an appendable insertNode.

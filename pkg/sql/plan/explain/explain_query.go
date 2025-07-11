@@ -81,6 +81,7 @@ const (
 	Label_Dedup_Join        = "Dedup join"
 	Label_Apply             = "Apply"
 	Label_PostDml           = "PostDml"
+	Label_Table_Clone       = "Table Clone"
 )
 
 const (

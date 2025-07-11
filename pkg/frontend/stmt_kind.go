@@ -129,7 +129,12 @@ If it is Case4, Then
 
 	Create/Drop database commits current txn. a new txn for the next statement if needed.
 */
-func statementCanBeExecutedInUncommittedTransaction(ctx context.Context, ses FeSession, stmt tree.Statement) (bool, error) {
+func statementCanBeExecutedInUncommittedTransaction(
+	ctx context.Context,
+	ses FeSession,
+	stmt tree.Statement,
+) (bool, error) {
+
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
@@ -223,6 +228,8 @@ func statementCanBeExecutedInUncommittedTransaction(ctx context.Context, ses FeS
 		//background transaction can execute the DROPxxx in one transaction
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.SetVar:
+		return true, nil
+	case *tree.CloneTable:
 		return true, nil
 	}
 

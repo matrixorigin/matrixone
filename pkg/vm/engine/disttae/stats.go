@@ -721,7 +721,7 @@ func updateInfoFromZoneMap(
 		}
 		return nil
 	}
-	if err := ForeachVisibleDataObject(
+	if err := ForeachVisibleObjects(
 		req.partitionState,
 		req.ts,
 		onObjFn,

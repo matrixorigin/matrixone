@@ -377,7 +377,8 @@ func (tbl *txnTable) TransferDeletes(
 		if sinker != nil {
 			sinker.Sync(ctx)
 			stats, bats := sinker.GetResult()
-			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, stats...)
+
+			tbl.tombstoneTable.tableSpace.registerStats(stats...)
 
 			if len(bats) != 0 {
 				panic(fmt.Sprintf("TN-TRANSFER-TOMBSTONE-FILES, batch is %d", len(bats)))
