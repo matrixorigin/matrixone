@@ -48,6 +48,7 @@ const (
 
 type CacheConfig struct {
 	MemoryCapacity toml.ByteSize `toml:"memory-capacity"`
+	DisableS3Fifo  bool          `toml:"disable-s3fifo"`
 }
 
 // BlockReadStats collect blk read related cache statistics,
@@ -111,16 +112,16 @@ func cacheCapacityFunc(size int64) fscache.CapacityFunc {
 }
 
 func init() {
-	metaCache = newMetaCache(cacheCapacityFunc(metaCacheSize()))
+	metaCache = newMetaCache(cacheCapacityFunc(metaCacheSize()), false)
 }
 
-func InitMetaCache(size int64) {
+func InitMetaCache(size int64, disable_s3fifo bool) {
 	onceInit.Do(func() {
-		metaCache = newMetaCache(cacheCapacityFunc(size))
+		metaCache = newMetaCache(cacheCapacityFunc(size), disable_s3fifo)
 	})
 }
 
-func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, []byte] {
+func newMetaCache(capacity fscache.CapacityFunc, disable_s3fifo bool) *fifocache.Cache[mataCacheKey, []byte] {
 	inuseBytes, capacityBytes := metric.GetFsCacheBytesGauge("", "meta")
 	capacityBytes.Set(float64(capacity()))
 	return fifocache.New[mataCacheKey, []byte](
@@ -134,7 +135,8 @@ func newMetaCache(capacity fscache.CapacityFunc) *fifocache.Cache[mataCacheKey, 
 		func(_ context.Context, _ mataCacheKey, _ []byte, size int64) { // postEvict
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacity()))
-		})
+		},
+		disable_s3fifo)
 }
 
 func EvictCache(ctx context.Context) (target int64) {

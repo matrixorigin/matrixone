@@ -12,11 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fscache
+package fifocache
 
-type Data interface {
-	Bytes() []byte
-	Slice(length int) Data
-	Retain()
-	Release() bool
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestShardMap(t *testing.T) {
+
+	m := NewShardMap[int, string](ShardInt[int])
+	ok := m.Set(1, "1", func(v string) {
+	})
+	assert.Equal(t, ok, true)
+	ok = m.Set(1, "1", func(v string) {
+	})
+	assert.Equal(t, ok, false)
+
+	v, ok := m.Get(1, func(v string) {
+	})
+	assert.Equal(t, ok, true)
+	assert.Equal(t, v, "1")
+
+	_, ok = m.GetAndDelete(0, func(v string) {
+	})
+	assert.Equal(t, ok, false)
+
+	_, ok = m.GetAndDelete(1, func(v string) {
+	})
+	assert.Equal(t, ok, true)
 }
