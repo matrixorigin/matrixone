@@ -724,6 +724,9 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 }
 
 func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if objRes.NotLockMeta {
+		return
+	}
 	if !c.needLockMeta {
 		return
 	}
