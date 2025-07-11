@@ -117,10 +117,19 @@ func (c *_CacheItem[K, V]) PostFn(ctx context.Context, fn func(ctx context.Conte
 }
 
 // Thread-safe
-func (c *_CacheItem[K, V]) Retain() bool {
+func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.retainValue()
+	ok := c.retainValue()
+	if !ok {
+		return false
+	}
+
+	if fn != nil {
+		fn(ctx, c.key, c.value, c.size)
+	}
+
+	return true
 }
 
 // INTERNAL: non-thread safe.
@@ -185,7 +194,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 
 	// FSCACHEDATA RETAIN
 	// increment the ref counter first no matter what to make sure the memory is occupied before hashtable.Set
-	item.Retain()
+	item.Retain(ctx, nil)
 
 	ok := c.htab.Set(key, item, nil)
 	if !ok {
@@ -217,16 +226,13 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 	}
 
 	// FSCACHEDATA RETAIN
-	ok = item.Retain()
+	ok = item.Retain(ctx, c.postGet)
 	if !ok {
 		return item.value, false
 	}
 
 	// increment
 	item.Inc()
-
-	// postGet
-	item.PostFn(ctx, c.postGet)
 
 	return item.value, true
 }
