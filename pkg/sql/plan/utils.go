@@ -1149,15 +1149,7 @@ func combineTwo(left, right *plan.Expr, op string, proc *process.Process) (*plan
 
 	if left == nil {
 		if op == "-" {
-			zeroExpr := &plan.Expr{
-				Typ: right.Typ,
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{I64Val: 0},
-					},
-				},
-			}
-			res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{zeroExpr, right})
+			res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "unary_minus", []*plan.Expr{right})
 			if err != nil {
 				return nil, err
 			}
@@ -1270,38 +1262,51 @@ func getColRefCnt(expr *plan.Expr) int {
 	return 0
 }
 
-func canTranspose(expr *plan.Expr) bool {
+func canTranspose(expr *plan.Expr) (can bool, leftCnt int, rightCnt int) {
 	fn := expr.GetF()
 	if fn == nil {
-		return false
+		return false, 0, 0
 	}
 
 	switch fn.Func.ObjName {
 	case "=", "<", "<=", ">", ">=", "<>":
 		if len(fn.Args) != 2 {
-			return false
+			return false, 0, 0
 		}
 
 		left, right := fn.Args[0], fn.Args[1]
 
 		if !checkOp(left) || !checkOp(right) {
-			return false
+			return false, 0, 0
 		}
 
-		if !(getColRefCnt(left) == 1 && getColRefCnt(right) == 0) {
-			return false
+		leftCnt = getColRefCnt(left)
+		rightCnt = getColRefCnt(right)
+		if !((leftCnt == 1 && rightCnt == 0) || (leftCnt == 0 && rightCnt == 1)) {
+			return false, 0, 0
 		}
 
 	default:
-		return false
+		return false, 0, 0
 	}
 
-	return true
+	return true, leftCnt, rightCnt
 }
 
 func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
-	if !canTranspose(expr) {
+	can, leftCnt, rightCnt := canTranspose(expr)
+	if !can {
 		return expr, nil
+	}
+
+	if leftCnt == 0 && rightCnt == 1 {
+		fn := expr.GetF()
+		left, right := fn.Args[0], fn.Args[1]
+		exchangedExpr, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{right, left})
+		if err != nil {
+			return nil, err
+		}
+		expr = exchangedExpr
 	}
 
 	fn := expr.GetF()
@@ -1318,17 +1323,6 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 	newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{right, constExpr})
 	if err != nil {
 		return nil, err
-	}
-
-	if newLeft == nil {
-		newLeft = &plan.Expr{
-			Typ: constExpr.Typ,
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_I64Val{I64Val: 0},
-				},
-			},
-		}
 	}
 
 	res, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{newLeft, newRight})
