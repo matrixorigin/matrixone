@@ -1367,6 +1367,8 @@ func TestCDCExecutor(t *testing.T) {
 
 	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
 	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
@@ -1375,7 +1377,7 @@ func TestCDCExecutor(t *testing.T) {
 
 	// create database and table
 
-	bat := CreateDBAndTableForHNSWAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
 
 	// append 1 row

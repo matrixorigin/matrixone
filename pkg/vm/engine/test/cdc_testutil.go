@@ -645,7 +645,56 @@ func mock_mo_indexes(
 		"`ordinal_position` int unsigned NOT NULL," +
 		"`options` text DEFAULT NULL," +
 		"`index_table_name` varchar(5000) DEFAULT NULL," +
-		"PRIMARY KEY (`id`,`column_name`)" +
+		"PRIMARY KEY (`table_id`,`column_name`)" +// use table_id as primary key instead of id to avoid duplicate
+		")"
+
+	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+
+	exec := v.(executor.SQLExecutor)
+	txn, err := de.NewTxnOperator(ctx, de.Now())
+	if err != nil {
+		return err
+	}
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(txn)
+
+	_, err = exec.Exec(ctx, sql, opts)
+	if err != nil {
+		return err
+	}
+	if err = txn.Commit(ctx); err != nil {
+		return err
+	}
+	return err
+}
+func mock_mo_foreign_keys(
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+) (err error) {
+	sql := "CREATE TABLE `mo_catalog`.`mo_foreign_keys` (" +
+		"`constraint_name` varchar(5000) NOT NULL," +
+		"`constraint_id` bigint unsigned NOT NULL DEFAULT 0," +
+		"`db_name` varchar(5000) NOT NULL," +
+		"`db_id` bigint unsigned NOT NULL DEFAULT 0," +
+		"`table_name` varchar(5000) NOT NULL," +
+		"`table_id` bigint unsigned NOT NULL DEFAULT 0," +
+		"`column_name` varchar(256) NOT NULL," +
+		"`column_id` bigint unsigned NOT NULL DEFAULT 0," +
+		"`refer_db_name` varchar(5000) NOT NULL," +
+		"`refer_db_id` bigint unsigned NOT NULL DEFAULT 0," +
+		"`refer_table_name` varchar(5000) NOT NULL," +
+		"`refer_table_id` bigint unsigned NOT NULL DEFAULT 0," +
+		"`refer_column_name` varchar(256) NOT NULL," +
+		"`refer_column_id` bigint unsigned NOT NULL DEFAULT 0," +
+		"`on_delete` varchar(128) NOT NULL," +
+		"`on_update` varchar(128) NOT NULL," +
+		"PRIMARY KEY (`constraint_name`,`constraint_id`,`db_name`,`db_id`,`table_name`,`table_id`,`column_name`,`column_id`,`refer_db_name`,`refer_db_id`,`refer_table_name`,`refer_table_id`,`refer_column_name`,`refer_column_id`)" +
 		")"
 
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -792,4 +841,37 @@ func CreateDBAndTableForHNSWAndGetAppendData(
 	assert.NoError(t, err)
 
 	return catalog2.MockBatch(schema, rowCount)
+}
+
+func CreateDBAndTableForCNConsumerAndGetAppendData(
+	t *testing.T,
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	rowCount int,
+) *containers.Batch {
+	createDBSql := fmt.Sprintf("create database if not exists %s", databaseName)
+	createTableSql := fmt.Sprintf(
+		"create table %s.%s (id int primary key, name varchar)", databaseName, tableName)
+
+	v, ok := moruntime.ServiceRuntime("").
+		GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+
+	exec := v.(executor.SQLExecutor)
+	_, err := exec.Exec(ctx, createDBSql, executor.Options{})
+	assert.NoError(t, err)
+	_, err = exec.Exec(ctx, createTableSql, executor.Options{})
+	assert.NoError(t, err)
+
+	return containers.MockBatchWithAttrs(
+		[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType()},
+		[]string{"id", "name"},
+		rowCount,
+		0,
+		nil,
+	)
 }

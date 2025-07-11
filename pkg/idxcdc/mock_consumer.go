@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -36,6 +35,8 @@ const (
 	fakeSql                = "fakeSql"
 	createTable            = "create table"
 	createTableIfNotExists = "create table if not exists"
+
+	targetDbName = "test_async_index_cdc"
 )
 
 func NewConsumer(
@@ -58,6 +59,8 @@ type interalSqlConsumer struct {
 
 	dataRetriever DataRetriever
 	tableInfo     *plan.TableDef
+
+	targetTableName string
 
 	// buf of sql statement
 	sqlBufs      [2][]byte
@@ -106,7 +109,6 @@ type interalSqlConsumer struct {
 	preSqlBufLen int
 
 	wg  sync.WaitGroup
-	txn client.TxnOperator
 }
 
 func NewInteralSqlConsumer(
@@ -120,6 +122,21 @@ func NewInteralSqlConsumer(
 	maxAllowedPacket := uint64(1024 * 1024)
 	logutil.Infof("cdc mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, maxAllowedPacket)
 
+	v, ok := moruntime.ServiceRuntime(cnUUID).
+		GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+
+	exec := v.(executor.SQLExecutor)
+	s.internalSqlExecutor = exec
+	s.targetTableName = fmt.Sprintf("test_table_%d", tableDef.TblId)
+	logutil.Infof("cdc %v->%vs", tableDef.Name, s.targetTableName)
+	err := s.createTargetTable(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
 	// sqlBuf
 	s.sqlBufs[0] = make([]byte, 0, maxAllowedPacket)
 	s.sqlBufs[1] = make([]byte, 0, maxAllowedPacket)
@@ -130,8 +147,8 @@ func NewInteralSqlConsumer(
 	s.rowBuf = make([]byte, 0, 1024)
 
 	// prefix and suffix
-	s.insertPrefix = []byte(fmt.Sprintf("Insert INTO `%s`.`%s` VALUES ", tableDef.DbName, tableDef.Name))
-	s.upsertPrefix = []byte(fmt.Sprintf("Replace INTO `%s`.`%s` VALUES ", tableDef.DbName, tableDef.Name))
+	s.insertPrefix = []byte(fmt.Sprintf("Insert INTO `%s`.`%s` VALUES ", targetDbName, s.targetTableName))
+	s.upsertPrefix = []byte(fmt.Sprintf("Replace INTO `%s`.`%s` VALUES ", targetDbName, s.targetTableName))
 	s.insertSuffix = []byte(";")
 	s.insertRowPrefix = []byte("(")
 	s.insertColSeparator = []byte(",")
@@ -142,7 +159,7 @@ func NewInteralSqlConsumer(
 	// e.g. delete from t1 where pk1=a1 and pk2=a2 or pk1=b1 and pk2=b2 or pk1=c1 and pk2=c2 ...;
 	//                                   ^
 	//                            deleteColSeparator
-	s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE ", tableDef.DbName, tableDef.Name))
+	s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE ", targetDbName, s.targetTableName))
 	s.deleteSuffix = []byte(";")
 	s.deleteRowPrefix = []byte("")
 	s.deleteColSeparator = []byte(" and ")
@@ -180,20 +197,26 @@ func NewInteralSqlConsumer(
 	s.preRowType = NoOp
 	s.preSqlBufLen = 0
 
-	v, ok := moruntime.ServiceRuntime(cnUUID).
-		GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	exec := v.(executor.SQLExecutor)
-	s.internalSqlExecutor = exec
-
 	return s, nil
 }
 
-func (s *interalSqlConsumer) exec(ctx context.Context, sql string) error {
-	_, err := s.internalSqlExecutor.Exec(ctx, sql, executor.Options{}.WithTxn(s.txn))
+func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
+	createDBSql := fmt.Sprintf("create database if not exists %s", targetDbName)
+	srcCreateSql := s.tableInfo.Createsql
+	if len(srcCreateSql) < len(createTableIfNotExists) || !strings.EqualFold(srcCreateSql[:len(createTableIfNotExists)], createTableIfNotExists) {
+		srcCreateSql = createTableIfNotExists + srcCreateSql[len(createTable):]
+	}
+	tableStart := len(createTableIfNotExists)
+	tableEnd := strings.Index(srcCreateSql, "(")
+	newTablePart := fmt.Sprintf("%s.%s", targetDbName, s.targetTableName)
+	createTableSql := srcCreateSql[:tableStart] + " " + newTablePart + srcCreateSql[tableEnd:]
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	_, err := s.internalSqlExecutor.Exec(ctx, createDBSql, executor.Options{})
+	if err != nil {
+		return err
+	}
+	_, err = s.internalSqlExecutor.Exec(ctx, createTableSql, executor.Options{})
 	return err
 }
 
@@ -216,7 +239,7 @@ func (s *interalSqlConsumer) Run(ctx context.Context) {
 				}
 				return nil
 			}
-			if err := s.exec(ctx, string(sqlBuffer)); err != nil {
+			if _, err := txn.Exec(string(sqlBuffer), executor.StatementOption{}); err != nil {
 				logutil.Errorf("cdc interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
 				// record error
 				panic(err)
@@ -230,7 +253,7 @@ func (s *interalSqlConsumer) Run(ctx context.Context) {
 }
 func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) error {
 	s.dataRetriever = data
-	
+
 	go s.Run(context.Background())
 	for {
 		insertBatch, deleteBatch, noMoreData, err := data.Next()
@@ -395,6 +418,9 @@ func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicB
 }
 
 func (s *interalSqlConsumer) tryFlushSqlBuf() (err error) {
+	if s.preSqlBufLen == 0 {
+		return
+	}
 	if s.isNonEmptyInsertStmt() || s.isNonEmptyUpsertStmt() {
 		s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
 		s.preSqlBufLen = len(s.sqlBuf)
@@ -425,7 +451,7 @@ func (s *interalSqlConsumer) appendSqlBuf(rowType RowType) (err error) {
 	// if s.sqlBuf has no enough space
 	if len(s.sqlBuf)+len(s.rowBuf)+suffixLen > cap(s.sqlBuf) {
 		// complete sql statement
-		if s.isNonEmptyInsertStmt()|| s.isNonEmptyUpsertStmt()  {
+		if s.isNonEmptyInsertStmt() || s.isNonEmptyUpsertStmt() {
 			s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
 			s.preSqlBufLen = len(s.sqlBuf)
 		}
