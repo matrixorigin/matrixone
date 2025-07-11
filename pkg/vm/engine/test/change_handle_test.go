@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/idxcdc"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -40,6 +41,8 @@ import (
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 )
@@ -1338,4 +1341,135 @@ func TestChangesHandle7(t *testing.T) {
 		assert.Equal(t, totalRowCount, 8192*2)
 		assert.NoError(t, handle.Close())
 	}
+}
+
+func TestCDCExecutor(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// create database and table
+
+	bat := CreateDBAndTableForHNSWAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	bats := bat.Split(10)
+
+	// append 1 row
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	require.Nil(t, err)
+
+	txn.Commit(ctxWithTimeout)
+
+	// init cdc executor
+	txnFactory := func() (client.TxnOperator, error) {
+		return disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	}
+	cdcExecutor, err := idxcdc.NewCDCTaskExecutor2(ctxWithTimeout, disttaeEngine.Engine, disttaeEngine.GetTxnClient(), "", txnFactory, common.DebugAllocator)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+
+	// register cdc job
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := idxcdc.RegisterJob(
+		ctx, "", txn, "pitr",
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_IndexSync),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		},
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			return ok
+		},
+	)
+	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	assert.True(t, ok)
+
+	// append 1 row
+	_, rel, txn, err = disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[1]))
+	require.Nil(t, err)
+
+	txn.Commit(ctxWithTimeout)
+
+	now := taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	assert.True(t, ts.GE(&now))
+	t.Logf("watermark greater than %v", now.ToString())
+
+	// unregister cdc job
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err = idxcdc.UnregisterJob(ctx, "", txn,
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_IndexSync),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		})
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			return !ok
+		},
+	)
+	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	assert.False(t, ok)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
 }

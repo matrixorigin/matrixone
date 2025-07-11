@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/idxcdc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -39,6 +40,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
 
@@ -387,4 +389,13 @@ func (s *service) registerExecutorsLocked() {
 			s.storeEngine,
 		),
 	)
+
+	cdcTask := idxcdc.NewCDCTaskExecutor2(
+		context.Background(),
+		s.storeEngine,
+		s._txnClient,
+		s.cfg.UUID,
+		common.DebugAllocator,
+	)
+	cdcTask.Start()
 }

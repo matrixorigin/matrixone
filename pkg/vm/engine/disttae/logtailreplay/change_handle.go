@@ -848,6 +848,7 @@ func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, t
 // This ensures that for any pk, we only keep the most recent operation,
 // whether it's an insert/update from data batch or a delete from tombstone batch.
 func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
+	return // TODO add delete
 	if data == nil || tombstone == nil {
 		return
 	}

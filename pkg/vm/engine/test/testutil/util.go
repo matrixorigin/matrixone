@@ -29,6 +29,7 @@ import (
 	"golang.org/x/exp/rand"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	pkgCatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -113,6 +114,7 @@ func CreateEngines(
 	rpcAgent = NewMockLogtailAgent()
 
 	rootDir := GetDefaultTestPath("engine_test", t)
+	os.RemoveAll(rootDir)
 
 	s3Op, err := getS3SharedFileServiceOption(ctx, rootDir)
 	require.NoError(t, err)
@@ -181,6 +183,37 @@ func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 	}
 
 	return defs, nil
+}
+
+func EngineDefAddIndex(defs []engine.TableDef, idxColName string) []engine.TableDef {
+	indexes := []*plan.IndexDef{
+		{
+			IndexName:          "hnsw_idx",
+			TableExist:         true,
+			IndexAlgo:          pkgCatalog.MoIndexHnswAlgo.ToString(),
+			IndexAlgoTableType: pkgCatalog.Hnsw_TblType_Metadata,
+			IndexTableName:     "meta_tbl",
+			Parts:              []string{idxColName},
+			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
+		},
+		{
+			IndexName:          "hnsw_idx",
+			TableExist:         true,
+			IndexAlgo:          pkgCatalog.MoIndexHnswAlgo.ToString(),
+			IndexAlgoTableType: pkgCatalog.Hnsw_TblType_Storage,
+			IndexTableName:     "storage_tbl",
+			Parts:              []string{idxColName},
+			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
+		},
+	}
+	for _, def := range defs {
+		if con, ok := def.(*engine.ConstraintDef); ok {
+			con.Cts = append(con.Cts, &engine.IndexDef{
+				Indexes: indexes,
+			})
+		}
+	}
+	return defs
 }
 
 func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName string) plan.TableDef {
