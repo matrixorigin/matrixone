@@ -1269,7 +1269,7 @@ func canTranspose(expr *plan.Expr) (can bool, leftCnt int, rightCnt int) {
 	}
 
 	switch fn.Func.ObjName {
-	case "=", "<", "<=", ">", ">=", "<>":
+	case "=":
 		if len(fn.Args) != 2 {
 			return false, 0, 0
 		}
