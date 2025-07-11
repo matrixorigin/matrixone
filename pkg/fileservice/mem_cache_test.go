@@ -45,7 +45,7 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Nil(t, err)
 
 	size := int64(128)
-	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "", false)
+	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
 	defer m.Close(ctx)
 
 	newReadVec := func() *IOVector {
@@ -112,17 +112,13 @@ func TestMemCacheLeak(t *testing.T) {
 	assert.Equal(t, int64(size)-1, m.cache.Available())
 	assert.Equal(t, int64(1), m.cache.Used())
 
-	// check double free
-	// delete path will remove items from hashtable but items are still in queus and have reference counter 0.
-	m.DeletePaths(ctx, []string{"foo"})
-
 }
 
 // TestHighConcurrency this test is to mainly test concurrency issue in objectCache
 // and dataOverlap-checker.
 func TestHighConcurrency(t *testing.T) {
 	ctx := context.Background()
-	m := NewMemCache(fscache.ConstCapacity(2), nil, nil, "", false)
+	m := NewMemCache(fscache.ConstCapacity(2), nil, nil, "")
 	defer m.Close(ctx)
 
 	n := 10
@@ -169,7 +165,6 @@ func BenchmarkMemoryCacheUpdate(b *testing.B) {
 		nil,
 		nil,
 		"",
-		false,
 	)
 	defer cache.Flush(ctx)
 
@@ -204,7 +199,6 @@ func BenchmarkMemoryCacheRead(b *testing.B) {
 		nil,
 		nil,
 		"",
-		false,
 	)
 	defer cache.Flush(ctx)
 
@@ -253,7 +247,6 @@ func TestMemoryCacheGlobalSizeHint(t *testing.T) {
 		nil,
 		nil,
 		"test",
-		false,
 	)
 	defer cache.Close(ctx)
 

@@ -35,12 +35,10 @@ type Cache[K comparable, V any] struct {
 
 	htab *ShardMap[K, *_CacheItem[K, V]]
 
-	usedSmall      atomic.Int64
-	small          Queue[*_CacheItem[K, V]]
-	usedMain       atomic.Int64
-	main           Queue[*_CacheItem[K, V]]
-	ghost          *ghost[K]
-	disable_s3fifo bool
+	usedSmall atomic.Int64
+	small     Queue[*_CacheItem[K, V]]
+	usedMain  atomic.Int64
+	main      Queue[*_CacheItem[K, V]]
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -150,30 +148,14 @@ func (c *_CacheItem[K, V]) releaseValue() {
 	cdata.Release()
 }
 
-// assume cache size is 128K
-// if cache capacity is smaller than 4G, ghost size is 100%.  Otherwise, 50%
-func estimateGhostSize(capacity int64) int {
-	estimate := int(capacity / int64(32806))
-	if capacity > 8000000000 { // 8G
-		// only 50%
-		estimate /= 2
-	}
-	if estimate < 10000 {
-		estimate = 10000
-	}
-	return estimate
-}
-
 func New[K comparable, V any](
 	capacity fscache.CapacityFunc,
 	keyShardFunc func(K) uint64,
 	postSet func(ctx context.Context, key K, value V, size int64),
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64),
-	disable_s3fifo bool,
 ) *Cache[K, V] {
 
-	ghostsize := estimateGhostSize(capacity())
 	ret := &Cache[K, V]{
 		capacity: capacity,
 		capSmall: func() int64 {
@@ -183,14 +165,12 @@ func New[K comparable, V any](
 			}
 			return cs
 		},
-		small:          *NewQueue[*_CacheItem[K, V]](),
-		main:           *NewQueue[*_CacheItem[K, V]](),
-		ghost:          newGhost[K](ghostsize),
-		postSet:        postSet,
-		postGet:        postGet,
-		postEvict:      postEvict,
-		htab:           NewShardMap[K, *_CacheItem[K, V]](keyShardFunc),
-		disable_s3fifo: disable_s3fifo,
+		small:     *NewQueue[*_CacheItem[K, V]](),
+		main:      *NewQueue[*_CacheItem[K, V]](),
+		postSet:   postSet,
+		postGet:   postGet,
+		postEvict: postEvict,
+		htab:      NewShardMap[K, *_CacheItem[K, V]](keyShardFunc),
 	}
 	return ret
 }
@@ -223,19 +203,8 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	c.evictAll(ctx, nil, 0)
 
 	// enqueue
-	if c.disable_s3fifo {
-		c.small.enqueue(item)
-		c.usedSmall.Add(item.size)
-	} else {
-		if c.ghost.contains(item.key) {
-			c.ghost.remove(item.key)
-			c.main.enqueue(item)
-			c.usedMain.Add(item.size)
-		} else {
-			c.small.enqueue(item)
-			c.usedSmall.Add(item.size)
-		}
-	}
+	c.small.enqueue(item)
+	c.usedSmall.Add(item.size)
 
 }
 
@@ -343,9 +312,6 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 			item.MarkAsDeleted(ctx, c.postEvict)
 
 			c.usedSmall.Add(-item.size)
-			if !c.disable_s3fifo {
-				c.ghost.add(item.key)
-			}
 			return
 		}
 	}

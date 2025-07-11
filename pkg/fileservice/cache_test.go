@@ -32,7 +32,7 @@ func Test_readCache(t *testing.T) {
 	slowCacheReadThreshold = time.Second
 
 	size := int64(128)
-	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "", false)
+	m := NewMemCache(fscache.ConstCapacity(size), nil, nil, "")
 	defer m.Close(ctx)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*3)

@@ -29,7 +29,6 @@ func BenchmarkEnsureNBytesAndSet(b *testing.B) {
 	cache := NewDataCache(
 		fscache.ConstCapacity(1024),
 		nil, nil, nil,
-		false,
 	)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -75,7 +74,6 @@ func BenchmarkDataCacheSet(b *testing.B) {
 	cache := NewDataCache(
 		fscache.ConstCapacity(1024),
 		nil, nil, nil,
-		false,
 	)
 	b.ResetTimer()
 	for i := range b.N {
@@ -95,7 +93,6 @@ func BenchmarkDataCacheGet(b *testing.B) {
 	cache := NewDataCache(
 		fscache.ConstCapacity(1024),
 		nil, nil, nil,
-		false,
 	)
 	key := fscache.CacheKey{
 		Path:   "foo",
