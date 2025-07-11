@@ -63,7 +63,7 @@ func TestShardCacheKeyAllocs(t *testing.T) {
 		Offset: 3,
 		Path:   strings.Repeat("abc", 42),
 	}
-	if n := testing.AllocsPerRun(64, func() {
+	if n := testing.AllocsPerRun(64000, func() {
 		shardCacheKey(key)
 	}); n != 0 {
 		t.Fatalf("should not allocate")
@@ -118,7 +118,8 @@ func (t testBytes) Bytes() []byte {
 	return t
 }
 
-func (t testBytes) Release() {
+func (t testBytes) Release() bool {
+	return false
 }
 
 func (t testBytes) Retain() {

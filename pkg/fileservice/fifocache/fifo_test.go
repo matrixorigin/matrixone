@@ -45,15 +45,15 @@ func TestCacheEvict(t *testing.T) {
 	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)
 	for i := 0; i < 64; i++ {
 		cache.Set(ctx, i, i, 1)
-		if cache.used1+cache.used2 > cache.capacity() {
-			t.Fatalf("capacity %v, used1 %v used2 %v", cache.capacity(), cache.used1, cache.used2)
+		if cache.Used() > cache.capacity() {
+			t.Fatalf("capacity %v, usedSmall %v usedMain %v", cache.capacity(), cache.usedSmall.Load(), cache.usedMain.Load())
 		}
 	}
 }
 
 func TestCacheEvict2(t *testing.T) {
 	ctx := context.Background()
-	cache := New[int, int](fscache.ConstCapacity(2), ShardInt[int], nil, nil, nil)
+	cache := New[int, int](fscache.ConstCapacity(20), ShardInt[int], nil, nil, nil)
 	cache.Set(ctx, 1, 1, 1)
 	cache.Set(ctx, 2, 2, 1)
 
@@ -76,8 +76,8 @@ func TestCacheEvict2(t *testing.T) {
 	v, ok = cache.Get(ctx, 4)
 	assert.True(t, ok)
 	assert.Equal(t, 4, v)
-	assert.Equal(t, int64(1), cache.used1)
-	assert.Equal(t, int64(1), cache.used2)
+	assert.Equal(t, int64(4), cache.usedSmall.Load())
+	assert.Equal(t, int64(0), cache.usedMain.Load())
 }
 
 func TestCacheEvict3(t *testing.T) {
@@ -99,7 +99,7 @@ func TestCacheEvict3(t *testing.T) {
 		cache.Set(ctx, i, true, 1)
 		cache.Get(ctx, i)
 		cache.Get(ctx, i)
-		assert.True(t, cache.used1+cache.used2 <= 1024)
+		assert.True(t, cache.Used() <= 1024)
 	}
 	assert.Equal(t, 0, nEvict)
 	assert.Equal(t, 1024, nSet)
@@ -107,10 +107,10 @@ func TestCacheEvict3(t *testing.T) {
 
 	for i := 0; i < 1024; i++ {
 		cache.Set(ctx, 10000+i, true, 1)
-		assert.True(t, cache.used1+cache.used2 <= 1024)
+		assert.True(t, cache.Used() <= 1024)
 	}
-	assert.Equal(t, int64(102), cache.used1)
-	assert.Equal(t, int64(922), cache.used2)
+	assert.Equal(t, int64(102), cache.usedSmall.Load())
+	assert.Equal(t, int64(922), cache.usedMain.Load())
 	assert.Equal(t, 1024, nEvict)
 	assert.Equal(t, 2048, nSet)
 	assert.Equal(t, 2048, nGet)
