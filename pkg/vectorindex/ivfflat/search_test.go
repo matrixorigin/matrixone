@@ -75,7 +75,7 @@ func TestIvfSearchParserError(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 
@@ -96,7 +96,7 @@ func TestIvfSearchCancel(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	proc.Ctx, proc.Cancel = context.WithCancelCause(proc.Ctx)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
