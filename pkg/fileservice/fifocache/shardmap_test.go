@@ -42,9 +42,4 @@ func TestShardMap(t *testing.T) {
 	_, ok = m.GetAndDelete(1, func(v string) {
 	})
 	assert.Equal(t, ok, true)
-
-	ok = m.ValueIsDeleted(1, "1", func(v string) bool {
-		return false
-	})
-	assert.Equal(t, ok, false)
 }

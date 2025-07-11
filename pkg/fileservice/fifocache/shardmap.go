@@ -78,17 +78,12 @@ func (m *ShardMap[K, V]) Get(key K, postfn func(V)) (V, bool) {
 	return v, ok
 }
 
-func (m *ShardMap[K, V]) Remove(key K, value V, postfn func(V)) {
+func (m *ShardMap[K, V]) Remove(key K) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
 	s.Lock()
 	defer s.Unlock()
 	delete(s.values, key)
-
-	if postfn != nil {
-		// call postEvict to decrement the cache reference counter, deallocate the buffer when ref counter = 0
-		postfn(value)
-	}
 }
 
 func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn func(V)) {
@@ -130,11 +125,4 @@ func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) (V, bool) {
 	}
 
 	return v, ok
-}
-
-func (m *ShardMap[K, V]) ValueIsDeleted(key K, value V, isDeleted func(V) bool) bool {
-	s := &m.shards[m.hashfn(key)%numShards]
-	s.RLock()
-	defer s.RUnlock()
-	return isDeleted(value)
 }
