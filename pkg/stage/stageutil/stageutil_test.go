@@ -28,7 +28,7 @@ import (
 
 func TestStageCache(t *testing.T) {
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	cache := proc.GetStageCache()
 
 	credentials := make(map[string]string)
@@ -68,7 +68,7 @@ func TestStageCache(t *testing.T) {
 
 func TestStageFail(t *testing.T) {
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	_, err := UrlToStageDef("stage:///path", proc)
 	require.NotNil(t, err)
 
@@ -89,7 +89,7 @@ func Test_runSql(t *testing.T) {
 		return executor.Result{}, nil
 	}))
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	_, err := runSql(proc, "")
 	require.Nil(t, err)
 }

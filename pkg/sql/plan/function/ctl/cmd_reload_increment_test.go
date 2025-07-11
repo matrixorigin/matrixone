@@ -48,7 +48,7 @@ func Test_handleReloadAutoIncrementCache(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.QueryClient = &testQClient{}
 	_, err := handleReloadAutoIncrementCache(
 		proc,

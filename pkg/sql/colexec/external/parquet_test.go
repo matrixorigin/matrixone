@@ -30,7 +30,7 @@ import (
 )
 
 func Test_getMapper(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	t.Run("indexed string", func(t *testing.T) {
 		var buf bytes.Buffer

@@ -35,14 +35,10 @@ type partitionTestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs []partitionTestCase
-)
-
-func init() {
-	tcs = []partitionTestCase{
+func makeTestCases(t *testing.T) []partitionTestCase {
+	return []partitionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Partition{
 				OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int32), Flag: 0}},
 			},
@@ -52,20 +48,20 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestPartition(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)

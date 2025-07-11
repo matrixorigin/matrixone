@@ -30,7 +30,7 @@ import (
 func TestPrepareRemote(t *testing.T) {
 	_ = colexec.NewServer(nil)
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestPrepareRemote(t *testing.T) {
 }
 
 func TestReceiverDone(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	d := &Dispatch{
 		ctr: &container{},
 	}
@@ -75,7 +75,7 @@ func Test_waitRemoteRegsReady(t *testing.T) {
 			{},
 		},
 	}
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	//wait waitNotifyTimeout seconds
 	ret, err := d.waitRemoteRegsReady(proc)
 	assert.Error(t, err)

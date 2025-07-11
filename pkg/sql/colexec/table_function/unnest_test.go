@@ -41,7 +41,6 @@ type unnestTestCase struct {
 }
 
 var (
-	utc          []unnestTestCase
 	defaultAttrs = []string{"col", "seq", "key", "path", "index", "value", "this"}
 	//defaultExprs   = []*plan.Expr{
 	//	&plan.Expr_C{
@@ -109,18 +108,18 @@ var (
 	}
 )
 
-func init() {
-	utc = []unnestTestCase{
-		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`}, []string{`$`}, []bool{false}, "str", true),
-		newTestCase(mpool.MustNewZero(), []string{"key", "col"}, []string{`{"a":1}`}, []string{`$`}, []bool{false}, "json", true),
-		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`}, []bool{false}, "json", true),
-		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`, `$`}, []bool{false}, "str", false),
-		newTestCase(mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`}, []bool{false, true}, "json", true),
+func makeTestCases(t *testing.T) []unnestTestCase {
+	return []unnestTestCase{
+		newTestCase(t, mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`}, []string{`$`}, []bool{false}, "str", true),
+		newTestCase(t, mpool.MustNewZero(), []string{"key", "col"}, []string{`{"a":1}`}, []string{`$`}, []bool{false}, "json", true),
+		newTestCase(t, mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`}, []bool{false}, "json", true),
+		newTestCase(t, mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`, `$`}, []bool{false}, "str", false),
+		newTestCase(t, mpool.MustNewZero(), defaultAttrs, []string{`{"a":1}`, `{"b":1}`}, []string{`$`}, []bool{false, true}, "json", true),
 	}
 }
 
-func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers []bool, jsonType string, success bool) unnestTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newTestCase(t *testing.T, m *mpool.MPool, attrs []string, jsons, paths []string, outers []bool, jsonType string, success bool) unnestTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range defaultColDefs {
@@ -157,13 +156,13 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 
 func TestUnnestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range utc {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestUnnestCall(t *testing.T) {
-	for _, ut := range utc {
+	for _, ut := range makeTestCases(t) {
 
 		err := ut.arg.Prepare(ut.proc)
 		require.NotNil(t, err)

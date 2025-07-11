@@ -42,32 +42,28 @@ type onDupTestCase struct {
 	rowCount int
 }
 
-var (
-	tcs []onDupTestCase
-)
-
-func init() {
-	tcs = []onDupTestCase{
-		newTestCase(),
+func makeTestCases(t *testing.T) []onDupTestCase {
+	return []onDupTestCase{
+		newTestCase(t),
 	}
 }
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestOnDuplicateKey(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -108,8 +104,8 @@ func resetChildren(arg *OnDuplicatekey) {
 	arg.AppendChild(op)
 }
 
-func newTestCase() onDupTestCase {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+func newTestCase(t *testing.T) onDupTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	pkType := types.T_int64.ToType()
 	leftExpr := &plan.Expr{
 		Typ: plan2.MakePlan2Type(&pkType),

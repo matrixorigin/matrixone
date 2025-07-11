@@ -55,7 +55,7 @@ func TestOpType(t *testing.T) {
 }
 
 func TestMergeDelete(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
 	metaLocBat0 := &batch.Batch{
 		Attrs: []string{

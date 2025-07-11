@@ -446,7 +446,7 @@ func Test_copyBytes(t *testing.T) {
 func Test_extractRowFromEveryVector(t *testing.T) {
 	var err error
 	bat := batch.New([]string{"const_null", "const", "normal"})
-	bat.Vecs[0] = testutil.MakeScalarNull(types.T_int32, 3)
+	bat.Vecs[0] = testutil.MakeScalarNull(t, types.T_int32, 3)
 	bat.Vecs[1] = testutil.MakeScalarInt64(1, 3)
 	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil)
 
@@ -484,7 +484,7 @@ func Test_extractRowFromVector(t *testing.T) {
 		{
 			args: args{
 				ctx:      context.Background(),
-				vec:      testutil.MakeScalarNull(types.T_int32, 3),
+				vec:      testutil.MakeScalarNull(t, types.T_int32, 3),
 				i:        0,
 				row:      make([]any, 1),
 				rowIndex: 0,

@@ -1010,6 +1010,13 @@ func (tc *txnOperator) doSend(
 	util.LogTxnSendRequests(tc.logger, requests)
 	result, err := tc.sender.Send(ctx, requests)
 	if err != nil {
+		if commit {
+			// TODO: remove this workaround
+			// set tc.mu.txn.CommitTS = now+10s
+			now, _ := tc.clock.Now()
+			now.PhysicalTime += 10000000000
+			tc.mu.txn.CommitTS = now
+		}
 		util.LogTxnSendRequestsFailed(tc.logger, requests, err)
 		return nil, err
 	}

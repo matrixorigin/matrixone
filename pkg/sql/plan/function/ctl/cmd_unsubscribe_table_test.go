@@ -48,7 +48,7 @@ func Test_doUnsubscribeTable(t *testing.T) {
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.QueryClient = &testQClient{}
 	err := doUnsubscribeTable(
 		proc,

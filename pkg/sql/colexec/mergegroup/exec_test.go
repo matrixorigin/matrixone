@@ -96,7 +96,7 @@ func hackMakeAggExecToTestMerge(r int) *hackAggExecToTestMerge {
 }
 
 func TestMergeGroup_WithoutGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	{
 		before := proc.Mp().CurrNB()
@@ -137,7 +137,7 @@ func TestMergeGroup_WithoutGroupBy(t *testing.T) {
 }
 
 func TestMergeGroup_WithGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	{
 		before := proc.Mp().CurrNB()

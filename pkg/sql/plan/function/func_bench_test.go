@@ -98,7 +98,7 @@ func BenchmarkDateFormat1(b *testing.B) {
 	//b.N = 1000000000
 	testCases := initFormatTestCase1()
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
@@ -181,7 +181,7 @@ func BenchmarkDateFormat2(b *testing.B) {
 	//b.N = 1000000000
 	testCases := initFormatTestCase2()
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
@@ -264,7 +264,7 @@ func BenchmarkDateFormat3(b *testing.B) {
 	//b.N = 1000000000
 	testCases := initFormatTestCase3()
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
@@ -347,7 +347,7 @@ func BenchmarkDateFormat4(b *testing.B) {
 	//b.N = 1000000000
 	testCases := initFormatTestCase4()
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
@@ -430,7 +430,7 @@ func BenchmarkDateFormat5(b *testing.B) {
 	//b.N = 1000000000
 	testCases := initFormatTestCase5()
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
@@ -513,7 +513,7 @@ func BenchmarkDateFormat6(b *testing.B) {
 	//b.N = 1000000000
 	testCases := initFormatTestCase6()
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateFormat)
 		fcTC.BenchMarkRun()
@@ -534,7 +534,7 @@ func TestDateFormat(t *testing.T) {
 	testCases1 := initFormatTestCase1()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases1 {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateFormat)
