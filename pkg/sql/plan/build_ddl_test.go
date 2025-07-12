@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -129,6 +130,7 @@ func TestBuildAlterView(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt1.(*tree.AlterView), ctx)
 	assert.NoError(t, err)
+	require.Equal(t, ctx.GetAccountName(), "")
 
 	//direct recursive refrence
 	ctx.EXPECT().GetRootSql().Return(sql2).AnyTimes()
@@ -521,4 +523,156 @@ func Test_buildTableDefs(t *testing.T) {
 
 	err := buildTableDefs(stmt, ctx, createTable, nil)
 	assert.Error(t, err)
+}
+
+func TestBuildCreatePitr(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Helper to create a base stmt
+	baseStmt := func() *tree.CreatePitr {
+		return &tree.CreatePitr{
+			IfNotExists: true,
+			Name:        "pitr1",
+			Level:       tree.PITRLEVELCLUSTER,
+			PitrValue:   1,
+			PitrUnit:    "h",
+		}
+	}
+
+	t.Run("sys account can create cluster level pitr", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		stmt := baseStmt()
+		plan, err := buildCreatePitr(stmt, ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, plan)
+		require.Equal(t, ctx.GetAccountName(), "sys")
+	})
+
+	t.Run("non-sys account cannot create cluster level pitr", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "user1" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 2, nil }
+		stmt := baseStmt()
+		_, err := buildCreatePitr(stmt, ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "only sys tenant can create cluster level pitr")
+	})
+
+	t.Run("sys account can create account level pitr for self", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		ctx.ResolveAccountIdsFunc = func(_ []string) ([]uint32, error) { return []uint32{1}, nil }
+		stmt := baseStmt()
+		stmt.Level = tree.PITRLEVELACCOUNT
+		stmt.AccountName = "sys"
+		plan, err := buildCreatePitr(stmt, ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, plan)
+	})
+
+	t.Run("non-sys account cannot create account level pitr for other", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "user1" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 2, nil }
+		stmt := baseStmt()
+		stmt.Level = tree.PITRLEVELACCOUNT
+		stmt.AccountName = "other"
+		_, err := buildCreatePitr(stmt, ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "only sys tenant can create tenant level pitr for other tenant")
+	})
+
+	t.Run("invalid pitr value", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		stmt := baseStmt()
+		stmt.PitrValue = 0
+		_, err := buildCreatePitr(stmt, ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid pitr value")
+	})
+
+	t.Run("invalid pitr unit", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		stmt := baseStmt()
+		stmt.PitrUnit = "invalid"
+		_, err := buildCreatePitr(stmt, ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid pitr unit")
+	})
+
+	t.Run("reserved pitr name", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		stmt := baseStmt()
+		stmt.Name = "sys_mo_catalog_pitr"
+		_, err := buildCreatePitr(stmt, ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "pitr name is reserved")
+	})
+
+	t.Run("database level pitr, database not exist", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return false }
+		stmt := baseStmt()
+		stmt.Level = tree.PITRLEVELDATABASE
+		stmt.DatabaseName = "db1"
+		_, err := buildCreatePitr(stmt, ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "database db1 does not exist")
+	})
+
+	t.Run("database level pitr, database exists", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return true }
+		ctx.GetDatabaseIdFunc = func(string, *Snapshot) (uint64, error) { return 123, nil }
+		stmt := baseStmt()
+		stmt.Level = tree.PITRLEVELDATABASE
+		stmt.DatabaseName = "db1"
+		plan, err := buildCreatePitr(stmt, ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, plan)
+	})
+
+	t.Run("table level pitr, table not exist", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return true }
+		ctx.ResolveFunc = func(string, string, *Snapshot) (*ObjectRef, *TableDef) { return nil, nil }
+		stmt := baseStmt()
+		stmt.Level = tree.PITRLEVELTABLE
+		stmt.DatabaseName = "db1"
+		stmt.TableName = "tb1"
+		_, err := buildCreatePitr(stmt, ctx)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "table db1.tb1 does not exist")
+	})
+
+	t.Run("table level pitr, table exists", func(t *testing.T) {
+		ctx := &MockCompilerContext{}
+		ctx.GetAccountNameFunc = func() string { return "sys" }
+		ctx.GetAccountIdFunc = func() (uint32, error) { return 1, nil }
+		ctx.DatabaseExistsFunc = func(string, *Snapshot) bool { return true }
+		ctx.ResolveFunc = func(string, string, *Snapshot) (*ObjectRef, *TableDef) { return &ObjectRef{}, &TableDef{TblId: 456} }
+		stmt := baseStmt()
+		stmt.Level = tree.PITRLEVELTABLE
+		stmt.DatabaseName = "db1"
+		stmt.TableName = "tb1"
+		plan, err := buildCreatePitr(stmt, ctx)
+		assert.NoError(t, err)
+		assert.NotNil(t, plan)
+	})
 }

@@ -101,6 +101,7 @@ type CompilerContext interface {
 	// get username of current session
 	GetUserName() string
 	GetAccountId() (uint32, error)
+	GetAccountName() string
 	// GetContext get raw context.Context
 	GetContext() context.Context
 

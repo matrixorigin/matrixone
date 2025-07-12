@@ -283,6 +283,9 @@ func (c *compilerContext) GetAccountId() (uint32, error) {
 	return defines.GetAccountId(c.proc.GetTopContext())
 }
 
+func (c *compilerContext) GetAccountName() string {
+	return "sys"
+}
 func (c *compilerContext) GetContext() context.Context {
 	return c.proc.GetTopContext()
 }

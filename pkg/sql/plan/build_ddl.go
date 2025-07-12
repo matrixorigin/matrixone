@@ -4537,3 +4537,124 @@ func parseDuration(ctx context.Context, period uint64, unit string) (time.Durati
 	seconds := period * uint64(unitDuration)
 	return time.Duration(seconds), nil
 }
+
+func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) {
+	// only sys can create cluster level pitr
+	currentAccount := ctx.GetAccountName()
+	currentAccountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if stmt.Level == tree.PITRLEVELCLUSTER && currentAccount != "sys" {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only sys tenant can create cluster level pitr")
+	}
+
+	// only sys can create tenant level pitr for other tenant
+	if stmt.Level == tree.PITRLEVELACCOUNT {
+		if len(stmt.AccountName) > 0 && currentAccount != "sys" {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only sys tenant can create tenant level pitr for other tenant")
+		}
+	}
+
+	// Check PITR value range
+	pitrVal := stmt.PitrValue
+	if pitrVal <= 0 || pitrVal > 100 {
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "invalid pitr value %d", pitrVal)
+	}
+
+	// Check if PITR unit is valid
+	pitrUnit := strings.ToLower(stmt.PitrUnit)
+	if pitrUnit != "h" && pitrUnit != "d" && pitrUnit != "mo" && pitrUnit != "y" {
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "invalid pitr unit %s", pitrUnit)
+	}
+
+	// check pitr exists or not
+	if string(stmt.Name) == SYSMOCATALOGPITR {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "pitr name is reserved")
+	}
+
+	// Validate related objects according to PITR level
+	var databaseId uint64
+	var tableId uint64
+	accountId := currentAccountId
+	accountName := currentAccount
+	switch stmt.Level {
+	case tree.PITRLEVELACCOUNT:
+		if len(stmt.AccountName) > 0 {
+			accountIds, err := ctx.ResolveAccountIds([]string{string(stmt.AccountName)})
+			if err != nil {
+				return nil, err
+			}
+			if len(accountIds) == 0 {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "account "+string(stmt.AccountName)+" does not exist")
+			}
+			accountId = accountIds[len(accountIds)-1]
+			accountName = string(stmt.AccountName)
+		}
+	case tree.PITRLEVELDATABASE:
+		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
+		}
+		databaseId, err = ctx.GetDatabaseId(string(stmt.DatabaseName), nil)
+		if err != nil {
+			return nil, err
+		}
+	case tree.PITRLEVELTABLE:
+		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
+		}
+		objRef, tableDef := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
+		if objRef == nil || tableDef == nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "table "+string(stmt.DatabaseName)+"."+string(stmt.TableName)+" does not exist")
+		}
+		tableId = tableDef.TblId
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_PITR,
+				Definition: &plan.DataDefinition_CreatePitr{
+					CreatePitr: &plan.CreatePitr{
+						IfNotExists:       stmt.IfNotExists,
+						Name:              string(stmt.Name),
+						Level:             int32(stmt.Level),
+						AccountName:       accountName,
+						DatabaseName:      string(stmt.DatabaseName),
+						TableName:         string(stmt.TableName),
+						PitrValue:         stmt.PitrValue,
+						PitrUnit:          stmt.PitrUnit,
+						DatabaseId:        databaseId,
+						TableId:           tableId,
+						AccountId:         accountId,
+						CurrentAccountId:  currentAccountId,
+						CurrentAccount:    currentAccount,
+						OriginAccountName: len(stmt.AccountName) > 0,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropPitr(stmt *tree.DropPitr, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_DROP_PITR
+	// Remove privilege check, no account ID validation
+
+	// Build drop pitr plan
+	dropPitr := &plan.DropPitr{
+		IfExists: stmt.IfExists,
+		Name:     string(stmt.Name),
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: ddlType,
+				Definition: &plan.DataDefinition_DropPitr{
+					DropPitr: dropPitr,
+				},
+			},
+		},
+	}, nil
+}
