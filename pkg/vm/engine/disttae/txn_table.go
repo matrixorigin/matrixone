@@ -89,28 +89,57 @@ func newTxnTable(
 			eng,
 		),
 	}
+
+	ps := process.GetPartitionService()
+	if ps.Enabled() && item.IsIndexTable() {
+		_, _, r, err := eng.GetRelationById(
+			process.Ctx,
+			process.GetTxnOperator(),
+			item.ExtraInfo.ParentTableID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tbl.parent = r
+	}
+
 	tbl.isLocal = tbl.isLocalFunc
 
 	if db.databaseId != catalog.MO_CATALOG_ID {
-		ps := process.GetPartitionService()
-		if ps.Enabled() && item.IsPartitionTable() {
-			metadata, err := ps.GetPartitionMetadata(
-				ctx,
-				item.Id,
-				process.GetTxnOperator(),
-			)
-			if err != nil {
-				return nil, err
+		if ps.Enabled() && (item.IsPartitionTable() || tbl.IsPartitionIndexTable()) {
+			proc := tbl.origin.proc.Load()
+
+			var combined *combinedTxnTable
+			if item.IsPartitionTable() {
+				metadata, err := ps.GetPartitionMetadata(
+					ctx,
+					item.Id,
+					process.GetTxnOperator(),
+				)
+				if err != nil {
+					return nil, err
+				}
+				combined = newCombinedTxnTable(
+					tbl.origin,
+					getPartitionTableFunc(proc, metadata, db),
+					getPruneTablesFunc(proc, metadata, db),
+					getPartitionPrunePKFunc(proc, metadata, db),
+				)
+			} else {
+				relations, err := tbl.getPartitionIndexesTables(process)
+				if err != nil {
+					return nil, err
+				}
+				combined = newCombinedTxnTable(
+					tbl.origin,
+					getArrayTableFunc(relations),
+					getArrayPruneTablesFunc(relations),
+					getArrayPrunePKFunc(relations),
+				)
 			}
 
-			p := newPartitionTxnTable(
-				tbl.origin,
-				metadata,
-				ps,
-			)
-			tbl.partition.tbl = p
-			tbl.partition.is = true
-			tbl.partition.service = ps
+			tbl.combined.tbl = combined
+			tbl.combined.is = true
 		}
 
 		tbl.shard.service = shardservice.GetService(process.GetService())
