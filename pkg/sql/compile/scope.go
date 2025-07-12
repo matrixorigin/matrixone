@@ -586,7 +586,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		if err != nil {
 			return err
 		}
-		if _, ok := s.NodeInfo.Data.(*disttae.PartitionedRelData); !ok {
+		if _, ok := s.NodeInfo.Data.(*disttae.CombinedRelData); !ok {
 			err = s.aggOptimize(c, rel, ctx)
 			if err != nil {
 				return err

@@ -153,6 +153,14 @@ func (item *TableItem) IsPartitionTable() bool {
 	return features.IsPartitioned(item.TableDef.FeatureFlag)
 }
 
+func (item *TableItem) IsIndexTable() bool {
+	if item.TableDef == nil {
+		return false
+	}
+
+	return features.IsIndexTable(item.TableDef.FeatureFlag)
+}
+
 func (item *TableItem) String() string {
 	return fmt.Sprintln(
 		"item ptr", uintptr(unsafe.Pointer(item)),

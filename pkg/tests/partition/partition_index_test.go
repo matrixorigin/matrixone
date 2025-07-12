@@ -115,3 +115,116 @@ func TestInsertAndDeleteWithIndex(
 		},
 	)
 }
+
+func TestSelectWithUniqueIndex(
+	t *testing.T,
+) {
+	runPartitionClusterTest(
+		t,
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+			exec := testutils.GetSQLExecutor(cn)
+
+			db := testutils.GetDatabaseName(t)
+			testutils.CreateTestDatabase(t, db, cn)
+
+			sql := fmt.Sprintf(
+				"create table %s (c int primary key, d int, unique key(d)) partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
+				t.Name(),
+			)
+
+			testutils.ExecSQL(
+				t,
+				db,
+				cn,
+				sql,
+			)
+
+			sql = fmt.Sprintf("insert into %s values (1,1), (2,2), (3,3), (4,4)", t.Name())
+			testutils.ExecSQL(
+				t,
+				db,
+				cn,
+				sql,
+			)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			for i := 0; i < 4; i++ {
+				res, err := exec.Exec(
+					ctx,
+					fmt.Sprintf("select c from %s where d = %d", t.Name(), i+1),
+					executor.Options{}.WithDatabase(db),
+				)
+				require.NoError(t, err)
+				n := 0
+				v := int32(0)
+				res.ReadRows(
+					func(rows int, cols []*vector.Vector) bool {
+						n += rows
+						v = executor.GetFixedRows[int32](cols[0])[0]
+						return true
+					},
+				)
+				res.Close()
+				require.Equal(t, 1, n)
+				require.Equal(t, int32(i+1), v)
+			}
+		},
+	)
+}
+
+func TestUniqueIndexCanWork(
+	t *testing.T,
+) {
+	runPartitionClusterTest(
+		t,
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+			exec := testutils.GetSQLExecutor(cn)
+
+			db := testutils.GetDatabaseName(t)
+			testutils.CreateTestDatabase(t, db, cn)
+
+			sql := fmt.Sprintf(
+				"create table %s (c int primary key, d int, unique key(d)) partition by list (c) (partition p1 values in (1,2), partition p2 values in (3,4))",
+				t.Name(),
+			)
+
+			testutils.ExecSQL(
+				t,
+				db,
+				cn,
+				sql,
+			)
+
+			sql = fmt.Sprintf("insert into %s values (1,1)", t.Name())
+			testutils.ExecSQL(
+				t,
+				db,
+				cn,
+				sql,
+			)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			defer cancel()
+			sql = fmt.Sprintf("insert into %s values (2,1)", t.Name())
+			_, err = exec.Exec(
+				ctx,
+				sql,
+				executor.Options{}.WithDatabase(db),
+			)
+			require.Error(t, err)
+
+			sql = fmt.Sprintf("insert into %s values (3,1)", t.Name())
+			_, err = exec.Exec(
+				ctx,
+				sql,
+				executor.Options{}.WithDatabase(db),
+			)
+			require.Error(t, err)
+		},
+	)
+}

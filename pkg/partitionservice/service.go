@@ -81,17 +81,6 @@ func (s *Service) Create(
 		return err
 	}
 
-	if txnOp != nil {
-		txnOp.AppendEventCallback(
-			client.CommitEvent,
-			func(_ client.TxnEvent) {
-				s.mu.Lock()
-				s.mu.tables[tableID] = newMetadataCache(metadata)
-				s.mu.Unlock()
-			},
-		)
-	}
-
 	return s.store.Create(
 		ctx,
 		def,
