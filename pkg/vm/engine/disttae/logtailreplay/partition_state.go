@@ -361,7 +361,11 @@ func (p *PartitionState) HandleLogtailEntry(
 			if ok, _ := objectio.PartitionStateInjected(entry.DatabaseName, entry.TableName); ok {
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
-			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
+			debug := false
+			if entry.DatabaseName == "db1" && entry.TableName == "t4" {
+				debug = true
+			}
+			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool, debug)
 		}
 
 	case api.Entry_Delete:
@@ -750,6 +754,7 @@ func (p *PartitionState) HandleRowsInsert(
 	primarySeqnum int,
 	packer *types.Packer,
 	pool *mpool.MPool,
+	debug ...bool,
 ) (
 	primaryKeys [][]byte,
 ) {
@@ -773,8 +778,20 @@ func (p *PartitionState) HandleRowsInsert(
 		packer,
 	)
 
+	var buf *bytes.Buffer
+	if len(debug) > 0 && debug[0] {
+		buf = new(bytes.Buffer)
+		defer func() {
+			fmt.Println("ABCD", buf.String())
+		}()
+	}
+
 	var numInserted int64
 	for i, rowID := range rowIDVector {
+		if buf != nil {
+			buf.WriteString(fmt.Sprintf("%s; ", timeVector[i].ToString()))
+		}
+
 		blockID := rowID.CloneBlockID()
 		pivot := &RowEntry{
 			BlockID: blockID,

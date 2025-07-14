@@ -17,6 +17,7 @@ package table_clone
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -144,6 +145,12 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 			txnOp = proc.GetTxnOperator()
 		}
 
+		debug := false
+		if tc.Ctx.SrcTblDef.Name == "t4" && tc.Ctx.DstTblName == "t5" {
+			debug = true
+			fmt.Println("ABCD clone t4 to t5", types.TimestampToTS(txnOp.SnapshotTS()).ToString(), proc.GetCloneTxnOperator() == nil)
+		}
+
 		if srcDB, err = tc.Ctx.Eng.Database(
 			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.DbName, txnOp,
 		); err != nil {
@@ -159,6 +166,11 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		if tc.srcRelReader, err = disttae.NewTableMetaReader(tc.Ctx.SrcCtx, tc.srcRel); err != nil {
 			return err
 		}
+
+		if debug {
+			fmt.Println("ABCD", "meta reader ts", disttae.GetTS(tc.srcRelReader).ToString())
+		}
+
 	}
 
 	{
