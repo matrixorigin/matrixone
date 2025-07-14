@@ -367,7 +367,7 @@ var (
 		to_ts VARCHAR(32) NOT NULL,
 		error_json VARCHAR(255) NOT NULL,
 		start_at DATETIME NULL,
-		end_at DATETIME NULL,
+		end_at DATETIME NULL
 	)`, catalog.MO_ASYNC_INDEX_ITERATIONS)
 )
 
