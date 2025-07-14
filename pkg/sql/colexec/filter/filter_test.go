@@ -955,6 +955,75 @@ func TestConstantTranspose(t *testing.T) {
 			},
 			expect: nil,
 		},
+		{
+			name: "more-complex-expression-with-multiple-operations",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							makeConstExpr(2),
+							makeAddExpr(
+								makeSubExpr(
+									makeAddExpr(
+										makeAddExpr(
+											makeAddExpr(
+												makeSubExpr(
+													makeAddExpr(
+														makeConstExpr(-9),
+														makeConstExpr(8),
+													),
+													makeConstExpr(7),
+												),
+												makeConstExpr(6),
+											),
+											makeConstExpr(2),
+										),
+										colExpr,
+									),
+									makeConstExpr(1),
+								),
+								makeConstExpr(5),
+							),
+						},
+					},
+				},
+			},
+			expect: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeSubExpr(
+								makeAddExpr(
+									makeSubExpr(
+										makeConstExpr(2),
+										makeConstExpr(5),
+									),
+									makeConstExpr(1),
+								),
+								makeAddExpr(
+									makeAddExpr(
+										makeSubExpr(
+											makeAddExpr(
+												makeConstExpr(-9),
+												makeConstExpr(8),
+											),
+											makeConstExpr(7),
+										),
+										makeConstExpr(6),
+									),
+									makeConstExpr(2),
+								),
+							),
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

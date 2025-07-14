@@ -1612,27 +1612,3 @@ func Test_SubUnsubTable(t *testing.T) {
 	)
 	require.NotNil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName, false))
 }
-
-func TestConstFold(t *testing.T) {
-	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
-	defer p.Close()
-
-	v, _ := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
-	exec := v.(executor.SQLExecutor)
-
-	var (
-		dbName = "db"
-		tName  = "t"
-	)
-	schema := catalog2.MockSchemaAll(10, 1)
-	schema.Name = tName
-	txnop := p.StartCNTxn()
-	_, _ = p.CreateDBAndTable(txnop, dbName, schema)
-	require.NoError(t, txnop.Commit(p.Ctx))
-
-	txnop = p.StartCNTxn()
-	query := `SELECT * FROM db.t WHERE 3 - 2 + 1 = -9 + 8 - 7 + 6 + 2 + mock_3 - 1 + 5`
-	_, err := exec.Exec(p.Ctx, query, executor.Options{}.WithTxn(txnop))
-	require.NoError(t, err)
-	require.NoError(t, txnop.Commit(p.Ctx))
-}
