@@ -1751,6 +1751,10 @@ func (tbl *txnTable) GetTableName() string {
 	return tbl.tableName
 }
 
+func (tbl *txnTable) TxnInfo() string {
+	return tbl.getTxn().op.Txn().DebugString()
+}
+
 func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 	return tbl.db.databaseId
 }

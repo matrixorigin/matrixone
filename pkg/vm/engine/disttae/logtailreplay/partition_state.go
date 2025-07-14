@@ -782,7 +782,8 @@ func (p *PartitionState) HandleRowsInsert(
 	if len(debug) > 0 && debug[0] {
 		buf = new(bytes.Buffer)
 		defer func() {
-			fmt.Println("ABCD", buf.String())
+			logutil.Info("debug clone B",
+				zap.String("row commit ts", buf.String()))
 		}()
 	}
 

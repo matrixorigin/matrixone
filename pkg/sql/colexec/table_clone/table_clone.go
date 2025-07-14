@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func init() {
@@ -148,7 +150,9 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		debug := false
 		if tc.Ctx.SrcTblDef.Name == "t4" && tc.Ctx.DstTblName == "t5" {
 			debug = true
-			fmt.Println("ABCD clone t4 to t5", types.TimestampToTS(txnOp.SnapshotTS()).ToString(), proc.GetCloneTxnOperator() == nil)
+			logutil.Info("debug clone A",
+				zap.String("ts", types.TimestampToTS(txnOp.SnapshotTS()).ToString()),
+				zap.Bool("clone txnOp", proc.GetCloneTxnOperator() == nil))
 		}
 
 		if srcDB, err = tc.Ctx.Eng.Database(
@@ -228,6 +232,12 @@ func clone(
 			idx = 1
 		}
 
+		var (
+			objCnt int
+			blkCnt int
+			rowCnt int
+		)
+
 		col, area := vector.MustVarlenaRawData(bat.Vecs[idx])
 		for i := range col {
 			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
@@ -235,12 +245,23 @@ func clone(
 				return moerr.NewInternalErrorNoCtxf("object fmt wrong: %s", stats.FlagString())
 			}
 
-			//if isTombstone {
-			//	fmt.Println("copy tombstone", dstRel.GetTableName(), stats.Rows(), stats.GetAppendable())
-			//} else {
-			//	fmt.Println("copy data", dstRel.GetTableName(), stats.Rows(), stats.GetAppendable())
-			//}
+			objCnt++
+			blkCnt += int(stats.BlkCnt())
+			rowCnt += int(stats.Rows())
 		}
+
+		dstDef := dstRel.GetTableDef(dstCtx)
+		srcTable := reader.(*disttae.TableMetaReader).Table
+		srcDef := srcTable.GetTableDef(srcCtx)
+
+		logutil.Info("TABLE-CLONE",
+			zap.Bool("isTombstone", isTombstone),
+			zap.String("src", fmt.Sprintf("%s(%d)-%s(%d)", srcDef.DbName, srcDef.DbId, srcDef.Name, srcDef.TblId)),
+			zap.String("dst", fmt.Sprintf("%s(%d)-%s(%d)", dstDef.DbName, dstDef.DbId, dstDef.Name, dstDef.TblId)),
+			zap.Int("objCnt", objCnt),
+			zap.Int("blkCnt", blkCnt),
+			zap.Int("rowCnt", rowCnt),
+			zap.String("read txn", srcTable.TxnInfo()))
 
 		return nil
 	}

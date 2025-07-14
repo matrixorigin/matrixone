@@ -43,7 +43,7 @@ const (
 )
 
 type TableMetaReader struct {
-	table    *txnTable
+	Table    *txnTable
 	fs       fileservice.FileService
 	snapshot types.TS
 	state    int
@@ -53,7 +53,7 @@ type TableMetaReader struct {
 
 func (r *TableMetaReader) Close() error {
 	//r.tblDef = nil
-	r.table = nil
+	r.Table = nil
 	r.pState = nil
 	r.state = endState
 	return nil
@@ -96,7 +96,7 @@ func NewTableMetaReader(
 		fs:       fs,
 		snapshot: snapshot,
 		//tblDef:   tblDef,
-		table:  table,
+		Table:  table,
 		pState: pState,
 	}, nil
 }
@@ -138,8 +138,8 @@ func (r *TableMetaReader) Read(
 		logutil.Info("TableMetaReader",
 			zap.String("table",
 				fmt.Sprintf("%s(%d)-%s(%d)-%s",
-					r.table.db.databaseName, r.table.db.databaseId,
-					r.table.tableName, r.table.tableId,
+					r.Table.db.databaseName, r.Table.db.databaseId,
+					r.Table.tableName, r.Table.tableId,
 					r.snapshot.ToString())),
 			zap.String("state", stateStr),
 			zap.Error(err), logs1, logs2)
@@ -148,14 +148,14 @@ func (r *TableMetaReader) Read(
 	outBatch.CleanOnlyData()
 
 	if isTombstone {
-		pkCol := plan2.PkColByTableDef(r.table.tableDef)
+		pkCol := plan2.PkColByTableDef(r.Table.tableDef)
 		pkType := plan2.ExprType2Type(&pkCol.Typ)
 
 		seqnums = []uint16{0, 1}
 		colTypes = []types.Type{types.T_Rowid.ToType(), pkType}
 		attrs = objectio.TombstoneAttrs_CN_Created
 	} else {
-		seqnums, colTypes, attrs, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(r.table.tableDef)
+		seqnums, colTypes, attrs, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(r.Table.tableDef)
 	}
 
 	// step1
@@ -224,7 +224,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 			if isTombstone {
 				s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
 			} else {
-				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
+				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.Table.tableDef, false)
 			}
 		}
 
@@ -388,11 +388,11 @@ func (r *TableMetaReader) collectVisibleObjs(
 		if isTombstone {
 			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
 		} else {
-			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
+			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.Table.tableDef, false)
 		}
 
 		source := &LocalDisttaeDataSource{
-			table:           r.table,
+			table:           r.Table,
 			pState:          r.pState,
 			fs:              r.fs,
 			ctx:             ctx,
