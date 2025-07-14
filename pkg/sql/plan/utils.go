@@ -1188,9 +1188,6 @@ func splitOutConst(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Ex
 	}
 
 	op := fn.Func.GetObjName()
-	if op != "+" && op != "-" {
-		return expr, nil, nil
-	}
 
 	left, leftConst, err := splitOutConst(fn.Args[0], proc)
 	if err != nil {

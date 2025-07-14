@@ -330,7 +330,6 @@ func (exec *txnExecutor) Exec(
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
-	// logutil.Info("*[Exec] sql", zap.String("sql", sql))
 	pn, err := plan.BuildPlan(compileContext, stmts[0], prepared)
 
 	if err != nil {
