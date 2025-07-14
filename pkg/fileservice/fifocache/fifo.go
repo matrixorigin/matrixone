@@ -93,16 +93,21 @@ func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx contex
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// check item is already deleted
 	if c.deleted {
+		// exit and return false which means no need to deallocate the memory
 		return false
 	}
 
+	// set deleted = true
 	c.deleted = true
 
+	// call postEvict before decrement the ref counter
 	if fn != nil {
 		fn(ctx, c.key, c.value, c.size)
 	}
 
+	// decrement the ref counter
 	c.releaseValue()
 	return true
 }
@@ -120,12 +125,16 @@ func (c *_CacheItem[K, V]) PostFn(ctx context.Context, fn func(ctx context.Conte
 func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// first check item is already deleted
 	if c.deleted {
 		return false
 	}
 
+	// if not deleted, increment ref counter to occupy the memory
 	c.retainValue()
 
+	// value is safe to be accessed now and call postfn
 	if fn != nil {
 		fn(ctx, c.key, c.value, c.size)
 	}
@@ -310,9 +319,9 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 		} else {
 			// evict
 			c.htab.Remove(item.key)
-			item.MarkAsDeleted(ctx, c.postEvict)
-
 			c.usedSmall.Add(-item.size)
+			// mark item as deleted and item should not be accessed again
+			item.MarkAsDeleted(ctx, c.postEvict)
 			return
 		}
 	}
@@ -340,9 +349,9 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 		} else {
 			// evict
 			c.htab.Remove(item.key)
-			item.MarkAsDeleted(ctx, c.postEvict)
-
 			c.usedMain.Add(-item.size)
+			// mark item as deleted and item should not be accessed again
+			item.MarkAsDeleted(ctx, c.postEvict)
 			return
 		}
 	}
