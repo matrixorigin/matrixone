@@ -1138,80 +1138,6 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
-func combineTwo(left, right *plan.Expr, op string, proc *process.Process) (*plan.Expr, error) {
-	if left == nil && right == nil {
-		return nil, nil
-	}
-
-	if right == nil {
-		return left, nil
-	}
-
-	if left == nil {
-		if op == "-" {
-			res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "unary_minus", []*plan.Expr{right})
-			if err != nil {
-				return nil, err
-			}
-			return res, nil
-		}
-		return right, nil
-	}
-
-	if op == "+" {
-		res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{left, right})
-		if err != nil {
-			return nil, err
-		}
-		return res, nil
-	}
-
-	res, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{left, right})
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
-func splitOutConst(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr, error) {
-	if lit := expr.GetLit(); lit != nil {
-		return nil, expr, nil
-	}
-
-	if colRef := expr.GetCol(); colRef != nil {
-		return expr, nil, nil
-	}
-
-	fn := expr.GetF()
-	if fn == nil {
-		return expr, nil, nil
-	}
-
-	op := fn.Func.GetObjName()
-
-	left, leftConst, err := splitOutConst(fn.Args[0], proc)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	right, rightConst, err := splitOutConst(fn.Args[1], proc)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	newExpr, err := combineTwo(left, right, op, proc)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	constExpr, err := combineTwo(leftConst, rightConst, op, proc)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return newExpr, constExpr, nil
-}
-
 func checkOp(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -1290,6 +1216,31 @@ func canTranspose(expr *plan.Expr) (can bool, leftCnt int, rightCnt int) {
 	return true, leftCnt, rightCnt
 }
 
+func getPath(expr *plan.Expr) []int {
+	if expr == nil {
+		return nil
+	}
+
+	if expr.GetCol() != nil {
+		return []int{}
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		return nil
+	}
+
+	if colPath := getPath(fn.Args[0]); colPath != nil {
+		return append([]int{0}, colPath...)
+	}
+
+	if colPath := getPath(fn.Args[1]); colPath != nil {
+		return append([]int{1}, colPath...)
+	}
+
+	return nil
+}
+
 func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
 	can, leftCnt, rightCnt := canTranspose(expr)
 	if !can {
@@ -1307,27 +1258,63 @@ func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, erro
 	}
 
 	fn := expr.GetF()
-	left, right := fn.Args[0], fn.Args[1]
-	newLeft, constExpr, err := splitOutConst(left, proc)
-	if err != nil {
-		return nil, err
-	}
+	curLeft, curRight := fn.Args[0], fn.Args[1]
 
-	if constExpr == nil {
+	colPath := getPath(curLeft)
+	if colPath == nil {
 		return expr, nil
 	}
 
-	newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{right, constExpr})
+	for _, direction := range colPath {
+		f := curLeft.GetF()
+		if f == nil {
+			break
+		}
+
+		var colSide, constSide *plan.Expr
+		if direction == 0 {
+			colSide = f.Args[0]
+			constSide = f.Args[1]
+		} else {
+			colSide = f.Args[1]
+			constSide = f.Args[0]
+		}
+
+		switch f.Func.ObjName {
+		case "+":
+			newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{curRight, constSide})
+			if err != nil {
+				return nil, err
+			}
+			curLeft = colSide
+			curRight = newRight
+
+		case "-":
+			if direction == 0 {
+				// col - const = right    →    col = right + const
+				newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{curRight, constSide})
+				if err != nil {
+					return nil, err
+				}
+				curLeft = colSide
+				curRight = newRight
+			} else {
+				// const - col = right    →    col = const - right
+				newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{constSide, curRight})
+				if err != nil {
+					return nil, err
+				}
+				curLeft = colSide
+				curRight = newRight
+			}
+		}
+	}
+	newExpr, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{curLeft, curRight})
 	if err != nil {
 		return nil, err
 	}
 
-	res, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{newLeft, newRight})
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
+	return newExpr, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {

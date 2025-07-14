@@ -844,16 +844,16 @@ func TestConstantTranspose(t *testing.T) {
 						Args: []*plan.Expr{
 							colExpr,
 							makeSubExpr(
-								makeConstExpr(-1),
-								makeAddExpr(
-									makeAddExpr(
-										makeAddExpr(
-											makeConstExpr(-8),
-											makeConstExpr(2),
-										),
+								makeSubExpr(
+									makeSubExpr(
 										makeConstExpr(-1),
+										makeConstExpr(5),
 									),
-									makeConstExpr(5),
+									makeConstExpr(-1),
+								),
+								makeAddExpr(
+									makeConstExpr(-8),
+									makeConstExpr(2),
 								),
 							),
 						},
@@ -901,7 +901,7 @@ func TestConstantTranspose(t *testing.T) {
 			},
 		},
 		{
-			name: "nested-expressions-with-multiple-references",
+			name: "nested-expressions",
 			input: &plan.Expr{
 				Typ: plan2.MakePlan2Type(&boolType),
 				Expr: &plan.Expr_F{
@@ -928,11 +928,11 @@ func TestConstantTranspose(t *testing.T) {
 						Args: []*plan.Expr{
 							colExpr,
 							makeSubExpr(
-								makeConstExpr(200),
-								makeAddExpr(
-									makeConstExpr(100),
+								makeSubExpr(
+									makeConstExpr(200),
 									makeConstExpr(50),
 								),
+								makeConstExpr(100),
 							),
 						},
 					},
