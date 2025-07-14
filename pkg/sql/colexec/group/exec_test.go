@@ -15,6 +15,8 @@
 package group
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,14 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // hackAggExecToTest 是一个不带任何逻辑的AggExec,主要用于单测中检查各种接口的调用次数。
 type hackAggExecToTest struct {
 	toFlush int
 
-	aggexec.AggFuncExec
 	preAllocated   int
 	groupNumber    int
 	doFillRow      int
@@ -40,6 +40,44 @@ type hackAggExecToTest struct {
 	doBatchFillRow int
 	doFlushTime    int
 	isFree         bool
+}
+
+var _ aggexec.AggFuncExec = new(hackAggExecToTest)
+
+func (h *hackAggExecToTest) AggID() int64 {
+	panic("unimplemented")
+}
+
+func (h *hackAggExecToTest) BatchMerge(next aggexec.AggFuncExec, offset int, groups []uint64) error {
+	panic("unimplemented")
+}
+
+func (h *hackAggExecToTest) IsDistinct() bool {
+	panic("unimplemented")
+}
+
+func (h *hackAggExecToTest) Marshal() ([]byte, error) {
+	return nil, nil
+}
+
+func (h *hackAggExecToTest) Merge(next aggexec.AggFuncExec, groupIdx1 int, groupIdx2 int) error {
+	panic("unimplemented")
+}
+
+func (h *hackAggExecToTest) SetExtraInformation(partialResult any, groupIndex int) (err error) {
+	panic("unimplemented")
+}
+
+func (h *hackAggExecToTest) TypesInfo() ([]types.Type, types.Type) {
+	panic("unimplemented")
+}
+
+func (h *hackAggExecToTest) Unmarshal(mp *mpool.MPool, result [][]byte, empties [][]byte, groups [][]byte) error {
+	return nil
+}
+
+func (h *hackAggExecToTest) Size() int64 {
+	return 0
 }
 
 func (h *hackAggExecToTest) GetOptResult() aggexec.SplitResult {

@@ -57,6 +57,21 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.state = vm.Build
 	group.ctr.dataSourceIsEmpty = true
 	group.prepareAnalyzer()
+
+	if group.SpillThreshold == 0 {
+		group.SpillThreshold = 1 * 1024 * 1024 //TODO
+	}
+	if group.ctr.spillManager == nil {
+		var groupByTypes []types.Type
+		for _, expr := range group.Exprs {
+			groupByTypes = append(groupByTypes, types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale))
+		}
+		group.ctr.spillManager, err = NewSpillManager(proc, groupByTypes, group.Aggs)
+		if err != nil {
+			return
+		}
+	}
+
 	if err = group.prepareAgg(proc); err != nil {
 		return err
 	}
@@ -188,6 +203,13 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 
 	for {
 		if group.ctr.state == vm.Eval {
+			// If we have spilled data, we need to merge it
+			if group.ctr.spillManager != nil && group.ctr.spillManager.HasSpilledData() {
+				if err := group.mergeSpilledData(proc); err != nil {
+					return nil, err
+				}
+			}
+
 			if group.ctr.result1.IsEmpty() {
 				group.ctr.state = vm.End
 				return nil, nil
@@ -216,6 +238,11 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 
 		group.ctr.dataSourceIsEmpty = false
 		if err = group.consumeBatchToGetFinalResult(proc, res); err != nil {
+			return nil, err
+		}
+
+		// Check for spill after processing each batch
+		if err := group.checkAndSpill(proc); err != nil {
 			return nil, err
 		}
 	}
@@ -312,7 +339,17 @@ func (group *Group) consumeBatchToGetFinalResult(
 					return err
 				}
 			}
+
+			// Check for spill after processing each chunk
+			if err := group.checkAndSpill(proc); err != nil {
+				return err
+			}
 		}
+	}
+
+	// Check for spill after processing the batch
+	if err := group.checkAndSpill(proc); err != nil {
+		return err
 	}
 
 	return nil
@@ -490,6 +527,11 @@ func (group *Group) consumeBatchToRes(
 					return false, err
 				}
 			}
+		}
+
+		// Check for spill after processing a batch
+		if err := group.checkAndSpill(proc); err != nil {
+			return false, err
 		}
 
 		return res.RowCount() < intermediateResultSendActionTrigger, nil

@@ -93,6 +93,9 @@ type Group struct {
 	GroupingFlag []bool
 	// agg info and agg column.
 	Aggs []aggexec.AggFuncExecExpression
+
+	// SpillThreshold is the memory threshold for spilling in bytes
+	SpillThreshold int64
 }
 
 func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
@@ -161,6 +164,8 @@ type container struct {
 	result1 GroupResultBuffer
 	// result if NeedEval is false.
 	result2 GroupResultNoneBlock
+
+	spillManager *SpillManager
 }
 
 func (ctr *container) isDataSourceEmpty() bool {
@@ -168,8 +173,14 @@ func (ctr *container) isDataSourceEmpty() bool {
 }
 
 func (group *Group) Free(proc *process.Process, _ bool, _ error) {
-	group.freeCannotReuse(proc.Mp())
+	// Use defer to ensure spill manager cleanup happens even if earlier operations panic
+	defer func() {
+		if group.ctr.spillManager != nil {
+			group.ctr.spillManager.Cleanup(proc.Ctx)
+		}
+	}()
 
+	group.freeCannotReuse(proc.Mp())
 	group.ctr.freeGroupEvaluate()
 	group.ctr.freeAggEvaluate()
 	group.FreeProjection(proc)

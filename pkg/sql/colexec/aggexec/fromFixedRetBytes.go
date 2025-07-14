@@ -217,7 +217,7 @@ func (exec *aggregatorFromFixedToBytes[from]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *aggregatorFromFixedToBytes[from]) marshal() ([]byte, error) {
+func (exec *aggregatorFromFixedToBytes[from]) Marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -232,7 +232,7 @@ func (exec *aggregatorFromFixedToBytes[from]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *aggregatorFromFixedToBytes[from]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *aggregatorFromFixedToBytes[from]) Unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	exec.execContext.decodeGroupContexts(groups, exec.singleAggInfo.retType, exec.singleAggInfo.argType)
 	return exec.ret.unmarshalFromBytes(result, empties)
 }

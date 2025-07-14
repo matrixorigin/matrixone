@@ -699,12 +699,12 @@ func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(v1, []byte("test1"), false, m.Mp()))
 		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v1}))
 
-		data, err := exec.marshal()
+		data, err := exec.Marshal()
 		require.NoError(t, err)
 		require.NotNil(t, data)
 
 		newExec := newGroupConcatExec(m, info, ",")
-		err = newExec.unmarshal(m.Mp(), nil, nil, [][]byte{[]byte(",")})
+		err = newExec.Unmarshal(m.Mp(), nil, nil, [][]byte{[]byte(",")})
 		require.NoError(t, err)
 
 		require.Equal(t, []byte(","), newExec.(*groupConcatExec).separator)
@@ -722,14 +722,14 @@ func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
 		}
 		exec := newGroupConcatExec(m, info, "|")
 
-		data, err := exec.marshal()
+		data, err := exec.Marshal()
 		require.NoError(t, err)
 
 		newExec := newGroupConcatExec(m, info, ",")
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.Unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		require.Equal(t, []byte("|"), newExec.(*groupConcatExec).separator)
@@ -753,14 +753,14 @@ func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(v1, []byte("distinct1"), false, m.Mp()))
 		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v1}))
 
-		data, err := exec.marshal()
+		data, err := exec.Marshal()
 		require.NoError(t, err)
 
 		newExec := newGroupConcatExec(m, info, ",")
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.Unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -803,14 +803,14 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 3}, nil, m.Mp()))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{v1}))
 
-		data, err := exec.marshal()
+		data, err := exec.Marshal()
 		require.NoError(t, err)
 
 		newExec := newCountColumnExecExec(m, info)
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.Unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -833,14 +833,14 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 1, 3}, nil, m.Mp()))
 		require.NoError(t, exec.BulkFill(0, []*vector.Vector{v1}))
 
-		data, err := exec.marshal()
+		data, err := exec.Marshal()
 		require.NoError(t, err)
 
 		newExec := newCountColumnExecExec(m, info)
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.Unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -858,14 +858,14 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 		exec := newCountColumnExecExec(m, info)
 		require.NoError(t, exec.GroupGrow(1))
 
-		data, err := exec.marshal()
+		data, err := exec.Marshal()
 		require.NoError(t, err)
 
 		newExec := newCountColumnExecExec(m, info)
 		encoded := &EncodedAgg{}
 		require.NoError(t, encoded.Unmarshal(data))
 
-		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		err = newExec.Unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
 		require.NoError(t, err)
 
 		exec.Free()
@@ -882,7 +882,7 @@ func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
 		}
 		exec := newCountColumnExecExec(m, info)
 
-		err := exec.unmarshal(m.Mp(), nil, nil, [][]byte{})
+		err := exec.Unmarshal(m.Mp(), nil, nil, [][]byte{})
 		require.NoError(t, err)
 
 		exec.Free()
