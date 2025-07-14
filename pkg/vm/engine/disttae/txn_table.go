@@ -266,7 +266,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	return sz + szInPart, nil
 }
 
-func ForeachVisibleDataObject(
+func ForeachVisibleObjects(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
 	fn func(obj objectio.ObjectEntry) error,
@@ -363,7 +363,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(
+	if err = ForeachVisibleObjects(
 		part,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -479,7 +479,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(
+	if err = ForeachVisibleObjects(
 		state,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -2363,7 +2363,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
-	err = ForeachVisibleDataObject(state, snapshot, func(obj objectio.ObjectEntry) error {
+	err = ForeachVisibleObjects(state, snapshot, func(obj objectio.ObjectEntry) error {
 		if obj.GetAppendable() {
 			return nil
 		}
