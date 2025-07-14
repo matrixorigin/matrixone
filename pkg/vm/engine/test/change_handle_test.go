@@ -1343,7 +1343,7 @@ func TestChangesHandle7(t *testing.T) {
 	}
 }
 
-func TestCDCExecutor(t *testing.T) {
+func TestCDCExecutor1(t *testing.T) {
 	catalog.SetupDefines("")
 
 	// idAllocator := common.NewIdAllocator(1000)
@@ -1483,3 +1483,148 @@ func TestCDCExecutor(t *testing.T) {
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 }
+
+// test register and unregister job
+func TestCDCExecutor2(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// create database and table
+
+	CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+
+	// init cdc executor
+	txnFactory := func() (client.TxnOperator, error) {
+		return disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	}
+	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		txnFactory,
+		GetTestCDCExecutorOption(),
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+	
+	// unregister a job that not exist
+	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := idxcdc.UnregisterJob(ctx, "", txn,
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_IndexSync),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		})
+	assert.False(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	// register cdc job
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err = idxcdc.RegisterJob(
+		ctx, "", txn, "pitr",
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		},
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	// register duplicate job
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err = idxcdc.RegisterJob(ctx, "", txn, "pitr",
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		})
+	assert.False(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	// unregister cdc job
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err = idxcdc.UnregisterJob(ctx, "", txn,
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_IndexSync),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		})
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	
+	// unregister droppend job
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err = idxcdc.UnregisterJob(ctx, "", txn,
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_IndexSync),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		})
+	assert.False(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	// register job again
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err = idxcdc.RegisterJob(ctx, "", txn, "pitr",
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "hnsw_idx",
+		})
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+}
+
