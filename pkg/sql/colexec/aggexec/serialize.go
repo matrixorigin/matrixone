@@ -19,7 +19,7 @@ import (
 )
 
 func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
-	return exec.marshal()
+	return exec.Marshal()
 }
 
 func UnmarshalAggFuncExec(
@@ -48,7 +48,7 @@ func UnmarshalAggFuncExec(
 		mp = mg.Mp()
 	}
 
-	if err := exec.unmarshal(
+	if err := exec.Unmarshal(
 		mp, encoded.Result, encoded.Empties, encoded.Groups); err != nil {
 		exec.Free()
 		return nil, err

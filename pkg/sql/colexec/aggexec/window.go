@@ -59,7 +59,7 @@ func (exec *singleWindowExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *singleWindowExec) marshal() ([]byte, error) {
+func (exec *singleWindowExec) Marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -81,7 +81,7 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *singleWindowExec) Unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(exec.groups) > 0 {
 		exec.groups = make([][]int64, len(groups))
 		for i := range exec.groups {
