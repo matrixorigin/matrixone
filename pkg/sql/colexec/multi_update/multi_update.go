@@ -174,26 +174,33 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 	ctr := &update.ctr
 
 	if ctr.state == vm.Build {
-		for {
-			input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
-			if err != nil {
-				return input, err
-			}
-
-			if input.Batch == nil {
-				ctr.state = vm.Eval
-				break
-			}
-
-			if input.Batch.IsEmpty() {
-				continue
-			}
-
-			err = ctr.s3Writer.append(proc, analyzer, input.Batch)
-			if err != nil {
-				return vm.CancelResult, err
-			}
+		input, err := update.getInput(proc, analyzer)
+		if err != nil {
+			return input, err
 		}
+
+		if input.Batch == nil || input.Batch.IsEmpty() {
+			if input.Batch == nil {
+				update.ctr.state = vm.Eval
+			}
+			result := vm.NewCallResult()
+			result.Batch = batch.EmptyBatch
+			return result, nil
+		}
+
+		w, err := update.getS3WriterFunc(update.mainTable)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+
+		err = w.append(proc, analyzer, input.Batch)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+
+		result := vm.NewCallResult()
+		result.Batch = batch.EmptyBatch
+		return result, nil
 	}
 
 	if ctr.state == vm.Eval {
@@ -405,4 +412,20 @@ func (update *MultiUpdate) resetMultiSources(proc *process.Process) error {
 		}
 	}
 	return nil
+}
+
+func (update *MultiUpdate) getInput(
+	proc *process.Process,
+	analyzer process.Analyzer,
+) (vm.CallResult, error) {
+	if !update.delegated {
+		input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return input, err
+		}
+
+		update.input = input
+	}
+
+	return update.input, nil
 }

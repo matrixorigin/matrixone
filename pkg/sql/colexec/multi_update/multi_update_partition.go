@@ -36,6 +36,7 @@ type PartitionMultiUpdate struct {
 	partitionIndexes map[uint64][]engine.Relation
 	rawTableIDs      []uint64
 	rawTableFlags    []uint64
+	writers          map[uint64]*s3WriterDelegate
 }
 
 func NewPartitionMultiUpdate(
@@ -257,4 +258,27 @@ func (op *PartitionMultiUpdate) getPartitionIndex(
 	}
 
 	panic("BUG")
+}
+
+func (op *PartitionMultiUpdate) getS3Writer(
+	id uint64,
+) (*s3WriterDelegate, error) {
+	var err error
+	w, ok := op.writers[id]
+	if !ok {
+		w, err = newS3Writer(op.raw)
+		if err != nil {
+			return nil, err
+		}
+		op.writers[id] = w
+	}
+	return w, nil
+}
+
+func (op *PartitionMultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
+	for k, w := range op.writers {
+		delete(op.writers, k)
+		return w
+	}
+	return nil
 }

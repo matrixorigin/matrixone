@@ -77,7 +77,8 @@ type MultiUpdate struct {
 
 	Engine engine.Engine
 
-	// SegmentMap map[string]int32
+	getS3WriterFunc          func(id uint64) (*s3WriterDelegate, error)
+	getFlushableS3WriterFunc func() *s3WriterDelegate
 
 	vm.OperatorBase
 }
