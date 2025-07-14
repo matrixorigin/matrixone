@@ -589,7 +589,15 @@ var GetTxnOp = func(
 		"",
 		info,
 		0)
-	return cnTxnClient.New(ctx, nowTs, createByOpt)
+	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	if err != nil {
+		return nil, err
+	}
+	err = cnEngine.New(ctx, op)
+	if err != nil {
+		return nil, err
+	}
+	return op, nil
 }
 
 var GetTxn = func(

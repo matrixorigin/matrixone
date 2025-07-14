@@ -103,7 +103,7 @@ func GetTxnFactory(
 	cnTxnClient client.TxnClient,
 ) func() (client.TxnOperator, error) {
 	return func() (client.TxnOperator, error) {
-		return GetTxnOp(ctx, cnEngine, cnTxnClient, "debug cdc")
+		return GetTxnOp(ctx, cnEngine, cnTxnClient, "default async index cdc executor")
 	}
 }
 
@@ -182,6 +182,8 @@ func NewCDCTaskExecutor(
 		option:     option,
 		mp:         mp,
 	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	err = exec.setAsyncIndexLogTableID(ctx)
 	if err != nil {
 		return nil, err

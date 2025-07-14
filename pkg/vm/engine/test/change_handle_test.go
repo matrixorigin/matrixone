@@ -1522,15 +1522,12 @@ func TestCDCExecutor2(t *testing.T) {
 	CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 
 	// init cdc executor
-	txnFactory := func() (client.TxnOperator, error) {
-		return disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
-	}
 	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		txnFactory,
+		nil,
 		GetTestCDCExecutorOption(),
 		common.DebugAllocator,
 	)
