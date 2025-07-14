@@ -125,10 +125,7 @@ func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Conte
 	if c.deleted {
 		return false
 	}
-	ok := c.retainValue()
-	if !ok {
-		return false
-	}
+	c.retainValue()
 
 	if fn != nil {
 		fn(ctx, c.key, c.value, c.size)
