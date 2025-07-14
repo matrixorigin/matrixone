@@ -22,3 +22,4 @@ use test;
 insert into tt2 select * from tt2;
 -- @session}
 commit;
+drop database test;

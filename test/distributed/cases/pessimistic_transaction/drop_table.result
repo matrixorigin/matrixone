@@ -22,3 +22,4 @@ use test;
 insert into tt2 select * from tt2;
 no such table test.tt2
 commit;
+drop database test;
