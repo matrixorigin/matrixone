@@ -115,6 +115,7 @@ func AsyncIndexCdcTaskExecutorFactory(
 	mp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) (err error) {
 	return func(ctx context.Context, task task.Task) (err error) {
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 		exec, err := NewCDCTaskExecutor(
 			ctx,
 			txnEngine,
