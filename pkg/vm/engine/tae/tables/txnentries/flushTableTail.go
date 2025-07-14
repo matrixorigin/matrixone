@@ -391,7 +391,7 @@ func (entry *flushTableTailEntry) IsAborted() bool { return false }
 
 type flushTableTailCmd struct{}
 
-func (cmd *flushTableTailCmd) GetType() uint16 { return IOET_WALTxnCommand_Compact }
+func (cmd *flushTableTailCmd) GetType() uint16 { return IOET_WALTxnCommand_FlushTableTail }
 func (cmd *flushTableTailCmd) WriteTo(w io.Writer) (n int64, err error) {
 	typ := IOET_WALTxnCommand_FlushTableTail
 	if _, err = w.Write(types.EncodeUint16(&typ)); err != nil {
