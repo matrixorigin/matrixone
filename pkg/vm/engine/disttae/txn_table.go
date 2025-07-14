@@ -97,7 +97,7 @@ func newTxnTable(
 			process.GetTxnOperator(),
 			item.ExtraInfo.ParentTableID,
 		)
-		if err != nil {
+		if err != nil && !strings.Contains(err.Error(), "can not find table by id") {
 			return nil, err
 		}
 		tbl.parent = r
