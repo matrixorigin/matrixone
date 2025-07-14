@@ -136,14 +136,13 @@ func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Conte
 // if deleted = true, item value is already released by this Cache and is NOT valid to use it inside the Cache.
 // if deleted = false, increment the reference counter of the value and it is safe to use now.
 func (c *_CacheItem[K, V]) retainValue() bool {
-	cdata, ok := any(c.value).(fscache.Data)
-	if !ok {
-		return true
-	}
 	if c.deleted {
 		return false
 	}
-	cdata.Retain()
+	cdata, ok := any(c.value).(fscache.Data)
+	if ok {
+		cdata.Retain()
+	}
 	return true
 }
 
