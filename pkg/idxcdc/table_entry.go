@@ -36,7 +36,7 @@ const (
 )
 
 type TableInfo_2 struct {
-	exec      *CDCTaskExecutor2
+	exec      *CDCTaskExecutor
 	tableDef  *plan.TableDef
 	accountID uint32
 	dbID      uint64
@@ -53,7 +53,7 @@ func tableInfoLess(a, b *TableInfo_2) bool {
 }
 
 func NewTableInfo_2(
-	exec *CDCTaskExecutor2,
+	exec *CDCTaskExecutor,
 	accountID uint32,
 	dbID, tableID uint64,
 	dbName, tableName string,

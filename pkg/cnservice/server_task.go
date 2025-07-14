@@ -401,10 +401,11 @@ func (s *service) registerExecutorsLocked() {
 		),
 	)
 
-	s.task.runner.RegisterExecutor(task.TaskCode_AsyncIndexCdc,
+	s.task.runner.RegisterExecutor(task.TaskCode_Async_Index_CDC,
 		idxcdc.AsyncIndexCdcTaskExecutorFactory(
 			s.storeEngine,
 			s._txnClient,
+			s.task.runner.Attach,
 			s.cfg.UUID,
 			common.AsyncIndexCdcAllocator,
 		),

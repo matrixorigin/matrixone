@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -50,50 +53,29 @@ const (
 	MOAsyncIndexLogTableName = "mo_async_index_log"
 )
 
-type relationFactory func(context.Context) (engine.Relation, client.TxnOperator, error)
+const (
+	DefaultGCInterval             = time.Hour
+	DefaultGCTTL                  = time.Hour
+	DefaultSyncTaskInterval       = time.Millisecond * 100
+	DefaultFlushWatermarkInterval = time.Hour
+)
 
-type replayFn func(
-	ctx context.Context, tableID uint64, accountID uint32, indexID int32,
-) (watermark types.TS, errorCode int, errorMsg string, err error)
-
-type deleteFn func(ctx context.Context, tableID uint64, accountID uint32, indexID int32) error
+type CDCExecutorOption struct {
+	GCInterval             time.Duration
+	GCTTL                  time.Duration
+	SyncTaskInterval       time.Duration
+	FlushWatermarkInterval time.Duration
+}
 
 type TxnFactory func() (client.TxnOperator, error)
 
-type CDCTaskExecutor2 struct {
-	tables  *btree.BTreeG[*TableInfo_2]
-	tableMu sync.RWMutex
-	// getInsertWatermarkFn func(
-	// 	ctx context.Context,
-	// 	tableID uint64,
-	// 	accountID int32,
-	// 	indexID int32,
-	// ) error
-	// getFlushWatermarkFn func(
-	// 	ctx context.Context,
-	// 	tableID uint64,
-	// 	watermark types.TS,
-	// 	accountID int32,
-	// 	indexID int32,
-	// 	errorCode int,
-	// 	info string,
-	// 	errorMsg string,
-	// ) error
-	// replayFn replayFn
-	// deleteFn deleteFn
-	packer *types.Packer
-	mp     *mpool.MPool
-	// spec     *task.CreateCdcDetails
-
-	// watermarkUpdater   WatermarkUpdater
-	// logger             *zap.Logger //todo: replace logutil.Infof
-	// sqlExecutorFactory func() ie.InternalExecutor
-	// attachToTask       func(context.Context, uint64, taskservice.ActiveRoutine) error
-	cnUUID string
-	// ts                 taskservice.TaskService
-	// fs                 fileservice.FileService
-	txnFactory func() (client.TxnOperator, error)
-	// sinkerFactory func(dbName, tableName string, tableDef []engine.TableDef) (Sinker, error)
+type CDCTaskExecutor struct {
+	tables               *btree.BTreeG[*TableInfo_2]
+	tableMu              sync.RWMutex
+	packer               *types.Packer
+	mp                   *mpool.MPool
+	cnUUID               string
+	txnFactory           func() (client.TxnOperator, error)
 	txnEngine            engine.Engine
 	asyncIndexLogTableID uint64
 
@@ -103,12 +85,16 @@ type CDCTaskExecutor2 struct {
 		req *cmd_util.GetChangedTableListReq,
 		resp *cmd_util.GetChangedTableListResp,
 	) (func(), error) // for test
+	option *CDCExecutorOption
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	worker Worker
 	wg     sync.WaitGroup
+
+	running   bool
+	runningMu sync.Mutex
 }
 
 func GetTxnFactory(
@@ -124,82 +110,75 @@ func GetTxnFactory(
 func AsyncIndexCdcTaskExecutorFactory(
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
+	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
 	cdUUID string,
 	mp *mpool.MPool,
 ) func(ctx context.Context, task task.Task) (err error) {
 	return func(ctx context.Context, task task.Task) (err error) {
-		exec, err := NewCDCTaskExecutor2(ctx, txnEngine, cnTxnClient, cdUUID,nil, mp)
+		exec, err := NewCDCTaskExecutor(
+			ctx,
+			txnEngine,
+			cnTxnClient,
+			cdUUID,
+			GetTxnFactory(ctx, txnEngine, cnTxnClient),
+			nil,
+			mp,
+		)
 		if err != nil {
 			return err
 		}
+		attachToTask(ctx, task.GetID(), exec)
 		exec.Start()
 		return nil
 	}
 }
 
-func NewCDCTaskExecutor2(
+func NewCDCTaskExecutor(
 	ctx context.Context,
-	// accountID uint64,
-	// spec *task.CreateCdcDetails,
-	// sqlExecutorFactory func() ie.InternalExecutor,
-	// sinkerFactory func(dbName, tableName string, tableDef []engine.TableDef) (Sinker, error),
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	cdUUID string,
-	// rpcHandleFn func(
-	// 	ctx context.Context,
-	// 	meta txn.TxnMeta,
-	// 	req *cmd_util.GetChangedTableListReq,
-	// 	resp *cmd_util.GetChangedTableListResp,
-	// ) (func(), error),
-	// getInsertWatermarkFn func(
-	// 	ctx context.Context,
-	// 	tableID uint64,
-	// 	accountID int32,
-	// 	indexID int32,
-	// ) error,
-	// getFlushWatermarkFn func(
-	// 	ctx context.Context,
-	// 	tableID uint64,
-	// 	watermark types.TS,
-	// 	accountID int32,
-	// 	indexID int32,
-	// 	errorCode int,
-	// 	info string,
-	// 	errorMsg string,
-	// ) error,
-	// replayFn replayFn,
-	// deleteFn deleteFn,
 	txnFactory func() (client.TxnOperator, error),
+	option *CDCExecutorOption,
 	mp *mpool.MPool,
-) (*CDCTaskExecutor2, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	worker := NewWorker()
-	// ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountID))
-	//TODO: subscribe mo_catalog.mo_async_index_log
-	exec := &CDCTaskExecutor2{
-		ctx:    ctx,
-		cancel: cancel,
-		packer: types.NewPacker(),
-		tables: btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true}),
-		// spec:                 spec,
-		// sqlExecutorFactory:   sqlExecutorFactory,
+) (exec *CDCTaskExecutor, err error) {
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"Async-Index-CDC-Task Executor init",
+			zap.Any("gcInterval", option.GCInterval),
+			zap.Any("gcttl", option.GCTTL),
+			zap.Any("syncTaskInterval", option.SyncTaskInterval),
+			zap.Any("flushWatermarkInterval", option.FlushWatermarkInterval),
+			zap.Error(err),
+		)
+	}()
+	if option == nil {
+		option = &CDCExecutorOption{
+			GCInterval:             DefaultGCInterval,
+			GCTTL:                  DefaultGCTTL,
+			SyncTaskInterval:       DefaultSyncTaskInterval,
+			FlushWatermarkInterval: DefaultFlushWatermarkInterval,
+		}
+	}
+	exec = &CDCTaskExecutor{
+		ctx:        ctx,
+		packer:     types.NewPacker(),
+		tables:     btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true}),
 		cnUUID:     cdUUID,
 		txnFactory: txnFactory,
-		// sinkerFactory:        sinkerFactory,
-		txnEngine: txnEngine,
-		worker:    worker,
-		wg:        sync.WaitGroup{},
-		// rpcHandleFn:          rpcHandleFn,
-		// watermarkUpdater:     newWatermarkUpdater(), //TODO
-		tableMu: sync.RWMutex{},
-		// getInsertWatermarkFn: getInsertWatermarkFn,
-		// getFlushWatermarkFn:  getFlushWatermarkFn,
-		// replayFn:             replayFn,
-		// deleteFn:             deleteFn,
-		mp: mp,
+		txnEngine:  txnEngine,
+		wg:         sync.WaitGroup{},
+		tableMu:    sync.RWMutex{},
+		option:     option,
+		mp:         mp,
 	}
-	err := exec.setAsyncIndexLogTableID(ctx)
+	err = exec.setAsyncIndexLogTableID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +189,12 @@ func NewCDCTaskExecutor2(
 	logtailreplay.RegisterRowsInsertHook(exec.onAsyncIndexLogInsert)
 	return exec, nil
 }
-func (exec *CDCTaskExecutor2) setAsyncIndexLogTableID(ctx context.Context) (err error) {
+
+func (exec *CDCTaskExecutor) setAsyncIndexLogTableID(ctx context.Context) (err error) {
 	tenantId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	txn, err := exec.txnFactory()
 	if err != nil {
 		return err
@@ -239,7 +222,7 @@ func (exec *CDCTaskExecutor2) setAsyncIndexLogTableID(ctx context.Context) (err 
 	})
 	return nil
 }
-func (exec *CDCTaskExecutor2) subscribeMOAsyncIndexLog(ctx context.Context) (err error) {
+func (exec *CDCTaskExecutor) subscribeMOAsyncIndexLog(ctx context.Context) (err error) {
 	sql := cdc.CDCSQLBuilder.AsyncIndexLogSelectSQL()
 	txn, err := exec.txnFactory()
 	if err != nil {
@@ -261,12 +244,12 @@ type RpcHandleFn func(
 	resp *cmd_util.GetChangedTableListResp,
 ) (func(), error)
 
-func (exec *CDCTaskExecutor2) SetRpcHandleFn(fn RpcHandleFn) {
+func (exec *CDCTaskExecutor) SetRpcHandleFn(fn RpcHandleFn) {
 	exec.rpcHandleFn = fn
 }
 
 // scan candidates
-func (exec *CDCTaskExecutor2) getAllTables() []*TableInfo_2 {
+func (exec *CDCTaskExecutor) getAllTables() []*TableInfo_2 {
 	exec.tableMu.RLock()
 	defer exec.tableMu.RUnlock()
 	items := exec.tables.Items()
@@ -274,53 +257,78 @@ func (exec *CDCTaskExecutor2) getAllTables() []*TableInfo_2 {
 }
 
 // get watermark, register new table, delete
-func (exec *CDCTaskExecutor2) getTable(tableID uint64) (*TableInfo_2, bool) {
+func (exec *CDCTaskExecutor) getTable(tableID uint64) (*TableInfo_2, bool) {
 	exec.tableMu.RLock()
 	defer exec.tableMu.RUnlock()
 	return exec.tables.Get(&TableInfo_2{tableID: tableID})
 }
 
-func (exec *CDCTaskExecutor2) setTable(table *TableInfo_2) {
+func (exec *CDCTaskExecutor) setTable(table *TableInfo_2) {
 	exec.tableMu.Lock()
 	defer exec.tableMu.Unlock()
 	exec.tables.Set(table)
 }
-func (exec *CDCTaskExecutor2) deleteTableEntry(table *TableInfo_2) {
+func (exec *CDCTaskExecutor) deleteTableEntry(table *TableInfo_2) {
 	exec.tableMu.Lock()
 	defer exec.tableMu.Unlock()
 	exec.tables.Delete(table)
 }
 
-func (exec *CDCTaskExecutor2) Resume() error {
-	// restart
+func (exec *CDCTaskExecutor) Resume() error {
+	exec.Start()
 	return nil
 }
-func (exec *CDCTaskExecutor2) Pause() error {
-	// stop
+func (exec *CDCTaskExecutor) Pause() error {
+	exec.Stop()
 	return nil
 }
-func (exec *CDCTaskExecutor2) Cancel() error {
-	// stop
+func (exec *CDCTaskExecutor) Cancel() error {
+	exec.Stop()
 	return nil
 }
-func (exec *CDCTaskExecutor2) Restart() error {
-	// stop
-	// restart
+func (exec *CDCTaskExecutor) Restart() error {
+	exec.Stop()
+	exec.Start()
 	return nil
 }
-func (exec *CDCTaskExecutor2) Start() {
+func (exec *CDCTaskExecutor) Start() {
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	if exec.running {
+		return
+	}
+	exec.running = true
+	logutil.Info(
+		"Async-Index-CDC-Task Start",
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	worker := NewWorker()
+	exec.worker = worker
+	exec.ctx = ctx
+	exec.cancel = cancel
 	exec.replay(exec.ctx)
 	exec.wg.Add(1)
 	go exec.run()
 }
 
-func (exec *CDCTaskExecutor2) Stop() {
+func (exec *CDCTaskExecutor) Stop() {
+	exec.runningMu.Lock()
+	defer exec.runningMu.Unlock()
+	if !exec.running {
+		return
+	}
+	exec.running = false
+	logutil.Info(
+		"Async-Index-CDC-Task Stop",
+	)
 	exec.worker.Stop()
 	exec.cancel()
 	exec.wg.Wait()
+	exec.ctx, exec.cancel = nil, nil
+	exec.worker = nil
 }
 
-func (exec *CDCTaskExecutor2) run() {
+func (exec *CDCTaskExecutor) run() {
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(time.Millisecond * 100) // todo
 	flushWatermarkTrigger := time.NewTicker(time.Hour)
@@ -333,8 +341,10 @@ func (exec *CDCTaskExecutor2) run() {
 			candidateTables := exec.getCandidateTables()
 			tables, fromTSs, toTS, err := exec.getDirtyTables(exec.ctx, candidateTables, exec.cnUUID, exec.txnEngine)
 			if err != nil {
-				// logutil.Errorf("cdc task %s get dirty tables failed, err: %v", exec.spec.TaskName, err)
-				logutil.Errorf("cdc task get dirty tables failed, err: %v", err)
+				logutil.Error(
+					"Async-Index-CDC-Task get dirty tables failed",
+					zap.Error(err),
+				)
 				continue
 			}
 			for i, table := range candidateTables {
@@ -350,19 +360,25 @@ func (exec *CDCTaskExecutor2) run() {
 		case <-flushWatermarkTrigger.C:
 			err := exec.FlushWatermarkForAllTables()
 			if err != nil {
-				logutil.Errorf("flush watermark for all tables failed, err: %v", err)
+				logutil.Error(
+					"Async-Index-CDC-Task flush watermark failed",
+					zap.Error(err),
+				)
 			}
 		case <-gcTrigger.C:
 			err := exec.GC(time.Hour) // todo
 			if err != nil {
-				logutil.Errorf("gc failed, err: %v", err)
+				logutil.Error(
+					"Async-Index-CDC-Task gc failed",
+					zap.Error(err),
+				)
 			}
 		}
 	}
 }
 
 // For UT
-func (exec *CDCTaskExecutor2) GetWatermark(srcTableID uint64, indexName string) (watermark types.TS, ok bool) {
+func (exec *CDCTaskExecutor) GetWatermark(srcTableID uint64, indexName string) (watermark types.TS, ok bool) {
 	table, ok := exec.getTable(srcTableID)
 	if !ok {
 		return
@@ -371,7 +387,7 @@ func (exec *CDCTaskExecutor2) GetWatermark(srcTableID uint64, indexName string) 
 	return
 }
 
-func (exec *CDCTaskExecutor2) onAsyncIndexLogInsert(ctx context.Context, input *api.Batch, tableID uint64) {
+func (exec *CDCTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *api.Batch, tableID uint64) {
 	if tableID != exec.asyncIndexLogTableID {
 		return
 	}
@@ -422,12 +438,15 @@ func (exec *CDCTaskExecutor2) onAsyncIndexLogInsert(ctx context.Context, input *
 
 }
 
-func (exec *CDCTaskExecutor2) replay(ctx context.Context) {
+func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 	sql := cdc.CDCSQLBuilder.AsyncIndexLogSelectSQL()
 	txn, err := exec.txnFactory()
 	if err != nil {
 		return
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	defer txn.Commit(ctx)
 	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
 	if err != nil {
@@ -460,7 +479,7 @@ func (exec *CDCTaskExecutor2) replay(ctx context.Context) {
 	})
 }
 
-func (exec *CDCTaskExecutor2) addIndex(
+func (exec *CDCTaskExecutor) addIndex(
 	ctx context.Context,
 	accountID uint32,
 	tableID uint64,
@@ -500,7 +519,7 @@ func (exec *CDCTaskExecutor2) addIndex(
 	return
 }
 
-func (exec *CDCTaskExecutor2) deleteIndex(
+func (exec *CDCTaskExecutor) deleteIndex(
 	ctx context.Context,
 	accountID uint32,
 	tableID uint64,
@@ -520,7 +539,7 @@ func (exec *CDCTaskExecutor2) deleteIndex(
 	return
 }
 
-func (exec *CDCTaskExecutor2) getRelation(
+func (exec *CDCTaskExecutor) getRelation(
 	ctx context.Context,
 	txnOp client.TxnOperator,
 	dbName, tableName string,
@@ -535,7 +554,7 @@ func (exec *CDCTaskExecutor2) getRelation(
 	}
 	return
 }
-func (exec *CDCTaskExecutor2) getTableByID(ctx context.Context, tableID uint64) (table engine.Relation, err error) {
+func (exec *CDCTaskExecutor) getTableByID(ctx context.Context, tableID uint64) (table engine.Relation, err error) {
 	txn, err := exec.txnFactory()
 	if err != nil {
 		return
@@ -546,7 +565,7 @@ func (exec *CDCTaskExecutor2) getTableByID(ctx context.Context, tableID uint64) 
 	}
 	return exec.getRelation(ctx, txn, dbName, tableName)
 }
-func (exec *CDCTaskExecutor2) getCandidateTables() []*TableInfo_2 {
+func (exec *CDCTaskExecutor) getCandidateTables() []*TableInfo_2 {
 	ret := make([]*TableInfo_2, 0)
 	items := exec.getAllTables()
 	for _, t := range items {
@@ -557,7 +576,7 @@ func (exec *CDCTaskExecutor2) getCandidateTables() []*TableInfo_2 {
 	}
 	return ret
 }
-func (exec *CDCTaskExecutor2) getDirtyTables(
+func (exec *CDCTaskExecutor) getDirtyTables(
 	ctx context.Context,
 	candidateTables []*TableInfo_2,
 	service string,
@@ -603,7 +622,7 @@ func (exec *CDCTaskExecutor2) getDirtyTables(
 	return
 }
 
-func (exec *CDCTaskExecutor2) FlushWatermarkForAllTables() error {
+func (exec *CDCTaskExecutor) FlushWatermarkForAllTables() error {
 	tables := exec.getAllTables()
 	if len(tables) == 0 {
 		return nil
@@ -645,16 +664,21 @@ func (exec *CDCTaskExecutor2) FlushWatermarkForAllTables() error {
 	if _, err = ExecWithResult(exec.ctx, insertSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
+	logutil.Info(
+		"Async-Index-CDC-Task flush watermark",
+		zap.Any("table count", len(tables)),
+	)
 	return nil
 }
 
-func (exec *CDCTaskExecutor2) GC(cleanupThreshold time.Duration) (err error) {
+func (exec *CDCTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	txn, err := exec.txnFactory()
 	if err != nil {
 		return err
 	}
 	defer txn.Commit(exec.ctx)
-	asyncIndexLogGCSql := cdc.CDCSQLBuilder.AsyncIndexLogGCSQL(time.Now().Add(-cleanupThreshold))
+	gcTime := time.Now().Add(-cleanupThreshold)
+	asyncIndexLogGCSql := cdc.CDCSQLBuilder.AsyncIndexLogGCSQL(gcTime)
 	if _, err = ExecWithResult(exec.ctx, asyncIndexLogGCSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
@@ -662,10 +686,14 @@ func (exec *CDCTaskExecutor2) GC(cleanupThreshold time.Duration) (err error) {
 	if _, err = ExecWithResult(exec.ctx, asyncIndexIterationsGCSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
+	logutil.Info(
+		"Async-Index-CDC-Task GC",
+		zap.Any("gcTime", gcTime),
+	)
 	return err
 }
 
-func (exec *CDCTaskExecutor2) String() string {
+func (exec *CDCTaskExecutor) String() string {
 	tables := exec.getAllTables()
 	str := "CDC Task\n"
 	for _, t := range tables {

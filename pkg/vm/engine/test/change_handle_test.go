@@ -1395,7 +1395,15 @@ func TestCDCExecutor(t *testing.T) {
 	txnFactory := func() (client.TxnOperator, error) {
 		return disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	}
-	cdcExecutor, err := idxcdc.NewCDCTaskExecutor2(ctxWithTimeout, disttaeEngine.Engine, disttaeEngine.GetTxnClient(), "", txnFactory, common.DebugAllocator)
+	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		txnFactory,
+		GetTestCDCExecutorOption(),
+		common.DebugAllocator,
+	)
 	require.NoError(t, err)
 	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
 

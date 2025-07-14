@@ -108,7 +108,7 @@ type interalSqlConsumer struct {
 	// the length of all completed sql statement in sqlBuf
 	preSqlBufLen int
 
-	wg  sync.WaitGroup
+	wg sync.WaitGroup
 }
 
 func NewInteralSqlConsumer(

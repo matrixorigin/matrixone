@@ -124,9 +124,9 @@ func (sinkerEntry *SinkerEntry) fillInAsyncIndexLogDeleteSQL(firstSinker bool, w
 	}
 	_, err := w.WriteString(
 		fmt.Sprintf(" (account_id = %d AND table_id = %d AND index_name = '%s' and drop_at is null)",
-		sinkerEntry.tableInfo.accountID,
-		sinkerEntry.tableInfo.tableID,
-		sinkerEntry.indexName,
-	))
+			sinkerEntry.tableInfo.accountID,
+			sinkerEntry.tableInfo.tableID,
+			sinkerEntry.indexName,
+		))
 	return err
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/idxcdc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	// "github.com/matrixorigin/matrixone/pkg/defines"
@@ -392,7 +394,7 @@ func getDeleteFn(
 // 	accountID uint32,
 // 	cnTestEngine *testutil.TestDisttaeEngine,
 // 	taeHandler *testutil.TestTxnStorage,
-// ) *frontend.CDCTaskExecutor2 {
+// ) *frontend.CDCTaskExecutor {
 
 // 	mockSpec := &task.CreateCdcDetails{
 // 		TaskName: "cdc_task",
@@ -437,7 +439,7 @@ func getDeleteFn(
 // 			common.DebugAllocator,
 // 		)
 // 	}
-// 	cdcExecutor := frontend.NewCDCTaskExecutor2(
+// 	cdcExecutor := frontend.NewCDCTaskExecutor(
 // 		ctx,
 // 		uint64(accountID),
 // 		mockSpec,
@@ -645,7 +647,7 @@ func mock_mo_indexes(
 		"`ordinal_position` int unsigned NOT NULL," +
 		"`options` text DEFAULT NULL," +
 		"`index_table_name` varchar(5000) DEFAULT NULL," +
-		"PRIMARY KEY (`table_id`,`column_name`)" +// use table_id as primary key instead of id to avoid duplicate
+		"PRIMARY KEY (`table_id`,`column_name`)" + // use table_id as primary key instead of id to avoid duplicate
 		")"
 
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -747,7 +749,7 @@ func getCDCPitrTablesString(
 
 // func addCDCTask(
 // 	ctx context.Context,
-// 	exec *frontend.CDCTaskExecutor2,
+// 	exec *frontend.CDCTaskExecutor,
 // 	srcDB, srcTable string,
 // 	dstDB, dstTable string,
 // ) error {
@@ -767,7 +769,7 @@ func getCDCPitrTablesString(
 
 // func pauseCDCTask(
 // 	ctx context.Context,
-// 	exec *frontend.CDCTaskExecutor2,
+// 	exec *frontend.CDCTaskExecutor,
 // 	srcDB, srcTable string,
 // 	dstDB, dstTable string,
 // ) error {
@@ -787,7 +789,7 @@ func getCDCPitrTablesString(
 
 // func dropCDCTask(
 // 	ctx context.Context,
-// 	exec *frontend.CDCTaskExecutor2,
+// 	exec *frontend.CDCTaskExecutor,
 // 	srcDB, srcTable string,
 // 	dstDB, dstTable string,
 // ) error {
@@ -874,4 +876,13 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 		0,
 		nil,
 	)
+}
+
+func GetTestCDCExecutorOption() *idxcdc.CDCExecutorOption {
+	return &idxcdc.CDCExecutorOption{
+		GCInterval:             time.Millisecond * 100,
+		GCTTL:                  time.Millisecond,
+		SyncTaskInterval:       time.Millisecond * 100,
+		FlushWatermarkInterval: time.Millisecond * 500,
+	}
 }

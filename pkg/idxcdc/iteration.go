@@ -81,7 +81,7 @@ func (iter *Iteration) Run() {
 		iter.table.exec.mp,
 	)
 	iter.endAt = time.Now()
-	err = iter.insertAsyncIndexIterations(ctx,txn)
+	err = iter.insertAsyncIndexIterations(ctx, txn)
 	if err != nil {
 		logutil.Errorf("insert async index iterations failed, err: %v", err)
 	}
