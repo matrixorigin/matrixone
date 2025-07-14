@@ -147,18 +147,11 @@ func (item *TableItem) IsDeleted() bool {
 }
 
 func (item *TableItem) IsPartitionTable() bool {
-	if item.TableDef == nil {
-		return false
-	}
-	return features.IsPartitioned(item.TableDef.FeatureFlag)
+	return item.TableDef != nil && features.IsPartitioned(item.TableDef.FeatureFlag)
 }
 
 func (item *TableItem) IsIndexTable() bool {
-	if item.TableDef == nil {
-		return false
-	}
-
-	return features.IsIndexTable(item.TableDef.FeatureFlag)
+	return item.TableDef != nil && features.IsIndexTable(item.TableDef.FeatureFlag)
 }
 
 func (item *TableItem) String() string {
