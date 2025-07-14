@@ -124,10 +124,7 @@ func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Conte
 		return false
 	}
 
-	ok := c.retainValue()
-	if !ok {
-		return false
-	}
+	c.retainValue()
 
 	if fn != nil {
 		fn(ctx, c.key, c.value, c.size)
@@ -139,12 +136,11 @@ func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Conte
 // INTERNAL: non-thread safe.
 // if deleted = true, item value is already released by this Cache and is NOT valid to use it inside the Cache.
 // if deleted = false, increment the reference counter of the value and it is safe to use now.
-func (c *_CacheItem[K, V]) retainValue() bool {
+func (c *_CacheItem[K, V]) retainValue() {
 	cdata, ok := any(c.value).(fscache.Data)
 	if ok {
 		cdata.Retain()
 	}
-	return true
 }
 
 // INTERNAL: non-thread safe.
