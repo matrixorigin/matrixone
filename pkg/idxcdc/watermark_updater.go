@@ -23,8 +23,10 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 func ExecWithResult(
@@ -56,33 +58,59 @@ func RegisterJob(
 	pitr_name string,
 	sinkerinfo_json *ConsumerInfo,
 ) (ok bool, err error) {
-	tenantId, err := defines.GetAccountId(ctx)
+	var tenantId uint32
+	var tableID uint64
+	var dropped bool
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"Async-Index-CDC-Task RegisterJob",
+			zap.Uint32("tenantID", tenantId),
+			zap.Uint64("tableID", tableID),
+			zap.String("indexName", sinkerinfo_json.IndexName),
+			zap.Bool("create new", ok),
+			zap.Bool("dropped", dropped),
+			zap.Error(err),
+		)
+	}()
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return false, err
+	}
 	consumerInfoJson, err := json.Marshal(sinkerinfo_json)
 	if err != nil {
 		return false, err
 	}
-
-	tableIDSql := cdc.CDCSQLBuilder.GetTableIDSQL(
+	tableID, err = getTableID(
+		ctx,
+		cnUUID,
+		txn,
 		tenantId,
 		sinkerinfo_json.DbName,
 		sinkerinfo_json.TableName,
 	)
-	result, err := ExecWithResult(ctx, tableIDSql, cnUUID, txn)
 	if err != nil {
 		return false, err
 	}
-	defer result.Close()
-	var tableID uint64
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != 1 {
-			panic(fmt.Sprintf("invalid rows %d", rows))
-		}
-		for i := 0; i < rows; i++ {
-			tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
-		}
-		return true
-	})
-
+	exist, dropped, err := queryIndexLog(
+		ctx,
+		cnUUID,
+		txn,
+		tenantId,
+		tableID,
+		sinkerinfo_json.IndexName,
+	)
+	if err != nil {
+		return false, err
+	}
+	if exist && !dropped {
+		return false, nil
+	}
+	ok = true
 	sql := cdc.CDCSQLBuilder.AsyncIndexLogInsertSQL(
 		tenantId,
 		tableID,
@@ -92,10 +120,9 @@ func RegisterJob(
 	)
 	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
-		// TODO: if duplicate, update ok
 		return false, err
 	}
-	return true, nil
+	return
 }
 
 // return true if delete success, return false if no task found, return error when delete failed.
@@ -104,22 +131,86 @@ func UnregisterJob(
 	cnUUID string,
 	txn client.TxnOperator,
 	consumerInfo *ConsumerInfo,
-) (bool, error) {
-	tenantId, err := defines.GetAccountId(ctx)
-	if err != nil {
+) (ok bool, err error) {
+	var tenantId uint32
+	var tableID uint64
+	var dropped bool
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"Async-Index-CDC-Task UnregisterJob failed",
+			zap.Uint32("tenantID", tenantId),
+			zap.Uint64("tableID", tableID),
+			zap.String("indexName", consumerInfo.IndexName),
+			zap.Bool("delete", ok),
+			zap.Bool("dropped", dropped),
+			zap.Error(err),
+		)
+	}()
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return false, err
 	}
-	tableIDSql := cdc.CDCSQLBuilder.GetTableIDSQL(
+	tableID, err = getTableID(
+		ctx,
+		cnUUID,
+		txn,
 		tenantId,
 		consumerInfo.DbName,
 		consumerInfo.TableName,
 	)
-	result, err := ExecWithResult(ctx, tableIDSql, cnUUID, txn)
 	if err != nil {
 		return false, err
 	}
+	exist, dropped, err := queryIndexLog(
+		ctx,
+		cnUUID,
+		txn,
+		tenantId,
+		tableID,
+		consumerInfo.IndexName,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !exist || dropped {
+		return false, nil
+	}
+	ok = true
+	sql := cdc.CDCSQLBuilder.AsyncIndexLogUpdateDropAtSQL(
+		tenantId,
+		tableID,
+		consumerInfo.IndexName,
+	)
+	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func getTableID(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	tenantId uint32,
+	dbName string,
+	tableName string,
+) (tableID uint64, err error) {
+	tableIDSql := cdc.CDCSQLBuilder.GetTableIDSQL(
+		tenantId,
+		dbName,
+		tableName,
+	)
+	result, err := ExecWithResult(ctx, tableIDSql, cnUUID, txn)
+	if err != nil {
+		return
+	}
 	defer result.Close()
-	var tableID uint64
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows != 1 {
 			panic(fmt.Sprintf("invalid rows %d", rows))
@@ -129,15 +220,38 @@ func UnregisterJob(
 		}
 		return true
 	})
-	sql := cdc.CDCSQLBuilder.AsyncIndexLogUpdateDropAtSQL(
+	return
+}
+
+func queryIndexLog(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	tenantId uint32,
+	tableID uint64,
+	indexName string,
+) (exist, dropped bool, err error) {
+	selectSql := cdc.CDCSQLBuilder.AsyncIndexLogSelectByTableSQL(
 		tenantId,
 		tableID,
-		consumerInfo.IndexName,
+		indexName,
 	)
-	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctx, selectSql, cnUUID, txn)
 	if err != nil {
-		// TODO: if duplicate, update ok
-		return false, err
+		return
 	}
-	return true, nil
+	defer result.Close()
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 1 {
+			panic(fmt.Sprintf("invalid rows %d", rows))
+		}
+		if rows != 0 {
+			exist = true
+		}
+		if !cols[0].IsNull(0) {
+			dropped = true
+		}
+		return true
+	})
+	return
 }

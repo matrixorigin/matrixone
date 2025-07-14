@@ -226,7 +226,7 @@ const (
 				consumer_config VARCHAR(255) NULL,//8
 			);
 		*/
-	CDCInsertMOAsyncIndexLogSqlTemplate = `INSERT INTO mo_catalog.mo_async_index_log (` +
+	CDCInsertMOAsyncIndexLogSqlTemplate = `REPLACE INTO mo_catalog.mo_async_index_log (` +
 		`account_id,` +
 		`table_id,` +
 		`index_name,` +
@@ -263,7 +263,11 @@ const (
 		`AND index_name = '%s'`
 	CDCDeleteMOAsyncIndexLogSqlTemplate = `DELETE FROM mo_catalog.mo_async_index_log WHERE ` +
 		`drop_at < '%s'`
-	CDCSelectMOAsyncIndexLogSqlTemplate = `SELECT * from mo_catalog.mo_async_index_log`
+	CDCSelectMOAsyncIndexLogSqlTemplate        = `SELECT * from mo_catalog.mo_async_index_log`
+	CDCSelectMOAsyncIndexLogByTableSqlTemplate = `SELECT drop_at from mo_catalog.mo_async_index_log WHERE ` +
+		`account_id = %d` +
+		`AND table_id = %d` +
+		`AND index_name = '%s'`
 	/*
 		CREATE TABLE mo_async_index_iterations (
 			account_id INT UNSIGNED NOT NULL,
@@ -350,18 +354,19 @@ const (
 	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
 
-	CDCInsertMOAsyncIndexLogSqlTemplate_Idx       = 19
-	CDCUpdateMOAsyncIndexLogSqlTemplate_Idx       = 20
-	CDCUpdateMOAsyncIndexLogDropAtSqlTemplate_Idx = 21
-	CDCDeleteMOAsyncIndexLogSqlTemplate_Idx       = 22
-	CDCSelectMOAsyncIndexLogSqlTemplate_Idx       = 23
+	CDCInsertMOAsyncIndexLogSqlTemplate_Idx        = 19
+	CDCUpdateMOAsyncIndexLogSqlTemplate_Idx        = 20
+	CDCUpdateMOAsyncIndexLogDropAtSqlTemplate_Idx  = 21
+	CDCDeleteMOAsyncIndexLogSqlTemplate_Idx        = 22
+	CDCSelectMOAsyncIndexLogSqlTemplate_Idx        = 23
+	CDCSelectMOAsyncIndexLogByTableSqlTemplate_Idx = 24
 
-	CDCInsertMOAsyncIndexIterationsTemplate_Idx = 24
-	CDCDeleteMOAsyncIndexIterationsTemplate_Idx = 25
+	CDCInsertMOAsyncIndexIterationsTemplate_Idx = 25
+	CDCDeleteMOAsyncIndexIterationsTemplate_Idx = 26
 
-	CDCGetTableIDTemplate_Idx = 26
+	CDCGetTableIDTemplate_Idx = 27
 
-	CDCSqlTemplateCount = 27
+	CDCSqlTemplateCount = 28
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -481,6 +486,12 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"info",
 			"drop_at",
 			"consumer_config",
+		},
+	},
+	CDCSelectMOAsyncIndexLogByTableSqlTemplate_Idx: {
+		SQL: CDCSelectMOAsyncIndexLogByTableSqlTemplate,
+		OutputAttrs: []string{
+			"drop_at",
 		},
 	},
 	CDCInsertMOAsyncIndexIterationsTemplate_Idx: {
@@ -891,6 +902,19 @@ func (b cdcSQLBuilder) AsyncIndexLogGCSQL(t time.Time) string {
 func (b cdcSQLBuilder) AsyncIndexLogSelectSQL() string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCSelectMOAsyncIndexLogSqlTemplate_Idx].SQL,
+	)
+}
+
+func (b cdcSQLBuilder) AsyncIndexLogSelectByTableSQL(
+	accountID uint32,
+	tableID uint64,
+	indexName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCSelectMOAsyncIndexLogByTableSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		indexName,
 	)
 }
 
