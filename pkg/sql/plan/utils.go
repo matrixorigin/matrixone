@@ -1138,6 +1138,185 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
+func checkOp(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetCol() != nil || expr.GetLit() != nil {
+		return true
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+
+	switch fn.Func.ObjName {
+	case "+", "-":
+		for _, childExpr := range fn.Args {
+			if !checkOp(childExpr) {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+
+	return true
+}
+
+func getColRefCnt(expr *plan.Expr) int {
+	if expr == nil {
+		return 0
+	}
+
+	if colRef := expr.GetCol(); colRef != nil {
+		return 1
+	}
+
+	if fn := expr.GetF(); fn != nil {
+		cnt := 0
+		for _, arg := range fn.Args {
+			cnt += getColRefCnt(arg)
+		}
+		return cnt
+	}
+
+	return 0
+}
+
+func canTranspose(expr *plan.Expr) (can bool, leftCnt int, rightCnt int) {
+	fn := expr.GetF()
+	if fn == nil {
+		return false, 0, 0
+	}
+
+	switch fn.Func.ObjName {
+	case "=":
+		if len(fn.Args) != 2 {
+			return false, 0, 0
+		}
+
+		left, right := fn.Args[0], fn.Args[1]
+
+		if !checkOp(left) || !checkOp(right) {
+			return false, 0, 0
+		}
+
+		leftCnt = getColRefCnt(left)
+		rightCnt = getColRefCnt(right)
+		if !((leftCnt == 1 && rightCnt == 0) || (leftCnt == 0 && rightCnt == 1)) {
+			return false, 0, 0
+		}
+
+	default:
+		return false, 0, 0
+	}
+
+	return true, leftCnt, rightCnt
+}
+
+func getPath(expr *plan.Expr) []int {
+	if expr == nil {
+		return nil
+	}
+
+	if expr.GetCol() != nil {
+		return []int{}
+	}
+
+	fn := expr.GetF()
+	if fn == nil {
+		return nil
+	}
+
+	if colPath := getPath(fn.Args[0]); colPath != nil {
+		return append([]int{0}, colPath...)
+	}
+
+	if colPath := getPath(fn.Args[1]); colPath != nil {
+		return append([]int{1}, colPath...)
+	}
+
+	return nil
+}
+
+func ConstantTranspose(expr *plan.Expr, proc *process.Process) (*plan.Expr, error) {
+	can, leftCnt, rightCnt := canTranspose(expr)
+	if !can {
+		return expr, nil
+	}
+
+	if leftCnt == 0 && rightCnt == 1 {
+		fn := expr.GetF()
+		left, right := fn.Args[0], fn.Args[1]
+		exchangedExpr, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{right, left})
+		if err != nil {
+			return nil, err
+		}
+		expr = exchangedExpr
+	}
+
+	fn := expr.GetF()
+	curLeft, curRight := fn.Args[0], fn.Args[1]
+
+	colPath := getPath(curLeft)
+	if colPath == nil {
+		return expr, nil
+	}
+
+	for _, direction := range colPath {
+		f := curLeft.GetF()
+		if f == nil {
+			break
+		}
+
+		var colSide, constSide *plan.Expr
+		if direction == 0 {
+			colSide = f.Args[0]
+			constSide = f.Args[1]
+		} else {
+			colSide = f.Args[1]
+			constSide = f.Args[0]
+		}
+
+		switch f.Func.ObjName {
+		case "+":
+			newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{curRight, constSide})
+			if err != nil {
+				return nil, err
+			}
+			curLeft = colSide
+			curRight = newRight
+
+		case "-":
+			if direction == 0 {
+				// col - const = right    →    col = right + const
+				newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{curRight, constSide})
+				if err != nil {
+					return nil, err
+				}
+				curLeft = colSide
+				curRight = newRight
+			} else {
+				// const - col = right    →    col = const - right
+				newRight, err := BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{constSide, curRight})
+				if err != nil {
+					return nil, err
+				}
+				curLeft = colSide
+				curRight = newRight
+			}
+		}
+	}
+	newExpr, err := BindFuncExprImplByPlanExpr(proc.Ctx, fn.Func.ObjName, []*plan.Expr{curLeft, curRight})
+	if err != nil {
+		return nil, err
+	}
+
+	return newExpr, nil
+}
+
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		panic(moerr.NewInternalError(proc.Ctx, "not supported type INTERVAL"))
@@ -1239,7 +1418,6 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 			},
 		}, nil
 	}
-
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
 		return expr, nil
