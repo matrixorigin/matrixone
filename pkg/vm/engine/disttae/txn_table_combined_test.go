@@ -32,11 +32,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Mock txnTable for testing
-type mockTxnTable struct {
-	primary *txnTable
-}
-
 func newMockCombinedTxnTable() *combinedTxnTable {
 	return &combinedTxnTable{
 		primary:     nil, // Will be set in individual tests
