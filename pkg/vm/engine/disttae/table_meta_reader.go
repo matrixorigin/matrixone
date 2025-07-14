@@ -140,7 +140,7 @@ func (r *TableMetaReader) Read(
 				fmt.Sprintf("%s(%d)-%s(%d)-%s",
 					r.Table.db.databaseName, r.Table.db.databaseId,
 					r.Table.tableName, r.Table.tableId,
-					r.snapshot.ToString())),
+					r.Table.TxnInfo())),
 			zap.String("state", stateStr),
 			zap.Error(err), logs1, logs2)
 	}()
