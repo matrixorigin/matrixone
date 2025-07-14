@@ -120,6 +120,10 @@ func (c *_CacheItem[K, V]) PostFn(ctx context.Context, fn func(ctx context.Conte
 func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.deleted {
+		return false
+	}
+
 	ok := c.retainValue()
 	if !ok {
 		return false
@@ -136,9 +140,6 @@ func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Conte
 // if deleted = true, item value is already released by this Cache and is NOT valid to use it inside the Cache.
 // if deleted = false, increment the reference counter of the value and it is safe to use now.
 func (c *_CacheItem[K, V]) retainValue() bool {
-	if c.deleted {
-		return false
-	}
 	cdata, ok := any(c.value).(fscache.Data)
 	if ok {
 		cdata.Retain()
@@ -150,10 +151,9 @@ func (c *_CacheItem[K, V]) retainValue() bool {
 // decrement the reference counter
 func (c *_CacheItem[K, V]) releaseValue() {
 	cdata, ok := any(c.value).(fscache.Data)
-	if !ok {
-		return
+	if ok {
+		cdata.Release()
 	}
-	cdata.Release()
 }
 
 func New[K comparable, V any](
