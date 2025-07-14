@@ -54,7 +54,7 @@ func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
+func (exec *medianColumnExecSelf[T, R]) Marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -78,7 +78,7 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *medianColumnExecSelf[T, R]) Unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(groups) > 0 {
 		exec.groups = make([]*Vectors[T], len(groups))
 		for i := range exec.groups {

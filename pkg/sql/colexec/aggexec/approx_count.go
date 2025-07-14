@@ -35,7 +35,7 @@ func (exec *approxCountFixedExec[T]) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
+func (exec *approxCountFixedExec[T]) Marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -60,7 +60,7 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountFixedExec[T]) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *approxCountFixedExec[T]) Unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	err := exec.ret.unmarshalFromBytes(result, empties)
 	if err != nil {
 		return err
@@ -90,7 +90,7 @@ func (exec *approxCountVarExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *approxCountVarExec) marshal() ([]byte, error) {
+func (exec *approxCountVarExec) Marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -115,7 +115,7 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountVarExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *approxCountVarExec) Unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	err := exec.ret.unmarshalFromBytes(result, empties)
 	if err != nil {
 		return err

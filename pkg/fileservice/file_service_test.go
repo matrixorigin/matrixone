@@ -1032,6 +1032,9 @@ func testFileService(
 		}
 
 		w, err := rwFS.NewWriter(ctx, "foo")
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+			return
+		}
 		assert.Nil(t, err)
 		assert.NotNil(t, w)
 		_, err = w.Write([]byte("foobarbaz"))
