@@ -162,7 +162,7 @@ func TestGetClusterByColumnOrder(t *testing.T) {
 }
 
 func TestFillCompositePKeyBatch(t *testing.T) {
-	var proc = testutil.NewProc()
+	var proc = testutil.NewProc(t)
 	columnSize := 10
 	rowCount := 10
 	bat, pkeyDef, valueCount := MakeBatch(columnSize, rowCount, proc.Mp())

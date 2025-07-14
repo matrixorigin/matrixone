@@ -33,14 +33,10 @@ type mergeRecTestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs []mergeRecTestCase
-)
-
-func init() {
-	tcs = []mergeRecTestCase{
+func makeTestCases(t *testing.T) []mergeRecTestCase {
+	return []mergeRecTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg:  &MergeRecursive{},
 		},
 	}
@@ -48,20 +44,20 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestMergeRecursive(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)

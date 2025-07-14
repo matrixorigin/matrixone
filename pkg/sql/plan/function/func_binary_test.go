@@ -49,7 +49,7 @@ func TestAddFaultPoint(t *testing.T) {
 	testCases := initAddFaultPointTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AddFaultPoint)
@@ -108,7 +108,7 @@ func TestCeil(t *testing.T) {
 	testCases := initCeilTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -177,7 +177,7 @@ func TestFloor(t *testing.T) {
 	testCases := initFloorTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -246,7 +246,7 @@ func TestRound(t *testing.T) {
 	testCases := initRoundTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -334,7 +334,7 @@ func TestCoalesce(t *testing.T) {
 	testCases := initCoalesceTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -377,7 +377,7 @@ func TestConcatWs(t *testing.T) {
 	testCases := initConcatWsTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, ConcatWs)
@@ -451,7 +451,7 @@ func TestDateAdd(t *testing.T) {
 	testCases := initDateAddTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -705,7 +705,7 @@ func TestConvertTz(t *testing.T) {
 	testCases := initConvertTzTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, ConvertTz)
@@ -797,7 +797,7 @@ func TestFormat(t *testing.T) {
 	testCases := initFormatTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateFormat)
@@ -871,7 +871,7 @@ func TestDateSub(t *testing.T) {
 	testCases := initDateSubTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -972,7 +972,7 @@ func TestField(t *testing.T) {
 	testCases := initFieldTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1073,7 +1073,7 @@ func TestFormat2Or3(t *testing.T) {
 	testCases := initFormat2Or3TestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.info {
@@ -1148,12 +1148,12 @@ func initFromUnixTimeTestCase() []tcTemp {
 	}
 }
 
-func newTmpProcess() *process.Process {
-	return newProcessWithMPool(mpool.MustNewZero())
+func newTmpProcess(t *testing.T) *process.Process {
+	return newProcessWithMPool(t, mpool.MustNewZero())
 }
 
-func newProcessWithMPool(mp *mpool.MPool) *process.Process {
-	process := testutil.NewProcessWithMPool("", mp)
+func newProcessWithMPool(t *testing.T, mp *mpool.MPool) *process.Process {
+	process := testutil.NewProcessWithMPool(t, "", mp)
 	process.Base.SessionInfo.TimeZone = time.FixedZone("UTC0", 0)
 	return process
 }
@@ -1162,7 +1162,7 @@ func TestFromUnixTime(t *testing.T) {
 	testCases := initFromUnixTimeTestCase()
 
 	// do the test work.
-	proc := newTmpProcess()
+	proc := newTmpProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1380,7 +1380,7 @@ func TestSubStr(t *testing.T) {
 	testCases := initSubStrTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.info {
@@ -1603,7 +1603,7 @@ func TestSubStrIndex(t *testing.T) {
 	testCases := initSubStrIndexTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, SubStrIndex[int64])
@@ -1672,7 +1672,7 @@ func initTimeDiffInTimeTestCase() []tcTemp {
 func TestTimeDiffInTime(t *testing.T) {
 	testCases := initTimeDiffInTimeTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TimeDiff[types.Time])
 		s, info := fcTC.Run()
@@ -1741,7 +1741,7 @@ func initTimeDiffInDatetimeTestCase() []tcTemp {
 func TestTimeDiffInDateTime(t *testing.T) {
 	testCases := initTimeDiffInDatetimeTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TimeDiff[types.Datetime])
 		s, info := fcTC.Run()
@@ -1881,7 +1881,7 @@ func initTimestampDiffTestCase() []tcTemp {
 func TestTimestampDiff(t *testing.T) {
 	testCases := initTimestampDiffTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, TimestampDiff)
 		s, info := fcTC.Run()
@@ -1946,7 +1946,7 @@ func TestStartsWith(t *testing.T) {
 	testCases := initStartsWithTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StartsWith)
 		s, info := fcTC.Run()
@@ -2011,7 +2011,7 @@ func TestEndsWith(t *testing.T) {
 	testCases := initEndsWithTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, EndsWith)
 		s, info := fcTC.Run()
@@ -2098,7 +2098,7 @@ func TestFindInSet(t *testing.T) {
 	testCases := initFindInSetTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, FindInSet)
 		s, info := fcTC.Run()
@@ -2158,7 +2158,7 @@ func initInstrTestCase() []tcTemp {
 func TestInstr(t *testing.T) {
 	testCases := initInstrTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Instr)
 		s, info := fcTC.Run()
@@ -2360,7 +2360,7 @@ func initLeftTestCase() []tcTemp {
 func TestLeft(t *testing.T) {
 	testCases := initLeftTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Left)
 		s, info := fcTC.Run()
@@ -2415,7 +2415,7 @@ func TestPower(t *testing.T) {
 	testCases := initPowerTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Power)
 		s, info := fcTC.Run()
@@ -2450,7 +2450,7 @@ func initSqrtTestCase() []tcTemp {
 func TestSqrt(t *testing.T) {
 	testCases := initSqrtTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, builtInSqrt)
 		s, info := fcTC.Run()
@@ -2491,7 +2491,7 @@ func initSqrtArrayTestCase() []tcTemp {
 func TestSqrtArray(t *testing.T) {
 	testCases := initSqrtArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2536,7 +2536,7 @@ func initInnerProductArrayTestCase() []tcTemp {
 func TestInnerProductArray(t *testing.T) {
 	testCases := initInnerProductArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2581,7 +2581,7 @@ func initCosineSimilarityArrayTestCase() []tcTemp {
 func TestCosineSimilarityArray(t *testing.T) {
 	testCases := initCosineSimilarityArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2626,7 +2626,7 @@ func initL2DistanceArrayTestCase() []tcTemp {
 func TestL2DistanceArray(t *testing.T) {
 	testCases := initL2DistanceArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2671,7 +2671,7 @@ func initCosineDistanceArrayTestCase() []tcTemp {
 func TestCosineDistanceArray(t *testing.T) {
 	testCases := initCosineDistanceArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2795,7 +2795,7 @@ func initExtractTestCase() []tcTemp {
 func TestExtract(t *testing.T) {
 	testCases := initExtractTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2938,7 +2938,7 @@ func initReplaceTestCase() []tcTemp {
 func TestReplace(t *testing.T) {
 	testCases := initReplaceTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Replace)
 		s, info := fcTC.Run()
@@ -3053,7 +3053,7 @@ func initTrimTestCase() []tcTemp {
 func TestTrim(t *testing.T) {
 	testCases := initTrimTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Trim)
 		s, info := fcTC.Run()
@@ -3093,7 +3093,7 @@ func initSplitPart() []tcTemp {
 func TestSplitPart(t *testing.T) {
 	testCases := initSplitPart()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, SplitPart)
 		s, info := fcTC.Run()

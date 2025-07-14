@@ -43,7 +43,7 @@ func TestIvfSearchRace(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
 

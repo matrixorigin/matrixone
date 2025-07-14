@@ -437,7 +437,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses := newTestSession(t, ctrl)
 		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ec := newTestExecCtx(ctx, ctrl)
-		ec.proc = testutil.NewProc()
+		ec.proc = testutil.NewProc(t)
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
@@ -477,7 +477,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses := newTestSession(t, ctrl)
 		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ec := newTestExecCtx(ctx, ctrl)
-		ec.proc = testutil.NewProc()
+		ec.proc = testutil.NewProc(t)
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
@@ -649,13 +649,13 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setPu("", pu)
-		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
 		ses.SetDatabaseName("db")
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
 		ec := newTestExecCtx(ctx, ctrl)
-		ec.proc = testutil.NewProc()
+		ec.proc = testutil.NewProc(t)
 		ec.ses = ses
 		ses.txnCompileCtx.execCtx = ec
 		for _, kase := range kases {
@@ -759,7 +759,7 @@ func TestGetExprValue(t *testing.T) {
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 		setPu("", pu)
-		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
+		ses := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
 		var c clock.Clock
 		err := ses.GetTxnHandler().CreateTempStorage(c)
 		assert.Nil(t, err)
@@ -914,7 +914,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
 	setPu("", pu)
-	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc().Mp())
+	ses1 := NewSession(ctx, "", &testMysqlWriter{}, testutil.NewProc(t).Mp())
 
 	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
 	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
@@ -1496,7 +1496,7 @@ func Test_BuildTableDefFromMoColumns(t *testing.T) {
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 
 		sql, err := getTableColumnDefSql(uint64(tenant.TenantID), "db1", "t1")
