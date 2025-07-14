@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -244,7 +243,6 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 		iter.sinkers[0].inited.Store(true)
 		sinker := iter.sinkers[0]
 		if iter.err[0] != nil {
-			logutil.Infof("lalala sinker %v, error %v", sinker.indexName, iter.err[0])
 			sinker.err = iter.err[0]
 		} else {
 			sinker.watermark = iter.to
@@ -262,7 +260,6 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 		}
 		sinker := iter.sinkers[0]
 		if iter.err[0] != nil {
-			logutil.Infof("lalala sinker %v, error %v", sinker.indexName, iter.err[0])
 			sinker.err = iter.err[0]
 		} else {
 			sinker.watermark = iter.to
@@ -277,7 +274,6 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 	t.state = TableState_Finished
 	for i, sinker := range iter.sinkers {
 		if iter.err[i] != nil {
-			logutil.Infof("lalala sinker %v, error %v", sinker.indexName, iter.err[i])
 			sinker.err = iter.err[i]
 		} else {
 			sinker.watermark = iter.to

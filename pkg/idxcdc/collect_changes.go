@@ -16,13 +16,16 @@ package idxcdc
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 func CollectChanges_2(
@@ -89,69 +92,97 @@ func CollectChanges_2(
 		typ = CDCDataType_Snapshot
 	}
 	txns := make([]client.TxnOperator, len(consumers))
+	waitGroups := make([]sync.WaitGroup, len(consumers))
 	for i, consumer := range consumers {
 		insertDataChs[i] = make(chan *CDCData, 1)
 		ackChs[i] = make(chan struct{}, 1)
 		txns[i], err = iter.table.exec.txnFactory()
 		if err != nil {
+			close(insertDataChs[i])
+			close(ackChs[i])
 			errs[i] = err
-			return
+			continue
 		}
 		dataRetrievers[i] = NewDataRetriever(consumer, iter, txns[i], insertDataChs[i], ackChs[i], typ)
 	}
 
 	go func() {
 		for {
+			var data *CDCData
 			insertData, deleteData, currentHint, err := changes.Next(ctx, mp)
 			if err != nil {
-				return
-			}
-
-			var data *CDCData
-			// both nil denote no more data (end of this tail)
-			if insertData == nil && deleteData == nil {
+				indexNames := ""
+				for _, sinker := range iter.sinkers {
+					indexNames = fmt.Sprintf("%s%s, ", indexNames, sinker.indexName)
+				}
+				logutil.Error(
+					"Async-Index-CDC-Task sink iteration failed",
+					zap.Uint32("tenantID", iter.table.accountID),
+					zap.Uint64("tableID", iter.table.tableID),
+					zap.String("indexName", indexNames),
+					zap.Error(err),
+					zap.String("from", iter.from.ToString()),
+					zap.String("to", iter.to.ToString()),
+				)
 				data = &CDCData{
 					noMoreData:  true,
 					insertBatch: nil,
 					deleteBatch: nil,
+					err:         err,
 				}
 			} else {
-				switch currentHint {
-				case engine.ChangesHandle_Snapshot:
-					if typ != CDCDataType_Snapshot {
-						panic("logic error")
-					}
-					insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-					insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+				// both nil denote no more data (end of this tail)
+				if insertData == nil && deleteData == nil {
 					data = &CDCData{
-						noMoreData:  false,
-						insertBatch: insertAtmBatch,
+						noMoreData:  true,
+						insertBatch: nil,
 						deleteBatch: nil,
 					}
-				case engine.ChangesHandle_Tail_wip:
-					panic("logic error")
-				case engine.ChangesHandle_Tail_done:
-					if typ != CDCDataType_Tail {
+				} else {
+					switch currentHint {
+					case engine.ChangesHandle_Snapshot:
+						if typ != CDCDataType_Snapshot {
+							panic("logic error")
+						}
+						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						data = &CDCData{
+							noMoreData:  false,
+							insertBatch: insertAtmBatch,
+							deleteBatch: nil,
+						}
+					case engine.ChangesHandle_Tail_wip:
 						panic("logic error")
-					}
-					insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-					deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-					insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-					deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-					data = &CDCData{
-						noMoreData:  false,
-						insertBatch: insertAtmBatch,
-						deleteBatch: deleteAtmBatch,
-					}
+					case engine.ChangesHandle_Tail_done:
+						if typ != CDCDataType_Tail {
+							panic("logic error")
+						}
+						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+						deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
+						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+						data = &CDCData{
+							noMoreData:  false,
+							insertBatch: insertAtmBatch,
+							deleteBatch: deleteAtmBatch,
+						}
 
-					addTailEndMetrics(insertAtmBatch)
-					addTailEndMetrics(deleteAtmBatch)
+						addTailEndMetrics(insertAtmBatch)
+						addTailEndMetrics(deleteAtmBatch)
+					}
 				}
 			}
+
 			for i := range consumers {
+				if dataRetrievers[i] == nil {
+					continue
+				}
 				insertDataChs[i] <- data
 			}
 			for i := range consumers {
+				if dataRetrievers[i] == nil {
+					continue
+				}
 				<-ackChs[i]
 			}
 			if preinsertAtmBatch != nil {
@@ -177,21 +208,46 @@ func CollectChanges_2(
 		}
 	}()
 
-	waitGroup := sync.WaitGroup{}
 	for i, consumerEntry := range consumers {
-		waitGroup.Add(1)
+		waitGroups[i].Add(1)
 		go func(i int) {
-			defer waitGroup.Done()
-			consumerEntry.consumer.Consume(ctx, dataRetrievers[i])
+			defer waitGroups[i].Done()
+			err := consumerEntry.consumer.Consume(ctx, dataRetrievers[i])
+			if err != nil {
+				logutil.Error(
+					"Async-Index-CDC-Task sink consume failed",
+					zap.Uint32("tenantID", iter.table.accountID),
+					zap.Uint64("tableID", iter.table.tableID),
+					zap.String("indexName", iter.sinkers[i].indexName),
+					zap.Error(err),
+					zap.String("from", iter.from.ToString()),
+					zap.String("to", iter.to.ToString()),
+				)
+				if txns[i] != nil {
+					txns[i].Rollback(ctx)
+					txns[i] = nil
+				}
+				close(insertDataChs[i])
+				close(ackChs[i])
+				ackChs[i] = nil
+				insertDataChs[i] = nil
+				dataRetrievers[i] = nil
+				errs[i] = err
+			}
 		}(i)
 	}
-	waitGroup.Wait()
+	for i := range waitGroups {
+		waitGroups[i].Wait()
+	}
 
 	for i, txn := range txns {
-		err := txn.Commit(ctx)
-		if err != nil {
-			// TODO: flush error and error msg
-			errs[i] = err
+		if txn != nil {
+			close(insertDataChs[i])
+			close(ackChs[i])
+			err := txn.Commit(ctx)
+			if err != nil {
+				errs[i] = err
+			}
 		}
 	}
 

@@ -143,7 +143,7 @@ func UnregisterJob(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-CDC-Task UnregisterJob failed",
+			"Async-Index-CDC-Task UnregisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("indexName", consumerInfo.IndexName),

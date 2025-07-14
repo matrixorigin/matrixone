@@ -166,6 +166,9 @@ func NewCDCTaskExecutor(
 			FlushWatermarkInterval: DefaultFlushWatermarkInterval,
 		}
 	}
+	if txnFactory == nil {
+		txnFactory = GetTxnFactory(ctx, txnEngine, cnTxnClient)
+	}
 	exec = &CDCTaskExecutor{
 		ctx:        ctx,
 		packer:     types.NewPacker(),

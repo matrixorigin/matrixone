@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 // 1. init sinker
@@ -44,6 +45,19 @@ func (iter *Iteration) Run() {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	iter.err = make([]error, len(iter.sinkers))
+	defer func() {
+		for i, sinkerErr := range iter.err {
+			if sinkerErr != nil {
+				logutil.Error(
+					"Async-Index-CDC-Task iteration failed",
+					zap.Uint32("tenantID", iter.table.accountID),
+					zap.Uint64("tableID", iter.table.tableID),
+					zap.String("indexName", iter.sinkers[i].indexName),
+					zap.Error(sinkerErr),
+				)
+			}
+		}
+	}()
 	txn, err := iter.table.exec.txnFactory()
 	if err != nil {
 		for i := range iter.sinkers {
@@ -68,7 +82,6 @@ func (iter *Iteration) Run() {
 	if iter.from.IsEmpty() {
 		iter.to = types.TimestampToTS(txn.SnapshotTS())
 	}
-	logutil.Infof("lalala iteration %v->%v", iter.from.ToString(), iter.to.ToString())
 	iter.err = CollectChanges_2(
 		ctx,
 		iter,
@@ -83,7 +96,31 @@ func (iter *Iteration) Run() {
 	iter.endAt = time.Now()
 	err = iter.insertAsyncIndexIterations(ctx, txn)
 	if err != nil {
-		logutil.Errorf("insert async index iterations failed, err: %v", err)
+		indexNames := ""
+		for _, sinker := range iter.sinkers {
+			indexNames = fmt.Sprintf("%s%s, ", indexNames, sinker.indexName)
+		}
+
+		errorStr := ""
+		for _, err := range iter.err {
+			if err != nil {
+				errorStr = fmt.Sprintf("%s%s, ", errorStr, err.Error())
+			} else {
+				errorStr = fmt.Sprintf("%s%s, ", errorStr, " ")
+			}
+		}
+
+		logutil.Error(
+			"Async-Index-CDC-Task sink iteration failed",
+			zap.Uint32("tenantID", iter.table.accountID),
+			zap.Uint64("tableID", iter.table.tableID),
+			zap.String("indexName", indexNames),
+			zap.String("error", errorStr),
+			zap.String("from", iter.from.ToString()),
+			zap.String("to", iter.to.ToString()),
+			zap.String("startAt", iter.startAt.Format(time.RFC3339)),
+			zap.String("endAt", iter.endAt.Format(time.RFC3339)),
+		)
 	}
 	iter.table.OnIterationFinished(iter)
 }

@@ -265,8 +265,8 @@ const (
 		`drop_at < '%s'`
 	CDCSelectMOAsyncIndexLogSqlTemplate        = `SELECT * from mo_catalog.mo_async_index_log`
 	CDCSelectMOAsyncIndexLogByTableSqlTemplate = `SELECT drop_at from mo_catalog.mo_async_index_log WHERE ` +
-		`account_id = %d` +
-		`AND table_id = %d` +
+		`account_id = %d ` +
+		`AND table_id = %d ` +
 		`AND index_name = '%s'`
 	/*
 		CREATE TABLE mo_async_index_iterations (
