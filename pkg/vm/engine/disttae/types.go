@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -639,21 +640,54 @@ func (txn *Transaction) traceWorkspaceLocked(commit bool) {
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
 // may be the order of insert+delete that needs to be adjusted.
 func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
+
 	if txn.statementID > 0 {
-		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
-		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
-				writes = append(writes, txn.writes[i])
+		slices.SortStableFunc(txn.writes[writeOffset:], func(a, b Entry) int {
+			// expected in descending order
+
+			aIsCatalog := a.isCatalog()
+			bIsCatalog := b.isCatalog()
+
+			// INSERT < DELETE < ALTER
+
+			if aIsCatalog && !bIsCatalog {
+				// a > b
+				return -1
 			}
-		}
-		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
-				writes = append(writes, txn.writes[i])
+
+			if !aIsCatalog && bIsCatalog {
+				// a < b
+				return 1
 			}
-		}
-		txn.writes = append(txn.writes[:writeOffset], writes...)
+
+			// (!aIsCatalog && !bIsCatalog) or (aIsCatalog && bIsCatalog)
+			if a.typ == b.typ {
+				return 0
+			}
+
+			return b.typ - a.typ
+		})
 	}
+
 	return nil
+
+	//	// old logic
+	//	if txn.statementID > 0 {
+	//		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
+	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
+	//			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
+	//				writes = append(writes, txn.writes[i])
+	//			}
+	//		}
+	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
+	//			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
+	//				writes = append(writes, txn.writes[i])
+	//			}
+	//		}
+	//		txn.writes = append(txn.writes[:writeOffset], writes...)
+	//	}
+	//
+	//	return nil
 }
 
 func (txn *Transaction) gcObjs(start int) error {

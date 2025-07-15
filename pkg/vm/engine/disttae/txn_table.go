@@ -89,28 +89,57 @@ func newTxnTable(
 			eng,
 		),
 	}
+
+	ps := process.GetPartitionService()
+	if ps.Enabled() && item.IsIndexTable() {
+		_, _, r, err := eng.GetRelationById(
+			process.Ctx,
+			process.GetTxnOperator(),
+			item.ExtraInfo.ParentTableID,
+		)
+		if err != nil && !strings.Contains(err.Error(), "can not find table by id") {
+			return nil, err
+		}
+		tbl.parent = r
+	}
+
 	tbl.isLocal = tbl.isLocalFunc
 
 	if db.databaseId != catalog.MO_CATALOG_ID {
-		ps := process.GetPartitionService()
-		if ps.Enabled() && item.IsPartitionTable() {
-			metadata, err := ps.GetPartitionMetadata(
-				ctx,
-				item.Id,
-				process.GetTxnOperator(),
-			)
-			if err != nil {
-				return nil, err
+		if ps.Enabled() && (item.IsPartitionTable() || tbl.IsPartitionIndexTable()) {
+			proc := tbl.origin.proc.Load()
+
+			var combined *combinedTxnTable
+			if item.IsPartitionTable() {
+				metadata, err := ps.GetPartitionMetadata(
+					ctx,
+					item.Id,
+					process.GetTxnOperator(),
+				)
+				if err != nil {
+					return nil, err
+				}
+				combined = newCombinedTxnTable(
+					tbl.origin,
+					getPartitionTableFunc(proc, metadata, db),
+					getPruneTablesFunc(proc, metadata, db),
+					getPartitionPrunePKFunc(proc, metadata, db),
+				)
+			} else {
+				relations, err := tbl.getPartitionIndexesTables(process)
+				if err != nil {
+					return nil, err
+				}
+				combined = newCombinedTxnTable(
+					tbl.origin,
+					getArrayTableFunc(relations),
+					getArrayPruneTablesFunc(relations),
+					getArrayPrunePKFunc(relations),
+				)
 			}
 
-			p := newPartitionTxnTable(
-				tbl.origin,
-				metadata,
-				ps,
-			)
-			tbl.partition.tbl = p
-			tbl.partition.is = true
-			tbl.partition.service = ps
+			tbl.combined.tbl = combined
+			tbl.combined.is = true
 		}
 
 		tbl.shard.service = shardservice.GetService(process.GetService())
@@ -266,7 +295,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	return sz + szInPart, nil
 }
 
-func ForeachVisibleDataObject(
+func ForeachVisibleObjects(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
 	fn func(obj objectio.ObjectEntry) error,
@@ -363,7 +392,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(
+	if err = ForeachVisibleObjects(
 		part,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -479,7 +508,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(
+	if err = ForeachVisibleObjects(
 		state,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -2363,7 +2392,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
-	err = ForeachVisibleDataObject(state, snapshot, func(obj objectio.ObjectEntry) error {
+	err = ForeachVisibleObjects(state, snapshot, func(obj objectio.ObjectEntry) error {
 		if obj.GetAppendable() {
 			return nil
 		}
