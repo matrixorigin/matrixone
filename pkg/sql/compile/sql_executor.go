@@ -331,6 +331,7 @@ func (exec *txnExecutor) Exec(
 	compileContext.SetRootSql(sql)
 
 	pn, err := plan.BuildPlan(compileContext, stmts[0], prepared)
+
 	if err != nil {
 		return executor.Result{}, err
 	}
