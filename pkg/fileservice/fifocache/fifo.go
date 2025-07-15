@@ -49,63 +49,33 @@ type _CacheItem[K comparable, V any] struct {
 	value V
 	size  int64
 
-	// mutex protect the deleted, freq and postFn
-	mu      sync.Mutex
 	freq    int8
 	deleted bool // flag indicate item is already deleted by either hashtable or evict
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) Inc() {
-	/*
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	*/
-
 	if c.freq < 3 {
 		c.freq += 1
 	}
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) Dec() {
-	/*
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	*/
-
 	if c.freq > 0 {
 		c.freq -= 1
 	}
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) GetFreq() int8 {
-	/*
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	*/
 	return c.freq
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) IsDeleted() bool {
-	/*
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	*/
 	return c.deleted
 }
 
-// Thread-safe
 // first MarkAsDeleted will decrement the ref counter and call postfn and set deleted = true.
 // After first call, MarkAsDeleted will do nothing.
 func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
-	/*
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	*/
-
 	// check item is already deleted
 	if c.deleted {
 		// exit and return false which means no need to deallocate the memory
@@ -125,24 +95,13 @@ func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx contex
 	return true
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) PostFn(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
 	if fn != nil {
-		/*
-			c.mu.Lock()
-			defer c.mu.Unlock()
-		*/
 		fn(ctx, c.key, c.value, c.size)
 	}
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
-	/*
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	*/
-
 	// first check item is already deleted
 	if c.deleted {
 		return false
