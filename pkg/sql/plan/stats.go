@@ -1266,6 +1266,21 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 	return ret, true
 }
 
+func transposeTableScanFilters(proc *process.Process, qry *Query, nodeId int32) {
+	node := qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
+		for i, e := range node.FilterList {
+			transposedExpr, err := ConstantTranspose(e, proc)
+			if err == nil && transposedExpr != nil {
+				node.FilterList[i] = transposedExpr
+			}
+		}
+	}
+	for _, childId := range node.Children {
+		transposeTableScanFilters(proc, qry, childId)
+	}
+}
+
 func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldInExpr bool) {
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
