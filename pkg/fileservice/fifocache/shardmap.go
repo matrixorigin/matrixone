@@ -22,9 +22,6 @@ const numShards = 256
 
 type ShardMap[K comparable, V any] struct {
 	shards [numShards]struct {
-		/*
-			sync.RWMutex
-		*/
 		values map[K]V
 		_      cpu.CacheLinePad
 	}
@@ -43,11 +40,6 @@ func NewShardMap[K comparable, V any](hashfn func(K) uint64) *ShardMap[K, V] {
 func (m *ShardMap[K, V]) Set(key K, value V, postfn func(V)) bool {
 
 	s := &m.shards[m.hashfn(key)%numShards]
-	/*
-		s.Lock()
-		defer s.Unlock()
-	*/
-
 	_, ok := s.values[key]
 	if ok {
 		return false
@@ -65,10 +57,6 @@ func (m *ShardMap[K, V]) Set(key K, value V, postfn func(V)) bool {
 func (m *ShardMap[K, V]) Get(key K, postfn func(V)) (V, bool) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
-	/*
-		s.RLock()
-		defer s.RUnlock()
-	*/
 	v, ok := s.values[key]
 
 	if !ok {
@@ -85,10 +73,6 @@ func (m *ShardMap[K, V]) Get(key K, postfn func(V)) (V, bool) {
 func (m *ShardMap[K, V]) Remove(key K) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
-	/*
-		s.Lock()
-		defer s.Unlock()
-	*/
 	delete(s.values, key)
 }
 
@@ -97,10 +81,6 @@ func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn 
 	for i := range m.shards {
 		s := &m.shards[i]
 		func() {
-			/*
-				s.Lock()
-				defer s.Unlock()
-			*/
 			for k, v := range s.values {
 				if fn(k, key) {
 					delete(s.values, k)
@@ -117,11 +97,6 @@ func (m *ShardMap[K, V]) CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn 
 func (m *ShardMap[K, V]) GetAndDelete(key K, postfn func(V)) (V, bool) {
 
 	s := &m.shards[m.hashfn(key)%numShards]
-	/*
-		s.Lock()
-		defer s.Unlock()
-	*/
-
 	v, ok := s.values[key]
 	if !ok {
 		return v, ok
