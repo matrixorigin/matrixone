@@ -699,6 +699,16 @@ func mock_mo_foreign_keys(
 		"PRIMARY KEY (`constraint_name`,`constraint_id`,`db_name`,`db_id`,`table_name`,`table_id`,`column_name`,`column_id`,`refer_db_name`,`refer_db_id`,`refer_table_name`,`refer_table_id`,`refer_column_name`,`refer_column_id`)" +
 		")"
 
+	result, err := execSql(de, ctx, sql)
+	result.Close()
+	return err
+}
+
+func execSql(
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+	sql string,
+) (result executor.Result,err error) {
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -707,7 +717,7 @@ func mock_mo_foreign_keys(
 	exec := v.(executor.SQLExecutor)
 	txn, err := de.NewTxnOperator(ctx, de.Now())
 	if err != nil {
-		return err
+		return 
 	}
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -715,14 +725,14 @@ func mock_mo_foreign_keys(
 		WithDisableIncrStatement().
 		WithTxn(txn)
 
-	_, err = exec.Exec(ctx, sql, opts)
+		result, err = exec.Exec(ctx, sql, opts)
 	if err != nil {
-		return err
+		return
 	}
 	if err = txn.Commit(ctx); err != nil {
-		return err
+		return result, err
 	}
-	return err
+	return result, nil
 }
 func getCDCPitrTablesString(
 	srcDB, srcTable string,
@@ -885,4 +895,45 @@ func GetTestCDCExecutorOption() *idxcdc.CDCExecutorOption {
 		SyncTaskInterval:       time.Millisecond * 100,
 		FlushWatermarkInterval: time.Millisecond * 500,
 	}
+}
+
+func CheckTableData(
+	t *testing.T,
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+	dbName string,
+	tableName string,
+	tableID uint64,
+){
+	asyncIndexDBName := "test_async_index_cdc"
+	asyncIndexTableName := fmt.Sprintf("test_table_%d", tableID)
+	sql1:= fmt.Sprintf(
+		"SELECT * FROM %v.%v EXCEPT SELECT * FROM %v.%v;",
+		dbName, tableName,
+		asyncIndexDBName, asyncIndexTableName,
+	)
+	result1, err := execSql(de, ctx, sql1)
+	assert.NoError(t, err)
+	defer result1.Close()
+	rowCount:=0
+	result1.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		rowCount+=rows
+		return true
+	})
+	assert.Equal(t, rowCount, 0)
+
+	sql2 := fmt.Sprintf(
+		"SELECT * FROM %v.%v EXCEPT SELECT * FROM %v.%v;",
+		asyncIndexDBName, asyncIndexTableName,
+		dbName, tableName,
+	)
+	result2, err := execSql(de, ctx, sql2)
+	assert.NoError(t, err)
+	defer result2.Close()
+	rowCount = 0
+	result2.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		rowCount += rows
+		return true
+	})
+	assert.Equal(t, rowCount, 0)
 }

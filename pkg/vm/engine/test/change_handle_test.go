@@ -1482,6 +1482,8 @@ func TestCDCExecutor1(t *testing.T) {
 	assert.False(t, ok)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
+	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID) 
+
 }
 
 // test register and unregister job
