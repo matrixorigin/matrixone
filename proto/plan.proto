@@ -150,6 +150,7 @@ message ObjectRef {
 	string obj_name		= 8;
 	string subscription_name = 9;
 	PubInfo pub_info = 10;
+	bool not_lock_meta = 11;
 }
 
 message PubInfo {
@@ -721,6 +722,7 @@ message Node {
 		APPLY = 53;
 		MULTI_UPDATE = 54;
 		POSTDML = 55;
+		TABLE_CLONE = 56;
 	}
 
 	enum JoinType {
@@ -1152,7 +1154,9 @@ message DataDefinition {
 		RENAME_TABLE = 35;
 		CREATE_PITR = 36;
 		DROP_PITR = 37;
+		CREATE_TABLE_WITH_CLONE = 38;
 	}
+
 	//DataDefinition type
 	DdlType ddl_type = 1;
 
