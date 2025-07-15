@@ -336,7 +336,7 @@ func MakeSnapshotAndPitrFineFilter(
 			if deleteTS.IsEmpty() {
 				logutil.Warn("GC-PANIC-TS-EMPTY",
 					zap.String("name", name),
-					zap.String("createTS", createTS.ToString()))
+					zap.String("create-ts", createTS.ToString()))
 				continue
 			}
 			if !logtail.ObjectIsSnapshotRefers(
