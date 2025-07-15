@@ -33,7 +33,8 @@ type Cache[K comparable, V any] struct {
 	postGet   func(ctx context.Context, key K, value V, size int64)
 	postEvict func(ctx context.Context, key K, value V, size int64)
 
-	htab *ShardMap[K, *_CacheItem[K, V]]
+	mutex sync.Mutex
+	htab  *ShardMap[K, *_CacheItem[K, V]]
 
 	usedSmall atomic.Int64
 	small     Queue[*_CacheItem[K, V]]
@@ -46,16 +47,20 @@ type _CacheItem[K comparable, V any] struct {
 	value V
 	size  int64
 
-	// mutex protect the deleted, freq and postFn
-	mu      sync.Mutex
+	/*
+		// mutex protect the deleted, freq and postFn
+		mu      sync.Mutex
+	*/
 	freq    int8
 	deleted bool // flag indicate item is already deleted by either hashtable or evict
 }
 
 // Thread-safe
 func (c *_CacheItem[K, V]) Inc() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	/*
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	*/
 
 	if c.freq < 3 {
 		c.freq += 1
@@ -64,8 +69,10 @@ func (c *_CacheItem[K, V]) Inc() {
 
 // Thread-safe
 func (c *_CacheItem[K, V]) Dec() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	/*
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	*/
 
 	if c.freq > 0 {
 		c.freq -= 1
@@ -74,15 +81,19 @@ func (c *_CacheItem[K, V]) Dec() {
 
 // Thread-safe
 func (c *_CacheItem[K, V]) GetFreq() int8 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	/*
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	*/
 	return c.freq
 }
 
 // Thread-safe
 func (c *_CacheItem[K, V]) IsDeleted() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	/*
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	*/
 	return c.deleted
 }
 
@@ -90,8 +101,10 @@ func (c *_CacheItem[K, V]) IsDeleted() bool {
 // first MarkAsDeleted will decrement the ref counter and call postfn and set deleted = true.
 // After first call, MarkAsDeleted will do nothing.
 func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	/*
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	*/
 
 	// check item is already deleted
 	if c.deleted {
@@ -115,16 +128,20 @@ func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx contex
 // Thread-safe
 func (c *_CacheItem[K, V]) PostFn(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
 	if fn != nil {
-		c.mu.Lock()
-		defer c.mu.Unlock()
+		/*
+			c.mu.Lock()
+			defer c.mu.Unlock()
+		*/
 		fn(ctx, c.key, c.value, c.size)
 	}
 }
 
 // Thread-safe
 func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	/*
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	*/
 
 	// first check item is already deleted
 	if c.deleted {
@@ -190,6 +207,9 @@ func New[K comparable, V any](
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	item := &_CacheItem[K, V]{
 		key:   key,
 		value: value,
@@ -222,6 +242,9 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	var item *_CacheItem[K, V]
 
 	item, ok = c.htab.Get(key, nil)
@@ -242,6 +265,9 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	item, ok := c.htab.GetAndDelete(key, nil)
 
 	if ok {
@@ -253,6 +279,9 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
 	target := c.evictAll(ctx, done, capacityCut)
 	if done != nil {
 		done <- target
@@ -261,11 +290,17 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 
 // ForceEvict evicts n bytes despite capacity
 func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
-	capacityCut := c.capacity() - c.Used() + n
-	c.Evict(ctx, nil, capacityCut)
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	capacityCut := c.capacity() - c.usedSmall.Load() + c.usedMain.Load() + n
+
+	c.evictAll(ctx, nil, capacityCut)
 }
 
 func (c *Cache[K, V]) Used() int64 {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	return c.usedSmall.Load() + c.usedMain.Load()
 }
 
