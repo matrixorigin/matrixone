@@ -67,10 +67,6 @@ func (r *TableMetaReader) Close() error {
 	return nil
 }
 
-func GetTS(r engine.Reader) types.TS {
-	return r.(*TableMetaReader).snapshot
-}
-
 func NewTableMetaReader(
 	ctx context.Context,
 	rel engine.Relation,
