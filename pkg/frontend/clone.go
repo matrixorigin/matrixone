@@ -140,11 +140,6 @@ func handleCloneTableAcrossAccounts(
 
 	sql := strings.Split(strings.ToLower(execCtx.input.sql), "to")[0]
 
-	if snapshot == nil {
-		suffix := fmt.Sprintf(" {MO_TS = %d}", ses.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
-		sql += suffix
-	}
-
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return err
 	}
