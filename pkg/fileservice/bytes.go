@@ -26,8 +26,7 @@ type Bytes struct {
 	mu          sync.Mutex
 	bytes       []byte
 	deallocator malloc.Deallocator
-	_refs       int32
-	refs        *int32
+	refs        int32
 }
 
 func (b *Bytes) Size() int64 {
@@ -66,9 +65,7 @@ func (b *Bytes) Retain() {
 		panic("fileservice.Bytes.Retain() buffer already deallocated")
 	}
 
-	if b.refs != nil {
-		(*b.refs) += 1
-	}
+	b.refs += 1
 }
 
 func (b *Bytes) Release() bool {
@@ -79,16 +76,8 @@ func (b *Bytes) Release() bool {
 		panic("fileservice.Bytes.Release() double free")
 	}
 
-	if b.refs != nil {
-		(*b.refs) -= 1
-		if *b.refs == 0 {
-			if b.deallocator != nil {
-				b.deallocator.Deallocate(malloc.NoHints)
-				b.bytes = nil
-				return true
-			}
-		}
-	} else {
+	b.refs -= 1
+	if b.refs == 0 {
 		if b.deallocator != nil {
 			b.deallocator.Deallocate(malloc.NoHints)
 			b.bytes = nil
@@ -112,9 +101,8 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 	bytes := &Bytes{
 		bytes:       slice,
 		deallocator: dec,
+		refs:        1,
 	}
-	bytes._refs = 1
-	bytes.refs = &bytes._refs
 	return bytes
 }
 

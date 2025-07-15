@@ -28,6 +28,7 @@ func TestBytes(t *testing.T) {
 		bs := &Bytes{
 			bytes:       bytes,
 			deallocator: deallocator,
+			refs:        1,
 		}
 		bs.Release()
 	})
@@ -39,6 +40,7 @@ func TestBytesPanic(t *testing.T) {
 	bs := &Bytes{
 		bytes:       bytes,
 		deallocator: deallocator,
+		refs:        1,
 	}
 
 	released := bs.Release()
