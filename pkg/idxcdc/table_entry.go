@@ -102,6 +102,13 @@ func (t *TableInfo_2) GetWatermark(indexName string) (watermark types.TS, ok boo
 	}
 	return types.TS{}, false
 }
+
+func (t *TableInfo_2) IsEmpty() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.sinkers) == 0
+}
+
 func (t *TableInfo_2) DeleteSinker(
 	ctx context.Context,
 	indexName string,
@@ -240,11 +247,19 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 	defer t.mu.Unlock()
 	// init sinker
 	if len(iter.sinkers) == 1 && !iter.sinkers[0].inited.Load() {
-		iter.sinkers[0].inited.Store(true)
 		sinker := iter.sinkers[0]
 		if iter.err[0] != nil {
 			sinker.err = iter.err[0]
+			t.exec.worker.Submit(
+				&Iteration{
+					table:   t,
+					sinkers: []*SinkerEntry{sinker},
+					to:      types.TS{},
+					from:    types.TS{},
+			},
+		)
 		} else {
+			iter.sinkers[0].inited.Store(true)
 			sinker.watermark = iter.to
 		}
 		return

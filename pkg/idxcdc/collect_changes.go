@@ -16,6 +16,7 @@ package idxcdc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
@@ -41,6 +43,9 @@ func CollectChanges_2(
 ) (errs []error) {
 	errs = make([]error, len(consumers))
 	changes, err := CollectChanges(ctx, rel, fromTs, toTs, mp)
+	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "collectChanges" {
+		err = errors.New(msg)
+	}
 	if err != nil {
 		for i := range consumers {
 			errs[i] = err
@@ -97,6 +102,12 @@ func CollectChanges_2(
 		insertDataChs[i] = make(chan *CDCData, 1)
 		ackChs[i] = make(chan struct{}, 1)
 		txns[i], err = iter.table.exec.txnFactory()
+		if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "collectChangesCreateTxn" {
+			err = errors.New(msg)
+		}
+		if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "collectChangesCreateTxn, firstTxn" && i == 0 {
+			err = errors.New(msg)
+		}
 		if err != nil {
 			close(insertDataChs[i])
 			close(ackChs[i])
@@ -110,6 +121,9 @@ func CollectChanges_2(
 		for {
 			var data *CDCData
 			insertData, deleteData, currentHint, err := changes.Next(ctx, mp)
+			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "changesNext" {
+				err = errors.New(msg)
+			}
 			if err != nil {
 				indexNames := ""
 				for _, sinker := range iter.sinkers {
@@ -213,6 +227,12 @@ func CollectChanges_2(
 		go func(i int) {
 			defer waitGroups[i].Done()
 			err := consumerEntry.consumer.Consume(ctx, dataRetrievers[i])
+			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume" {
+				err = errors.New(msg)
+			}
+			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume, firstTxn" && i == 0 {
+				err = errors.New(msg)
+			}
 			if err != nil {
 				logutil.Error(
 					"Async-Index-CDC-Task sink consume failed",

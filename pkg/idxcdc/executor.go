@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -343,9 +345,9 @@ func (exec *CDCTaskExecutor) Stop() {
 
 func (exec *CDCTaskExecutor) run() {
 	defer exec.wg.Done()
-	syncTaskTrigger := time.NewTicker(time.Millisecond * 100) // todo
-	flushWatermarkTrigger := time.NewTicker(time.Hour)
-	gcTrigger := time.NewTicker(time.Hour)
+	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
+	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
+	gcTrigger := time.NewTicker(exec.option.GCTTL)
 	for {
 		select {
 		case <-exec.ctx.Done():
@@ -353,6 +355,9 @@ func (exec *CDCTaskExecutor) run() {
 		case <-syncTaskTrigger.C:
 			candidateTables := exec.getCandidateTables()
 			tables, fromTSs, toTS, err := exec.getDirtyTables(exec.ctx, candidateTables, exec.cnUUID, exec.txnEngine)
+			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "getDirtyTables" {
+				err = errors.New(msg)
+			}
 			if err != nil {
 				logutil.Error(
 					"Async-Index-CDC-Task get dirty tables failed",
@@ -452,6 +457,21 @@ func (exec *CDCTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *a
 }
 
 func (exec *CDCTaskExecutor) replay(ctx context.Context) {
+	var err error
+	indexCount := 0
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"Async-Index-CDC-Task replay",
+			zap.Int("indexCount", indexCount),
+			zap.Error(err),
+		)
+	}()
 	sql := cdc.CDCSQLBuilder.AsyncIndexLogSelectSQL()
 	txn, err := exec.txnFactory()
 	if err != nil {
@@ -477,6 +497,7 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 			if !dropAtVector.IsNull(uint64(i)) {
 				continue
 			}
+			indexCount++
 			watermarkStr := watermarkVector.GetStringAt(i)
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
 			exec.addIndex(
@@ -500,11 +521,33 @@ func (exec *CDCTaskExecutor) addIndex(
 	errorCode int,
 	consumerInfoStr string,
 ) (err error) {
+	var indexName string
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"Async-Index-CDC-Task add index",
+			zap.Uint32("accountID", accountID),
+			zap.Uint64("tableID", tableID),
+			zap.String("indexName", indexName),
+			zap.String("watermark", watermarkStr),
+			zap.Int("errorCode", errorCode),
+			zap.Error(err),
+		)
+	}()
 	consumerInfo := &ConsumerInfo{}
 	err = json.Unmarshal([]byte(consumerInfoStr), consumerInfo)
+	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "addIndex" {
+		err = errors.New(msg)
+	}
 	if err != nil {
 		return
 	}
+	indexName = consumerInfo.IndexName
 	rel, err := exec.getTableByID(ctx, tableID)
 	if err != nil {
 		return
@@ -538,11 +581,29 @@ func (exec *CDCTaskExecutor) deleteIndex(
 	tableID uint64,
 	indexName string,
 ) (err error) {
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"Async-Index-CDC-Task delete index",
+			zap.Uint32("accountID", accountID),
+			zap.Uint64("tableID", tableID),
+			zap.String("indexName", indexName),
+			zap.Error(err),
+		)
+	}()
 	table, ok := exec.getTable(tableID)
 	if !ok {
 		return moerr.NewInternalError(ctx, "table not found")
 	}
 	empty, err := table.DeleteSinker(ctx, indexName)
+	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "deleteIndex" {
+		err = errors.New(msg)
+	}
 	if err != nil {
 		return
 	}
@@ -582,6 +643,9 @@ func (exec *CDCTaskExecutor) getCandidateTables() []*TableInfo_2 {
 	ret := make([]*TableInfo_2, 0)
 	items := exec.getAllTables()
 	for _, t := range items {
+		if t.IsEmpty() {
+			continue
+		}
 		if !t.IsInitedAndFinished() {
 			continue
 		}
@@ -661,20 +725,22 @@ func (exec *CDCTaskExecutor) FlushWatermarkForAllTables() error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	defer cancel()
 	defer func() {
 		if err != nil {
-			err2 := txn.Rollback(exec.ctx)
+			err2 := txn.Rollback(ctx)
 			if err2 != nil {
 				logutil.Errorf("flush watermark for all tables rollback failed, err: %v", err2)
 			}
 		} else {
-			err = txn.Commit(exec.ctx)
+			err = txn.Commit(ctx)
 		}
 	}()
-	if _, err = ExecWithResult(exec.ctx, deleteSql, exec.cnUUID, txn); err != nil {
+	if _, err = ExecWithResult(ctx, deleteSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
-	if _, err = ExecWithResult(exec.ctx, insertSql, exec.cnUUID, txn); err != nil {
+	if _, err = ExecWithResult(ctx, insertSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
 	logutil.Info(
@@ -689,14 +755,16 @@ func (exec *CDCTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	if err != nil {
 		return err
 	}
-	defer txn.Commit(exec.ctx)
+	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	defer cancel()
+	defer txn.Commit(ctx)
 	gcTime := time.Now().Add(-cleanupThreshold)
 	asyncIndexLogGCSql := cdc.CDCSQLBuilder.AsyncIndexLogGCSQL(gcTime)
-	if _, err = ExecWithResult(exec.ctx, asyncIndexLogGCSql, exec.cnUUID, txn); err != nil {
+	if _, err = ExecWithResult(ctx, asyncIndexLogGCSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
 	asyncIndexIterationsGCSql := cdc.CDCSQLBuilder.AsyncIndexIterationsGCSQL(time.Now().Add(-cleanupThreshold))
-	if _, err = ExecWithResult(exec.ctx, asyncIndexIterationsGCSql, exec.cnUUID, txn); err != nil {
+	if _, err = ExecWithResult(ctx, asyncIndexIterationsGCSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
 	logutil.Info(

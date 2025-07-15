@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -1482,7 +1483,7 @@ func TestCDCExecutor1(t *testing.T) {
 	assert.False(t, ok)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
-	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID) 
+	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID)
 
 }
 
@@ -1538,7 +1539,7 @@ func TestCDCExecutor2(t *testing.T) {
 
 	cdcExecutor.Start()
 	defer cdcExecutor.Stop()
-	
+
 	// unregister a job that not exist
 	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -1596,7 +1597,7 @@ func TestCDCExecutor2(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
-	
+
 	// unregister droppend job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -1624,6 +1625,193 @@ func TestCDCExecutor2(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
-
 }
 
+// test error handle
+func TestCDCExecutor3(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	bats := bat.Split(10)
+	
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
+	// init cdc executor
+	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		nil,
+		&idxcdc.CDCExecutorOption{
+			SyncTaskInterval: time.Millisecond * 10,
+			FlushWatermarkInterval: time.Hour,
+			GCTTL: time.Hour,
+			GCInterval: time.Hour,
+		},
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+
+	fault.Enable()
+	defer fault.Disable()
+
+	registerFn := func(indexName string) {
+		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+		require.NoError(t, err)
+		ok, err := idxcdc.RegisterJob(
+			ctx, "", txn, "pitr",
+			&idxcdc.ConsumerInfo{
+				ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
+				DbName:       "srcdb",
+				TableName:    "src_table",
+				IndexName:    indexName,
+			},
+		)
+		assert.True(t, ok)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctxWithTimeout))
+	}
+
+	unregisterFn := func(indexName string) {
+		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+		require.NoError(t, err)
+		ok, err := idxcdc.UnregisterJob(ctx, "", txn,
+			&idxcdc.ConsumerInfo{
+				ConsumerType: int8(idxcdc.ConsumerType_IndexSync),
+				DbName:       "srcdb",
+				TableName:    "src_table",
+				IndexName:    indexName,
+			})
+		assert.True(t, ok)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctxWithTimeout))	
+	}
+
+	appendFn := func(idx int) {
+		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+		require.Nil(t, err)
+	
+		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
+		require.Nil(t, err)
+	
+		txn.Commit(ctxWithTimeout)
+	}
+
+	// add index
+	rmFn, err := objectio.InjectCDCExecutor("addIndex")
+	assert.NoError(t, err)
+
+	registerFn("hnsw_idx_0")
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+			return ok
+		},
+	)
+	_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+	assert.False(t, ok)
+
+	rmFn()
+
+	unregisterFn("hnsw_idx_0")
+
+	// first iteration
+	appendFn(0)
+	
+	rmFn, err = objectio.InjectCDCExecutor("iterationCreateTxn")
+	assert.NoError(t, err)
+	registerFn("hnsw_idx_0")
+	
+	now := taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+	assert.False(t, ts.GE(&now))
+	rmFn()
+	
+	now = taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+	assert.True(t, ts.GE(&now))
+
+	// get relation failed
+	rmFn, err = objectio.InjectCDCExecutor("iterationGetRelation")
+	assert.NoError(t, err)
+	
+	registerFn("hnsw_idx_1")
+	
+	now = taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
+	assert.False(t, ts.GE(&now))
+
+	rmFn()
+	
+	now = taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
+	assert.True(t, ts.GE(&now))
+}
