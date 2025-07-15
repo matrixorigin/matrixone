@@ -151,8 +151,8 @@ func TestTxnTable_Reset(t *testing.T) {
 		})
 		assert.NoError(t, tbl.Reset(newOp))
 
-		tbl.(*txnTableDelegate).partition.is = true
-		tbl.(*txnTableDelegate).partition.tbl = &partitionTxnTable{
+		tbl.(*txnTableDelegate).combined.is = true
+		tbl.(*txnTableDelegate).combined.tbl = &combinedTxnTable{
 			primary: newTxnTableForTest(),
 		}
 		assert.NoError(t, tbl.Reset(newOp))
