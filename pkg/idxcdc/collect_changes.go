@@ -109,6 +109,10 @@ func CollectChanges_2(
 			err = errors.New(msg)
 		}
 		if err != nil {
+			if txns[i] != nil {
+				txns[i].Commit(ctx)
+				txns[i] = nil
+			}
 			close(insertDataChs[i])
 			close(ackChs[i])
 			errs[i] = err
@@ -223,7 +227,7 @@ func CollectChanges_2(
 	}()
 
 	for i, consumerEntry := range consumers {
-		if dataRetrievers[i] == nil {
+		if txns[i] == nil {
 			continue
 		}
 		waitGroups[i].Add(1)

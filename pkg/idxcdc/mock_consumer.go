@@ -130,7 +130,7 @@ func NewInteralSqlConsumer(
 
 	exec := v.(executor.SQLExecutor)
 	s.internalSqlExecutor = exec
-	s.targetTableName = fmt.Sprintf("test_table_%d", tableDef.TblId)
+	s.targetTableName = fmt.Sprintf("test_table_%d_%v", tableDef.TblId, info.IndexName)
 	logutil.Infof("cdc %v->%vs", tableDef.Name, s.targetTableName)
 	err := s.createTargetTable(context.Background())
 	if err != nil {
@@ -258,6 +258,7 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 	for {
 		insertBatch, deleteBatch, noMoreData, err := data.Next()
 		if err != nil {
+			s.sqlBufSendCh <- []byte("no more data")
 			return err
 		}
 		if noMoreData {

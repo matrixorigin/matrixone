@@ -904,9 +904,10 @@ func CheckTableData(
 	dbName string,
 	tableName string,
 	tableID uint64,
+	indexName string,
 ){
 	asyncIndexDBName := "test_async_index_cdc"
-	asyncIndexTableName := fmt.Sprintf("test_table_%d", tableID)
+	asyncIndexTableName := fmt.Sprintf("test_table_%d_%v", tableID, indexName)
 	sql1:= fmt.Sprintf(
 		"SELECT * FROM %v.%v EXCEPT SELECT * FROM %v.%v;",
 		dbName, tableName,

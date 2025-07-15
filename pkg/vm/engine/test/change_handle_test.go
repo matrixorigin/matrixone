@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1380,6 +1381,7 @@ func TestCDCExecutor1(t *testing.T) {
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
+	defer bat.Close()
 
 	// append 1 row
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
@@ -1483,7 +1485,7 @@ func TestCDCExecutor1(t *testing.T) {
 	assert.False(t, ok)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
-	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID)
+	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, "hnsw_idx")
 
 }
 
@@ -1522,7 +1524,8 @@ func TestCDCExecutor2(t *testing.T) {
 
 	// create database and table
 
-	CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	defer bats.Close()
 
 	// init cdc executor
 	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
@@ -1662,7 +1665,8 @@ func TestCDCExecutor3(t *testing.T) {
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
-	
+	defer bat.Close()
+
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 	require.Nil(t, err)
 
@@ -1678,10 +1682,10 @@ func TestCDCExecutor3(t *testing.T) {
 		"",
 		nil,
 		&idxcdc.CDCExecutorOption{
-			SyncTaskInterval: time.Millisecond * 10,
+			SyncTaskInterval:       time.Millisecond * 10,
 			FlushWatermarkInterval: time.Hour,
-			GCTTL: time.Hour,
-			GCInterval: time.Hour,
+			GCTTL:                  time.Hour,
+			GCInterval:             time.Hour,
 		},
 		common.DebugAllocator,
 	)
@@ -1723,26 +1727,42 @@ func TestCDCExecutor3(t *testing.T) {
 			})
 		assert.True(t, ok)
 		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctxWithTimeout))	
+		assert.NoError(t, txn.Commit(ctxWithTimeout))
 	}
 
 	appendFn := func(idx int) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 		require.Nil(t, err)
-	
+
 		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
 		require.Nil(t, err)
-	
+
 		txn.Commit(ctxWithTimeout)
 	}
 
+	checkWaterMarkFn := func(indexName string, waitTime int, expectResult bool) {
+		now := taeHandler.GetDB().TxnMgr.Now()
+		testutils.WaitExpect(
+			waitTime,
+			func() bool {
+				ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+				return ts.GE(&now)
+			},
+		)
+		ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+		if expectResult {
+			assert.True(t, ts.GE(&now))
+		} else {
+			assert.False(t, ts.GE(&now))
+		}
+	}
 	// add index
 	rmFn, err := objectio.InjectCDCExecutor("addIndex")
 	assert.NoError(t, err)
 
 	registerFn("hnsw_idx_0")
 	testutils.WaitExpect(
-		1000,
+		100,
 		func() bool {
 			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
 			return ok
@@ -1761,105 +1781,307 @@ func TestCDCExecutor3(t *testing.T) {
 	rmFn, err = objectio.InjectCDCExecutor("iterationCreateTxn")
 	assert.NoError(t, err)
 	registerFn("hnsw_idx_0")
-	
-	now := taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
-			return ts.GE(&now)
-		},
-	)
-	ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
-	assert.False(t, ts.GE(&now))
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
 	rmFn()
-	
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
-			return ts.GE(&now)
-		},
-	)
-	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
-	assert.True(t, ts.GE(&now))
+	checkWaterMarkFn("hnsw_idx_0", 1000, true)
 
 	// get relation failed
 	rmFn, err = objectio.InjectCDCExecutor("iterationGetRelation")
 	assert.NoError(t, err)
-	
+
 	registerFn("hnsw_idx_1")
-	
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
-			return ts.GE(&now)
-		},
-	)
-	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
-	assert.False(t, ts.GE(&now))
+
+	checkWaterMarkFn("hnsw_idx_1", 100, false)
 
 	rmFn()
-	
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
-			return ts.GE(&now)
-		},
-	)
-	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
-	assert.True(t, ts.GE(&now))
+
+	checkWaterMarkFn("hnsw_idx_1", 1000, true)
 
 	// insert AsyncIndexIterations failed
 	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
 	assert.NoError(t, err)
-	
+
 	registerFn("hnsw_idx_2")
-	
-	now = taeHandler.GetDB().TxnMgr.Now()
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_2")
-			return ts.GE(&now)
-		},
-	)
-	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_2")
-	assert.True(t, ts.GE(&now))
+
+	checkWaterMarkFn("hnsw_idx_2", 1000, true)
 	rmFn()
 
 	// collectChanges create txn failed
 	rmFn, err = objectio.InjectCDCExecutor("collectChangesCreateTxn")
 	assert.NoError(t, err)
-	
+
 	registerFn("hnsw_idx_3")
-	
-	now = taeHandler.GetDB().TxnMgr.Now()
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
-			return ts.GE(&now)
-		},
-	)
-	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
-	assert.False(t, ts.GE(&now))
+
+	checkWaterMarkFn("hnsw_idx_3", 100, false)
 	rmFn()
 
-	now = taeHandler.GetDB().TxnMgr.Now()
+	checkWaterMarkFn("hnsw_idx_3", 1000, true)
+
+	// changesNext failed
+	rmFn, err = objectio.InjectCDCExecutor("changesNext")
+	assert.NoError(t, err)
+
+	registerFn("hnsw_idx_4")
+
+	checkWaterMarkFn("hnsw_idx_4", 100, false)
+	rmFn()
+
+	checkWaterMarkFn("hnsw_idx_4", 1000, true)
+
+	// collect Changes failed
+	rmFn, err = objectio.InjectCDCExecutor("collectChanges")
+	assert.NoError(t, err)
+
+	registerFn("hnsw_idx_5")
+
+	checkWaterMarkFn("hnsw_idx_5", 100, false)
+	rmFn()
+
+	checkWaterMarkFn("hnsw_idx_5", 1000, true)
+
+	// consume failed
+	rmFn, err = objectio.InjectCDCExecutor("consume")
+	assert.NoError(t, err)
+
+	registerFn("hnsw_idx_6")
+
+	checkWaterMarkFn("hnsw_idx_6", 100, false)
+	rmFn()
+
+	checkWaterMarkFn("hnsw_idx_6", 1000, true)
+
+	// getDirtyTables
+	rmFn, err = objectio.InjectCDCExecutor("getDirtyTables")
+	assert.NoError(t, err)
+	checkWaterMarkFn("hnsw_idx_6", 1000, false)
+	rmFn()
+
+	for i := 0; i < 6; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+
+	// drop index
+	rmFn, err = objectio.InjectCDCExecutor("deleteIndex")
+	assert.NoError(t, err)
 	testutils.WaitExpect(
 		1000,
 		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
-			return ts.GE(&now)
+			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+			return !ok
 		},
 	)
-	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
-	assert.True(t, ts.GE(&now))
+	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+	assert.True(t, ok)
+	rmFn()
+}
+
+// test error handle
+func TestCDCExecutor4(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	bats := bat.Split(10)
+	defer bat.Close()
+
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
+	// init cdc executor
+	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		nil,
+		&idxcdc.CDCExecutorOption{
+			SyncTaskInterval:       time.Millisecond * 10,
+			FlushWatermarkInterval: time.Hour,
+			GCTTL:                  time.Hour,
+			GCInterval:             time.Hour,
+		},
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+
+	fault.Enable()
+	defer fault.Disable()
+
+	registerFn := func(indexName string) {
+		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+		require.NoError(t, err)
+		ok, err := idxcdc.RegisterJob(
+			ctx, "", txn, "pitr",
+			&idxcdc.ConsumerInfo{
+				ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
+				DbName:       "srcdb",
+				TableName:    "src_table",
+				IndexName:    indexName,
+			},
+		)
+		assert.True(t, ok)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctxWithTimeout))
+	}
+
+	appendFn := func(idx int) {
+		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+		require.Nil(t, err)
+
+		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
+		require.Nil(t, err)
+
+		txn.Commit(ctxWithTimeout)
+	}
+
+	checkWaterMarkFn := func(indexName string, waitTime int, expectResult bool) {
+		now := taeHandler.GetDB().TxnMgr.Now()
+		testutils.WaitExpect(
+			waitTime,
+			func() bool {
+				ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+				return ts.GE(&now)
+			},
+		)
+		ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+		if expectResult {
+			assert.True(t, ts.GE(&now))
+		} else {
+			assert.False(t, ts.GE(&now))
+		}
+	}
+
+	indexCount := 3
+	for i := 0; i < indexCount; i++ {
+		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
+	}
+
+	// iterationCreateTxn failed
+	rmFn, err := objectio.InjectCDCExecutor("iterationCreateTxn")
+	assert.NoError(t, err)
+	appendFn(0)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	rmFn()
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+
+	// iterationGetRelation failed
+	rmFn, err = objectio.InjectCDCExecutor("iterationGetRelation")
+	assert.NoError(t, err)
+	appendFn(1)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	rmFn()
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+
+	// insertAsyncIndexIterations failed
+	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
+	assert.NoError(t, err)
+	appendFn(2)
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+	rmFn()
+
+	// collectChanges failed
+	rmFn, err = objectio.InjectCDCExecutor("collectChanges")
+	assert.NoError(t, err)
+	appendFn(3)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	rmFn()
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+
+	// collectChangesCreateTxn failed
+	rmFn, err = objectio.InjectCDCExecutor("collectChangesCreateTxn")
+	assert.NoError(t, err)
+	appendFn(4)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	rmFn()
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+	// collectChangesCreateTxn, firstTxn failed
+	rmFn, err = objectio.InjectCDCExecutor("collectChangesCreateTxn, firstTxn")
+	assert.NoError(t, err)
+	appendFn(5)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	for i := 1; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+	rmFn()
+	checkWaterMarkFn("hnsw_idx_0", 1000, true)
+
+	// changesNext failed
+	rmFn, err = objectio.InjectCDCExecutor("changesNext")
+	assert.NoError(t, err)
+	appendFn(6)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	rmFn()
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+
+	// consume failed
+	rmFn, err = objectio.InjectCDCExecutor("consume")
+	assert.NoError(t, err)
+	appendFn(7)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	rmFn()
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+	// consume, firstTxn failed
+	rmFn, err = objectio.InjectCDCExecutor("consume, firstTxn")
+	assert.NoError(t, err)
+	appendFn(8)
+	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	for i := 1; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	}
+	rmFn()
+	checkWaterMarkFn("hnsw_idx_0", 1000, true)
+
+	for i := 0; i < indexCount; i++ {
+		CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, fmt.Sprintf("hnsw_idx_%d", i))
+	}
 }
