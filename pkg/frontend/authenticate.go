@@ -1037,8 +1037,8 @@ var (
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
-	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 	dropMoRetention                 = `drop table if exists mo_catalog.mo_retention;`
 
@@ -1457,16 +1457,16 @@ const (
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
 	// grant ownership on database
-	grantOwnershipOnDatabaseFormat = `grant ownership on database %s to %s;`
+	grantOwnershipOnDatabaseFormat = "grant ownership on database `%s` to `%s`;"
 
 	// grant ownership on table
-	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+	grantOwnershipOnTableFormat = "grant ownership on table `%s`.`%s` to `%s`;"
 
 	// revoke ownership on database owner
-	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s from %s;`
+	revokeOwnershipFromDatabaseFormat = "revoke ownership on database `%s` from `%s`;"
 
 	// revoke ownership on table owner
-	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
+	revokeOwnershipFromTableFormat = "revoke ownership on table `%s`.`%s` from `%s`;"
 
 	// get the owner of the database
 	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
