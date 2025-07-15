@@ -1757,7 +1757,7 @@ func TestCDCExecutor3(t *testing.T) {
 
 	// first iteration
 	appendFn(0)
-	
+
 	rmFn, err = objectio.InjectCDCExecutor("iterationCreateTxn")
 	assert.NoError(t, err)
 	registerFn("hnsw_idx_0")
@@ -1813,5 +1813,53 @@ func TestCDCExecutor3(t *testing.T) {
 		},
 	)
 	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_1")
+	assert.True(t, ts.GE(&now))
+
+	// insert AsyncIndexIterations failed
+	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
+	assert.NoError(t, err)
+	
+	registerFn("hnsw_idx_2")
+	
+	now = taeHandler.GetDB().TxnMgr.Now()
+	now = taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_2")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_2")
+	assert.True(t, ts.GE(&now))
+	rmFn()
+
+	// collectChanges create txn failed
+	rmFn, err = objectio.InjectCDCExecutor("collectChangesCreateTxn")
+	assert.NoError(t, err)
+	
+	registerFn("hnsw_idx_3")
+	
+	now = taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
+	assert.False(t, ts.GE(&now))
+	rmFn()
+
+	now = taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
+			return ts.GE(&now)
+		},
+	)
+	ts, _ = cdcExecutor.GetWatermark(tableID, "hnsw_idx_3")
 	assert.True(t, ts.GE(&now))
 }

@@ -47,6 +47,7 @@ func (iter *Iteration) Run() {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	iter.err = make([]error, len(iter.sinkers))
+	iter.startAt = time.Now()
 	var txn client.TxnOperator
 	defer func() {
 		iter.endAt = time.Now()

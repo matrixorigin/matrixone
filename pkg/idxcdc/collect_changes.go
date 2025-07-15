@@ -223,6 +223,9 @@ func CollectChanges_2(
 	}()
 
 	for i, consumerEntry := range consumers {
+		if dataRetrievers[i] == nil {
+			continue
+		}
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()

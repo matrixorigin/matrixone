@@ -576,7 +576,7 @@ func mock_mo_async_index_iterations(
 		"error_json VARCHAR NOT NULL," +
 		"start_at DATETIME NULL," +
 		"end_at DATETIME NULL," +
-		"PRIMARY KEY (start_at)" +
+		"PRIMARY KEY (table_id, index_names,to_ts)" +
 		")"
 
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
