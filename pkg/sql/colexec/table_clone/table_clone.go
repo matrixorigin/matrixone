@@ -147,14 +147,6 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 			txnOp = proc.GetTxnOperator()
 		}
 
-		debug := false
-		if tc.Ctx.SrcTblDef.Name == "t4" && tc.Ctx.DstTblName == "t5" {
-			debug = true
-			logutil.Info("debug clone A",
-				zap.String("ts", types.TimestampToTS(txnOp.SnapshotTS()).ToString()),
-				zap.Bool("clone txnOp", proc.GetCloneTxnOperator() == nil))
-		}
-
 		if srcDB, err = tc.Ctx.Eng.Database(
 			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.DbName, txnOp,
 		); err != nil {
@@ -170,11 +162,6 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		if tc.srcRelReader, err = disttae.NewTableMetaReader(tc.Ctx.SrcCtx, tc.srcRel); err != nil {
 			return err
 		}
-
-		if debug {
-			fmt.Println("ABCD", "meta reader ts", disttae.GetTS(tc.srcRelReader).ToString())
-		}
-
 	}
 
 	{
@@ -251,8 +238,8 @@ func clone(
 		}
 
 		dstDef := dstRel.GetTableDef(dstCtx)
-		srcTable := reader.(*disttae.TableMetaReader).Table
-		srcDef := srcTable.GetTableDef(srcCtx)
+		innerReader := reader.(*disttae.TableMetaReader)
+		srcDef := innerReader.GetTableDef()
 
 		logutil.Info("TABLE-CLONE",
 			zap.Bool("isTombstone", isTombstone),
@@ -261,7 +248,7 @@ func clone(
 			zap.Int("objCnt", objCnt),
 			zap.Int("blkCnt", blkCnt),
 			zap.Int("rowCnt", rowCnt),
-			zap.String("read txn", srcTable.TxnInfo()))
+			zap.String("read txn", innerReader.GetTxnInfo()))
 
 		return nil
 	}

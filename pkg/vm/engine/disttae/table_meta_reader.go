@@ -43,7 +43,7 @@ const (
 )
 
 type TableMetaReader struct {
-	Table    *txnTable
+	table    *txnTable
 	fs       fileservice.FileService
 	snapshot types.TS
 	state    int
@@ -51,9 +51,17 @@ type TableMetaReader struct {
 	pState *logtailreplay.PartitionState
 }
 
+func (r *TableMetaReader) GetTableDef() *plan.TableDef {
+	return r.table.tableDef
+}
+
+func (r *TableMetaReader) GetTxnInfo() string {
+	return r.table.getTxn().op.Txn().DebugString()
+}
+
 func (r *TableMetaReader) Close() error {
 	//r.tblDef = nil
-	r.Table = nil
+	r.table = nil
 	r.pState = nil
 	r.state = endState
 	return nil
@@ -96,7 +104,7 @@ func NewTableMetaReader(
 		fs:       fs,
 		snapshot: snapshot,
 		//tblDef:   tblDef,
-		Table:  table,
+		table:  table,
 		pState: pState,
 	}, nil
 }
@@ -138,9 +146,9 @@ func (r *TableMetaReader) Read(
 		logutil.Info("TableMetaReader",
 			zap.String("table",
 				fmt.Sprintf("%s(%d)-%s(%d)-%s",
-					r.Table.db.databaseName, r.Table.db.databaseId,
-					r.Table.tableName, r.Table.tableId,
-					r.Table.TxnInfo())),
+					r.table.db.databaseName, r.table.db.databaseId,
+					r.table.tableName, r.table.tableId,
+					r.GetTxnInfo())),
 			zap.String("state", stateStr),
 			zap.Error(err), logs1, logs2)
 	}()
@@ -148,14 +156,14 @@ func (r *TableMetaReader) Read(
 	outBatch.CleanOnlyData()
 
 	if isTombstone {
-		pkCol := plan2.PkColByTableDef(r.Table.tableDef)
+		pkCol := plan2.PkColByTableDef(r.table.tableDef)
 		pkType := plan2.ExprType2Type(&pkCol.Typ)
 
 		seqnums = []uint16{0, 1}
 		colTypes = []types.Type{types.T_Rowid.ToType(), pkType}
 		attrs = objectio.TombstoneAttrs_CN_Created
 	} else {
-		seqnums, colTypes, attrs, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(r.Table.tableDef)
+		seqnums, colTypes, attrs, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(r.table.tableDef)
 	}
 
 	// step1
@@ -224,7 +232,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 			if isTombstone {
 				s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
 			} else {
-				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.Table.tableDef, false)
+				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
 			}
 		}
 
@@ -388,11 +396,11 @@ func (r *TableMetaReader) collectVisibleObjs(
 		if isTombstone {
 			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
 		} else {
-			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.Table.tableDef, false)
+			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
 		}
 
 		source := &LocalDisttaeDataSource{
-			table:           r.Table,
+			table:           r.table,
 			pState:          r.pState,
 			fs:              r.fs,
 			ctx:             ctx,
