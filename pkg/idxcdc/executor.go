@@ -129,7 +129,9 @@ func AsyncIndexCdcTaskExecutorFactory(
 			return err
 		}
 		attachToTask(ctx, task.GetID(), exec)
-		exec.Start()
+
+		exec.initState()
+		exec.run()
 		return nil
 	}
 }
@@ -298,6 +300,11 @@ func (exec *CDCTaskExecutor) Restart() error {
 	return nil
 }
 func (exec *CDCTaskExecutor) Start() {
+	exec.initState()
+	go exec.run()
+}
+
+func (exec *CDCTaskExecutor) initState() {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
 	if exec.running {
@@ -314,7 +321,7 @@ func (exec *CDCTaskExecutor) Start() {
 	exec.cancel = cancel
 	exec.replay(exec.ctx)
 	exec.wg.Add(1)
-	go exec.run()
+
 }
 
 func (exec *CDCTaskExecutor) Stop() {

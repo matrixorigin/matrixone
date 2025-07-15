@@ -51,6 +51,10 @@ func (t *startTask) Handle(_ context.Context) error {
 			if t.task.task.TaskType == task.TaskType_CreateCdc && err == nil {
 				return
 			}
+			// if async index cdc task quit without error
+			if t.task.task.TaskType == task.TaskType_TypeAsyncIndexCdc && err == nil {
+				return
+			}
 			t.runner.removeDaemonTask(t.task.task.ID)
 		}()
 
