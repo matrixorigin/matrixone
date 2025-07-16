@@ -137,6 +137,7 @@ func MergeCheckpoint(
 	}
 
 	sinker := ckputil.NewDataSinker(pool, fs)
+	defer sinker.Close()
 	if err = sinker.Write(ctx, ckpData); err != nil {
 		return
 	}

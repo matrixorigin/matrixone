@@ -683,8 +683,8 @@ func (sm *SnapshotMeta) Update(
 					createAt: createTS,
 					deleteAt: deleteTS,
 				}
-				logutil.Warn(
-					"GC-PANIC-UPDATE-SNAPSHOT-META",
+				logutil.Info(
+					"GC-SnapshotMeta-Update-Collector",
 					zap.Uint64("table-id", tid),
 					zap.String("object-name", id.String()),
 					zap.String("create-at", createTS.ToString()),
