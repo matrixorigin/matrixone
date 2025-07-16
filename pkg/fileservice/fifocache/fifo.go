@@ -50,31 +50,26 @@ type _CacheItem[K comparable, V any] struct {
 	deleted bool // flag indicate item is already deleted by either hashtable or evict
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) Inc() {
 	if c.freq < 3 {
 		c.freq += 1
 	}
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) Dec() {
 	if c.freq > 0 {
 		c.freq -= 1
 	}
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) GetFreq() int8 {
 	return c.freq
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) IsDeleted() bool {
 	return c.deleted
 }
 
-// Thread-safe
 // first MarkAsDeleted will decrement the ref counter and call postfn and set deleted = true.
 // After first call, MarkAsDeleted will do nothing.
 func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
@@ -97,14 +92,12 @@ func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx contex
 	return true
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) PostFn(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
 	if fn != nil {
 		fn(ctx, c.key, c.value, c.size)
 	}
 }
 
-// Thread-safe
 func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
 	// first check item is already deleted
 	if c.deleted {
@@ -122,7 +115,6 @@ func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Conte
 	return true
 }
 
-// INTERNAL: non-thread safe.
 // if deleted = true, item value is already released by this Cache and is NOT valid to use it inside the Cache.
 // if deleted = false, increment the reference counter of the value and it is safe to use now.
 func (c *_CacheItem[K, V]) retainValue() {
@@ -132,7 +124,6 @@ func (c *_CacheItem[K, V]) retainValue() {
 	}
 }
 
-// INTERNAL: non-thread safe.
 // decrement the reference counter
 func (c *_CacheItem[K, V]) releaseValue() {
 	cdata, ok := any(c.value).(fscache.Data)
