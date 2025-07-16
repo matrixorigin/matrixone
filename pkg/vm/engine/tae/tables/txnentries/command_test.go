@@ -24,22 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCompactBlockCmd(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
-	sid1 := objectio.NewSegmentid()
-	sid2 := objectio.NewSegmentid()
-	from := &common.ID{TableID: 1, BlockID: *objectio.NewBlockid(sid1, 1, 0)}
-	to := &common.ID{TableID: 1, BlockID: *objectio.NewBlockid(sid2, 3, 0)}
-	cmd := newCompactBlockCmd(from, to, nil, 0)
-
-	buf, err := cmd.MarshalBinary()
-	assert.Nil(t, err)
-
-	_, err = txnbase.BuildCommandFrom(buf)
-	assert.Nil(t, err)
-}
-
 func TestMergeBlocksCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
