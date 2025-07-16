@@ -177,10 +177,28 @@ func (t *TableInfo_2) GetMaxWaterMarkLocked() types.TS {
 	return maxWatermark
 }
 
+func (t *TableInfo_2) getCandidateLocked() []*SinkerEntry {
+	var candidates []*SinkerEntry
+	for _, sinker := range t.sinkers {
+		if !sinker.inited.Load() {
+			continue
+		}
+		if sinker.PermanentError() {
+			continue
+		}
+		candidates = append(candidates, sinker)
+	}
+	return candidates
+}
+
 func (t *TableInfo_2) GetSyncTask(ctx context.Context, toTS types.TS) *Iteration {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	dirtySinker := t.getNewSinkersLocked()
+	candidates := t.getCandidateLocked()
+	if len(candidates) == 0 {
+		panic("logic error")
+	}
+	dirtySinker := t.getNewSinkersLocked(candidates)
 	maxTS := t.GetMaxWaterMarkLocked()
 	if dirtySinker != nil {
 		t.state = TableState_Running
@@ -192,9 +210,14 @@ func (t *TableInfo_2) GetSyncTask(ctx context.Context, toTS types.TS) *Iteration
 		}
 	}
 	t.state = TableState_Running
+	for _, sinker := range candidates {
+		if sinker.watermark.GT(&toTS) {
+			toTS = sinker.watermark
+		}
+	}
 	return &Iteration{
 		table:   t,
-		sinkers: t.sinkers,
+		sinkers: candidates,
 		to:      toTS,
 		from:    maxTS,
 	}
@@ -256,8 +279,8 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 					sinkers: []*SinkerEntry{sinker},
 					to:      types.TS{},
 					from:    types.TS{},
-			},
-		)
+				},
+			)
 		} else {
 			iter.sinkers[0].inited.Store(true)
 			sinker.watermark = iter.to
@@ -283,7 +306,8 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 		return
 	}
 	// all sinkers
-	if !maxTS.EQ(&iter.from) {
+	if maxTS.LT(&iter.from) {
+		// if there're new sinkers, maxTS may be greater
 		panic("logic error")
 	}
 	t.state = TableState_Finished
@@ -296,9 +320,9 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 	}
 }
 
-func (t *TableInfo_2) getNewSinkersLocked() *SinkerEntry {
+func (t *TableInfo_2) getNewSinkersLocked(candidates []*SinkerEntry) *SinkerEntry {
 	maxTS := t.GetMaxWaterMarkLocked()
-	for _, sinker := range t.sinkers {
+	for _, sinker := range candidates {
 		if !sinker.inited.Load() {
 			continue
 		}

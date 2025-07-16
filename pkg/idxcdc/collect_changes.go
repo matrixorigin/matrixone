@@ -25,10 +25,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
+
+type DataRetrieverConsumer interface {
+	DataRetriever
+	WaitBatchConsume()
+	SetNextBatch(*CDCData)
+	SetError(error)
+	Close()
+}
 
 func CollectChanges_2(
 	ctx context.Context,
@@ -89,40 +96,28 @@ func CollectChanges_2(
 		return atomicBatch
 	}
 
-	dataRetrievers := make([]DataRetriever, len(consumers))
-	insertDataChs := make([]chan *CDCData, len(consumers))
-	ackChs := make([]chan struct{}, len(consumers))
+	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
 	typ := CDCDataType_Tail
 	if fromTs.IsEmpty() {
 		typ = CDCDataType_Snapshot
 	}
-	txns := make([]client.TxnOperator, len(consumers))
 	waitGroups := make([]sync.WaitGroup, len(consumers))
 	for i, consumer := range consumers {
-		insertDataChs[i] = make(chan *CDCData, 1)
-		ackChs[i] = make(chan struct{}, 1)
-		txns[i], err = iter.table.exec.txnFactory()
-		if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "collectChangesCreateTxn" {
-			err = errors.New(msg)
-		}
-		if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "collectChangesCreateTxn, firstTxn" && i == 0 {
-			err = errors.New(msg)
-		}
-		if err != nil {
-			if txns[i] != nil {
-				txns[i].Commit(ctx)
-				txns[i] = nil
-			}
-			close(insertDataChs[i])
-			close(ackChs[i])
-			errs[i] = err
-			continue
-		}
-		dataRetrievers[i] = NewDataRetriever(consumer, iter, txns[i], insertDataChs[i], ackChs[i], typ)
+		dataRetrievers[i] = NewDataRetriever(consumer, iter, typ)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+	changeHandelWg := sync.WaitGroup{}
 	go func() {
+		defer cancel()
+		defer changeHandelWg.Done()
+		changeHandelWg.Add(1)
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			var data *CDCData
 			insertData, deleteData, currentHint, err := changes.Next(ctx, mp)
 			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "changesNext" {
@@ -192,16 +187,10 @@ func CollectChanges_2(
 			}
 
 			for i := range consumers {
-				if dataRetrievers[i] == nil {
-					continue
-				}
-				insertDataChs[i] <- data
+				dataRetrievers[i].SetNextBatch(data)
 			}
 			for i := range consumers {
-				if dataRetrievers[i] == nil {
-					continue
-				}
-				<-ackChs[i]
+				dataRetrievers[i].WaitBatchConsume()
 			}
 			if preinsertAtmBatch != nil {
 				preinsertAtmBatch.Close()
@@ -227,19 +216,13 @@ func CollectChanges_2(
 	}()
 
 	for i, consumerEntry := range consumers {
-		if txns[i] == nil {
+		if dataRetrievers[i] == nil {
 			continue
 		}
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
 			err := consumerEntry.consumer.Consume(ctx, dataRetrievers[i])
-			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume" {
-				err = errors.New(msg)
-			}
-			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume, firstTxn" && i == 0 {
-				err = errors.New(msg)
-			}
 			if err != nil {
 				logutil.Error(
 					"Async-Index-CDC-Task sink consume failed",
@@ -250,15 +233,7 @@ func CollectChanges_2(
 					zap.String("from", iter.from.ToString()),
 					zap.String("to", iter.to.ToString()),
 				)
-				if txns[i] != nil {
-					txns[i].Rollback(ctx)
-					txns[i] = nil
-				}
-				close(insertDataChs[i])
-				close(ackChs[i])
-				ackChs[i] = nil
-				insertDataChs[i] = nil
-				dataRetrievers[i] = nil
+				dataRetrievers[i].SetError(err)
 				errs[i] = err
 			}
 		}(i)
@@ -267,15 +242,11 @@ func CollectChanges_2(
 		waitGroups[i].Wait()
 	}
 
-	for i, txn := range txns {
-		if txn != nil {
-			close(insertDataChs[i])
-			close(ackChs[i])
-			err := txn.Commit(ctx)
-			if err != nil {
-				errs[i] = err
-			}
-		}
+	cancel()
+	changeHandelWg.Wait()
+
+	for _, dataRetriever := range dataRetrievers {
+		dataRetriever.Close()
 	}
 
 	return

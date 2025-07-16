@@ -15,8 +15,10 @@
 package idxcdc
 
 import (
+	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/cdc"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -35,27 +37,32 @@ const (
 type DataRetrieverImpl struct {
 	*SinkerEntry
 	*Iteration
-	txn          client.TxnOperator
-	insertDataCh <-chan *CDCData
-	ackChan      chan<- struct{}
 	typ          int8
+
+	insertDataCh chan *CDCData
+	ackChan      chan struct{}
+	ctx context.Context
+	cancel context.CancelFunc
+	err error
+
+	closed bool
+	mu sync.Mutex
 }
 
 func NewDataRetriever(
 	consumer *SinkerEntry,
 	iteration *Iteration,
-	txn client.TxnOperator,
-	insertDataCh <-chan *CDCData,
-	ackChan chan<- struct{},
 	dataType int8,
 ) *DataRetrieverImpl {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &DataRetrieverImpl{
 		SinkerEntry:  consumer,
 		Iteration:    iteration,
-		txn:          txn,
-		insertDataCh: insertDataCh,
-		ackChan:      ackChan,
+		insertDataCh: make(chan *CDCData, 1),
+		ackChan:      make(chan struct{}, 1),
 		typ:          dataType,
+		ctx: ctx,
+		cancel: cancel,
 	}
 }
 
@@ -85,4 +92,47 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 
 func (r *DataRetrieverImpl) GetDataType() int8 {
 	return r.typ
+}
+
+func (r *DataRetrieverImpl) SetNextBatch(data *CDCData) {
+	if r.hasError() {
+		return
+	}
+	r.insertDataCh <- data
+}
+
+func (r *DataRetrieverImpl) WaitBatchConsume(){
+	if r.hasError() {
+		return
+	}
+	select {
+	case <-r.ctx.Done():
+		return
+	case <-r.ackChan:
+	}
+}
+
+func (r *DataRetrieverImpl) hasError() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err != nil
+}
+
+// after error occurs, the data retriever won't consume any more data
+func (r *DataRetrieverImpl) SetError(err error) {
+	if r.hasError() {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return
+	}
+	r.cancel()
+	r.err = err
+}
+
+func (r *DataRetrieverImpl) Close() {
+	close(r.insertDataCh)
+	close(r.ackChan)
 }

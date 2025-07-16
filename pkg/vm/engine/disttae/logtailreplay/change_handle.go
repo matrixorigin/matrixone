@@ -96,14 +96,16 @@ type BatchHandle struct {
 	ctx         context.Context
 
 	baseHandle *baseHandle
+	tombstone  bool
 }
 
-func NewRowHandle(data *batch.Batch, mp *mpool.MPool, baseHandle *baseHandle, ctx context.Context) (handle *BatchHandle) {
+func NewRowHandle(data *batch.Batch, mp *mpool.MPool, baseHandle *baseHandle, ctx context.Context, tombstone bool) (handle *BatchHandle) {
 	handle = &BatchHandle{
 		mp:         mp,
 		batches:    data,
 		ctx:        ctx,
 		baseHandle: baseHandle,
+		tombstone:  tombstone,
 	}
 	if data != nil {
 		handle.batchLength = data.Vecs[0].Length()
@@ -646,7 +648,7 @@ func (p *baseHandle) newBatchHandleWithRowIterator(ctx context.Context, iter btr
 	if bat == nil {
 		return nil
 	}
-	h = NewRowHandle(bat, mp, p, ctx)
+	h = NewRowHandle(bat, mp, p, ctx, tombstone)
 	return
 }
 func (p *baseHandle) getBatchesFromRowIterator(iter btree.IterG[*RowEntry], start, end types.TS, tombstone bool, mp *mpool.MPool) (bat *batch.Batch) {

@@ -16,6 +16,7 @@ package idxcdc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -56,6 +58,7 @@ var _ Consumer = &interalSqlConsumer{}
 
 type interalSqlConsumer struct {
 	internalSqlExecutor executor.SQLExecutor
+	indexName           string
 
 	dataRetriever DataRetriever
 	tableInfo     *plan.TableDef
@@ -108,7 +111,8 @@ type interalSqlConsumer struct {
 	// the length of all completed sql statement in sqlBuf
 	preSqlBufLen int
 
-	wg sync.WaitGroup
+	wg  sync.WaitGroup
+	err error
 }
 
 func NewInteralSqlConsumer(
@@ -118,6 +122,7 @@ func NewInteralSqlConsumer(
 ) (Consumer, error) {
 	s := &interalSqlConsumer{
 		tableInfo: tableDef,
+		indexName: info.IndexName,
 	}
 	maxAllowedPacket := uint64(1024 * 1024)
 	logutil.Infof("cdc mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, maxAllowedPacket)
@@ -235,7 +240,10 @@ func (s *interalSqlConsumer) Run(ctx context.Context) {
 		for sqlBuffer := range s.sqlBufSendCh {
 			if string(sqlBuffer) == "no more data" {
 				if s.dataRetriever.GetDataType() != CDCDataType_Snapshot {
-					s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
+					err := s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
+					if err != nil {
+						return err
+					}
 				}
 				return nil
 			}
@@ -248,11 +256,22 @@ func (s *interalSqlConsumer) Run(ctx context.Context) {
 		return nil
 	}, executor.Options{})
 	if err != nil {
-		panic(err)
+		s.err = err
 	}
 }
 func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) error {
 	s.dataRetriever = data
+	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume" {
+		return errors.New(msg)
+	}
+	if msg, injected := objectio.CDCExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithIndexName") {
+		strs := strings.Split(msg, ":")
+		for i := 1; i < len(strs); i++ {
+			if s.indexName == strs[i] {
+				return errors.New(strs[0])
+			}
+		}
+	}
 
 	go s.Run(context.Background())
 	for {
@@ -286,7 +305,7 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 
 			s.sqlBufSendCh <- []byte("no more data")
 			s.wg.Wait()
-			return nil
+			return s.err
 		}
 
 		if data.GetDataType() == CDCDataType_Snapshot {

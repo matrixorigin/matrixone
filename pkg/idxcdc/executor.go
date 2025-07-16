@@ -369,6 +369,9 @@ func (exec *CDCTaskExecutor) run() {
 				_, ok := tables[table.tableID]
 				if ok {
 					iteration := table.GetSyncTask(exec.ctx, toTS)
+					if iteration == nil {
+						continue
+					}
 					exec.worker.Submit(iteration)
 				} else {
 					from := types.TimestampToTS(fromTSs[i])
