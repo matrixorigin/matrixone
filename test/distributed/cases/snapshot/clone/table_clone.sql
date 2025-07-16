@@ -66,6 +66,7 @@ create table db1_copy_copy.t4_copy_copy clone t4_copy {snapshot = "sp1"} to acco
 create database db1_copy_copy;
 -- @session
 
+create table db1_copy_copy.t4_copy_copy clone db1_copy.t4_copy to account acc2;
 create table db1_copy_copy.t4_copy_copy clone db1_copy.t4_copy {snapshot = "sp1"} to account acc2;
 
 -- @session:id=5&user=acc2:root2&password=111
