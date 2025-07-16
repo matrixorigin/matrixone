@@ -716,7 +716,7 @@ func Test_UpdatePreparePhyScope(t *testing.T) {
 		RootOperator: &phyOperator1_4,
 	}
 
-	testCompile := NewMockCompile()
+	testCompile := NewMockCompile(t)
 	var reg process.WaitRegister
 	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
 	s2 := generateScopeWithRootOperator(

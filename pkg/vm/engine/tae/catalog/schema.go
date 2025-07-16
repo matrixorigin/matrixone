@@ -202,11 +202,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 			return moerr.NewInternalErrorNoCtxf("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
 		}
 		targetCol.Name = rename.NewName
-		// a -> b, z -> a, m -> z
-		// only m column deletion should be sent to cn. a and z can be seen as update according to pk, <tid-colname>
-		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, rename.OldName)
-		s.removeDroppedName(rename.NewName)
-		logutil.Infof("[Alter] rename column %s %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
+		s.NameMap[targetCol.Name] = targetCol.Idx
+		s.Extra.ColumnChanged = true
+		logutil.Infof("[Alter] rename column %s -> %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
 		add := req.GetAddColumn()
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)
@@ -232,7 +230,6 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 
 		s.Extra.ColumnChanged = true
-		s.removeDroppedName(newcol.Name)
 		s.Extra.NextColSeqnum += 1
 		return s.Finalize(true) // rebuild sortkey
 	case apipb.AlterKind_DropColumn:
@@ -283,18 +280,6 @@ func (s *Schema) EstimateRowSize() (size int) {
 func (s *Schema) IsSameColumns(other *Schema) bool {
 	return s.Extra.NextColSeqnum == other.Extra.NextColSeqnum &&
 		len(s.ColDefs) == len(other.ColDefs)
-}
-
-func (s *Schema) removeDroppedName(name string) {
-	idx := -1
-	for i, s := range s.Extra.DroppedAttrs {
-		if s == name {
-			idx = i
-		}
-	}
-	if idx >= 0 {
-		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs[:idx], s.Extra.DroppedAttrs[idx+1:]...)
-	}
 }
 
 func (s *Schema) HasPK() bool      { return s.SortKey != nil && s.SortKey.IsPrimary() }

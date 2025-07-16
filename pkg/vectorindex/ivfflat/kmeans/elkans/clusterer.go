@@ -272,10 +272,10 @@ func (km *ElkanClusterer[T]) initBounds() error {
 
 	for n := 0; n < ncpu; n++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 			for x := range km.vectorList {
-				if x%ncpu != n {
+				if x%ncpu != tid {
 					continue
 				}
 				minDist := metric.MaxFloat[T]()
@@ -297,7 +297,7 @@ func (km *ElkanClusterer[T]) initBounds() error {
 				km.vectorMetas[x].upper = minDist
 				km.assignments[x] = closestCenter
 			}
-		}()
+		}(n)
 	}
 
 	wg.Wait()
@@ -322,10 +322,10 @@ func (km *ElkanClusterer[T]) computeCentroidDistances() error {
 
 	for n := 0; n < ncpu; n++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 			for i := 0; i < km.clusterCnt; i++ {
-				if i%ncpu != n {
+				if i%ncpu != tid {
 					continue
 				}
 				for j := i + 1; j < km.clusterCnt; j++ {
@@ -340,7 +340,7 @@ func (km *ElkanClusterer[T]) computeCentroidDistances() error {
 
 				}
 			}
-		}()
+		}(n)
 	}
 	wg.Wait()
 
@@ -378,12 +378,12 @@ func (km *ElkanClusterer[T]) assignData() (int, error) {
 	for n := 0; n < ncpu; n++ {
 
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 
 			for currVector := range km.vectorList {
 
-				if currVector%ncpu != n {
+				if currVector%ncpu != tid {
 					continue
 				}
 				// step 2
@@ -451,7 +451,7 @@ func (km *ElkanClusterer[T]) assignData() (int, error) {
 					}
 				}
 			}
-		}()
+		}(n)
 	}
 
 	wg.Wait()

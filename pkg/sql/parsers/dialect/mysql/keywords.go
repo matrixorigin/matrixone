@@ -251,6 +251,7 @@ func init() {
 		"issuer":                     ISSUER,
 		"isolation":                  ISOLATION,
 		"iterate":                    ITERATE,
+		"internal":                   INTERNAL,
 		"join":                       JOIN,
 		"json":                       JSON,
 		"jsontype":                   JSONTYPE,
@@ -655,5 +656,6 @@ func init() {
 		"dedup":                      DEDUP,
 		"savepoint":                  SAVEPOINT,
 		"recovery_window":            RECOVERY_WINDOW,
+		"clone":                      CLONE,
 	}
 }

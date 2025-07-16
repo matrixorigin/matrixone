@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -123,8 +124,8 @@ var (
 
 // functions to make a scalar vector for test.
 var (
-	MakeScalarNull = func(typ types.T, length int) *vector.Vector {
-		return vector.NewConstNull(typ.ToType(), length, NewProc().Mp())
+	MakeScalarNull = func(t testing.TB, typ types.T, length int) *vector.Vector {
+		return vector.NewConstNull(typ.ToType(), length, NewProc(t).Mp())
 	}
 	MakeScalarInt64 = func(v int64, length int) *vector.Vector {
 		return makeScalar(v, length, int64Type)
@@ -294,4 +295,24 @@ func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
 		panic(err)
 	}
 	return v
+}
+
+func MakeVarlenaVector(data [][]byte, nulls []uint64, mp *mpool.MPool) *vector.Vector {
+	vec := vector.NewVec(types.T_blob.ToType())
+	for _, d := range data {
+		if d != nil {
+			vector.AppendBytes(vec, d, false, mp)
+		} else {
+			vector.AppendBytes(vec, nil, true, mp)
+		}
+	}
+
+	if len(nulls) > 0 {
+		vecNsp := vec.GetNulls()
+		for _, row := range nulls {
+			vecNsp.Add(row)
+		}
+	}
+
+	return vec
 }

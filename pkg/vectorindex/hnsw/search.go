@@ -230,10 +230,10 @@ func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 			for j, idx := range s.Indexes {
-				if j%nthread == i {
+				if j%nthread == tid {
 					keys, distances, err := idx.Search(query, limit)
 					if err != nil {
 						errs = errors.Join(errs, err)
@@ -245,7 +245,7 @@ func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.
 					}
 				}
 			}
-		}()
+		}(i)
 	}
 
 	wg.Wait()

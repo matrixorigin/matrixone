@@ -700,7 +700,11 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 	}, nil
 }
 
-func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
+func buildCreateTable(
+	stmt *tree.CreateTable,
+	ctx CompilerContext,
+) (*Plan, error) {
+
 	if stmt.IsAsLike {
 		var err error
 		oldTable := stmt.LikeTableName
@@ -708,7 +712,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		tblName := formatStr(string(oldTable.ObjectName))
 		dbName := formatStr(string(oldTable.SchemaName))
 
-		snapshot := &Snapshot{TS: &timestamp.Timestamp{}}
+		var snapshot *Snapshot
+		snapshot = ctx.GetSnapshot()
+		if snapshot == nil {
+			snapshot = &Snapshot{TS: &timestamp.Timestamp{}}
+		}
+
 		if dbName, err = databaseIsValid(getSuitableDBName(dbName, ""), ctx, snapshot); err != nil {
 			return nil, err
 		}
@@ -732,12 +741,18 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel || tableDef.TableType == catalog.SystemClusterRel {
+		// TODO WHY?
+		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
-		tableDef.Name = string(newTable.ObjectName)
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false)
+		tableDef.Name = string(newTable.ObjectName)
+		tableDef.DbName = string(newTable.SchemaName)
+		if len(tableDef.DbName) == 0 {
+			tableDef.DbName = ctx.DefaultDatabase()
+		}
+
+		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true)
 		if err != nil {
 			return nil, err
 		}
@@ -3590,6 +3605,13 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 	}, nil
 }
 
+func formatTreeNode(opt tree.NodeFormatter) string {
+	// get callsite
+	ft := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	opt.Format(ft)
+	return ft.String()
+}
+
 func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	databaseName := string(stmt.Table.SchemaName)
@@ -3638,12 +3660,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
 	}
 	unsupportedErrFmt := "unsupported alter option in inplace mode: %s"
-	unsupportedErrorStr := func(opt tree.NodeFormatter) string {
-		// get callsite
-		ft := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		opt.Format(ft)
-		return ft.String()
-	}
 
 	var detectSqls []string
 	var updateSqls []string
@@ -3694,7 +3710,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					unsupportedErrFmt,
-					unsupportedErrorStr(opt),
+					formatTreeNode(opt),
 				)
 			}
 			if name_not_found {
@@ -3949,7 +3965,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					unsupportedErrFmt,
-					unsupportedErrorStr(def),
+					formatTreeNode(def),
 				)
 			}
 
@@ -4074,36 +4090,104 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			continue
 
 		case *tree.AlterTableModifyColumnClause:
-			ok, _ := isVarcharLengthBumped(ctx.GetContext(), opt, tableDef)
-			if ok {
-				colName := opt.NewColumn.Name.ColName()
-				oldCol := FindColumn(tableDef.Cols, colName)
-				newColType, err := getTypeFromAst(ctx.GetContext(), opt.NewColumn.Type)
-				if err != nil {
-					return nil, err
-				}
+			// defensively check again
+			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, tableDef)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"failed inplace check: %s",
+					formatTreeNode(opt),
+				)
+			}
 
-				alterTable.Actions[i] = &plan.AlterTable_Action{
-					Action: &plan.AlterTable_Action_AlterVarcharLength{
-						AlterVarcharLength: &plan.AlterVarcharLength{
-							ColumnName: colName,
-							NewLength:  newColType.Width,
-							OldLength:  oldCol.Typ.Width,
+			if alterTable.CopyTableDef == nil {
+				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			}
+
+			// update new column info to copy_table_def
+			err := updateNewColumnInTableDef(
+				ctx,
+				alterTable.CopyTableDef,
+				FindColumn(tableDef.Cols, opt.NewColumn.Name.ColName()),
+				opt.NewColumn,
+				opt.Position,
+			)
+			if err != nil {
+				return nil, err
+			}
+		case *tree.AlterTableRenameColumnClause:
+			if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+				return nil, err
+			}
+
+			if alterTable.CopyTableDef == nil {
+				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			}
+
+			col := FindColumn(
+				alterTable.CopyTableDef.Cols,
+				opt.OldColumnName.ColName(),
+			)
+			if col == nil {
+				return nil, moerr.NewBadFieldError(
+					ctx.GetContext(),
+					opt.OldColumnName.ColNameOrigin(),
+					alterTable.TableDef.Name,
+				)
+			}
+			oldColNameOrigin := col.OriginName
+			newColNameOrigin := opt.NewColumnName.ColNameOrigin()
+
+			if oldColNameOrigin == newColNameOrigin {
+				continue
+			}
+
+			sqls, err := updateRenameColumnInTableDef(
+				ctx,
+				col,
+				alterTable.CopyTableDef,
+				opt,
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			updateSqls = append(updateSqls,
+				getSqlForRenameColumn(tableDef.DbName,
+					alterTable.TableDef.Name,
+					oldColNameOrigin,
+					newColNameOrigin)...)
+
+			updateSqls = append(updateSqls, sqls...)
+
+			alterTable.Actions = append(
+				alterTable.Actions,
+				&plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterRenameColumn{
+						AlterRenameColumn: &plan.AlterRenameColumn{
+							OldName:     oldColNameOrigin,
+							NewName:     newColNameOrigin,
+							SequenceNum: int32(col.Seqnum),
 						},
 					},
-				}
-			} else {
-				// Currently only varchar length modification is supported for INPLACE algorithm
-				// Other column modifications will use COPY algorithm
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Currently only varchar length modification is supported for INPLACE algorithm")
-			}
+				},
+			)
+
 		default:
 			return nil, moerr.NewInvalidInputf(
 				ctx.GetContext(),
 				unsupportedErrFmt,
-				unsupportedErrorStr(opt),
+				formatTreeNode(opt),
 			)
 		}
+	}
+
+	if alterTable.CopyTableDef != nil {
+		alterTable.Actions = append(alterTable.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AlterReplaceDef{
+				AlterReplaceDef: &plan.AlterReplaceDef{},
+			},
+		})
 	}
 
 	if stmt.PartitionOption != nil {
@@ -4111,7 +4195,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, moerr.NewNotSupportedf(
 			ctx.GetContext(),
 			unsupportedErrFmt,
-			unsupportedErrorStr(stmt.PartitionOption),
+			formatTreeNode(stmt.PartitionOption),
 		)
 	}
 
@@ -4550,4 +4634,128 @@ func parseDuration(ctx context.Context, period uint64, unit string) (time.Durati
 	}
 	seconds := period * uint64(unitDuration)
 	return time.Duration(seconds), nil
+}
+
+func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) {
+	// only sys can create cluster level pitr
+	currentAccount := ctx.GetAccountName()
+	currentAccountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if stmt.Level == tree.PITRLEVELCLUSTER && currentAccount != "sys" {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "only sys tenant can create cluster level pitr")
+	}
+
+	// only sys can create tenant level pitr for other tenant
+	if stmt.Level == tree.PITRLEVELACCOUNT {
+		if len(stmt.AccountName) > 0 && currentAccount != "sys" {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "only sys tenant can create tenant level pitr for other tenant")
+		}
+	}
+
+	// Check PITR value range
+	pitrVal := stmt.PitrValue
+	if pitrVal <= 0 || pitrVal > 100 {
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "invalid pitr value %d", pitrVal)
+	}
+
+	// Check if PITR unit is valid
+	pitrUnit := strings.ToLower(stmt.PitrUnit)
+	if pitrUnit != "h" && pitrUnit != "d" && pitrUnit != "mo" && pitrUnit != "y" {
+		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "invalid pitr unit %s", pitrUnit)
+	}
+
+	// check pitr exists or not
+	if string(stmt.Name) == SYSMOCATALOGPITR {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "pitr name is reserved")
+	}
+
+	// Validate related objects according to PITR level
+	var databaseId uint64
+	var tableId uint64
+	accountId := currentAccountId
+	accountName := currentAccount
+	switch stmt.Level {
+	case tree.PITRLEVELACCOUNT:
+		if len(stmt.AccountName) > 0 {
+			accountIds, err := ctx.ResolveAccountIds([]string{string(stmt.AccountName)})
+			if err != nil {
+				return nil, err
+			}
+			if len(accountIds) == 0 {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "account "+string(stmt.AccountName)+" does not exist")
+			}
+			accountId = accountIds[len(accountIds)-1]
+			accountName = string(stmt.AccountName)
+		}
+	case tree.PITRLEVELDATABASE:
+		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
+		}
+		databaseId, err = ctx.GetDatabaseId(string(stmt.DatabaseName), nil)
+		if err != nil {
+			return nil, err
+		}
+	case tree.PITRLEVELTABLE:
+		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
+		}
+		objRef, tableDef, err := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "table "+string(stmt.DatabaseName)+"."+string(stmt.TableName)+" does not exist")
+		}
+		tableId = tableDef.TblId
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_PITR,
+				Definition: &plan.DataDefinition_CreatePitr{
+					CreatePitr: &plan.CreatePitr{
+						IfNotExists:       stmt.IfNotExists,
+						Name:              string(stmt.Name),
+						Level:             int32(stmt.Level),
+						AccountName:       accountName,
+						DatabaseName:      string(stmt.DatabaseName),
+						TableName:         string(stmt.TableName),
+						PitrValue:         stmt.PitrValue,
+						PitrUnit:          stmt.PitrUnit,
+						DatabaseId:        databaseId,
+						TableId:           tableId,
+						AccountId:         accountId,
+						CurrentAccountId:  currentAccountId,
+						CurrentAccount:    currentAccount,
+						OriginAccountName: len(stmt.AccountName) > 0,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropPitr(stmt *tree.DropPitr, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_DROP_PITR
+	// Remove privilege check, no account ID validation
+
+	// Build drop pitr plan
+	dropPitr := &plan.DropPitr{
+		IfExists: stmt.IfExists,
+		Name:     string(stmt.Name),
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: ddlType,
+				Definition: &plan.DataDefinition_DropPitr{
+					DropPitr: dropPitr,
+				},
+			},
+		},
+	}, nil
 }

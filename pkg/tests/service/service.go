@@ -1393,7 +1393,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), opt)
+		ls, err := newLogService(cfg, testutil.NewFS(c.t), opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(

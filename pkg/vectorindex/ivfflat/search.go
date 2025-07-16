@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"sync"
@@ -94,7 +95,8 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 }
 
 // load chunk from database
-func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T, distfn metric.DistanceFunction[T], heap *vectorindex.SearchResultSafeHeap,
+func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *process.Process,
+	query []T, distfn metric.DistanceFunction[T], heap *vectorindex.SearchResultSafeHeap,
 	stream_chan chan executor.Result, error_chan chan error) (stream_closed bool, err error) {
 
 	var res executor.Result
@@ -108,7 +110,10 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(proc *process.Process, query []T
 	case err = <-error_chan:
 		return false, err
 	case <-proc.Ctx.Done():
-		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+		return false, proc.Ctx.Err()
+	case <-lctx.Done():
+		// local context cancelled. something went wrong with other threads
+		return false, context.Cause(lctx)
 	}
 
 	bat := res.Batches[0]
@@ -148,10 +153,10 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 	var wg sync.WaitGroup
 	for n := 0; n < nworker; n++ {
 		wg.Add(1)
-		go func() {
+		go func(tid int) {
 			defer wg.Done()
 			for i, c := range idx.Centroids {
-				if i%nworker != n {
+				if i%nworker != tid {
 					continue
 				}
 				dist, err := distfn(query, c.Vec)
@@ -161,7 +166,7 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 				}
 				heap.Push(&vectorindex.SearchResult{Id: c.Id, Distance: float64(dist)})
 			}
-		}()
+		}(n)
 	}
 
 	wg.Wait()
@@ -190,7 +195,9 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
-	errs := make(chan error, nthread)
+	lctx := context.Background()
+	lctx, cancel := context.WithCancelCause(lctx)
+	defer cancel(nil)
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
@@ -219,21 +226,21 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 		instr,
 	)
-
 	//os.Stderr.WriteString(sql)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
 		if err != nil {
 			// send multiple errors to stop the nworker threads
-			for i := int64(0); i < nthread; i++ {
-				error_chan <- err
-			}
+			cancel(err)
 			return
 		}
 	}()
 
 	heap := vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
-	var wg sync.WaitGroup
 
 	for n := int64(0); n < nthread; n++ {
 
@@ -246,9 +253,9 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 			sql_closed := false
 			var err2 error
 			for !sql_closed {
-				sql_closed, err2 = idx.searchEntries(proc, query, distfn, heap, stream_chan, error_chan)
+				sql_closed, err2 = idx.searchEntries(lctx, proc, query, distfn, heap, stream_chan, error_chan)
 				if err2 != nil {
-					errs <- err2
+					cancel(err2)
 					return
 				}
 			}
@@ -257,8 +264,14 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 
 	wg.Wait()
 
-	if len(errs) > 0 {
-		return nil, nil, <-errs
+	// check local context cancelled
+	select {
+	case <-proc.Ctx.Done():
+		return nil, nil, proc.Ctx.Err()
+	case <-lctx.Done():
+		err := context.Cause(lctx)
+		return nil, nil, err
+	default:
 	}
 
 	resid := make([]any, 0, rt.Limit)

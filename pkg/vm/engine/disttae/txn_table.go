@@ -89,28 +89,57 @@ func newTxnTable(
 			eng,
 		),
 	}
+
+	ps := process.GetPartitionService()
+	if ps.Enabled() && item.IsIndexTable() {
+		_, _, r, err := eng.GetRelationById(
+			process.Ctx,
+			process.GetTxnOperator(),
+			item.ExtraInfo.ParentTableID,
+		)
+		if err != nil && !strings.Contains(err.Error(), "can not find table by id") {
+			return nil, err
+		}
+		tbl.parent = r
+	}
+
 	tbl.isLocal = tbl.isLocalFunc
 
 	if db.databaseId != catalog.MO_CATALOG_ID {
-		ps := process.GetPartitionService()
-		if ps.Enabled() && item.IsPartitionTable() {
-			metadata, err := ps.GetPartitionMetadata(
-				ctx,
-				item.Id,
-				process.GetTxnOperator(),
-			)
-			if err != nil {
-				return nil, err
+		if ps.Enabled() && (item.IsPartitionTable() || tbl.IsPartitionIndexTable()) {
+			proc := tbl.origin.proc.Load()
+
+			var combined *combinedTxnTable
+			if item.IsPartitionTable() {
+				metadata, err := ps.GetPartitionMetadata(
+					ctx,
+					item.Id,
+					process.GetTxnOperator(),
+				)
+				if err != nil {
+					return nil, err
+				}
+				combined = newCombinedTxnTable(
+					tbl.origin,
+					getPartitionTableFunc(proc, metadata, db),
+					getPruneTablesFunc(proc, metadata, db),
+					getPartitionPrunePKFunc(proc, metadata, db),
+				)
+			} else {
+				relations, err := tbl.getPartitionIndexesTables(process)
+				if err != nil {
+					return nil, err
+				}
+				combined = newCombinedTxnTable(
+					tbl.origin,
+					getArrayTableFunc(relations),
+					getArrayPruneTablesFunc(relations),
+					getArrayPrunePKFunc(relations),
+				)
 			}
 
-			p := newPartitionTxnTable(
-				tbl.origin,
-				metadata,
-				ps,
-			)
-			tbl.partition.tbl = p
-			tbl.partition.is = true
-			tbl.partition.service = ps
+			tbl.combined.tbl = combined
+			tbl.combined.is = true
 		}
 
 		tbl.shard.service = shardservice.GetService(process.GetService())
@@ -266,7 +295,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	return sz + szInPart, nil
 }
 
-func ForeachVisibleDataObject(
+func ForeachVisibleObjects(
 	state *logtailreplay.PartitionState,
 	ts types.TS,
 	fn func(obj objectio.ObjectEntry) error,
@@ -363,7 +392,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(
+	if err = ForeachVisibleObjects(
 		part,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -479,7 +508,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(
+	if err = ForeachVisibleObjects(
 		state,
 		types.TimestampToTS(tbl.db.op.SnapshotTS()),
 		onObjFn,
@@ -715,7 +744,13 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 			logutil.Info(
 				"TXN-FILTER-RANGE-LOG",
 				zap.String("name", tbl.tableDef.Name),
-				zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+				zap.String("exprs", plan2.FormatExprs(
+					rangesParam.BlockFilters, plan2.FormatOption{
+						ExpandVec:       true,
+						ExpandVecMaxLen: 2,
+						MaxDepth:        5,
+					},
+				)),
 				zap.Uint64("tbl-id", tbl.tableId),
 				zap.String("txn", tbl.db.op.Txn().DebugString()),
 				zap.Int("blocks", blocks.Len()),
@@ -839,7 +874,14 @@ func (tbl *txnTable) rangesOnePart(
 		logutil.Info(
 			"SLOW-RANGES:",
 			zap.String("table", tbl.tableDef.Name),
-			zap.String("exprs", plan2.FormatExprs(rangesParam.BlockFilters)),
+			zap.String("exprs", plan2.FormatExprs(
+				rangesParam.BlockFilters,
+				plan2.FormatOption{
+					ExpandVec:       true,
+					ExpandVecMaxLen: 2,
+					MaxDepth:        5,
+				},
+			)),
 		)
 	}
 
@@ -1243,14 +1285,7 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	return tbl.AlterTable(ctx, c, []*api.AlterTableReq{req})
 }
 
-// Note:
-//
-// 1. It is insufficeint to use txn.CreateTable to check, which contains newly-created table or newly-altered table in txn.
-// Imagine altering a normal table twice in a single txn,
-// and then the second alter will be treated as an operation on a newly-created table if txn.CreateTable is used.
-//
-// 2. This check depends on replaying all catalog cache when cn starts.
-func (tbl *txnTable) isCreatedInTxn(ctx context.Context) (bool, error) {
+func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 	// test or mo_table_stats
 	if tbl.fake {
 		return false, nil
@@ -1304,6 +1339,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.tableName = oldTableName
 			case api.AlterKind_ReplaceDef:
 				// Rollback for ReplaceDef is handled by restoring defs
+			case api.AlterKind_RenameColumn:
+				// RenameColumn takes effect in form of ReplaceDef
 			}
 		}
 		tbl.defs = olddefs
@@ -1317,6 +1354,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	// update tbl properties and reconstruct supplement TableDef
 	var hasReplaceDef bool
 	var replaceDefReq *api.AlterTableReq
+	renameColMap := make(map[string]string)
 	for _, req := range reqs {
 		switch req.GetKind() {
 		case api.AlterKind_AddPartition:
@@ -1336,6 +1374,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		case api.AlterKind_ReplaceDef:
 			hasReplaceDef = true
 			replaceDefReq = req
+		case api.AlterKind_RenameColumn:
+			hasReplaceDef = true
+			re := req.GetRenameCol()
+			renameColMap[re.OldName] = re.NewName
 		default:
 			panic("not supported")
 		}
@@ -1358,17 +1400,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		defs, _, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
 		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 		tbl.defs = defs
-		tbl.tableDef = nil
-
-		// Apply other modifications on top of the replaced definition
-		if len(appendDef) > 0 {
-			tbl.defs = append(tbl.defs, appendDef...)
-		}
-	} else {
-		tbl.defs = append(tbl.defs, appendDef...)
 	}
-	tbl.tableDef = nil
-	tbl.GetTableDef(ctx)
 
 	// 0. check if the table is created in txn.
 	// For a table created in txn, alter means to recreate table and put relating dml/alter batch behind the new create batch.
@@ -1379,9 +1411,14 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 	if !createdInTxn {
 		tbl.version += 1
+		appendDef = append(appendDef, &engine.VersionDef{Version: tbl.version})
 		// For normal Alter, send Alter request to TN
 		reqPayload := make([][]byte, 0, len(reqs))
 		for _, req := range reqs {
+			if req.GetKind() == api.AlterKind_ReplaceDef {
+				// ReplaceDef works only in CN, do not send it to TN
+				continue
+			}
 			payload, err := req.Marshal()
 			if err != nil {
 				return err
@@ -1398,6 +1435,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			return err
 		}
 	}
+
+	tbl.defs = append(tbl.defs, appendDef...)
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
@@ -1422,6 +1463,13 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				transfered := &txn.writes[len(txn.writes)-1]
 				transfered.tableName = tbl.tableName // in case renaming
 				transfered.bat, err = cur.bat.Dup(txn.proc.Mp())
+				if len(renameColMap) > 0 {
+					for i, attr := range transfered.bat.Attrs {
+						if newName, ok := renameColMap[attr]; ok {
+							transfered.bat.Attrs[i] = newName
+						}
+					}
+				}
 				if err != nil {
 					return err
 				}
@@ -2028,7 +2076,7 @@ func (tbl *txnTable) getPartitionState(
 		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 
 	start, end = types.MaxTs(), types.MinTs()
-	if ps != nil || err != nil {
+	if ps != nil {
 		start, end = ps.GetDuration()
 		msg = "Txn-Table-GetSSPS-Succeed"
 	} else {
@@ -2350,7 +2398,7 @@ func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objecti
 	sortKeyPos, _ := tbl.getSortKeyPosAndSortKeyIsPK()
 	objStats := make([]objectio.ObjectStats, 0, tbl.ApproxObjectsNum(ctx))
 
-	err = ForeachVisibleDataObject(state, snapshot, func(obj objectio.ObjectEntry) error {
+	err = ForeachVisibleObjects(state, snapshot, func(obj objectio.ObjectEntry) error {
 		if obj.GetAppendable() {
 			return nil
 		}

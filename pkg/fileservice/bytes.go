@@ -16,53 +16,75 @@ package fileservice
 
 import (
 	"context"
-	"sync/atomic"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
 type Bytes struct {
+	mu          sync.Mutex
 	bytes       []byte
 	deallocator malloc.Deallocator
-	deallocated uint32
-	_refs       atomic.Int32
-	refs        *atomic.Int32
+	refs        int32
 }
 
 func (b *Bytes) Size() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Size() buffer already deallocated")
+	}
 	return int64(len(b.bytes))
 }
 
 func (b *Bytes) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Bytes() buffer already deallocated")
+	}
 	return b.bytes
 }
 
 func (b *Bytes) Slice(length int) fscache.Data {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Slice() buffer already deallocated")
+	}
 	b.bytes = b.bytes[:length]
 	return b
 }
 
 func (b *Bytes) Retain() {
-	if b.refs != nil {
-		b.refs.Add(1)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Retain() buffer already deallocated")
 	}
+
+	b.refs += 1
 }
 
-func (b *Bytes) Release() {
-	if b.refs != nil {
-		if n := b.refs.Add(-1); n == 0 {
-			if b.deallocator != nil &&
-				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
-				b.deallocator.Deallocate(malloc.NoHints)
-			}
-		}
-	} else {
-		if b.deallocator != nil &&
-			atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
+func (b *Bytes) Release() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.bytes == nil {
+		panic("fileservice.Bytes.Release() double free")
+	}
+
+	b.refs -= 1
+	if b.refs == 0 {
+		if b.deallocator != nil {
 			b.deallocator.Deallocate(malloc.NoHints)
+			b.bytes = nil
+			return true
 		}
 	}
+	return false
 }
 
 type bytesAllocator struct {
@@ -79,9 +101,8 @@ func (b *bytesAllocator) allocateCacheData(size int, hints malloc.Hints) fscache
 	bytes := &Bytes{
 		bytes:       slice,
 		deallocator: dec,
+		refs:        1,
 	}
-	bytes._refs.Store(1)
-	bytes.refs = &bytes._refs
 	return bytes
 }
 

@@ -50,7 +50,7 @@ func TestPrepare(t *testing.T) {
 	arg := &TableScan{
 		Reader: reader,
 	}
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	err := arg.Prepare(proc)
 	require.NoError(t, err)
 }
@@ -70,7 +70,7 @@ func TestCall(t *testing.T) {
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator

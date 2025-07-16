@@ -62,7 +62,7 @@ func Test_updateStorageSize(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	size := uint64(9999 * 1024 * 1024)
 	bat := batch.Batch{}
@@ -75,7 +75,7 @@ func Test_updateStorageSize(t *testing.T) {
 func Test_updateCount(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	ori := int64(0x12)
 	add := int64(0x12)

@@ -49,11 +49,49 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
+func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
+	planDefs := tableDef.GetDefs()
+	c := new(ConstraintDef)
+	for _, def := range planDefs {
+		switch defVal := def.GetDef().(type) {
+		case *plan.TableDef_DefType_Properties:
+			c.Cts = append(c.Cts, &StreamConfigsDef{
+				Configs: defVal.Properties.GetProperties(),
+			})
+		}
+	}
+
+	if tableDef.Indexes != nil {
+		c.Cts = append(c.Cts, &IndexDef{
+			Indexes: tableDef.Indexes,
+		})
+	}
+
+	if tableDef.Fkeys != nil {
+		c.Cts = append(c.Cts, &ForeignKeyDef{
+			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if tableDef.Pkey != nil {
+		c.Cts = append(c.Cts, &PrimaryKeyDef{
+			Pkey: tableDef.Pkey,
+		})
+	}
+
+	if len(tableDef.RefChildTbls) > 0 {
+		c.Cts = append(c.Cts, &RefChildTableDef{
+			Tables: tableDef.RefChildTbls,
+		})
+	}
+
+	return c
+}
+
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
 	planDefs := tableDef.GetDefs()
 	var exeDefs []TableDef
 	var propDef *PropertiesDef
-	c := new(ConstraintDef)
 	for _, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
 		case *plan.TableDef_DefType_Properties:
@@ -66,9 +104,6 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 			}
 			propDef = &PropertiesDef{Properties: properties}
 			exeDefs = append(exeDefs, propDef)
-			c.Cts = append(c.Cts, &StreamConfigsDef{
-				Configs: defVal.Properties.GetProperties(),
-			})
 		}
 	}
 
@@ -89,27 +124,9 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		},
 	)
 
-	if tableDef.Indexes != nil {
-		c.Cts = append(c.Cts, &IndexDef{
-			Indexes: tableDef.Indexes,
-		})
-	}
-
 	if tableDef.ViewSql != nil {
 		exeDefs = append(exeDefs, &ViewDef{
 			View: tableDef.ViewSql.View,
-		})
-	}
-
-	if len(tableDef.Fkeys) > 0 {
-		c.Cts = append(c.Cts, &ForeignKeyDef{
-			Fkeys: tableDef.Fkeys,
-		})
-	}
-
-	if tableDef.Pkey != nil {
-		c.Cts = append(c.Cts, &PrimaryKeyDef{
-			Pkey: tableDef.Pkey,
 		})
 	}
 
@@ -124,12 +141,7 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		})
 	}
 
-	if len(tableDef.RefChildTbls) > 0 {
-		c.Cts = append(c.Cts, &RefChildTableDef{
-			Tables: tableDef.RefChildTbls,
-		})
-	}
-
+	c := PlanDefToCstrDef(tableDef)
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
 	}
@@ -139,6 +151,7 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 			Name: tableDef.ClusterBy.Name,
 		})
 	}
+
 	return exeDefs, extra, nil
 }
 
@@ -1165,6 +1178,8 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+
+	HasTempEngine() bool
 }
 
 type VectorPool interface {

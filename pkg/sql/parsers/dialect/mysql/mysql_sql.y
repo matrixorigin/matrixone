@@ -351,6 +351,7 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
+%token <str> CLONE
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -485,7 +486,7 @@ import (
 %token <str> MO_TS
 
 // PITR
-%token <str> PITR RECOVERY_WINDOW
+%token <str> PITR RECOVERY_WINDOW INTERNAL
 
 // CDC
 %token <str> CDC
@@ -557,7 +558,7 @@ import (
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subscription_opt
-%type <accountsSetOption> alter_publication_accounts_opt, create_publication_accounts
+%type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
@@ -587,7 +588,7 @@ import (
 %type <funcArg> func_arg
 %type <funcArgDecl> func_arg_decl
 %type <funcReturn> func_return
-%type <boolVal> func_body_import
+%type <boolVal> func_body_import internal_opt
 %type <str> func_lang extension_lang extension_name
 
 %type <procName> proc_name
@@ -1145,7 +1146,7 @@ snapshot_object_opt:
     }
 
 create_pitr_stmt:
-    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING
+    CREATE PITR not_exists_opt ident FOR ACCOUNT RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1153,9 +1154,10 @@ create_pitr_stmt:
             Level: tree.PITRLEVELACCOUNT,
             PitrValue: $8,
             PitrUnit: $9,
+            Internal: $10,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR CLUSTER RANGE pitr_value STRING internal_opt
     {
        $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1163,9 +1165,10 @@ create_pitr_stmt:
             Level: tree.PITRLEVELCLUSTER,
             PitrValue: $8,
             PitrUnit: $9,
+            Internal: $10,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR ACCOUNT ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR ACCOUNT ident RANGE pitr_value STRING internal_opt
     {
        $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1174,9 +1177,10 @@ create_pitr_stmt:
             AccountName: tree.Identifier($7.Compare()),
             PitrValue: $9,
             PitrUnit: $10,
+            Internal: $11,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR DATABASE ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1185,9 +1189,10 @@ create_pitr_stmt:
             DatabaseName: tree.Identifier($7.Compare()),
             PitrValue: $9,
             PitrUnit: $10,
+            Internal: $11,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR TABLE ident ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR TABLE ident ident RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1197,9 +1202,10 @@ create_pitr_stmt:
             TableName: tree.Identifier($8.Compare()),
             PitrValue: $10,
             PitrUnit: $11,
+            Internal: $12,
         }
     }
-|   CREATE PITR not_exists_opt ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident RANGE pitr_value STRING internal_opt
     {
         $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1207,9 +1213,10 @@ create_pitr_stmt:
             Level: tree.PITRLEVELACCOUNT,
             PitrValue: $6,
             PitrUnit: $7,
+            Internal: $8,
         }
     }
-|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING
+|   CREATE PITR not_exists_opt ident FOR DATABASE ident TABLE ident RANGE pitr_value STRING internal_opt
     {
          $$ = &tree.CreatePitr{
             IfNotExists: $3,
@@ -1219,6 +1226,7 @@ create_pitr_stmt:
             TableName: tree.Identifier($9.Compare()),
             PitrValue: $11,
             PitrUnit: $12,
+            Internal: $13,
         }
     }
 
@@ -3643,6 +3651,7 @@ algorithm_type:
 |   INSTANT
 |   INPLACE
 |   COPY
+|   CLONE
 
 able_type:
     DISABLE
@@ -7172,11 +7181,16 @@ drop_snapshot_stmt:
     }
 
 drop_pitr_stmt:
-   DROP PITR exists_opt ident
+   DROP PITR exists_opt ident internal_opt
    {
        var ifExists = $3
        var name = tree.Identifier($4.Compare())
-       $$ = tree.NewDropPitr(ifExists, name)
+       $$ = &tree.DropPitr {
+	   		IfExists: ifExists,
+			Name: name,
+			Internal: $5,
+       }
+
    }
 
 account_role_name:
@@ -7721,6 +7735,23 @@ create_database_stmt:
         )
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
+|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt
+    {
+    	var t = tree.NewCloneDatabase()
+    	t.DstDatabase = tree.Identifier($4)
+    	t.SrcDatabase = tree.Identifier($6)
+    	t.AtTsExpr = $7
+    	$$ = t
+    }
+|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt TO ACCOUNT ident
+    {
+    	var t = tree.NewCloneDatabase()
+    	t.DstDatabase = tree.Identifier($4)
+    	t.SrcDatabase = tree.Identifier($6)
+    	t.AtTsExpr = $7
+    	t.ToAccountName = tree.Identifier($10.Compare())
+    	$$ = t
+    }
 
 subscription_opt:
     {
@@ -7742,6 +7773,15 @@ not_exists_opt:
         $$ = false
     }
 |   IF NOT EXISTS
+    {
+        $$ = true
+    }
+
+internal_opt:
+    {
+        $$ = false
+    }
+|   INTERNAL
     {
         $$ = true
     }
@@ -8001,6 +8041,25 @@ create_table_stmt:
         t.Table = *$5
         t.SubscriptionOption = $6
         $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name
+    {
+	t := tree.NewCloneTable()
+	t.CreateTable.Table = *$5
+	t.CreateTable.LikeTableName = *$7
+	t.CreateTable.IsAsLike = true
+	t.SrcTable = *$7
+	$$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name TO ACCOUNT ident
+    {
+	t := tree.NewCloneTable()
+	t.CreateTable.Table = *$5
+	t.CreateTable.LikeTableName = *$7
+	t.CreateTable.IsAsLike = true
+	t.SrcTable = *$7
+	t.ToAccountName = tree.Identifier($10.Compare())
+	$$ = t
     }
 
 load_param_opt_2:
@@ -12536,6 +12595,7 @@ equal_opt:
 //|   TABLE_VALUES
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
+//|   CLONE
 
 non_reserved_keyword:
     ACCOUNT
@@ -12902,6 +12962,7 @@ non_reserved_keyword:
 |   CUBE
 |   RETRY
 |   SQL_BUFFER_RESULT
+|	INTERNAL
 
 func_not_keyword:
     DATE_ADD

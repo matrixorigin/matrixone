@@ -51,10 +51,12 @@ const (
 	Remote
 	CreateDatabase
 	CreateTable
+	CreatePitr
 	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
+	DropPitr
 	DropIndex
 	TruncateTable
 	AlterView
@@ -66,6 +68,7 @@ const (
 	DropSequence
 	AlterSequence
 	Replace
+	TableClone
 )
 
 func (m magicType) String() string {

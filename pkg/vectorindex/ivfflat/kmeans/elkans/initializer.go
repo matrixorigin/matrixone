@@ -119,12 +119,12 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 		for n := 0; n < ncpu; n++ {
 			wg.Add(1)
 
-			go func() {
+			go func(tid int) {
 				defer wg.Done()
 
 				for vecIdx := range vectors {
 
-					if vecIdx%ncpu != n {
+					if vecIdx%ncpu != tid {
 						continue
 					}
 
@@ -145,7 +145,7 @@ func (kpp *KMeansPlusPlus[T]) InitCentroids(_vectors any, k int) (_centroids any
 					totalDistToExistingCenters += distances[vecIdx]
 					mutex.Unlock()
 				}
-			}()
+			}(n)
 		}
 
 		wg.Wait()

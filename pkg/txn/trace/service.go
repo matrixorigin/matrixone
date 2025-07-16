@@ -422,7 +422,7 @@ func (s *service) watch(ctx context.Context) {
 			ctx,
 			func(txn executor.TxnExecutor) error {
 				sql := fmt.Sprintf("select name, state from %s.%s", DebugDB, FeaturesTables)
-				res, err := txn.Exec(sql, executor.StatementOption{})
+				res, err := txn.Exec(sql, executor.StatementOption{}.WithDisableLog())
 				if err != nil {
 					return err
 				}

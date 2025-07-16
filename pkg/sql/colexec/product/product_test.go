@@ -50,32 +50,31 @@ type productTestCase struct {
 
 var (
 	tag int32
-	tcs []productTestCase
 )
 
-func init() {
-	tcs = []productTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
-		newTestCase([]bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+func makeTestCases(t *testing.T) []productTestCase {
+	return []productTestCase{
+		newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
+		newTestCase(t, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)}),
 	}
 }
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestProduct(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
@@ -160,8 +159,8 @@ func TestProduct(t *testing.T) {
 		}
 	}
 */
-func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTestCase {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos) productTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	_, cancel := context.WithCancel(context.Background())
 	resultBatch := batch.NewWithSize(len(rp))

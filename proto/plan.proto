@@ -150,6 +150,7 @@ message ObjectRef {
 	string obj_name		= 8;
 	string subscription_name = 9;
 	PubInfo pub_info = 10;
+	bool not_lock_meta = 11;
 }
 
 message PubInfo {
@@ -721,6 +722,7 @@ message Node {
 		APPLY = 53;
 		MULTI_UPDATE = 54;
 		POSTDML = 55;
+		TABLE_CLONE = 56;
 	}
 
 	enum JoinType {
@@ -1150,7 +1152,11 @@ message DataDefinition {
 		SHOW_CONNECTORS = 33;
 		SHOW_UPGRADE = 34;
 		RENAME_TABLE = 35;
+		CREATE_PITR = 36;
+		DROP_PITR = 37;
+		CREATE_TABLE_WITH_CLONE = 38;
 	}
+
 	//DataDefinition type
 	DdlType ddl_type = 1;
 
@@ -1179,6 +1185,8 @@ message DataDefinition {
 		AlterSequence  alter_sequence   = 19;
 		CreateView  create_view         = 20;
 		RenameTable rename_table 	    = 21;
+		CreatePitr create_pitr = 100;
+		DropPitr drop_pitr = 101;
 	}
 }
 
@@ -1345,6 +1353,14 @@ message AlterVarcharLength {
 	int32 old_length = 3;
 }
 
+message AlterReplaceDef {}
+
+message AlterRenameColumn {
+	string old_name = 1;
+	string new_name = 2;
+	int32 sequence_num = 3;
+}
+
 message AlterTable {
 	enum AlgorithmType {
 		DEFAULT = 0;
@@ -1364,7 +1380,12 @@ message AlterTable {
 			AlterDropColumn drop_column = 8;
 			AlterTableAlterReIndex alter_reindex = 9;
 			AlterVarcharLength alter_varchar_length = 10;
-		};
+			// used in inplace mode, change the properties that TN doesn't care,
+			// like the width of varchar, the nullability of the column, etc.
+			// the updated def is copy_table_def
+			AlterReplaceDef alter_replace_def = 11;
+			AlterRenameColumn alter_rename_column = 12;
+		}
 	}
 	string database			      = 1;
 	TableDef table_def 		    = 2;
@@ -1555,4 +1576,26 @@ message MetadataScanInfo {
 	int64 compress_size = 9;
 	int64 origin_size   = 10;
 	bytes zone_map      = 11;
+}
+
+message CreatePitr {
+  bool if_not_exists = 1;
+  string name = 2;
+  int32 level = 3;
+  string account_name = 4;
+  string database_name = 5;
+  string table_name = 6;
+  int64 pitr_value = 7;
+  string pitr_unit = 8;
+	uint64 database_id = 9;
+	uint64 table_id = 10;
+	uint32 account_id = 11;
+	uint32 current_account_id = 12;
+	string current_account = 13;
+	bool origin_account_name = 14;
+}
+
+message DropPitr {
+  bool if_exists = 1;
+  string name = 2;
 }

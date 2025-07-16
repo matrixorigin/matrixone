@@ -281,7 +281,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_SOURCE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN,
+		plan.Node_EXTERNAL_SCAN, plan.Node_SOURCE_SCAN, plan.Node_TABLE_CLONE:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -350,6 +351,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal, &remapInfo)
 				if err != nil {
 					return nil, err
+				}
+
+				col := rfSpec.Expr.GetCol()
+				if len(col.Name) == 0 {
+					col.Name = node.TableDef.Cols[col.ColPos].Name
 				}
 			}
 		}
@@ -1350,37 +1356,34 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
 			})
 		} else {
-			internalRemapping := &ColRefRemapping{
-				globalToLocal: make(map[[2]int32][2]int32),
-			}
-
 			tag := node.BindingTags[0]
-			for i := range node.TableDef.Cols {
+			newCols := make([]*plan.ColDef, 0, len(node.TableDef.Cols))
+			newData := make([]*plan.ColData, 0, len(node.RowsetData.Cols))
+
+			for i, col := range node.TableDef.Cols {
 				globalRef := [2]int32{tag, int32(i)}
 				if colRefCnt[globalRef] == 0 {
 					continue
 				}
-				internalRemapping.addColRef(globalRef)
-			}
 
-			for i, col := range node.TableDef.Cols {
-				if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
-					continue
-				}
+				remapping.addColRef(globalRef)
 
-				remapping.addColRef(internalRemapping.localToGlobal[i])
-
+				newCols = append(newCols, node.TableDef.Cols[i])
+				newData = append(newData, node.RowsetData.Cols[i])
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
 					Typ: col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
-							ColPos: int32(i),
+							ColPos: int32(len(node.ProjectList)),
 							Name:   col.Name,
 						},
 					},
 				})
 			}
+
+			node.TableDef.Cols = newCols
+			node.RowsetData.Cols = newData
 		}
 
 	case plan.Node_LOCK_OP:
@@ -4362,7 +4365,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		if tbl.AtTsExpr != nil {
-			ctx.snapshot, err = builder.resolveTsHint(tbl.AtTsExpr)
+			ctx.snapshot, err = builder.ResolveTsHint(tbl.AtTsExpr)
 			if err != nil {
 				return 0, err
 			}
@@ -5011,7 +5014,7 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	}
 }
 
-func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *Snapshot, err error) {
+func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *Snapshot, err error) {
 	if tsExpr == nil {
 		return
 	}
