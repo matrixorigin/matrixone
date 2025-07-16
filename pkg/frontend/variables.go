@@ -961,7 +961,7 @@ type GlobalSysVarsMgr struct {
 
 func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
 	sysVarsMp["version_comment"] = CNServiceConfig.VersionComment
-	sysVarsMp["version"] = CNServiceConfig.ServerVersionPrefix + CNServiceConfig.MoVersion
+	sysVarsMp["version"] = CNServiceConfig.ServerVersionPrefix + serverVersion.Load().(string)
 }
 
 // Get return sys vars of accountId
