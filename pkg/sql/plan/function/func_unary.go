@@ -1593,17 +1593,21 @@ func Version(
 		versionStr string
 	)
 
-	if versionAny, err = proc.GetResolveVariableFunc()(
+	resolveVariableFunc := proc.GetResolveVariableFunc()
+
+	if versionAny, err = resolveVariableFunc(
 		"version", true, true,
 	); err != nil {
 		return err
 	}
 
 	versionStr = versionAny.(string)
+	retBytes := functionUtil.QuickStrToBytes(versionStr)
 
-	return opNoneParamToBytes(result, proc, length, func() []byte {
-		return functionUtil.QuickStrToBytes(versionStr)
-	})
+	return opNoneParamToBytes(
+		result, proc, length, func() []byte {
+			return retBytes
+		})
 }
 
 func GitVersion(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
