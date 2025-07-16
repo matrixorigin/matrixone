@@ -464,6 +464,8 @@ func (db *txnDatabase) createWithID(
 				if err != nil {
 					return err
 				}
+			case *engine.VersionDef:
+				tbl.version = defVal.Version
 			}
 		}
 		tbl.extraInfo.NextColSeqnum = uint32(len(cols) - 1 /*rowid doesn't occupy seqnum*/)

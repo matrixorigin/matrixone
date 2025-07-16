@@ -51,6 +51,14 @@ type TableMetaReader struct {
 	pState *logtailreplay.PartitionState
 }
 
+func (r *TableMetaReader) GetTableDef() *plan.TableDef {
+	return r.table.tableDef
+}
+
+func (r *TableMetaReader) GetTxnInfo() string {
+	return r.table.getTxn().op.Txn().DebugString()
+}
+
 func (r *TableMetaReader) Close() error {
 	//r.tblDef = nil
 	r.table = nil
@@ -136,7 +144,7 @@ func (r *TableMetaReader) Read(
 				fmt.Sprintf("%s(%d)-%s(%d)-%s",
 					r.table.db.databaseName, r.table.db.databaseId,
 					r.table.tableName, r.table.tableId,
-					r.snapshot.ToString())),
+					r.GetTxnInfo())),
 			zap.String("state", stateStr),
 			zap.Error(err), logs1, logs2)
 	}()

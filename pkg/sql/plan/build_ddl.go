@@ -3605,6 +3605,13 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 	}, nil
 }
 
+func formatTreeNode(opt tree.NodeFormatter) string {
+	// get callsite
+	ft := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+	opt.Format(ft)
+	return ft.String()
+}
+
 func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	tableName := string(stmt.Table.ObjectName)
 	databaseName := string(stmt.Table.SchemaName)
@@ -3653,12 +3660,6 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		colMap[tableDef.Pkey.CompPkeyCol.Name] = tableDef.Pkey.CompPkeyCol
 	}
 	unsupportedErrFmt := "unsupported alter option in inplace mode: %s"
-	unsupportedErrorStr := func(opt tree.NodeFormatter) string {
-		// get callsite
-		ft := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		opt.Format(ft)
-		return ft.String()
-	}
 
 	var detectSqls []string
 	var updateSqls []string
@@ -3709,7 +3710,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					unsupportedErrFmt,
-					unsupportedErrorStr(opt),
+					formatTreeNode(opt),
 				)
 			}
 			if name_not_found {
@@ -3964,7 +3965,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, moerr.NewInternalErrorf(
 					ctx.GetContext(),
 					unsupportedErrFmt,
-					unsupportedErrorStr(def),
+					formatTreeNode(def),
 				)
 			}
 
@@ -4089,36 +4090,104 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			continue
 
 		case *tree.AlterTableModifyColumnClause:
-			ok, _ := isVarcharLengthBumped(ctx.GetContext(), opt, tableDef)
-			if ok {
-				colName := opt.NewColumn.Name.ColName()
-				oldCol := FindColumn(tableDef.Cols, colName)
-				newColType, err := getTypeFromAst(ctx.GetContext(), opt.NewColumn.Type)
-				if err != nil {
-					return nil, err
-				}
+			// defensively check again
+			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, tableDef)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"failed inplace check: %s",
+					formatTreeNode(opt),
+				)
+			}
 
-				alterTable.Actions[i] = &plan.AlterTable_Action{
-					Action: &plan.AlterTable_Action_AlterVarcharLength{
-						AlterVarcharLength: &plan.AlterVarcharLength{
-							ColumnName: colName,
-							NewLength:  newColType.Width,
-							OldLength:  oldCol.Typ.Width,
+			if alterTable.CopyTableDef == nil {
+				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			}
+
+			// update new column info to copy_table_def
+			err := updateNewColumnInTableDef(
+				ctx,
+				alterTable.CopyTableDef,
+				FindColumn(tableDef.Cols, opt.NewColumn.Name.ColName()),
+				opt.NewColumn,
+				opt.Position,
+			)
+			if err != nil {
+				return nil, err
+			}
+		case *tree.AlterTableRenameColumnClause:
+			if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+				return nil, err
+			}
+
+			if alterTable.CopyTableDef == nil {
+				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			}
+
+			col := FindColumn(
+				alterTable.CopyTableDef.Cols,
+				opt.OldColumnName.ColName(),
+			)
+			if col == nil {
+				return nil, moerr.NewBadFieldError(
+					ctx.GetContext(),
+					opt.OldColumnName.ColNameOrigin(),
+					alterTable.TableDef.Name,
+				)
+			}
+			oldColNameOrigin := col.OriginName
+			newColNameOrigin := opt.NewColumnName.ColNameOrigin()
+
+			if oldColNameOrigin == newColNameOrigin {
+				continue
+			}
+
+			sqls, err := updateRenameColumnInTableDef(
+				ctx,
+				col,
+				alterTable.CopyTableDef,
+				opt,
+			)
+			if err != nil {
+				return nil, err
+			}
+
+			updateSqls = append(updateSqls,
+				getSqlForRenameColumn(tableDef.DbName,
+					alterTable.TableDef.Name,
+					oldColNameOrigin,
+					newColNameOrigin)...)
+
+			updateSqls = append(updateSqls, sqls...)
+
+			alterTable.Actions = append(
+				alterTable.Actions,
+				&plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterRenameColumn{
+						AlterRenameColumn: &plan.AlterRenameColumn{
+							OldName:     oldColNameOrigin,
+							NewName:     newColNameOrigin,
+							SequenceNum: int32(col.Seqnum),
 						},
 					},
-				}
-			} else {
-				// Currently only varchar length modification is supported for INPLACE algorithm
-				// Other column modifications will use COPY algorithm
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Currently only varchar length modification is supported for INPLACE algorithm")
-			}
+				},
+			)
+
 		default:
 			return nil, moerr.NewInvalidInputf(
 				ctx.GetContext(),
 				unsupportedErrFmt,
-				unsupportedErrorStr(opt),
+				formatTreeNode(opt),
 			)
 		}
+	}
+
+	if alterTable.CopyTableDef != nil {
+		alterTable.Actions = append(alterTable.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AlterReplaceDef{
+				AlterReplaceDef: &plan.AlterReplaceDef{},
+			},
+		})
 	}
 
 	if stmt.PartitionOption != nil {
@@ -4126,7 +4195,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, moerr.NewNotSupportedf(
 			ctx.GetContext(),
 			unsupportedErrFmt,
-			unsupportedErrorStr(stmt.PartitionOption),
+			formatTreeNode(stmt.PartitionOption),
 		)
 	}
 
