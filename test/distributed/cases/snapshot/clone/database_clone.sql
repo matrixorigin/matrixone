@@ -1,3 +1,18 @@
+drop database if exists db0;
+create database db0;
+use db0;
+
+create table s1(a int);
+insert into s1 select * from generate_series(1,5)g;
+
+create database db0_copy_0 clone db0;
+show tables from db0_copy_0;
+select * from db0_copy_0.s1;
+
+create database db0_copy_1 clone db0 to account sys;
+show tables from db0_copy_1;
+select * from db0_copy_1.s1;
+
 drop database if exists db1;
 create database db1;
 use db1;
@@ -16,7 +31,11 @@ insert into t1 select *,* from generate_series(1,5)g;
 insert into t2 select *,* from generate_series(1,5)g;
 insert into t3 select *,* from generate_series(1,5)g;
 
+-- across account clone need a snapshot.
 create database db1_copy clone db1 to account acc1;
+create snapshot sp_temp for database db1;
+create database db1_copy clone db1 {snapshot = "sp_temp"} to account acc1;
+drop snapshot sp_temp;
 
 -- @session:id=2&user=acc1:root1&password=111
 show tables from db1_copy;
@@ -70,6 +89,9 @@ drop snapshot if exists sp0;
 drop snapshot if exists sp1;
 drop account if exists acc1;
 drop account if exists acc2;
+drop database if exists db0;
+drop database if exists db0_copy_0;
+drop database if exists db0_copy_1;
 drop database if exists db1;
 drop publication if exists sys_pub;
 drop database if exists db2;

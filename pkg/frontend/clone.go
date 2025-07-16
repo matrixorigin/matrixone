@@ -96,6 +96,10 @@ func handleCloneTableAcrossAccounts(
 		return err
 	}
 
+	if snapshot == nil && opAccountId != toAccountId {
+		return moerr.NewInternalErrorNoCtxf("clone table between different accounts need a snapshot")
+	}
+
 	if stmt.SrcTable.SchemaName == "" {
 		fromAccountId = opAccountId
 		if snapshot != nil && snapshot.Tenant != nil {
@@ -139,11 +143,6 @@ func handleCloneTableAcrossAccounts(
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
 	sql := strings.Split(strings.ToLower(execCtx.input.sql), "to")[0]
-
-	if snapshot == nil {
-		suffix := fmt.Sprintf(" {MO_TS = %d}", ses.proc.GetTxnOperator().SnapshotTS().PhysicalTime)
-		sql += suffix
-	}
 
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return err
@@ -199,6 +198,10 @@ func handleCloneDatabase(
 		return err
 	}
 
+	if snapshot == nil && opAccountId != toAccountId {
+		return moerr.NewInternalErrorNoCtxf("clone database between different accounts need a snapshot")
+	}
+
 	if opAccountId != sysAccountID && opAccountId != toAccountId {
 		return moerr.NewInternalError(reqCtx, "only sys can clone table to another account")
 	}
@@ -231,7 +234,6 @@ func handleCloneDatabase(
 		return err
 	}
 
-	now := ses.GetProc().GetTxnOperator().SnapshotTS().PhysicalTime
 	ctx2 = defines.AttachAccountId(reqCtx, toAccountId)
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
@@ -240,9 +242,6 @@ func handleCloneDatabase(
 
 		if snapCondition != "" {
 			sql = sql + " " + snapCondition
-		} else {
-			suffix := fmt.Sprintf(" {MO_TS = %d}", now)
-			sql += suffix
 		}
 
 		if err = bh.ExecRestore(ctx2, sql, opAccountId, toAccountId); err != nil {
