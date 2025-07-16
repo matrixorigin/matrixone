@@ -60,6 +60,8 @@ func (iter *Iteration) Run() {
 					zap.Uint32("tenantID", iter.table.accountID),
 					zap.Uint64("tableID", iter.table.tableID),
 					zap.String("indexName", iter.sinkers[i].indexName),
+					zap.String("from", iter.from.ToString()),
+					zap.String("to", iter.to.ToString()),
 					zap.Error(sinkerErr),
 				)
 			}

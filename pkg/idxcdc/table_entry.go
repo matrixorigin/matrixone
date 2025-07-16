@@ -75,7 +75,7 @@ func (t *TableInfo_2) AddSinker(
 	sinkConfig *ConsumerInfo,
 	watermark types.TS,
 	iterationErr error,
-) (existed bool, err error) {
+) (ok bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, sinker := range t.sinkers {
@@ -110,7 +110,6 @@ func (t *TableInfo_2) IsEmpty() bool {
 }
 
 func (t *TableInfo_2) DeleteSinker(
-	ctx context.Context,
 	indexName string,
 ) (isEmpty bool, err error) {
 	t.mu.Lock()
@@ -121,7 +120,7 @@ func (t *TableInfo_2) DeleteSinker(
 			return len(t.sinkers) == 0, nil
 		}
 	}
-	return false, moerr.NewInternalError(ctx, "sinker not found")
+	return false, moerr.NewInternalErrorNoCtx("sinker not found")
 }
 
 func (t *TableInfo_2) IsInitedAndFinished() bool {
@@ -241,11 +240,18 @@ func (t *TableInfo_2) UpdateWatermark(from, to types.TS) {
 	}
 }
 
-func (t *TableInfo_2) fillInAsyncIndexLogInsertSQL(firstTable bool, w *bytes.Buffer) (err error) {
+func (t *TableInfo_2) fillInAsyncIndexLogUpdateSQL(firstTable bool, insertWriter, deleteWriter *bytes.Buffer) (err error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for i, sinker := range t.sinkers {
-		err = sinker.fillInAsyncIndexLogInsertSQL(i == 0 && firstTable, w)
+		if sinker.watermark.IsEmpty() {
+			continue
+		}
+		err = sinker.fillInAsyncIndexLogInsertSQL(i == 0 && firstTable, insertWriter)
+		if err != nil {
+			return err
+		}
+		err = sinker.fillInAsyncIndexLogDeleteSQL(i == 0 && firstTable, deleteWriter)
 		if err != nil {
 			return err
 		}
@@ -253,17 +259,6 @@ func (t *TableInfo_2) fillInAsyncIndexLogInsertSQL(firstTable bool, w *bytes.Buf
 	return
 }
 
-func (t *TableInfo_2) fillInAsyncIndexLogDeleteSQL(firstTable bool, w *bytes.Buffer) (err error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	for i, sinker := range t.sinkers {
-		err = sinker.fillInAsyncIndexLogDeleteSQL(i == 0 && firstTable, w)
-		if err != nil {
-			return err
-		}
-	}
-	return
-}
 
 func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 	t.mu.Lock()

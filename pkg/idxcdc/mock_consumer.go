@@ -231,6 +231,7 @@ func (s *interalSqlConsumer) Run(ctx context.Context) {
 		logutil.Infof("cdc interalSqlConsumer(%v).Run: end", s.tableInfo.Name)
 	}()
 
+	s.err = nil
 	s.wg.Add(1)
 	defer s.wg.Done()
 

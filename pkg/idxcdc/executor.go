@@ -449,11 +449,11 @@ func (exec *CDCTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *a
 		watermark := types.StringToTS(watermarkStr)
 		if watermark.IsEmpty() && errorCodes[i] == 0 && dropAtVector.IsNull(uint64(i)) {
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
-			go exec.addIndex(ctx, accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr)
+			go exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr)
 		}
 		if !dropAtVector.IsNull(uint64(i)) {
 			indexName := indexNameVector.GetStringAt(i)
-			go exec.deleteIndex(ctx, accountIDs[i], tid, indexName)
+			go exec.deleteIndex(accountIDs[i], tid, indexName)
 		}
 	}
 
@@ -504,7 +504,6 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 			watermarkStr := watermarkVector.GetStringAt(i)
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
 			exec.addIndex(
-				ctx,
 				accountIDs[i],
 				tableIDs[i],
 				watermarkStr,
@@ -517,7 +516,6 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 }
 
 func (exec *CDCTaskExecutor) addIndex(
-	ctx context.Context,
 	accountID uint32,
 	tableID uint64,
 	watermarkStr string,
@@ -542,6 +540,9 @@ func (exec *CDCTaskExecutor) addIndex(
 			zap.Error(err),
 		)
 	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	consumerInfo := &ConsumerInfo{}
 	err = json.Unmarshal([]byte(consumerInfoStr), consumerInfo)
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "addIndex" {
@@ -574,12 +575,14 @@ func (exec *CDCTaskExecutor) addIndex(
 	if errorCode != 0 {
 		panic("logic error") // TODO: convert error
 	}
-	_, err = table.AddSinker(consumerInfo, watermark, nil)
+	ok, err = table.AddSinker(consumerInfo, watermark, nil)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("sinker already exists")
+	}
 	return
 }
 
 func (exec *CDCTaskExecutor) deleteIndex(
-	ctx context.Context,
 	accountID uint32,
 	tableID uint64,
 	indexName string,
@@ -601,9 +604,9 @@ func (exec *CDCTaskExecutor) deleteIndex(
 	}()
 	table, ok := exec.getTable(tableID)
 	if !ok {
-		return moerr.NewInternalError(ctx, "table not found")
+		return moerr.NewInternalErrorNoCtx("table not found")
 	}
-	empty, err := table.DeleteSinker(ctx, indexName)
+	empty, err := table.DeleteSinker(indexName)
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "deleteIndex" {
 		err = errors.New(msg)
 	}
@@ -713,11 +716,7 @@ func (exec *CDCTaskExecutor) FlushWatermarkForAllTables() error {
 	insertSqlWriter.WriteString("INSERT INTO mo_catalog.mo_async_index_log " +
 		"(account_id,table_id,index_name,last_sync_txn_ts,err_code,error_msg,info,consumer_config,drop_at) VALUES")
 	for i, table := range tables {
-		err := table.fillInAsyncIndexLogDeleteSQL(i == 0, deleteSqlWriter)
-		if err != nil {
-			return err
-		}
-		err = table.fillInAsyncIndexLogInsertSQL(i == 0, insertSqlWriter)
+		err := table.fillInAsyncIndexLogUpdateSQL(i == 0, insertSqlWriter, deleteSqlWriter)
 		if err != nil {
 			return err
 		}

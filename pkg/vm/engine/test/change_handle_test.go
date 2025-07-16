@@ -1532,6 +1532,13 @@ func TestCDCExecutor2(t *testing.T) {
 	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	defer bats.Close()
 
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
 	// init cdc executor
 	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
 		ctxWithTimeout,
@@ -1549,7 +1556,7 @@ func TestCDCExecutor2(t *testing.T) {
 	defer cdcExecutor.Stop()
 
 	// unregister a job that not exist
-	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := idxcdc.UnregisterJob(ctx, "", txn,
 		&idxcdc.ConsumerInfo{
@@ -1633,6 +1640,16 @@ func TestCDCExecutor2(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			return ok
+		},
+	)
+	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	assert.True(t, ok)
 }
 
 // test error handle
