@@ -457,7 +457,7 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
 	result := "Join Type: " + ndesc.Node.JoinType.String()
-	if ndesc.Node.BuildOnLeft {
+	if ndesc.Node.IsRightJoin {
 		if ndesc.Node.JoinType == plan.Node_SEMI || ndesc.Node.JoinType == plan.Node_ANTI {
 			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
 		}

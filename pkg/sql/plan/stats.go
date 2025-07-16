@@ -1552,9 +1552,18 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
-			node.BuildOnLeft = false
+			node.IsRightJoin = false
 		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
-			node.BuildOnLeft = true
+			node.IsRightJoin = true
+		}
+
+	case plan.Node_DEDUP:
+		if node.OnDuplicateAction != plan.Node_FAIL {
+			node.IsRightJoin = false
+		} else if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
+			node.IsRightJoin = false
+		} else if rightChild.Stats.Outcnt > 100 && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+			node.IsRightJoin = true
 		}
 	}
 

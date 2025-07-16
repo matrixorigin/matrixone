@@ -375,6 +375,25 @@ message DedupJoin {
   int32 del_col_idx = 16;
 }
 
+message RightDedupJoin {
+  repeated int32 rel_list = 1;
+  repeated int32 col_list = 2;
+  repeated plan.Expr left_cond = 3;
+  repeated plan.Expr right_cond = 4;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 5;
+  bool is_shuffle = 6;
+  int32 join_map_tag = 7;
+  int32 shuffle_idx = 8;
+  plan.Node.OnDuplicateAction on_duplicate_action = 9;
+  string dedup_col_name = 10;
+  repeated plan.Type dedup_col_types = 11 [(gogoproto.nullable) = false];
+  repeated plan.Type left_types = 12 [(gogoproto.nullable) = false];
+  repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
+	repeated int32 update_col_idx_list = 14;
+	repeated plan.Expr update_col_expr_list = 15;
+  int32 del_col_idx = 16;
+}
+
 message Product {
   repeated int32 rel_list = 1;
   repeated int32 col_list = 2;
@@ -527,31 +546,32 @@ message Instruction{
   RightJoin right_join = 28;
   RightSemiJoin right_semi_join = 29;
   RightAntiJoin right_anti_join = 30;
+  RightDedupJoin right_dedup_join = 31;
 
-  Deletion delete = 31;
-  LockOp lock_op = 32;
-  Shuffle shuffle = 33;
-  Merge merge = 34;
-  StreamScan stream_scan = 35;
-  PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
-  SampleFunc sample_func = 37;
-  FuzzyFilter fuzzy_filter = 38;
+  Deletion delete = 32;
+  LockOp lock_op = 33;
+  Shuffle shuffle = 34;
+  Merge merge = 35;
+  StreamScan stream_scan = 36;
+  PreInsertSecondaryIndex pre_insert_secondary_index  = 37;
+  SampleFunc sample_func = 38;
+  FuzzyFilter fuzzy_filter = 39;
 
-  string cn_addr = 39;
-  int32 operator_id = 40;
-  int32 parallel_id = 41;
-  int32 max_parallel = 42;
-  IndexJoin index_join = 43;
-  ProductL2 product_l2 = 44;
-  TableScan table_scan = 45;
-  ValueScan value_scan = 46;
-  UnionAll union_all = 47;
-  HashBuild hash_build = 48;
-  Shufflebuild shuffle_build = 49;
-  Indexbuild index_build = 50;
-  Apply apply = 51;
-  MultiUpdate multi_update = 52;
-  PostDml post_dml = 53;
+  string cn_addr = 40;
+  int32 operator_id = 41;
+  int32 parallel_id = 42;
+  int32 max_parallel = 43;
+  IndexJoin index_join = 44;
+  ProductL2 product_l2 = 45;
+  TableScan table_scan = 46;
+  ValueScan value_scan = 47;
+  UnionAll union_all = 48;
+  HashBuild hash_build = 49;
+  Shufflebuild shuffle_build = 50;
+  Indexbuild index_build = 51;
+  Apply apply = 52;
+  MultiUpdate multi_update = 53;
+  PostDml post_dml = 54;
 }
 
 message AnalysisList {

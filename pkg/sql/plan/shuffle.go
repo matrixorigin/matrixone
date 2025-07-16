@@ -434,9 +434,9 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 		if !leftSorted {
 			leftCost := builder.qry.Nodes[node.Children[0]].Stats.Outcnt
 			rightCost := builder.qry.Nodes[node.Children[1]].Stats.Outcnt
-			if node.BuildOnLeft {
+			if node.IsRightJoin {
 				// its better for right join to go shuffle, but can not go complex shuffle
-				if node.BuildOnLeft && leftCost > ShuffleTypeThreshHoldUpperLimit*rightCost {
+				if node.IsRightJoin && leftCost > ShuffleTypeThreshHoldUpperLimit*rightCost {
 					return
 				}
 			} else if leftCost > ShuffleTypeThreshHoldLowerLimit*rightCost {
@@ -514,7 +514,7 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
-	if n.BuildOnLeft {
+	if n.IsRightJoin {
 		if n.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
 			return
 		}
