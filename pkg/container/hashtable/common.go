@@ -48,3 +48,7 @@ type Aggregator interface {
 
 	Finalize(states, results []unsafe.Pointer)
 }
+
+func toUnsafePointer[T any](p *T) unsafe.Pointer {
+	return unsafe.Pointer(p)
+}
