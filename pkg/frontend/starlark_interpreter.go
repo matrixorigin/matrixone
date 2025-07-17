@@ -25,6 +25,7 @@ import (
 	ujson "github.com/matrixorigin/matrixone/pkg/util/json"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
+	"go.starlark.net/syntax"
 	"go.uber.org/zap"
 )
 
@@ -32,8 +33,6 @@ type starlarkInterpreter struct {
 	interp      *Interpreter
 	thread      *starlark.Thread
 	predeclared starlark.StringDict
-	outVars     map[string]interface{}
-	fn          starlark.Value
 }
 
 func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) {
@@ -213,7 +212,18 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 		}
 	}
 
-	globals, err := starlark.ExecFile(si.thread, "", spBody, si.predeclared)
+	globals, err := starlark.ExecFileOptions(
+		&syntax.FileOptions{
+			While:           true,
+			TopLevelControl: true,
+			GlobalReassign:  true,
+			Recursion:       true,
+		},
+		si.thread,
+		"",
+		spBody,
+		si.predeclared,
+	)
 	if err != nil {
 		return err
 	}
