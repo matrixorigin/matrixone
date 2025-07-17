@@ -100,10 +100,13 @@ func (si *starlarkInterpreter) moSql(thread *starlark.Thread, b *starlark.Builti
 
 	if len(erArray) == 0 {
 		return starlark.None, nil
+	} else if len(erArray) > 1 {
+		return starlark.String("sql must return a single result set"), nil
 	}
 
-	rows := make([]starlark.Value, len(erArray))
-	for i, er := range erArray {
+	er := erArray[0]
+	rows := make([]starlark.Value, er.GetRowCount())
+	for i := range rows {
 		rowsi := make(starlark.Tuple, er.GetColumnCount())
 		for j := range rowsi {
 			v, err := er.GetString(si.interp.ctx, uint64(i), uint64(j))
