@@ -246,6 +246,7 @@ func (t *partitionTxnTable) CollectTombstones(
 func (t *partitionTxnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 	panic("not implemented")

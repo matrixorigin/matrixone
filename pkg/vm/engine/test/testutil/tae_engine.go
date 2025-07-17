@@ -47,6 +47,10 @@ func (ts *TestTxnStorage) BindSchema(schema *catalog.Schema) {
 	ts.schema = schema
 }
 
+func (ts *TestTxnStorage) GetDelegate() *dbutil.TestEngine {
+	return ts.taeDelegate
+}
+
 func (ts *TestTxnStorage) GetDB() *db.DB {
 	return ts.txnHandler.GetDB()
 }

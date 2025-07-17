@@ -986,7 +986,7 @@ type Relation interface {
 
 	CollectTombstones(ctx context.Context, txnOffset int, policy TombstoneCollectPolicy) (Tombstoner, error)
 
-	CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (ChangesHandle, error)
+	CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (ChangesHandle, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 

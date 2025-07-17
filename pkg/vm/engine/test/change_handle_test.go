@@ -98,7 +98,7 @@ func TestChangesHandle1(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -117,7 +117,7 @@ func TestChangesHandle1(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -187,7 +187,7 @@ func TestChangesHandle2(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -207,7 +207,7 @@ func TestChangesHandle2(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -304,7 +304,7 @@ func TestChangesHandle3(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -323,7 +323,7 @@ func TestChangesHandle3(t *testing.T) {
 		assert.Equal(t, totalRows, 163820)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows = 0
 		for {
@@ -415,7 +415,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeEngine.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -434,7 +434,7 @@ func TestChangesHandleForCNWrite(t *testing.T) {
 		assert.Equal(t, totalRows, bat.Length())
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		batchCount := 0
 		for {
@@ -536,7 +536,7 @@ func TestChangesHandle4(t *testing.T) {
 		require.Nil(t, err)
 
 		c := &checkHelper{}
-		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, _, err := handle.Next(ctx, mp)
@@ -656,7 +656,7 @@ func TestChangesHandle5(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -675,7 +675,7 @@ func TestChangesHandle5(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -755,7 +755,7 @@ func TestChangesHandle6(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, types.TS{}, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		for {
@@ -774,7 +774,7 @@ func TestChangesHandle6(t *testing.T) {
 		assert.Equal(t, totalRows, 9)
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -858,7 +858,7 @@ func TestChangesHandleStaleFiles1(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		_, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		_, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrStaleRead))
 
 	}
@@ -930,7 +930,7 @@ func TestChangesHandleStaleFiles2(t *testing.T) {
 
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
-		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeEngine.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		{
 			txn, dnRel := testutil2.GetRelation(t, accountId, taeEngine.GetDB(), databaseName, tableName)
@@ -1021,7 +1021,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
 		handle.(*logtailreplay.ChangeHandler).LogThreshold = time.Microsecond
@@ -1117,7 +1117,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, ts1, mp)
+		handle, err := rel.CollectChanges(ctx, startTS, ts1, true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1131,7 +1131,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		}
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, startTS, ts3, mp)
+		handle, err = rel.CollectChanges(ctx, startTS, ts3, true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1146,7 +1146,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		}
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, ts2, ts3, mp)
+		handle, err = rel.CollectChanges(ctx, ts2, ts3, true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1161,7 +1161,7 @@ func TestChangeHandleFilterBatch1(t *testing.T) {
 		}
 		assert.NoError(t, handle.Close())
 
-		handle, err = rel.CollectChanges(ctx, ts2, ts4, mp)
+		handle, err = rel.CollectChanges(ctx, ts2, ts4, true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1258,7 +1258,7 @@ func TestChangeHandleFilterBatch2(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, end, mp)
+		handle, err := rel.CollectChanges(ctx, startTS, end, true, mp)
 		assert.NoError(t, err)
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
@@ -1325,7 +1325,7 @@ func TestChangesHandle7(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
+		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRowCount := 0
 		for {
@@ -1640,7 +1640,7 @@ func TestCDCExecutor2(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
-	
+
 	testutils.WaitExpect(
 		1000,
 		func() bool {
@@ -2077,4 +2077,143 @@ func TestCDCExecutor4(t *testing.T) {
 	for i := 0; i < indexCount; i++ {
 		CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, fmt.Sprintf("hnsw_idx_%d", i))
 	}
+}
+
+// test multiple indexes with same table
+func TestCDCExecutor5(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(
+		ctx,
+		testutil.TestOptions{TaeEngineOptions: config.WithLongScanAndCKPOpts(nil)},
+		t,
+	)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	dbName := "db"
+	rows := 3
+	tableCount := 10
+	tableIDs := make([]uint64, tableCount)
+	bats := make([]*containers.Batch, tableCount)
+	for i := 0; i < tableCount; i++ {
+
+		tableName := fmt.Sprintf("src_table_%d", i)
+		bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, dbName, tableName, rows)
+		bats[i] = bat
+		defer bat.Close()
+		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, dbName, tableName)
+		require.Nil(t, err)
+
+		tableIDs[i] = rel.GetTableID(ctxWithTimeout)
+
+		txn.Commit(ctxWithTimeout)
+	}
+
+	// init cdc executor
+	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		nil,
+		&idxcdc.CDCExecutorOption{
+			SyncTaskInterval:       time.Millisecond * 10,
+			FlushWatermarkInterval: time.Hour,
+			GCTTL:                  time.Hour,
+			GCInterval:             time.Hour,
+		},
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+
+	registerFn := func(indexName string, tableName string) {
+		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+		require.NoError(t, err)
+		ok, err := idxcdc.RegisterJob(
+			ctx, "", txn, "pitr",
+			&idxcdc.ConsumerInfo{
+				ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
+				DbName:       dbName,
+				TableName:    tableName,
+				IndexName:    indexName,
+			},
+		)
+		assert.True(t, ok)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctxWithTimeout))
+	}
+
+	checkWaterMarkFn := func(indexName string, waitTime int, tableIdx int) {
+		now := taeHandler.GetDB().TxnMgr.Now()
+		testutils.WaitExpect(
+			waitTime,
+			func() bool {
+				ts, _ := cdcExecutor.GetWatermark(tableIDs[tableIdx], indexName)
+				return ts.GE(&now)
+			},
+		)
+		ts, _ := cdcExecutor.GetWatermark(tableIDs[tableIdx], indexName)
+		assert.True(t, ts.GE(&now), indexName)
+	}
+
+	indexCount := 10
+	updateTimes := 10
+
+	for j := 0; j < tableCount; j++ {
+		for i := 0; i < indexCount; i++ {
+			registerFn(fmt.Sprintf("hnsw_idx_%d", i), fmt.Sprintf("src_table_%d", j))
+		}
+	}
+
+	deleted := make([]bool, tableCount)
+	for i := 0; i < updateTimes; i++ {
+		for j := 0; j < tableCount; j++ {
+			if deleted[j] {
+				testutil2.Append(t, accountId, taeHandler.GetDB(), dbName, fmt.Sprintf("src_table_%d", j), bats[j])
+				deleted[j] = false
+			} else {
+				testutil2.DeleteAll(t, accountId, taeHandler.GetDB(), dbName, fmt.Sprintf("src_table_%d", j))
+				deleted[j] = true
+			}
+		}
+	}
+
+	for j := 0; j < tableCount; j++ {
+		for i := 0; i < indexCount; i++ {
+			checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 40000, j)
+			CheckTableData(t, disttaeEngine, ctxWithTimeout, dbName, fmt.Sprintf("src_table_%d", j), tableIDs[j], fmt.Sprintf("hnsw_idx_%d", i))
+		}
+	}
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
 }

@@ -297,6 +297,10 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 				s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
 				s.curBufIdx ^= 1
 				s.sqlBuf = s.sqlBufs[s.curBufIdx]
+
+				s.preSqlBufLen = 0
+				s.sqlBuf = s.sqlBuf[:s.preSqlBufLen]
+				s.preRowType = NoOp
 			}
 
 			// reset status
@@ -338,7 +342,7 @@ func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *batch.Batch)
 		}
 
 		// step3: append to sqlBuf, send sql if sqlBuf is full
-		if err = s.appendSqlBuf(InsertRow); err != nil {
+		if err = s.appendSqlBuf(UpsertRow); err != nil {
 			panic(err)
 		}
 	}
@@ -468,6 +472,9 @@ func (s *interalSqlConsumer) appendSqlBuf(rowType RowType) (err error) {
 	if rowType == DeleteRow {
 		suffixLen = len(s.deleteSuffix)
 	}
+	if rowType == UpsertRow {
+		suffixLen = len(s.insertSuffix)
+	}
 
 	// if s.sqlBuf has no enough space
 	if len(s.sqlBuf)+len(s.rowBuf)+suffixLen > cap(s.sqlBuf) {
@@ -488,10 +495,15 @@ func (s *interalSqlConsumer) appendSqlBuf(rowType RowType) (err error) {
 
 		// reset s.sqlBuf
 		s.preSqlBufLen = 0
-		if rowType == InsertRow {
+		switch rowType {
+		case InsertRow:
 			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.insertPrefix...)
-		} else {
+		case DeleteRow:
 			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.deletePrefix...)
+		case UpsertRow:
+			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.upsertPrefix...)
+		default:
+			panic(fmt.Sprintf("invalid row type %d", rowType))
 		}
 	}
 

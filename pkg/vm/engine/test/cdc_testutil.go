@@ -862,7 +862,7 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 	databaseName string,
 	tableName string,
 	rowCount int,
-) *containers.Batch {
+) (*containers.Batch) {
 	createDBSql := fmt.Sprintf("create database if not exists %s", databaseName)
 	createTableSql := fmt.Sprintf(
 		"create table %s.%s (id int primary key, name varchar)", databaseName, tableName)
