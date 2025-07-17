@@ -9,7 +9,6 @@ drop table if exists part;
 drop table if exists partsupp;
 drop table if exists supplier;
 
-select sleep(10);
 -- customer
 select count(*) from customer {snapshot = 'tpch_snapshot'};
 select count(*) from customer {snapshot = 'tpch_snapshot'};
@@ -90,7 +89,6 @@ select count(*) from supplier;
 select count(*) from supplier;
 
 drop database tpch;
-select sleep(10);
 
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
 select count(*) from tpch.customer {snapshot = 'tpch_snapshot'};
