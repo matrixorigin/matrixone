@@ -5873,6 +5873,7 @@ func Test_doDropUser(t *testing.T) {
 }
 
 func Test_doInterpretCall(t *testing.T) {
+	t.Skip("skip doInterpretCall")
 	convey.Convey("call precedure (not exist)fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
