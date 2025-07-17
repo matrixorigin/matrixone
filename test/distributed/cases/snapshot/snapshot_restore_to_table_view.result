@@ -213,6 +213,7 @@ Human Resources    1000.00    0.00
 drop snapshot if exists sp06;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:12:33.077715    account    sys        
 create snapshot sp06 for account;
 drop database test01;
 restore account sys from snapshot sp06;
@@ -523,11 +524,11 @@ JOIN University.Enrollments ue ON u.StudentID = ue.StudentID
 GROUP BY u.StudentID, u.Name;
 select * from ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 select * from ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
@@ -541,6 +542,7 @@ Bob Johnson    3.70    3.60000000
 drop snapshot if exists sp06;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:12:33.077715    account    sys        
 create snapshot sp06 for account;
 drop database School;
 drop database University;
@@ -614,24 +616,25 @@ Eve    3.50000000
 Frank    3.60000000
 select * from EducationSystem.ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 select * from EducationSystem.ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
 Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
 select * from EducationSystem.StudentOverallPerformance;
 studentname    studentgrade    averagegrade
-Alice Smith    3.50    3.60000000
-Bob Johnson    3.70    3.60000000
 Eve    null    3.50000000
 Frank    null    3.60000000
+Alice Smith    3.50    3.60000000
+Bob Johnson    3.70    3.60000000
 drop database School;
 drop database University;
 drop database EducationSystem;
 drop snapshot if exists sp06;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:12:33.077715    account    sys        

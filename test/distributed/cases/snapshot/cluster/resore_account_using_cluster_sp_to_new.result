@@ -125,10 +125,12 @@ count(*)
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:06:21.366961    account    sys        
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-07-05 07:36:49.613651    cluster            
+cluster_sp    2025-07-17 19:11:32.556438    cluster            
+account_sp    2025-07-17 19:06:21.366961    account    sys        
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 drop account if exists acc02;
@@ -157,6 +159,7 @@ drop account if exists acc02;
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:06:21.366961    account    sys        
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 DROP DATABASE IF EXISTS Company;
@@ -477,10 +480,12 @@ departmentid    budget
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:06:21.366961    account    sys        
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-07-05 07:36:52.333141    cluster            
+cluster_sp    2025-07-17 19:11:34.310776    cluster            
+account_sp    2025-07-17 19:06:21.366961    account    sys        
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
@@ -607,6 +612,7 @@ drop account if exists acc02;
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:06:21.366961    account    sys        
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 DROP DATABASE IF EXISTS School;
@@ -855,6 +861,7 @@ Bob Johnson    3.70    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:06:21.366961    account    sys        
 create snapshot cluster_sp for cluster;
 drop database if exists School;
 drop database if exists University;
@@ -930,11 +937,11 @@ Eve    3.50000000
 Frank    3.60000000
 select * from EducationSystem.ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 select * from EducationSystem.ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
@@ -950,3 +957,4 @@ drop account if exists acc02;
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:06:21.366961    account    sys        

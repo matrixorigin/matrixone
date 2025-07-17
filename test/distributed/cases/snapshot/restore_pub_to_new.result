@@ -55,8 +55,8 @@ drop publication if exists pub06;
 create publication pub06 database db10 account acc02 comment 'publish db10';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub06    db10    *    acc02        2024-08-26 16:01:44    null    publish db10
-pub05    db09    *    acc02        2024-08-26 16:01:44    null    publish db09
+pub06    db10    *    acc02        2025-07-17 12:14:10    null    publish db10
+pub05    db09    *    acc02        2025-07-17 12:14:10    null    publish db09
 drop database if exists sub05;
 create database sub05 from acc01 publication pub05;
 show databases;
@@ -101,3 +101,4 @@ drop account acc02;
 drop account acc03;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:12:33.077715    account    sys        
