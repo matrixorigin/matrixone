@@ -761,6 +761,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *hashbuild.HashBuild:
 		in.HashBuild = &pipeline.HashBuild{
 			NeedHashMap:       t.NeedHashMap,
+			ForcePassHashMap:  t.ForcePassHashMap,
 			HashOnPK:          t.HashOnPK,
 			NeedBatches:       t.NeedBatches,
 			NeedAllocateSels:  t.NeedAllocateSels,
@@ -776,6 +777,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *shufflebuild.ShuffleBuild:
 		in.ShuffleBuild = &pipeline.Shufflebuild{
+			ForcePassHashMap:  t.ForcePassHashMap,
 			HashOnPK:          t.HashOnPK,
 			NeedBatches:       t.NeedBatches,
 			NeedAllocateSels:  t.NeedAllocateSels,

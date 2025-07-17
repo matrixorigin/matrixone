@@ -40,6 +40,7 @@ type container struct {
 
 type ShuffleBuild struct {
 	ctr               container
+	ForcePassHashMap  bool
 	HashOnPK          bool
 	NeedBatches       bool
 	NeedAllocateSels  bool

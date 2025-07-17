@@ -73,7 +73,7 @@ func (hb *HashmapBuilder) GetGroupCount() uint64 {
 	return 0
 }
 
-func (hb *HashmapBuilder) Prepare(keyCols []*plan.Expr, delColIdx int32, proc *process.Process) error {
+func (hb *HashmapBuilder) Prepare(keyCols []*plan.Expr, forceHashMap bool, delColIdx int32, proc *process.Process) error {
 	var err error
 	if len(hb.executors) == 0 {
 		hb.needDupVec = false
@@ -94,6 +94,18 @@ func (hb *HashmapBuilder) Prepare(keyCols []*plan.Expr, delColIdx int32, proc *p
 			hb.keyWidth += width
 			hb.executors[i], err = colexec.NewExpressionExecutor(proc, keyCols[i])
 			if err != nil {
+				return err
+			}
+		}
+	}
+
+	if forceHashMap {
+		if hb.keyWidth <= 8 {
+			if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
+				return err
+			}
+		} else {
+			if hb.StrHashMap, err = hashmap.NewStrMap(false); err != nil {
 				return err
 			}
 		}
@@ -210,13 +222,17 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 
 	var itr hashmap.Iterator
 	if hb.keyWidth <= 8 {
-		if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
-			return err
+		if hb.IntHashMap == nil {
+			if hb.IntHashMap, err = hashmap.NewIntHashMap(false); err != nil {
+				return err
+			}
 		}
 		itr = hb.IntHashMap.NewIterator()
 	} else {
-		if hb.StrHashMap, err = hashmap.NewStrMap(false); err != nil {
-			return err
+		if hb.StrHashMap == nil {
+			if hb.StrHashMap, err = hashmap.NewStrMap(false); err != nil {
+				return err
+			}
 		}
 		itr = hb.StrHashMap.NewIterator()
 	}

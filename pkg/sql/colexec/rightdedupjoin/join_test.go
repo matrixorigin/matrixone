@@ -81,13 +81,13 @@ func TestString(t *testing.T) {
 	}
 }
 
-func TestDedupJoin(t *testing.T) {
+func TestRightDedupJoin(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.barg.IsDedup = true
+		tc.barg.IsDedup = false
 		tc.barg.DelColIdx = -1
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestDedupJoin(t *testing.T) {
 		tc.proc.GetMessageBoard().Reset()
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.barg.IsDedup = true
+		tc.barg.IsDedup = false
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
 
@@ -130,7 +130,7 @@ func TestDedupJoin(t *testing.T) {
 		tc.arg.OnDuplicateAction = plan.Node_IGNORE
 		err = tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.barg.IsDedup = true
+		tc.barg.IsDedup = false
 		tc.barg.OnDuplicateAction = plan.Node_IGNORE
 		err = tc.barg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -260,8 +260,9 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			NeedHashMap: true,
-			Conditions:  cs[1],
+			NeedHashMap:      true,
+			ForcePassHashMap: true,
+			Conditions:       cs[1],
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,
@@ -269,7 +270,7 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 					IsLast:  false,
 				},
 			},
-			NeedAllocateSels: true,
+			NeedAllocateSels: false,
 			JoinMapTag:       tag,
 			JoinMapRefCnt:    1,
 		},

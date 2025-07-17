@@ -32,15 +32,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const opName = "dedup_join"
+const opName = "right_dedup_join"
 
 func (rightDedupJoin *RightDedupJoin) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
-	buf.WriteString(": dedup join ")
+	buf.WriteString(": right dedup join ")
 }
 
 func (rightDedupJoin *RightDedupJoin) OpType() vm.OpType {
-	return vm.DedupJoin
+	return vm.RightDedupJoin
 }
 
 func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error) {
@@ -89,11 +89,7 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 				return result, err
 			}
 
-			if ctr.mp == nil && !rightDedupJoin.IsShuffle {
-				ctr.state = End
-			} else {
-				ctr.state = Probe
-			}
+			ctr.state = Probe
 
 		case Probe:
 			input, err = vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)
@@ -132,8 +128,8 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 	if err != nil {
 		return
 	}
-	ctr.groupCount = ctr.mp.GetGroupCount()
 	if ctr.mp != nil {
+		ctr.groupCount = ctr.mp.GetGroupCount()
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return
@@ -194,9 +190,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 			case plan.Node_IGNORE:
 				// TODO
+				return moerr.NewNotSupported(proc.Ctx, "RIGHT DEDUP join not support IGNORE")
 
 			case plan.Node_UPDATE:
 				// TODO
+				return moerr.NewNotSupported(proc.Ctx, "RIGHT DEDUP join not support UPDATE")
 			}
 		}
 	}

@@ -51,7 +51,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
 
-	return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, hashBuild.DelColIdx, proc)
+	return hashBuild.ctr.hashmapBuilder.Prepare(hashBuild.Conditions, hashBuild.ForcePassHashMap, hashBuild.DelColIdx, proc)
 }
 
 func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
@@ -76,7 +76,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 
 		case SendJoinMap:
 			var jm *message.JoinMap
-			if ctr.hashmapBuilder.InputBatchRowCount > 0 {
+			if ap.ForcePassHashMap || ctr.hashmapBuilder.InputBatchRowCount > 0 {
 				jm = message.NewJoinMap(ctr.hashmapBuilder.MultiSels, ctr.hashmapBuilder.IntHashMap, ctr.hashmapBuilder.StrHashMap, ctr.hashmapBuilder.DelRows, ctr.hashmapBuilder.Batches.Buf, proc.Mp())
 				jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				if ap.NeedBatches {

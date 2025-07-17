@@ -138,6 +138,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.ShuffleBuild:
 		t := sourceOp.(*shufflebuild.ShuffleBuild)
 		op := shufflebuild.NewArgument()
+		op.ForcePassHashMap = t.ForcePassHashMap
 		op.HashOnPK = t.HashOnPK
 		op.NeedBatches = t.NeedBatches
 		op.NeedAllocateSels = t.NeedAllocateSels
@@ -2024,10 +2025,11 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 	case vm.RightDedupJoin:
 		arg := op.(*rightdedupjoin.RightDedupJoin)
 		ret.NeedHashMap = true
+		ret.ForcePassHashMap = true
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
-		ret.IsDedup = true
+		ret.NeedBatches = false
+		ret.NeedAllocateSels = false
+		ret.IsDedup = false
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes
@@ -2174,9 +2176,10 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 	case vm.RightDedupJoin:
 		arg := op.(*rightdedupjoin.RightDedupJoin)
 		ret.Conditions = arg.Conditions[1]
-		ret.NeedBatches = true
-		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
-		ret.IsDedup = true
+		ret.ForcePassHashMap = true
+		ret.NeedBatches = false
+		ret.NeedAllocateSels = false
+		ret.IsDedup = false
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes

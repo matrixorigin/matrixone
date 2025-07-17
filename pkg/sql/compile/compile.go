@@ -2715,14 +2715,26 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			c.anal.isFirst = false
 		}
 	case plan.Node_DEDUP:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
-		currentFirstFlag := c.anal.isFirst
-		for i := range rs {
-			op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].setRootOperator(op)
+		if node.IsRightJoin {
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			currentFirstFlag := c.anal.isFirst
+			for i := range rs {
+				op := constructRightDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+				rs[i].NodeInfo.Mcpu = 1
+			}
+			c.anal.isFirst = false
+		} else {
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			currentFirstFlag := c.anal.isFirst
+			for i := range rs {
+				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+			}
+			c.anal.isFirst = false
 		}
-		c.anal.isFirst = false
 	case plan.Node_MARK:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst

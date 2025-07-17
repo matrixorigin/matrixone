@@ -44,7 +44,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 func TestBuildHashMap(t *testing.T) {
 	var hb HashmapBuilder
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	err := hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, proc)
+	err := hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, false, -1, proc)
 	require.NoError(t, err)
 
 	inputBatch := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, int(100000), proc.Mp())
