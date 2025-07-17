@@ -199,6 +199,8 @@ spec:
             - sh
             - -c
             - |
+              sed -i 's@//.*archive.ubuntu.com@//mirrors.ustc.edu.cn@g' /etc/apt/sources.list;
+              sed -i 's/security.ubuntu.com/mirrors.ustc.edu.cn/g' /etc/apt/sources.list;
               apt update -y;
               apt install -y iptables conntrack;
               iptables -A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT;

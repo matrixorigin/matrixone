@@ -204,6 +204,19 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	return newTblInfo, nil
 }
 
+func checkTableType(ctx context.Context, tableDef *TableDef) error {
+	if tableDef.TableType == catalog.SystemSourceRel {
+		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
+	} else if tableDef.TableType == catalog.SystemExternalRel {
+		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from external table")
+	} else if tableDef.TableType == catalog.SystemViewRel {
+		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from view")
+	} else if tableDef.TableType == catalog.SystemSequenceRel && ctx.Value(defines.BgKey{}) == nil {
+		return moerr.NewInvalidInput(ctx, "Cannot insert/update/delete from sequence")
+	}
+	return nil
+}
+
 func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo *dmlTableInfo, aliasMap map[string][2]string, withMap map[string]struct{}) error {
 	var tblName, dbName, alias string
 
@@ -255,14 +268,8 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if tableDef.TableType == catalog.SystemSourceRel {
-		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from source")
-	} else if tableDef.TableType == catalog.SystemExternalRel {
-		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from external table")
-	} else if tableDef.TableType == catalog.SystemViewRel {
-		return moerr.NewInvalidInput(ctx.GetContext(), "cannot insert/update/delete from view")
-	} else if tableDef.TableType == catalog.SystemSequenceRel && ctx.GetContext().Value(defines.BgKey{}) == nil {
-		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
+	if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+		return err
 	}
 
 	var newCols []*ColDef

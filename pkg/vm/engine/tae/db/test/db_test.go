@@ -8900,7 +8900,7 @@ func TestDedupSnapshot3(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
+	opts := config.WithQuickScanCKPAndLongGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 

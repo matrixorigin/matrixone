@@ -128,6 +128,8 @@ create account acc2 admin_name "root2" identified by "111";
 create table db1_copy_copy.t4_copy_copy clone t4_copy {snapshot = "sp1"} to account acc2;
 internal error: no db selected for the src table t4_copy
 create database db1_copy_copy;
+create table db1_copy_copy.t4_copy_copy clone db1_copy.t4_copy to account acc2;
+internal error: clone table between different accounts need a snapshot
 create table db1_copy_copy.t4_copy_copy clone db1_copy.t4_copy {snapshot = "sp1"} to account acc2;
 select * from db1_copy_copy.t4_copy_copy;
 a    b
