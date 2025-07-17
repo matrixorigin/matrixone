@@ -3940,10 +3940,14 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		}
 
 		// update pitr
-		rtnErr = updatePitrObjectId(ctx, bh, da.Name, uint64(accountId))
-		if rtnErr != nil {
+		if rtnErr = updatePitrObjectId(
+			ctx, bh, da.Name,
+			uint64(accountId),
+			ses.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano(),
+		); rtnErr != nil {
 			return rtnErr
 		}
+
 		return rtnErr
 	}
 

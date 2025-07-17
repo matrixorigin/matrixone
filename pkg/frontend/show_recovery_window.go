@@ -15,30 +15,39 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-var (
-	getTablePitrRecordsFormat = "select pitr_name, modified_time,pitr_length, pitr_unit, pitr_status, pitr_status_changed_time from MO_CATALOG.MO_PITR where create_account = %d and account_name = '%s' and database_name = '%s' and table_name = '%s' and pitr_name != '%s' and level = 'table'"
-
-	getTableSnapshotRecordsFormat = "select sname, ts from MO_CATALOG.MO_SNAPSHOTS where account_name = '%s' and database_name = '%s' and table_name = '%s' and level = 'table'"
-
-	getDbPitrRecordsFormat = "select pitr_name, modified_time,pitr_length, pitr_unit, pitr_status, pitr_status_changed_time from MO_CATALOG.MO_PITR where create_account = %d and account_name = '%s' and database_name = '%s' and pitr_name != '%s' and level = 'database'"
-
-	getDbSnapshotRecordsFormat = "select sname, ts from MO_CATALOG.MO_SNAPSHOTS where account_name = '%s' and database_name = '%s' and level = 'database'"
-
-	getAccountPitrRecordsFormat = "select pitr_name, modified_time,pitr_length, pitr_unit, pitr_status, pitr_status_changed_time from MO_CATALOG.MO_PITR where create_account = %d and account_name = '%s' and pitr_name != '%s' and level = 'account'"
-
-	getAccountSnapshotRecordsFormat = "select sname, ts from MO_CATALOG.MO_SNAPSHOTS where account_name = '%s' and level = 'account'"
+const (
+	nsTimeFormat = "2006-01-02 15:04:05.999999999"
 )
 
-func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecoveryWindow) (err error) {
+type pitrItem struct {
+	start string
+	end   string
+	name  string
+}
+
+type snapItem struct {
+	ts   string
+	name string
+}
+
+func doShowRecoveryWindow(
+	ctx context.Context,
+	ses *Session,
+	srw *tree.ShowRecoveryWindow,
+) (err error) {
+
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -50,8 +59,33 @@ func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecov
 		return err
 	}
 
+	var (
+		opAccount uint32
+
+		level tree.RecoveryWindowLevel
+
+		tableName    string
+		databaseName string
+		accountName  string
+
+		rows = make([][]interface{}, 0)
+	)
+
+	level = srw.Level
+	tableName = srw.TableName.String()
+	accountName = srw.AccountName.String()
+	databaseName = srw.DatabaseName.String()
+
+	if accountName == "" {
+		accountName = ses.GetTenantName()
+	}
+
+	if opAccount, err = defines.GetAccountId(ctx); err != nil {
+		return err
+	}
+
 	// check privilege
-	err = checkShowRecoveryWindowPrivilege(ctx, ses, srw)
+	err = checkShowRecoveryWindowPrivilege(ctx, ses, srw, opAccount)
 	if err != nil {
 		return err
 	}
@@ -60,27 +94,23 @@ func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecov
 	// recovery window level
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col1.SetName("Recovery_Window_Level")
+	col1.SetName("RecoveryWindowLevel")
 
-	// account name
 	col2 := new(MysqlColumn)
 	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col2.SetName("Account_Name")
+	col2.SetName("AccountName")
 
-	// database name
 	col3 := new(MysqlColumn)
 	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col3.SetName("Database_Name")
+	col3.SetName("DatabaseName")
 
-	// table name
 	col4 := new(MysqlColumn)
 	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col4.SetName("Table_Name")
+	col4.SetName("TableName")
 
-	// recovery windows
 	col5 := new(MysqlColumn)
 	col5.SetColumnType(defines.MYSQL_TYPE_JSON)
-	col5.SetName("Recovery_Windows")
+	col5.SetName("RecoveryWindows")
 
 	mrs := ses.GetMysqlResultSet()
 	mrs.AddColumn(col1)
@@ -89,706 +119,546 @@ func doShowRecoveryWindow(ctx context.Context, ses *Session, srw *tree.ShowRecov
 	mrs.AddColumn(col4)
 	mrs.AddColumn(col5)
 
-	rows := make([][]interface{}, 0)
-	// recovey level
-	level := srw.Level
-	switch level {
-	case tree.RECOVERYWINDOWLEVELACCOUNT:
-		var accountName string
-		if len(srw.AccountName) > 0 {
-			accountName = srw.AccountName.String()
-		} else {
-			accountName = ses.GetTenantInfo().GetTenant()
-		}
-
-		var windowRows [][]interface{}
-		windowRows, err = getAccountRecoveryWindowRows(ctx, ses, bh, accountName)
-		if err != nil {
-			return err
-		}
-		rows = append(rows, windowRows...)
-	case tree.RECOVERYWINDOWLEVELDATABASE:
-		var accountName, dbName string
-		accountName = ses.GetTenantInfo().GetTenant()
-		if len(srw.DatabaseName.String()) > 0 {
-			dbName = srw.DatabaseName.String()
-		}
-		var windowRows [][]interface{}
-		windowRows, err = getDbRecoveryWindowRows(ctx, ses, bh, accountName, dbName)
-		if err != nil {
-			return err
-		}
-		rows = append(rows, windowRows...)
-
-	case tree.RECOVERYWINDOWLEVELTABLE:
-		// get table recovery window
-		var accountName, dbName, tblName string
-		accountName = ses.GetTenantInfo().GetTenant()
-		if len(srw.DatabaseName.String()) > 0 {
-			dbName = srw.DatabaseName.String()
-		}
-		if len(srw.TableName.String()) > 0 {
-			tblName = srw.TableName.String()
-		}
-
-		var windowRows [][]interface{}
-		windowRows, err = getTableRecoveryWindowRows(ctx, ses, bh, accountName, dbName, tblName)
-		if err != nil {
-			return err
-		}
-		rows = append(rows, windowRows...)
+	if rows, err = constructRecoveryWindow(
+		ctx, ses, bh, level,
+		tableName, databaseName, accountName,
+		opAccount,
+	); err != nil {
+		return err
 	}
 
 	for _, row := range rows {
 		mrs.AddRow(row)
 	}
+
 	return trySaveQueryResult(ctx, ses, mrs)
 }
 
-func getAccountRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExec, accountName string) ([][]interface{}, error) {
-	bh.ClearExecResultSet()
-	bh.Exec(ctx, "show databases")
-	erArray, err := getResultSet(ctx, bh)
-	if err != nil {
+func constructRecoveryWindow(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	level tree.RecoveryWindowLevel,
+	tableName string,
+	databaseName string,
+	accountName string,
+	opAccount uint32,
+) (windowRows [][]interface{}, err error) {
+
+	var (
+		levelStr string
+
+		snapSearchSQL string
+		pitrSearchSQL string
+
+		snapPitrSearchCond string
+	)
+
+	switch level {
+	case tree.RECOVERYWINDOWLEVELACCOUNT:
+		levelStr = "account"
+
+		snapPitrSearchCond = fmt.Sprintf(
+			"account_name = '%s'",
+			accountName,
+		)
+	case tree.RECOVERYWINDOWLEVELDATABASE:
+		levelStr = "database"
+
+		snapPitrSearchCond = fmt.Sprintf(
+			"(account_name = '%s' AND database_name = '') OR "+
+				"(account_name = '%s' AND database_name = '%s')",
+			accountName,
+			accountName, databaseName,
+		)
+	case tree.RECOVERYWINDOWLEVELTABLE:
+		levelStr = "table"
+
+		snapPitrSearchCond = fmt.Sprintf(
+			"(account_name = '%s' AND database_name = '') OR "+
+				"(account_name = '%s' AND database_name = '%s' AND table_name = '') OR "+
+				"(account_name = '%s' AND database_name = '%s' AND table_name = '%s')",
+			accountName,
+			accountName, databaseName,
+			accountName, databaseName, tableName,
+		)
+
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("show recovery window level does not exist")
+	}
+
+	snapSearchSQL = fmt.Sprintf(
+		"select sname, level, account_name, database_name, table_name, ts from `%s`.`%s` where %s",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, snapPitrSearchCond,
+	)
+
+	pitrSearchSQL = fmt.Sprintf(
+		"select "+
+			"	pitr_name, level, account_name, database_name, table_name, "+
+			"	modified_time, pitr_length, pitr_unit, pitr_status, pitr_status_changed_time "+
+			"from "+
+			"`%s`.`%s` "+
+			"	where %s AND pitr_name != '%s'",
+		catalog.MO_CATALOG, catalog.MO_PITR, snapPitrSearchCond, SYSMOCATALOGPITR,
+	)
+
+	var (
+		pitrRecords []tableRecoveryWindow
+		snapRecords []tableRecoveryWindowForSnapshot
+
+		rows [][]interface{}
+
+		tableToSnaps map[[3]string][]snapItem
+		tableToPitrs map[[3]string][]pitrItem
+	)
+
+	if snapRecords, err = execSnapSearchSQL(ctx, ses, bh, snapSearchSQL); err != nil {
 		return nil, err
 	}
 
-	dbs := make([]string, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			dbName, err := erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			if !needSkipDb(dbName) {
-				dbs = append(dbs, dbName)
-			}
+	newCtx := defines.AttachAccountId(ctx, sysAccountID)
+	if pitrRecords, err = execPitrSearchSQL(newCtx, ses, bh, pitrSearchSQL); err != nil {
+		return nil, err
+	}
+
+	if tableToSnaps, tableToPitrs, err = searchTables(
+		ctx, ses, bh, level,
+		accountName, databaseName, tableName,
+		pitrRecords, snapRecords,
+		opAccount,
+	); err != nil {
+		return nil, err
+	}
+
+	var (
+		row  []interface{}
+		keys = make(map[[3]string]struct{})
+
+		jsonBuf bytes.Buffer
+	)
+
+	for key := range tableToSnaps {
+		keys[key] = struct{}{}
+	}
+
+	for key := range tableToPitrs {
+		keys[key] = struct{}{}
+	}
+
+	for val := range keys {
+		row = make([]interface{}, 5)
+
+		row[0] = levelStr
+		row[1] = val[0]
+		row[2] = val[1]
+		row[3] = val[2]
+
+		jsonBuf.Reset()
+		jsonBuf.WriteString("[")
+
+		for _, snap := range tableToSnaps[val] {
+			jsonBuf.WriteString(
+				fmt.Sprintf(
+					"{'timestamp':'%s', 'source':'snapshot', 'source_name':'%s'}, ",
+					snap.ts, snap.name,
+				))
 		}
-	}
 
-	var rows [][]interface{}
-
-	// get account recovery window for pitr
-	pitrRecords, err := getAccountPitrRecords(ctx, ses, bh, accountName)
-	if err != nil {
-		return nil, err
-	}
-	// get account recovery window for snapshot
-	snapshotRecords, err := getAccountSnapshotRecords(ctx, ses, bh, accountName)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, dbName := range dbs {
-		// get db recovery window separately
-		var windowRows [][]interface{}
-		windowRows, err = getAccountRecoveryWindow(ctx, ses, bh, accountName, dbName, &pitrRecords, &snapshotRecords)
-		if err != nil {
-			return nil, err
+		for _, pitr := range tableToPitrs[val] {
+			jsonBuf.WriteString(
+				fmt.Sprintf(
+					"{'start_time':'%s', 'end_time':'%s', 'source':'pitr', 'source_name':'%s'}, ",
+					pitr.start, pitr.end, pitr.name,
+				))
 		}
-		rows = append(rows, windowRows...)
-	}
-	return rows, nil
-}
 
-func getAccountRecoveryWindow(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string, accountPitrs *[]tableRecoveryWindow, accountSnapshot *[]tableRecoveryWindowForSnapshot) ([][]interface{}, error) {
-	// get tables
-	var err error
-	var erArray []ExecResult
-	bh.ClearExecResultSet()
-	bh.Exec(ctx, "show tables from "+dbName)
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
+		jsonBuf.WriteString("]")
 
-	tables := make([]string, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			tableName, err := erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			tables = append(tables, tableName)
+		row[4] = []byte(jsonBuf.String())
 
-		}
-	}
-
-	var rows [][]interface{}
-
-	// get db recovery window for pitr
-	pitrRecords, err := getDbPitrRecords(ctx, ses, bh, accountName, dbName)
-	if err != nil {
-		return nil, err
-	}
-	pitrRecords = append(pitrRecords, *accountPitrs...)
-
-	// get db recovery window for snapshot
-	snapshotRecords, err := getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
-	if err != nil {
-		return nil, err
-	}
-	snapshotRecords = append(snapshotRecords, *accountSnapshot...)
-
-	// get table recovery window separately
-	for _, tblName := range tables {
-		var windowRows [][]interface{}
-		windowRows, err = getTableRecoveryWindowRowsForDb(ctx, ses, bh, accountName, dbName, tblName, &pitrRecords, &snapshotRecords)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, windowRows...)
-	}
-	return rows, nil
-}
-
-func getDbRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) ([][]interface{}, error) {
-	// get tables
-	var err error
-	var erArray []ExecResult
-	bh.ClearExecResultSet()
-	bh.Exec(ctx, "show tables from "+dbName)
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	tables := make([]string, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			tableName, err := erArray[0].GetString(ctx, i, 0)
-			if err != nil {
-				return nil, err
-			}
-			tables = append(tables, tableName)
-
-		}
-	}
-
-	var rows [][]interface{}
-
-	// get db recovery window for pitr
-	pitrRecords, err := getDbPitrRecords(ctx, ses, bh, accountName, dbName)
-	if err != nil {
-		return nil, err
-	}
-
-	// get db recovery window for snapshot
-	snapshotRecords, err := getDbSnapshotsRecords(ctx, ses, bh, accountName, dbName)
-	if err != nil {
-		return nil, err
-	}
-
-	// get table recovery window separately
-	for _, tblName := range tables {
-		var windowRows [][]interface{}
-		windowRows, err = getTableRecoveryWindowRowsForDb(ctx, ses, bh, accountName, dbName, tblName, &pitrRecords, &snapshotRecords)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, windowRows...)
-	}
-	return rows, nil
-}
-
-func getTableRecoveryWindowRowsForDb(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName, tblName string, dbPitrRecords *[]tableRecoveryWindow, dbSnapshotRecords *[]tableRecoveryWindowForSnapshot) ([][]interface{}, error) {
-	var rows [][]interface{}
-	var err error
-	marshelStrs := make([]string, 0)
-	// get table recovery window
-	var pitrRecords []tableRecoveryWindow
-	pitrRecords, err = getTablePitrRecords(ctx, ses, bh, accountName, dbName, tblName)
-	if err != nil {
-		return nil, err
-	}
-	pitrRecords = append(pitrRecords, *dbPitrRecords...)
-	for _, record := range pitrRecords {
-		var str string
-		str, err = marshalRcoveryWindowToJson(record)
-		if err != nil {
-			return nil, err
-		}
-		if len(str) > 0 {
-			// skip invalid pitr
-			marshelStrs = append(marshelStrs, str)
-		}
-	}
-
-	// get table snapshot
-	var snapshotRecords []tableRecoveryWindowForSnapshot
-	snapshotRecords, err = getTableSnapshotRecords(ctx, ses, bh, accountName, dbName, tblName)
-	if err != nil {
-		return nil, err
-	}
-	snapshotRecords = append(snapshotRecords, *dbSnapshotRecords...)
-	for _, record := range snapshotRecords {
-		str := marshalRcoveryWindowToJsonForSnapshot(record)
-		marshelStrs = append(marshelStrs, str)
-	}
-
-	if len(marshelStrs) > 0 {
-		str := ""
-		for i, s := range marshelStrs {
-			if i == 0 {
-				str = s
-			} else {
-				str = str + ","
-				str += "\n"
-				str = str + s
-			}
-		}
-		row := make([]interface{}, 5)
-		row[0] = "database"
-		row[1] = accountName
-		row[2] = dbName
-		row[3] = tblName
-		row[4] = []byte(str)
 		rows = append(rows, row)
 	}
+
 	return rows, nil
 }
 
-func getTableRecoveryWindowRows(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName, tblName string) ([][]interface{}, error) {
-	var rows [][]interface{}
-	var err error
-	marshelStrs := make([]string, 0)
-	// get table recovery window
-	var pitrRecords []tableRecoveryWindow
-	pitrRecords, err = getTablePitrRecords(ctx, ses, bh, accountName, dbName, tblName)
-	if err != nil {
-		return nil, err
-	}
-	for _, record := range pitrRecords {
-		var str string
-		str, err = marshalRcoveryWindowToJson(record)
-		if err != nil {
-			return nil, err
-		}
-		if len(str) > 0 {
-			// skip invalid pitr
-			marshelStrs = append(marshelStrs, str)
+func searchTables(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	level tree.RecoveryWindowLevel,
+	accountName string,
+	databaseName string,
+	tableName string,
+	pitrsRecords []tableRecoveryWindow,
+	snapRecords []tableRecoveryWindowForSnapshot,
+	opAccount uint32,
+) (
+	tableToSnaps map[[3]string][]snapItem,
+	tableToPitrs map[[3]string][]pitrItem,
+	err error,
+) {
+
+	var (
+		newCtx context.Context
+
+		sqlRet []ExecResult
+
+		searchSQL string
+
+		searchCondA string
+		searchCondB string
+		searchCondC string
+
+		fromAccount    uint32
+		needUpdateFrom = true
+	)
+
+	skipCond := ""
+	for i, db := range skipDbs {
+		skipCond += fmt.Sprintf("'%s'", db)
+		if i != len(skipDbs)-1 {
+			skipCond += ","
 		}
 	}
 
-	// get table snapshot
-	var snapshotRecords []tableRecoveryWindowForSnapshot
-	snapshotRecords, err = getTableSnapshotRecords(ctx, ses, bh, accountName, dbName, tblName)
-	if err != nil {
-		return nil, err
-	}
-	for _, record := range snapshotRecords {
-		str := marshalRcoveryWindowToJsonForSnapshot(record)
-		marshelStrs = append(marshelStrs, str)
+	searchCondA = fmt.Sprintf(" reldatabase not in (%s)", skipCond)
+
+	// if the account name doesn't equal to the login acc,
+	// this query must be `show recovery_window for acc` in the sys account.
+	// if so, we cannot ensure that the account we want to show keep unchanged all the time.(delete, recreate...),
+	//  that's why we need to query the account id again and again when attaching different TS.
+	if accountName == ses.GetTenantName() {
+		needUpdateFrom = false
+		fromAccount = opAccount
 	}
 
-	if len(marshelStrs) > 0 {
-		str := ""
-		for i, s := range marshelStrs {
-			if i == 0 {
-				str = s
-			} else {
-				str = str + ","
-				str += "\n"
-				str = str + s
+	makeCondB := func(ts int64) error {
+		if needUpdateFrom {
+			if fromAccount, err = getAccountIdByTS(ctx, bh, accountName, ts); err != nil {
+				return err
 			}
 		}
-		row := make([]interface{}, 5)
-		row[0] = "table"
-		row[1] = accountName
-		row[2] = dbName
-		row[3] = tblName
-		row[4] = []byte(str)
-		rows = append(rows, row)
-	}
-	return rows, nil
-}
 
-type tableRecoveryWindow struct {
-	pitrName              string
-	modifiedTime          string
-	pitrValue             uint64
-	pitrUnit              string
-	pitrStatus            uint64 // 1:active 0:inactive
-	pitrStatusChangedTime string
-}
-
-/*
-  marshal recovery window to json format
- {
-    "start_time": "2024-11-20 00:00:00",
-    "end_time": "2024-11-29 23:59:59",
-    "source": "pitr",
-    "source_name": "pitr_001"
-  },
-*/
-
-func marshalRcoveryWindowToJson(records tableRecoveryWindow) (string, error) {
-	var startTime string
-	var endTime string
-	var err error
-
-	startTime, err = getStartTimeOfRecoveryWindow(records)
-	if err != nil {
-		return "", err
-	}
-	if len(startTime) == 0 {
-		// invalid pitr
-		return "", nil
-	}
-
-	endTime = getEndTimeOfRecoveryWindow(records)
-
-	// print json string for every field
-	jsonStr := fmt.Sprintf(`{"start_time": "%s", "end_time": "%s", "source": "pitr", "source_name": "%s"}`, startTime, endTime, records.pitrName)
-	return jsonStr, nil
-}
-
-/*
-  marshal recovery window to json format
-  {
-    "timestamp": "2024-11-25 12:00:00",
-    "source": "snapshot",
-    "source_name": "snapshot_002"
-  },
-*/
-
-func marshalRcoveryWindowToJsonForSnapshot(records tableRecoveryWindowForSnapshot) string {
-	// parser utc timestamp to local time
-	ts := records.ts
-	t := time.Unix(0, ts)
-	tsFormatLocal := t.Local().Format("2006-01-02 15:04:05")
-	var jsonStr = fmt.Sprintf(`{"timestamp": "%s", "source": "snapshot", "source_name": "%s"}`, tsFormatLocal, records.snapshotName)
-	return jsonStr
-}
-
-func getStartTimeOfRecoveryWindow(records tableRecoveryWindow) (string, error) {
-	var err error
-	var t time.Time
-	modifyTime := records.modifiedTime
-	// parse createTimeStr to utc time
-	t, err = time.ParseInLocation("2006-01-02 15:04:05", modifyTime, time.UTC)
-	if err != nil {
-		return "", err
-	}
-	pitrValidMinTs := t.UTC().UnixNano()
-
-	pitrValue := records.pitrValue
-	pitrUnit := records.pitrUnit
-
-	var startTs time.Time
-	startTs, err = addTimeSpan(int(pitrValue), pitrUnit)
-	if err != nil {
-		return "", err
-	}
-
-	if records.pitrStatus == 0 {
-		pitrChangedtime := records.pitrStatusChangedTime
-		// parse pitrChangedtime to utc time
-		t, err = time.ParseInLocation("2006-01-02 15:04:05", pitrChangedtime, time.UTC)
-		if err != nil {
-			return "", err
+		switch level {
+		case tree.RECOVERYWINDOWLEVELACCOUNT:
+			searchCondB = fmt.Sprintf(
+				" AND account_id = %d",
+				fromAccount,
+			)
+		case tree.RECOVERYWINDOWLEVELDATABASE:
+			searchCondB = fmt.Sprintf(
+				" AND account_id = %d AND reldatabase = '%s'",
+				fromAccount, databaseName,
+			)
+		case tree.RECOVERYWINDOWLEVELTABLE:
+			searchCondB = fmt.Sprintf(
+				" AND account_id = %d AND reldatabase = '%s' AND relname = '%s'",
+				fromAccount, databaseName, tableName,
+			)
+		default:
+			return moerr.NewInternalErrorNoCtxf("show recovery window level does not exist")
 		}
-		pitrValidMinTs = t.UTC().UnixNano()
-		if startTs.UnixNano() > pitrValidMinTs {
-			// invalid pitr
-			return "", nil
+
+		return nil
+	}
+
+	var (
+		endStr   string
+		startStr string
+		startTS  int64
+	)
+
+	tableToSnaps = make(map[[3]string][]snapItem)
+	tableToPitrs = make(map[[3]string][]pitrItem)
+
+	newCtx = defines.AttachAccountId(ctx, opAccount)
+	for _, snap := range snapRecords {
+		ts := timestamp.Timestamp{PhysicalTime: snap.ts}
+
+		if err = makeCondB(snap.ts); err != nil {
+			return
+		}
+
+		// already table level, no need to query mo_tables.
+		if snap.level == "table" {
+			key := [3]string{accountName, snap.databaseName, snap.tableName}
+			tableToSnaps[key] = append(tableToSnaps[key], snapItem{
+				name: snap.snapshotName,
+				ts:   ts.ToStdTime().String(),
+			})
+			continue
+
+		} else if snap.level == "database" {
+			searchCondC = fmt.Sprintf(
+				" AND reldatabase = '%s'",
+				snap.databaseName,
+			)
+
+		} else if snap.level == "account" {
+			searchCondC = fmt.Sprintf(
+				" AND account_id = %d",
+				fromAccount,
+			)
+
 		} else {
-			// return startTs in local time
-			return startTs.Local().Format("2006-01-02 15:04:05"), nil
+			return nil, nil, moerr.NewInternalErrorNoCtxf("unknow snapshot level")
 		}
-	} else {
-		if startTs.UnixNano() > pitrValidMinTs {
-			// return startTs in local time
-			return startTs.Local().Format("2006-01-02 15:04:05"), nil
+
+		searchSQL = fmt.Sprintf(
+			"select reldatabase, relname from `%s`.`%s` {SNAPSHOT = '%s'} where %s",
+			catalog.MO_CATALOG, catalog.MO_TABLES, snap.snapshotName,
+			searchCondA+searchCondB+searchCondC,
+		)
+
+		bh.ClearExecResultSet()
+		if err = bh.Exec(newCtx, searchSQL); err != nil {
+			return
+		}
+
+		if sqlRet, err = getResultSet(newCtx, bh); err != nil {
+			return
+		}
+
+		if execResultArrayHasData(sqlRet) {
+			for i := uint64(0); i < sqlRet[0].GetRowCount(); i++ {
+				if databaseName, err = sqlRet[0].GetString(newCtx, i, 0); err != nil {
+					return
+				}
+
+				if tableName, err = sqlRet[0].GetString(newCtx, i, 1); err != nil {
+					return
+				}
+
+				key := [3]string{accountName, databaseName, tableName}
+				tableToSnaps[key] = append(tableToSnaps[key], snapItem{
+					name: snap.snapshotName,
+					ts:   ts.ToStdTime().String(),
+				})
+			}
+		}
+	}
+
+	for _, pitr := range pitrsRecords {
+		if startStr, err = getStartTimeOfRecoveryWindowInLoc(pitr); err != nil {
+			return
+		}
+
+		endStr = getEndTimeOfRecoveryWindowInLoc(pitr)
+
+		if startTS, err = doResolveTimeStamp(startStr); err != nil {
+			return
+		}
+
+		if err = makeCondB(startTS); err != nil {
+			return
+		}
+
+		if pitr.level == "table" {
+			key := [3]string{accountName, pitr.databaseName, pitr.tableName}
+			tableToPitrs[key] = append(tableToPitrs[key], pitrItem{
+				name:  pitr.pitrName,
+				end:   endStr,
+				start: startStr,
+			})
+
+			continue
+
+		} else if pitr.level == "database" {
+			searchCondC = fmt.Sprintf(
+				" AND reldatabase = '%s'",
+				pitr.databaseName,
+			)
+
+		} else if pitr.level == "account" {
+			searchCondC = fmt.Sprintf(
+				" AND account_id = %d",
+				fromAccount,
+			)
+
 		} else {
-			return t.Local().Format("2006-01-02 15:04:05"), nil
+			return nil, nil, moerr.NewInternalErrorNoCtxf("unknow snapshot level")
+		}
+
+		searchSQL = fmt.Sprintf(
+			"select reldatabase, relname from `%s`.`%s` {MO_TS = %d} where %s",
+			catalog.MO_CATALOG, catalog.MO_TABLES, startTS,
+			searchCondA+searchCondB+searchCondC,
+		)
+
+		bh.ClearExecResultSet()
+		if err = bh.Exec(newCtx, searchSQL); err != nil {
+			return
+		}
+
+		if sqlRet, err = getResultSet(newCtx, bh); err != nil {
+			return
+		}
+
+		if execResultArrayHasData(sqlRet) {
+			for i := uint64(0); i < sqlRet[0].GetRowCount(); i++ {
+				if databaseName, err = sqlRet[0].GetString(newCtx, i, 0); err != nil {
+					return
+				}
+
+				if tableName, err = sqlRet[0].GetString(newCtx, i, 1); err != nil {
+					return
+				}
+
+				key := [3]string{accountName, databaseName, tableName}
+				tableToPitrs[key] = append(tableToPitrs[key], pitrItem{
+					name:  pitr.pitrName,
+					end:   endStr,
+					start: startStr,
+				})
+			}
 		}
 	}
+
+	return
 }
 
-func getEndTimeOfRecoveryWindow(records tableRecoveryWindow) string {
-	if records.pitrStatus == 0 {
-		return records.pitrStatusChangedTime
-	} else {
-		// return local time now
-		return time.Now().Format("2006-01-02 15:04:05")
-	}
-}
-
-func getTablePitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName, tblName string) ([]tableRecoveryWindow, error) {
-	var newCtx = ctx
-	curAccountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if curAccountId != sysAccountID {
-		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
-	}
-
-	sql := fmt.Sprintf(getTablePitrRecordsFormat, curAccountId, accountName, dbName, tblName, SYSMOCATALOGPITR)
-	getLogger(ses.GetService()).Info(fmt.Sprintf("getTablePitrRecords sql: %s", sql))
+func execPitrSearchSQL(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	searchSQL string,
+) (records []tableRecoveryWindow, err error) {
 
 	bh.ClearExecResultSet()
-	err = bh.Exec(newCtx, sql)
-	if err != nil {
+	if err = bh.Exec(ctx, searchSQL); err != nil {
 		return nil, err
 	}
 
-	erArray, err := getResultSet(newCtx, bh)
-	if err != nil {
+	var (
+		record tableRecoveryWindow
+		sqlRet []ExecResult
+	)
+
+	if sqlRet, err = getResultSet(ctx, bh); err != nil {
 		return nil, err
 	}
 
-	records := make([]tableRecoveryWindow, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var record tableRecoveryWindow
-			if record.pitrName, err = erArray[0].GetString(newCtx, i, 0); err != nil {
+	records = make([]tableRecoveryWindow, 0)
+	if execResultArrayHasData(sqlRet) {
+		for i := uint64(0); i < sqlRet[0].GetRowCount(); i++ {
+			if record.pitrName, err = sqlRet[0].GetString(ctx, i, 0); err != nil {
 				return nil, err
 			}
-			if record.modifiedTime, err = erArray[0].GetString(newCtx, i, 1); err != nil {
+
+			if record.level, err = sqlRet[0].GetString(ctx, i, 1); err != nil {
 				return nil, err
 			}
-			if record.pitrValue, err = erArray[0].GetUint64(newCtx, i, 2); err != nil {
+
+			if record.accountName, err = sqlRet[0].GetString(ctx, i, 2); err != nil {
 				return nil, err
 			}
-			if record.pitrUnit, err = erArray[0].GetString(newCtx, i, 3); err != nil {
+
+			if record.databaseName, err = sqlRet[0].GetString(ctx, i, 3); err != nil {
 				return nil, err
 			}
-			if record.pitrStatus, err = erArray[0].GetUint64(newCtx, i, 4); err != nil {
+
+			if record.tableName, err = sqlRet[0].GetString(ctx, i, 4); err != nil {
 				return nil, err
 			}
-			if record.pitrStatusChangedTime, err = erArray[0].GetString(newCtx, i, 5); err != nil {
+
+			if record.modifiedTime, err = sqlRet[0].GetInt64(ctx, i, 5); err != nil {
+				return nil, err
+			}
+
+			if record.pitrValue, err = sqlRet[0].GetUint64(ctx, i, 6); err != nil {
+				return nil, err
+			}
+
+			if record.pitrUnit, err = sqlRet[0].GetString(ctx, i, 7); err != nil {
+				return nil, err
+			}
+
+			if record.pitrStatus, err = sqlRet[0].GetUint64(ctx, i, 8); err != nil {
+				return nil, err
+			}
+
+			if record.pitrStatusChangedTime, err = sqlRet[0].GetInt64(ctx, i, 9); err != nil {
 				return nil, err
 			}
 
 			records = append(records, record)
 		}
 	}
+
 	return records, nil
 }
 
-type tableRecoveryWindowForSnapshot struct {
-	snapshotName string
-	ts           int64 // utc timestamp
-}
-
-func getTableSnapshotRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName, tblName string) ([]tableRecoveryWindowForSnapshot, error) {
-	var erArray []ExecResult
-	var err error
-
-	sql := fmt.Sprintf(getTableSnapshotRecordsFormat, accountName, dbName, tblName)
-	getLogger(ses.GetService()).Info(fmt.Sprintf("getTableSnapshotRecords sql: %s", sql))
+func execSnapSearchSQL(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	searchSQL string,
+) (records []tableRecoveryWindowForSnapshot, err error) {
 
 	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
+	if err = bh.Exec(ctx, searchSQL); err != nil {
 		return nil, err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
+	var (
+		sqlRet []ExecResult
+		record tableRecoveryWindowForSnapshot
+	)
+
+	if sqlRet, err = getResultSet(ctx, bh); err != nil {
 		return nil, err
 	}
 
-	records := make([]tableRecoveryWindowForSnapshot, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var record tableRecoveryWindowForSnapshot
-			if record.snapshotName, err = erArray[0].GetString(ctx, i, 0); err != nil {
+	records = make([]tableRecoveryWindowForSnapshot, 0)
+
+	if execResultArrayHasData(sqlRet) {
+		for i := uint64(0); i < sqlRet[0].GetRowCount(); i++ {
+			if record.snapshotName, err = sqlRet[0].GetString(ctx, i, 0); err != nil {
 				return nil, err
 			}
-			if record.ts, err = erArray[0].GetInt64(ctx, i, 1); err != nil {
+
+			if record.level, err = sqlRet[0].GetString(ctx, i, 1); err != nil {
+				return nil, err
+			}
+
+			if record.accountName, err = sqlRet[0].GetString(ctx, i, 2); err != nil {
+				return nil, err
+			}
+
+			if record.databaseName, err = sqlRet[0].GetString(ctx, i, 3); err != nil {
+				return nil, err
+			}
+
+			if record.tableName, err = sqlRet[0].GetString(ctx, i, 4); err != nil {
+				return nil, err
+			}
+
+			if record.ts, err = sqlRet[0].GetInt64(ctx, i, 5); err != nil {
 				return nil, err
 			}
 
 			records = append(records, record)
 		}
 	}
+
 	return records, nil
 }
 
-func getDbPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) ([]tableRecoveryWindow, error) {
-	var newCtx = ctx
-	curAccountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if curAccountId != sysAccountID {
-		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
-	}
+func checkShowRecoveryWindowPrivilege(
+	ctx context.Context,
+	ses *Session,
+	srw *tree.ShowRecoveryWindow,
+	opAccount uint32,
+) (err error) {
 
-	sql := fmt.Sprintf(getDbPitrRecordsFormat, curAccountId, accountName, dbName, SYSMOCATALOGPITR)
-	getLogger(ses.GetService()).Info(fmt.Sprintf("getDbPitrRecords sql: %s", sql))
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(newCtx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err := getResultSet(newCtx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	records := make([]tableRecoveryWindow, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var record tableRecoveryWindow
-			if record.pitrName, err = erArray[0].GetString(newCtx, i, 0); err != nil {
-				return nil, err
-			}
-			if record.modifiedTime, err = erArray[0].GetString(newCtx, i, 1); err != nil {
-				return nil, err
-			}
-			if record.pitrValue, err = erArray[0].GetUint64(newCtx, i, 2); err != nil {
-				return nil, err
-			}
-			if record.pitrUnit, err = erArray[0].GetString(newCtx, i, 3); err != nil {
-				return nil, err
-			}
-			if record.pitrStatus, err = erArray[0].GetUint64(newCtx, i, 4); err != nil {
-				return nil, err
-			}
-			if record.pitrStatusChangedTime, err = erArray[0].GetString(newCtx, i, 5); err != nil {
-				return nil, err
-			}
-
-			records = append(records, record)
-		}
-	}
-	return records, nil
-}
-
-func getDbSnapshotsRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName, dbName string) ([]tableRecoveryWindowForSnapshot, error) {
-	var erArray []ExecResult
-	var err error
-
-	sql := fmt.Sprintf(getDbSnapshotRecordsFormat, accountName, dbName)
-	getLogger(ses.GetService()).Info(fmt.Sprintf("getDbSnapshotRecords sql: %s", sql))
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	records := make([]tableRecoveryWindowForSnapshot, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var record tableRecoveryWindowForSnapshot
-			if record.snapshotName, err = erArray[0].GetString(ctx, i, 0); err != nil {
-				return nil, err
-			}
-			if record.ts, err = erArray[0].GetInt64(ctx, i, 1); err != nil {
-				return nil, err
-			}
-
-			records = append(records, record)
-		}
-	}
-	return records, nil
-}
-
-func getAccountPitrRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName string) ([]tableRecoveryWindow, error) {
-	var newCtx = ctx
-	curAccountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if curAccountId != sysAccountID {
-		newCtx = defines.AttachAccountId(newCtx, sysAccountID)
-	}
-
-	sql := fmt.Sprintf(getAccountPitrRecordsFormat, curAccountId, accountName, SYSMOCATALOGPITR)
-	getLogger(ses.GetService()).Info(fmt.Sprintf("getAccountPitrRecords sql: %s", sql))
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(newCtx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err := getResultSet(newCtx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	records := make([]tableRecoveryWindow, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var record tableRecoveryWindow
-			if record.pitrName, err = erArray[0].GetString(newCtx, i, 0); err != nil {
-				return nil, err
-			}
-			if record.modifiedTime, err = erArray[0].GetString(newCtx, i, 1); err != nil {
-				return nil, err
-			}
-			if record.pitrValue, err = erArray[0].GetUint64(newCtx, i, 2); err != nil {
-				return nil, err
-			}
-			if record.pitrUnit, err = erArray[0].GetString(newCtx, i, 3); err != nil {
-				return nil, err
-			}
-			if record.pitrStatus, err = erArray[0].GetUint64(newCtx, i, 4); err != nil {
-				return nil, err
-			}
-			if record.pitrStatusChangedTime, err = erArray[0].GetString(newCtx, i, 5); err != nil {
-				return nil, err
-			}
-
-			records = append(records, record)
-		}
-	}
-	return records, nil
-}
-
-func getAccountSnapshotRecords(ctx context.Context, ses *Session, bh BackgroundExec, accountName string) ([]tableRecoveryWindowForSnapshot, error) {
-	var erArray []ExecResult
-	var err error
-
-	sql := fmt.Sprintf(getAccountSnapshotRecordsFormat, accountName)
-	getLogger(ses.GetService()).Info(fmt.Sprintf("getAccountSnapshotRecords sql: %s", sql))
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return nil, err
-	}
-
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return nil, err
-	}
-
-	records := make([]tableRecoveryWindowForSnapshot, 0)
-	if execResultArrayHasData(erArray) {
-		for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-			var record tableRecoveryWindowForSnapshot
-			if record.snapshotName, err = erArray[0].GetString(ctx, i, 0); err != nil {
-				return nil, err
-			}
-			if record.ts, err = erArray[0].GetInt64(ctx, i, 1); err != nil {
-				return nil, err
-			}
-
-			records = append(records, record)
-		}
-	}
-	return records, nil
-}
-
-func checkShowRecoveryWindowPrivilege(ctx context.Context, ses *Session, srw *tree.ShowRecoveryWindow) error {
 	switch srw.Level {
 	case tree.RECOVERYWINDOWLEVELACCOUNT:
-		if len(srw.AccountName) > 0 && !ses.GetTenantInfo().IsSysTenant() {
-			return moerr.NewInternalError(ctx, "only sys account can show other account's recovery window")
+		if len(srw.AccountName) > 0 && opAccount != sysAccountID {
+			loginAcc := ses.GetTenantName()
+			if srw.AccountName.String() != loginAcc {
+				return moerr.NewInternalError(ctx, "only sys account can show other account's recovery window")
+			}
 		}
 	case tree.RECOVERYWINDOWLEVELDATABASE:
 		dbName := srw.DatabaseName.String()
@@ -800,6 +670,97 @@ func checkShowRecoveryWindowPrivilege(ctx context.Context, ses *Session, srw *tr
 		if len(dbName) > 0 && needSkipDb(dbName) {
 			return moerr.NewInternalError(ctx, "can not show recovery window for system table")
 		}
+	default:
+		return moerr.NewInternalError(ctx, "unknown recovery window level")
 	}
 	return nil
+}
+
+type tableRecoveryWindow struct {
+	pitrName              string
+	level                 string
+	modifiedTime          int64
+	pitrValue             uint64
+	pitrUnit              string
+	pitrStatus            uint64 // 1:active 0:inactive
+	pitrStatusChangedTime int64
+	accountName           string
+	databaseName          string
+	tableName             string
+}
+
+type tableRecoveryWindowForSnapshot struct {
+	snapshotName string
+	level        string
+	ts           int64 // utc timestamp
+	accountName  string
+	databaseName string
+	tableName    string
+}
+
+func getStartTimeOfRecoveryWindowInLoc(record tableRecoveryWindow) (string, error) {
+	var (
+		err error
+
+		objChangeInUTC time.Time
+
+		validMinTS int64
+		validMaxTS int64
+
+		rangeStartFromNow    time.Time
+		rangeStartFromChange time.Time
+	)
+
+	//      valid minTS				 valid maxTS
+	//           |--------valid---------|
+	// |---------|----------------------|------------------------|---
+	//      pitr create/modify 		drop db/table (obj change)
+	//															now
+	//	                                          <---------------
+	//											     pitr range
+
+	validMinTS = record.modifiedTime
+	validMaxTS = record.pitrStatusChangedTime
+
+	objChangeInUTC = time.Unix(0, record.pitrStatusChangedTime).UTC()
+
+	if rangeStartFromNow, err = addTimeSpan(
+		time.Time{}, int(record.pitrValue), record.pitrUnit,
+	); err != nil {
+		return "", err
+	}
+
+	startTS := rangeStartFromNow
+
+	// the account/database/table may be dropped
+	if record.pitrStatus == 0 {
+		if rangeStartFromNow.UnixNano() > validMaxTS {
+			// exceeds the recovery range
+			return "", nil
+		}
+
+		// the range start from the changed TS is valid only when the status has changed
+		if rangeStartFromChange, err = addTimeSpan(
+			objChangeInUTC, int(record.pitrValue), record.pitrUnit,
+		); err != nil {
+			return "", err
+		}
+
+		startTS = rangeStartFromChange
+	}
+
+	if startTS.UnixNano() < validMinTS {
+		return time.Unix(0, validMinTS).Local().Format(nsTimeFormat), nil
+	}
+
+	return startTS.Local().Format(nsTimeFormat), nil
+}
+
+func getEndTimeOfRecoveryWindowInLoc(record tableRecoveryWindow) string {
+	if record.pitrStatus == 0 {
+		return time.Unix(0, record.pitrStatusChangedTime).Local().Format(nsTimeFormat)
+	} else {
+		// return local time now
+		return time.Now().Local().Format(nsTimeFormat)
+	}
 }

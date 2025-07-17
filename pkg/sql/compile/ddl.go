@@ -207,8 +207,12 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 	// 5.update mo_pitr table
 	if !needSkipDbs[dbName] {
-		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
-			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
+		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
+		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
+			catalog.MO_CATALOG, catalog.MO_PITR,
+			catalog.MO_PITR_STATUS, 0,
+			catalog.MO_PITR_CHANGED_TIME, now,
+
 			catalog.MO_PITR_ACCOUNT_ID, accountId,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_STATUS, 1,
@@ -2752,9 +2756,13 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	if !needSkipDbs[dbName] {
+		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 		updatePitrSql := fmt.Sprintf(
-			"update `%s`.`%s` set `%s` = %d, `%s` = %s where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
-			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS, 0, catalog.MO_PITR_CHANGED_TIME, "default",
+			"update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = '%s' and `%s` = %d and `%s` = %d",
+			catalog.MO_CATALOG, catalog.MO_PITR,
+			catalog.MO_PITR_STATUS, 0,
+			catalog.MO_PITR_CHANGED_TIME, now,
+
 			catalog.MO_PITR_ACCOUNT_ID, accountID,
 			catalog.MO_PITR_DB_NAME, dbName,
 			catalog.MO_PITR_TABLE_NAME, tblName,
@@ -3826,6 +3834,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		return err
 	}
 
+	now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 	// Build create pitr sql
 	sql := fmt.Sprintf(`insert into mo_catalog.mo_pitr(
                                pitr_id, 
@@ -3840,12 +3849,14 @@ func (s *Scope) CreatePitr(c *Compile) error {
                                table_name, 
                                obj_id, 
                                pitr_length, 
-                               pitr_unit) values ('%s', '%s', %d, '%s', '%s', '%s', %d, '%s', '%s', '%s', %d, %d, '%s')`,
+                               pitr_unit,
+                               pitr_status_changed_time,
+                            ) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d)`,
 		newUUid,
 		pitrName,
 		createPitr.GetCurrentAccountId(),
-		types.CurrentTimestamp().String2(time.UTC, 0),
-		types.CurrentTimestamp().String2(time.UTC, 0),
+		now,
+		now,
 		pitrLevel.String(),
 		createPitr.GetCurrentAccountId(),
 		createPitr.GetAccountName(),
@@ -3853,7 +3864,9 @@ func (s *Scope) CreatePitr(c *Compile) error {
 		createPitr.GetTableName(),
 		getPitrObjectId(createPitr),
 		createPitr.GetPitrValue(),
-		createPitr.GetPitrUnit())
+		createPitr.GetPitrUnit(),
+		now,
+	)
 
 	// Execute create pitr sql
 	err = c.runSql(sql)
@@ -3917,12 +3930,15 @@ func (s *Scope) CreatePitr(c *Compile) error {
 			table_name,
 			obj_id,
 			pitr_length,
-			pitr_unit) values ('%s', '%s', %d, '%s', '%s', '%s', %d, '%s', '%s', '%s', '%s', %d, '%s')`,
+			pitr_unit,
+            pitr_status_changed_time
+        ) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', '%s', %d, '%s', %d)`,
+
 			sysPitrUuid,
 			sysMoCatalogPitr,
 			sysAccountId,
-			types.CurrentTimestamp().String2(time.UTC, 0),
-			types.CurrentTimestamp().String2(time.UTC, 0),
+			now,
+			now,
 			tree.PITRLEVELDATABASE.String(),
 			sysAccountId,
 			"sys",
@@ -3930,7 +3946,9 @@ func (s *Scope) CreatePitr(c *Compile) error {
 			"",
 			moCatalogId,
 			createPitr.GetPitrValue(),
-			createPitr.GetPitrUnit())
+			createPitr.GetPitrUnit(),
+			now,
+		)
 		err = c.runSqlWithAccountId(insertSql, sysAccountId)
 		if err != nil {
 			return err
