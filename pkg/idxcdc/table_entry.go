@@ -259,7 +259,6 @@ func (t *TableInfo_2) fillInAsyncIndexLogUpdateSQL(firstTable bool, insertWriter
 	return
 }
 
-
 func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

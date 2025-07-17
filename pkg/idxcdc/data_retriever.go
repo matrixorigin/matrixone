@@ -37,16 +37,16 @@ const (
 type DataRetrieverImpl struct {
 	*SinkerEntry
 	*Iteration
-	typ          int8
+	typ int8
 
 	insertDataCh chan *CDCData
 	ackChan      chan struct{}
-	ctx context.Context
-	cancel context.CancelFunc
-	err error
+	ctx          context.Context
+	cancel       context.CancelFunc
+	err          error
 
 	closed bool
-	mu sync.Mutex
+	mu     sync.Mutex
 }
 
 func NewDataRetriever(
@@ -61,8 +61,8 @@ func NewDataRetriever(
 		insertDataCh: make(chan *CDCData, 1),
 		ackChan:      make(chan struct{}, 1),
 		typ:          dataType,
-		ctx: ctx,
-		cancel: cancel,
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 }
 
@@ -101,7 +101,7 @@ func (r *DataRetrieverImpl) SetNextBatch(data *CDCData) {
 	r.insertDataCh <- data
 }
 
-func (r *DataRetrieverImpl) WaitBatchConsume(){
+func (r *DataRetrieverImpl) WaitBatchConsume() {
 	if r.hasError() {
 		return
 	}

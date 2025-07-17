@@ -459,7 +459,6 @@ func InjectCDCExecutor(msg string) (rmFault func() (bool, error), err error) {
 	return
 }
 
-
 func Debug19524Injected() bool {
 	_, _, injected := fault.TriggerFault(FJ_Debug19524)
 	return injected

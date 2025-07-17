@@ -709,7 +709,7 @@ func execSql(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
 	sql string,
-) (result executor.Result,err error) {
+) (result executor.Result, err error) {
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -718,7 +718,7 @@ func execSql(
 	exec := v.(executor.SQLExecutor)
 	txn, err := de.NewTxnOperator(ctx, de.Now())
 	if err != nil {
-		return 
+		return
 	}
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -726,7 +726,7 @@ func execSql(
 		WithDisableIncrStatement().
 		WithTxn(txn)
 
-		result, err = exec.Exec(ctx, sql, opts)
+	result, err = exec.Exec(ctx, sql, opts)
 	if err != nil {
 		return
 	}
@@ -863,7 +863,7 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 	databaseName string,
 	tableName string,
 	rowCount int,
-) (*containers.Batch) {
+) *containers.Batch {
 	createDBSql := fmt.Sprintf("create database if not exists %s", databaseName)
 	createTableSql := fmt.Sprintf(
 		"create table %s.%s (id int primary key, name varchar)", databaseName, tableName)
@@ -906,10 +906,10 @@ func CheckTableData(
 	tableName string,
 	tableID uint64,
 	indexName string,
-){
+) {
 	asyncIndexDBName := "test_async_index_cdc"
 	asyncIndexTableName := fmt.Sprintf("test_table_%d_%v", tableID, indexName)
-	sql1:= fmt.Sprintf(
+	sql1 := fmt.Sprintf(
 		"SELECT * FROM %v.%v EXCEPT SELECT * FROM %v.%v;",
 		dbName, tableName,
 		asyncIndexDBName, asyncIndexTableName,
@@ -917,9 +917,9 @@ func CheckTableData(
 	result1, err := execSql(de, ctx, sql1)
 	assert.NoError(t, err)
 	defer result1.Close()
-	rowCount:=0
+	rowCount := 0
 	result1.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		rowCount+=rows
+		rowCount += rows
 		return true
 	})
 	assert.Equal(t, rowCount, 0)
