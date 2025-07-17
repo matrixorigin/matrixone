@@ -8922,11 +8922,16 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		return nil, err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	// XXXSP
+	var bh BackgroundExec
+	if bg {
+		bh = ses.GetShareTxnBackgroundExec(ctx, false)
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	defer bh.Close()
 
 	bh.ClearExecResultSet()
-
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return nil, err
