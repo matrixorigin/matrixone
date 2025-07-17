@@ -221,7 +221,7 @@ func (node *CreateProcedure) Format(ctx *FmtCtx) {
 		// default to sql
 		ctx.WriteString("sql")
 	}
-	ctx.WriteString("'")
+	ctx.WriteString("' ")
 
 	ctx.WriteString("'")
 	ctx.WriteString(node.Body)
