@@ -676,8 +676,8 @@ restore account sys database test02 table Enrollments from snapshot sp07;
 select * from Enrollments;
 studentid    courseid    enrollmentdate
 1    101    2024-01-10
-2    102    2024-01-15
 1    103    2024-01-20
+2    102    2024-01-15
 3    101    2024-02-01
 select * from Enrollments {snapshot = 'sp07'};
 studentid    courseid    enrollmentdate
@@ -867,3 +867,4 @@ drop snapshot sp100;
 drop snapshot sp101;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:12:33.077715    account    sys        

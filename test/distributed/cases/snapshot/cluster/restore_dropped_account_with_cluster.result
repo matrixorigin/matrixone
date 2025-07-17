@@ -382,19 +382,19 @@ create account acc07 admin_name = 'test_account' identified by '111111111'  comm
 create account acc03 admin_name = 'test_account' identified by '123';
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc05    test_account    2024-12-16 08:11:17    open    null    5    65    0.0    0.0    test_comment
-acc06    test_account    2024-12-16 08:11:17    open    null    5    65    0.0    0.0    test_comment
-acc07    test_account    2024-12-16 08:11:18    open    null    5    65    0.0    0.0    test_comment
-acc03    test_account    2024-12-16 08:11:18    open    null    5    65    0.0    0.0    
-sys    root    2024-12-16 07:47:54    open    null    7    99    4.422488    0.0    system account
+acc05    test_account    2025-07-17 19:12:14    open    null    5    65    0.0    0.0    test_comment
+acc06    test_account    2025-07-17 19:12:14    open    null    5    65    0.0    0.0    test_comment
+acc07    test_account    2025-07-17 19:12:14    open    null    5    65    0.0    0.0    test_comment
+acc03    test_account    2025-07-17 19:12:14    open    null    5    65    0.0    0.0    
+sys    root    2025-07-17 19:05:12    open    null    8    110    37.346318    0.0    system account
 restore cluster from snapshot snapshot_01;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc03    test_account    2024-12-16 08:11:18    open    null    6    73    0.0    0.0    
-acc01    test_account    2024-12-16 08:11:20    open    null    6    66    0.0    0.0    
-acc02    test_account    2024-12-16 08:11:21    open    null    6    73    0.0    0.0    test_comment
-acc04    test_account    2024-12-16 08:11:21    open    null    5    65    0.0    0.0    test_comment
-sys    root    2024-12-16 07:47:54    open    null    7    99    4.422488    0.0    system account
+acc03    test_account    2025-07-17 19:12:14    open    null    6    73    0.0    0.0    
+acc01    test_account    2025-07-17 19:12:17    open    null    6    66    0.0    0.0    
+acc02    test_account    2025-07-17 19:12:17    open    null    6    73    0.0    0.0    test_comment
+acc04    test_account    2025-07-17 19:12:18    open    null    5    65    0.0    0.0    test_comment
+sys    root    2025-07-17 19:05:12    open    null    8    110    37.286067    0.0    system account
 select * from db01.t01;
 a
 1

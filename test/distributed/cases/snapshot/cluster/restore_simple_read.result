@@ -8,14 +8,12 @@ count(*)
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-06-28 06:13:04.389609    account    sys        
 create snapshot cluster_sp for cluster;
 create snapshot account_sp for account;
-internal error: snapshot account_sp already exists
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-28 06:21:19.645732    cluster            
-account_sp    2024-06-28 06:13:04.389609    account    sys        
+account_sp    2025-07-17 19:12:33.077715    account    sys        
+cluster_sp    2025-07-17 19:12:33.072143    cluster            
 delete from snapshot_read.test_snapshot_read where a > 10;
 insert into test_snapshot_read (a) values(11),(12), (13), (14), (15),(16), (17), (18), (19), (20);
 select count(*) from snapshot_read.test_snapshot_read where a in (select a from snapshot_read.test_snapshot_read {snapshot = 'cluster_sp'});

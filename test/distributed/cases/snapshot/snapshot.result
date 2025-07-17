@@ -11,21 +11,22 @@ sleep(1)
 create snapshot snapshot_04 for account default_1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot_04    2024-12-31 03:50:38.729708    account    default_1        
-snapshot_03    2024-12-31 03:50:37.616675    account    default_1        
-snapshot_02    2024-12-31 03:50:36.543137    account    default_1        
-snapshot_01    2024-12-31 03:50:36.145389    cluster            
+snapshot_04    2025-07-17 19:14:20.329071    account    default_1        
+snapshot_03    2025-07-17 19:14:19.313128    account    default_1        
+snapshot_02    2025-07-17 19:14:18.303305    account    default_1        
+snapshot_01    2025-07-17 19:14:18.199505    cluster            
+account_sp    2025-07-17 19:12:33.077715    account    sys        
 show snapshots where SNAPSHOT_NAME = 'snapshot_01';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-snapshot_01    2024-12-31 03:50:36.145389    cluster            
+snapshot_01    2025-07-17 19:14:18.199505    cluster            
 show snapshots where SNAPSHOT_LEVEL = 'cluster';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-snapshot_01    2024-12-31 03:50:36.145389    cluster            
+snapshot_01    2025-07-17 19:14:18.199505    cluster            
 show snapshots where ACCOUNT_NAME = 'default_1';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-snapshot_04    2024-12-31 03:50:38.729708    account    default_1        
-snapshot_03    2024-12-31 03:50:37.616675    account    default_1        
-snapshot_02    2024-12-31 03:50:36.543137    account    default_1        
+snapshot_04    2025-07-17 19:14:20.329071    account    default_1        
+snapshot_03    2025-07-17 19:14:19.313128    account    default_1        
+snapshot_02    2025-07-17 19:14:18.303305    account    default_1        
 DROP SNAPSHOT snapshot_01;
 DROP SNAPSHOT snapshot_02;
 DROP SNAPSHOT snapshot_03;
@@ -41,22 +42,22 @@ sleep(1)
 create snapshot snapshot_07 for account default_1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot_07    2024-12-31 03:50:41.042356    account    default_1        
-snapshot_06    2024-12-31 03:50:40.013175    account    default_1        
-snapshot_05    2024-12-31 03:50:38.972736    account    default_1        
+snapshot_07    2025-07-17 19:14:22.570392    account    default_1        
+snapshot_06    2025-07-17 19:14:21.551879    account    default_1        
+snapshot_05    2025-07-17 19:14:20.493629    account    default_1        
 show snapshots where SNAPSHOT_NAME = 'snapshot_07';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-snapshot_07    2024-12-31 03:50:41.042356    account    default_1        
+snapshot_07    2025-07-17 19:14:22.570392    account    default_1        
 show snapshots where SNAPSHOT_LEVEL = 'account';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-snapshot_07    2024-12-31 03:50:41.042356    account    default_1        
-snapshot_06    2024-12-31 03:50:40.013175    account    default_1        
-snapshot_05    2024-12-31 03:50:38.972736    account    default_1        
+snapshot_07    2025-07-17 19:14:22.570392    account    default_1        
+snapshot_06    2025-07-17 19:14:21.551879    account    default_1        
+snapshot_05    2025-07-17 19:14:20.493629    account    default_1        
 show snapshots where ACCOUNT_NAME = 'default_1';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-snapshot_07    2024-12-31 03:50:41.042356    account    default_1        
-snapshot_06    2024-12-31 03:50:40.013175    account    default_1        
-snapshot_05    2024-12-31 03:50:38.972736    account    default_1        
+snapshot_07    2025-07-17 19:14:22.570392    account    default_1        
+snapshot_06    2025-07-17 19:14:21.551879    account    default_1        
+snapshot_05    2025-07-17 19:14:20.493629    account    default_1        
 drop account default_1;
 create snapshot snapshot_08 for account default_1;
 internal error: account default_1 does not exist
@@ -71,8 +72,9 @@ create account default_2 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_10 for account default_2;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot_10    2024-12-31 03:50:44.821212    account    default_2        
-snapshot_09    2024-12-31 03:50:41.827006    account    default_1        
+snapshot_10    2025-07-17 19:14:24.096213    account    default_2        
+snapshot_09    2025-07-17 19:14:22.928055    account    default_1        
+account_sp    2025-07-17 19:12:33.077715    account    sys        
 create snapshot snapshot_11 for account default_1;
 create snapshot snapshot_12 for account default_2;
 internal error: only sys tenant can create tenant level snapshot for other tenant
@@ -80,7 +82,7 @@ create snapshot snapshot_13 for cluster;
 internal error: only sys tenant can create cluster level snapshot
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snapshot_11    2024-12-31 03:50:44.884872    account    default_1        
+snapshot_11    2025-07-17 19:14:24.112819    account    default_1        
 create user  efg identified by '111';
 create snapshot snapshot_14 for account default_1;
 internal error: do not have privilege to execute the statement
@@ -128,3 +130,4 @@ drop snapshot if exists `_binary`;
 drop table if exists cluster01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:12:33.077715    account    sys        

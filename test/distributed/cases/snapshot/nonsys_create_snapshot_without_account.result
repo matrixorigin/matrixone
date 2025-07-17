@@ -54,7 +54,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-277802    test01    def    create database test01    2    2    2025-01-07 11:50:28    48    
+308425    test01    def    create database test01    2    2    2025-07-17 12:13:28    258    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -82,7 +82,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-277802    test01    def    create database test01    2    2    2025-01-07 11:50:28    48    
+308425    test01    def    create database test01    2    2    2025-07-17 12:13:28    258    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -127,7 +127,7 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-277820    test02    def    create database test02    2    2    2025-01-07 11:50:29    48    
+308443    test02    def    create database test02    2    2    2025-07-17 12:13:28    258    
 select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
 attname
 col1
@@ -231,13 +231,13 @@ drop snapshot if exists sp04;
 create snapshot sp04 for account;
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2025-01-07 03:50:31.66455    account    acc01        
+sp04    2025-07-17 19:13:28.697599    account    acc01        
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
 count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-277840    test03    def    create database test03    2    2    2025-01-07 11:50:30    48    
+308463    test03    def    create database test03    2    2    2025-07-17 12:13:28    258    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
 empno
@@ -479,8 +479,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-01-07 03:50:34.701608    account    acc01        
-sp07    2025-01-07 03:50:34.599754    account    acc01        
+sp08    2025-07-17 19:13:29.921063    account    acc01        
+sp07    2025-07-17 19:13:29.84454    account    acc01        
 restore account acc01 from snapshot sp08;
 select * from table02;
 col1    col2
@@ -526,8 +526,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2025-01-07 03:50:35.642588    account    acc01        
-sp09    2025-01-07 03:50:35.548831    account    acc01        
+sp10    2025-07-17 19:13:30.809649    account    acc01        
+sp09    2025-07-17 19:13:30.788767    account    acc01        
 restore account acc01 from snapshot sp09;
 select * from table02;
 col1    col2
@@ -732,11 +732,11 @@ Table    Create Table
 tm2    CREATE TABLE `tm2` (\n  `a` int NOT NULL AUTO_INCREMENT,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`)\n)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2025-01-07 03:50:37.01478    account    acc01        
-sp14    2025-01-07 03:50:36.829672    account    acc01        
-sp13    2025-01-07 03:50:36.698631    account    acc01        
-sp12    2025-01-07 03:50:36.592813    account    acc01        
-sp11    2025-01-07 03:50:36.485793    account    acc01        
+sp15    2025-07-17 19:13:31.309125    account    acc01        
+sp14    2025-07-17 19:13:31.274103    account    acc01        
+sp13    2025-07-17 19:13:31.249221    account    acc01        
+sp12    2025-07-17 19:13:31.232161    account    acc01        
+sp11    2025-07-17 19:13:31.194014    account    acc01        
 drop database db03;
 drop snapshot sp15;
 drop snapshot sp14;
@@ -911,8 +911,8 @@ Table    Create Table
 table01    CREATE TABLE `table01` (\n  `col1` int DEFAULT NULL,\n  `col2` enum('a','b','c') DEFAULT NULL\n)
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp15    2025-01-07 03:50:39.612703    account    acc01        
-sp14    2025-01-07 03:50:39.190647    account    acc01        
+sp15    2025-07-17 19:13:32.060577    account    acc01        
+sp14    2025-07-17 19:13:31.890322    account    acc01        
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -1014,7 +1014,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp16    2025-01-07 03:50:40.802014    account    acc01        
+sp16    2025-07-17 19:13:32.308053    account    acc01        
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1076,11 +1076,11 @@ count(*)
 insert into pri01 values(23420, 32432543.3242);
 select * from pri01;
 col1    col2
+23420    32432543
 1    2378
 234    -3923
 23423    32432543
 234222    -3923
-23420    32432543
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    NO    PRI    null        
@@ -1090,7 +1090,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-278094    db11    def    create database db11    2    2    2025-01-07 11:50:42    48    
+308705    db11    def    create database db11    2    2    2025-07-17 12:13:32    258    
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 attname
 col1
@@ -1129,3 +1129,4 @@ drop snapshot sp19;
 drop account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+account_sp    2025-07-17 19:12:33.077715    account    sys        

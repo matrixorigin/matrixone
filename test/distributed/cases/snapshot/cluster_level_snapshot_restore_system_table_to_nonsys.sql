@@ -139,7 +139,7 @@ call test_if_hit_elseif_first_elseif();
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
--- @ignore:0,7,8
+-- @ignore:0,8,9
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -154,7 +154,7 @@ drop procedure test_if_hit_if;
 restore account acc01 from snapshot sp_sp05;
 
 -- @session:id=1&user=acc01:test_account&password=111
--- @ignore:0,7,8
+-- @ignore:0,8,9
 select * from mo_catalog.mo_stored_procedure;
 call test_if_hit_elseif_first_elseif();
 call test_if_hit_if();
@@ -191,7 +191,7 @@ call test_if_hit_second_elseif();
 drop procedure if exists test_if_hit_else;
 create procedure test_if_hit_else() 'begin DECLARE v1 INT; SET v1 = 3; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_else();
--- @ignore:0,7,8
+-- @ignore:0,8,9
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -202,7 +202,7 @@ create snapshot sp_sp06 for cluster;
 drop table tbh1;
 drop table tbh2;
 drop procedure test_if_hit_second_elseif;
--- @ignore:0,7,8
+-- @ignore:0,8,9
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -211,7 +211,7 @@ restore account acc01 from snapshot sp_sp06;
 -- @session:id=1&user=acc01:test_account&password=111
 call test_if_hit_else();
 call test_if_hit_second_elseif();
--- @ignore:0,7,8
+-- @ignore:0,8,9
 select * from mo_catalog.mo_stored_procedure;
 drop procedure test_if_hit_second_elseif;
 drop procedure test_if_hit_else;

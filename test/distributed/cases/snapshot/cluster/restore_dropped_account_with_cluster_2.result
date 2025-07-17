@@ -376,17 +376,17 @@ drop account if exists acc04;
 create account acc03 admin_name = 'test_account' identified by '123';
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-sys    root    2024-12-16 09:41:53    open    null    7    99    0.0    0.0    system account
-acc03    test_account    2024-12-16 09:46:05    open    null    5    65    0.0    0.0    
+acc03    test_account    2025-07-17 19:12:23    open    null    5    65    0.0    0.0    
+sys    root    2025-07-17 19:05:12    open    null    8    110    37.286067    0.0    system account
 restore account acc01 from snapshot snapshot_cls;
 restore account acc02 from snapshot snapshot_cls;
 restore account acc03 from snapshot snapshot_cls;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-sys    root    2024-12-16 09:41:53    open    null    7    99    0.0    0.0    system account
-acc03    test_account    2024-12-16 09:46:05    open    null    6    73    0.0    0.0    
-acc01    test_account    2024-12-16 09:46:05    open    null    6    66    0.0    0.0    
-acc02    test_account    2024-12-16 09:46:06    open    null    6    73    0.0    0.0    test_comment
+acc03    test_account    2025-07-17 19:12:23    open    null    6    73    0.0    0.0    
+acc01    test_account    2025-07-17 19:12:23    open    null    6    66    0.0    0.0    
+acc02    test_account    2025-07-17 19:12:24    open    null    6    73    0.0    0.0    test_comment
+sys    root    2025-07-17 19:05:12    open    null    8    110    37.286067    0.0    system account
 select * from db01.t01;
 a
 1

@@ -4,17 +4,18 @@ drop snapshot if exists spsp01;
 create snapshot spsp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2025-01-06 06:52:50.238536    account    acc01        
+spsp01    2025-07-17 19:13:49.505859    account    acc01        
+account_sp    2025-07-17 19:12:33.077715    account    sys        
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-sys    root    2025-01-06 06:51:51    open    null    8    109    1.635153    0.0    system account
-acc01    test_account    2025-01-06 06:52:50    open    null    5    65    0.0    0.0    
+acc01    test_account    2025-07-17 19:13:49    open    null    5    65    0.0    0.0    
+sys    root    2025-07-17 19:05:12    open    null    8    110    44.570462    0.0    system account
 drop account acc01;
 restore account acc01 from snapshot spsp01;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-sys    root    2025-01-06 06:51:51    open    null    8    109    1.635153    0.0    system account
-acc01    test_account    2025-01-06 06:52:50    open    null    5    65    0.0    0.0    
+acc01    test_account    2025-07-17 19:13:49    open    null    5    65    0.0    0.0    
+sys    root    2025-07-17 19:05:12    open    null    8    110    44.570462    0.0    system account
 drop account acc01;
 drop snapshot spsp01;
 drop account if exists acc02;
@@ -135,8 +136,8 @@ drop account acc02;
 restore account acc02 from snapshot spsp02;
 show accounts;
 account_name    admin_name    created_time    status    suspended_time    db_count    tbl_count    size    snapshot_size    comments
-acc02    test_account    2025-07-03 05:09:30    open    null    9    71    0.0    0.0
-sys    root    2025-07-03 04:00:34    open    null    8    110    36.113428    0.0    system account
+acc02    test_account    2025-07-17 19:13:51    open    null    9    71    0.0    0.0    
+sys    root    2025-07-17 19:05:12    open    null    8    110    44.570462    0.0    system account
 show databases;
 Database
 information_schema
@@ -302,10 +303,10 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage01    file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage        disabled    2025-01-06 06:52:52    
+1    stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage        disabled    2025-07-17 19:13:53    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
 select * from t1 into outfile 'stage://stage01/local_stage_table20.csv';
 truncate t1;
 load data infile 'stage://stage01/local_stage_table20.csv' into table t1 fields terminated by ',' ignore 1 lines;
@@ -434,7 +435,7 @@ id    ti    si    bi    fl    dl    de    ch    vch    dd    dt
 9    8    4    9    9849.312    9849312.0    9849    see you    subquery    2022-04-28    2022-04-28 22:40:11
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/ariznawl/code/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
 select * from vtab32;
 id    vecf32_3    vecf32_5
 1    null    null
@@ -464,7 +465,7 @@ abcd_f
 abcde_
 select * from test02;
 col1    col2
-1    file:///Users/ariznawl/code/matrixone/test/distributed/resources/load_data/time_date_2.csv
+1    file:///Users/fengttt/m/matrixone/test/distributed/resources/load_data/time_date_2.csv
 use test06;
 select * from table01;
 id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10

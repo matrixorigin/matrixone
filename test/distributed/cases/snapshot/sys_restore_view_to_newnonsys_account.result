@@ -531,8 +531,8 @@ studentid    name    grade
 select * from Enrollments;
 studentid    courseid    enrollmentdate
 1    101    2024-01-10
-2    102    2024-01-15
 1    103    2024-01-20
+2    102    2024-01-15
 3    101    2024-02-01
 select * from StudentCoursesView;
 studentname    coursetitle    teacher    enrollmentdate
@@ -545,8 +545,8 @@ use test02;
 select * from Enrollments;
 studentid    courseid    enrollmentdate
 1    101    2024-01-10
-2    102    2024-01-15
 1    103    2024-01-20
+2    102    2024-01-15
 3    101    2024-02-01
 select * from StudentCoursesView;
 studentname    coursetitle    teacher    enrollmentdate
