@@ -195,6 +195,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 						return
 					}
 				}
+				logutil.Infof("db.Catalog.GCByTS wartMark %v", wartMark.ToString())
 				db.Catalog.GCByTS(ctx, wartMark)
 			},
 			1,

@@ -974,6 +974,7 @@ func TestReplay7(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
+	config.MinTSGCCheckerFactory(tae, tae.Opts)
 	schema := catalog.MockSchemaAll(18, 14)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 5
@@ -1256,6 +1257,7 @@ func TestReplay10(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
+	config.MinTSGCCheckerFactory(tae, tae.Opts)
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 5
