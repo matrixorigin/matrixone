@@ -184,15 +184,15 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if wartMark.IsEmpty() {
 					return
 				}
-				// If gcWaterMark has not been updated for a long time
-				// exceeding GlobalVersionInterval, use GlobalVersionInterval
-				// must be more than 10 minutes to be effective,
-				// because in some cases of ut, GlobalVersionInterval will be very short
-				if db.Opts.CheckpointCfg.GlobalVersionInterval > 10*time.Minute {
-					ts := types.BuildTS(wartMark.Physical()-
-						int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
-					if wartMark.GE(&ts) {
-						wartMark = ts
+
+				ts := types.BuildTS(wartMark.Physical()-
+					int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
+				if wartMark.GE(&ts) {
+					wartMark = ts
+				}
+				if db.Opts.GCTimeChecker != nil {
+					if !db.Opts.GCTimeChecker(&wartMark) {
+						return
 					}
 				}
 				db.Catalog.GCByTS(ctx, wartMark)

@@ -16,6 +16,8 @@ package config
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -30,6 +32,13 @@ func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Op
 	opts.CheckpointCfg.BlockRows = 10
 	opts.Ctx = context.Background()
 	return opts
+}
+
+func MinTSGCCheckerFactory(e *db.DB, opts *options.Options) {
+	opts.GCTimeChecker = func(ts *types.TS) bool {
+		minTS := e.TxnMgr.MinTSForTest()
+		return !ts.GE(&minTS)
+	}
 }
 
 func WithQuickScanAndCKPOpts(

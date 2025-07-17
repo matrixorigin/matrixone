@@ -16,6 +16,7 @@ package options
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -75,6 +76,7 @@ type Options struct {
 	IncrementalDedup     bool
 	IsStandalone         bool
 	EnableApplyTableData bool
+	GCTimeChecker        func(ts *types.TS) bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`

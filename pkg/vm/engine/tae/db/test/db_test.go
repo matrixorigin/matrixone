@@ -5483,6 +5483,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.Name = "testupdate"
@@ -5768,6 +5769,7 @@ func TestDeletePerf(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 1000
 	schema.Extra.ObjectMaxBlocks = 5
@@ -5846,6 +5848,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
+			config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 			cleaner := gc.NewCheckpointCleaner(
 				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
 			)
@@ -5920,6 +5923,7 @@ func TestGCDropDB(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
+			config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner)
 			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
@@ -5996,6 +6000,7 @@ func TestGCDropTable(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
+			config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 			cleaner := gc.NewCheckpointCleaner(
 				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
 			)
@@ -8694,6 +8699,7 @@ func TestDedup2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.Extra.BlockMaxRows = 2
@@ -8723,6 +8729,7 @@ func TestCompactLargeTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(600, 3)
 	schema.Extra.BlockMaxRows = 2
@@ -8752,7 +8759,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-
+	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 	schema := catalog.MockSchemaAll(60, 3)
 	schema.Extra.BlockMaxRows = 20
 	schema.Extra.ObjectMaxBlocks = 10
