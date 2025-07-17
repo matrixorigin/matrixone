@@ -503,12 +503,13 @@ func mock_mo_async_index_log(
 	addDefFn("account_id", types.T_uint32.ToType(), 0)
 	addDefFn("table_id", types.T_uint64.ToType(), 1)
 	addDefFn("index_name", types.T_varchar.ToType(), 2)
-	addDefFn("last_sync_txn_ts", types.T_varchar.ToType(), 3)
-	addDefFn("err_code", types.T_int32.ToType(), 4)
-	addDefFn("error_msg", types.T_varchar.ToType(), 5)
-	addDefFn("info", types.T_varchar.ToType(), 6)
-	addDefFn("drop_at", types.T_varchar.ToType(), 7)
-	addDefFn("consumer_config", types.T_varchar.ToType(), 8)
+	addDefFn("column_names", types.T_varchar.ToType(), 3)
+	addDefFn("last_sync_txn_ts", types.T_varchar.ToType(), 4)
+	addDefFn("err_code", types.T_int32.ToType(), 5)
+	addDefFn("error_msg", types.T_varchar.ToType(), 6)
+	addDefFn("info", types.T_varchar.ToType(), 7)
+	addDefFn("drop_at", types.T_varchar.ToType(), 8)
+	addDefFn("consumer_config", types.T_varchar.ToType(), 9)
 
 	defs = append(defs,
 		&engine.ConstraintDef{

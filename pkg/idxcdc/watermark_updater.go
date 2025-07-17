@@ -116,6 +116,7 @@ func RegisterJob(
 		tableID,
 		sinkerinfo_json.IndexName,
 		"",
+		"",
 		string(consumerInfoJson),
 	)
 	_, err = ExecWithResult(ctx, sql, cnUUID, txn)

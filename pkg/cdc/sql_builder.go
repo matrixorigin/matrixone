@@ -230,6 +230,7 @@ const (
 		`account_id,` +
 		`table_id,` +
 		`index_name,` +
+		`column_names,` +
 		`last_sync_txn_ts,` +
 		`err_code,` +
 		`error_msg,` +
@@ -240,6 +241,7 @@ const (
 		`%d,` + // account_id
 		`%d,` + // table_id
 		`'%s',` + // index_name
+		`'%s',` + // column_names
 		`'%s',` + // last_sync_txn_ts
 		`%d,` + // err_code
 		`'%s',` + // error_msg
@@ -844,6 +846,7 @@ func (b cdcSQLBuilder) AsyncIndexLogInsertSQL(
 	accountID uint32,
 	tableID uint64,
 	indexName string,
+	columnNames string,
 	info string,
 	consumerConfig string,
 ) string {
@@ -852,6 +855,7 @@ func (b cdcSQLBuilder) AsyncIndexLogInsertSQL(
 		accountID,
 		tableID,
 		indexName,
+		columnNames,
 		types.TS{}.ToString(),
 		0,
 		"",

@@ -132,7 +132,12 @@ func AsyncIndexCdcTaskExecutorFactory(
 		}
 		attachToTask(ctx, task.GetID(), exec)
 
-		exec.initState()
+		exec.runningMu.Lock()
+		defer exec.runningMu.Unlock()
+		if exec.running {
+			return nil
+		}
+		exec.initStateLocked()
 		exec.run()
 		return nil
 	}
@@ -302,16 +307,16 @@ func (exec *CDCTaskExecutor) Restart() error {
 	return nil
 }
 func (exec *CDCTaskExecutor) Start() {
-	exec.initState()
-	go exec.run()
-}
-
-func (exec *CDCTaskExecutor) initState() {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
 	if exec.running {
 		return
 	}
+	exec.initStateLocked()
+	go exec.run()
+}
+
+func (exec *CDCTaskExecutor) initStateLocked() {
 	exec.running = true
 	logutil.Info(
 		"Async-Index-CDC-Task Start",
@@ -344,6 +349,9 @@ func (exec *CDCTaskExecutor) Stop() {
 }
 
 func (exec *CDCTaskExecutor) run() {
+	logutil.Info(
+		"Async-Index-CDC-Task Run",
+	)
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
 	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
