@@ -76,7 +76,7 @@ type Options struct {
 	IncrementalDedup     bool
 	IsStandalone         bool
 	EnableApplyTableData bool
-	GCTimeChecker        func(ts *types.TS) bool
+	GCTimeCheckerFactory func(any) func(*types.TS) bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`

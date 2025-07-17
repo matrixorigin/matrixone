@@ -170,7 +170,6 @@ func TestBackupData2(t *testing.T) {
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
 	defer opts.Fs.Close(ctx)
-	config.MinTSGCCheckerFactory(db.DB, db.Opts)
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10

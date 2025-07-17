@@ -296,7 +296,6 @@ func TestTruncate1(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer db.Close()
-	config.MinTSGCCheckerFactory(db.DB, db.Opts)
 
 	fault.Enable()
 	defer fault.Disable()
@@ -348,7 +347,6 @@ func TestAppend3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae, tae.Opts)
 
 	fault.Enable()
 	defer fault.Disable()
@@ -3190,7 +3188,7 @@ func TestTruncate(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -3612,7 +3610,6 @@ func TestDelete3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
 	forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
@@ -4222,7 +4219,7 @@ func TestWatchDirty(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
@@ -4286,7 +4283,6 @@ func TestDirtyWatchRace(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
@@ -4759,7 +4755,6 @@ func TestReadCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	fault.Enable()
 	defer fault.Disable()
@@ -4856,7 +4851,7 @@ func TestDelete4(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.NewEmptySchema("xx")
 	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
 	schema.AppendCol("offset", types.T_uint32.ToType())
@@ -5238,7 +5233,6 @@ func TestUpdate(t *testing.T) {
 	// opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.Extra.BlockMaxRows = 100
@@ -5492,7 +5486,6 @@ func TestAlwaysUpdate(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.Name = "testupdate"
@@ -5778,7 +5771,7 @@ func TestDeletePerf(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 1000
 	schema.Extra.ObjectMaxBlocks = 5
@@ -5857,7 +5850,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 			cleaner := gc.NewCheckpointCleaner(
 				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
 			)
@@ -5932,7 +5925,7 @@ func TestGCDropDB(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 			cleaner := gc.NewCheckpointCleaner(context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner)
 			manager := gc.NewDiskCleaner(cleaner, true)
 			manager.Start()
@@ -6009,7 +6002,7 @@ func TestGCDropTable(t *testing.T) {
 			opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 			cleaner := gc.NewCheckpointCleaner(
 				context.Background(), "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
 			)
@@ -6649,7 +6642,6 @@ func TestGlobalCheckpoint1(t *testing.T) {
 	options.WithGlobalVersionInterval(time.Millisecond * 10)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	fault.Enable()
 	defer fault.Disable()
@@ -6689,7 +6681,7 @@ func TestAppendAndGC(t *testing.T) {
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	db := tae.DB
 
 	db.MergeScheduler.PauseAll()
@@ -6771,7 +6763,6 @@ func TestAppendAndGC2(t *testing.T) {
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	db := tae.DB
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	fault.Enable()
 	defer fault.Disable()
@@ -6884,7 +6875,7 @@ func TestSnapshotGC(t *testing.T) {
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	db := tae.DB
 
 	fault.Enable()
@@ -7132,7 +7123,7 @@ func TestSnapshotMeta(t *testing.T) {
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	db := tae.DB
 	db.MergeScheduler.PauseAll()
 
@@ -7314,7 +7305,7 @@ func TestPitrMeta(t *testing.T) {
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	db := tae.DB
 	db.MergeScheduler.PauseAll()
 
@@ -7584,7 +7575,7 @@ func TestMergeGC(t *testing.T) {
 	//options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	db := tae.DB
 
 	fault.Enable()
@@ -7736,7 +7727,7 @@ func TestCkpLeak(t *testing.T) {
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	db := tae.DB
 	db.MergeScheduler.PauseAll()
 
@@ -7836,7 +7827,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	options.WithCheckpointIncrementaInterval(time.Hour)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -8505,7 +8496,7 @@ func TestGCCatalog2(t *testing.T) {
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchema(3, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -8543,7 +8534,7 @@ func TestGCCatalog3(t *testing.T) {
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchema(3, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -8719,7 +8710,6 @@ func TestDedup2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.Extra.BlockMaxRows = 2
@@ -8749,7 +8739,6 @@ func TestCompactLargeTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(600, 3)
 	schema.Extra.BlockMaxRows = 2
@@ -8779,7 +8768,7 @@ func TestCommitS3Blocks(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchemaAll(60, 3)
 	schema.Extra.BlockMaxRows = 20
 	schema.Extra.ObjectMaxBlocks = 10
@@ -8834,7 +8823,7 @@ func TestDedupSnapshot1(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	fault.Enable()
 	defer fault.Disable()
 	rmFn, err := objectio.InjectPrintFlushEntry("")
@@ -8870,7 +8859,6 @@ func TestDedupSnapshot2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
@@ -8931,7 +8919,7 @@ func TestDedupSnapshot3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 3
@@ -9892,7 +9880,6 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	options.WithCheckpointGlobalMinCount(3)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
 
 	fault.Enable()
 	defer fault.Disable()
@@ -10314,7 +10301,7 @@ func TestPersistTransferTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 3
@@ -10385,7 +10372,7 @@ func TestClearPersistTransferTable(t *testing.T) {
 			opts := config.WithQuickScanAndCKPOpts(nil)
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-			config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 			schema := catalog.MockSchemaAll(13, 3)
 			schema.Extra.BlockMaxRows = 10
 			schema.Extra.ObjectMaxBlocks = 3

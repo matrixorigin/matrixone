@@ -549,7 +549,7 @@ func TestMergeBlocks2(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
-	config.MinTSGCCheckerFactory(tae, tae.Opts)
+
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.Extra.BlockMaxRows = 5
 	schema.Extra.ObjectMaxBlocks = 2
@@ -668,7 +668,6 @@ func TestCompaction2(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
-	config.MinTSGCCheckerFactory(db, db.Opts)
 
 	schema := catalog.MockSchemaAll(4, 2)
 	schema.Extra.BlockMaxRows = 21

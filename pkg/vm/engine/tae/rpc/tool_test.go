@@ -55,7 +55,7 @@ func Test_gcArg(t *testing.T) {
 	options.WithCheckpointGlobalMinCount(100)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	config.MinTSGCCheckerFactory(tae.DB, tae.Opts)
+
 	dir := path.Join(tae.Dir, "data")
 	dump := gcDumpArg{
 		ctx: &inspectContext{

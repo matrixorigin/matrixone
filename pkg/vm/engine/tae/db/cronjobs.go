@@ -190,8 +190,9 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if wartMark.GE(&ts) {
 					wartMark = ts
 				}
-				if db.Opts.GCTimeChecker != nil {
-					if !db.Opts.GCTimeChecker(&wartMark) {
+				if db.Opts.GCTimeCheckerFactory != nil {
+					op := db.Opts.GCTimeCheckerFactory(db)
+					if !op(&wartMark) {
 						return
 					}
 				}
