@@ -549,3 +549,7 @@ func (exec *aggregatorFromBytesToBytes) Free() {
 	exec.ret.free()
 	exec.distinctHash.free()
 }
+
+func (exec *aggregatorFromBytesToBytes) Size() int64 {
+	return exec.ret.Size() + exec.distinctHash.Size() + exec.execContext.Size()
+}
