@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 	"time"
 
@@ -215,6 +216,12 @@ var readTableWithTxn = func(
 func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (err error) {
 	//step1 : create an txnOp
 	txnOp, err := GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
+
+	// if injected, we expect the reader to close
+	if objectio.CDCReaderErrInjected() {
+		err = moerr.NewInternalErrorNoCtx("CDC_READER_ERR")
+	}
+
 	if err != nil {
 		return err
 	}
@@ -314,6 +321,7 @@ func (reader *tableReader) readTableWithTxn(
 
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
+
 	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return

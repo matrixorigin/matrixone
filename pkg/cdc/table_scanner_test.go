@@ -59,7 +59,7 @@ func TestTableScanner(t *testing.T) {
 	td := &TableDetector{
 		Mutex:                sync.Mutex{},
 		Mp:                   make(map[uint32]TblMap),
-		Callbacks:            make(map[string]func(map[uint32]TblMap)),
+		Callbacks:            make(map[string]TableCallback),
 		CallBackAccountId:    make(map[string]uint32),
 		SubscribedAccountIds: make(map[uint32][]string),
 		CallBackDbName:       make(map[string][]string),
@@ -69,13 +69,13 @@ func TestTableScanner(t *testing.T) {
 		exec:                 mockSqlExecutor,
 	}
 
-	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) {})
+	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
 	assert.Equal(t, 1, len(td.Callbacks))
-	td.Register("id2", 2, []string{"db2"}, []string{"tbl2"}, func(mp map[uint32]TblMap) {})
+	td.Register("id2", 2, []string{"db2"}, []string{"tbl2"}, func(mp map[uint32]TblMap) error { return nil })
 	assert.Equal(t, 2, len(td.Callbacks))
 	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 
-	td.Register("id3", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) {})
+	td.Register("id3", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
 	assert.Equal(t, 3, len(td.Callbacks))
 	assert.Equal(t, 2, len(td.SubscribedAccountIds))
 	assert.Equal(t, 2, len(td.SubscribedDbNames["db1"]))
@@ -96,7 +96,7 @@ func TestTableScanner(t *testing.T) {
 	assert.Equal(t, 0, len(td.SubscribedAccountIds))
 	assert.Equal(t, 0, len(td.SubscribedDbNames))
 
-	td.Register("id4", 1, []string{"db4"}, []string{"tbl4"}, func(mp map[uint32]TblMap) {})
+	td.Register("id4", 1, []string{"db4"}, []string{"tbl4"}, func(mp map[uint32]TblMap) error { return nil })
 	assert.Equal(t, 1, len(td.Callbacks))
 	assert.Equal(t, 1, len(td.SubscribedAccountIds))
 

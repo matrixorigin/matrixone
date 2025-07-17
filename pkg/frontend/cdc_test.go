@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"regexp"
 	"sync"
 	"testing"
@@ -1002,7 +1003,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	gostub.Stub(&cdc.GetTableDetector, func(cnUUID string) *cdc.TableDetector {
 		return &cdc.TableDetector{
 			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            map[string]func(map[uint32]cdc.TblMap){"id": func(mp map[uint32]cdc.TblMap) {}},
+			Callbacks:            map[string]cdc.TableCallback{"id": func(mp map[uint32]cdc.TblMap) error { return nil }},
 			CallBackAccountId:    map[string]uint32{"id": 0},
 			SubscribedAccountIds: map[uint32][]string{0: {"id"}},
 			CallBackDbName:       make(map[string][]string),
@@ -2286,6 +2287,7 @@ func TestCdcTask_Cancel(t *testing.T) {
 }
 
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
+	fault.EnableDomain(fault.DomainFrontend)
 	type fields struct {
 		logger               *zap.Logger
 		ie                   ie.InternalExecutor

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"regexp"
 	"strconv"
 	"sync"
@@ -208,6 +209,11 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
+	// if injected, we expect the start to keep retrying
+	if objectio.CDCStartErrInjected() {
+		return moerr.NewInternalError(context.Background(), "CDC_START_ERR")
+	}
+
 	dbs := make([]string, 0, len(exec.tables.Pts))
 	tables := make([]string, 0, len(exec.tables.Pts))
 	for _, pt := range exec.tables.Pts {
@@ -260,6 +266,10 @@ func (exec *CDCTaskExecutor) Resume() error {
 			zap.String("task-name", exec.spec.TaskName),
 		)
 	}()
+
+	if exec.isRunning {
+		return nil
+	}
 
 	go func() {
 		// closed in Pause, need renew
@@ -397,10 +407,16 @@ func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (e
 	)
 }
 
-func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMap) {
+func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMap) error {
 	// lock to avoid create pipelines for the same table
+	// 2025.7, this lock might be needless now
 	exec.Lock()
 	defer exec.Unlock()
+
+	// if injected, we expect nothing
+	if sleepSeconds, injected := objectio.CDCHandleSlowInjected(); injected {
+		time.Sleep(time.Duration(sleepSeconds) * time.Second)
+	}
 
 	accountId := uint32(exec.spec.Accounts[0].GetId())
 	ctx := defines.AttachAccountId(context.Background(), accountId)
@@ -413,7 +429,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			zap.String("task-name", exec.spec.TaskName),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
 	defer func() {
 		cdc.FinishTxnOp(ctx, err, txnOp, exec.cnEngine)
@@ -425,7 +441,12 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			zap.String("task-name", exec.spec.TaskName),
 			zap.Error(err),
 		)
-		return
+		return err
+	}
+
+	// if injected, we expect the handleNewTables to keep retrying
+	if objectio.CDCHandleErrInjected() {
+		return moerr.NewInternalError(context.Background(), "CDC_HANDLENEWTABLES_ERR")
 	}
 
 	for key, info := range allAccountTbls[accountId] {
@@ -459,24 +480,13 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
 			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", exec.spec.TaskName, key, err)
+			return err
 		} else {
+			info.IdChanged = newTableInfo.IdChanged
 			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", exec.spec.TaskName, key)
 		}
-		logger := logutil.Info
-		msg := "CDC-Task-HandleNewTables-Success"
-		if err != nil {
-			logger = logutil.Error
-			msg = "CDC-Task-HandleNewTables-Failed"
-		}
-		logger(
-			msg,
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("task-name", exec.spec.TaskName),
-			zap.String("table-key", key),
-			zap.String("table-info", newTableInfo.String()),
-			zap.Error(err),
-		)
 	}
+	return nil
 }
 
 func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {

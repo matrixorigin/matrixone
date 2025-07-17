@@ -53,6 +53,13 @@ const (
 
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
+
+	FJ_CDCStartErr          = "fj/cdc/starterr"
+	FJ_CDCHandleSlow        = "fj/cdc/handleslow"
+	FJ_CDCHandleErr         = "fj/cdc/handleerr"
+	FJ_CDCSinkerSendErr     = "fj/cdc/sinkersenderr"
+	FJ_CDCReaderErr         = "fj/cdc/readererr"
+	FJ_CDCCollectChangesErr = "fj/cdc/collectchangeserr"
 )
 
 const (
@@ -545,4 +552,34 @@ func CDCRecordTxnInjected(dbName, tableName string) (bool, int) {
 		return false, 0
 	}
 	return checkLoggingArgs(int(iarg), sarg, dbName, tableName)
+}
+
+func CDCStartErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCStartErr)
+	return injected
+}
+
+func CDCHandleSlowInjected() (sleepSeconds int64, injected bool) {
+	iarg, _, injected := fault.TriggerFault(FJ_CDCHandleSlow)
+	return iarg, injected
+}
+
+func CDCHandleErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCHandleErr)
+	return injected
+}
+
+func CDCSinkerSendErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCSinkerSendErr)
+	return injected
+}
+
+func CDCReaderErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCReaderErr)
+	return injected
+}
+
+func CDCCollectChangesErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCCollectChangesErr)
+	return injected
 }
