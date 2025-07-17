@@ -22,6 +22,7 @@ import (
 	ujson "github.com/matrixorigin/matrixone/pkg/util/json"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.starlark.net/starlark"
+	"go.starlark.net/syntax"
 	"go.uber.org/zap"
 )
 
@@ -91,9 +92,18 @@ func (op *opBuiltInStarlark) buildFn(proc *process.Process, program string) erro
 		"jq": starlark.NewBuiltin("jq", moJq),
 	}
 
-	// execute the starlark program, ExecFile is deprecated but still widely used
-	// in starlark-go repo.
-	op.globals, err = starlark.ExecFile(op.th, "", program, op.predeclared)
+	op.globals, err = starlark.ExecFileOptions(
+		&syntax.FileOptions{
+			While:           true,
+			TopLevelControl: true,
+			GlobalReassign:  true,
+			Recursion:       true,
+		},
+		op.th,
+		"",
+		program,
+		op.predeclared,
+	)
 	if err != nil {
 		return err
 	}
