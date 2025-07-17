@@ -38,6 +38,7 @@ func TestCheckpoint1(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
+
 	schema := catalog.MockSchema(13, 12)
 	schema.Extra.BlockMaxRows = 1000
 	schema.Extra.ObjectMaxBlocks = 2
