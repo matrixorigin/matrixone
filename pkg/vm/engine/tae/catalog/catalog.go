@@ -191,7 +191,6 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 	processor.ObjectFn = func(se *ObjectEntry) error {
 		needGC := se.DeleteBefore(ts)
 		if needGC {
-			logutil.Infof("lalala rm object %v, delete ts %v", se.ID().String(), se.DeletedAt.ToString())
 			tbl := se.table
 			tbl.RemoveEntry(se)
 			objCnt++

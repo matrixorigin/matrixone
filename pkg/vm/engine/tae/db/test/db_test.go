@@ -8967,8 +8967,6 @@ func TestDedupSnapshot3(t *testing.T) {
 	wg.Wait()
 
 	txn, rel := tae.GetRelation()
-	time.Sleep(1 * time.Second)
-	logutil.Infof("txn tt is %v", txn.String())
 	for _, def := range schema.ColDefs {
 		rows := testutil.GetColumnRowsByScan(t, rel, def.Idx, false)
 		if totalRows != rows {
