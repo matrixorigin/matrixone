@@ -1106,6 +1106,11 @@ func (tbl *txnTable) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return defs, nil
 }
 
+func (tbl *txnTable) RefeshTableDef(ctx context.Context) {
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
+}
+
 func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 	if tbl.tableDef == nil {
 		var clusterByDef *plan.ClusterByDef
@@ -1393,13 +1398,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		panic("not equal cstr")
 	}
 
+	var baseDefs []engine.TableDef
 	// update TableDef
 	if hasReplaceDef {
 		// When ReplaceDef exists, replace the entire table definition
 		replaceDef := replaceDefReq.GetReplaceDef()
-		defs, _, _ := engine.PlanDefsToExeDefs(replaceDef.Def)
-		defs = append(defs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
-		tbl.defs = defs
+		baseDefs, _, _ = engine.PlanDefsToExeDefs(replaceDef.Def)
+		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
+	} else {
+		baseDefs = append([]engine.TableDef{}, tbl.defs...)
 	}
 
 	// 0. check if the table is created in txn.
@@ -1436,15 +1443,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		}
 	}
 
-	tbl.defs = append(tbl.defs, appendDef...)
-	tbl.tableDef = nil
-	tbl.GetTableDef(ctx)
-
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
 	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
 		return err
 	}
+
+	// update table defs after deleting old table metadata
+	tbl.defs = append(baseDefs, appendDef...)
+	tbl.RefeshTableDef(ctx)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. insert new table metadata
