@@ -4738,7 +4738,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
-		WithStatementOption(options)
+		WithStatementOption(options).
+		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
 	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
