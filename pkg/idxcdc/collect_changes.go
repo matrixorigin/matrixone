@@ -106,7 +106,7 @@ func CollectChanges_2(
 		dataRetrievers[i] = NewDataRetriever(consumer, iter, typ)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	ctxWithCancel, cancel := context.WithCancel(ctx)
 	changeHandelWg := sync.WaitGroup{}
 	go func() {
 		defer cancel()
@@ -114,12 +114,12 @@ func CollectChanges_2(
 		changeHandelWg.Add(1)
 		for {
 			select {
-			case <-ctx.Done():
+			case <-ctxWithCancel.Done():
 				return
 			default:
 			}
 			var data *CDCData
-			insertData, deleteData, currentHint, err := changes.Next(ctx, mp)
+			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
 			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "changesNext" {
 				err = errors.New(msg)
 			}

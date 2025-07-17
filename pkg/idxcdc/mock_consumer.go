@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -65,12 +64,6 @@ type interalSqlConsumer struct {
 
 	targetTableName string
 
-	// buf of sql statement
-	sqlBufs      [2][]byte
-	curBufIdx    int
-	sqlBuf       []byte
-	sqlBufSendCh chan []byte
-
 	// prefix of sql statement, e.g. `insert into xx values ...`
 	insertPrefix []byte
 	upsertPrefix []byte
@@ -108,11 +101,8 @@ type interalSqlConsumer struct {
 
 	// insert or delete of last record, used for combine inserts and deletes
 	preRowType RowType
-	// the length of all completed sql statement in sqlBuf
-	preSqlBufLen int
 
-	wg  sync.WaitGroup
-	err error
+	maxAllowedPacket uint64
 }
 
 func NewInteralSqlConsumer(
@@ -124,8 +114,8 @@ func NewInteralSqlConsumer(
 		tableInfo: tableDef,
 		indexName: info.IndexName,
 	}
-	maxAllowedPacket := uint64(1024 * 1024)
-	logutil.Infof("cdc mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, maxAllowedPacket)
+	s.maxAllowedPacket = uint64(1024 * 1024)
+	logutil.Infof("cdc mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, s.maxAllowedPacket)
 
 	v, ok := moruntime.ServiceRuntime(cnUUID).
 		GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -141,13 +131,6 @@ func NewInteralSqlConsumer(
 	if err != nil {
 		return nil, err
 	}
-
-	// sqlBuf
-	s.sqlBufs[0] = make([]byte, 0, maxAllowedPacket)
-	s.sqlBufs[1] = make([]byte, 0, maxAllowedPacket)
-	s.curBufIdx = 0
-	s.sqlBuf = s.sqlBufs[s.curBufIdx]
-	s.sqlBufSendCh = make(chan []byte)
 
 	s.rowBuf = make([]byte, 0, 1024)
 
@@ -200,7 +183,6 @@ func NewInteralSqlConsumer(
 
 	// pre
 	s.preRowType = NoOp
-	s.preSqlBufLen = 0
 
 	return s, nil
 }
@@ -225,41 +207,6 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 	return err
 }
 
-func (s *interalSqlConsumer) Run(ctx context.Context) {
-	logutil.Infof("cdc interalSqlConsumer(%v).Run: start", s.tableInfo.Name)
-	defer func() {
-		logutil.Infof("cdc interalSqlConsumer(%v).Run: end", s.tableInfo.Name)
-	}()
-
-	s.err = nil
-	s.wg.Add(1)
-	defer s.wg.Done()
-
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
-	err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		for sqlBuffer := range s.sqlBufSendCh {
-			if string(sqlBuffer) == "no more data" {
-				if s.dataRetriever.GetDataType() != CDCDataType_Snapshot {
-					err := s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
-					if err != nil {
-						return err
-					}
-				}
-				return nil
-			}
-			if _, err := txn.Exec(string(sqlBuffer), executor.StatementOption{}); err != nil {
-				logutil.Errorf("cdc interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
-				// record error
-				panic(err)
-			}
-		}
-		return nil
-	}, executor.Options{})
-	if err != nil {
-		s.err = err
-	}
-}
 func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) error {
 	s.dataRetriever = data
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume" {
@@ -274,63 +221,52 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 		}
 	}
 
-	go s.Run(context.Background())
-	for {
-		insertBatch, deleteBatch, noMoreData, err := data.Next()
-		if err != nil {
-			s.sqlBufSendCh <- []byte("no more data")
-			return err
-		}
-		if noMoreData {
-			// complete sql statement
-			if s.isNonEmptyInsertStmt() || s.isNonEmptyUpsertStmt() {
-				s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
-				s.preSqlBufLen = len(s.sqlBuf)
+	err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		for {
+			insertBatch, deleteBatch, noMoreData, err := data.Next()
+			if err != nil {
+				return err
 			}
-			if s.isNonEmptyDeleteStmt() {
-				s.sqlBuf = appendBytes(s.sqlBuf, s.deleteSuffix)
-				s.preSqlBufLen = len(s.sqlBuf)
-			}
+			if noMoreData {
 
-			// output the left sql
-			if s.preSqlBufLen > 0 {
-				s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
-				s.curBufIdx ^= 1
-				s.sqlBuf = s.sqlBufs[s.curBufIdx]
-
-				s.preSqlBufLen = 0
-				s.sqlBuf = s.sqlBuf[:s.preSqlBufLen]
-				s.preRowType = NoOp
+				if s.dataRetriever.GetDataType() != CDCDataType_Snapshot {
+					err := s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
+					if err != nil {
+						return err
+					}
+				}
+				return nil
 			}
 
-			// reset status
-			s.preSqlBufLen = 0
-			s.sqlBuf = s.sqlBuf[:s.preSqlBufLen]
-			s.preRowType = NoOp
-
-			s.sqlBufSendCh <- []byte("no more data")
-			s.wg.Wait()
-			return s.err
+			if data.GetDataType() == CDCDataType_Snapshot {
+				err = s.sinkSnapshot(ctx, insertBatch.Batches[0], txn)
+				if err != nil {
+					return err
+				}
+			} else if data.GetDataType() == CDCDataType_Tail {
+				err = s.sinkTail(ctx, insertBatch, deleteBatch, txn)
+				if err != nil {
+					return err
+				}
+			} else {
+				panic("logic error")
+			}
 		}
-
-		if data.GetDataType() == CDCDataType_Snapshot {
-			s.sinkSnapshot(ctx, insertBatch.Batches[0])
-		} else if data.GetDataType() == CDCDataType_Tail {
-			s.sinkTail(ctx, insertBatch, deleteBatch)
-		}
-	}
+	}, executor.Options{})
+	return err
 }
 
-func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *batch.Batch) {
+func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *batch.Batch, txn executor.TxnExecutor) error {
 	var err error
 
 	// if last row is not insert row, means this is the first snapshot batch
-	if s.preRowType != UpsertRow {
-		s.sqlBuf = append(s.sqlBuf[:0], s.upsertPrefix...)
-		s.preRowType = UpsertRow
-	}
+	sqlBuffer := make([]byte, 0)
 
 	for i := 0; i < batchRowCount(bat); i++ {
+		if len(sqlBuffer) == 0 {
+			sqlBuffer = append(sqlBuffer, s.upsertPrefix...)
+			s.preRowType = UpsertRow
+		}
 		// step1: get row from the batch
 		if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
 			panic(err)
@@ -342,15 +278,20 @@ func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *batch.Batch)
 		}
 
 		// step3: append to sqlBuf, send sql if sqlBuf is full
-		if err = s.appendSqlBuf(UpsertRow); err != nil {
+		if sqlBuffer, err = s.appendSqlBuf(UpsertRow, sqlBuffer, txn); err != nil {
 			panic(err)
 		}
 	}
+	err = s.tryFlushSqlBuf(txn, sqlBuffer)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // insertBatch and deleteBatch is sorted by ts
 // for the same ts, delete first, then insert
-func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBatch *AtomicBatch) {
+func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBatch *AtomicBatch, txn executor.TxnExecutor) error {
 	var err error
 
 	insertIter := insertBatch.GetRowIterator().(*atomicBatchRowIter)
@@ -363,36 +304,47 @@ func (s *interalSqlConsumer) sinkTail(ctx context.Context, insertBatch, deleteBa
 	// output sql until one iterator reach the end
 	insertIterHasNext, deleteIterHasNext := insertIter.Next(), deleteIter.Next()
 
-	// output the rest of insert iterator
-	for insertIterHasNext {
-		if err = s.sinkInsert(ctx, insertIter); err != nil {
-			panic(err)
-		}
-		// get next item
-		insertIterHasNext = insertIter.Next()
-	}
-	s.tryFlushSqlBuf()
-
+	sqlBuffer := make([]byte, 0)
 	// output the rest of delete iterator
 	for deleteIterHasNext {
-		if err = s.sinkDelete(ctx, deleteIter); err != nil {
+		if len(sqlBuffer) == 0 {
+			sqlBuffer = append(sqlBuffer, s.deletePrefix...)
+			s.preRowType = DeleteRow
+		}
+		if sqlBuffer, err = s.sinkDelete(ctx, deleteIter, sqlBuffer, txn); err != nil {
 			panic(err)
 		}
 		// get next item
 		deleteIterHasNext = deleteIter.Next()
 	}
-	s.tryFlushSqlBuf()
+	err = s.tryFlushSqlBuf(txn, sqlBuffer)
+	if err != nil {
+		return err
+	}
+	sqlBuffer = make([]byte, 0)
+	// output the rest of insert iterator
+	for insertIterHasNext {
+		if len(sqlBuffer) == 0 {
+			sqlBuffer = append(sqlBuffer, s.insertPrefix...)
+			s.preRowType = InsertRow
+		}
+		if sqlBuffer, err = s.sinkInsert(ctx, insertIter, sqlBuffer, txn); err != nil {
+			panic(err)
+		}
+		// get next item
+		insertIterHasNext = insertIter.Next()
+	}
+	err = s.tryFlushSqlBuf(txn, sqlBuffer)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s *interalSqlConsumer) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter) (err error) {
+func (s *interalSqlConsumer) sinkInsert(ctx context.Context, insertIter *atomicBatchRowIter, sqlBuffer []byte, txn executor.TxnExecutor) (res []byte, err error) {
 	// if last row is not insert row, need complete the last sql first
 	if s.preRowType != InsertRow {
-		if s.isNonEmptyDeleteStmt() {
-			s.sqlBuf = appendBytes(s.sqlBuf, s.deleteSuffix)
-			s.preSqlBufLen = len(s.sqlBuf)
-		}
-		s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.insertPrefix...)
-		s.preRowType = InsertRow
+		panic("logic error")
 	}
 
 	// step1: get row from the batch
@@ -406,22 +358,17 @@ func (s *interalSqlConsumer) sinkInsert(ctx context.Context, insertIter *atomicB
 	}
 
 	// step3: append to sqlBuf
-	if err = s.appendSqlBuf(InsertRow); err != nil {
+	if res, err = s.appendSqlBuf(InsertRow, sqlBuffer, txn); err != nil {
 		return
 	}
 
 	return
 }
 
-func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter) (err error) {
+func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchRowIter, sqlBuffer []byte, txn executor.TxnExecutor) (res []byte, err error) {
 	// if last row is not insert row, need complete the last sql first
 	if s.preRowType != DeleteRow {
-		if s.isNonEmptyInsertStmt() {
-			s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
-			s.preSqlBufLen = len(s.sqlBuf)
-		}
-		s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.deletePrefix...)
-		s.preRowType = DeleteRow
+		panic("logic error")
 	}
 
 	// step1: get row from the batch
@@ -435,39 +382,28 @@ func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicB
 	}
 
 	// step3: append to sqlBuf
-	if err = s.appendSqlBuf(DeleteRow); err != nil {
+	if res, err = s.appendSqlBuf(DeleteRow, sqlBuffer, txn); err != nil {
 		return
 	}
 
 	return
 }
 
-func (s *interalSqlConsumer) tryFlushSqlBuf() (err error) {
-	if s.preSqlBufLen == 0 {
+func (s *interalSqlConsumer) tryFlushSqlBuf(txn executor.TxnExecutor, sqlBuffer []byte) (err error) {
+	if len(sqlBuffer) == 0 {
 		return
 	}
-	if s.isNonEmptyInsertStmt() || s.isNonEmptyUpsertStmt() {
-		s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
-		s.preSqlBufLen = len(s.sqlBuf)
+	if _, err := txn.Exec(string(sqlBuffer), executor.StatementOption{}); err != nil {
+		logutil.Errorf("cdc interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
+		// record error
+		panic(err)
 	}
-	if s.isNonEmptyDeleteStmt() {
-		s.sqlBuf = appendBytes(s.sqlBuf, s.deleteSuffix)
-		s.preSqlBufLen = len(s.sqlBuf)
-	}
-	// send it to downstream
-	s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
-	s.curBufIdx ^= 1
-	s.sqlBuf = s.sqlBufs[s.curBufIdx]
-
-	s.preSqlBufLen = 0
-	s.sqlBuf = s.sqlBuf[:s.preSqlBufLen]
-	s.preRowType = NoOp
 	return
 }
 
 // appendSqlBuf appends rowBuf to sqlBuf if not exceed its cap
 // otherwise, send sql to downstream first, then reset sqlBuf and append
-func (s *interalSqlConsumer) appendSqlBuf(rowType RowType) (err error) {
+func (s *interalSqlConsumer) appendSqlBuf(rowType RowType, sqlBuffer []byte, txn executor.TxnExecutor) (res []byte, err error) {
 	suffixLen := len(s.insertSuffix)
 	if rowType == DeleteRow {
 		suffixLen = len(s.deleteSuffix)
@@ -477,57 +413,67 @@ func (s *interalSqlConsumer) appendSqlBuf(rowType RowType) (err error) {
 	}
 
 	// if s.sqlBuf has no enough space
-	if len(s.sqlBuf)+len(s.rowBuf)+suffixLen > cap(s.sqlBuf) {
-		// complete sql statement
-		if s.isNonEmptyInsertStmt() || s.isNonEmptyUpsertStmt() {
-			s.sqlBuf = appendBytes(s.sqlBuf, s.insertSuffix)
-			s.preSqlBufLen = len(s.sqlBuf)
-		}
-		if s.isNonEmptyDeleteStmt() {
-			s.sqlBuf = appendBytes(s.sqlBuf, s.deleteSuffix)
-			s.preSqlBufLen = len(s.sqlBuf)
-		}
-
-		// send it to downstream
-		s.sqlBufSendCh <- s.sqlBuf[:s.preSqlBufLen]
-		s.curBufIdx ^= 1
-		s.sqlBuf = s.sqlBufs[s.curBufIdx]
-
-		// reset s.sqlBuf
-		s.preSqlBufLen = 0
+	if len(sqlBuffer)+len(s.rowBuf)+suffixLen > int(s.maxAllowedPacket) {
 		switch rowType {
 		case InsertRow:
-			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.insertPrefix...)
+			if len(sqlBuffer) == len(s.insertPrefix) {
+				panic("logic error")
+			}
 		case DeleteRow:
-			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.deletePrefix...)
+			if len(sqlBuffer) == len(s.deletePrefix) {
+				panic("logic error")
+			}
 		case UpsertRow:
-			s.sqlBuf = append(s.sqlBuf[:s.preSqlBufLen], s.upsertPrefix...)
+			if len(sqlBuffer) == len(s.upsertPrefix) {
+				panic("logic error")
+			}
+		default:
+			panic(fmt.Sprintf("invalid row type %d", rowType))
+		}
+		// complete sql statement
+		if s.isNonEmptyInsertStmt(sqlBuffer) || s.isNonEmptyUpsertStmt(sqlBuffer) {
+			sqlBuffer = appendBytes(sqlBuffer, s.insertSuffix)
+		}
+		if s.isNonEmptyDeleteStmt(sqlBuffer) {
+			sqlBuffer = appendBytes(sqlBuffer, s.deleteSuffix)
+		}
+		s.tryFlushSqlBuf(txn, sqlBuffer)
+		sqlBuffer = make([]byte, 0)
+
+		// reset s.sqlBuf
+		switch rowType {
+		case InsertRow:
+			sqlBuffer = append(sqlBuffer, s.insertPrefix...)
+		case DeleteRow:
+			sqlBuffer = append(sqlBuffer, s.deletePrefix...)
+		case UpsertRow:
+			sqlBuffer = append(sqlBuffer, s.upsertPrefix...)
 		default:
 			panic(fmt.Sprintf("invalid row type %d", rowType))
 		}
 	}
 
 	// append bytes
-	if s.isNonEmptyInsertStmt() || s.isNonEmptyUpsertStmt() {
-		s.sqlBuf = appendBytes(s.sqlBuf, s.insertRowSeparator)
+	if s.isNonEmptyInsertStmt(sqlBuffer) || s.isNonEmptyUpsertStmt(sqlBuffer) {
+		sqlBuffer = appendBytes(sqlBuffer, s.insertRowSeparator)
 	}
-	if s.isNonEmptyDeleteStmt() {
-		s.sqlBuf = appendBytes(s.sqlBuf, s.deleteRowSeparator)
+	if s.isNonEmptyDeleteStmt(sqlBuffer) {
+		sqlBuffer = appendBytes(sqlBuffer, s.deleteRowSeparator)
 	}
-	s.sqlBuf = append(s.sqlBuf, s.rowBuf...)
-	return
+	sqlBuffer = append(sqlBuffer, s.rowBuf...)
+	return sqlBuffer, nil
 }
 
-func (s *interalSqlConsumer) isNonEmptyDeleteStmt() bool {
-	return s.preRowType == DeleteRow && len(s.sqlBuf)-s.preSqlBufLen > len(s.deletePrefix)
+func (s *interalSqlConsumer) isNonEmptyDeleteStmt(sqlBuffer []byte) bool {
+	return s.preRowType == DeleteRow && len(sqlBuffer) > len(s.deletePrefix)
 }
 
-func (s *interalSqlConsumer) isNonEmptyInsertStmt() bool {
-	return s.preRowType == InsertRow && len(s.sqlBuf)-s.preSqlBufLen > len(s.insertPrefix)
+func (s *interalSqlConsumer) isNonEmptyInsertStmt(sqlBuffer []byte) bool {
+	return s.preRowType == InsertRow && len(sqlBuffer) > len(s.insertPrefix)
 }
 
-func (s *interalSqlConsumer) isNonEmptyUpsertStmt() bool {
-	return s.preRowType == UpsertRow && len(s.sqlBuf)-s.preSqlBufLen > len(s.upsertPrefix)
+func (s *interalSqlConsumer) isNonEmptyUpsertStmt(sqlBuffer []byte) bool {
+	return s.preRowType == UpsertRow && len(sqlBuffer) > len(s.upsertPrefix)
 }
 
 // getInsertRowBuf convert insert row to string

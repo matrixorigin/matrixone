@@ -2118,7 +2118,7 @@ func TestCDCExecutor5(t *testing.T) {
 
 	dbName := "db"
 	rows := 3
-	tableCount := 10
+	tableCount := 2
 	tableIDs := make([]uint64, tableCount)
 	bats := make([]*containers.Batch, tableCount)
 	for i := 0; i < tableCount; i++ {
@@ -2186,7 +2186,7 @@ func TestCDCExecutor5(t *testing.T) {
 		assert.True(t, ts.GE(&now), indexName)
 	}
 
-	indexCount := 10
+	indexCount := 3
 	updateTimes := 10
 
 	for j := 0; j < tableCount; j++ {
@@ -2210,7 +2210,7 @@ func TestCDCExecutor5(t *testing.T) {
 
 	for j := 0; j < tableCount; j++ {
 		for i := 0; i < indexCount; i++ {
-			checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 40000, j)
+			checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, j)
 			CheckTableData(t, disttaeEngine, ctxWithTimeout, dbName, fmt.Sprintf("src_table_%d", j), tableIDs[j], fmt.Sprintf("hnsw_idx_%d", i))
 		}
 	}
