@@ -1578,12 +1578,36 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
-func Version(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	versionStr := proc.GetSessionInfo().GetVersion()
+func Version(
+	_ []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
 
-	return opNoneParamToBytes(result, proc, length, func() []byte {
-		return functionUtil.QuickStrToBytes(versionStr)
-	})
+	var (
+		err error
+
+		versionAny interface{}
+		versionStr string
+	)
+
+	resolveVariableFunc := proc.GetResolveVariableFunc()
+
+	if versionAny, err = resolveVariableFunc(
+		"version", true, true,
+	); err != nil {
+		return err
+	}
+
+	versionStr = versionAny.(string)
+	retBytes := functionUtil.QuickStrToBytes(versionStr)
+
+	return opNoneParamToBytes(
+		result, proc, length, func() []byte {
+			return retBytes
+		})
 }
 
 func GitVersion(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
