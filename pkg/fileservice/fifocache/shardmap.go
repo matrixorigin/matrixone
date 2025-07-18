@@ -15,7 +15,6 @@
 package fifocache
 
 import (
-	"os"
 	"sync"
 
 	"golang.org/x/sys/cpu"
@@ -46,11 +45,9 @@ type ShardMap[K comparable, V any] struct {
 func NewCacheMap[K comparable, V any](hashfn func(K) uint64) CacheMap[K, V] {
 
 	if SingleMutexFlag {
-		os.Stderr.WriteString("Single mutex\n")
 		return NewSingleMap[K, V]()
 	}
 
-	os.Stderr.WriteString("Multiple mutex\n")
 	return NewShardMap[K, V](hashfn)
 }
 
