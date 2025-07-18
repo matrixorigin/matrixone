@@ -68,7 +68,7 @@ func doShowRecoveryWindow(
 		databaseName string
 		accountName  string
 
-		rows = make([][]interface{}, 0)
+		rows [][]interface{}
 	)
 
 	level = srw.Level
@@ -245,6 +245,7 @@ func constructRecoveryWindow(
 		keys[key] = struct{}{}
 	}
 
+	rows = make([][]interface{}, 0, len(keys))
 	for val := range keys {
 		row = make([]interface{}, 5)
 
@@ -274,7 +275,7 @@ func constructRecoveryWindow(
 
 		jsonBuf.WriteString("]")
 
-		row[4] = []byte(jsonBuf.String())
+		row[4] = jsonBuf.Bytes()
 
 		rows = append(rows, row)
 	}

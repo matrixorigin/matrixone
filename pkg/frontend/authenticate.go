@@ -3939,11 +3939,16 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		ts := time.Now().UTC().UnixNano()
+		if ses != nil && ses.proc != nil && ses.proc.GetTxnOperator() != nil {
+			ses.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
+		}
+
 		// update pitr
 		if rtnErr = updatePitrObjectId(
 			ctx, bh, da.Name,
 			uint64(accountId),
-			ses.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano(),
+			ts,
 		); rtnErr != nil {
 			return rtnErr
 		}

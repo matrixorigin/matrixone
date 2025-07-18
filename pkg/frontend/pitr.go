@@ -1985,7 +1985,7 @@ func addTimeSpan(pivot time.Time, length int, unit string) (time.Time, error) {
 		now time.Time
 	)
 
-	if pivot.IsZero() {
+	if !pivot.IsZero() {
 		now = pivot.UTC()
 	} else {
 		now = time.Now().UTC()
