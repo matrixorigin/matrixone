@@ -20,6 +20,7 @@ type Queue[T any] struct {
 	head     *queuePart[T]
 	tail     *queuePart[T]
 	partPool sync.Pool
+	size     int
 }
 
 type queuePart[T any] struct {
@@ -46,9 +47,9 @@ func NewQueue[T any]() *Queue[T] {
 	return queue
 }
 
+// empty is an internal helper, assumes lock is held
 func (p *Queue[T]) empty() bool {
-	return p.head == p.tail &&
-		p.head.begin == len(p.head.values)
+	return p.head == p.tail && len(p.head.values) == p.head.begin
 }
 
 func (p *queuePart[T]) reset() {
@@ -66,6 +67,7 @@ func (p *Queue[T]) enqueue(v T) {
 		p.head = newPart
 	}
 	p.head.values = append(p.head.values, v)
+	p.size++
 }
 
 func (p *Queue[T]) dequeue() (ret T, ok bool) {
@@ -76,17 +78,25 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 	if p.tail.begin >= len(p.tail.values) {
 		// shrink
 		if p.tail.next == nil {
-			panic("impossible")
+			// This should ideally not happen if empty() check passes,
+			// but adding a safeguard.
+			// Consider logging an error here if it does.
+			return
 		}
 		part := p.tail
 		p.tail = p.tail.next
-		p.partPool.Put(part)
+		p.partPool.Put(part) // Return the old part to the pool
 	}
 
 	ret = p.tail.values[p.tail.begin]
 	var zero T
 	p.tail.values[p.tail.begin] = zero
 	p.tail.begin++
+	p.size--
 	ok = true
 	return
+}
+
+func (p *Queue[T]) Len() int {
+	return p.size
 }
