@@ -3941,7 +3941,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		ts := time.Now().UTC().UnixNano()
 		if ses != nil && ses.proc != nil && ses.proc.GetTxnOperator() != nil {
-			ses.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
+			ts = ses.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 		}
 
 		// update pitr

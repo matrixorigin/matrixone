@@ -206,8 +206,6 @@ func constructRecoveryWindow(
 		pitrRecords []tableRecoveryWindow
 		snapRecords []tableRecoveryWindowForSnapshot
 
-		rows [][]interface{}
-
 		tableToSnaps map[[3]string][]snapItem
 		tableToPitrs map[[3]string][]pitrItem
 	)
@@ -231,9 +229,9 @@ func constructRecoveryWindow(
 	}
 
 	var (
-		row  []interface{}
-		keys = make(map[[3]string]struct{})
-
+		row     []interface{}
+		rows    = make([][]interface{}, 0, len(tableToSnaps))
+		keys    = make(map[[3]string]struct{})
 		jsonBuf bytes.Buffer
 	)
 
@@ -245,7 +243,6 @@ func constructRecoveryWindow(
 		keys[key] = struct{}{}
 	}
 
-	rows = make([][]interface{}, 0, len(keys))
 	for val := range keys {
 		row = make([]interface{}, 5)
 
