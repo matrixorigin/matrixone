@@ -48,6 +48,9 @@ type TableInfo_2 struct {
 }
 
 func tableInfoLess(a, b *TableInfo_2) bool {
+	if a.accountID != b.accountID {
+		return a.accountID < b.accountID
+	}
 	return a.tableID < b.tableID
 }
 

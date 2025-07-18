@@ -1019,8 +1019,8 @@ var (
 		MoCatalogMoAccountLockDDL,
 		MoCatalogMergeSettingsDDL,
 		MoCatalogMergeSettingsInitData,
-		MoCatalogAsyncIndexLogDDL,
-		MoCatalogAsyncIndexIterationsDDL,
+		MoCatalogMoCdcAsyncIndexLogDDL,
+		MoCatalogMoCdcAsyncIndexIterationsDDL,
 	}
 
 	//drop tables for the tenant

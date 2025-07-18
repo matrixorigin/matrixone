@@ -18,7 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -58,6 +60,9 @@ func RegisterJob(
 	pitr_name string,
 	sinkerinfo_json *ConsumerInfo,
 ) (ok bool, err error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	defer cancel()
 	var tenantId uint32
 	var tableID uint64
 	var dropped bool
@@ -86,7 +91,7 @@ func RegisterJob(
 		return false, err
 	}
 	tableID, err = getTableID(
-		ctx,
+		ctxWithSysAccount,
 		cnUUID,
 		txn,
 		tenantId,
@@ -97,7 +102,7 @@ func RegisterJob(
 		return false, err
 	}
 	exist, dropped, err := queryIndexLog(
-		ctx,
+		ctxWithSysAccount,
 		cnUUID,
 		txn,
 		tenantId,
@@ -119,7 +124,7 @@ func RegisterJob(
 		"",
 		string(consumerInfoJson),
 	)
-	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
 		return false, err
 	}

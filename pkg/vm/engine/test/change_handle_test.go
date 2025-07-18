@@ -1437,11 +1437,11 @@ func TestCDCExecutor1(t *testing.T) {
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 			return ok
 		},
 	)
-	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 	assert.True(t, ok)
 
 	// append 1 row
@@ -1457,11 +1457,11 @@ func TestCDCExecutor1(t *testing.T) {
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			ts, _ := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 			return ts.GE(&now)
 		},
 	)
-	ts, _ := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	ts, _ := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 	assert.True(t, ts.GE(&now))
 	t.Logf("watermark greater than %v", now.ToString())
 
@@ -1482,11 +1482,11 @@ func TestCDCExecutor1(t *testing.T) {
 	testutils.WaitExpect(
 		4000,
 		func() bool {
-			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 			return !ok
 		},
 	)
-	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 	assert.False(t, ok)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -1644,11 +1644,11 @@ func TestCDCExecutor2(t *testing.T) {
 	testutils.WaitExpect(
 		1000,
 		func() bool {
-			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 			return ok
 		},
 	)
-	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx")
+	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 	assert.True(t, ok)
 }
 
@@ -1767,11 +1767,11 @@ func TestCDCExecutor3(t *testing.T) {
 		testutils.WaitExpect(
 			waitTime,
 			func() bool {
-				ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+				ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
 				return ts.GE(&now)
 			},
 		)
-		ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+		ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
 		if expectResult {
 			assert.True(t, ts.GE(&now), indexName)
 		} else {
@@ -1786,11 +1786,11 @@ func TestCDCExecutor3(t *testing.T) {
 	testutils.WaitExpect(
 		100,
 		func() bool {
-			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx_0")
 			return ok
 		},
 	)
-	_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+	_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx_0")
 	assert.False(t, ok)
 
 	rmFn()
@@ -1877,11 +1877,11 @@ func TestCDCExecutor3(t *testing.T) {
 	testutils.WaitExpect(
 		1000,
 		func() bool {
-			_, ok := cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx_0")
 			return !ok
 		},
 	)
-	_, ok = cdcExecutor.GetWatermark(tableID, "hnsw_idx_0")
+	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx_0")
 	assert.True(t, ok)
 	rmFn()
 }
@@ -1986,11 +1986,11 @@ func TestCDCExecutor4(t *testing.T) {
 		testutils.WaitExpect(
 			waitTime,
 			func() bool {
-				ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+				ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
 				return ts.GE(&now)
 			},
 		)
-		ts, _ := cdcExecutor.GetWatermark(tableID, indexName)
+		ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
 		if expectResult {
 			assert.True(t, ts.GE(&now), indexName)
 		} else {
@@ -2182,11 +2182,11 @@ func TestCDCExecutor5(t *testing.T) {
 		testutils.WaitExpect(
 			waitTime,
 			func() bool {
-				ts, _ := cdcExecutor.GetWatermark(tableIDs[tableIdx], indexName)
+				ts, _ := cdcExecutor.GetWatermark(accountId, tableIDs[tableIdx], indexName)
 				return ts.GE(&now)
 			},
 		)
-		ts, _ := cdcExecutor.GetWatermark(tableIDs[tableIdx], indexName)
+		ts, _ := cdcExecutor.GetWatermark(accountId, tableIDs[tableIdx], indexName)
 		assert.True(t, ts.GE(&now), indexName)
 	}
 
@@ -2220,4 +2220,103 @@ func TestCDCExecutor5(t *testing.T) {
 	}
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
+}
+
+func TestCDCExecutor6(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	account2 := uint32(2)
+	ctxAccountID2 := context.WithValue(ctx, defines.TenantIDKey{}, account2)
+	ctxAccountID2, cancel2 := context.WithTimeout(ctxAccountID2, time.Minute*5)
+	err = mock_mo_indexes(disttaeEngine, ctxAccountID2)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxAccountID2)
+	require.NoError(t, err)
+	defer cancel2()
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxAccountID2, "srcdb", "src_table", 10)
+	defer bat.Close()
+
+	_, rel, txn, err := disttaeEngine.GetTable(ctxAccountID2, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxAccountID2)
+
+	txn.Commit(ctxAccountID2)
+
+	// init cdc executor
+	cdcExecutor, err := idxcdc.NewCDCTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		nil,
+		&idxcdc.CDCExecutorOption{
+			SyncTaskInterval:       time.Millisecond * 10,
+			FlushWatermarkInterval: time.Hour,
+			GCTTL:                  time.Hour,
+			GCInterval:             time.Hour,
+		},
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+
+	txn, err = disttaeEngine.NewTxnOperator(ctxAccountID2, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := idxcdc.RegisterJob(
+		ctxAccountID2, "", txn, "pitr",
+		&idxcdc.ConsumerInfo{
+			ConsumerType: int8(idxcdc.ConsumerType_CNConsumer),
+			DbName:       "srcdb",
+			TableName:    "src_table",
+			IndexName:    "idx",
+		},
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxAccountID2))
+
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			_, ok := cdcExecutor.GetWatermark(account2, tableID, "idx")
+			return ok
+		},
+	)
+	_, ok = cdcExecutor.GetWatermark(account2, tableID, "idx")
+	assert.True(t, ok)
+	t.Log(cdcExecutor.String())
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 }

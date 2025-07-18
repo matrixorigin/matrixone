@@ -274,7 +274,6 @@ var (
 			)`
 
 	MoCatalogMoCdcAsyncIndexLogDDL = `CREATE TABLE mo_async_index_log (
-				id INT AUTO_INCREMENT PRIMARY KEY,
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,
 				index_name VARCHAR NOT NULL,
@@ -345,32 +344,6 @@ var (
 		catalog.MO_MERGE_SETTINGS,
 		merge.MergeSettingsVersion_Curr,
 		merge.DefaultMergeSettings.String())
-
-	MoCatalogAsyncIndexLogDDL = fmt.Sprintf(`create table mo_catalog.%s (
-		account_id INT UNSIGNED NOT NULL,
-		table_id BIGINT UNSIGNED NOT NULL,
-		index_name VARCHAR NOT NULL,
-		column_names VARCHAR NOT NULL,
-		last_sync_txn_ts VARCHAR(32)  NOT NULL,
-		err_code INT NOT NULL,
-		error_msg VARCHAR(255) NOT NULL,
-		info VARCHAR NOT NULL,
-		drop_at DATETIME NULL,
-		consumer_config VARCHAR(255) NULL,
-		primary key(account_id, table_id, index_name)
-	)`, catalog.MO_ASYNC_INDEX_LOG)
-
-	MoCatalogAsyncIndexIterationsDDL = fmt.Sprintf(`create table mo_catalog.%s (
-    	id INT AUTO_INCREMENT PRIMARY KEY,
-		account_id INT UNSIGNED NOT NULL,
-		table_id BIGINT UNSIGNED NOT NULL,
-		index_names VARCHAR(255),
-		from_ts VARCHAR(32) NOT NULL,
-		to_ts VARCHAR(32) NOT NULL,
-		error_json VARCHAR(255) NOT NULL,
-		start_at DATETIME NULL,
-		end_at DATETIME NULL
-	)`, catalog.MO_ASYNC_INDEX_ITERATIONS)
 )
 
 // `mo_catalog` database system tables
