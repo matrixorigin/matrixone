@@ -42,7 +42,6 @@ type container struct {
 type HashBuild struct {
 	ctr               container
 	NeedHashMap       bool
-	ForcePassHashMap  bool
 	HashOnPK          bool
 	NeedBatches       bool
 	NeedAllocateSels  bool

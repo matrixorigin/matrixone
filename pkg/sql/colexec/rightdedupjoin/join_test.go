@@ -260,9 +260,8 @@ func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]
 			JoinMapTag: tag,
 		},
 		barg: &hashbuild.HashBuild{
-			NeedHashMap:      true,
-			ForcePassHashMap: true,
-			Conditions:       cs[1],
+			NeedHashMap: true,
+			Conditions:  cs[1],
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     0,

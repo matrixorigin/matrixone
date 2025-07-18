@@ -465,35 +465,33 @@ message UnionAll {
 
 message HashBuild {
   bool NeedHashMap = 1;
-  bool ForcePassHashMap = 2;
-  bool HashOnPK = 3;
-  bool NeedBatches = 4;
-  bool NeedAllocateSels = 5;
-  repeated plan.Expr Conditions = 6;
-  int32 JoinMapTag = 7;
-  int32 JoinMapRefCnt = 8;
-  plan.RuntimeFilterSpec RuntimeFilterSpec = 9;
-  bool is_dedup = 10;
-  plan.Node.OnDuplicateAction on_duplicate_action = 11;
-  string dedup_col_name = 12;
-  repeated plan.Type dedup_col_types = 13 [(gogoproto.nullable) = false];
-  int32 del_col_idx = 14;
-}
-
-message Shufflebuild {
-  bool ForcePassHashMap = 1;
   bool HashOnPK = 2;
   bool NeedBatches = 3;
   bool NeedAllocateSels = 4;
-  repeated plan.Expr Conditions = 5;    
-  plan.RuntimeFilterSpec RuntimeFilterSpec = 6;
-  int32 JoinMapTag = 7;
-  int32 ShuffleIdx = 8;
+  repeated plan.Expr Conditions = 5;
+  int32 JoinMapTag = 6;
+  int32 JoinMapRefCnt = 7;
+  plan.RuntimeFilterSpec RuntimeFilterSpec = 8;
   bool is_dedup = 9;
   plan.Node.OnDuplicateAction on_duplicate_action = 10;
   string dedup_col_name = 11;
   repeated plan.Type dedup_col_types = 12 [(gogoproto.nullable) = false];
   int32 del_col_idx = 13;
+}
+
+message Shufflebuild {
+  bool HashOnPK = 1;
+  bool NeedBatches = 2;
+  bool NeedAllocateSels = 3;
+  repeated plan.Expr Conditions = 4;    
+  plan.RuntimeFilterSpec RuntimeFilterSpec = 5;
+  int32 JoinMapTag = 6;
+  int32 ShuffleIdx = 7;
+  bool is_dedup = 8;
+  plan.Node.OnDuplicateAction on_duplicate_action = 9;
+  string dedup_col_name = 10;
+  repeated plan.Type dedup_col_types = 11 [(gogoproto.nullable) = false];
+  int32 del_col_idx = 12;
 }
 
 message Indexbuild {

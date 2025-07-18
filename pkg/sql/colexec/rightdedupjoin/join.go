@@ -113,6 +113,10 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 			return result, nil
 
 		default:
+			if ctr.mp != nil {
+				ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
+			}
+
 			result.Batch = nil
 			result.Status = vm.ExecStop
 			return result, nil
@@ -128,10 +132,39 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 	if err != nil {
 		return
 	}
-	if ctr.mp != nil {
+
+	if ctr.mp == nil {
+		var (
+			keyWidth   int
+			intHashMap *hashmap.IntHashMap
+			strHashMap *hashmap.StrHashMap
+		)
+
+		for _, typ := range rightDedupJoin.LeftTypes {
+			width := typ.Oid.TypeLen()
+			if typ.Oid.FixedLength() < 0 {
+				width = 128
+			}
+			keyWidth += width
+		}
+
+		if keyWidth <= 8 {
+			intHashMap, err = hashmap.NewIntHashMap(false)
+			if err != nil {
+				return err
+			}
+		} else {
+			strHashMap, err = hashmap.NewStrHashMap(false)
+			if err != nil {
+				return err
+			}
+		}
+
+		ctr.mp = message.NewJoinMap(message.JoinSels{}, intHashMap, strHashMap, nil, nil, proc.Mp())
+	} else {
 		ctr.groupCount = ctr.mp.GetGroupCount()
-		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
+
 	return
 }
 
@@ -142,6 +175,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 	}
 
 	count := bat.RowCount()
+	err = ctr.mp.PreAlloc(uint64(count))
+	if err != nil {
+		return err
+	}
+
 	itr := ctr.mp.NewIterator()
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -201,10 +239,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 	result.Batch = batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
-		result.Batch.Vecs[i], err = bat.Vecs[rp.Pos].Dup(proc.Mp())
-		if err != nil {
-			return err
-		}
+		result.Batch.Vecs[i] = bat.Vecs[rp.Pos]
+		bat.Vecs[rp.Pos] = nil
 	}
 	result.Batch.SetRowCount(count)
 
