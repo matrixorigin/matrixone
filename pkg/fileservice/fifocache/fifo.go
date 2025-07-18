@@ -22,9 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-// go build -ldflags "-X fifocache.SingleMutexFlag=false"
-var SingleMutexFlag = true
-
 // Cache implements an in-memory cache with S3-FIFO-based eviction
 // All postfn is very critical.  They will increment and decrement the reference counter of the cache data and deallocate the memory when reference counter is 0.
 // Make sure the postfn is protected by mutex from shardmap.
