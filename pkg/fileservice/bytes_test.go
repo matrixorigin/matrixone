@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -31,4 +32,21 @@ func TestBytes(t *testing.T) {
 		}
 		bs.Release()
 	})
+}
+
+func TestBytesIncorrectFree(t *testing.T) {
+	bytes := DefaultCacheDataAllocator().AllocateCacheData(t.Context(), 1)
+	bytes.Release()
+	func() {
+		defer func() {
+			p := recover()
+			if p == nil {
+				t.Fatal("should panic")
+			}
+			if msg := fmt.Sprintf("%v", p); msg != "incorrect free, ref count: -1" {
+				t.Fatalf("got %s", msg)
+			}
+		}()
+		bytes.Release()
+	}()
 }
