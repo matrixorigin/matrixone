@@ -1558,7 +1558,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		}
 
 	case plan.Node_DEDUP:
-		if node.OnDuplicateAction != plan.Node_FAIL {
+		if node.OnDuplicateAction != plan.Node_FAIL || node.DedupJoinCtx != nil {
 			node.IsRightJoin = false
 		} else if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
