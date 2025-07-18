@@ -167,7 +167,7 @@ func CollectChanges_2(
 				}
 			}
 
-			data.Add(len(consumers))
+			data.Set(len(consumers))
 			for i := range consumers {
 				dataRetrievers[i].SetNextBatch(data)
 			}

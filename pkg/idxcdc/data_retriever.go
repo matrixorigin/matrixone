@@ -24,8 +24,6 @@ import (
 )
 
 type CDCData struct {
-	mutex  sync.Mutex
-	cond   *sync.Cond
 	refcnt atomic.Int32
 
 	insertBatch *AtomicBatch
@@ -46,21 +44,16 @@ func NewCDCData(
 		deleteBatch: deleteBatch,
 		err:         err,
 	}
-	d.cond = sync.NewCond(&d.mutex)
 	return d
 }
 
-func (d *CDCData) Add(cnt int) {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
+func (d *CDCData) Set(cnt int) {
 	d.refcnt.Add(int32(cnt))
 }
 
 func (d *CDCData) Done() {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-	d.refcnt.Add(-1)
-	if d.refcnt.Load() == 0 {
+	newRefcnt := d.refcnt.Add(-1)
+	if newRefcnt == 0 {
 		if d.insertBatch != nil {
 			d.insertBatch.Close()
 			d.insertBatch = nil
@@ -69,13 +62,6 @@ func (d *CDCData) Done() {
 			d.deleteBatch.Close()
 			d.deleteBatch = nil
 		}
-	}
-}
-func (d *CDCData) Wait() {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-	for d.refcnt.Load() > 0 {
-		d.cond.Wait()
 	}
 }
 
