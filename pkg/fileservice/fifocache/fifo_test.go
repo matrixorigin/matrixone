@@ -115,3 +115,23 @@ func TestCacheEvict3(t *testing.T) {
 	assert.Equal(t, 2048, nSet)
 	assert.Equal(t, 2048, nGet)
 }
+
+func TestDoubleFree(t *testing.T) {
+	evicts := make(map[int]int)
+	cache := New(
+		fscache.ConstCapacity(1),
+		ShardInt,
+		nil, nil,
+		func(ctx context.Context, key int, value int, size int64) {
+			evicts[key]++
+		},
+	)
+	// set
+	cache.Set(t.Context(), 1, 1, 1)
+	// delete, item still in queue
+	cache.Delete(t.Context(), 1)
+	// set to evict 1
+	cache.Set(t.Context(), 2, 2, 1)
+	// check
+	assert.Equal(t, 1, evicts[1])
+}
