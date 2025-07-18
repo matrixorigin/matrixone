@@ -196,6 +196,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		}
 	}
 
+	var err error
 	if ap.OnDuplicateAction != plan.Node_UPDATE || ctr.mp.HashOnUnique() {
 		if ctr.matched.Count() == 0 {
 			ap.ctr.buf = make([]*batch.Batch, len(ctr.batches))
@@ -206,11 +207,13 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				batSize := bat.RowCount()
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
-						ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
-						bat.Vecs[rp.Pos] = nil
+						ap.ctr.buf[i].Vecs[j], err = bat.Vecs[rp.Pos].Dup(proc.Mp())
+						if err != nil {
+							return err
+						}
 					} else {
 						ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.LeftTypes[rp.Pos])
-						if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
+						if err = vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
 							return err
 						}
 					}
@@ -251,13 +254,13 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.RightTypes[rp.Pos])
 					for _, sel := range newSels {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						if err := ap.ctr.buf[i].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+						if err = ap.ctr.buf[i].Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
 							return err
 						}
 					}
 				} else {
 					ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.LeftTypes[rp.Pos])
-					if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, len(newSels), proc.Mp()); err != nil {
+					if err = vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, len(newSels), proc.Mp()); err != nil {
 						return err
 					}
 				}
@@ -289,13 +292,13 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					ap.ctr.buf[batIdx].Vecs[i] = vector.NewVec(ap.RightTypes[rp.Pos])
 					for _, sel := range sels[fillCnt : fillCnt+batSize] {
 						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
-						if err := ap.ctr.buf[batIdx].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+						if err = ap.ctr.buf[batIdx].Vecs[i].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
 							return err
 						}
 					}
 				} else {
 					ap.ctr.buf[batIdx].Vecs[i] = vector.NewVec(ap.LeftTypes[rp.Pos])
-					if err := vector.AppendMultiFixed(ap.ctr.buf[batIdx].Vecs[i], 0, true, batSize, proc.Mp()); err != nil {
+					if err = vector.AppendMultiFixed(ap.ctr.buf[batIdx].Vecs[i], 0, true, batSize, proc.Mp()); err != nil {
 						return err
 					}
 				}
