@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"sync"
 	"time"
@@ -215,25 +214,11 @@ func (exec *CDCTaskExecutor) setAsyncIndexLogTableID(ctx context.Context) (err e
 	}
 	defer txn.Commit(ctx)
 
-	tableIDSql := cdc.CDCSQLBuilder.GetTableIDSQL(
-		tenantId,
-		catalog.MO_CATALOG,
-		MOAsyncIndexLogTableName,
-	)
-	result, err := ExecWithResult(ctx, tableIDSql, exec.cnUUID, txn)
+	tableID, err := getTableID(ctx, exec.cnUUID, txn, tenantId, catalog.MO_CATALOG, MOAsyncIndexLogTableName)
 	if err != nil {
 		return err
 	}
-	defer result.Close()
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != 1 {
-			panic(fmt.Sprintf("invalid rows %d", rows))
-		}
-		for i := 0; i < rows; i++ {
-			exec.asyncIndexLogTableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
-		}
-		return true
-	})
+	exec.asyncIndexLogTableID = tableID
 	return nil
 }
 func (exec *CDCTaskExecutor) subscribeMOAsyncIndexLog(ctx context.Context) (err error) {
