@@ -60,6 +60,7 @@ func NewDiskCache(
 	asyncLoad bool,
 	cacheDataAllocator CacheDataAllocator,
 	name string,
+	disable_s3fifo bool,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -119,6 +120,7 @@ func NewDiskCache(
 					)
 				}
 			},
+			disable_s3fifo,
 		),
 	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))

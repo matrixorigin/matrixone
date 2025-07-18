@@ -62,6 +62,7 @@ func BenchmarkMemoryFSWithMemoryCache(b *testing.B) {
 		nil,
 		nil,
 		"",
+		false,
 	)
 	defer cache.Close(ctx)
 
@@ -85,6 +86,7 @@ func BenchmarkMemoryFSWithMemoryCacheLowCapacity(b *testing.B) {
 	cache := NewMemCache(
 		fscache.ConstCapacity(2*1024*1024), nil, nil,
 		"",
+		false,
 	)
 	defer cache.Close(ctx)
 
