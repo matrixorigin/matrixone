@@ -49,6 +49,11 @@ type aggBitmapGroupContext struct {
 func generateBitmapGroupContext(_ types.Type, _ ...types.Type) aggexec.AggGroupExecContext {
 	return &aggBitmapGroupContext{bmp: roaring.New()}
 }
+
+func (a *aggBitmapGroupContext) Size() int64 {
+	return int64(a.bmp.GetSizeInBytes())
+}
+
 func (a *aggBitmapGroupContext) Marshal() []byte {
 	b, _ := a.bmp.ToBytes()
 	return b

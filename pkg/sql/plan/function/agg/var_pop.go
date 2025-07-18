@@ -121,6 +121,11 @@ func generateAggVarPopGroupContext(_ types.Type, _ ...types.Type) aggexec.AggGro
 		count: 0,
 	}
 }
+
+func (a *aggVarPopGroupContext) Size() int64 {
+	return 16 // float64 + int64
+}
+
 func (a *aggVarPopGroupContext) Marshal() []byte {
 	bs := types.EncodeFloat64(&a.sum)
 	bs = append(bs, types.EncodeInt64(&a.count)...)
@@ -202,6 +207,11 @@ func generateAggVarPopOfDecimalGroupContext(_ types.Type, _ ...types.Type) aggex
 		sum:      types.Decimal128{},
 	}
 }
+
+func (a *aggVarPopOfDecimalGroupContext) Size() int64 {
+	return 32
+}
+
 func (a *aggVarPopOfDecimalGroupContext) Marshal() []byte {
 	bs := types.EncodeInt64(&a.count)
 	bs = append(bs, types.EncodeBool(&a.overflow)...)
@@ -225,6 +235,11 @@ func generateAggVarPopOfDecimalCommonContext(ret types.Type, parameters ...types
 		resultScale: ret.Scale,
 	}
 }
+
+func (a *aggVarPopOfDecimalCommonContext) Size() int64 {
+	return 8
+}
+
 func (a *aggVarPopOfDecimalCommonContext) Marshal() []byte {
 	bs := types.EncodeInt32(&a.argScale)
 	bs = append(bs, types.EncodeInt32(&a.resultScale)...)

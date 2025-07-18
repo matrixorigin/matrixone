@@ -80,6 +80,7 @@ func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string)
 	for key, item := range shard.values {
 		if key.Path == path {
 			delete(shard.values, key)
+			// key deleted, call postEvict
 			if d.fifo.postEvict != nil {
 				d.fifo.postEvict(ctx, item.key, item.value, item.size)
 			}
