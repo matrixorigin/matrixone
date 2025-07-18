@@ -209,11 +209,6 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		return err
 	}
 
-	// if injected, we expect the start to keep retrying
-	if objectio.CDCStartErrInjected() {
-		return moerr.NewInternalError(context.Background(), "CDC_START_ERR")
-	}
-
 	dbs := make([]string, 0, len(exec.tables.Pts))
 	tables := make([]string, 0, len(exec.tables.Pts))
 	for _, pt := range exec.tables.Pts {
@@ -266,10 +261,6 @@ func (exec *CDCTaskExecutor) Resume() error {
 			zap.String("task-name", exec.spec.TaskName),
 		)
 	}()
-
-	if exec.isRunning {
-		return nil
-	}
 
 	go func() {
 		// closed in Pause, need renew

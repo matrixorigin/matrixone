@@ -913,11 +913,6 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 			_, err = s.conn.Exec(fakeSql, reuseQueryArg)
 		}
 
-		// if injected, we expect the error log to be shown and returned
-		if objectio.CDCSinkerSendErrInjected() {
-			err = moerr.NewInternalErrorNoCtx("CDC_SINKER_SEND_ERR")
-		}
-
 		if err != nil {
 
 			s.infoRecordedTxnSQLs(err)

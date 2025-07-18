@@ -168,6 +168,53 @@ func TestScanAndProcess(t *testing.T) {
 	td.scanAndProcess(context.Background())
 }
 
+func TestProcessCallBack(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	td := &TableDetector{
+		Mutex:                sync.Mutex{},
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 nil,
+		lastMp:               make(map[uint32]TblMap),
+	}
+
+	tables := map[uint32]TblMap{
+		1: {
+			"db1.tbl1": &DbTableInfo{
+				SourceDbId:      1,
+				SourceDbName:    "db1",
+				SourceTblId:     1001,
+				SourceTblName:   "tbl1",
+				SourceCreateSql: "create table tbl1 (a int)",
+				IdChanged:       false,
+			},
+		},
+	}
+	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return moerr.NewInternalErrorNoCtx("ERR") })
+	assert.Equal(t, 1, len(td.Callbacks))
+	td.mu.Lock()
+	td.lastMp = tables
+	td.mu.Unlock()
+
+	td.processCallback(context.Background(), tables)
+
+	td.mu.Lock()
+	defer td.mu.Unlock()
+
+	assert.False(t, td.handling, "handling should be reset to false")
+
+	assert.NotNil(t, td.lastMp, "lastMp should not be cleared on error")
+	assert.Equal(t, tables, td.lastMp, "lastMp should remain unchanged")
+}
+
 func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
