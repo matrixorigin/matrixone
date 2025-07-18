@@ -167,12 +167,13 @@ func CollectChanges_2(
 				}
 			}
 
+			noMoreData := data.noMoreData
 			data.Set(len(consumers))
 			for i := range consumers {
 				dataRetrievers[i].SetNextBatch(data)
 			}
 
-			if data.noMoreData {
+			if noMoreData {
 				return
 			}
 		}
