@@ -137,7 +137,7 @@ func AsyncIndexCdcTaskExecutorFactory(
 			return nil
 		}
 		exec.initStateLocked()
-		exec.run()
+		exec.run(ctx)
 		return nil
 	}
 }
@@ -312,7 +312,7 @@ func (exec *CDCTaskExecutor) Start() {
 		return
 	}
 	exec.initStateLocked()
-	go exec.run()
+	go exec.run(context.Background())
 }
 
 func (exec *CDCTaskExecutor) initStateLocked() {
@@ -347,16 +347,23 @@ func (exec *CDCTaskExecutor) Stop() {
 	exec.worker = nil
 }
 
-func (exec *CDCTaskExecutor) run() {
+func (exec *CDCTaskExecutor) run(ctx context.Context) {
 	logutil.Info(
 		"Async-Index-CDC-Task Run",
 	)
+	defer func() {
+		logutil.Info(
+			"Async-Index-CDC-Task Run Done",
+		)
+	}()
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
 	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
 	gcTrigger := time.NewTicker(exec.option.GCTTL)
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-exec.ctx.Done():
 			return
 		case <-syncTaskTrigger.C:
@@ -500,9 +507,9 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 		accountIDs := vector.MustFixedColNoTypeCheck[uint32](cols[0])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](cols[1])
 		watermarkVector := cols[3]
-		errorCodes := vector.MustFixedColNoTypeCheck[int32](cols[4])
-		consumerInfoVector := cols[8]
-		dropAtVector := cols[7]
+		errorCodes := vector.MustFixedColNoTypeCheck[int32](cols[5])
+		consumerInfoVector := cols[9]
+		dropAtVector := cols[8]
 		for i := 0; i < rows; i++ {
 			if !dropAtVector.IsNull(uint64(i)) {
 				continue
