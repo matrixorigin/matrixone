@@ -31,7 +31,6 @@ import (
 
 type DataRetrieverConsumer interface {
 	DataRetriever
-	WaitBatchConsume()
 	SetNextBatch(*CDCData)
 	SetError(error)
 	Close()
@@ -63,7 +62,6 @@ func CollectChanges_2(
 	//step3: pull data
 	var insertData, deleteData *batch.Batch
 	var insertAtmBatch, deleteAtmBatch *AtomicBatch
-	var preinsertAtmBatch, predeleteAtmBatch *AtomicBatch
 
 	tableDef := rel.CopyTableDef(ctx)
 	insTSColIdx := len(tableDef.Cols) - 1
@@ -137,20 +135,11 @@ func CollectChanges_2(
 					zap.String("from", iter.from.ToString()),
 					zap.String("to", iter.to.ToString()),
 				)
-				data = &CDCData{
-					noMoreData:  true,
-					insertBatch: nil,
-					deleteBatch: nil,
-					err:         err,
-				}
+				data = NewCDCData(true, nil, nil, err)
 			} else {
 				// both nil denote no more data (end of this tail)
 				if insertData == nil && deleteData == nil {
-					data = &CDCData{
-						noMoreData:  true,
-						insertBatch: nil,
-						deleteBatch: nil,
-					}
+					data = NewCDCData(true, nil, nil, err)
 				} else {
 					switch currentHint {
 					case engine.ChangesHandle_Snapshot:
@@ -159,11 +148,7 @@ func CollectChanges_2(
 						}
 						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						data = &CDCData{
-							noMoreData:  false,
-							insertBatch: insertAtmBatch,
-							deleteBatch: nil,
-						}
+						data = NewCDCData(false, insertAtmBatch, nil, nil)
 					case engine.ChangesHandle_Tail_wip:
 						panic("logic error")
 					case engine.ChangesHandle_Tail_done:
@@ -174,11 +159,7 @@ func CollectChanges_2(
 						deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
 						deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-						data = &CDCData{
-							noMoreData:  false,
-							insertBatch: insertAtmBatch,
-							deleteBatch: deleteAtmBatch,
-						}
+						data = NewCDCData(false, insertAtmBatch, deleteAtmBatch, nil)
 
 						addTailEndMetrics(insertAtmBatch)
 						addTailEndMetrics(deleteAtmBatch)
@@ -186,27 +167,9 @@ func CollectChanges_2(
 				}
 			}
 
+			data.Add(len(consumers))
 			for i := range consumers {
 				dataRetrievers[i].SetNextBatch(data)
-			}
-			for i := range consumers {
-				dataRetrievers[i].WaitBatchConsume()
-			}
-			if preinsertAtmBatch != nil {
-				preinsertAtmBatch.Close()
-				preinsertAtmBatch = nil
-			}
-			if predeleteAtmBatch != nil {
-				predeleteAtmBatch.Close()
-				predeleteAtmBatch = nil
-			}
-			if insertAtmBatch != nil {
-				preinsertAtmBatch = insertAtmBatch
-				insertAtmBatch = nil
-			}
-			if deleteAtmBatch != nil {
-				predeleteAtmBatch = deleteAtmBatch
-				deleteAtmBatch = nil
 			}
 
 			if data.noMoreData {

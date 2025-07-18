@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -223,63 +222,79 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 
 	err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 		for {
-			insertBatch, deleteBatch, noMoreData, err := data.Next()
+			cdcData := data.Next()
+			noMoreData, err := s.consumeData(ctx, data.GetDataType(), cdcData, txn)
 			if err != nil {
 				return err
 			}
 			if noMoreData {
-
-				if s.dataRetriever.GetDataType() != CDCDataType_Snapshot {
-					err := s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
-					if err != nil {
-						return err
-					}
-				}
 				return nil
-			}
-
-			if data.GetDataType() == CDCDataType_Snapshot {
-				err = s.sinkSnapshot(ctx, insertBatch.Batches[0], txn)
-				if err != nil {
-					return err
-				}
-			} else if data.GetDataType() == CDCDataType_Tail {
-				err = s.sinkTail(ctx, insertBatch, deleteBatch, txn)
-				if err != nil {
-					return err
-				}
-			} else {
-				panic("logic error")
 			}
 		}
 	}, executor.Options{})
 	return err
 }
+func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, cdcData *CDCData, txn executor.TxnExecutor) (noMoreData bool, err error) {
+	defer cdcData.Done()
+	if cdcData.err != nil {
+		return false, cdcData.err
+	}
+	insertBatch := cdcData.insertBatch
+	deleteBatch := cdcData.deleteBatch
+	noMoreData = cdcData.noMoreData
+	if noMoreData {
 
-func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *batch.Batch, txn executor.TxnExecutor) error {
+		if s.dataRetriever.GetDataType() != CDCDataType_Snapshot {
+			err = s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
+			if err != nil {
+				return
+			}
+		}
+		return
+	}
+
+	if dataType == CDCDataType_Snapshot {
+		err = s.sinkSnapshot(ctx, insertBatch, txn)
+		if err != nil {
+			return
+		}
+	} else if dataType == CDCDataType_Tail {
+		err = s.sinkTail(ctx, insertBatch, deleteBatch, txn)
+		if err != nil {
+			return
+		}
+	} else {
+		panic("logic error")
+	}
+	return
+}
+
+func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch, txn executor.TxnExecutor) error {
 	var err error
 
 	// if last row is not insert row, means this is the first snapshot batch
 	sqlBuffer := make([]byte, 0)
 
-	for i := 0; i < batchRowCount(bat); i++ {
-		if len(sqlBuffer) == 0 {
-			sqlBuffer = append(sqlBuffer, s.upsertPrefix...)
-			s.preRowType = UpsertRow
-		}
-		// step1: get row from the batch
-		if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
-			panic(err)
-		}
+	for _, bat := range bat.Batches {
+		for i := 0; i < batchRowCount(bat); i++ {
+			if len(sqlBuffer) == 0 {
+				sqlBuffer = append(sqlBuffer, s.upsertPrefix...)
+				s.preRowType = UpsertRow
+			}
+			// step1: get row from the batch
+			if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
+				panic(err)
+			}
 
-		// step2: transform rows into sql parts
-		if err = s.getInsertRowBuf(ctx); err != nil {
-			panic(err)
-		}
+			// step2: transform rows into sql parts
+			if err = s.getInsertRowBuf(ctx); err != nil {
+				panic(err)
+			}
 
-		// step3: append to sqlBuf, send sql if sqlBuf is full
-		if sqlBuffer, err = s.appendSqlBuf(UpsertRow, sqlBuffer, txn); err != nil {
-			panic(err)
+			// step3: append to sqlBuf, send sql if sqlBuf is full
+			if sqlBuffer, err = s.appendSqlBuf(UpsertRow, sqlBuffer, txn); err != nil {
+				panic(err)
+			}
 		}
 	}
 	err = s.tryFlushSqlBuf(txn, sqlBuffer)

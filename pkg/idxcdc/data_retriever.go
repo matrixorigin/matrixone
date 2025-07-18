@@ -17,16 +17,66 @@ package idxcdc
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 type CDCData struct {
+	mutex  sync.Mutex
+	cond   *sync.Cond
+	refcnt atomic.Int32
+
 	insertBatch *AtomicBatch
 	deleteBatch *AtomicBatch
 	noMoreData  bool
 	err         error
+}
+
+func NewCDCData(
+	noMoreData bool,
+	insertBatch *AtomicBatch,
+	deleteBatch *AtomicBatch,
+	err error,
+) *CDCData {
+	d := &CDCData{
+		noMoreData:  noMoreData,
+		insertBatch: insertBatch,
+		deleteBatch: deleteBatch,
+		err:         err,
+	}
+	d.cond = sync.NewCond(&d.mutex)
+	return d
+}
+
+func (d *CDCData) Add(cnt int) {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	d.refcnt.Add(int32(cnt))
+}
+
+func (d *CDCData) Done() {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	d.refcnt.Add(-1)
+	if d.refcnt.Load() == 0 {
+		if d.insertBatch != nil {
+			d.insertBatch.Close()
+			d.insertBatch = nil
+		}
+		if d.deleteBatch != nil {
+			d.deleteBatch.Close()
+			d.deleteBatch = nil
+		}
+	}
+}
+func (d *CDCData) Wait() {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+	for d.refcnt.Load() > 0 {
+		d.cond.Wait()
+	}
 }
 
 const (
@@ -45,8 +95,7 @@ type DataRetrieverImpl struct {
 	cancel       context.CancelFunc
 	err          error
 
-	closed bool
-	mu     sync.Mutex
+	mu sync.Mutex
 }
 
 func NewDataRetriever(
@@ -66,12 +115,12 @@ func NewDataRetriever(
 	}
 }
 
-func (r *DataRetrieverImpl) Next() (insertBatch, deleteBatch *AtomicBatch, noMoreDate bool, err error) {
+func (r *DataRetrieverImpl) Next() (cdcData *CDCData) {
 	data := <-r.insertDataCh
 	defer func() {
 		r.ackChan <- struct{}{}
 	}()
-	return data.insertBatch, data.deleteBatch, data.noMoreData, data.err
+	return data
 }
 
 func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts executor.StatementOption) error {
@@ -99,12 +148,6 @@ func (r *DataRetrieverImpl) SetNextBatch(data *CDCData) {
 		return
 	}
 	r.insertDataCh <- data
-}
-
-func (r *DataRetrieverImpl) WaitBatchConsume() {
-	if r.hasError() {
-		return
-	}
 	select {
 	case <-r.ctx.Done():
 		return

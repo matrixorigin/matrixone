@@ -58,7 +58,7 @@ const (
 )
 
 type DataRetriever interface {
-	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
+	Next() (cdcData *CDCData)
 	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
 	GetDataType() int8
 }
