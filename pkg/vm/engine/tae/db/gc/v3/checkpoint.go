@@ -1022,6 +1022,9 @@ func (c *checkpointCleaner) tryGCLocked(
 	if maxGlobalCKP = c.checkpointCli.MaxGlobalCheckpoint(); maxGlobalCKP == nil {
 		return
 	}
+	if !c.checkExtras(maxGlobalCKP) {
+		return
+	}
 	// 1.2. If there is no incremental checkpoint scanned, no need to do GC.
 	//      because GC is based on the scanned result.
 	var scannedWindow *GCWindow
