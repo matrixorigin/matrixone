@@ -1013,7 +1013,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 	return n, nil
 }
 
-func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (n int, err error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
@@ -1042,7 +1042,6 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 			return 0, err
 		}
 	}
-	logutil.Infof("debug_21848, cdcTaskRowsAffected: %d", cdcTaskRowsAffected)
 
 	daemonTaskRowsAffected, err := m.RunAddDaemonTask(ctx, tx, dt)
 	if err != nil {
@@ -1053,7 +1052,8 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 		err = moerr.NewInternalError(ctx, "add cdc task status failed.")
 		return 0, err
 	}
-	return daemonTaskRowsAffected, nil
+	n = daemonTaskRowsAffected
+	return
 }
 
 func (m *mysqlTaskStorage) UpdateCDCTask(

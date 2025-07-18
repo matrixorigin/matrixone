@@ -46,7 +46,7 @@ func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
 }
 
 func TestMergeBlock(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
 	segmentid := objectio.NewSegmentid()
 	name1 := objectio.BuildObjectName(segmentid, 0)
@@ -211,7 +211,7 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 		AddAffectedRows: true,
 	}
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
 
 	// arg.Prepare(proc)

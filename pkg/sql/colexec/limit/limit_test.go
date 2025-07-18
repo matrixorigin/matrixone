@@ -41,14 +41,10 @@ type limitTestCase struct {
 	getRowCount int
 }
 
-var (
-	tcs []limitTestCase
-)
-
-func init() {
-	tcs = []limitTestCase{
+func makeTestCases(t *testing.T) []limitTestCase {
+	return []limitTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Limit{
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(0),
 				OperatorBase: vm.OperatorBase{
@@ -62,7 +58,7 @@ func init() {
 			getRowCount: 0,
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Limit{
 				LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(1),
 				OperatorBase: vm.OperatorBase{
@@ -76,7 +72,7 @@ func init() {
 			getRowCount: 1,
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Limit{
 				ctr: container{
 					seen: 0,
@@ -97,13 +93,13 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
@@ -111,7 +107,7 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestLimit(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -141,9 +137,9 @@ func TestLimit(t *testing.T) {
 
 func BenchmarkLimit(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		tcs = []limitTestCase{
+		tcs := []limitTestCase{
 			{
-				proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+				proc: testutil.NewProcessWithMPool(b, "", mpool.MustNewZero()),
 				arg: &Limit{
 					LimitExpr: plan2.MakePlan2Uint64ConstExprWithType(8),
 				},

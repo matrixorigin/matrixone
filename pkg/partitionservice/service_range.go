@@ -48,6 +48,7 @@ func (s *Service) getMetadataByRangeType(
 
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
 			tree.WithEscapeSingleQuoteString(),
 		)
 		method.Expr.Format(ctx)
@@ -73,6 +74,7 @@ func (s *Service) getMetadataByRangeType(
 		func(p *tree.Partition) string {
 			ctx := tree.NewFmtCtx(
 				dialect.MYSQL,
+				tree.WithQuoteIdentifier(),
 				tree.WithEscapeSingleQuoteString(),
 			)
 			p.Values.Format(ctx)

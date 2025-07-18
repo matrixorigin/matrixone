@@ -409,7 +409,7 @@ func Test_handleCreateCdc(t *testing.T) {
 	})
 	defer stubOpenDbConn.Reset()
 
-	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -448,7 +448,7 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 	pu.TaskService = &testTaskService{}
 	setPu("", &pu)
 
-	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples) error {
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, minLength ...int64) error {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
@@ -2225,13 +2225,12 @@ func TestCdcTask_Resume(t *testing.T) {
 }
 
 func TestCdcTask_Restart(t *testing.T) {
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
 	cdc := &CDCTaskExecutor{
-		activeRoutine: cdc.NewCdcActiveRoutine(),
-		watermarkUpdater: cdc.NewWatermarkUpdater(
-			sysAccountID,
-			"taskID-0",
-			nil,
-		),
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
@@ -2270,29 +2269,20 @@ func TestCdcTask_Cancel(t *testing.T) {
 		<-ch
 	}()
 
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-
-	sqlx := "DELETE FROM `mo_catalog`.`mo_cdc_watermark` WHERE account_id = .* AND task_id = .*"
-	mock.ExpectExec(sqlx).WillReturnResult(sqlmock.NewResult(1, 1))
-	tie := &testIE{
-		db: db,
-	}
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
 	cdc := &CDCTaskExecutor{
-		activeRoutine: cdc.NewCdcActiveRoutine(),
-		watermarkUpdater: cdc.NewWatermarkUpdater(
-			sysAccountID,
-			"taskID-1",
-			tie,
-		),
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
 		spec: &task.CreateCdcDetails{
 			TaskName: "task1",
 		},
 		holdCh:    ch,
 		isRunning: true,
 	}
-	err = cdc.Cancel()
-	assert.NoErrorf(t, err, "Pause()")
+	err := cdc.Cancel()
+	assert.NoErrorf(t, err, "Cancel()")
 }
 
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
@@ -2312,7 +2302,7 @@ func TestCdcTask_retrieveCdcTask(t *testing.T) {
 		startTs              types.TS
 		noFull               bool
 		activeRoutine        *cdc.ActiveRoutine
-		sunkWatermarkUpdater *cdc.WatermarkUpdater
+		sunkWatermarkUpdater *cdc.CDCWatermarkUpdater
 	}
 	type args struct {
 		ctx context.Context
@@ -2830,41 +2820,6 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 	cdcTask.handleNewTables(mp)
 }
 
-type mockWatermarkUpdater struct{}
-
-func (m mockWatermarkUpdater) Run(context.Context, *cdc.ActiveRoutine) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockWatermarkUpdater) InsertIntoDb(*cdc.DbTableInfo, types.TS) error {
-	return nil
-}
-
-func (m mockWatermarkUpdater) GetFromMem(string, string) types.TS {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m mockWatermarkUpdater) GetFromDb(dbName, tblName string) (watermark types.TS, err error) {
-	err = moerr.NewErrNoWatermarkFoundNoCtx(dbName, tblName)
-	return
-}
-
-func (m mockWatermarkUpdater) UpdateMem(string, string, types.TS) {
-
-}
-
-func (m mockWatermarkUpdater) DeleteFromMem(string, string) {}
-
-func (m mockWatermarkUpdater) DeleteFromDb(string, string) error {
-	return nil
-}
-
-func (m mockWatermarkUpdater) SaveErrMsg(string, string, string) error {
-	return nil
-}
-
 type mockReader struct{}
 
 func (m mockReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
@@ -2935,14 +2890,21 @@ func (m mockSinker) Close() {
 func (m mockSinker) ClearError() {}
 
 func TestCdcTask_addExecPipelineForTable(t *testing.T) {
+	u, _ := cdc.InitCDCWatermarkUpdaterForTest(t)
+	u.Start()
+	defer u.Stop()
 	cdcTask := &CDCTaskExecutor{
-		watermarkUpdater: &mockWatermarkUpdater{},
+		watermarkUpdater: u,
 		runningReaders:   &sync.Map{},
 		noFull:           true,
 		additionalConfig: map[string]interface{}{
 			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
 			cdc.CDCTaskExtraOptions_SendSqlTimeout:       cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn: cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
+			cdc.CDCTaskExtraOptions_Frequency:            "",
+		},
+		spec: &task.CreateCdcDetails{
+			Accounts: []*task.Account{{Id: 0}},
 		},
 	}
 
@@ -2966,17 +2928,47 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	})
 	defer stubGetTableDef.Reset()
 
-	stubSinker := gostub.Stub(&cdc.NewSinker, func(cdc.UriInfo, *cdc.DbTableInfo, cdc.IWatermarkUpdater,
-		*plan.TableDef, int, time.Duration, *cdc.ActiveRoutine, uint64, string) (cdc.Sinker, error) {
-		return &mockSinker{}, nil
-	})
+	stubSinker := gostub.Stub(
+		&cdc.NewSinker,
+		func(
+			cdc.UriInfo,
+			uint64,
+			string,
+			*cdc.DbTableInfo,
+			*cdc.CDCWatermarkUpdater,
+			*plan.TableDef,
+			int,
+			time.Duration,
+			*cdc.ActiveRoutine,
+			uint64,
+			string,
+		) (cdc.Sinker, error) {
+			return &mockSinker{}, nil
+		})
 	defer stubSinker.Reset()
 
-	stubReader := gostub.Stub(&cdc.NewTableReader, func(client.TxnClient, engine.Engine, *mpool.MPool,
-		*fileservice.Pool[*types.Packer], *cdc.DbTableInfo, cdc.Sinker, cdc.IWatermarkUpdater, *plan.TableDef, bool,
-		*sync.Map, types.TS, types.TS, bool) cdc.Reader {
-		return &mockReader{}
-	})
+	stubReader := gostub.Stub(
+		&cdc.NewTableReader,
+		func(
+			client.TxnClient,
+			engine.Engine,
+			*mpool.MPool,
+			*fileservice.Pool[*types.Packer],
+			uint64,
+			string,
+			*cdc.DbTableInfo,
+			cdc.Sinker,
+			*cdc.CDCWatermarkUpdater,
+			*plan.TableDef,
+			bool,
+			*sync.Map,
+			types.TS,
+			types.TS,
+			bool,
+			string,
+		) cdc.Reader {
+			return &mockReader{}
+		})
 	defer stubReader.Reset()
 
 	assert.NoError(t, cdcTask.addExecPipelineForTable(context.Background(), info, txnOperator))
@@ -3011,7 +3003,7 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			return 0, "", level == "table", nil
 		},
 	)
-	err := CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts)
+	err := CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts, 0)
 	assert.Error(t, err)
 	stubGetPitrLength.Reset()
 
@@ -3020,7 +3012,7 @@ func TestCdcTask_checkPitr(t *testing.T) {
 			return 0, "", false, moerr.NewInternalErrorNoCtx("")
 		},
 	)
-	err = CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts)
+	err = CDCCheckPitrGranularity(context.Background(), nil, "acc1", pts, 0, 1)
 	assert.Error(t, err)
 	stubGetPitrLength.Reset()
 
@@ -3184,4 +3176,85 @@ func TestCDCCreateTaskOptions_handleLevel(t *testing.T) {
 	level := cdc.CDCPitrGranularity_Table
 	err = opts.handleLevel(context.Background(), nil, req, level)
 	assert.Error(t, err)
+}
+
+func TestCDCCreateTaskOptions_handleFrequency(t *testing.T) {
+	opts := &CDCCreateTaskOptions{}
+	err := opts.handleFrequency(context.Background(), nil, nil, "db", "1m")
+	assert.Error(t, err)
+
+	req := &CDCCreateTaskRequest{
+		Tables: "db1.t1:db2.t2,db1.t1:db4.t4",
+	}
+	level := cdc.CDCPitrGranularity_Table
+	err = opts.handleFrequency(context.Background(), nil, req, level, "abc")
+	assert.Error(t, err)
+	err = opts.handleFrequency(context.Background(), nil, req, level, "1h")
+	assert.Error(t, err)
+}
+
+func TestIsValidFrequency(t *testing.T) {
+	tests := []struct {
+		freq  string
+		valid bool
+	}{
+		{"15m", true},
+		{"1h", true},
+		{"60h", true},
+
+		{"", false},
+		{"01m", false},
+		{"001m", false},
+		{"0m", false},
+		{"00m", false},
+		{"-1h", false},
+		{"2.5h", false},
+		{"1s", false},
+		{"1", false},
+		{"m", false},
+		{"h", false},
+		{"abc", false},
+		{"10min", false},
+		{" 1h", false},
+		{"1h ", false},
+		{"1H", false},
+		{"1M", false},
+		{"10000001m", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.freq, func(t *testing.T) {
+			if got := isValidFrequency(tt.freq); got != tt.valid {
+				t.Errorf("isValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
+			}
+		})
+	}
+}
+
+func TestTransformIntoHours(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"15m", 1},
+		{"30m", 1},
+		{"59m", 1},
+		{"60m", 1},
+		{"61m", 2},
+		{"120m", 2},
+		{"121m", 3},
+
+		{"1h", 1},
+		{"24h", 24},
+
+		{"", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := transformIntoHours(tt.input); got != tt.want {
+				t.Errorf("transformIntoHours(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
 }

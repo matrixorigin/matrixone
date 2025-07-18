@@ -17,6 +17,9 @@ package executor
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -266,4 +269,37 @@ func (opts Options) WithStreaming(stream_chan chan Result, error_chan chan error
 
 func (opts Options) Streaming() (chan Result, chan error, bool) {
 	return opts.stream_chan, opts.error_chan, opts.streaming
+}
+
+func (opts StatementOption) HasParams() bool {
+	return len(opts.params) > 0
+}
+
+func (opts StatementOption) Params(
+	mp *mpool.MPool,
+) *vector.Vector {
+	vec := vector.NewVec(types.T_varchar.ToType())
+	vector.AppendStringList(
+		vec,
+		opts.params,
+		make([]bool, len(opts.params)),
+		mp,
+	)
+	return vec
+}
+
+func (opts StatementOption) WithParams(
+	values []string,
+) StatementOption {
+	opts.params = values
+	return opts
+}
+
+func (opts Options) WithForceRebuildPlan() Options {
+	opts.forceRebuildPlan = true
+	return opts
+}
+
+func (opts Options) ForceRebuildPlan() bool {
+	return opts.forceRebuildPlan
 }

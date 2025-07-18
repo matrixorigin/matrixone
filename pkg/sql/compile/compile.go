@@ -395,6 +395,8 @@ func (c *Compile) run(s *Scope) error {
 		} else {
 			return s.CreateTable(c)
 		}
+	case CreatePitr:
+		return s.CreatePitr(c)
 	case CreateView:
 		return s.CreateView(c)
 	case AlterView:
@@ -405,6 +407,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.RenameTable(c)
 	case DropTable:
 		return s.DropTable(c)
+	case DropPitr:
+		return s.DropPitr(c)
 	case DropSequence:
 		return s.DropSequence(c)
 	case CreateSequence:
@@ -419,6 +423,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.TruncateTable(c)
 	case Replace:
 		return s.replace(c)
+	case TableClone:
+		return s.TableClone(c)
 	}
 	return nil
 }
@@ -636,6 +642,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 				newScope(DropDatabase).
 					withPlan(pn),
 			}, nil
+		case plan.DataDefinition_CREATE_PITR:
+			return []*Scope{
+				newScope(CreatePitr).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return []*Scope{
 				newScope(CreateTable).
@@ -664,6 +675,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 		case plan.DataDefinition_DROP_TABLE:
 			return []*Scope{
 				newScope(DropTable).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_DROP_PITR:
+			return []*Scope{
+				newScope(DropPitr).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
@@ -701,15 +717,21 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 			plan.DataDefinition_SHOW_COLUMNS,
 			plan.DataDefinition_SHOW_CREATETABLE:
 			return c.compileQuery(pn.GetDdl().GetQuery())
-			// 1、not supported: show arnings/errors/status/processlist
-			// 2、show variables will not return query
-			// 3、show create database/table need rewrite to create sql
+		// 1、not supported: show arnings/errors/status/processlist
+		// 2、show variables will not return query
+		// 3、show create database/table need rewrite to create sql
+
+		case plan.DataDefinition_CREATE_TABLE_WITH_CLONE:
+			return c.compileTableClone(pn)
 		}
 	}
 	return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", pn))
 }
 
 func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if objRes.NotLockMeta {
+		return
+	}
 	if !c.needLockMeta {
 		return
 	}
@@ -1304,6 +1326,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePostDml(n, ss)
 		return ss, nil
+
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -4247,6 +4270,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	//	forceSingle = true
 	//}
 
+	if n.NodeType == plan.Node_TABLE_CLONE {
+		forceSingle = true
+	}
+
 	var nodes engine.Nodes
 	// scan on current CN
 	if shouldScanOnCurrentCN(c, n, forceSingle) {
@@ -4659,11 +4686,26 @@ func (c *Compile) runSql(sql string) error {
 	return c.runSqlWithAccountId(sql, NoAccountId)
 }
 
+func (c *Compile) runSqlWithOptions(
+	sql string,
+	options executor.StatementOption,
+) error {
+	return c.runSqlWithAccountIdAndOptions(sql, NoAccountId, options)
+}
+
 func (c *Compile) runSqlWithAccountId(sql string, accountId int32) error {
+	return c.runSqlWithAccountIdAndOptions(sql, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runSqlWithAccountIdAndOptions(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+) error {
 	if sql == "" {
 		return nil
 	}
-	res, err := c.runSqlWithResult(sql, accountId)
+	res, err := c.runSqlWithResultAndOptions(sql, accountId, options)
 	if err != nil {
 		return err
 	}
@@ -4672,6 +4714,14 @@ func (c *Compile) runSqlWithAccountId(sql string, accountId int32) error {
 }
 
 func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result, error) {
+	return c.runSqlWithResultAndOptions(sql, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runSqlWithResultAndOptions(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
@@ -4687,7 +4737,8 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		WithTxn(c.proc.GetTxnOperator()).
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
-		WithLowerCaseTableNames(&lower)
+		WithLowerCaseTableNames(&lower).
+		WithStatementOption(options)
 
 	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
@@ -4837,4 +4888,40 @@ func (c *Compile) getLower() int64 {
 		lower = lowerVar.(int64)
 	}
 	return lower
+}
+
+func (c *Compile) compileTableClone(
+	pn *plan.Plan,
+) ([]*Scope, error) {
+
+	var (
+		err error
+		s1  *Scope
+
+		nodes    []engine.Node
+		cloneQry = pn.GetDdl().Query
+	)
+
+	nodes, err = c.generateNodes(cloneQry.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	copyOp, err := constructTableClone(c, cloneQry.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	s1 = newScope(TableClone)
+	s1.NodeInfo = nodes[0]
+	s1.TxnOffset = c.TxnOffset
+	s1.DataSource = &Source{
+		node: cloneQry.Nodes[0],
+	}
+	s1.Plan = pn
+
+	s1.Proc = c.proc.NewNoContextChildProc(0)
+	s1.setRootOperator(copyOp)
+
+	return []*Scope{s1}, nil
 }

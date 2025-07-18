@@ -16,11 +16,11 @@ package multi_update
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,9 +29,13 @@ import (
 type PartitionMultiUpdate struct {
 	vm.OperatorBase
 
-	raw     *MultiUpdate
-	tableID uint64
-	meta    partition.PartitionMetadata
+	raw              *MultiUpdate
+	tableID          uint64
+	meta             partition.PartitionMetadata
+	mainIndexes      []uint64
+	partitionIndexes map[uint64][]engine.Relation
+	rawTableIDs      []uint64
+	rawTableFlags    []uint64
 }
 
 func NewPartitionMultiUpdate(
@@ -74,12 +78,39 @@ func (op *PartitionMultiUpdate) Prepare(
 	}
 
 	var err error
-	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(proc.Ctx, op.tableID, proc.GetTxnOperator())
+	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(
+		proc.Ctx,
+		op.tableID,
+		proc.GetTxnOperator(),
+	)
 	if err != nil {
 		return err
 	}
+	_, _, r, err := op.raw.Engine.GetRelationById(
+		proc.Ctx,
+		proc.GetTxnOperator(),
+		op.tableID,
+	)
+	if err != nil {
+		return err
+	}
+	if len(r.GetExtraInfo().IndexTables) > 0 {
+		op.mainIndexes = r.GetExtraInfo().IndexTables
+		op.partitionIndexes = make(map[uint64][]engine.Relation, len(op.meta.Partitions))
+	}
+
 	op.raw.OperatorBase = op.OperatorBase
-	return op.raw.Prepare(proc)
+	if err = op.raw.Prepare(proc); err != nil {
+		return err
+	}
+
+	op.rawTableIDs = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
+	op.rawTableFlags = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
+	for _, c := range op.raw.MultiUpdateCtx {
+		op.rawTableIDs = append(op.rawTableIDs, c.TableDef.TblId)
+		op.rawTableFlags = append(op.rawTableFlags, c.TableDef.FeatureFlag)
+	}
+	return nil
 }
 
 func (op *PartitionMultiUpdate) Call(
@@ -119,20 +150,32 @@ func (op *PartitionMultiUpdate) Call(
 			partition partition.Partition,
 			bat *batch.Batch,
 		) bool {
-			for _, c := range op.raw.MultiUpdateCtx {
-				c.ObjRef.ObjName = partition.PartitionTableName
-				rel, err = colexec.GetRelAndPartitionRelsByObjRef(
-					proc.Ctx,
-					proc,
-					op.raw.Engine,
-					c.ObjRef,
-				)
-				if err != nil {
-					return false
+			_, _, rel, err = op.raw.Engine.GetRelationById(
+				proc.Ctx,
+				proc.GetTxnOperator(),
+				partition.PartitionID,
+			)
+			if err != nil {
+				return false
+			}
+
+			// mapping all main table and index table to partition's.
+			for i, c := range op.raw.MultiUpdateCtx {
+				r := rel
+				if features.IsIndexTable(op.rawTableFlags[i]) {
+					r, err = op.getPartitionIndex(
+						proc,
+						op.rawTableIDs[i],
+						partition.PartitionID,
+						rel,
+					)
+					if err != nil {
+						return false
+					}
 				}
 
-				c.ObjRef.ObjName = partition.PartitionTableName
-				c.TableDef = rel.GetTableDef(proc.Ctx)
+				c.ObjRef.ObjName = r.GetTableName()
+				c.TableDef = r.GetTableDef(proc.Ctx)
 			}
 			op.raw.resetMultiUpdateCtxs()
 			if err = op.raw.resetMultiSources(proc); err != nil {
@@ -180,4 +223,38 @@ func (op *PartitionMultiUpdate) Reset(
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &op.OperatorBase
+}
+
+func (op *PartitionMultiUpdate) getPartitionIndex(
+	proc *process.Process,
+	tableID uint64,
+	partitionID uint64,
+	partitionRel engine.Relation,
+) (engine.Relation, error) {
+	for i, id := range op.mainIndexes {
+		if id == tableID {
+			indexes, ok := op.partitionIndexes[partitionID]
+			if ok {
+				return indexes[i], nil
+			}
+
+			relations := make([]engine.Relation, 0, len(op.meta.Partitions))
+			for _, index := range partitionRel.GetExtraInfo().IndexTables {
+				_, _, rel, err := op.raw.Engine.GetRelationById(
+					proc.Ctx,
+					proc.GetTxnOperator(),
+					index,
+				)
+				if err != nil {
+					return nil, err
+				}
+				relations = append(relations, rel)
+			}
+			op.partitionIndexes[partitionID] = relations
+
+			return relations[i], nil
+		}
+	}
+
+	panic("BUG")
 }

@@ -52,8 +52,8 @@ var (
 	}
 )
 
-func newHnswCreateTestCase(m *mpool.MPool, attrs []string, param string) hnswCreateTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) hnswCreateTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range hnswcreatedefaultColdefs {
@@ -93,7 +93,7 @@ func TestHnswCreate(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 
 	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswCreateTestCase(mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
 
 	inbat := makeBatchHnswCreate(ut.proc)
 
@@ -141,7 +141,7 @@ func TestHnswCreateParamFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 
 	for _, param := range failedparam {
-		ut := newHnswCreateTestCase(mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+		ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
 
 		inbat := makeBatchHnswCreate(ut.proc)
 
@@ -185,7 +185,7 @@ func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 
-	ut := newHnswCreateTestCase(mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
 	failbatches := makeBatchHnswCreateFail(ut.proc)
 	for _, b := range failbatches {
 

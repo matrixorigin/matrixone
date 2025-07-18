@@ -101,7 +101,7 @@ func TestRemoteRun(t *testing.T) {
 	defer ctrl.Finish()
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 
 	tPCli := &testPipelineClient{

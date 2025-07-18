@@ -549,6 +549,7 @@ func TestMergeBlocks2(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
+
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.Extra.BlockMaxRows = 5
 	schema.Extra.ObjectMaxBlocks = 2

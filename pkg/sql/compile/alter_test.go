@@ -217,7 +217,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -258,7 +258,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -314,7 +314,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -370,7 +370,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -641,7 +641,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -680,7 +680,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -734,7 +734,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()

@@ -173,9 +173,9 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 			},
 		)
 		optFs := testutil.WithFileService(fs)
-		proc = testutil.NewProc(optFs)
+		proc = testutil.NewProc(t, optFs)
 	} else {
-		proc = testutil.NewProc()
+		proc = testutil.NewProc(t)
 	}
 
 	proc.Base.TxnClient = txnClient

@@ -33,7 +33,7 @@ import (
 )
 
 func TestSortKey(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Ctx = context.TODO()
 	batch1 := &batch.Batch{
 		Attrs: []string{"a"},
@@ -66,7 +66,7 @@ func TestSortKey(t *testing.T) {
 }
 
 func TestSetStatsCNCreated(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	ctx := proc.Ctx
 
 	bat := batch.NewWithSize(2)
@@ -438,7 +438,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test no data to flush
 	{
-		proc := testutil.NewProc()
+		proc := testutil.NewProc(t)
 		ctx := proc.Ctx
 
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
@@ -455,7 +455,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test no SHARED service err
 	{
-		proc := testutil.NewProc()
+		proc := testutil.NewProc(t)
 		ctx := proc.Ctx
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
@@ -470,7 +470,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 	// test normal flush
 	{
-		proc := testutil.NewProc()
+		proc := testutil.NewProc(t)
 		ctx := proc.Ctx
 
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
@@ -493,6 +493,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		require.NoError(t, err)
 
 		proc := testutil.NewProc(
+			t,
 			testutil.WithMPool(pool))
 		ctx := proc.Ctx
 
@@ -529,7 +530,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 func TestGetSharedFSFromProc(t *testing.T) {
 	{
-		proc := testutil.NewProc()
+		proc := testutil.NewProc(t)
 		fs, err := GetSharedFSFromProc(proc)
 		require.NoError(t, err)
 		require.NotNil(t, fs)

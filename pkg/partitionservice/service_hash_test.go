@@ -17,8 +17,9 @@ package partitionservice
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -59,7 +60,7 @@ func TestCreateHash(t *testing.T) {
 
 				v, ok := memStore.uncommitted[tableID]
 				assert.True(t, ok)
-				assert.Equal(t, columns[0], v.metadata.Description)
+				assert.Equal(t, "`"+columns[0]+"`", v.metadata.Description)
 				assert.Equal(t, 2, len(v.partitions))
 				for _, p := range v.partitions {
 					assert.NotEqual(t, 0, p.PartitionID)

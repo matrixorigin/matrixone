@@ -48,7 +48,7 @@ func TestPrefixEq(t *testing.T) {
 		},
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixEq)
@@ -83,7 +83,7 @@ func TestPrefixIn(t *testing.T) {
 		},
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, newImplPrefixIn().doPrefixIn)
@@ -122,7 +122,7 @@ func TestPrefixBetween(t *testing.T) {
 		},
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, PrefixBetween)

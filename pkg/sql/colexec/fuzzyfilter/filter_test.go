@@ -36,8 +36,6 @@ type fuzzyTestCase struct {
 
 var (
 	rowCnts []float64
-
-	tcs []fuzzyTestCase
 )
 
 func init() {
@@ -50,11 +48,13 @@ func init() {
 	// 	68871111,
 	// 	137742221,
 	// }
+}
 
-	tcs = []fuzzyTestCase{
+func makeTestCases(t *testing.T) []fuzzyTestCase {
+	return []fuzzyTestCase{
 		{
 			arg:  newArgument(types.T_int32.ToType()),
-			proc: newProcess(),
+			proc: newProcess(t),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
@@ -102,8 +102,8 @@ func newArgument(typ types.Type) *FuzzyFilter {
 	return arg
 }
 
-func newProcess() *process.Process {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+func newProcess(t *testing.T) *process.Process {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	return proc
 }
 
@@ -121,7 +121,7 @@ func setProcForTest(fuzzyFilter *FuzzyFilter, proc *process.Process, typs []type
 }
 
 func TestString(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		buf := new(bytes.Buffer)
 		tc.arg.String(buf)
 		require.Equal(t, "fuzzy_filter: fuzzy check duplicate constraint", buf.String())
@@ -129,14 +129,14 @@ func TestString(t *testing.T) {
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestFuzzyFilter(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		for _, r := range rowCnts {
 			setProcForTest(tc.arg, tc.proc, tc.types, r)
 			tc.arg.N = r

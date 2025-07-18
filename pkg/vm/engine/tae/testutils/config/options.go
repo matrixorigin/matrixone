@@ -16,6 +16,8 @@ package config
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -28,8 +30,16 @@ func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Op
 	opts.CheckpointCfg.MinCount = int64(factor)
 	opts.CheckpointCfg.IncrementalInterval *= time.Duration(factor)
 	opts.CheckpointCfg.BlockRows = 10
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	opts.Ctx = context.Background()
 	return opts
+}
+
+func MinTSGCCheckerFactory(e any) func(ts *types.TS) bool {
+	return func(ts *types.TS) bool {
+		minTS := e.(*db.DB).TxnMgr.MinTSForTest()
+		return !ts.GE(&minTS)
+	}
 }
 
 func WithQuickScanAndCKPOpts(
@@ -59,6 +69,7 @@ func WithQuickScanAndCKPOpts(
 	opts.CatalogCfg = new(options.CatalogCfg)
 	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	for _, op := range ops {
 		op(opts)
 	}
@@ -83,6 +94,7 @@ func WithQuickScanCKPAndLongGCOpts(
 	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
 	opts.CheckpointCfg.BlockRows = 10
 	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	opts.Ctx = context.Background()
 	for _, op := range ops {
 		op(opts)
@@ -115,6 +127,7 @@ func WithQuickScanAndCKPAndGCOpts(
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	for _, op := range ops {
 		op(opts)
 	}
@@ -137,6 +150,7 @@ func WithLongScanAndCKPOpts(
 	opts.CheckpointCfg.GlobalMinCount = 10000000
 	opts.CheckpointCfg.BlockRows = 10
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	for _, option := range ops {
 		option(opts)
 	}
@@ -163,6 +177,7 @@ func WithLongScanAndCKPOptsAndQuickGC(
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	for _, option := range ops {
 		option(opts)
 	}

@@ -441,9 +441,9 @@ func splitTasksOnSpan(
 		return idx
 	}
 	notesFmt := []string{
-		"pointDepth %v >= %v, narrow span",
-		"pointDepth %v >= %v, medium span",
 		"pointDepth %v >= %v, wide span",
+		"pointDepth %v >= %v, medium span",
+		"pointDepth %v >= %v, narrow span",
 	}
 	start := 0
 	pos := 0

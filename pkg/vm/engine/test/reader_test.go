@@ -129,7 +129,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	// }
 
 	var exes []colexec.ExpressionExecutor
-	proc := testutil3.NewProcessWithMPool("", mp)
+	proc := testutil3.NewProcessWithMPool(t, "", mp)
 	expr := []*plan.Expr{
 		readutil.MakeFunctionExprForTest("=", []*plan.Expr{
 			readutil.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
@@ -1339,7 +1339,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 func Test_SimpleReader(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil3.NewProcessWithMPool("", mp)
+	proc := testutil3.NewProcessWithMPool(t, "", mp)
 	pkType := types.T_int32.ToType()
 	bat1 := readutil.NewCNTombstoneBatch(
 		&pkType,

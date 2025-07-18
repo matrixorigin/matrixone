@@ -275,6 +275,7 @@ CREATE TABLE `t2` (
 
 alter table t2 drop primary key;
 alter table t2 AUTO_INCREMENT=10;
+alter table t2 disable keys;
 
 CREATE TABLE `t3` (
 `a` INT NOT NULL,
@@ -487,6 +488,20 @@ alter table t5 modify column content varchar(1000);
 
 select * from t5;
 show create table t5;
+
+begin;
+
+alter table t5 rename column content to new_content;
+
+-- @separator:table
+select mo_ctl('dn', 'flush', 'mo_catalog.mo_columns');
+
+select sleep(0.51);
+
+commit;
+
+show create table t5;
+
 
 -- Cleanup
 drop table t1;

@@ -316,7 +316,7 @@ func (s *Storage) Delete(
 			for _, p := range metadata.Partitions {
 				res, err = txn.Exec(
 					fmt.Sprintf(
-						"drop table %s",
+						"drop table `%s`",
 						p.PartitionTableName,
 					),
 					executor.StatementOption{},
@@ -496,7 +496,12 @@ func getPartitionTableCreateSQL(
 		table.ObjectNamePrefix,
 		table.AtTsExpr,
 	)
-	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	return tree.StringWithOpts(
+		stmt,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
 }
 
 func getInsertMetadataSQL(

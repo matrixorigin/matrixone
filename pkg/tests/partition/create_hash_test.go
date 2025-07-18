@@ -17,7 +17,6 @@ package partition
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"testing"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -189,7 +189,6 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 			}
 		},
 	)
-
 }
 
 func TestShowCreatePartitionTable(t *testing.T) {
@@ -212,13 +211,13 @@ func TestShowCreatePartitionTable(t *testing.T) {
 		"show create table %s",
 	}
 	results := []string{
-		"CREATE TABLE `testshowcreatepartitiontable_0` (\n  `c` int DEFAULT NULL\n) partition by hash(c) partitions 2",
-		"CREATE TABLE `testshowcreatepartitiontable_1` (\n  `c` int DEFAULT NULL,\n  `b` vecf32(2) DEFAULT NULL\n) partition by hash(c) partitions 2",
-		"CREATE TABLE `testshowcreatepartitiontable_2` (\n  `c` int DEFAULT NULL,\n  `b` vecf32(2) DEFAULT NULL\n) partition by hash(c) partitions 3",
+		"CREATE TABLE `testshowcreatepartitiontable_0` (\n  `c` int DEFAULT NULL\n) partition by hash(`c`) partitions 2",
+		"CREATE TABLE `testshowcreatepartitiontable_1` (\n  `c` int DEFAULT NULL,\n  `b` vecf32(2) DEFAULT NULL\n) partition by hash(`c`) partitions 2",
+		"CREATE TABLE `testshowcreatepartitiontable_2` (\n  `c` int DEFAULT NULL,\n  `b` vecf32(2) DEFAULT NULL\n) partition by hash(`c`) partitions 3",
 		"CREATE TABLE `testshowcreatepartitiontable_3` (\n  `c` int NOT NULL,\n  PRIMARY KEY (`c`)\n) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
-		"CREATE TABLE `testshowcreatepartitiontable_4` (\n  `c` int NOT NULL,\n  PRIMARY KEY (`c`)\n) partition by List columns(c) (partition p0 values in (1, 2), partition p1 values in (3, 4))",
+		"CREATE TABLE `testshowcreatepartitiontable_4` (\n  `c` int NOT NULL,\n  PRIMARY KEY (`c`)\n) partition by List columns(`c`) (partition p0 values in (1, 2), partition p1 values in (3, 4))",
 		"CREATE TABLE `testshowcreatepartitiontable_5` (\n  `a` int unsigned DEFAULT NULL,\n  `c` int DEFAULT NULL\n) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
-		"CREATE TABLE `testshowcreatepartitiontable_6` (\n  `b` vecf32(2) DEFAULT NULL,\n  `c` int DEFAULT NULL\n) partition by hash(c) partitions 2",
+		"CREATE TABLE `testshowcreatepartitiontable_6` (\n  `b` vecf32(2) DEFAULT NULL,\n  `c` int DEFAULT NULL\n) partition by hash(`c`) partitions 2",
 	}
 
 	runPartitionClusterTest(

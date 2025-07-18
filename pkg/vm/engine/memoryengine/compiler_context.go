@@ -143,7 +143,7 @@ func (c *CompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan.Snap
 }
 
 func (c *CompilerContext) GetProcess() *process.Process {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(nil)
 	return proc
 }
 
@@ -208,6 +208,10 @@ func (*CompilerContext) GetUserName() string {
 
 func (c *CompilerContext) GetAccountId() (uint32, error) {
 	return defines.GetAccountId(c.ctx)
+}
+
+func (c *CompilerContext) GetAccountName() string {
+	return "sys"
 }
 
 func (c *CompilerContext) GetContext() context.Context {
