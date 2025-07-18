@@ -200,6 +200,7 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 		return
 	}
 	delete(shard.values, key)
+	// key deleted, call postEvict
 	if c.postEvict != nil {
 		c.postEvict(ctx, item.key, item.value, item.size)
 	}
@@ -290,9 +291,12 @@ func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
 	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
-	delete(shard.values, item.key)
-	if c.postEvict != nil {
-		c.postEvict(ctx, item.key, item.value, item.size)
+	if _, ok := shard.values[item.key]; ok {
+		delete(shard.values, item.key)
+		// key deleted, call postEvict
+		if c.postEvict != nil {
+			c.postEvict(ctx, item.key, item.value, item.size)
+		}
 	}
 }
 
