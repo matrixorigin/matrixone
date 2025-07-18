@@ -60,8 +60,10 @@ func (p *queuePart[T]) reset() {
 }
 
 func (p *Queue[T]) enqueue(v T) {
-	p.mu.Lock()         // Acquire lock
-	defer p.mu.Unlock() // Ensure lock is released
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
 
 	if len(p.head.values) >= maxQueuePartCapacity {
 		// extend
@@ -75,8 +77,10 @@ func (p *Queue[T]) enqueue(v T) {
 }
 
 func (p *Queue[T]) dequeue() (ret T, ok bool) {
-	p.mu.Lock()         // Acquire lock
-	defer p.mu.Unlock() // Ensure lock is released
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
 
 	if p.empty() {
 		return
@@ -105,7 +109,9 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 }
 
 func (p *Queue[T]) Len() int {
-	p.mu.Lock()         // Acquire lock
-	defer p.mu.Unlock() // Ensure lock is released
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
 	return p.size
 }

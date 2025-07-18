@@ -15,10 +15,22 @@
 package fifocache
 
 import (
+	"os"
 	"sync"
 
 	"golang.org/x/sys/cpu"
 )
+
+type CacheMap[K comparable, V any] interface {
+	Set(key K, value V, postfn func(V)) bool
+	Get(key K, postfn func(V)) (V, bool)
+	Remove(key K)
+	CompareAndDelete(key K, fn func(k1, k2 K) bool, postfn func(V))
+	GetAndDelete(key K, postfn func(V)) (V, bool)
+}
+
+var _ CacheMap[int, string] = &ShardMap[int, string]{}
+var _ CacheMap[int, string] = &SingleMap[int, string]{}
 
 const numShards = 256
 
@@ -31,7 +43,18 @@ type ShardMap[K comparable, V any] struct {
 	hashfn func(K) uint64
 }
 
-func NewShardMap[K comparable, V any](hashfn func(K) uint64) *ShardMap[K, V] {
+func NewCacheMap[K comparable, V any](hashfn func(K) uint64) CacheMap[K, V] {
+
+	if SingleMutexFlag {
+		os.Stderr.WriteString("Single mutex\n")
+		return NewSingleMap[K, V]()
+	}
+
+	os.Stderr.WriteString("Multiple mutex\n")
+	return NewShardMap[K, V](hashfn)
+}
+
+func NewShardMap[K comparable, V any](hashfn func(K) uint64) CacheMap[K, V] {
 	m := &ShardMap[K, V]{hashfn: hashfn}
 
 	for i := range m.shards {
