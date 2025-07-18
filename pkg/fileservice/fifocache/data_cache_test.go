@@ -29,6 +29,7 @@ func BenchmarkEnsureNBytesAndSet(b *testing.B) {
 	cache := NewDataCache(
 		fscache.ConstCapacity(1024),
 		nil, nil, nil,
+		false,
 	)
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -63,7 +64,7 @@ func TestShardCacheKeyAllocs(t *testing.T) {
 		Offset: 3,
 		Path:   strings.Repeat("abc", 42),
 	}
-	if n := testing.AllocsPerRun(64, func() {
+	if n := testing.AllocsPerRun(64000, func() {
 		shardCacheKey(key)
 	}); n != 0 {
 		t.Fatalf("should not allocate")
@@ -74,6 +75,7 @@ func BenchmarkDataCacheSet(b *testing.B) {
 	cache := NewDataCache(
 		fscache.ConstCapacity(1024),
 		nil, nil, nil,
+		false,
 	)
 	b.ResetTimer()
 	for i := range b.N {
@@ -93,6 +95,7 @@ func BenchmarkDataCacheGet(b *testing.B) {
 	cache := NewDataCache(
 		fscache.ConstCapacity(1024),
 		nil, nil, nil,
+		false,
 	)
 	key := fscache.CacheKey{
 		Path:   "foo",
@@ -118,7 +121,8 @@ func (t testBytes) Bytes() []byte {
 	return t
 }
 
-func (t testBytes) Release() {
+func (t testBytes) Release() bool {
+	return false
 }
 
 func (t testBytes) Retain() {

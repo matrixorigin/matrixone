@@ -28,7 +28,28 @@ func TestBytes(t *testing.T) {
 		bs := &Bytes{
 			bytes:       bytes,
 			deallocator: deallocator,
+			refs:        1,
 		}
 		bs.Release()
 	})
+}
+
+func TestBytesPanic(t *testing.T) {
+	bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
+	assert.Nil(t, err)
+	bs := &Bytes{
+		bytes:       bytes,
+		deallocator: deallocator,
+		refs:        1,
+	}
+
+	released := bs.Release()
+	assert.Equal(t, released, true)
+
+	assert.Panics(t, func() { bs.Release() }, "Bytes.Release panic()")
+	assert.Panics(t, func() { bs.Size() }, "Bytes.Size panic()")
+	assert.Panics(t, func() { bs.Bytes() }, "Bytes.Bytes panic()")
+	assert.Panics(t, func() { bs.Slice(0) }, "Bytes.Slice panic()")
+	assert.Panics(t, func() { bs.Retain() }, "Bytes.Retain panic()")
+
 }
