@@ -290,10 +290,10 @@ var (
 			id INT AUTO_INCREMENT PRIMARY KEY,
 			account_id INT UNSIGNED NOT NULL,
 			table_id BIGINT UNSIGNED NOT NULL,
-			index_names VARCHAR(255),--multiple indexes
+			index_names VARCHAR(255),
 			from_ts VARCHAR(32) NOT NULL,
 			to_ts VARCHAR(32) NOT NULL,
-			error_json VARCHAR(255) NOT NULL,--Multiple errors are stored. Different consumers may have different errors.
+			error_json VARCHAR(255) NOT NULL,
 			start_at DATETIME NULL,
 			end_at DATETIME NULL
 		)`
