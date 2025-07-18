@@ -22,7 +22,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"math"
 	"math/rand"
 	"slices"
@@ -621,11 +620,6 @@ var GetSnapshotTS = func(txnOp client.TxnOperator) timestamp.Timestamp {
 }
 
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-	// if injected, we expect the reader to close
-	if objectio.CDCCollectChangesErrInjected() {
-		return nil, moerr.NewInternalErrorNoCtx("CDC_COLLECT_CHANGES_ERR")
-	}
-
 	return rel.CollectChanges(ctx, fromTs, toTs, mp)
 }
 

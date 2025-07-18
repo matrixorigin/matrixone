@@ -15,6 +15,9 @@
 package cdc
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"strings"
 	"sync"
 	"testing"
@@ -138,4 +141,112 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	sql = builder.CollectTableInfoSQL("0", "'source_db'", "'orders'")
 	expected = "SELECT  REL_ID,  RELNAME,  RELDATABASE_ID,  RELDATABASE,  REL_CREATESQL,  ACCOUNT_ID FROM `MO_CATALOG`.`MO_TABLES` WHERE  ACCOUNT_ID IN (0)  AND RELDATABASE IN ('SOURCE_DB')  AND RELNAME IN ('ORDERS')  AND RELKIND = 'R'  AND RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
 	assert.Equal(t, strings.ToUpper(expected), strings.ToUpper(sql))
+}
+
+func TestScanAndProcess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	td := &TableDetector{
+		Mutex:                sync.Mutex{},
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 nil,
+	}
+
+	fault.Enable()
+	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
+	td.scanAndProcess(context.Background())
+	fault.Disable()
+
+	td.scanAndProcess(context.Background())
+}
+
+func TestTableScanner_UpdateTableInfo(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
+	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil)
+	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil)
+	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil)
+	bat1.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil)
+	bat1.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil)
+	bat1.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil)
+	bat1.SetRowCount(1)
+	res1 := executor.Result{
+		Mp:      testutil.TestUtilMp,
+		Batches: []*batch.Batch{bat1},
+	}
+
+	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
+	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil) // 新的表ID
+	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil)
+	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil)
+	bat2.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil)
+	bat2.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil)
+	bat2.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil)
+	bat2.SetRowCount(1)
+	res2 := executor.Result{
+		Mp:      testutil.TestUtilMp,
+		Batches: []*batch.Batch{bat2},
+	}
+
+	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+
+	mockSqlExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		gomock.Any(),
+	).Return(res1, nil)
+
+	mockSqlExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		gomock.Any(),
+	).Return(res2, nil)
+
+	td := &TableDetector{
+		Mutex:                sync.Mutex{},
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSqlExecutor,
+	}
+
+	td.Register("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
+		return nil
+	})
+
+	err := td.scanTable()
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(td.Mp))
+
+	accountMap, ok := td.Mp[1]
+	assert.True(t, ok)
+
+	tblInfo, ok := accountMap["db1.tbl1"]
+	assert.True(t, ok)
+	assert.Equal(t, uint64(1001), tblInfo.SourceTblId)
+	assert.False(t, tblInfo.IdChanged)
+
+	err = td.scanTable()
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(td.Mp))
+
+	accountMap = td.Mp[1]
+	tblInfo = accountMap["db1.tbl1"]
+	assert.Equal(t, uint64(1002), tblInfo.SourceTblId)
+	assert.True(t, tblInfo.IdChanged)
 }

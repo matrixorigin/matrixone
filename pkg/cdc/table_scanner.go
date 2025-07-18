@@ -17,6 +17,8 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"slices"
 	"strings"
 	"sync"
@@ -243,9 +245,7 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	defer s.mu.Unlock()
 
 	if err != nil {
-		logutil.Warn("CDC-TableDetector-Callback-Failed",
-			zap.Error(err),
-		)
+		logutil.Warn("CDC-TableDetector-Callback-Failed", zap.Error(err))
 	} else {
 		logutil.Info("CDC-TableDetector-Callback-Success")
 		s.lastMp = nil
@@ -255,6 +255,10 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 }
 
 func (s *TableDetector) scanTable() error {
+	if objectio.CDCScanTableErrInjected() {
+		return moerr.NewInternalError(context.Background(), "CDC_SCANTABLE_ERR")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var (
@@ -344,12 +348,13 @@ func (s *TableDetector) scanTable() error {
 			if !exists {
 				mp[accountId][key] = newInfo
 			} else {
+				idChanged := oldInfo.OnlyDiffinTblId(newInfo)
 				oldInfo.SourceDbId = dbId
 				oldInfo.SourceDbName = dbName
 				oldInfo.SourceTblId = tblId
 				oldInfo.SourceTblName = tblName
 				oldInfo.SourceCreateSql = createSql
-				oldInfo.IdChanged = oldInfo.IdChanged || oldInfo.OnlyDiffinTblId(newInfo)
+				oldInfo.IdChanged = oldInfo.IdChanged || idChanged
 				mp[accountId][key] = oldInfo
 			}
 		}
