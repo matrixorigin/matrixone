@@ -206,11 +206,8 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				batSize := bat.RowCount()
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
-						typ := ap.RightTypes[rp.Pos]
-						ap.ctr.buf[i].Vecs[j] = vector.NewVec(typ)
-						if err := vector.GetUnionAllFunction(typ, proc.Mp())(ap.ctr.buf[i].Vecs[j], bat.Vecs[rp.Pos]); err != nil {
-							return err
-						}
+						ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
+						bat.Vecs[rp.Pos] = nil
 					} else {
 						ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.LeftTypes[rp.Pos])
 						if err := vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
