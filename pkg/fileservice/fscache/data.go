@@ -18,5 +18,5 @@ type Data interface {
 	Bytes() []byte
 	Slice(length int) Data
 	Retain()
-	Release() bool
+	Release()
 }
