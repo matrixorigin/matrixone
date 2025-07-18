@@ -776,7 +776,7 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 }
 
 func makeS3OutputBatch() *batch.Batch {
-	bat := batch.NewWithSize(6)
+	bat := batch.NewWithSize(5)
 	bat.Vecs[0] = vector.NewVec(types.T_uint8.ToType())   // action type  0=actionInsert, 1=actionDelete
 	bat.Vecs[1] = vector.NewVec(types.T_uint16.ToType())  // index of update.UpdateCtxs
 	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())  // rowCount of s3 blocks
