@@ -302,7 +302,7 @@ func TestAddCdcTask(t *testing.T) {
 	callback := func(context.Context, SqlExecutor) (int, error) {
 		return 1, nil
 	}
-
+	mock.ExpectCommit()
 	affected, err := storage.AddCDCTask(
 		context.Background(),
 		dt,
