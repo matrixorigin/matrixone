@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -56,6 +57,8 @@ func (b *Bytes) Release() {
 				atomic.CompareAndSwapUint32(&b.deallocated, 0, 1) {
 				b.deallocator.Deallocate(malloc.NoHints)
 			}
+		} else if n < 0 {
+			panic(fmt.Sprintf("incorrect free, ref count: %d", n))
 		}
 	} else {
 		if b.deallocator != nil &&
