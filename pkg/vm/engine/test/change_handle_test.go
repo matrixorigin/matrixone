@@ -2127,6 +2127,10 @@ func TestCDCExecutor5(t *testing.T) {
 		bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, dbName, tableName, rows)
 		bats[i] = bat
 		defer bat.Close()
+	}
+
+	for i := 0; i < tableCount; i++ {
+		tableName := fmt.Sprintf("src_table_%d", i)
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, dbName, tableName)
 		require.Nil(t, err)
 

@@ -435,20 +435,20 @@ func (exec *CDCTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *a
 	if err != nil {
 		panic(err)
 	}
-	watermarkVector, err := vector.ProtoVectorToVector(input.Vecs[5])
+	watermarkVector, err := vector.ProtoVectorToVector(input.Vecs[6])
 	if err != nil {
 		panic(err)
 	}
-	errorCodeVector, err := vector.ProtoVectorToVector(input.Vecs[6])
+	errorCodeVector, err := vector.ProtoVectorToVector(input.Vecs[7])
 	if err != nil {
 		panic(err)
 	}
 	errorCodes := vector.MustFixedColWithTypeCheck[int32](errorCodeVector)
-	consumerInfoVector, err := vector.ProtoVectorToVector(input.Vecs[10])
+	consumerInfoVector, err := vector.ProtoVectorToVector(input.Vecs[11])
 	if err != nil {
 		panic(err)
 	}
-	dropAtVector, err := vector.ProtoVectorToVector(input.Vecs[9])
+	dropAtVector, err := vector.ProtoVectorToVector(input.Vecs[10])
 	if err != nil {
 		panic(err)
 	}
