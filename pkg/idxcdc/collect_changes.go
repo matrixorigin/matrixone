@@ -16,10 +16,10 @@ package idxcdc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,7 +50,7 @@ func CollectChanges_2(
 	errs = make([]error, len(consumers))
 	changes, err := CollectChanges(ctx, rel, fromTs, toTs, mp)
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "collectChanges" {
-		err = errors.New(msg)
+		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		for i := range consumers {
@@ -119,7 +119,7 @@ func CollectChanges_2(
 			var data *CDCData
 			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
 			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "changesNext" {
-				err = errors.New(msg)
+				err = moerr.NewInternalErrorNoCtx(msg)
 			}
 			if err != nil {
 				indexNames := ""

@@ -16,11 +16,11 @@ package idxcdc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -72,7 +72,7 @@ func (iter *Iteration) Run() {
 		defer txn.Commit(ctx)
 	}
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "iterationCreateTxn" {
-		err = errors.New(msg)
+		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		for i := range iter.sinkers {
@@ -88,7 +88,7 @@ func (iter *Iteration) Run() {
 		iter.table.tableName,
 	)
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "iterationGetRelation" {
-		err = errors.New(msg)
+		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		for i := range iter.sinkers {
@@ -124,7 +124,7 @@ func (iter *Iteration) insertAsyncIndexIterations(ctx context.Context) {
 			}
 		}
 		if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "insertAsyncIndexIterations" {
-			err = errors.New(msg)
+			err = moerr.NewInternalErrorNoCtx(msg)
 		}
 		if err != nil {
 			indexNames := ""

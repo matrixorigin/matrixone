@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"sync"
@@ -364,7 +363,7 @@ func (exec *CDCTaskExecutor) run() {
 			candidateTables := exec.getCandidateTables()
 			tables, fromTSs, toTS, err := exec.getDirtyTables(exec.ctx, candidateTables, exec.cnUUID, exec.txnEngine)
 			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "getDirtyTables" {
-				err = errors.New(msg)
+				err = moerr.NewInternalErrorNoCtx(msg)
 			}
 			if err != nil {
 				logutil.Error(
@@ -554,7 +553,7 @@ func (exec *CDCTaskExecutor) addIndex(
 	consumerInfo := &ConsumerInfo{}
 	err = json.Unmarshal([]byte(consumerInfoStr), consumerInfo)
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "addIndex" {
-		err = errors.New(msg)
+		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		return
@@ -616,7 +615,7 @@ func (exec *CDCTaskExecutor) deleteIndex(
 	}
 	empty, err := table.DeleteSinker(indexName)
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "deleteIndex" {
-		err = errors.New(msg)
+		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		return

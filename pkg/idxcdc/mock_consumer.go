@@ -16,12 +16,12 @@ package idxcdc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -209,13 +209,13 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) error {
 	s.dataRetriever = data
 	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume" {
-		return errors.New(msg)
+		return moerr.NewInternalErrorNoCtx(msg)
 	}
 	if msg, injected := objectio.CDCExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithIndexName") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
 			if s.indexName == strs[i] {
-				return errors.New(strs[0])
+				return moerr.NewInternalErrorNoCtx(strs[0])
 			}
 		}
 	}
