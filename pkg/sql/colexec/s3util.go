@@ -155,7 +155,8 @@ func NewCNS3DataWriter(
 		sortKeyIdx, attrs, attrTypes,
 		factor, mp, fs,
 		ioutil.WithTailSizeCap(0),
-		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)))
+		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
+		ioutil.WithOffHeap())
 
 	writer.ResetBlockInfoBat()
 
