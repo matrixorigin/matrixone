@@ -118,8 +118,7 @@ func (t testBytes) Bytes() []byte {
 	return t
 }
 
-func (t testBytes) Release() bool {
-	return false
+func (t testBytes) Release() {
 }
 
 func (t testBytes) Retain() {
