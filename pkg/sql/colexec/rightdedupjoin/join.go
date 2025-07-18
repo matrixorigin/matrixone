@@ -169,19 +169,31 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
-	err := ctr.evalJoinCondition(bat, proc)
+	var (
+		err error
+		itr hashmap.Iterator
+	)
+
+	count := bat.RowCount()
+
+	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
+	// do nothing for txn.mode = Optimistic
+	if isPessimistic && ap.OnDuplicateAction == plan.Node_FAIL {
+		goto END
+	}
+
+	err = ctr.evalJoinCondition(bat, proc)
 	if err != nil {
 		return err
 	}
 
-	count := bat.RowCount()
 	err = ctr.mp.PreAlloc(uint64(count))
 	if err != nil {
 		return err
 	}
 
-	itr := ctr.mp.NewIterator()
-	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
+	itr = ctr.mp.NewIterator()
+
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -199,7 +211,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 			switch ap.OnDuplicateAction {
 			case plan.Node_FAIL:
-				if v <= ctr.groupCount && isPessimistic {
+				if v <= ctr.groupCount {
 					var rowStr string
 					if len(ap.DedupColTypes) == 1 {
 						if ap.DedupColName == catalog.IndexTableIndexColName {
@@ -237,6 +249,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		}
 	}
 
+END:
 	result.Batch = batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		result.Batch.Vecs[i], err = bat.Vecs[rp.Pos].Dup(proc.Mp())
