@@ -105,6 +105,9 @@ func (op *PartitionMultiUpdate) Prepare(
 		return err
 	}
 
+	op.raw.getS3WriterFunc = op.getS3Writer
+	op.raw.getFlushableS3WriterFunc = op.getFlushableS3Writer
+
 	op.rawTableIDs = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
 	op.rawTableFlags = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
 	for _, c := range op.raw.MultiUpdateCtx {

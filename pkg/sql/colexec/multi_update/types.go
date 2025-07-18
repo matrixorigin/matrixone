@@ -84,7 +84,7 @@ type MultiUpdate struct {
 }
 
 type updateCtxInfo struct {
-	Sources     []engine.Relation
+	Source      engine.Relation
 	tableType   UpdateTableType
 	insertAttrs []string
 }
@@ -99,6 +99,7 @@ type container struct {
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
+	outputBat *batch.Batch
 }
 
 type MultiUpdateCtx struct {

@@ -77,7 +77,7 @@ func (update *MultiUpdate) delete_table(
 		deleteBatch.SetRowCount(rowCount)
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		update.addDeleteAffectRows(tableType, uint64(rowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
