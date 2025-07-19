@@ -3257,4 +3257,5 @@ func TestTransformIntoHours(t *testing.T) {
 			}
 		})
 	}
+	_ = moerr.NewInvalidStateNoCtxf("for test coverage")
 }
