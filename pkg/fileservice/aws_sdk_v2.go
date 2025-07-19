@@ -309,7 +309,7 @@ func (a *AwsSDKv2) Exists(
 				return false, nil
 			}
 		}
-		return false, err
+		return false, wrapError("AwsSDKv2.Exists", err)
 	}
 	return output != nil, nil
 }

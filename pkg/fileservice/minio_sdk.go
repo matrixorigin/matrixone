@@ -312,7 +312,7 @@ func (a *MinioSDK) Exists(
 		if a.is404(err) {
 			return false, nil
 		}
-		return false, err
+		return false, wrapError("MinioSDK.Exists", err)
 	}
 
 	return true, nil

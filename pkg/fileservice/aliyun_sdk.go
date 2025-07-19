@@ -226,7 +226,7 @@ func (a *AliyunSDK) Exists(
 		if a.is404(err) {
 			return false, nil
 		}
-		return false, err
+		return false, wrapError("AliyunSDK.Exists", err)
 	}
 
 	return true, nil
