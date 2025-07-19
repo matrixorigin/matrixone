@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +29,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -156,6 +158,15 @@ func buildInsertPlans(
 	ifNeedCheckPkDup := !builder.qry.LoadTag
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
+
+	if v := ctx.GetContext().Value(defines.SkipPkDedup{}); v != nil {
+		if v.(string) == tableDef.Name {
+			logutil.Info("skip pk dedup",
+				zap.String("tableDef", tableDef.Name),
+				zap.Bool("originalDedup", ifNeedCheckPkDup))
+			ifNeedCheckPkDup = false
+		}
+	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
 		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)

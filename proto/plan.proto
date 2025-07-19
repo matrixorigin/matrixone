@@ -1402,6 +1402,7 @@ message AlterTable {
 	// into mo_foreign_keys
 	repeated string updateFkSqls = 11;
 	string RawSQL            = 12;
+	bool skip_pk_dedup 	     = 13;
 }
 
 message DropTable {
