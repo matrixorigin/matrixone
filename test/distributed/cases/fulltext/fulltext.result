@@ -1,3 +1,6 @@
+SET experimental_fulltext_index = 0;
+create table fulltext_index_00(a bigint primary key, b varchar, c text, FULLTEXT(b));
+internal error: experimental_fulltext_index is not enabled
 set experimental_fulltext_index=1;
 set ft_relevancy_algorithm="TF-IDF";
 create table src (id bigint primary key, body varchar, title text);

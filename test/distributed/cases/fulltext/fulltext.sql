@@ -1,3 +1,7 @@
+SET experimental_fulltext_index = 0;
+create table fulltext_index_00(a bigint primary key, b varchar, c text, FULLTEXT(b));
+
+
 -- TODO: run all tests with both experimental_fulltext_index = 0 and 1
 -- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
 set experimental_fulltext_index=1;

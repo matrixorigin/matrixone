@@ -1387,6 +1387,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+		err = s.checkTableWithValidIndexes(c, newRelation)
+		if err != nil {
+			c.proc.Error(c.proc.Ctx, "createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
+
 		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
 		if err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
