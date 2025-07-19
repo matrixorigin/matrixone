@@ -1464,6 +1464,8 @@ const (
 
 	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
+	deleteProcedureUsingDB = `delete from mo_catalog.mo_stored_procedure where db = '%s';`
+
 	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
 	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d order by role_id;`
 
@@ -4429,6 +4431,36 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 	}
 
 	return err
+}
+
+func doDropProcedureWithDB(ctx context.Context, ses *Session, stmt tree.Statement) (err error) {
+	var dbName string
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		dbName = string(st.Name)
+	default:
+		return moerr.NewInternalErrorf(ctx, "unsupported statement type: %T", stmt)
+	}
+
+	// XXXSP
+	// Why do we need to start a transaction here?
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	bh.ClearExecResultSet()
+	sql := fmt.Sprintf(deleteProcedureUsingDB, dbName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
