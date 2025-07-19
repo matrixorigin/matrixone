@@ -81,6 +81,7 @@ require (
 	github.com/spf13/cobra v1.8.0
 	github.com/spkg/bom v1.0.0
 	github.com/stretchr/testify v1.9.0
+	github.com/syncthing/notify v0.0.0-20250528144937-c7027d4f7465
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.55
 	github.com/ti-mo/conntrack v0.5.1
 	github.com/ti-mo/netfilter v0.5.2
