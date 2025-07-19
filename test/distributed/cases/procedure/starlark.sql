@@ -69,7 +69,7 @@ select @qs;
 call sp_quote($$foo'bar''zoo$$, @qs2);
 select @qs2;
 
-create procedure sp_jq(in jq varchar, in data varchar, out jqresult varchar) language 'starlark'
+create or replace procedure sp_jq(in jq varchar, in data varchar, out jqresult varchar) language 'starlark'
 '   
 out_jqresult = mo.jq(jq, data)
 ';
@@ -79,5 +79,4 @@ select @res;
 call sp_jq('.[0] + .[1]', '[1, 2]', @res);
 select @res;
 
-drop database procedure_test;
-
+drop database if exists procedure_test;

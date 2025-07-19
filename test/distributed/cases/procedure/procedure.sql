@@ -142,3 +142,5 @@ set @id = 100;
 call test_inout_param(@id);
 select @id;
 drop procedure test_inout_param;
+
+drop database if exists procedure_test;
