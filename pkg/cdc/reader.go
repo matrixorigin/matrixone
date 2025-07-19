@@ -215,6 +215,7 @@ var readTableWithTxn = func(
 func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (err error) {
 	//step1 : create an txnOp
 	txnOp, err := GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
+
 	if err != nil {
 		return err
 	}
@@ -314,6 +315,7 @@ func (reader *tableReader) readTableWithTxn(
 
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
+
 	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return

@@ -18,6 +18,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/stretchr/testify/require"
 	"regexp"
 	"sync"
 	"testing"
@@ -1002,7 +1005,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	gostub.Stub(&cdc.GetTableDetector, func(cnUUID string) *cdc.TableDetector {
 		return &cdc.TableDetector{
 			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            map[string]func(map[uint32]cdc.TblMap){"id": func(mp map[uint32]cdc.TblMap) {}},
+			Callbacks:            map[string]cdc.TableCallback{"id": func(mp map[uint32]cdc.TblMap) error { return nil }},
 			CallBackAccountId:    map[string]uint32{"id": 0},
 			SubscribedAccountIds: map[uint32][]string{0: {"id"}},
 			CallBackDbName:       make(map[string][]string),
@@ -2286,6 +2289,7 @@ func TestCdcTask_Cancel(t *testing.T) {
 }
 
 func TestCdcTask_retrieveCdcTask(t *testing.T) {
+	fault.EnableDomain(fault.DomainFrontend)
 	type fields struct {
 		logger               *zap.Logger
 		ie                   ie.InternalExecutor
@@ -2765,6 +2769,152 @@ func TestCdcTask_handleNewTables(t *testing.T) {
 		},
 	}
 	cdcTask.handleNewTables(mp)
+}
+
+func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			Accounts: []*task.Account{{Id: 0}},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		exclude:        regexp.MustCompile("db1.tb1"),
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+
+	mp := map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{},
+			"db1.tb2": &cdc.DbTableInfo{IdChanged: true},
+		},
+	}
+
+	fault.Enable()
+	objectio.SimpleInject(objectio.FJ_CDCAddExecErr)
+	err := cdcTask.handleNewTables(mp)
+	require.Error(t, err)
+	fault.Disable()
+
+	fault.Enable()
+	objectio.SimpleInject(objectio.FJ_CDCAddExecConsumeTruncate)
+	err = cdcTask.handleNewTables(mp)
+	require.NoError(t, err)
+	require.Equal(t, false, mp[0]["db1.tb2"].IdChanged)
+	fault.Disable()
+}
+
+func TestCdcTask_handleNewTables_GetTxnOpErr(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, moerr.NewInternalErrorNoCtx("ERR")
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			Accounts: []*task.Account{{Id: 0}},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		exclude:        regexp.MustCompile("db1.tb1"),
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+
+	mp := map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{},
+			"db2.tb1": &cdc.DbTableInfo{},
+		},
+	}
+	err := cdcTask.handleNewTables(mp)
+	require.Error(t, err)
+}
+
+func TestCdcTask_handleNewTables_NewEngineFailed(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			Accounts: []*task.Account{{Id: 0}},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		exclude:        regexp.MustCompile("db1.tb1"),
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+
+	mp := map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{},
+			"db2.tb1": &cdc.DbTableInfo{},
+		},
+	}
+	fault.Enable()
+	objectio.SimpleInject(objectio.FJ_CDCHandleErr)
+	err := cdcTask.handleNewTables(mp)
+	require.Error(t, err)
+	fault.Disable()
 }
 
 func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T) {

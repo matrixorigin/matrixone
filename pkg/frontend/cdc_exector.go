@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"regexp"
 	"strconv"
 	"sync"
@@ -397,10 +398,16 @@ func (exec *CDCTaskExecutor) updateErrMsg(ctx context.Context, errMsg string) (e
 	)
 }
 
-func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMap) {
+func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMap) error {
 	// lock to avoid create pipelines for the same table
+	// 2025.7, this lock might be needless now
 	exec.Lock()
 	defer exec.Unlock()
+
+	// if injected, we expect nothing
+	if sleepSeconds, injected := objectio.CDCHandleSlowInjected(); injected {
+		time.Sleep(time.Duration(sleepSeconds) * time.Second)
+	}
 
 	accountId := uint32(exec.spec.Accounts[0].GetId())
 	ctx := defines.AttachAccountId(context.Background(), accountId)
@@ -413,19 +420,26 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 			zap.String("task-name", exec.spec.TaskName),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
 	defer func() {
 		cdc.FinishTxnOp(ctx, err, txnOp, exec.cnEngine)
 	}()
-	if err = exec.cnEngine.New(ctx, txnOp); err != nil {
+	err = exec.cnEngine.New(ctx, txnOp)
+
+	// if injected, we expect the handleNewTables to keep retrying
+	if objectio.CDCHandleErrInjected() {
+		err = moerr.NewInternalError(context.Background(), "CDC_HANDLENEWTABLES_ERR")
+	}
+
+	if err != nil {
 		logutil.Error(
 			"CDC-Task-HandleNewTables-NewEngineFailed",
 			zap.String("task-id", exec.spec.TaskId),
 			zap.String("task-name", exec.spec.TaskName),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
 
 	for key, info := range allAccountTbls[accountId] {
@@ -459,24 +473,13 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
 			logutil.Errorf("cdc task %s add exec pipeline for table %s failed, err: %v", exec.spec.TaskName, key, err)
+			return err
 		} else {
+			info.IdChanged = newTableInfo.IdChanged
 			logutil.Infof("cdc task %s add exec pipeline for table %s successfully", exec.spec.TaskName, key)
 		}
-		logger := logutil.Info
-		msg := "CDC-Task-HandleNewTables-Success"
-		if err != nil {
-			logger = logutil.Error
-			msg = "CDC-Task-HandleNewTables-Failed"
-		}
-		logger(
-			msg,
-			zap.String("task-id", exec.spec.TaskId),
-			zap.String("task-name", exec.spec.TaskName),
-			zap.String("table-key", key),
-			zap.String("table-info", newTableInfo.String()),
-			zap.Error(err),
-		)
 	}
+	return nil
 }
 
 func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {
@@ -511,6 +514,16 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	info *cdc.DbTableInfo,
 	txnOp client.TxnOperator,
 ) (err error) {
+	// for ut
+	if objectio.CDCAddExecConsumeTruncateInjected() {
+		info.IdChanged = false
+		return nil
+	}
+
+	if objectio.CDCAddExecErrInjected() {
+		return moerr.NewInternalErrorNoCtx("CDC_AddExecPipelineForTable_ERR")
+	}
+
 	// step 1. init watermarkUpdater
 	// get watermark from db
 	watermark := exec.startTs
