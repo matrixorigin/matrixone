@@ -25,7 +25,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-01-02 15:10:39.5826    account    acc01        
+sp01    2025-07-19 05:52:55.707381    account    acc01        
 use acc_test01;
 insert into s3t values (300001, 34, 23, 1);
 select count(*) from s3t;
@@ -179,6 +179,7 @@ drop database if exists acc_test04;
 create database acc_test04;
 use acc_test04;
 drop table if exists index03;
+
 create table index03 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -193,8 +194,10 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 select count(*) from acc_test02.pri01;
 count(*)
 4
@@ -242,7 +245,7 @@ count(*)
 2
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n)
 drop snapshot if exists sp04;
 create snapshot sp04 for account acc01;
 insert into acc_test02.pri01 values (50,'ACCOUNTING','NEW YORK');
@@ -268,7 +271,7 @@ a    b    c
 2    3    4
 show create table acc_test04.index03;
 Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n) partition by range columns (emp_no) (partition p01 values less than (100001), partition p02 values less than (200001), partition p03 values less than (300001), partition p04 values less than (400001))
+index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n)
 restore account acc01 from snapshot sp04 to account acc02;
 show databases;
 Database
@@ -329,8 +332,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-01-02 15:10:40.539771    account    acc01        
-sp07    2025-01-02 15:10:40.525108    account    acc01        
+sp08    2025-07-19 05:52:58.143598    account    acc01        
+sp07    2025-07-19 05:52:58.119    account    acc01        
 restore account acc01 from snapshot sp07 to account acc02;
 restore account acc01 from snapshot sp08 to account acc02;
 use test01;

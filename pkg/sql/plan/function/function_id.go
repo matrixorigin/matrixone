@@ -409,9 +409,13 @@ const (
 	L2_DISTANCE_SQ_XC = 342
 
 	TS_TO_TIME = 343
+
+	STARLARK     = 344
+	TRY_STARLARK = 345
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 344
+	FUNCTION_END_NUMBER = 346
 )
 
 // functionIdRegister is what function we have registered already.
@@ -741,6 +745,10 @@ var functionIdRegister = map[string]int32{
 	// match function
 	"fulltext_match":       FULLTEXT_MATCH,
 	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
+
+	// starlark function
+	"starlark":     STARLARK,
+	"try_starlark": TRY_STARLARK,
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,

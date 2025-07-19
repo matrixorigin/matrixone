@@ -128,7 +128,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 09:10:58.007964    cluster            
+cluster_sp    2025-07-19 05:48:20.721954    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 restore account acc01 from snapshot cluster_sp;
@@ -477,7 +477,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-24 09:10:59.735423    cluster            
+cluster_sp    2025-07-19 05:48:22.868107    cluster            
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
@@ -831,11 +831,11 @@ JOIN University.Enrollments ue ON u.StudentID = ue.StudentID
 GROUP BY u.StudentID, u.Name;
 select * from ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 select * from ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024

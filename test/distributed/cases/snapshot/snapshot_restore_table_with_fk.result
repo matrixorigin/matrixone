@@ -70,7 +70,7 @@ a
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-11-14 03:01:41.734402887    account    acc1        
+sn1    2025-07-19 05:52:11.006501    account    acc1        
 drop database fk_test;
 restore account acc1 from snapshot sn1;
 show databases;
@@ -166,7 +166,7 @@ a    b
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-11-14 03:01:42.219753977    account    acc1        
+sn1    2025-07-19 05:52:11.871511    account    acc1        
 delete from fk_test1.t2;
 select * from fk_test1.t2;
 a    b

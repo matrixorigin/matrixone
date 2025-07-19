@@ -614,21 +614,21 @@ Eve    3.50000000
 Frank    3.60000000
 select * from EducationSystem.ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 select * from EducationSystem.ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
 Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
 select * from EducationSystem.StudentOverallPerformance;
 studentname    studentgrade    averagegrade
-Alice Smith    3.50    3.60000000
-Bob Johnson    3.70    3.60000000
 Eve    null    3.50000000
 Frank    null    3.60000000
+Alice Smith    3.50    3.60000000
+Bob Johnson    3.70    3.60000000
 drop database School;
 drop database University;
 drop database EducationSystem;

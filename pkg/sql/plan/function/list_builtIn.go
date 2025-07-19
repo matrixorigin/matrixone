@@ -819,6 +819,46 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `starlark`
+	{
+		functionId: STARLARK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInStarlark().starlark
+				},
+			},
+		},
+	},
+
+	// function `try_starlark`
+	{
+		functionId: TRY_STARLARK,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInStarlark().tryStarlark
+				},
+			},
+		},
+	},
+
 	//function `json_set`
 	{
 		functionId: JSON_SET,

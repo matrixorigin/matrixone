@@ -128,7 +128,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-07-05 07:36:49.613651    cluster            
+cluster_sp    2025-07-19 05:48:25.302245    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 drop account if exists acc02;
@@ -480,7 +480,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-07-05 07:36:52.333141    cluster            
+cluster_sp    2025-07-19 05:48:28.621558    cluster            
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;
@@ -848,10 +848,10 @@ Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
 Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
 select * from StudentOverallPerformance;
 studentname    studentgrade    averagegrade
-Eve    null    3.50000000
-Frank    null    3.60000000
 Alice Smith    3.50    3.60000000
 Bob Johnson    3.70    3.60000000
+Eve    null    3.50000000
+Frank    null    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME

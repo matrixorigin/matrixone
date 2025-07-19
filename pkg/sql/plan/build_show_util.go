@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"

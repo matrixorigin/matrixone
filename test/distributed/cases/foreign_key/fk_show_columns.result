@@ -67,7 +67,7 @@ created_time    TIMESTAMP(0)    YES        null
 comments    VARCHAR(256)    YES        null        
 version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
 suspended_time    TIMESTAMP(0)    YES        null        
-create_version    VARCHAR(50)    YES        1.2.0
+create_version    VARCHAR(50)    YES        1.2.0        
 desc	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
 user_id    INT(32)    NO    PRI    null    auto_increment    
@@ -141,11 +141,12 @@ database_collation    VARCHAR(64)    YES        null
 desc	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
 proc_id    INT(32)    NO    PRI    null    auto_increment    
-name    VARCHAR(100)    YES    UNI    null        
+name    VARCHAR(100)    YES        null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
+lang    TEXT(0)    YES        null        
 body    TEXT(0)    YES        null        
-db    VARCHAR(100)    YES        null        
+db    VARCHAR(100)    YES    MUL    null        
 definer    VARCHAR(50)    YES        null        
 modified_time    TIMESTAMP(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
@@ -391,7 +392,7 @@ created_time    TIMESTAMP(0)    YES        null
 comments    VARCHAR(256)    YES        null        
 version    BIGINT UNSIGNED(64)    YES        null    auto_increment    
 suspended_time    TIMESTAMP(0)    YES        null        
-create_version    VARCHAR(50)    YES        1.2.0
+create_version    VARCHAR(50)    YES        1.2.0        
 show columns from	mo_catalog.mo_user                    ;
 Field    Type    Null    Key    Default    Extra    Comment
 user_id    INT(32)    NO    PRI    null    auto_increment    
@@ -465,11 +466,12 @@ database_collation    VARCHAR(64)    YES        null
 show columns from	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
 proc_id    INT(32)    NO    PRI    null    auto_increment    
-name    VARCHAR(100)    YES    UNI    null        
+name    VARCHAR(100)    YES        null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
+lang    TEXT(0)    YES        null        
 body    TEXT(0)    YES        null        
-db    VARCHAR(100)    YES        null        
+db    VARCHAR(100)    YES    MUL    null        
 definer    VARCHAR(50)    YES        null        
 modified_time    TIMESTAMP(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
@@ -780,11 +782,12 @@ database_collation    VARCHAR(64)    YES        null
 desc	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
 proc_id    INT(32)    NO    PRI    null    auto_increment    
-name    VARCHAR(100)    YES    UNI    null        
+name    VARCHAR(100)    YES        null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
+lang    TEXT(0)    YES        null        
 body    TEXT(0)    YES        null        
-db    VARCHAR(100)    YES        null        
+db    VARCHAR(100)    YES    MUL    null        
 definer    VARCHAR(50)    YES        null        
 modified_time    TIMESTAMP(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        
@@ -1082,11 +1085,12 @@ database_collation    VARCHAR(64)    YES        null
 show columns from	mo_catalog.mo_stored_procedure        ;
 Field    Type    Null    Key    Default    Extra    Comment
 proc_id    INT(32)    NO    PRI    null    auto_increment    
-name    VARCHAR(100)    YES    UNI    null        
+name    VARCHAR(100)    YES        null        
 creator    INT UNSIGNED(32)    YES        null        
 args    TEXT(0)    YES        null        
+lang    TEXT(0)    YES        null        
 body    TEXT(0)    YES        null        
-db    VARCHAR(100)    YES        null        
+db    VARCHAR(100)    YES    MUL    null        
 definer    VARCHAR(50)    YES        null        
 modified_time    TIMESTAMP(0)    YES        null        
 created_time    TIMESTAMP(0)    YES        null        

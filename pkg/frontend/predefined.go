@@ -200,9 +200,10 @@ var (
 
 	MoCatalogMoStoredProcedureDDL = `create table mo_catalog.mo_stored_procedure (
 				proc_id int auto_increment,
-				name     varchar(100) unique key,
+				name     varchar(100),
 				creator  int unsigned,
 				args     text,
+				lang     text,
 				body     text,
 				db       varchar(100),
 				definer  varchar(50),
@@ -214,7 +215,8 @@ var (
 				character_set_client varchar(64),
 				collation_connection varchar(64),
 				database_collation varchar(64),
-				primary key(proc_id)
+				primary key(proc_id),
+				unique key(db, name)
 			)`
 
 	MoCatalogMoStagesDDL = `create table mo_catalog.mo_stages (

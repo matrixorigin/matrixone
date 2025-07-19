@@ -297,6 +297,25 @@ func (ses *Session) getNextProcessId() string {
 	return fmt.Sprintf("%d%d", routineId, ses.GetSqlCount())
 }
 
+// SetUserDefinedVar sets the user defined variable to the value in session
+func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
+	return nil
+}
+
+// GetUserDefinedVar gets value of the user defined variable
+func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	val, ok := ses.userDefinedVars[strings.ToLower(name)]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf(errorUserVariableDoesNotExist(), name)
+	}
+	return val, nil
+}
+
 func (ses *Session) SetPlan(plan *plan.Plan) {
 	ses.p = plan
 }
@@ -544,6 +563,7 @@ func NewSession(
 		timestampMap: map[TS]time.Time{},
 		statsCache:   plan2.NewStatsCache(),
 	}
+
 	ses.userDefinedVars = make(map[string]*UserDefinedVar)
 	ses.prepareStmts = make(map[string]*PrepareStmt)
 	// For seq init values.
@@ -989,25 +1009,6 @@ func (ses *Session) RemovePrepareStmt(name string) {
 		stmt.Close()
 	}
 	delete(ses.prepareStmts, name)
-}
-
-// SetUserDefinedVar sets the user defined variable to the value in session
-func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
-	return nil
-}
-
-// GetUserDefinedVar gets value of the user defined variable
-func (ses *Session) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	val, ok := ses.userDefinedVars[strings.ToLower(name)]
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtxf(errorUserVariableDoesNotExist(), name)
-	}
-	return val, nil
 }
 
 // GetUserDefinedVar gets value of the config
