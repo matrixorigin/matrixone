@@ -26,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -52,13 +51,14 @@ var (
 		table_name,
 		obj_id,
 		pitr_length,
-		pitr_unit ) values ('%s', '%s', %d, '%s', '%s', '%s', %d, '%s', '%s', '%s', %d, %d, '%s');`
+		pitr_unit,
+        pitr_status_changed_time) values ('%s', '%s', %d, %d, %d, '%s', %d, '%s', '%s', '%s', %d, %d, '%s', %d);`
 
 	checkPitrFormat = `select pitr_id from mo_catalog.mo_pitr where pitr_name = "%s" and create_account = %d order by pitr_id;`
 
 	dropPitrFormat = `delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id;`
 
-	alterPitrFormat = `update mo_catalog.mo_pitr set modified_time = '%s', pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
+	alterPitrFormat = `update mo_catalog.mo_pitr set modified_time = %d, pitr_length = %d, pitr_unit = '%s' where pitr_name = '%s' and create_account = %d;`
 
 	getPitrFormat = `select * from mo_catalog.mo_pitr`
 
@@ -73,7 +73,7 @@ var (
 	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
-	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = default where account_name = '%s' and pitr_status = 1 and obj_id = %d;`
+	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d;`
 
 	getLengthAndUnitFmt = `select pitr_length, pitr_unit from mo_catalog.mo_pitr where account_id = %d and level = '%s'`
 )
@@ -98,12 +98,32 @@ const (
 	SYSMOCATALOGPITR = "sys_mo_catalog_pitr"
 )
 
-func getSqlForCreatePitr(ctx context.Context, pitrId, pitrName string, createAcc uint64, createTime, modifitedTime string, level string, accountId uint64, accountName, databaseName, tableName string, objectId uint64, pitrLength uint8, pitrValue string) (string, error) {
+func getSqlForCreatePitr(
+	ctx context.Context,
+	pitrId, pitrName string,
+	createAcc uint64,
+	createTime int64,
+	level string,
+	accountId uint64,
+	accountName, databaseName, tableName string,
+	objectId uint64,
+	pitrLength uint8,
+	pitrValue string,
+
+) (string, error) {
+
 	err := inputNameIsInvalid(ctx, pitrName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoPitr, pitrId, pitrName, createAcc, createTime, modifitedTime, level, accountId, accountName, databaseName, tableName, objectId, pitrLength, pitrValue), nil
+	return fmt.Sprintf(
+		insertIntoMoPitr,
+		pitrId, pitrName, createAcc,
+		createTime, createTime,
+		level, accountId, accountName,
+		databaseName, tableName, objectId,
+		pitrLength, pitrValue, createTime,
+	), nil
 }
 
 func getSqlForCheckPitr(ctx context.Context, pitr string, accountId uint64) (string, error) {
@@ -118,7 +138,7 @@ func getSqlForDropPitr(pitrName string, accountId uint64) string {
 	return fmt.Sprintf(dropPitrFormat, pitrName, accountId)
 }
 
-func getSqlForAlterPitr(modifiedTime string, pitrLength uint8, pitrUnit string, pitrName string, accountId uint64) string {
+func getSqlForAlterPitr(modifiedTime int64, pitrLength uint8, pitrUnit string, pitrName string, accountId uint64) string {
 	return fmt.Sprintf(alterPitrFormat, modifiedTime, pitrLength, pitrUnit, pitrName, accountId)
 }
 
@@ -158,8 +178,8 @@ func getPubInfoWithPitr(ts int64, accountId uint32, dbName string) string {
 	return fmt.Sprintf(getPubInfoWithPitrFormat, ts, accountId, dbName)
 }
 
-func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64) string {
-	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, accountName, objId)
+func getSqlForUpdateMoPitrAccountObjectId(accountName string, objId uint64, ts int64) string {
+	return fmt.Sprintf(updateMoPitrAccountObjectIdFmt, ts, accountName, objId)
 }
 
 func getSqlForGetLengthAndUnitFmt(accountId uint32, level, accName, dbName, tblName string) string {
@@ -358,8 +378,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			newUUid.String(),
 			pitrName,
 			uint64(createAcc),
-			types.CurrentTimestamp().String2(time.UTC, 0),
-			types.CurrentTimestamp().String2(time.UTC, 0),
+			time.Now().UTC().UnixNano(),
 			pitrLevel.String(),
 			0,
 			accountName,
@@ -424,8 +443,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 				newUUid.String(),
 				pitrName,
 				uint64(createAcc),
-				types.CurrentTimestamp().String2(time.UTC, 0),
-				types.CurrentTimestamp().String2(time.UTC, 0),
+				time.Now().UTC().UnixNano(),
 				pitrLevel.String(),
 				accountId,
 				pitrForAccount,
@@ -451,8 +469,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 				newUUid.String(),
 				pitrName,
 				uint64(createAcc),
-				types.CurrentTimestamp().String2(time.UTC, 0),
-				types.CurrentTimestamp().String2(time.UTC, 0),
+				time.Now().UTC().UnixNano(),
 				pitrLevel.String(),
 				uint64(createAcc),
 				currentAccount,
@@ -520,8 +537,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			newUUid.String(),
 			pitrName,
 			uint64(createAcc),
-			types.CurrentTimestamp().String2(time.UTC, 0),
-			types.CurrentTimestamp().String2(time.UTC, 0),
+			time.Now().UTC().UnixNano(),
 			pitrLevel.String(),
 			uint64(createAcc),
 			currentAccount,
@@ -590,8 +606,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			newUUid.String(),
 			pitrName,
 			uint64(createAcc),
-			types.CurrentTimestamp().String2(time.UTC, 0),
-			types.CurrentTimestamp().String2(time.UTC, 0),
+			time.Now().UTC().UnixNano(),
 			pitrLevel.String(),
 			uint64(createAcc),
 			currentAccount,
@@ -651,12 +666,12 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			}
 		}
 
-		oldMinTs, err = addTimeSpan(int(sysPitrValue), sysPitrUnit)
+		oldMinTs, err = addTimeSpan(time.Time{}, int(sysPitrValue), sysPitrUnit)
 		if err != nil {
 			return err
 		}
 
-		newMinTs, err = addTimeSpan(int(pitrVal), pitrUnit)
+		newMinTs, err = addTimeSpan(time.Time{}, int(pitrVal), pitrUnit)
 		if err != nil {
 			return err
 		}
@@ -719,8 +734,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 			mocatalogId.String(),
 			SYSMOCATALOGPITR,
 			sysAccountID,
-			types.CurrentTimestamp().String2(time.UTC, 0),
-			types.CurrentTimestamp().String2(time.UTC, 0),
+			time.Now().UTC().UnixNano(),
 			tree.PITRLEVELDATABASE.String(),
 			sysAccountID,
 			sysAccountName,
@@ -874,7 +888,8 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 			return err
 		}
 	} else {
-		sql = getSqlForAlterPitr(types.CurrentTimestamp().String2(time.UTC, 0),
+		sql = getSqlForAlterPitr(
+			time.Now().UTC().UnixNano(),
 			uint8(stmt.PitrValue),
 			pitrUnit,
 			string(stmt.Name),
@@ -1947,7 +1962,7 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	pitrValue := pitrRecord.pitrValue
 	pitrUnit := pitrRecord.pitrUnit
 
-	minTs, err := addTimeSpan(int(pitrValue), pitrUnit)
+	minTs, err := addTimeSpan(time.Time{}, int(pitrValue), pitrUnit)
 	if err != nil {
 		return err
 	}
@@ -1965,8 +1980,16 @@ func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 }
 
 // get pitr time span
-func addTimeSpan(length int, unit string) (time.Time, error) {
-	now := time.Now().UTC()
+func addTimeSpan(pivot time.Time, length int, unit string) (time.Time, error) {
+	var (
+		now time.Time
+	)
+
+	if !pivot.IsZero() {
+		now = pivot.UTC()
+	} else {
+		now = time.Now().UTC()
+	}
 
 	switch unit {
 	case "h":
@@ -2373,10 +2396,13 @@ func createPubByPitr(
 func updatePitrObjectId(ctx context.Context,
 	bh BackgroundExec,
 	accountName string,
-	objId uint64) (err error) {
+	objId uint64,
+	ts int64,
+) (err error) {
 	sql := getSqlForUpdateMoPitrAccountObjectId(
 		accountName,
 		objId,
+		ts,
 	)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
