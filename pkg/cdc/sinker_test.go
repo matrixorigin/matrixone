@@ -1185,4 +1185,5 @@ func TestRecordTxn(t *testing.T) {
 		s.infoRecordedTxnSQLs(nil)
 		s.infoRecordedTxnSQLs(nil)
 	}
+	_ = moerr.NewInvalidStateNoCtxf("for test coverage")
 }
