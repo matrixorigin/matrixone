@@ -402,22 +402,9 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Process, analyzer process.Analyzer, result *vm.CallResult) error {
-	var (
-		err error
-		itr hashmap.Iterator
-	)
-
-	count := bat.RowCount()
-	rowCntInc := 0
-	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
-	// do nothing for txn.mode = Optimistic
-	if isPessimistic && ap.OnDuplicateAction == plan.Node_FAIL {
-		goto END
-	}
-
 	ap.resetRBat()
 
-	err = ctr.evalJoinCondition(bat, proc)
+	err := ctr.evalJoinCondition(bat, proc)
 	if err != nil {
 		return err
 	}
@@ -431,8 +418,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		}
 	}
 
-	itr = ctr.mp.NewIterator()
-
+	rowCntInc := 0
+	count := bat.RowCount()
+	itr := ctr.mp.NewIterator()
+	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -447,6 +436,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 			switch ap.OnDuplicateAction {
 			case plan.Node_FAIL:
 				if ctr.mp.IsDeleted(vals[k] - 1) {
+					continue
+				}
+
+				// do nothing for txn.mode = Optimistic
+				if !isPessimistic {
 					continue
 				}
 
@@ -550,7 +544,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		}
 	}
 
-END:
 	ctr.rbat.AddRowCount(rowCntInc)
 	result.Batch = ctr.rbat
 	ap.ctr.lastPos = 0
