@@ -42,7 +42,9 @@ select * from t;
 call sp_ins2(10); -- ok;
 select * from t;
 call sp_ins2(9); -- fail;
+-- @bvt:issue#22208
 select * from t;
+-- @bvt:issue
 
 -- @bvt:issue#22165
 set @v = 100;    

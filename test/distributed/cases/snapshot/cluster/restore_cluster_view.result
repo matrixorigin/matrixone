@@ -230,11 +230,11 @@ JOIN University.Enrollments ue ON u.StudentID = ue.StudentID
 GROUP BY u.StudentID, u.Name;
 select * from ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 select * from ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
@@ -484,10 +484,10 @@ Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
 Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
 select * from StudentOverallPerformance;
 studentname    studentgrade    averagegrade
-Alice Smith    3.50    3.60000000
-Bob Johnson    3.70    3.60000000
 Eve    null    3.50000000
 Frank    null    3.60000000
+Alice Smith    3.50    3.60000000
+Bob Johnson    3.70    3.60000000
 DROP DATABASE IF EXISTS School;
 CREATE DATABASE School;
 USE School;
@@ -716,11 +716,11 @@ JOIN University.Enrollments ue ON u.StudentID = ue.StudentID
 GROUP BY u.StudentID, u.Name;
 select * from ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 select * from ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
@@ -734,12 +734,10 @@ Frank    null    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:06:21.366961    account    sys        
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2025-07-17 19:11:57.983639    cluster            
-account_sp    2025-07-17 19:06:21.366961    account    sys        
+cluster_sp    2025-07-19 05:48:53.538507    cluster            
 drop database if exists EducationSystem;
 drop database if exists School;
 drop database if exists University;
@@ -818,89 +816,6 @@ Eve    3.50000000
 Frank    3.60000000
 select * from EducationSystem.ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
-Alice Smith    3.50    Calculus    3.50
-Bob Johnson    3.70    Calculus    3.60
-Alice Smith    3.50    Physics    3.70
-Eve    null    Introduction to Computer Science    3.50
-Frank    null    Advanced Mathematics    3.60
-select * from EducationSystem.ComprehensiveEducatorInfo;
-professorname    departmentname    coursetitle    semester
-Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
-Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
-select * from EducationSystem.StudentOverallPerformance;
-studentname    studentgrade    averagegrade
-Eve    null    3.50000000
-Frank    null    3.60000000
-Alice Smith    3.50    3.60000000
-Bob Johnson    3.70    3.60000000
-select * from School.Students;
-studentid    name    grade
-1    Alice Smith    3.50
-2    Bob Johnson    3.70
-select * from School.Courses;
-courseid    title    credits
-101    Calculus    4
-102    Physics    4
-select * from School.Enrollments;
-enrollmentid    studentid    courseid    grade
-1    1    101    3.50
-2    2    101    3.60
-3    1    102    3.70
-select * from School.StudentCourses;
-studentname    coursetitle    grade
-Alice Smith    Calculus    3.50
-Bob Johnson    Calculus    3.60
-Alice Smith    Physics    3.70
-select * from School.HighGradeStudents;
-studentid    name    averagegrade
-1    Alice Smith    3.60000000
-2    Bob Johnson    3.60000000
-select * from School.CourseAverageGrades;
-courseid    title    averagegrade
-101    Calculus    3.55000000
-102    Physics    3.70000000
-select * from University.Departments;
-departmentid    name    head
-1    Computer Science    Dr. Alice
-2    Mathematics    Dr. Bob
-select * from University.Professors;
-professorid    name    departmentid
-1    Dr. Charlie    1
-2    Dr. Delta    2
-select * from University.Students;
-studentid    name    departmentid
-1    Eve    1
-2    Frank    2
-select * from University.Courses;
-courseid    title    departmentid    credits
-101    Introduction to Computer Science    1    4
-102    Advanced Mathematics    2    3
-select * from University.Enrollments;
-enrollmentid    studentid    courseid    grade
-1    1    101    3.50
-2    2    102    3.60
-select * from University.ProfessorCourses;
-professorid    courseid    semester
-1    101    Fall 2024
-2    102    Spring 2024
-select * from University.StudentCourses;
-studentname    coursetitle    grade
-Eve    Introduction to Computer Science    3.50
-Frank    Advanced Mathematics    3.60
-select * from University.ProfessorCourses;
-professorid    courseid    semester
-1    101    Fall 2024
-2    102    Spring 2024
-select * from University.DepartmentAverageGrade;
-departmentname    averagegrade
-Computer Science    3.50000000
-Mathematics    3.60000000
-select * from University.TopStudents;
-name    averagegrade
-Eve    3.50000000
-Frank    3.60000000
-select * from EducationSystem.ComprehensiveStudentCourseInfo;
-studentname    studentgrade    coursetitle    coursegrade
 Eve    null    Introduction to Computer Science    3.50
 Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
@@ -984,11 +899,94 @@ Eve    3.50000000
 Frank    3.60000000
 select * from EducationSystem.ComprehensiveStudentCourseInfo;
 studentname    studentgrade    coursetitle    coursegrade
+Eve    null    Introduction to Computer Science    3.50
+Frank    null    Advanced Mathematics    3.60
 Alice Smith    3.50    Calculus    3.50
 Bob Johnson    3.70    Calculus    3.60
 Alice Smith    3.50    Physics    3.70
+select * from EducationSystem.ComprehensiveEducatorInfo;
+professorname    departmentname    coursetitle    semester
+Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
+Dr. Delta    Mathematics    Advanced Mathematics    Spring 2024
+select * from EducationSystem.StudentOverallPerformance;
+studentname    studentgrade    averagegrade
+Eve    null    3.50000000
+Frank    null    3.60000000
+Alice Smith    3.50    3.60000000
+Bob Johnson    3.70    3.60000000
+select * from School.Students;
+studentid    name    grade
+1    Alice Smith    3.50
+2    Bob Johnson    3.70
+select * from School.Courses;
+courseid    title    credits
+101    Calculus    4
+102    Physics    4
+select * from School.Enrollments;
+enrollmentid    studentid    courseid    grade
+1    1    101    3.50
+2    2    101    3.60
+3    1    102    3.70
+select * from School.StudentCourses;
+studentname    coursetitle    grade
+Alice Smith    Calculus    3.50
+Bob Johnson    Calculus    3.60
+Alice Smith    Physics    3.70
+select * from School.HighGradeStudents;
+studentid    name    averagegrade
+1    Alice Smith    3.60000000
+2    Bob Johnson    3.60000000
+select * from School.CourseAverageGrades;
+courseid    title    averagegrade
+101    Calculus    3.55000000
+102    Physics    3.70000000
+select * from University.Departments;
+departmentid    name    head
+1    Computer Science    Dr. Alice
+2    Mathematics    Dr. Bob
+select * from University.Professors;
+professorid    name    departmentid
+1    Dr. Charlie    1
+2    Dr. Delta    2
+select * from University.Students;
+studentid    name    departmentid
+1    Eve    1
+2    Frank    2
+select * from University.Courses;
+courseid    title    departmentid    credits
+101    Introduction to Computer Science    1    4
+102    Advanced Mathematics    2    3
+select * from University.Enrollments;
+enrollmentid    studentid    courseid    grade
+1    1    101    3.50
+2    2    102    3.60
+select * from University.ProfessorCourses;
+professorid    courseid    semester
+1    101    Fall 2024
+2    102    Spring 2024
+select * from University.StudentCourses;
+studentname    coursetitle    grade
+Eve    Introduction to Computer Science    3.50
+Frank    Advanced Mathematics    3.60
+select * from University.ProfessorCourses;
+professorid    courseid    semester
+1    101    Fall 2024
+2    102    Spring 2024
+select * from University.DepartmentAverageGrade;
+departmentname    averagegrade
+Computer Science    3.50000000
+Mathematics    3.60000000
+select * from University.TopStudents;
+name    averagegrade
+Eve    3.50000000
+Frank    3.60000000
+select * from EducationSystem.ComprehensiveStudentCourseInfo;
+studentname    studentgrade    coursetitle    coursegrade
 Eve    null    Introduction to Computer Science    3.50
 Frank    null    Advanced Mathematics    3.60
+Alice Smith    3.50    Calculus    3.50
+Bob Johnson    3.70    Calculus    3.60
+Alice Smith    3.50    Physics    3.70
 select * from EducationSystem.ComprehensiveEducatorInfo;
 professorname    departmentname    coursetitle    semester
 Dr. Charlie    Computer Science    Introduction to Computer Science    Fall 2024
@@ -1002,7 +1000,6 @@ Bob Johnson    3.70    3.60000000
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:06:21.366961    account    sys        
 drop database if exists EducationSystem;
 drop database if exists School;
 drop database if exists University;

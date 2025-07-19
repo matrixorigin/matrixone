@@ -413,7 +413,6 @@ departmentid    budget
 drop snapshot if exists snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 create snapshot snapshot_01 for account;
 Drop database Payroll;
 Drop database Projects;
@@ -537,4 +536,3 @@ drop database if exists Company;
 drop snapshot snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        

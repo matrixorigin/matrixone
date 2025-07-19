@@ -7,7 +7,7 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    test_tenant_1        2025-07-17 12:15:02    null    publish db1 database
+pubname1    db1    *    test_tenant_1        2025-07-18 22:51:54    null    publish db1 database
 show databases like 'db1';
 Database
 db1
@@ -78,8 +78,8 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 create publication pubname2 database db2 account all comment 'publish db2 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    *        2025-07-17 12:15:03    null    publish db2 database
-pubname1    db1    *    test_tenant_1        2025-07-17 12:15:03    null    publish db1 database
+pubname2    db2    *    *        2025-07-18 22:51:54    null    publish db2 database
+pubname1    db1    *    test_tenant_1        2025-07-18 22:51:54    null    publish db1 database
 show databases like 'db%';
 Database
 db1
@@ -106,8 +106,8 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2025-07-17 12:15:03    sub_db2    2025-07-17 12:15:03    0
-pubname1    sys    db1    *    publish db1 database    2025-07-17 12:15:03    sub_db1    2025-07-17 12:15:03    0
+pubname2    sys    db2    *    publish db2 database    2025-07-18 22:51:54    sub_db2    2025-07-18 22:51:54    0
+pubname1    sys    db1    *    publish db1 database    2025-07-18 22:51:54    sub_db1    2025-07-18 22:51:54    0
 create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
@@ -120,7 +120,7 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2025-07-17 12:15:03    sub_db2    2025-07-17 12:15:03    0
+pubname2    sys    db2    *    publish db2 database    2025-07-18 22:51:54    sub_db2    2025-07-18 22:51:55    0
 create snapshot snapshot3 for account;
 drop publication pubname1;
 drop publication pubname2;
@@ -146,8 +146,8 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:03    2
-pubname1    sys    null    null    null    null    sub_db1    2025-07-17 12:15:03    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:54    2
+pubname1    sys    null    null    null    null    sub_db1    2025-07-18 22:51:54    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -157,7 +157,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:03    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:55    2
 restore account sys from snapshot snapshot3;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
@@ -181,8 +181,8 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:03    2
-pubname1    sys    null    null    null    null    sub_db1    2025-07-17 12:15:03    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:54    2
+pubname1    sys    null    null    null    null    sub_db1    2025-07-18 22:51:54    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -192,7 +192,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:03    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:55    2
 drop snapshot snapshot3;
 drop account test_tenant_1;
 drop account test_tenant_2;
@@ -219,8 +219,8 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 create publication pubname2 database db2 account all comment 'publish db2 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    *        2025-07-17 12:15:04    null    publish db2 database
-pubname1    db1    *    test_tenant_1        2025-07-17 12:15:04    null    publish db1 database
+pubname2    db2    *    *        2025-07-18 22:51:56    null    publish db2 database
+pubname1    db1    *    test_tenant_1        2025-07-18 22:51:55    null    publish db1 database
 show databases like 'db%';
 Database
 db1
@@ -247,8 +247,8 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2025-07-17 12:15:04    sub_db2    2025-07-17 12:15:04    0
-pubname1    sys    db1    *    publish db1 database    2025-07-17 12:15:04    sub_db1    2025-07-17 12:15:04    0
+pubname2    sys    db2    *    publish db2 database    2025-07-18 22:51:56    sub_db2    2025-07-18 22:51:56    0
+pubname1    sys    db1    *    publish db1 database    2025-07-18 22:51:55    sub_db1    2025-07-18 22:51:56    0
 create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
@@ -261,7 +261,7 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2025-07-17 12:15:04    sub_db2    2025-07-17 12:15:04    0
+pubname2    sys    db2    *    publish db2 database    2025-07-18 22:51:56    sub_db2    2025-07-18 22:51:56    0
 restore account sys from snapshot snapshot4;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
@@ -283,8 +283,8 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:04    2
-pubname1    sys    null    null    null    null    sub_db1    2025-07-17 12:15:04    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:56    2
+pubname1    sys    null    null    null    null    sub_db1    2025-07-18 22:51:56    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -294,7 +294,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:04    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:56    2
 drop snapshot snapshot4;
 drop account test_tenant_1;
 drop account test_tenant_2;
@@ -308,7 +308,6 @@ show databases like 'db%';
 Database
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 create snapshot snapshot5 for account;
 create database db1;
 use db1;
@@ -317,7 +316,7 @@ create account test_tenant_1 admin_name 'test_account' identified by '111';
 create publication pubname1 database db1 account test_tenant_1 comment 'publish db1 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    test_tenant_1        2025-07-17 12:15:06    null    publish db1 database
+pubname1    db1    *    test_tenant_1        2025-07-18 22:51:57    null    publish db1 database
 show databases like 'db%';
 Database
 db1
@@ -328,7 +327,7 @@ Tables_in_sub_db1
 t1
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname1    sys    db1    *    publish db1 database    2025-07-17 12:15:06    sub_db1    2025-07-17 12:15:06    0
+pubname1    sys    db1    *    publish db1 database    2025-07-18 22:51:57    sub_db1    2025-07-18 22:51:57    0
 create snapshot snapshot6 for account;
 drop publication pubname1;
 drop database db1;
@@ -340,7 +339,7 @@ create account test_tenant_2 admin_name 'test_account' identified by '111';
 create publication pubname2 database db2 account all comment 'publish db2 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    *        2025-07-17 12:15:06    null    publish db2 database
+pubname2    db2    *    *        2025-07-18 22:51:57    null    publish db2 database
 show databases like 'db%';
 Database
 db2
@@ -356,8 +355,8 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2025-07-17 12:15:06    sub_db2    2025-07-17 12:15:06    0
-pubname1    sys    null    null    null    null    sub_db1    2025-07-17 12:15:06    2
+pubname2    sys    db2    *    publish db2 database    2025-07-18 22:51:57    sub_db2    2025-07-18 22:51:57    0
+pubname1    sys    null    null    null    null    sub_db1    2025-07-18 22:51:57    2
 create database sub_db2 from sys publication pubname2;
 use sub_db2;
 show tables;
@@ -370,7 +369,7 @@ a
 3
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    db2    *    publish db2 database    2025-07-17 12:15:06    sub_db2    2025-07-17 12:15:06    0
+pubname2    sys    db2    *    publish db2 database    2025-07-18 22:51:57    sub_db2    2025-07-18 22:51:57    0
 restore account sys from snapshot snapshot6;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
@@ -393,8 +392,8 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:06    2
-pubname1    sys    null    null    null    null    sub_db1    2025-07-17 12:15:06    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:57    2
+pubname1    sys    null    null    null    null    sub_db1    2025-07-18 22:51:57    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -404,7 +403,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:06    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:57    2
 restore account sys from snapshot snapshot5;
 show databases like 'sub_db1';
 Database
@@ -422,8 +421,8 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:06    2
-pubname1    sys    null    null    null    null    sub_db1    2025-07-17 12:15:06    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:57    2
+pubname1    sys    null    null    null    null    sub_db1    2025-07-18 22:51:57    2
 show databases like 'sub_db2';
 Database
 sub_db2
@@ -433,7 +432,7 @@ show tables;
 internal error: there is no publication pubname2
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pubname2    sys    null    null    null    null    sub_db2    2025-07-17 12:15:06    2
+pubname2    sys    null    null    null    null    sub_db2    2025-07-18 22:51:57    2
 drop snapshot snapshot5;
 drop snapshot snapshot6;
 drop account test_tenant_1;
@@ -448,4 +447,3 @@ show databases like 'db%';
 Database
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        

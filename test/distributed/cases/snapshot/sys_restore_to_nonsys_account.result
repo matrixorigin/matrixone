@@ -24,8 +24,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-17 19:16:09.114238    account    acc01        
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp01    2025-07-19 05:53:00.750633    account    acc01        
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 insert into s3t values (300001, 34, 23, 1);
@@ -176,6 +175,7 @@ drop database if exists acc_test04;
 create database acc_test04;
 use acc_test04;
 drop table if exists index03;
+
 create table index03 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -190,8 +190,10 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 select count(*) from acc_test02.pri01;
 count(*)
 4
@@ -252,6 +254,7 @@ invalid input: column col1 does not exist
 update acc_test03.table04 set col1 = 1000;
 internal error: column 'col1' not found in table
 alter table acc_test04.index03 drop primary key;
+
 select count(*) from acc_test02.pri01;
 count(*)
 5
@@ -323,9 +326,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-17 19:16:11.978399    account    acc01        
-sp07    2025-07-17 19:16:11.955532    account    acc01        
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp08    2025-07-19 05:53:03.594028    account    acc01        
+sp07    2025-07-19 05:53:03.568687    account    acc01        
 use test01;
 create table table03 (col1 int);
 insert into table03 values (1),(2);
@@ -463,4 +465,3 @@ drop snapshot full_sp_acc01;
 drop account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        

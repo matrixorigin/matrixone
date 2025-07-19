@@ -3,20 +3,17 @@ create snapshot sn1 for database db1;
 internal error: database db1 does not exist
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 drop database if exists db1;
 create database if not exists db1;
 create snapshot sn2 for database db1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2025-07-17 19:14:28.490291    database    sys    db1    
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sn2    2025-07-19 05:51:19.508658    database    sys    db1    
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop snapshot if exists sn1;
@@ -29,7 +26,7 @@ create database if not exists db1;
 create snapshot sn2 for database db1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2025-07-17 19:14:28.673615    database    acc01    db1    
+sn2    2025-07-19 05:51:19.705071    database    acc01    db1    
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
@@ -39,7 +36,6 @@ create snapshot sn1 for table db1 tbl1;
 internal error: table db1.tbl1 does not exist
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 drop database if exists db1;
 create database if not exists db1;
 create table db1.tbl1 (a int);
@@ -47,14 +43,12 @@ insert into db1.tbl1 values (1), (2), (3);
 create snapshot sn2 for table db1 tbl1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2025-07-17 19:14:28.728259    table    sys    db1    tbl1
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sn2    2025-07-19 05:51:19.766481    table    sys    db1    tbl1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop snapshot if exists sn1;
@@ -69,7 +63,7 @@ insert into db1.tbl1 values (1), (2), (3);
 create snapshot sn2 for table db1 tbl1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn2    2025-07-17 19:14:29.061103    table    acc01    db1    tbl1
+sn2    2025-07-19 05:51:20.178454    table    acc01    db1    tbl1
 drop database if exists db1;
 drop snapshot if exists sn2;
 drop snapshot if exists sn1;
@@ -88,8 +82,7 @@ drop snapshot if exists sn1;
 create snapshot sn1 for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2025-07-17 19:14:29.109252    account    sys        
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sn1    2025-07-19 05:51:20.228072    account    sys        
 drop snapshot if exists sn1;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
@@ -97,7 +90,7 @@ drop snapshot if exists sn1;
 create snapshot sn1 for account;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2025-07-17 19:14:29.398054    account    acc01        
+sn1    2025-07-19 05:51:20.510677    account    acc01        
 drop snapshot if exists sn1;
 drop account if exists acc1;
 drop account if exists acc02;
@@ -151,6 +144,7 @@ drop database if exists test04;
 create database test04;
 use test04;
 drop table if exists partition01;
+
 create table partition01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -165,8 +159,10 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 drop database if exists test06;
 create database test06;
 use test06;
