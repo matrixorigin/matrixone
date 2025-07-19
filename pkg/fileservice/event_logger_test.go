@@ -22,7 +22,8 @@ import (
 
 func TestEventLogger(t *testing.T) {
 	ctx := context.Background()
-	ctx = WithEventLogger(ctx)
+	ctx, logger := WithEventLogger(ctx)
+	defer logger.Stop()
 	LogEvent(ctx, str_to_cache_data_begin, 1)
 	LogEvent(ctx, str_to_cache_data_end, 2, 3)
 	LogSlowEvent(ctx, time.Nanosecond)
@@ -31,9 +32,10 @@ func TestEventLogger(t *testing.T) {
 func BenchmarkEventLogger(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ctx := context.Background()
-		ctx = WithEventLogger(ctx)
+		ctx, logger := WithEventLogger(ctx)
 		LogEvent(ctx, str_to_cache_data_begin, 1)
 		LogEvent(ctx, str_to_cache_data_end, 2, 3)
 		LogSlowEvent(ctx, time.Hour)
+		logger.Stop()
 	}
 }
