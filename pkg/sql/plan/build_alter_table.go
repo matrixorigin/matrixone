@@ -19,17 +19,38 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"go.uber.org/zap"
 )
+
+func skipPkDedup(old, new *TableDef) bool {
+	oldPk := old.Pkey
+	newPk := new.Pkey
+
+	noOldPk := oldPk == nil || oldPk.PkeyColName == catalog.FakePrimaryKeyColName
+	noNewPk := newPk == nil || newPk.PkeyColName == catalog.FakePrimaryKeyColName
+	if noNewPk {
+		return true
+	}
+
+	if noOldPk {
+		return false
+	}
+
+	// oldPk and newPk are not nil, check if the primary key is the same
+	return slices.Equal(oldPk.Names, newPk.Names)
+}
 
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
 	ctx := cctx.GetContext()
@@ -136,6 +157,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		return nil, err
 	}
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
+
+	alterTablePlan.SkipPkDedup = skipPkDedup(tableDef, copyTableDef)
+	logutil.Info("skip pk dedup",
+		zap.Any("originPk", tableDef.Pkey),
+		zap.Any("copyPk", copyTableDef.Pkey),
+		zap.Bool("skipPkDedup", alterTablePlan.SkipPkDedup))
 
 	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx)
 	if err != nil {
