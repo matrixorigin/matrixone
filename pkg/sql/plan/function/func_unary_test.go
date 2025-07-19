@@ -60,7 +60,7 @@ func TestAbs(t *testing.T) {
 	testCases := initAbsTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AbsInt64)
@@ -71,7 +71,7 @@ func TestAbs(t *testing.T) {
 
 func BenchmarkAbsInt64(b *testing.B) {
 	testCases := initAbsTestCase()
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 
 	b.StartTimer()
 	for _, tc := range testCases {
@@ -114,7 +114,7 @@ func initAbsArrayTestCase() []tcTemp {
 func TestAbsArray(t *testing.T) {
 	testCases := initAbsArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -183,7 +183,7 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 func TestNormalizeL2Array(t *testing.T) {
 	testCases := initNormalizeL2ArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -229,7 +229,7 @@ func initSummationArrayTestCase() []tcTemp {
 func TestSummationArray(t *testing.T) {
 	testCases := initSummationArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -275,7 +275,7 @@ func initL1NormArrayTestCase() []tcTemp {
 func TestL1NormArray(t *testing.T) {
 	testCases := initL1NormArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -300,7 +300,7 @@ func initL2NormArrayTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{3.741657386773941, 8.774964387392123},
+				[]float64{3.741657257080078, 8.774964332580566},
 				[]bool{false, false}),
 		},
 		{
@@ -321,7 +321,7 @@ func initL2NormArrayTestCase() []tcTemp {
 func TestL2NormArray(t *testing.T) {
 	testCases := initL2NormArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -503,7 +503,7 @@ func initSubVectorTestCase() []tcTemp {
 func TestSubVector(t *testing.T) {
 	testCases := initSubVectorTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -548,7 +548,7 @@ func TestAsciiString(t *testing.T) {
 	testCases := initAsciiStringTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AsciiString)
@@ -577,7 +577,7 @@ func TestAsciiInt(t *testing.T) {
 	testCases := initAsciiIntTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AsciiInt[int64])
@@ -606,7 +606,7 @@ func TestAsciiUint(t *testing.T) {
 	testCases := initAsciiUintTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, AsciiUint[uint64])
@@ -635,7 +635,7 @@ func TestBin(t *testing.T) {
 	testCases := initBinTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Bin[uint8])
@@ -664,7 +664,7 @@ func TestBinFloat(t *testing.T) {
 	testCases := initBinFloatTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, BinFloat[float32])
@@ -715,7 +715,7 @@ func TestBitLengthFunc(t *testing.T) {
 	testCases := initBitLengthFuncTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, BitLengthFunc)
@@ -744,7 +744,7 @@ func TestCurrentDate(t *testing.T) {
 	testCases := initCurrentDateTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, CurrentDate)
@@ -773,7 +773,7 @@ func TestDateToDate(t *testing.T) {
 	testCases := initDateToDateTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateToDate)
@@ -803,7 +803,7 @@ func TestDatetimeToDate(t *testing.T) {
 	testCases := initDatetimeToDateTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DatetimeToDate)
@@ -833,7 +833,7 @@ func TestTimeToDate(t *testing.T) {
 	testCases := initTimeToDateTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, TimeToDate)
@@ -863,7 +863,7 @@ func TestDateStringToDate(t *testing.T) {
 	testCases := initDateStringToDateTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateStringToDate)
@@ -892,7 +892,7 @@ func TestDateToDay(t *testing.T) {
 	testCases := initDateToDayTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DateToDay)
@@ -921,7 +921,7 @@ func TestDatetimeToDay(t *testing.T) {
 	testCases := initDatetimeToDayTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DatetimeToDay)
@@ -950,7 +950,7 @@ func TestDayOfYear(t *testing.T) {
 	testCases := initDayOfYearTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, DayOfYear)
@@ -979,7 +979,7 @@ func TestEmpty(t *testing.T) {
 	testCases := initEmptyTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Empty)
@@ -1008,7 +1008,7 @@ func TestJsonQuote(t *testing.T) {
 	testCases := initJsonQuoteTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, JsonQuote)
@@ -1037,7 +1037,7 @@ func TestJsonUnquote(t *testing.T) {
 	testCases := initJsonUnquoteTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, JsonUnquote)
@@ -1048,7 +1048,7 @@ func TestJsonUnquote(t *testing.T) {
 
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	ctx := context.Background()
 	filepath := dir + "test"
 	fs, readPath, err := fileservice.GetForETL(ctx, proc.Base.FileService, filepath)
@@ -1113,7 +1113,7 @@ func TestMoMemoryUsage(t *testing.T) {
 	testCases := initMoMemoryUsageTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, MoMemUsage)
@@ -1126,7 +1126,7 @@ func TestMoEnableMemoryUsage(t *testing.T) {
 	testCases := initMoMemoryUsageTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, MoEnableMemUsageDetail)
@@ -1139,7 +1139,7 @@ func TestMoDisableMemoryUsage(t *testing.T) {
 	testCases := initMoMemoryUsageTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, MoDisableMemUsageDetail)
@@ -1168,7 +1168,7 @@ func TestSpace(t *testing.T) {
 	testCases := initSpaceTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, SpaceNumber[uint64])
@@ -1250,7 +1250,7 @@ func TestToTime(t *testing.T) {
 	testCases := initToTimeCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1323,7 +1323,7 @@ func TestToTimeStamp(t *testing.T) {
 	testCases := initToTimestampCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1364,7 +1364,7 @@ func TestValues(t *testing.T) {
 		},
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Values)
@@ -1409,7 +1409,7 @@ func TestHour(t *testing.T) {
 	testCases := initHourTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1461,7 +1461,7 @@ func TestMinute(t *testing.T) {
 	testCases := initMinuteTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1513,7 +1513,7 @@ func TestSecond(t *testing.T) {
 	testCases := initSecondTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -1550,7 +1550,7 @@ func TestBinary(t *testing.T) {
 	testCases := initBinaryTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Binary)
@@ -1599,7 +1599,7 @@ func initHexStringTestCase() []tcTemp {
 func TestHexString(t *testing.T) {
 	testCases := initHexStringTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HexString)
 		s, info := fcTC.Run()
@@ -1634,7 +1634,7 @@ func initHexInt64TestCase() []tcTemp {
 func TestHexInt64(t *testing.T) {
 	testCases := initHexInt64TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
 		s, info := fcTC.Run()
@@ -1714,7 +1714,7 @@ func initHexArrayTestCase() []tcTemp {
 func TestHexArray(t *testing.T) {
 	testCases := initHexArrayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HexArray)
 		s, info := fcTC.Run()
@@ -1748,7 +1748,7 @@ func initMd5TestCase() []tcTemp {
 func TestMd5(t *testing.T) {
 	testCases := initMd5TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Md5)
 		s, info := fcTC.Run()
@@ -1816,7 +1816,7 @@ func initUnhexTestCase() []tcTemp {
 func TestUnhex(t *testing.T) {
 	testCases := initUnhexTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Unhex)
 		s, info := fcTC.Run()
@@ -1857,7 +1857,7 @@ func initToBase64TestCase() []tcTemp {
 func TestToBase64(t *testing.T) {
 	testCases := initToBase64TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, ToBase64)
 		s, info := fcTC.Run()
@@ -1899,7 +1899,7 @@ func initFromBase64TestCase() []tcTemp {
 func TestFromBase64(t *testing.T) {
 	testCases := initFromBase64TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, FromBase64)
 		s, info := fcTC.Run()
@@ -1927,7 +1927,7 @@ func initBlobLengthTestCase() []tcTemp {
 func TestBlobLength(t *testing.T) {
 	testCases := initBlobLengthTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
 		s, info := fcTC.Run()
@@ -1961,7 +1961,7 @@ func initLengthTestCase() []tcTemp {
 func TestLength(t *testing.T) {
 	testCases := initLengthTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Length)
 		s, info := fcTC.Run()
@@ -2104,7 +2104,7 @@ func initLengthUTF8TestCase() []tcTemp {
 func TestLengthUTF8(t *testing.T) {
 	testCases := initLengthUTF8TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, LengthUTF8)
 		s, info := fcTC.Run()
@@ -2133,7 +2133,7 @@ func initLtrimTestCase() []tcTemp {
 func TestLtrim(t *testing.T) {
 	testCases := initLtrimTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Ltrim)
 
@@ -2507,7 +2507,7 @@ func initRtrimTestCase() []tcTemp {
 func TestRtrim(t *testing.T) {
 	testCases := initRtrimTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Rtrim)
 		s, info := fcTC.Run()
@@ -2607,7 +2607,7 @@ func initReverseTestCase() []tcTemp {
 func TestReverse(t *testing.T) {
 	testCases := initReverseTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Reverse)
 		s, info := fcTC.Run()
@@ -2641,7 +2641,7 @@ func initOctUint8TestCase() []tcTemp {
 func TestOctUint8(t *testing.T) {
 	testCases := initOctUint8TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint8])
 		s, info := fcTC.Run()
@@ -2676,7 +2676,7 @@ func initOctUint16TestCase() []tcTemp {
 func TestOctUint16(t *testing.T) {
 	testCases := initOctUint16TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint16])
 		s, info := fcTC.Run()
@@ -2712,7 +2712,7 @@ func initOctUint32TestCase() []tcTemp {
 func TestOctUint32(t *testing.T) {
 	testCases := initOctUint32TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint32])
 		s, info := fcTC.Run()
@@ -2749,7 +2749,7 @@ func initOctUint64TestCase() []tcTemp {
 func TestOctUint64(t *testing.T) {
 	testCases := initOctUint64TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[uint64])
 		s, info := fcTC.Run()
@@ -2780,7 +2780,7 @@ func initOctInt8TestCase() []tcTemp {
 func TestOctInt8(t *testing.T) {
 	testCases := initOctInt8TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int8])
 		s, info := fcTC.Run()
@@ -2809,7 +2809,7 @@ func initOctInt16TestCase() []tcTemp {
 func TestOctInt16(t *testing.T) {
 	testCases := initOctInt16TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int16])
 		s, info := fcTC.Run()
@@ -2838,7 +2838,7 @@ func initOctInt32TestCase() []tcTemp {
 func TestOctInt32(t *testing.T) {
 	testCases := initOctInt32TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int32])
 		s, info := fcTC.Run()
@@ -2867,7 +2867,7 @@ func initOctInt64TestCase() []tcTemp {
 func TestOctInt64(t *testing.T) {
 	testCases := initOctInt64TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Oct[int64])
 		s, info := fcTC.Run()
@@ -2880,7 +2880,7 @@ func TestOctInt64(t *testing.T) {
 func TestDecode(t *testing.T) {
 	testCases := initDecodeTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Decode)
 		s, info := fcTC.Run()
@@ -2960,7 +2960,7 @@ func initDecodeTestCase() []tcTemp {
 func TestEncode(t *testing.T) {
 	testCases := initEncodeTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Encode)
 		s, info := fcTC.Run()
@@ -3061,7 +3061,7 @@ func initDateToMonthTestCase() []tcTemp {
 func TestDateToMonth(t *testing.T) {
 	testCases := initDateToMonthTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToMonth)
 		s, info := fcTC.Run()
@@ -3091,7 +3091,7 @@ func initDateTimeToMonthTestCase() []tcTemp {
 func TestDateTimeToMonth(t *testing.T) {
 	testCases := initDateTimeToMonthTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToMonth)
 		s, info := fcTC.Run()
@@ -3118,7 +3118,7 @@ func initDateStringToMonthTestCase() []tcTemp {
 func TestDateStringToMonth(t *testing.T) {
 	testCases := initDateStringToMonthTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToMonth)
 		s, info := fcTC.Run()
@@ -3151,7 +3151,7 @@ func initDateToYearTestCase() []tcTemp {
 func TestDateToYear(t *testing.T) {
 	testCases := initDateToYearTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToYear)
 		s, info := fcTC.Run()
@@ -3181,7 +3181,7 @@ func initDateTimeToYearTestCase() []tcTemp {
 func TestDateTimeToYear(t *testing.T) {
 	testCases := initDateTimeToYearTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToYear)
 		s, info := fcTC.Run()
@@ -3208,7 +3208,7 @@ func initDateStringToYearTestCase() []tcTemp {
 func TestDateStringToYear(t *testing.T) {
 	testCases := initDateStringToYearTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToYear)
 		s, info := fcTC.Run()
@@ -3270,7 +3270,7 @@ func initDateToWeekTestCase() []tcTemp {
 func TestDateToWeek(t *testing.T) {
 	testCases := initDateToWeekTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeek)
 		s, info := fcTC.Run()
@@ -3328,7 +3328,7 @@ func initDateTimeToWeekTestCase() []tcTemp {
 func TestDateTimeToWeek(t *testing.T) {
 	testCases := initDateTimeToWeekTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeek)
 		s, info := fcTC.Run()
@@ -3361,7 +3361,7 @@ func initDateToWeekdayTestCase() []tcTemp {
 func TestDateToWeekday(t *testing.T) {
 	testCases := initDateToWeekdayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateToWeekday)
 		s, info := fcTC.Run()
@@ -3392,7 +3392,7 @@ func initDateTimeToWeekdayTestCase() []tcTemp {
 func TestDateTimeToWeekday(t *testing.T) {
 	testCases := initDateTimeToWeekdayTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DatetimeToWeekday)
 		s, info := fcTC.Run()
@@ -3414,7 +3414,7 @@ func initPiTestCase() []tcTemp {
 func TestPi(t *testing.T) {
 	testCases := initPiTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Pi)
 		s, info := fcTC.Run()
@@ -3436,7 +3436,7 @@ func initUTCTimestampTestCase() []tcTemp {
 func TestUTCTimestamp(t *testing.T) {
 	testCases := initUTCTimestampTestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, UTCTimestamp)
 		s, info := fcTC.Run()
@@ -3463,7 +3463,7 @@ func TestSleep(t *testing.T) {
 	}
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, Sleep[uint64])
@@ -3568,7 +3568,7 @@ func TestBitCast(t *testing.T) {
 	testCases := initBitCastTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, BitCast)
@@ -3596,7 +3596,7 @@ func initSHA1TestCase() []tcTemp {
 func TestSHA1(t *testing.T) {
 	testCases := initSHA1TestCase()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, SHA1Func)
 		s, info := fcTC.Run()

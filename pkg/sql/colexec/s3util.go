@@ -15,7 +15,9 @@
 package colexec
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,357 +26,316 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-// S3Writer is used to write table data to S3 and package a series of `BlockWriter` write operations
-// Currently there are two scenarios will let cn write s3 directly
-// scenario 1 is insert operator directly go s3, when a one-time insert/load data volume is relatively large will trigger the scenario.
-// scenario 2 is txn.workspace exceeds the threshold value, in the txn.dumpBatch function trigger a write s3
-type S3Writer struct {
-	sortIndex      int // When writing table data, if table has sort key, need to sort data and then write to S3
-	pk             int
-	partitionIndex int16 // This value is aligned with the partition number
-	isClusterBy    bool
-
-	schemaVersion uint32
-	seqnums       []uint16
-	tablename     string
-
-	isTombstone bool
-
-	writer *ioutil.BlockWriter
-
-	// the third vector only has several rows, not aligns with the other two vectors.
-	blockInfoBat *batch.Batch
-
-	// An intermediate cache after the merge sort of all `batches` data
-	buffer *batch.Batch
-
-	// batches[i] used to store the batches of table
-	// Each batch in batches will be sorted internally, and all batches correspond to only one table
-	// when the batches' size is over 64M, we will use merge sort, and then write a segment in s3
-	batches []*batch.Batch
-
-	// tableBatchSizes are used to record the table_i's batches'
-	// size in tableBatches
-	batSize uint64
-
-	typs []types.Type
-	ufs  []func(*vector.Vector, *vector.Vector) error // functions for vector union
-}
 
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
 	WriteS3Threshold uint64 = 128 * mpool.MB
-
-	TagS3SizeForMOLogger uint64 = 1 * mpool.MB
 )
 
-func (w *S3Writer) Free(mp *mpool.MPool) {
-	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(mp)
-		w.blockInfoBat = nil
-	}
-	if w.buffer != nil {
-		w.buffer.Clean(mp)
-		w.buffer = nil
-	}
-	for _, bat := range w.batches {
-		bat.Clean(mp)
-	}
-	w.batches = nil
+type CNS3Writer struct {
+	sinker       *ioutil.Sinker
+	written      []objectio.ObjectStats
+	blockInfoBat *batch.Batch
+
+	hold                   []*batch.Batch
+	holdFlushUntilSyncCall bool
+
+	isTombstone bool
 }
 
-func (w *S3Writer) GetBlockInfoBat() *batch.Batch {
-	return w.blockInfoBat
+func (w *CNS3Writer) String() string {
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(fmt.Sprintf("Sinker: %s\n", w.sinker.String()))
+	buf.WriteString(fmt.Sprintf(
+		"Others: {written=%d, isTombstone=%v, holdFlushUntilSyncCall=%v, hold=%v, blockInfoBat=%v}",
+		len(w.written), w.isTombstone, w.holdFlushUntilSyncCall, len(w.hold),
+		common.MoBatchToString(w.blockInfoBat, w.blockInfoBat.RowCount())))
+
+	return buf.String()
 }
 
-func NewS3TombstoneWriter() (*S3Writer, error) {
-	return &S3Writer{
-		sortIndex:   0,
-		pk:          0,
-		isTombstone: true,
-	}, nil
-}
+func NewCNS3TombstoneWriter(
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	pkType types.Type) *CNS3Writer {
 
-func NewS3Writer(tableDef *plan.TableDef, partitionIdx int16) (*S3Writer, error) {
-	writer := &S3Writer{
-		tablename:      tableDef.GetName(),
-		seqnums:        make([]uint16, 0, len(tableDef.Cols)),
-		schemaVersion:  tableDef.Version,
-		sortIndex:      -1,
-		pk:             -1,
-		partitionIndex: partitionIdx,
-	}
+	writer := &CNS3Writer{}
 
+	writer.sinker = ioutil.NewTombstoneSinker(
+		objectio.HiddenColumnSelection_None,
+		pkType, mp, fs,
+		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
+		ioutil.WithTailSizeCap(0))
+
+	writer.isTombstone = true
 	writer.ResetBlockInfoBat()
-	for i, colDef := range tableDef.Cols {
-		if colDef.Name != catalog.Row_ID {
-			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
-		} else {
-			// check rowid as the last column
-			if i != len(tableDef.Cols)-1 {
-				logutil.Errorf("bad rowid position for %q, %+v", writer.tablename, colDef)
-			}
-		}
-	}
-	logutil.Debugf("s3 table set from NewS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
 
-	// Get Single Col pk index
+	return writer
+}
+
+func GetSequmsAttrsSortKeyIdxFromTableDef(
+	tableDef *plan.TableDef,
+) ([]uint16, []types.Type, []string, int, bool) {
+
+	var (
+		sequms       []uint16
+		sortKeyIdx   = -1
+		isPrimaryKey bool
+
+		attrs     []string
+		attrTypes []types.Type
+	)
+
 	for idx, colDef := range tableDef.Cols {
-		if colDef.Name == tableDef.Pkey.PkeyColName && colDef.Name != catalog.FakePrimaryKeyColName {
-			writer.sortIndex = idx
-			writer.pk = idx
+		if colDef.Name == tableDef.Pkey.PkeyColName && !catalog.IsFakePkName(colDef.Name) {
+			sortKeyIdx = idx
+			isPrimaryKey = true
 			break
 		}
 	}
 
-	if tableDef.ClusterBy != nil {
-		writer.isClusterBy = true
-
-		// the `rowId` column has been excluded from target table's `TableDef` for insert statements (insert, load),
-		// link: `/pkg/sql/plan/build_constraint_util.go` -> func setTableExprToDmlTableInfo
-		// and the `sortIndex` position can be directly obtained using a name that matches the sorting key
+	// create table t1(a int primary key) cluster by a ==> not support
+	// the `primary key` and `cluster by` cannot both exist.
+	// the condition of sortIdx == -1 may be unnecessary.
+	if sortKeyIdx == -1 && tableDef.ClusterBy != nil {
+		// the rowId column has been excluded from the TableDef of the target table for the insert statements(insert,load).
+		// link: pkg/sql/plan/build_constraint_util.go --> func setTableExprToDmlTableInfo,
+		// and the sortKeyIdx position can be directly obtained by using a name that matches the sorting key.
 		for idx, colDef := range tableDef.Cols {
 			if colDef.Name == tableDef.ClusterBy.Name {
-				writer.sortIndex = idx
+				sortKeyIdx = idx
 			}
 		}
 	}
 
-	return writer, nil
-}
+	for i, colDef := range tableDef.Cols {
+		if colDef.Name != catalog.Row_ID {
+			sequms = append(sequms, uint16(colDef.Seqnum))
+			attrs = append(attrs, colDef.Name)
 
-func (w *S3Writer) ResetBlockInfoBat() {
-	// A simple explanation of the two vectors held by metaLocBat
-	// vecs[0] to mark which table this metaLoc belongs to: [0] means insertTable itself, [1] means the first uniqueIndex table, [2] means the second uniqueIndex table and so on
-	// vecs[1] store relative block metadata
-	if w.blockInfoBat != nil {
-		w.blockInfoBat.CleanOnlyData()
-	} else {
-		attrs := []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
-		blockInfoBat := batch.NewWithSize(len(attrs))
-		blockInfoBat.Attrs = attrs
-		blockInfoBat.Vecs[0] = vector.NewVec(types.T_int16.ToType())
-		blockInfoBat.Vecs[1] = vector.NewVec(types.T_text.ToType())
-		blockInfoBat.Vecs[2] = vector.NewVec(types.T_binary.ToType())
-
-		w.blockInfoBat = blockInfoBat
-	}
-}
-
-func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
-	var err error
-	result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), w.blockInfoBat)
-	if err != nil {
-		return err
-	}
-	w.ResetBlockInfoBat()
-	return nil
-}
-
-func (w *S3Writer) writeBatsToBlockInfoBat(mpool *mpool.MPool) error {
-	for _, bat := range w.batches {
-		if err := vector.AppendFixed(
-			w.blockInfoBat.Vecs[0], -w.partitionIndex-1,
-			false, mpool); err != nil {
-			return err
+			attrTypes = append(attrTypes, types.New(types.T(colDef.Typ.Id), colDef.Typ.Width, colDef.Typ.Scale))
+		} else {
+			// check rowid as the last column
+			if i != len(tableDef.Cols)-1 {
+				logutil.Errorf("bad rowid position for %q, %+v", tableDef.Name, colDef)
+			}
 		}
-		bytes, err := bat.MarshalBinary()
+	}
+	logutil.Debugf("s3 table set from NewS3Writer %q seqnums: %+v", tableDef.Name, sequms)
+
+	return sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey
+}
+
+func NewCNS3DataWriter(
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	tableDef *plan.TableDef,
+	holdFlushUntilSyncCall bool,
+) *CNS3Writer {
+
+	writer := &CNS3Writer{
+		holdFlushUntilSyncCall: holdFlushUntilSyncCall,
+	}
+
+	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
+
+	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
+
+	writer.sinker = ioutil.NewSinker(
+		sortKeyIdx, attrs, attrTypes,
+		factor, mp, fs,
+		ioutil.WithTailSizeCap(0),
+		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
+		ioutil.WithOffHeap())
+
+	writer.ResetBlockInfoBat()
+
+	return writer
+}
+
+func (w *CNS3Writer) Write(ctx context.Context, mp *mpool.MPool, bat *batch.Batch) error {
+	if w.holdFlushUntilSyncCall {
+		copied, err := bat.Dup(mp)
 		if err != nil {
 			return err
 		}
-		if err = vector.AppendBytes(
-			w.blockInfoBat.Vecs[1], bytes,
-			false, mpool); err != nil {
-			return err
-		}
+		w.hold = append(w.hold, copied)
+	} else {
+		return w.sinker.Write(ctx, bat)
 	}
-	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
 	return nil
 }
 
-func (w *S3Writer) initBuffers(proc *process.Process, bat *batch.Batch) {
-	if w.buffer != nil {
-		return
-	}
-	buffer, err := proc.NewBatchFromSrc(bat, options.DefaultBlockMaxRows)
-	if err != nil {
-		panic(err)
-	}
-	w.buffer = buffer
-}
-
-// StashBatch batch into w.bats.
-// true: the tableBatches[idx] is over threshold
-// false: the tableBatches[idx] is less than or equal threshold
-func (w *S3Writer) StashBatch(proc *process.Process, bat *batch.Batch) bool {
-	var rbat *batch.Batch
-
-	if len(w.typs) == 0 {
-		for i := 0; i < bat.VectorCount(); i++ {
-			typ := *bat.GetVector(int32(i)).GetType()
-			w.typs = append(w.typs, typ)
-			w.ufs = append(w.ufs, vector.GetUnionAllFunction(typ, proc.Mp()))
-		}
-	}
-	res := false
-	start, end := 0, bat.RowCount()
-	for start < end {
-		n := len(w.batches)
-		if n != 0 && w.batches[n-1].RowCount() < options.DefaultBlockMaxRows {
-			// w.batches[n-1] is not full.
-			rbat = w.batches[n-1]
-		} else {
-			// w.batches[n-1] is full, use a new batch.
-			var err error
-			rbat, err = proc.NewBatchFromSrc(bat, options.DefaultBlockMaxRows)
-			if err != nil {
-				panic(err)
-			}
-			w.batches = append(w.batches, rbat)
-		}
-		rows := end - start
-		if left := options.DefaultBlockMaxRows - rbat.RowCount(); rows > left {
-			rows = left
-		}
-
-		for i := 0; i < bat.VectorCount(); i++ {
-			vec := rbat.GetVector(int32(i))
-			srcVec, err := bat.GetVector(int32(i)).Window(start, start+rows)
-			if err != nil {
-				panic(err)
-			}
-			err = w.ufs[i](vec, srcVec)
-			if err != nil {
-				panic(err)
-			}
-		}
-		rbat.AddRowCount(rows)
-		start += rows
-		w.batSize += uint64(rbat.Size())
-		if w.batSize > WriteS3Threshold {
-			res = true
-		}
-	}
-	return res
-}
-
-func (w *S3Writer) FlushTailBatch(ctx context.Context, proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	if w.batSize >= TagS3SizeForMOLogger {
-		return w.SortAndSync(ctx, proc)
-	}
-	return nil, objectio.ObjectStats{}, w.writeBatsToBlockInfoBat(proc.GetMPool())
-}
-
-// SortAndSync sort block data and write block data to S3
-func (w *S3Writer) SortAndSync(ctx context.Context, proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	if len(w.batches) == 0 {
-		return nil, objectio.ObjectStats{}, nil
-	}
-
+func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.ObjectStats, error) {
 	defer func() {
-		// clean
-		w.batches = w.batches[:0]
-		w.batSize = 0
+		for _, bat := range w.hold {
+			bat.Clean(mp)
+		}
+		w.hold = nil
 	}()
 
-	if w.sortIndex == -1 {
-		if _, err := w.generateWriter(proc); err != nil {
-			return nil, objectio.ObjectStats{}, err
-		}
-
-		for i := range w.batches {
-			if _, err := w.writer.WriteBatch(w.batches[i]); err != nil {
-				return nil, objectio.ObjectStats{}, err
+	if len(w.hold) != 0 {
+		for _, bat := range w.hold {
+			if err := w.sinker.Write(ctx, bat); err != nil {
+				return nil, err
 			}
-			w.batches[i].Clean(proc.GetMPool())
-		}
-		return w.sync(ctx, proc)
-	}
-
-	for i := range w.batches {
-		err := SortByKey(proc, w.batches[i], w.sortIndex, w.isClusterBy, proc.GetMPool())
-		if err != nil {
-			return nil, objectio.ObjectStats{}, err
 		}
 	}
 
-	w.initBuffers(proc, w.batches[0])
-
-	if _, err := w.generateWriter(proc); err != nil {
-		return nil, objectio.ObjectStats{}, err
+	if err := w.sinker.Sync(ctx); err != nil {
+		return nil, err
 	}
 
-	sinker := func(bat *batch.Batch) error {
-		_, err := w.writer.WriteBatch(bat)
-		return err
-	}
-	if err := mergeutil.MergeSortBatches(
-		w.batches,
-		w.sortIndex,
-		w.buffer,
-		sinker,
-		proc.GetMPool(),
-		true,
-	); err != nil {
-		return nil, objectio.ObjectStats{}, err
-	}
-	return w.sync(ctx, proc)
+	w.written, _ = w.sinker.GetResult()
+
+	return w.written, nil
 }
 
-func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
-	// Use uuid as segment id
-	// TODO: multiple 64m file in one segment
-	obj := Get().GenerateObject()
-	s3, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
-	}
-	w.writer, err = ioutil.NewBlockWriterNew(
-		s3, obj, w.schemaVersion, w.seqnums, w.isTombstone,
-	)
-	if err != nil {
-		return nil, err
+func (w *CNS3Writer) Close(mp *mpool.MPool) error {
+	if w.sinker != nil {
+		if err := w.sinker.Close(); err != nil {
+			return err
+		}
+		w.sinker = nil
 	}
 
-	if w.sortIndex > -1 {
-		w.writer.SetSortKey(uint16(w.sortIndex))
+	if len(w.hold) != 0 {
+		for _, bat := range w.hold {
+			bat.Clean(mp)
+		}
+		w.hold = nil
+		w.holdFlushUntilSyncCall = false
 	}
 
-	if w.isTombstone {
-		if w.pk > -1 {
-			w.writer.SetPrimaryKeyWithType(
-				uint16(w.pk),
-				index.HBF,
-				index.ObjectPrefixFn,
-				index.BlockPrefixFn,
-			)
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.Clean(mp)
+		w.blockInfoBat = nil
+	}
+
+	w.written = nil
+
+	return nil
+}
+
+func ExpandObjectStatsToBatch(
+	mp *mpool.MPool,
+	isTombstone bool,
+	outBath *batch.Batch,
+	isCNCreated bool,
+	statsList ...objectio.ObjectStats,
+) (err error) {
+
+	if !isTombstone {
+		objectio.ForeachBlkInObjStatsList(
+			true, nil,
+			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				if err = vector.AppendBytes(
+					outBath.Vecs[0],
+					objectio.EncodeBlockInfo(&blk), false, mp); err != nil {
+					return false
+				}
+
+				return true
+
+			}, statsList...)
+
+		for i := range statsList {
+			if isCNCreated {
+				objectio.WithCNCreated()(&statsList[i])
+			}
+
+			if err = vector.AppendBytes(outBath.Vecs[1],
+				statsList[i].Marshal(), false, mp); err != nil {
+				return err
+			}
 		}
 	} else {
-		if w.pk > -1 {
-			w.writer.SetPrimaryKey(uint16(w.pk))
+		for i := range statsList {
+			if isCNCreated {
+				objectio.WithCNCreated()(&statsList[i])
+			}
+
+			if err = vector.AppendBytes(outBath.Vecs[0],
+				statsList[i].Marshal(), false, mp); err != nil {
+				return err
+			}
 		}
 	}
 
-	return obj, err
+	outBath.SetRowCount(outBath.Vecs[0].Length())
+	return nil
+}
+
+func (w *CNS3Writer) FillBlockInfoBat(
+	mp *mpool.MPool,
+) (*batch.Batch, error) {
+
+	err := ExpandObjectStatsToBatch(mp, w.isTombstone, w.blockInfoBat, true, w.written...)
+
+	return w.blockInfoBat, err
+}
+
+func AllocCNS3ResultBat(
+	isTombstone bool,
+	isMemoryTable bool,
+) *batch.Batch {
+
+	var (
+		attrs     []string
+		attrTypes []types.Type
+
+		blockInfoBat *batch.Batch
+	)
+
+	if isMemoryTable {
+		attrs = []string{catalog.BlockMeta_TableIdx_Insert, catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		attrTypes = []types.Type{types.T_int16.ToType(), types.T_text.ToType(), types.T_binary.ToType()}
+	} else if !isTombstone {
+		attrs = []string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats}
+		attrTypes = []types.Type{types.T_text.ToType(), types.T_binary.ToType()}
+	} else {
+		attrs = []string{catalog.ObjectMeta_ObjectStats}
+		attrTypes = []types.Type{types.T_binary.ToType()}
+	}
+
+	blockInfoBat = batch.NewWithSize(len(attrs))
+	blockInfoBat.Attrs = attrs
+
+	for i := range attrs {
+		blockInfoBat.Vecs[i] = vector.NewVec(attrTypes[i])
+	}
+
+	return blockInfoBat
+}
+
+func (w *CNS3Writer) ResetBlockInfoBat() {
+
+	if w.blockInfoBat != nil {
+		w.blockInfoBat.CleanOnlyData()
+	}
+
+	w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone, false)
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
-func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_null bool, m *mpool.MPool) error {
+func SortByKey(
+	proc *process.Process,
+	bat *batch.Batch,
+	sortIndex int,
+	allow_null bool,
+	m *mpool.MPool,
+) error {
+
 	hasNull := false
 	// Not-Null Check, notice that cluster by support null value
 	if nulls.Any(bat.Vecs[sortIndex].GetNulls()) {
@@ -414,54 +375,36 @@ func SortByKey(proc *process.Process, bat *batch.Batch, sortIndex int, allow_nul
 	return nil
 }
 
-// FillBlockInfoBat put blockInfo generated by sync into metaLocBat
-func (w *S3Writer) FillBlockInfoBat(blkInfos []objectio.BlockInfo, stats objectio.ObjectStats, mpool *mpool.MPool) error {
-	for _, blkInfo := range blkInfos {
+func (w *CNS3Writer) OutputRawData(
+	proc *process.Process,
+	result *batch.Batch,
+) error {
+	defer func() {
+		if len(w.hold) > 0 {
+			for _, bat := range w.hold {
+				bat.Clean(proc.Mp())
+			}
+			w.hold = nil
+		}
+	}()
+
+	for _, bat := range w.hold {
 		if err := vector.AppendFixed(
-			w.blockInfoBat.Vecs[0],
-			w.partitionIndex,
-			false,
-			mpool); err != nil {
+			result.Vecs[0], int16(-1), false, proc.Mp()); err != nil {
 			return err
 		}
-		if err := vector.AppendBytes(
-			w.blockInfoBat.Vecs[1],
-			objectio.EncodeBlockInfo(&blkInfo),
-			false,
-			mpool); err != nil {
+
+		bytes, err := bat.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		if err = vector.AppendBytes(
+			result.Vecs[1], bytes, false, proc.Mp()); err != nil {
 			return err
 		}
 	}
 
-	if err := vector.AppendBytes(w.blockInfoBat.Vecs[2],
-		stats.Marshal(), false, mpool); err != nil {
-		return err
-	}
+	result.SetRowCount(result.Vecs[0].Length())
 
-	w.blockInfoBat.SetRowCount(w.blockInfoBat.Vecs[0].Length())
 	return nil
-}
-
-// sync writes batches in buffer to fileservice(aka s3 in this feature) and get metadata about block on fileservice.
-// For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) sync(ctx context.Context, proc *process.Process) ([]objectio.BlockInfo, objectio.ObjectStats, error) {
-	blocks, _, err := w.writer.Sync(ctx)
-	if err != nil {
-		return nil, objectio.ObjectStats{}, err
-	}
-	blkInfos := make([]objectio.BlockInfo, 0, len(blocks))
-	for j := range blocks {
-		blkInfos = append(blkInfos,
-			blocks[j].GenerateBlockInfo(w.writer.GetName(), w.sortIndex != -1),
-		)
-	}
-
-	var stats objectio.ObjectStats
-	if w.sortIndex != -1 {
-		stats = w.writer.GetObjectStats(objectio.WithCNCreated(), objectio.WithSorted())
-	} else {
-		stats = w.writer.GetObjectStats(objectio.WithCNCreated())
-	}
-
-	return blkInfos, stats, err
 }

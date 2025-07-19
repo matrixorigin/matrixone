@@ -132,26 +132,13 @@ func (obj *aobject) PrepareCompact() bool {
 	}
 	if droppedCommitted {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				obj.meta.Load().PrintPrepareCompactDebugLog()
-			}
 			return false
 		}
 	} else {
 		if !obj.meta.Load().PrepareCompactLocked() {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				obj.meta.Load().PrintPrepareCompactDebugLog()
-			}
 			return false
 		}
 		if !obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
-			if obj.meta.Load().CheckPrintPrepareCompactLocked(checkDuration) {
-				logutil.Infof("obj %v, data prepare compact failed", obj.meta.Load().ID().String())
-				if !obj.meta.Load().HasPrintedPrepareComapct.Load() {
-					obj.meta.Load().HasPrintedPrepareComapct.Store(true)
-					logutil.Infof("append MVCC %v", obj.appendMVCC.StringLocked())
-				}
-			}
 			return false
 		}
 	}
@@ -272,6 +259,41 @@ func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
 		return int32(vec.Length()), nil
 	}
 }
+func (obj *aobject) ApplyDebugBatch(bat *containers.Batch, txn txnif.AsyncTxn) (ans []txnif.TxnEntry, err error) {
+	node := obj.PinNode()
+	defer node.Unref()
+	if node.IsPersisted() {
+		return
+	}
+	mnode := node.MustMNode()
+
+	commitTSVec := bat.Vecs[len(bat.Vecs)-1]
+	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](commitTSVec.GetDownstreamVector())
+	prevTS := commitTSs[0]
+	anodeStart := 0
+	ans = make([]txnif.TxnEntry, 0)
+	for i, ts := range commitTSs {
+		if !ts.EQ(&prevTS) {
+			an, create := obj.appendMVCC.AddAppendNodeLocked(txn, uint32(anodeStart), uint32(i))
+			if create {
+				ans = append(ans, an)
+			}
+			anodeStart = i
+			prevTS = ts
+		}
+	}
+	an, create := obj.appendMVCC.AddAppendNodeLocked(txn, uint32(anodeStart), uint32(bat.Length()))
+	if create {
+		ans = append(ans, an)
+	}
+	tmpAttrs := bat.Attrs
+	bat.Attrs = tmpAttrs[:len(tmpAttrs)-1]
+	if _, err = mnode.ApplyAppendLocked(bat); err != nil {
+		return
+	}
+	bat.Attrs = tmpAttrs
+	return
+}
 func (obj *aobject) Contains(
 	ctx context.Context,
 	txn txnif.TxnReader,
@@ -307,6 +329,8 @@ func (obj *aobject) Contains(
 }
 
 func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
+	obj.Lock()
+	defer obj.Unlock()
 	an := node.(*updates.AppendNode)
 	obj.appendMVCC.OnReplayAppendNode(an)
 	return

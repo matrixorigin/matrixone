@@ -29,7 +29,6 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	check := fixedBinaryCastRule1[s1.Oid][s2.Oid]
 	if check.cast {
 		t1, t2 := check.left.ToType(), check.right.ToType()
-
 		// special case: null + type, null + null, type + null
 		if s1.Oid == types.T_any && s2.Oid == types.T_any {
 			return true, t1, t2
@@ -1051,6 +1050,14 @@ func initFixed1() {
 		{types.T_varbinary, types.T_bit, types.T_uint64, types.T_uint64},
 		{types.T_blob, types.T_bit, types.T_uint64, types.T_uint64},
 		{types.T_text, types.T_bit, types.T_uint64, types.T_uint64},
+		// T_TS -> xx
+		{types.T_TS, types.T_varchar, types.T_varchar, types.T_varchar},
+		{types.T_TS, types.T_timestamp, types.T_timestamp, types.T_timestamp},
+		{types.T_TS, types.T_int64, types.T_int64, types.T_int64},
+		// xx -> T_TS
+		{types.T_varchar, types.T_TS, types.T_varchar, types.T_varchar},
+		{types.T_timestamp, types.T_TS, types.T_timestamp, types.T_timestamp},
+		{types.T_int64, types.T_TS, types.T_int64, types.T_int64},
 	}
 
 	for _, r := range ru {

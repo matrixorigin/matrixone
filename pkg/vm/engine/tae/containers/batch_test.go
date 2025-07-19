@@ -16,6 +16,7 @@ package containers
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"strings"
 	"testing"
@@ -162,6 +163,48 @@ func TestBatchWithPool(t *testing.T) {
 	assert.Equal(t, 0, usedCnt)
 
 	pool.Destory()
+}
+
+func BenchmarkBatchReset(b *testing.B) {
+	colTypes := types.MockColTypes()
+
+	// Test with different batch sizes
+	for _, size := range []int{100, 1000, 10000} {
+		b.Run(fmt.Sprintf("Size_%d", size), func(b *testing.B) {
+			// Create a batch with the specified size
+			seedBat := MockBatch(colTypes, size, 3, nil)
+			defer seedBat.Close()
+
+			// Create a pool for testing with pool
+			uid := uuid.New()
+			pool := NewVectorPool(uid.String(), 200)
+			defer pool.Destory()
+
+			batWithPool := BuildBatchWithPool(seedBat.Attrs, colTypes, 0, pool)
+			batWoPool := BuildBatch(seedBat.Attrs, colTypes, Options{})
+
+			// Test without pool
+			b.Run("WithoutPool", func(b *testing.B) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					batWoPool.Append(seedBat)
+					batWoPool.Reset()
+					batWoPool.Append(seedBat)
+				}
+			})
+
+			// Test with pool
+			b.Run("WithPool", func(b *testing.B) {
+				// Set the pool for the batch
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					batWithPool.Append(seedBat)
+					batWithPool.Reset()
+					batWithPool.Append(seedBat)
+				}
+			})
+		})
+	}
 }
 
 func TestBatchSpliter(t *testing.T) {

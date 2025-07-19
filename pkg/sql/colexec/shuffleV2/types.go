@@ -86,6 +86,7 @@ func (shuffle *ShuffleV2) GetShufflePool() *ShufflePoolV2 {
 func (shuffle *ShuffleV2) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if shuffle.ctr.buf != nil {
 		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.buf = nil
 	}
 	if shuffle.ctr.shufflePool != nil {
 		shuffle.ctr.shufflePool.Reset(proc.Mp())

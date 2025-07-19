@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/crc64"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -472,7 +473,7 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 		return false, err
 	}
 	for _, v := range waitingList {
-		if !waiters.add(v) {
+		if !waiters.add(v, v.WaiterAddress) {
 			return false, nil
 		}
 	}
@@ -480,9 +481,14 @@ func (s *service) fetchTxnWaitingList(txn pb.WaitTxn, waiters *waiters) (bool, e
 }
 
 func (s *service) abortDeadlockTxn(wait pb.WaitTxn, err error) {
-	// this wait activeTxn must be hold by current service, because
-	// all transactions found to be deadlocked by the deadlock
-	// detector must be held by the current service
+	if wait.WaiterAddress != "" && wait.WaiterAddress != s.serviceID {
+		ok, err := s.abortRemoteDeadlockTxn(wait)
+		if err != nil || !ok {
+			logAbortRemoteDeadlockFailed(s.logger, wait, err)
+		}
+		return
+	}
+
 	activeTxn := s.activeTxnHolder.getActiveTxn(wait.TxnID, false, "")
 	// the active txn closed
 	if activeTxn == nil {
@@ -565,6 +571,7 @@ func (s *service) getLockTableWithCreate(
 		s.mu.Unlock()
 		return v
 	}
+
 	if v := fn(); v != nil {
 		return v, nil
 	}
@@ -575,6 +582,7 @@ func (s *service) getLockTableWithCreate(
 		delete(s.mu.allocating[group], tableID)
 		close(c)
 	}()
+
 	bind, err := getLockTableBind(
 		s.remote.client,
 		group,
@@ -954,6 +962,7 @@ type lockTableHolders struct {
 	service string
 	logger  *log.MOLogger
 	holders map[uint32]*lockTableHolder
+	version atomic.Uint64
 }
 
 func (m *lockTableHolders) get(group uint32, id uint64) lockTable {
@@ -982,6 +991,7 @@ func (m *lockTableHolders) mustGetHolder(group uint32) *lockTableHolder {
 		tables:  map[uint64]lockTable{},
 	}
 	m.holders[group] = h
+	m.version.Add(1)
 	return h
 }
 
@@ -999,9 +1009,20 @@ func (m *lockTableHolders) removeWithFilter(filter func(uint64, lockTable) bool)
 	m.RLock()
 	defer m.RUnlock()
 
+	removed := false
 	for _, h := range m.holders {
-		h.removeWithFilter(filter)
+		if h.removeWithFilter(filter) {
+			removed = true
+		}
 	}
+	if removed {
+		m.version.Add(1)
+	}
+}
+
+// getVersion returns the current version of the lockTableHolders
+func (m *lockTableHolders) getVersion() uint64 {
+	return m.version.Load()
 }
 
 type lockTableHolder struct {
@@ -1054,13 +1075,16 @@ func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) bool {
 	return true
 }
 
-func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool) {
+func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool) bool {
 	m.Lock()
 	defer m.Unlock()
+	removed := false
 	for id, v := range m.tables {
 		if filter(id, v) {
 			v.close()
 			delete(m.tables, id)
+			removed = true
 		}
 	}
+	return removed
 }

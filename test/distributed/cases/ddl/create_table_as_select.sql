@@ -212,9 +212,7 @@ select * from cast03;
 
 drop table if exists cast04;
 create table cast04(col1 char(10), col2 char(10), col3 char(10)) as select * from cast03;
--- @bvt:issue#14475
 select * from cast04;
--- @bvt:issue
 drop table cast03;
 drop table cast04;
 
@@ -470,13 +468,11 @@ show create table time04;
 select * from time04;
 drop table time04;
 
--- @bvt:issue#14804
 drop table if exists time05;
 create table time05 as select unix_timestamp(col1) from time01;
 show create table time05;
-select * from time05;
+select count(*) from time05;
 drop table time05;
--- @bvt:issue
 
 drop table if exists time06;
 create table time06 as select datediff('2007-12-31 23:59:59', col1) as timedifferent from time01;

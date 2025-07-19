@@ -49,6 +49,10 @@ type tokenizeState struct {
 	batch *batch.Batch
 }
 
+func (u *tokenizeState) end(tf *TableFunction, proc *process.Process) error {
+	return nil
+}
+
 func (u *tokenizeState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()
@@ -176,6 +180,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 			u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
 		}
+
 	case "json":
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
@@ -210,6 +215,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 			joffset += int32(len(c))
 		}
+
 	case "json_value":
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
@@ -238,8 +244,13 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 			joffset += int32(len(c))
 		}
+
 	default:
 		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
+	}
+
+	if len(u.doc.Words) > 0 {
+		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: fulltext.DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
 	}
 
 	return nil

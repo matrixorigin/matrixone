@@ -302,8 +302,8 @@ func TestAddCdcTask(t *testing.T) {
 	callback := func(context.Context, SqlExecutor) (int, error) {
 		return 1, nil
 	}
-
-	affected, err := storage.AddCdcTask(
+	mock.ExpectCommit()
+	affected, err := storage.AddCDCTask(
 		context.Background(),
 		dt,
 		callback,
@@ -332,15 +332,15 @@ func TestAddCdcTask(t *testing.T) {
 		sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	callback2 := func(ctx context.Context, ts task.TaskStatus, keyMap map[CdcTaskKey]struct{}, se SqlExecutor) (int, error) {
-		keyMap[CdcTaskKey{
+	callback2 := func(ctx context.Context, ts task.TaskStatus, keyMap map[CDCTaskKey]struct{}, se SqlExecutor) (int, error) {
+		keyMap[CDCTaskKey{
 			AccountId: uint64(catalog.System_Account),
 			TaskId:    dt.Metadata.ID,
 		}] = struct{}{}
 		return 1, nil
 	}
 
-	affected, err = storage.UpdateCdcTask(
+	affected, err = storage.UpdateCDCTask(
 		context.Background(),
 		task.TaskStatus_Canceled,
 		callback2,
@@ -355,7 +355,7 @@ func TestAddCdcTask(t *testing.T) {
 		newDaemonTaskRows(t, dt),
 	)
 
-	_, err = storage.UpdateCdcTask(
+	_, err = storage.UpdateCDCTask(
 		context.Background(),
 		task.TaskStatus_PauseRequested,
 		callback2,

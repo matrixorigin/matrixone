@@ -63,24 +63,14 @@ func NewObjectidWithSegmentIDAndNum(sid *Segmentid, num uint16) *ObjectId {
 
 func BuildObjectBlockid(name ObjectName, sequence uint16) *Blockid {
 	var id Blockid
-	BuildObjectBlockidTo(name, sequence, id[:])
+	FillBlockidWithNameAndSeq(name, sequence, id[:])
 	return &id
 
 }
 
-func BuildObjectBlockidTo(name ObjectName, sequence uint16, to []byte) {
+func FillBlockidWithNameAndSeq(name ObjectName, sequence uint16, to []byte) {
 	copy(to, name[0:NameStringOff])
 	copy(to[NameStringOff:], types.EncodeUint16(&sequence))
-}
-
-func Str2Blockid(id string) *Blockid {
-	var blkid Blockid
-	copy(blkid[:], id)
-	return &blkid
-}
-
-func ToObjectNameShort(blkID *Blockid) *ObjectNameShort {
-	return (*ObjectNameShort)(unsafe.Pointer(&blkID[0]))
 }
 
 func IsBlockInObject(blkID *types.Blockid, objID *ObjectName) bool {

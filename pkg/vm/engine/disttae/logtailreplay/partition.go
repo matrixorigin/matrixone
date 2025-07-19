@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -200,14 +201,15 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 
 	state := curState.Copy()
 
+	inst := time.Now()
 	state.truncate(ids, ts)
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
 
-	logutil.Infof("Truncate:table name:%s,tid:%v partition state from %p to %p,startTs:%s",
-		p.TableInfo.Name, p.TableInfo.ID, curState, state, ts.ToString())
+	logutil.Infof("Truncate:table name:%s,tid:%v partition state from %p to %p,startTs:%s, cost:%s",
+		p.TableInfo.Name, p.TableInfo.ID, curState, state, ts.ToString(), time.Since(inst))
 
 	return nil
 }

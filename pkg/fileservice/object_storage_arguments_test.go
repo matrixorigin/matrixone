@@ -184,3 +184,23 @@ func TestAWSRegion(t *testing.T) {
 	}
 	assert.NotNil(t, args.validate())
 }
+
+func TestParseHDFSArgs(t *testing.T) {
+	var args ObjectStorageArguments
+	if err := args.SetFromString([]string{
+		"user=user",
+		"kerberos-service-principle-name=principle-name",
+		"kerberos-username=username",
+		"kerberos-realm=realm",
+		"kerberos-password=password",
+		"kerberos-keytab-path=path",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, "user", args.User)
+	assert.Equal(t, "principle-name", args.KerberosServicePrincipleName)
+	assert.Equal(t, "username", args.KerberosUsername)
+	assert.Equal(t, "realm", args.KerberosRealm)
+	assert.Equal(t, "password", args.KerberosPassword)
+	assert.Equal(t, "path", args.KerberosKeytabPath)
+}

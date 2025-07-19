@@ -30,6 +30,7 @@ import (
 )
 
 var CauseSwitchWrite2Replay = moerr.NewInternalErrorNoCtx("SwitchWrite2Replay")
+var CauseStopGC = moerr.NewInternalErrorNoCtx("StopGC")
 
 const (
 	JT_GCNoop tasks.JobType = 300 + iota
@@ -66,7 +67,7 @@ type DiskCleaner struct {
 	cleaner Cleaner
 
 	step        atomic.Uint32
-	replayError atomic.Value
+	replayError atomic.Pointer[error]
 	runningCtx  atomic.Pointer[runningCtx]
 
 	processQueue sm.Queue
@@ -250,16 +251,13 @@ func (cleaner *DiskCleaner) doExecute(ctx context.Context) (err error) {
 			zap.Error(err),
 		)
 	}()
-	var ok bool
 	if replayErr := cleaner.replayError.Load(); replayErr != nil {
-		if _, ok = replayErr.(error); ok {
-			if err = cleaner.cleaner.Replay(ctx); err != nil {
-				msg = "GC-Replay"
-				cleaner.replayError.Store(err)
-				return
-			} else {
-				cleaner.replayError.Store(0)
-			}
+		if err = cleaner.cleaner.Replay(ctx); err != nil {
+			msg = "GC-Replay"
+			cleaner.replayError.Store(&err)
+			return
+		} else {
+			cleaner.replayError.Store(nil)
 		}
 	}
 	err = cleaner.cleaner.Process(ctx)
@@ -270,9 +268,9 @@ func (cleaner *DiskCleaner) doExecute(ctx context.Context) (err error) {
 func (cleaner *DiskCleaner) doReplay(ctx context.Context) (err error) {
 	if err = cleaner.cleaner.Replay(ctx); err != nil {
 		logutil.Error("GC-Replay-Error", zap.Error(err))
-		cleaner.replayError.Store(err)
+		cleaner.replayError.Store(&err)
 	} else {
-		cleaner.replayError.Store(0)
+		cleaner.replayError.Store(nil)
 	}
 	return
 }
@@ -299,8 +297,6 @@ func (cleaner *DiskCleaner) doReplayAndExecute(ctx context.Context) (err error) 
 	if err = cleaner.doReplay(ctx); err != nil {
 		return
 	}
-	msg = "GC-TryGC"
-	err = cleaner.cleaner.TryGC(ctx)
 	return
 }
 

@@ -30,12 +30,15 @@ var _ vm.Operator = new(TableFunction)
 type TableFunction struct {
 	ctr container
 
-	Rets     []*plan.ColDef
-	Args     []*plan.Expr
-	Attrs    []string
-	Params   []byte
-	FuncName string
-	Limit    *plan.Expr
+	Rets        []*plan.ColDef
+	Args        []*plan.Expr
+	Attrs       []string
+	Params      []byte
+	FuncName    string
+	Limit       *plan.Expr
+	IsSingle    bool
+	OffsetTotal [][2]int64
+	CanOpt      bool
 
 	vm.OperatorBase
 }
@@ -75,6 +78,7 @@ type tvfState interface {
 	reset(tf *TableFunction, proc *process.Process)
 	//start(tf *TableFunction, proc *process.Process, nthRow int) error
 	start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error
+	end(tf *TableFunction, proc *process.Process) error
 	call(tf *TableFunction, proc *process.Process) (vm.CallResult, error)
 	free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error)
 }
@@ -167,4 +171,8 @@ func (s *simpleOneBatchState) startPreamble(tf *TableFunction, proc *process.Pro
 	} else {
 		s.batch.CleanOnlyData()
 	}
+}
+
+func (s *simpleOneBatchState) end(tf *TableFunction, proc *process.Process) error {
+	return nil
 }

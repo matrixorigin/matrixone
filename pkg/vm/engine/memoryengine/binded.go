@@ -42,6 +42,10 @@ func (b *BindedEngine) LatestLogtailAppliedTime() timestamp.Timestamp {
 	return b.engine.LatestLogtailAppliedTime()
 }
 
+func (b *BindedEngine) HasTempEngine() bool {
+	return b.engine.HasTempEngine()
+}
+
 func (b *BindedEngine) Commit(ctx context.Context, _ client.TxnOperator) error {
 	return b.engine.Commit(ctx, b.txnOp)
 }
@@ -101,8 +105,8 @@ func (b *BindedEngine) AllocateIDByKey(ctx context.Context, key string) (uint64,
 	return b.engine.AllocateIDByKey(ctx, key)
 }
 
-func (b *BindedEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
-	return b.engine.TryToSubscribeTable(ctx, dbID, tbID)
+func (b *BindedEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
+	return b.engine.TryToSubscribeTable(ctx, dbID, tbID, dbName, tblName)
 }
 
 func (b *BindedEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {

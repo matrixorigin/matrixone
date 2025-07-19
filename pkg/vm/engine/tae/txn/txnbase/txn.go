@@ -141,7 +141,7 @@ func (txn *Txn) GetBase() txnif.BaseTxn {
 func (txn *Txn) GetLsn() uint64              { return txn.LSN }
 func (txn *Txn) IsReplay() bool              { return txn.isReplay }
 func (txn *Txn) GetContext() context.Context { return txn.Store.GetContext() }
-func (txn *Txn) MockIncWriteCnt() int        { return txn.Store.IncreateWriteCnt() }
+func (txn *Txn) MockIncWriteCnt() error      { return txn.Store.IncreateWriteCnt("mock") }
 
 func (txn *Txn) SetError(err error) { txn.Err = err }
 func (txn *Txn) GetError() error    { return txn.Err }
@@ -211,6 +211,9 @@ func (txn *Txn) Prepare(ctx context.Context) (pts types.TS, err error) {
 // Notice that there may be a such scenario in which a 2PC distributed transaction in ACTIVE
 // will be rollbacked, since Rollback message may arrive before the Prepare message.
 func (txn *Txn) Rollback(ctx context.Context) (err error) {
+	if txn.GetStore().IsOffline() {
+		return
+	}
 	//idempotent check
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warnf("tae : txn %s is not found in TxnManager", txn.GetID())
@@ -286,6 +289,9 @@ func (txn *Txn) CommitInRecovery(ctx context.Context) (err error) {
 }
 
 func (txn *Txn) doCommit(ctx context.Context, inRecovery bool) (err error) {
+	if txn.GetStore().IsOffline() {
+		return
+	}
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		err = moerr.NewTxnNotFoundNoCtx()
 		return
@@ -307,7 +313,10 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 	return txn.Store
 }
 
-func (txn *Txn) GetLSN() uint64 { return txn.LSN }
+func (txn *Txn) GetLSN() uint64 {
+	txn.GetTxnState(true)
+	return txn.LSN
+}
 
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	// Idempotent check

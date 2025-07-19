@@ -233,12 +233,8 @@ func (tomb *tombstoneData) ApplyInMemTombstones(
 		return
 	}
 
-	start, end := ioutil.FindStartEndOfBlockFromSortedRowids(tomb.rowids, bid)
-
-	for i := start; i < end; i++ {
-		offset := tomb.rowids[i].GetRowOffset()
-		left = FastApplyDeletedRows(left, deleted, offset)
-	}
+	// is the tomb.rowIds sorted?
+	FastApplyDeletesByRowIds(bid, &left, deleted, tomb.rowids, true)
 
 	return
 }
@@ -313,52 +309,19 @@ func (tomb *tombstoneData) Merge(other engine.Tombstoner) error {
 	)
 }
 
-func RowIdsToOffset(rowIds []types.Rowid, wantedType any, skipMask objectio.Bitmap) any {
-	switch wantedType.(type) {
-	case int32:
-		var ret []int32
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, int32(offset))
-		}
-		return ret
+func RowIdsToOffset(
+	rowIds []types.Rowid,
+	skipMask objectio.Bitmap,
+) []int64 {
 
-	case uint32:
-		var ret []uint32
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, uint32(offset))
+	ret := make([]int64, 0, 10)
+	for i, rowId := range rowIds {
+		if skipMask.Contains(uint64(i)) {
+			continue
 		}
-		return ret
-
-	case uint64:
-		var ret []uint64
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, uint64(offset))
-		}
-		return ret
-
-	case int64:
-		var ret []int64
-		for i, rowId := range rowIds {
-			if skipMask.Contains(uint64(i)) {
-				continue
-			}
-			offset := rowId.GetRowOffset()
-			ret = append(ret, int64(offset))
-		}
-		return ret
+		offset := rowId.GetRowOffset()
+		ret = append(ret, int64(offset))
 	}
 
-	return nil
+	return ret
 }

@@ -567,7 +567,7 @@ func GetConstantValue2(proc *process.Process, expr *plan.Expr, vec *vector.Vecto
 		case types.T_datetime:
 			if val, ok := cExpr.Lit.Value.(*plan.Literal_Datetimeval); ok {
 				val := val.Datetimeval
-				err = vector.AppendFixed(vec, val, false, proc.GetMPool())
+				err = vector.AppendFixed(vec, types.Datetime(val), false, proc.GetMPool())
 				return true, err
 			} else {
 				err = vector.AppendBytes(vec, nil, true, proc.Mp())

@@ -80,8 +80,8 @@ const (
 )
 
 const (
-	SmallBatchThreshold = 8192
-	CoarseMaxRow        = 8192
+	SmallBatchThreshold = objectio.BlockMaxRows
+	CoarseMaxRow        = objectio.BlockMaxRows
 
 	LoadParallism = 20
 	LogThreshold  = time.Minute
@@ -180,10 +180,13 @@ func (r *BatchHandle) next(bat **batch.Batch, mp *mpool.MPool, start, end int) (
 			(*bat).Vecs = append((*bat).Vecs, newVec)
 		}
 	} else {
-		for i, vec := range (*bat).Vecs {
-			appendFromEntry(r.batches.Vecs[i], vec, r.rowOffsetCursor, mp)
+		for offset := start; offset < end; offset++ {
+			for i, vec := range (*bat).Vecs {
+				appendFromEntry(r.batches.Vecs[i], vec, offset, mp)
+			}
 		}
 	}
+	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	r.baseHandle.changesHandle.copyDuration += time.Since(t0)
 	return
 }
@@ -303,6 +306,7 @@ func (h *CNObjectHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.
 		src := data.Vecs[i]
 		vec.Union(src, sels, mp)
 	}
+	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	h.base.changesHandle.copyDuration += time.Since(t0)
 	return
 }
@@ -460,9 +464,12 @@ func (h *AObjectHandle) next(ctx context.Context, bat **batch.Batch, mp *mpool.M
 		}
 	} else {
 		for i, vec := range (*bat).Vecs {
-			appendFromEntry(h.currentBatch.Vecs[i], vec, h.rowOffsetCursor, mp)
+			for rowOffset := start; rowOffset < end; rowOffset++ {
+				appendFromEntry(h.currentBatch.Vecs[i], vec, rowOffset, mp)
+			}
 		}
 	}
+	(*bat).SetRowCount((*bat).Vecs[0].Length())
 	h.p.changesHandle.copyDuration += time.Since(t0)
 	h.rowOffsetCursor = end
 	if h.rowOffsetCursor >= h.batchLength {
@@ -699,7 +706,9 @@ type ChangeHandler struct {
 	dataHandle      *baseHandle
 	coarseMaxRow    int
 	quick           bool
+	primarySeqnum   int
 	scheduler       tasks.JobScheduler
+	mp              *mpool.MPool
 
 	readDuration, copyDuration    time.Duration
 	updateDuration, totalDuration time.Duration
@@ -718,6 +727,7 @@ func NewChangesHandler(
 	state *PartitionState,
 	start, end types.TS,
 	maxRow uint32,
+	primarySeqnum int,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (changeHandle *ChangeHandler, err error) {
@@ -725,13 +735,15 @@ func NewChangesHandler(
 		return nil, moerr.NewErrStaleReadNoCtx(state.start.ToString(), start.ToString())
 	}
 	changeHandle = &ChangeHandler{
-		coarseMaxRow: int(maxRow),
-		start:        start,
-		end:          end,
-		fs:           fs,
-		minTS:        state.start,
-		LogThreshold: LogThreshold,
-		scheduler:    tasks.NewParallelJobScheduler(LoadParallism),
+		coarseMaxRow:  int(maxRow),
+		start:         start,
+		end:           end,
+		fs:            fs,
+		minTS:         state.start,
+		LogThreshold:  LogThreshold,
+		primarySeqnum: primarySeqnum,
+		mp:            mp,
+		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
 	}
 	changeHandle.tombstoneHandle, err = NewBaseHandler(state, changeHandle, start, end, mp, true, fs, ctx)
 	if err != nil {
@@ -784,14 +796,178 @@ func (p *ChangeHandler) decideNextHandle() int {
 	return NextChangeHandle_Data
 }
 func (p *ChangeHandler) quickNext(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, err error) {
-	err = p.dataHandle.QuickNext(ctx, &data, mp)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+	for {
+		dataEnd := false
+		tombstoneEnd := false
+		err = p.dataHandle.QuickNext(ctx, &data, mp)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			dataEnd = true
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+		err = p.tombstoneHandle.QuickNext(ctx, &tombstone, mp)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
+			tombstoneEnd = true
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+		if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+			return
+		}
+		if tombstoneEnd && dataEnd {
+			break
+		}
+		if dataEnd && tombstone.RowCount() > p.coarseMaxRow {
+			break
+		}
+		if tombstoneEnd && data.RowCount() > p.coarseMaxRow {
+			break
+		}
+	}
+	return
+}
+
+// filterBatch merges operations on the same primary key (pk) from data and tombstone batches.
+// For each pk, it keeps only the latest operation based on timestamp order.
+//
+// The function takes:
+// - data: batch containing insert/update operations
+// - tombstone: batch containing delete operations
+// - primarySeqnum: index of primary key column
+//
+// It works by:
+// 1. Building a map of all operations (both data and tombstone) keyed by pk
+// 2. For each pk, sorting operations by timestamp
+// 3. Marking older operations for deletion to keep only the latest one
+// 4. Shrinking both batches to remove the marked rows
+//
+// This ensures that for any pk, we only keep the most recent operation,
+// whether it's an insert/update from data batch or a delete from tombstone batch.
+func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
+	if data == nil || tombstone == nil {
 		return
 	}
-	err = p.tombstoneHandle.QuickNext(ctx, &tombstone, mp)
-	if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
-		err = nil
+
+	type rowInfo struct {
+		row      int
+		ts       types.TS
+		isDelete bool
 	}
+
+	// Build maps for data and tombstone batches
+	rowInfoMap := make(map[any][]rowInfo)
+
+	// Process data batch
+	pkVec := data.Vecs[primarySeqnum]
+	tsVec := data.Vecs[len(data.Vecs)-1]
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
+	for i := 0; i < pkVec.Length(); i++ {
+		pkVal := vector.GetAny(pkVec, i)
+		if _, ok := pkVal.([]byte); ok {
+			pkVal = string(pkVal.([]byte))
+		}
+		rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
+			row:      i,
+			ts:       timestamps[i],
+			isDelete: false,
+		})
+	}
+
+	// Process tombstone batch
+	pkVec = tombstone.Vecs[0]
+	tsVec = tombstone.Vecs[1]
+	timestamps = vector.MustFixedColWithTypeCheck[types.TS](tsVec)
+	for i := 0; i < pkVec.Length(); i++ {
+		pkVal := vector.GetAny(pkVec, i)
+		if _, ok := pkVal.([]byte); ok {
+			pkVal = string(pkVal.([]byte))
+		}
+		rowInfoMap[pkVal] = append(rowInfoMap[pkVal], rowInfo{
+			row:      i,
+			ts:       timestamps[i],
+			isDelete: true,
+		})
+	}
+
+	dataRowsToDelete := make([]int64, 0)
+	tombstoneRowsToDelete := make([]int64, 0)
+
+	for _, rowInfos := range rowInfoMap {
+		// Sort by timestamp
+		goSort.Slice(rowInfos, func(i, j int) bool {
+			if rowInfos[i].ts.EQ(&rowInfos[j].ts) {
+				if rowInfos[i].isDelete && !rowInfos[j].isDelete {
+					return true
+				}
+				return false
+			}
+			return rowInfos[i].ts.LT(&rowInfos[j].ts)
+		})
+
+		if len(rowInfos) <= 1 {
+			continue
+		}
+
+		first := rowInfos[0]
+		last := rowInfos[len(rowInfos)-1]
+
+		// Case 1: First is delete
+		if first.isDelete {
+			// Keep only last insert
+			if !last.isDelete {
+				for _, ri := range rowInfos[0 : len(rowInfos)-1] {
+					if ri.isDelete {
+						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+					} else {
+						dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+					}
+				}
+			} else {
+				// Keep only last delete
+				for _, ri := range rowInfos[:len(rowInfos)-1] {
+					if ri.isDelete {
+						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+					} else {
+						dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+					}
+				}
+			}
+		} else {
+			// Case 2: First is insert
+			if !last.isDelete {
+				// Keep only last insert
+				for _, ri := range rowInfos[:len(rowInfos)-1] {
+					if ri.isDelete {
+						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+					} else {
+						dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+					}
+				}
+			} else {
+				// Delete all rows
+				for _, ri := range rowInfos {
+					if ri.isDelete {
+						tombstoneRowsToDelete = append(tombstoneRowsToDelete, int64(ri.row))
+					} else {
+						dataRowsToDelete = append(dataRowsToDelete, int64(ri.row))
+					}
+				}
+			}
+		}
+	}
+
+	goSort.Slice(tombstoneRowsToDelete, func(i, j int) bool {
+		return tombstoneRowsToDelete[i] < tombstoneRowsToDelete[j]
+	})
+	goSort.Slice(dataRowsToDelete, func(i, j int) bool {
+		return dataRowsToDelete[i] < dataRowsToDelete[j]
+	})
+	tombstone.Shrink(tombstoneRowsToDelete, true)
+	data.Shrink(dataRowsToDelete, true)
 	return
 }
 func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
@@ -817,10 +993,22 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 			)
 		}
 	}
+	defer func() {
+		if data != nil && data.RowCount() == 0 {
+			data.Clean(p.mp)
+			data = nil
+		}
+		if tombstone != nil && tombstone.RowCount() == 0 {
+			tombstone.Clean(p.mp)
+			tombstone = nil
+		}
+	}()
 	hint = engine.ChangesHandle_Tail_done
 	t0 := time.Now()
 	if p.quick {
-		data, tombstone, err = p.quickNext(ctx, mp)
+		if data, tombstone, err = p.quickNext(ctx, mp); err != nil {
+			return
+		}
 		p.totalDuration += time.Since(t0)
 		if data != nil {
 			p.dataLength += data.Vecs[0].Length()
@@ -835,31 +1023,44 @@ func (p *ChangeHandler) Next(ctx context.Context, mp *mpool.MPool) (data, tombst
 		switch typ {
 		case NextChangeHandle_Data:
 			err = p.dataHandle.Next(ctx, &data, mp)
-			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow {
-				p.totalDuration += time.Since(t0)
-				if data != nil {
-					p.dataLength += data.Vecs[0].Length()
+			if err == nil && data.Vecs[0].Length() >= p.coarseMaxRow*2 {
+				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+					return
 				}
-				if tombstone != nil {
-					p.tombstoneLength += tombstone.Vecs[0].Length()
+				if data.Vecs[0].Length() > p.coarseMaxRow {
+					p.totalDuration += time.Since(t0)
+					if data != nil {
+						p.dataLength += data.Vecs[0].Length()
+					}
+					if tombstone != nil {
+						p.tombstoneLength += tombstone.Vecs[0].Length()
+					}
+					return
 				}
-				return
 			}
 		case NextChangeHandle_Tombstone:
 			err = p.tombstoneHandle.Next(ctx, &tombstone, mp)
-			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow {
-				p.totalDuration += time.Since(t0)
-				if data != nil {
-					p.dataLength += data.Vecs[0].Length()
+			if err == nil && tombstone.Vecs[0].Length() >= p.coarseMaxRow*2 {
+				if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+					return
 				}
-				if tombstone != nil {
-					p.tombstoneLength += tombstone.Vecs[0].Length()
+				if tombstone.Vecs[0].Length() > p.coarseMaxRow {
+					p.totalDuration += time.Since(t0)
+					if data != nil {
+						p.dataLength += data.Vecs[0].Length()
+					}
+					if tombstone != nil {
+						p.tombstoneLength += tombstone.Vecs[0].Length()
+					}
+					return
 				}
-				return
 			}
 		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			err = nil
+			if err = filterBatch(data, tombstone, p.primarySeqnum); err != nil {
+				return
+			}
 			p.totalDuration += time.Since(t0)
 			if data != nil {
 				p.dataLength += data.Vecs[0].Length()

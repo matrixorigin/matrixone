@@ -69,7 +69,8 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
-				stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), false, false, false)
+				noid := objectio.NewObjectid()
+				stats := objectio.NewObjectStatsWithObjectID(&noid, false, false, false)
 				obj, err := rel.CreateNonAppendableObject(false, &objectio.CreateObjOpt{Stats: stats})
 				testutil.MockObjectStats(t, obj)
 				assert.Nil(t, err)
@@ -896,10 +897,10 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return testutil.AllCheckpointsFinished(tae)
 	})
 	testutil.PrintCheckpointStats(t, tae)
-	assert.Equal(t, tae.Wal.GetDSN(), tae.Wal.GetCheckpointed())
+	assert.Equal(t, tae.Wal.GetLSNWatermark(), tae.Wal.GetCheckpointed())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -973,6 +974,7 @@ func TestReplay7(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
+
 	schema := catalog.MockSchemaAll(18, 14)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 5
@@ -1255,6 +1257,7 @@ func TestReplay10(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
+
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 5
@@ -1404,4 +1407,58 @@ func TestReplayDatabaseEntry(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, datypStr, dbEntry.GetDatType())
 	assert.Equal(t, createSqlStr, dbEntry.GetCreateSql())
+}
+
+// LongScanAndCKPOpts
+// add some txns
+// force gckp
+// get ckp-lsn and truncate-lsn
+// replay
+// check ckp-lsn and truncate-lsn
+func Test_ReplayAfterForceGCKP(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	{
+		txn, err := tae.StartTxn(nil)
+		assert.NoError(t, err)
+		_, err = testutil.CreateDatabase2(
+			ctx, txn, t.Name(),
+		)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	err := tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), 0)
+	assert.NoError(t, err)
+
+	maxICKP := tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	t.Log(maxICKP.String())
+
+	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	t.Log(maxGCKP.String())
+
+	tae.Restart(ctx)
+
+	maxICKP2 := tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	t.Log(maxICKP2.String())
+
+	maxGCKP2 := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	t.Log(maxGCKP2.String())
+
+	assert.Equal(t, maxICKP.LSN(), maxICKP2.LSN())
+	assert.Equal(t, maxGCKP.LSN(), maxGCKP2.LSN())
+	assert.Equal(t, maxICKP.GetTruncateLsn(), maxICKP2.GetTruncateLsn())
+	assert.Equal(t, maxGCKP.GetTruncateLsn(), maxGCKP2.GetTruncateLsn())
+
+	expectGCKPEnd := maxICKP.GetEnd()
+	expectGCKPEnd = expectGCKPEnd.Next()
+	assert.Equal(t, expectGCKPEnd, maxGCKP2.GetEnd())
+
+	assert.Equal(t, maxICKP.LSN(), maxGCKP2.LSN())
+	assert.Equal(t, maxICKP.GetTruncateLsn(), maxGCKP2.GetTruncateLsn())
 }

@@ -99,6 +99,37 @@ func NewObjectStatsWithObjectID(id *ObjectId, appendable, sorted, cnCreated bool
 
 	return stats
 }
+
+// use the b5~b7 to store the level
+func (des *ObjectStats) SetLevel(level int8) {
+	// Clear the bits b5~b7 (bits 5, 6, and 7) without affecting other bits
+	// 0xE0 = 11100000 - mask for the top 3 bits (b7, b6, b5)
+	// We want to keep the top 3 bits and clear bits 5, 6, and 7
+	des[reservedOffset] = des[reservedOffset] & 0x1F
+
+	// Shift the level value to bits 5-7 (b5~b7)
+	// First ensure level is between 0 and 7
+	if level < 0 {
+		level = 0
+	}
+	if level > 7 {
+		level = 7
+	}
+	// Shift the level value to position b5~b7 (bits 5, 6, and 7)
+	// 0xE0 = 11100000 - mask for bits 5, 6, and 7
+	shiftedLevel := (byte(level) << 5) & 0xE0
+
+	// Set the level bits (b5~b7) while preserving other bits
+	des[reservedOffset] = des[reservedOffset] | shiftedLevel
+}
+
+func (des *ObjectStats) GetLevel() int8 {
+	// Extract the level value from bits 5-7 (b5~b7)
+	// 0xE0 = 11100000 - mask for bits 5, 6, and 7
+	// Shift right by 5 to get the actual level value
+	return int8((des[reservedOffset] & 0xE0) >> 5)
+}
+
 func (des *ObjectStats) Marshal() []byte {
 	return des[:]
 }
@@ -148,7 +179,7 @@ func (des *ObjectStats) ObjectLocation() Location {
 
 func (des *ObjectStats) ConstructBlockId(id uint16) Blockid {
 	var blockId Blockid
-	BuildObjectBlockidTo(des.ObjectName(), id, blockId[:])
+	FillBlockidWithNameAndSeq(des.ObjectName(), id, blockId[:])
 	return blockId
 }
 

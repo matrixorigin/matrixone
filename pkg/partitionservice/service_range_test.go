@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/assert"
@@ -46,18 +47,19 @@ func TestCreateRange(t *testing.T) {
 			func(
 				ctx context.Context,
 				txnOp client.TxnOperator,
-				s *service,
-				store *memStorage,
+				s *Service,
+				store PartitionStorage,
 			) {
-				def := newTestTableDefine(1, columns, []types.T{v})
-				store.addUncommittedTable(def)
+				def := newTestTablePartitionDefine(1, columns, []types.T{v}, num, partition.PartitionMethod_Range)
+				memStore := store.(*memStorage)
+				memStore.addUncommittedTable(def)
 
 				stmt := newTestRangeOption(t, columns[0], num)
 				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
-				v, ok := store.uncommitted[tableID]
+				v, ok := memStore.uncommitted[tableID]
 				assert.True(t, ok)
-				assert.Equal(t, columns[0], v.metadata.Description)
+				assert.Equal(t, fmt.Sprintf("`%s`", columns[0]), v.metadata.Description)
 				assert.Equal(t, 2, len(v.partitions))
 				for _, p := range v.partitions {
 					assert.NotEqual(t, 0, p.PartitionID)
@@ -72,8 +74,8 @@ func TestGetMetadataByRangeType(t *testing.T) {
 		func(
 			ctx context.Context,
 			txnOp client.TxnOperator,
-			s *service,
-			store *memStorage,
+			s *Service,
+			store PartitionStorage,
 		) {
 			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
 			stmt := newTestRangeOption(t, "c1", 1)
@@ -102,8 +104,8 @@ func TestGetMetadataByRangeColumnsType(t *testing.T) {
 		func(
 			ctx context.Context,
 			txnOp client.TxnOperator,
-			s *service,
-			store *memStorage,
+			s *Service,
+			store PartitionStorage,
 		) {
 			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
 			stmt := newTestRangeColumnsOption(t, "c1", 2)
@@ -135,16 +137,17 @@ func TestCreateRangeColumns(t *testing.T) {
 			func(
 				ctx context.Context,
 				txnOp client.TxnOperator,
-				s *service,
-				store *memStorage,
+				s *Service,
+				store PartitionStorage,
 			) {
-				def := newTestTableDefine(1, columns, []types.T{v})
-				store.addUncommittedTable(def)
+				def := newTestTablePartitionDefine(1, columns, []types.T{v}, num, partition.PartitionMethod_Range)
+				memStore := store.(*memStorage)
+				memStore.addUncommittedTable(def)
 
 				stmt := newTestRangeColumnsOption(t, columns[0], num)
 				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
-				v, ok := store.uncommitted[tableID]
+				v, ok := memStore.uncommitted[tableID]
 				assert.True(t, ok)
 				assert.Equal(t, 2, len(v.partitions))
 				for _, p := range v.partitions {

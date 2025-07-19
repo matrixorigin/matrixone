@@ -15,31 +15,43 @@
 package compile
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
 	ivfFlatIndexFlag  = "experimental_ivf_index"
 	fulltextIndexFlag = "experimental_fulltext_index"
+	hnswIndexFlag     = "experimental_hnsw_index"
 )
 
-func (s *Scope) handleUniqueIndexTable(c *Compile, dbSource engine.Database,
-	indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleUniqueIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	if err := indexTableBuild(c, def, dbSource); err != nil {
+	if err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource); err != nil {
 		return err
 	}
 	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
@@ -57,30 +69,45 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return nil
 }
 
-func (s *Scope) handleRegularSecondaryIndexTable(c *Compile, dbSource engine.Database,
-	indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleRegularSecondaryIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	if err := indexTableBuild(c, def, dbSource); err != nil {
+	if err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource); err != nil {
 		return err
 	}
 
 	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
-func (s *Scope) handleMasterIndexTable(c *Compile, dbSource engine.Database,
-	indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleMasterIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuild(c, def, dbSource)
+	err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
 	if err != nil {
 		return err
 	}
@@ -95,8 +122,16 @@ func (s *Scope) handleMasterIndexTable(c *Compile, dbSource engine.Database,
 	return nil
 }
 
-func (s *Scope) handleFullTextIndexTable(c *Compile, dbSource engine.Database, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleFullTextIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
 		return err
 	} else if !ok {
@@ -107,7 +142,7 @@ func (s *Scope) handleFullTextIndexTable(c *Compile, dbSource engine.Database, i
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuild(c, def, dbSource)
+	err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
 	if err != nil {
 		return err
 	}
@@ -179,6 +214,18 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
 
+	var cfg vectorindex.IndexTableConfig
+	src_alias := "src"
+	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
+
+	cfg.MetadataTable = metadataTableName
+	cfg.IndexTable = indexDef.IndexTableName
+	cfg.DbName = qryDatabase
+	cfg.SrcTable = originalTableDef.Name
+	cfg.PKey = pkColName
+	cfg.KeyPart = indexDef.Parts[0]
+	cfg.DataSize = totalCnt
+
 	// 1.a algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 	if err != nil {
@@ -188,9 +235,6 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	if err != nil {
 		return err
 	}
-	centroidParamsDistFn := catalog.ToLower(params[catalog.IndexAlgoParamOpType])
-	kmeansInitType := "kmeansplusplus"
-	kmeansNormalize := "false"
 
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
@@ -217,67 +261,46 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return nil
 	}
 
-	// 2. Sampling SQL Logic
-	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
-	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
-		indexColumnName,
-		sampleCnt,
-		indexColumnName,
-		qryDatabase,
-		originalTableDef.Name,
-	)
+	val, err := c.proc.GetResolveVariableFunc()("ivf_threads_build", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.ThreadsBuild = val.(int64)
 
-	// 3. Insert into centroids table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`)",
-		qryDatabase,
-		indexDef.IndexTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid)
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.KmeansTrainPercent = val.(int64)
 
-	/*
-		Sample SQL:
+	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
+	if err != nil {
+		return err
+	}
+	cfg.KmeansMaxIteration = val.(int64)
 
-		SELECT
-		(SELECT CAST(`value` AS BIGINT) FROM meta WHERE `key` = 'version'),
-		ROW_NUMBER() OVER(),
-		cast(`__mo_index_unnest_cols`.`value` as VARCHAR)
-		FROM
-		(SELECT cluster_centers(`embedding` kmeans '2,vector_l2_ops') AS `__mo_index_centroids_string` FROM (select sample(embedding, 10 rows) as embedding from tbl) ) AS `__mo_index_centroids_tbl`
-		CROSS JOIN
-		UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;
-	*/
-	// 4. final SQL
-	clusterCentersSQL := fmt.Sprintf("%s "+
-		"SELECT "+
-		"(SELECT CAST(`%s` AS BIGINT) FROM `%s` WHERE `%s` = 'version'), "+
-		"ROW_NUMBER() OVER(), "+
-		"cast(`__mo_index_unnest_cols`.`value` as VARCHAR) "+
-		"FROM "+
-		"(SELECT cluster_centers(`%s` kmeans '%d,%s,%s,%s') AS `__mo_index_centroids_string` FROM %s ) AS `__mo_index_centroids_tbl` "+
-		"CROSS JOIN "+
-		"UNNEST(`__mo_index_centroids_tbl`.`__mo_index_centroids_string`) AS `__mo_index_unnest_cols`;",
-		insertSQL,
+	params_str := indexDef.IndexAlgoParams
 
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		metadataTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+	cfgbytes, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
 
-		indexColumnName,
-		centroidParamsLists,
-		centroidParamsDistFn,
-		kmeansInitType,
-		kmeansNormalize,
-		sampleSQL,
-	)
+	part := src_alias + "." + indexDef.Parts[0]
+	insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
+	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
+		qryDatabase, originalTableDef.Name,
+		src_alias,
+		params_str,
+		string(cfgbytes),
+		part)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
 		return err
 	}
 
-	err = c.runSql(clusterCentersSQL)
+	err = c.runSql(sql)
 	if err != nil {
 		return err
 	}
@@ -293,6 +316,16 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
 	metadataTableName string,
 	centroidsTableName string) error {
+
+	// 1.a algo params
+	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	optype, ok := params[catalog.IndexAlgoParamOpType]
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("vector optype not found")
+	}
 
 	// 1. Original table's pkey name and value
 	var originalTblPkColsCommaSeperated string
@@ -339,7 +372,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
 		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s` cross_l2 join %s "+
+		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
 		" using (`%s`, `%s`) ",
 		insertSQL,
 
@@ -348,14 +381,16 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTblPkColMaySerial,
 		indexColumnName,
 
+		qryDatabase,
 		originalTableDef.Name,
+		optype,
 		centroidsTableForCurrentVersionSql,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		indexColumnName,
 	)
 
-	err := s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
 	if err != nil {
 		return err
 	}
@@ -450,6 +485,75 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
 	if err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func (s *Scope) handleVectorHnswIndex(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDefs map[string]*plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
+
+	if ok, err := s.isExperimentalEnabled(c, hnswIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("experimental_hnsw_index is not enabled")
+	}
+
+	// 1. static check
+	if len(indexDefs) != 2 {
+		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
+	}
+	if len(indexDefs[catalog.Hnsw_TblType_Metadata].Parts) != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid hnsw index part must be 1.")
+	}
+
+	// 2. create hidden tables
+	if indexInfo != nil {
+		for _, table := range indexInfo.GetIndexTables() {
+			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
+				return err
+			}
+		}
+	}
+
+	// clear the cache (it only work in standalone mode though)
+	key := indexDefs[catalog.Hnsw_TblType_Storage].IndexTableName
+	cache.Cache.Remove(key)
+
+	// delete old data first
+	{
+		sqls, err := genDeleteHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+		if err != nil {
+			return err
+		}
+
+		for _, sql := range sqls {
+			err = c.runSql(sql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// 3. build hnsw index
+	sqls, err := genBuildHnswIndex(c.proc, indexDefs, qryDatabase, originalTableDef)
+	if err != nil {
+		return err
+	}
+
+	for _, sql := range sqls {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

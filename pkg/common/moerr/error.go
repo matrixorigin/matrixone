@@ -228,6 +228,7 @@ const (
 	ErrCantDelGCChecker          uint16 = 20637
 	ErrTxnUnknown                uint16 = 20638
 	ErrTxnControl                uint16 = 20639
+	ErrOfflineTxnWrite           uint16 = 20640
 
 	// Group 7: lock service
 	// ErrDeadLockDetected lockservice has detected a deadlock and should abort the transaction if it receives this error
@@ -473,6 +474,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCantDelGCChecker:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can't delete gc checker"},
 	ErrTxnUnknown:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn commit status is unknown: %s"},
 	ErrTxnControl:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn control error: %s"},
+	ErrOfflineTxnWrite:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "write offline txn: %s"},
 
 	// Group 7: lock service
 	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
@@ -689,7 +691,14 @@ func DowncastError(e error) *Error {
 // ConvertPanicError converts a runtime panic to internal error.
 func ConvertPanicError(ctx context.Context, v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
-		return e
+		err := &Error{
+			code:      e.code,
+			mysqlCode: e.mysqlCode,
+			message:   e.message,
+			sqlState:  e.sqlState,
+			detail:    fmt.Sprintf("%s\n%+v", e.detail, stack.Callers(3)),
+		}
+		return err
 	}
 	return newError(ctx, ErrInternal, fmt.Sprintf("panic %v: %+v", v, stack.Callers(3)))
 }

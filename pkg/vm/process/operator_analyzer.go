@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
@@ -337,6 +338,8 @@ type OperatorStats struct {
 	CacheRemoteHit  int64 `json:"CacheRemoteHit,omitempty"`
 
 	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
+
+	BackgroundQueries []*plan.Query `json:"BackgroundQueries,omitempty"`
 }
 
 func NewOperatorStats(operatorName string) *OperatorStats {

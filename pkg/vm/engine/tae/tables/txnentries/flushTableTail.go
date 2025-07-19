@@ -121,14 +121,16 @@ func NewFlushTableTailEntry(
 			}
 		}
 		// prepare transfer pages
-		entry.addTransferPages(ctx)
+		if err := entry.addTransferPages(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	return entry, nil
 }
 
 // add transfer pages for dropped aobjects
-func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
+func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) error {
 	isTransient := !entry.tableEntry.GetLastestSchemaLocked(false).HasPK()
 	ioVector := model.InitTransferPageIO()
 	pages := make([]*model.TransferHashPage, 0, len(entry.transMappings))
@@ -142,20 +144,32 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 		id := entry.aobjHandles[i].Fingerprint()
 		entry.pageIds = append(entry.pageIds, id)
 		objectIDs := []*objectio.ObjectId{entry.createdObjHandle.GetID()}
-		page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), objectIDs)
+		page := model.NewTransferHashPage(
+			id,
+			bts,
+			isTransient,
+			entry.rt.TmpFS,
+			model.GetTTL(),
+			model.GetDiskTTL(),
+			objectIDs,
+		)
 		page.Train(m)
 
 		start = time.Now()
 		err := model.AddTransferPage(page, ioVector)
 		if err != nil {
-			return
+			return err
 		}
 		duration += time.Since(start)
 		pages = append(pages, page)
 	}
 
 	start = time.Now()
-	model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+	transferFS, err := model.GetTransferFS(entry.rt.TmpFS)
+	if err != nil {
+		return err
+	}
+	model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
 	now := time.Now()
 	for _, page := range pages {
 		if page.BornTS() != bts {
@@ -167,6 +181,7 @@ func (entry *flushTableTailEntry) addTransferPages(ctx context.Context) {
 	}
 	duration += time.Since(start)
 	v2.TransferPageFlushLatencyHistogram.Observe(duration.Seconds())
+	return nil
 }
 
 // collectDelsAndTransfer collects deletes in flush process and moves them to the created obj
@@ -228,8 +243,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(
 				return
 			}
 			blkID := objectio.NewBlockidWithObjectID(entry.createdObjHandle.GetID(), destpos.BlkIdx)
-			entry.delTbls[destpos.BlkIdx] = blkID
-			entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
+			entry.delTbls[destpos.BlkIdx] = &blkID
+			entry.rt.TransferDelsMap.SetDelsForBlk(blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 			id := entry.createdObjHandle.Fingerprint()
 			id.SetBlockOffset(uint16(destpos.BlkIdx))
 			if pkVec == nil {
@@ -304,7 +319,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	//    It's ok to leave the DelsMap fade away naturally.
 
 	// remove written file
-	fs := entry.rt.Fs.Service
+	fs := entry.rt.Fs
 
 	// object for snapshot read of aobjects
 	aobjNames := make([]string, 0, len(entry.aobjMetas))
@@ -376,7 +391,7 @@ func (entry *flushTableTailEntry) IsAborted() bool { return false }
 
 type flushTableTailCmd struct{}
 
-func (cmd *flushTableTailCmd) GetType() uint16 { return IOET_WALTxnCommand_Compact }
+func (cmd *flushTableTailCmd) GetType() uint16 { return IOET_WALTxnCommand_FlushTableTail }
 func (cmd *flushTableTailCmd) WriteTo(w io.Writer) (n int64, err error) {
 	typ := IOET_WALTxnCommand_FlushTableTail
 	if _, err = w.Write(types.EncodeUint16(&typ)); err != nil {

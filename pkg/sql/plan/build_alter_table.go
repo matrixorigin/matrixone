@@ -19,41 +19,67 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"go.uber.org/zap"
 )
 
-func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
+func skipPkDedup(old, new *TableDef) bool {
+	oldPk := old.Pkey
+	newPk := new.Pkey
+
+	noOldPk := oldPk == nil || oldPk.PkeyColName == catalog.FakePrimaryKeyColName
+	noNewPk := newPk == nil || newPk.PkeyColName == catalog.FakePrimaryKeyColName
+	if noNewPk {
+		return true
+	}
+
+	if noOldPk {
+		return false
+	}
+
+	// oldPk and newPk are not nil, check if the primary key is the same
+	return slices.Equal(oldPk.Names, newPk.Names)
+}
+
+func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
+	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
 	schemaName, tableName := string(stmt.Table.Schema()), string(stmt.Table.Name())
 	if schemaName == "" {
-		schemaName = ctx.DefaultDatabase()
+		schemaName = cctx.DefaultDatabase()
 	}
 
 	var snapshot *Snapshot
-	_, tableDef := ctx.Resolve(schemaName, tableName, snapshot)
+	_, tableDef, err := cctx.Resolve(schemaName, tableName, snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
-		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
+		return nil, moerr.NewNoSuchTable(ctx, schemaName, tableName)
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	accountId, err := ctx.GetAccountId()
+	accountId, err := cctx.GetAccountId()
 	if err != nil {
 		return nil, err
 	}
 	if isClusterTable && accountId != catalog.System_Account {
-		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
+		return nil, moerr.NewInternalError(ctx, "only the sys account can alter the cluster table")
 	}
 
 	// 2. split alter_option list
-	copyTableDef, err := buildCopyTableDef(ctx.GetContext(), tableDef)
+	copyTableDef, err := buildCopyTableDef(ctx, tableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -80,76 +106,65 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		AlgorithmType:  plan.AlterTable_COPY,
 	}
 
+	unsupportedErrorFmt := "unsupported alter option in copy mode: %s"
+
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
-				err = AddPrimaryKey(ctx, alterTablePlan, optionAdd, alterTableCtx)
-			case *tree.ForeignKey:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
-			case *tree.UniqueIndex:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
-			case *tree.Index:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
-			case *tree.ColumnTableDef:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 			default:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", optionAdd)
+				// column adding is handled in *tree.AlterAddCol
+				// various indexes\fks adding are handled in inplace mode.
+				return nil, moerr.NewInvalidInputf(ctx,
+					unsupportedErrorFmt, formatTreeNode(option))
 			}
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				//return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", option)
-				err = DropColumn(ctx, alterTablePlan, string(option.Name), alterTableCtx)
-			case tree.AlterTableDropIndex:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
-			case tree.AlterTableDropKey:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
 			case tree.AlterTableDropPrimaryKey:
-				err = DropPrimaryKey(ctx, alterTablePlan, alterTableCtx)
-			case tree.AlterTableDropForeignKey:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
 			default:
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", option)
+				// various indexes\fks dropping are handled in inplace mode.
+				return nil, moerr.NewInvalidInputf(ctx,
+					unsupportedErrorFmt, formatTreeNode(option))
 			}
-		case *tree.AlterOptionAlterIndex:
-			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.AlterOptionAlterReIndex:
-			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.TableOptionComment:
-			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.AlterOptionTableName:
-			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
-			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
+			err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableModifyColumnClause:
-			err = ModifyColumn(ctx, alterTablePlan, option, alterTableCtx)
+			err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableChangeColumnClause:
-			err = ChangeColumn(ctx, alterTablePlan, option, alterTableCtx)
+			err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableRenameColumnClause:
-			err = RenameColumn(ctx, alterTablePlan, option, alterTableCtx)
+			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableAlterColumnClause:
-			err = AlterColumn(ctx, alterTablePlan, option, alterTableCtx)
+			err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableOrderByColumnClause:
-			err = OrderByColumn(ctx, alterTablePlan, option, alterTableCtx)
-		case *tree.TableOptionAutoIncrement:
-			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "Do not support this stmt now. %v", spec)
+			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
 		default:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now.")
+			return nil, moerr.NewInvalidInputf(ctx,
+				unsupportedErrorFmt, formatTreeNode(option))
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	createTmpDdl, _, err := ConstructCreateTableSQL(ctx, copyTableDef, snapshot, true)
+	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true)
 	if err != nil {
 		return nil, err
 	}
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
 
-	insertTmpDml, err := buildAlterInsertDataSQL(ctx, alterTableCtx)
+	alterTablePlan.SkipPkDedup = skipPkDedup(tableDef, copyTableDef)
+	logutil.Info("skip pk dedup",
+		zap.Any("originPk", tableDef.Pkey),
+		zap.Any("copyPk", copyTableDef.Pkey),
+		zap.Bool("skipPkDedup", alterTablePlan.SkipPkDedup))
+
+	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +198,7 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	for key, value := range alterCtx.alterColMap {
 		if isFirst {
 			insertBuffer.WriteString("`" + key + "`")
-			if value.sexprType == columnName {
+			if value.sexprType == exprColumnName {
 				selectBuffer.WriteString("`" + value.sexprStr + "`")
 			} else {
 				selectBuffer.WriteString(value.sexprStr)
@@ -192,7 +207,7 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 		} else {
 			insertBuffer.WriteString(", " + "`" + key + "`")
 
-			if value.sexprType == columnName {
+			if value.sexprType == exprColumnName {
 				selectBuffer.WriteString(", " + "`" + value.sexprStr + "`")
 			} else {
 				selectBuffer.WriteString(", " + value.sexprStr)
@@ -223,8 +238,8 @@ type AlterTableContext struct {
 type exprType int
 
 const (
-	constValue exprType = iota
-	columnName
+	exprConstValue exprType = iota
+	exprColumnName
 )
 
 type selectExpr struct {
@@ -241,7 +256,7 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 		}
 
 		alterTblColMap[coldef.Name] = selectExpr{
-			sexprType: columnName,
+			sexprType: exprColumnName,
 			sexprStr:  coldef.Name,
 		}
 
@@ -279,7 +294,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName, nil)
+	objRef, tableDef, err := ctx.Resolve(schemaName, tableName, nil)
+	if err != nil {
+		return nil, err
+	}
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -310,7 +328,10 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return buildAlterTableInplace(stmt, ctx)
 	}
 
-	algorithm := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options)
+	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, tableDef)
+	if err != nil {
+		return nil, err
+	}
 	if algorithm == plan.AlterTable_COPY {
 		return buildAlterTableCopy(stmt, ctx)
 	} else {
@@ -318,7 +339,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 }
 
-func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.AlterTableOption) (algorithm plan.AlterTable_AlgorithmType) {
+func ResolveAlterTableAlgorithm(
+	ctx context.Context,
+	validAlterSpecs []tree.AlterTableOption,
+	tableDef *TableDef,
+) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
@@ -331,8 +356,6 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			case *tree.UniqueIndex:
 				algorithm = plan.AlterTable_INPLACE
 			case *tree.Index:
-				algorithm = plan.AlterTable_INPLACE
-			case *tree.ColumnTableDef:
 				algorithm = plan.AlterTable_INPLACE
 			default:
 				algorithm = plan.AlterTable_INPLACE
@@ -364,10 +387,18 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableModifyColumnClause:
 			algorithm = plan.AlterTable_COPY
+			var ok bool
+			ok, err = isInplaceModifyColumn(ctx, option, tableDef)
+			if err != nil {
+				return
+			}
+			if ok {
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.AlterTableChangeColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableRenameColumnClause:
-			algorithm = plan.AlterTable_COPY
+			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterTableAlterColumnClause:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableOrderByColumnClause:
@@ -377,11 +408,155 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 		default:
 			algorithm = plan.AlterTable_INPLACE
 		}
-		if algorithm != plan.AlterTable_COPY {
-			return algorithm
+		if algorithm == plan.AlterTable_COPY {
+			return
 		}
 	}
-	return algorithm
+	return
+}
+
+func isInplaceModifyColumn(
+	ctx context.Context,
+	clause *tree.AlterTableModifyColumnClause,
+	tableDef *TableDef,
+) (ok bool, err error) {
+	oCol := FindColumn(tableDef.Cols, clause.NewColumn.Name.ColName())
+	if oCol == nil {
+		err = moerr.NewBadFieldError(
+			ctx, clause.NewColumn.Name.ColNameOrigin(), tableDef.Name)
+		return
+	}
+
+	ok, err = positionMatched(ctx, clause.Position, tableDef, oCol)
+	if err != nil {
+		return
+	}
+	if !ok {
+		return
+	}
+
+	ok, err = storageAgnosticType(ctx, clause.NewColumn, oCol)
+	if err != nil {
+		return
+	}
+	if !ok {
+		return
+	}
+
+	ok, err = storageAgnosticAttrs(ctx, clause.NewColumn, oCol)
+	if err != nil {
+		return
+	}
+	if !ok {
+		return
+	}
+
+	return
+}
+
+func positionMatched(
+	ctx context.Context,
+	nPos *tree.ColumnPosition,
+	tableDef *TableDef,
+	oCol *ColDef,
+) (ok bool, err error) {
+	ok = true
+	if nPos != nil && nPos.Typ != tree.ColumnPositionNone {
+		var newPos int
+		newPos, err = findPositionRelativeColumn(ctx, tableDef.Cols, nPos)
+		if err != nil {
+			ok = false
+			return
+		}
+		if newPos != int(oCol.ColId-1) {
+			ok = false
+		}
+	}
+	return
+}
+
+// return true for char and varchar with increased width
+func storageAgnosticType(
+	ctx context.Context,
+	nCol *tree.ColumnTableDef,
+	oCol *ColDef,
+) (ok bool, err error) {
+
+	nTy, err := getTypeFromAst(ctx, nCol.Type)
+	if err != nil {
+		return
+	}
+
+	oTy := oCol.Typ
+
+	if oTy.Id != nTy.Id {
+		return
+	}
+
+	if nTy.Id != int32(types.T_varchar) && nTy.Id != int32(types.T_char) {
+		return
+	}
+
+	// leave autoInrement check to storage agnostic attrs because the autoInrement
+	// in nTy should be determined by nCol.Attributes
+
+	scaleMatch := oTy.Scale == nTy.Scale
+	enumMatch := oTy.Enumvalues == nTy.Enumvalues
+
+	if !scaleMatch || !enumMatch {
+		return
+	}
+
+	widthIncrease := oTy.Width <= nTy.Width
+	if !widthIncrease {
+		return
+	}
+
+	ok = true
+	return
+}
+
+func storageAgnosticAttrs(
+	ctx context.Context,
+	nCol *tree.ColumnTableDef,
+	oCol *ColDef,
+) (ok bool, err error) {
+	ok = true
+	for _, attr := range nCol.Attributes {
+		switch a := attr.(type) {
+		case *tree.AttributeNull:
+			oCanBeNull := oCol.Default != nil && oCol.Default.NullAbility
+			nCanBeNull := a.Is
+			// ❌ Null -> Not Null: rewrite to check
+			// ✅ Not Null -> Null: drop not null is allowed
+			// ✅ Not Null -> Not Null
+			// ✅ Null -> Null
+			if oCanBeNull != nCanBeNull && oCanBeNull {
+				ok = false
+			}
+		case *tree.AttributeOnUpdate:
+			oExpr := ""
+			if oCol.OnUpdate != nil {
+				oExpr = oCol.OnUpdate.OriginString
+			}
+			nExpr := tree.String(a.Expr, dialect.MYSQL)
+			if oExpr != nExpr {
+				ok = false
+			}
+		case *tree.AttributeComment, *tree.AttributeDefault:
+			// keep ok true, we don't care about what comment or default is
+			ok = true
+		default:
+			// key, primary key, unique key, auto increment, reference etc.
+			// all of these involve third party constraint tables
+			// so we don't support them in inplace alter table
+			ok = false
+		}
+		if !ok {
+			return
+		}
+	}
+	return
 }
 
 func buildNotNullColumnVal(col *ColDef) string {

@@ -30,7 +30,7 @@ import (
 // WithServerLogger set rpc server logger
 func WithServerLogger(logger *zap.Logger) ServerOption {
 	return func(rs *server) {
-		rs.logger = logger
+		rs.logger = logutil.GetPanicLoggerWithLevel(zap.FatalLevel)
 	}
 }
 

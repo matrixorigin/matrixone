@@ -30,6 +30,13 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	CKPProtocolVersion_V1 uint8 = 1
+	CKPProtocolVersion_V2 uint8 = 2
+
+	CKPProtocolVersion_Curr = CKPProtocolVersion_V2
+)
+
 func newRunnerStore(
 	sid string,
 	globalHistoryDuration time.Duration,
@@ -99,6 +106,17 @@ func (s *runnerStore) MaxIncrementalCheckpoint() *CheckpointEntry {
 		if entries[i].IsFinished() {
 			return entries[i]
 		}
+	}
+	return nil
+}
+
+func (s *runnerStore) MinIncrementalCheckpoint() *CheckpointEntry {
+	s.RLock()
+	minEntry, _ := s.incrementals.Min()
+	s.RUnlock()
+
+	if minEntry != nil && minEntry.IsFinished() {
+		return minEntry
 	}
 	return nil
 }
@@ -550,7 +568,10 @@ func (s *runnerStore) MaxFinishedGlobalCheckpointLocked() *CheckpointEntry {
 	return it.Item()
 }
 
-func (s *runnerStore) GetPenddingIncrementalCount() int {
+// GetIncrementalCountAfterGlobal returns the number of incremental checkpoints that are not covered by the latest global checkpoint.
+// It counts from the most recent incremental checkpoint backwards until it finds one that is covered by the global checkpoint.
+// Only finished incremental checkpoints are counted.
+func (s *runnerStore) GetIncrementalCountAfterGlobal() int {
 	entries := s.GetAllIncrementalCheckpoints()
 	global := s.MaxGlobalCheckpoint()
 
@@ -773,6 +794,7 @@ func (s *runnerStore) CollectCheckpointsInRange(
 			ckpStart.ToString(),
 			checkpointed.ToString())
 		locs = append(locs, duration)
+		locs = append([]string{strconv.Itoa(int(CKPProtocolVersion_Curr))}, locs...)
 		locations = strings.Join(locs, ";")
 	}()
 

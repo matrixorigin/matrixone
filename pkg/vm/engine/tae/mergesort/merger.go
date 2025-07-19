@@ -106,7 +106,6 @@ type merger[T comparable] struct {
 
 func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, df dataFetcher[T]) Merger {
 	size := host.GetObjectCnt()
-	rowSizeU64 := host.GetTotalSize() / uint64(host.GetTotalRowCnt())
 	m := &merger[T]{
 		host:   host,
 		objCnt: size,
@@ -123,10 +122,9 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 		objBlkCnts:    host.GetBlkCnts(),
 		rowPerBlk:     host.GetBlockMaxRows(),
 		stats: mergeStats{
-			totalRowCnt:   host.GetTotalRowCnt(),
-			rowSize:       uint32(rowSizeU64),
 			targetObjSize: host.GetTargetObjSize(),
 			blkPerObj:     host.GetObjectMaxBlocks(),
+			totalSize:     host.GetTotalSize(),
 		},
 		loadedObjBlkCnts: make([]int, size),
 	}
@@ -142,6 +140,8 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 }
 
 func (m *merger[T]) merge(ctx context.Context) error {
+	defer m.release()
+
 	for i := 0; i < m.objCnt; i++ {
 		if ok, err := m.loadBlk(ctx, uint32(i)); !ok {
 			if err == nil {
@@ -156,7 +156,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			src:    uint32(i),
 		})
 	}
-	defer m.release()
 
 	var releaseF func()
 	for i := 0; i < m.objCnt; i++ {
@@ -172,6 +171,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	defer releaseF()
 
 	transferMaps := m.host.GetTransferMaps()
+	bigblk := false
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -205,8 +205,11 @@ func (m *merger[T]) merge(ctx context.Context) error {
 		m.stats.blkRowCnt++
 		m.stats.objRowCnt++
 		m.stats.mergedRowCnt++
+		if m.stats.blkRowCnt%100 == 0 {
+			bigblk = m.buffer.Size() > int(m.stats.targetObjSize)*3/2
+		}
 		// write new block
-		if m.stats.blkRowCnt == int(m.rowPerBlk) {
+		if m.stats.blkRowCnt == int(m.rowPerBlk) || bigblk {
 			m.stats.blkRowCnt = 0
 			m.stats.objBlkCnt++
 
@@ -216,11 +219,13 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			if _, err := m.writer.WriteBatch(m.buffer); err != nil {
 				return err
 			}
+			m.stats.writtenBytes = m.writer.GetWrittenOriginalSize()
+			m.stats.mergedSize += uint64(m.stats.writtenBytes)
 			// force clean
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if m.stats.needNewObject() {
+			if m.stats.needNewObject() || bigblk {
 				// write object and reset writer
 				if err := m.syncObject(ctx); err != nil {
 					return err
@@ -229,6 +234,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 				m.stats.objBlkCnt = 0
 				m.stats.objRowCnt = 0
 				m.stats.objCnt++
+				bigblk = false
 			}
 		}
 
@@ -262,11 +268,12 @@ func (m *merger[T]) nextPos() uint32 {
 }
 
 func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
-	nextBatch, del, releaseF, err := m.host.LoadNextBatch(ctx, objIdx)
 	if m.bats[objIdx].bat != nil {
 		m.bats[objIdx].releaseF()
 		m.bats[objIdx].releaseF = nil
 	}
+	nextBatch, del, releaseF, err := m.host.LoadNextBatch(ctx, objIdx, m.bats[objIdx].bat)
+
 	if err != nil {
 		if errors.Is(err, ErrNoMoreBlocks) {
 			return false, nil
@@ -275,7 +282,7 @@ func (m *merger[T]) loadBlk(ctx context.Context, objIdx uint32) (bool, error) {
 	}
 	for nextBatch.RowCount() == 0 {
 		releaseF()
-		nextBatch, del, releaseF, err = m.host.LoadNextBatch(ctx, objIdx)
+		nextBatch, del, releaseF, err = m.host.LoadNextBatch(ctx, objIdx, nextBatch)
 		if err != nil {
 			if errors.Is(err, ErrNoMoreBlocks) {
 				return false, nil

@@ -444,6 +444,17 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		zap.Any("extra-info", task))
 	v2.TaskFlushTableTailDurationHistogram.Observe(duration.Seconds())
 
+	if o := task.createdObjHandles; o != nil {
+		v2.TaskDataInputSizeCounter.Add(
+			float64(o.GetMeta().(*catalog.ObjectEntry).OriginSize()),
+		)
+	}
+	if o := task.createdTombstoneHandles; o != nil {
+		v2.TaskTombstoneInputSizeCounter.Add(
+			float64(o.GetMeta().(*catalog.ObjectEntry).OriginSize()),
+		)
+	}
+
 	if time.Since(task.createAt) > SlowFlushTaskOverall {
 		logutil.Info(
 			"[FLUSH-SUMMARY]",
@@ -670,9 +681,9 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 
 	// write!
 	objID := objectio.NewObjectid()
-	name := objectio.BuildObjectNameWithObjectID(objID)
+	name := objectio.BuildObjectNameWithObjectID(&objID)
 	writer, err := ioutil.NewBlockWriterNew(
-		task.rt.Fs.Service,
+		task.rt.Fs,
 		name,
 		schema.Version,
 		seqnums,
@@ -718,7 +729,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		sorted = true
 	}
 	// update new status for created blocks
-	stats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
+	stats := objectio.NewObjectStatsWithObjectID(&objID, false, sorted, false)
 	writerStats := writer.Stats()
 	objectio.SetObjectStats(stats, &writerStats)
 	// create new object to hold merged blocks
@@ -738,6 +749,25 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 		createdObjectHandle = task.createdObjHandles
 	}
+
+	if catalog.CheckMergeTrace(task.rel.ID()) {
+		entry := task.rel.GetMeta().(*catalog.TableEntry)
+		if isTombstone {
+			catalog.LogInputTombstoneObjectWithExistingBatches(
+				entry,
+				stats,
+				task.txn.GetStartTS(),
+				writtenBatches,
+			)
+		} else {
+			catalog.LogInputDataObject(
+				entry,
+				stats,
+				task.txn.GetStartTS(),
+			)
+		}
+	}
+
 	err = createdObjectHandle.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
 	if err != nil {
 		return

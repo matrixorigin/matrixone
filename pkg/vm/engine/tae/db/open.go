@@ -15,39 +15,25 @@
 package db
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"path"
+	"io"
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"go.uber.org/zap"
 
-	"github.com/BurntSushi/toml"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
-	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -78,56 +64,39 @@ func Open(
 	opts *options.Options,
 	dbOpts ...DBOption,
 ) (db *DB, err error) {
-	dbLocker, err := createDBLock(dirname)
+	opts = opts.FillDefaults(dirname)
+	// TODO: remove
+	fillRuntimeOptions(opts)
 
-	logutil.Info(
-		Phase_Open,
-		zap.String("db-dirname", dirname),
-		zap.Error(err),
+	var (
+		dbLocker      io.Closer
+		startTime     = time.Now()
+		rollbackSteps stepFuncs
+		logger        = logutil.Info
 	)
-	totalTime := time.Now()
-
-	if err != nil {
-		return nil, err
-	}
-
-	var onErrorCalls []func()
 
 	defer func() {
+		if err == nil && dbLocker != nil {
+			db.DBLocker, dbLocker = dbLocker, nil
+		}
 		if dbLocker != nil {
 			dbLocker.Close()
 		}
-		if err != nil && len(onErrorCalls) > 0 {
-			for _, call := range onErrorCalls {
-				call()
+		if err != nil {
+			if err2 := rollbackSteps.Apply("open-tae", true, 1); err2 != nil {
+				panic(fmt.Sprintf("open-tae: rollback failed, %s", err2))
 			}
+			logger = logutil.Error
 		}
-		logutil.Info(
+		logger(
 			Phase_Open,
-			zap.Duration("total-cost", time.Since(totalTime)),
+			zap.Duration("total-cost", time.Since(startTime)),
 			zap.String("mode", db.GetTxnMode().String()),
+			zap.String("db-dirname", dirname),
+			zap.String("config", opts.JsonString()),
 			zap.Error(err),
 		)
 	}()
-
-	opts = opts.FillDefaults(dirname)
-	fillRuntimeOptions(opts)
-
-	wbuf := &bytes.Buffer{}
-	werr := toml.NewEncoder(wbuf).Encode(opts)
-	logutil.Info(
-		Phase_Open,
-		zap.String("config", wbuf.String()),
-		zap.Error(werr),
-	)
-	serviceDir := path.Join(dirname, "data")
-	if opts.Fs == nil {
-		// TODO:fileservice needs to be passed in as a parameter
-		opts.Fs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
-	if opts.LocalFs == nil {
-		opts.LocalFs = objectio.TmpNewFileservice(ctx, path.Join(dirname, "data"))
-	}
 
 	db = &DB{
 		Dir:       dirname,
@@ -138,29 +107,41 @@ func Open(
 	for _, opt := range dbOpts {
 		opt(db)
 	}
-	txnMode := db.GetTxnMode()
-	if !txnMode.IsValid() {
-		panic(fmt.Sprintf("open-tae: invalid txn mode %s", txnMode))
+
+	if db.IsWriteMode() {
+		if dbLocker, err = createDBLock(dirname); err != nil {
+			return
+		}
 	}
 
-	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
-	localFs := objectio.NewObjectFS(opts.LocalFs, serviceDir)
 	transferTable, err := model.NewTransferTable[*model.TransferHashPage](ctx, opts.LocalFs)
 	if err != nil {
-		panic(fmt.Sprintf("open-tae: model.NewTransferTable failed, %s", err))
+		return
 	}
 
-	switch opts.LogStoreT {
-	case options.LogstoreBatchStore:
-		db.Wal = wal.NewBatchStoreDriver(opts.Ctx, dirname, WALDir, nil)
-	case options.LogstoreLogservice:
-		db.Wal = wal.NewLogserviceDriver(opts.Ctx, opts.Lc)
+	if opts.WalClientFactory != nil {
+		db.Wal = wal.NewLogserviceHandle(opts.WalClientFactory)
+	} else {
+		db.Wal = wal.NewLocalHandle(dirname, WALDir, nil)
 	}
-	scheduler := newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
+
+	rollbackSteps.Add("rollback open wal", func() error {
+		return db.Wal.Close()
+	})
+
+	scheduler := newTaskScheduler(
+		db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers,
+	)
+	rollbackSteps.Add("rollback open scheduler", func() error {
+		scheduler.Stop()
+		return nil
+	})
+
 	db.Runtime = dbutils.NewRuntime(
 		dbutils.WithRuntimeTransferTable(transferTable),
-		dbutils.WithRuntimeObjectFS(fs),
-		dbutils.WithRuntimeLocalFS(localFs),
+		dbutils.WithRuntimeObjectFS(opts.Fs),
+		dbutils.WithRuntimeLocalFS(opts.LocalFs),
+		dbutils.WithRuntimeTmpFS(opts.TmpFs),
 		dbutils.WithRuntimeSmallPool(dbutils.MakeDefaultSmallPool("small-vector-pool")),
 		dbutils.WithRuntimeTransientPool(dbutils.MakeDefaultTransientPool("trasient-vector-pool")),
 		dbutils.WithRuntimeScheduler(scheduler),
@@ -170,178 +151,19 @@ func Open(
 	dataFactory := tables.NewDataFactory(
 		db.Runtime, db.Dir,
 	)
-	catalog.DefaultTableDataFactory = dataFactory.MakeTableFactory()
-	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo); err != nil {
+	if db.Catalog, err = catalog.OpenCatalog(db.usageMemo, dataFactory); err != nil {
 		return
 	}
 	db.usageMemo.C = db.Catalog
-
-	// Init and start txn manager
-	txnStoreFactory := txnimpl.TxnStoreFactory(
-		opts.Ctx,
-		db.Catalog,
-		db.Wal,
-		db.Runtime,
-		dataFactory,
-		opts.MaxMessageSize,
-	)
-	txnFactory := txnimpl.TxnFactory(db.Catalog)
-	var txnMgrOpts []txnbase.TxnManagerOption
-	switch txnMode {
-	case DBTxnMode_Write:
-		txnMgrOpts = append(txnMgrOpts, txnbase.WithWriteMode)
-	case DBTxnMode_Replay:
-		txnMgrOpts = append(txnMgrOpts, txnbase.WithReplayMode)
-	}
-	db.TxnMgr = txnbase.NewTxnManager(
-		txnStoreFactory, txnFactory, db.Opts.Clock, txnMgrOpts...,
-	)
-	db.LogtailMgr = logtail.NewManager(
-		db.Runtime,
-		int(db.Opts.LogtailCfg.PageSize),
-		db.TxnMgr.Now,
-	)
-	db.Runtime.Now = db.TxnMgr.Now
-	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
-	db.TxnMgr.Start(opts.Ctx)
-	onErrorCalls = append(onErrorCalls, func() {
-		db.TxnMgr.Stop()
+	rollbackSteps.Add("rollback open catalog", func() error {
+		db.Catalog.Close()
+		return nil
 	})
-
-	db.LogtailMgr.Start()
-	onErrorCalls = append(onErrorCalls, func() {
-		db.LogtailMgr.Stop()
-	})
-
-	db.BGCheckpointRunner = checkpoint.NewRunner(
-		opts.Ctx,
-		db.Runtime,
-		db.Catalog,
-		logtail.NewDirtyCollector(db.LogtailMgr, db.Opts.Clock, db.Catalog, new(catalog.LoopProcessor)),
-		db.Wal,
-		&checkpoint.CheckpointCfg{
-			MinCount:                    opts.CheckpointCfg.MinCount,
-			IncrementalReservedWALCount: opts.CheckpointCfg.ReservedWALEntryCount,
-			IncrementalInterval:         opts.CheckpointCfg.IncrementalInterval,
-			GlobalMinCount:              opts.CheckpointCfg.GlobalMinCount,
-			GlobalHistoryDuration:       opts.CheckpointCfg.GlobalVersionInterval,
-			SizeHint:                    opts.CheckpointCfg.Size,
-			BlockMaxRowsHint:            opts.CheckpointCfg.BlockRows,
-		},
-	)
-	db.BGCheckpointRunner.Start()
-	onErrorCalls = append(onErrorCalls, func() {
-		db.BGCheckpointRunner.Stop()
-	})
-
-	db.BGFlusher = checkpoint.NewFlusher(
-		db.Runtime,
-		db.BGCheckpointRunner,
-		db.Catalog,
-		db.BGCheckpointRunner.GetDirtyCollector(),
-		checkpoint.WithFlusherInterval(opts.CheckpointCfg.FlushInterval),
-		checkpoint.WithFlusherCronPeriod(opts.CheckpointCfg.ScanInterval),
-	)
-
-	now := time.Now()
-	// TODO: checkpoint dir should be configurable
-	ckpReplayer := db.BGCheckpointRunner.BuildReplayer(ioutil.GetCheckpointDir(), dataFactory)
-	defer ckpReplayer.Close()
-	if err = ckpReplayer.ReadCkpFiles(); err != nil {
-		return
-	}
-
-	// 1. replay three tables objectlist
-	checkpointed, ckpLSN, valid, err := ckpReplayer.ReplayThreeTablesObjectlist(Phase_Open)
-	if err != nil {
-		return
-	}
-
-	var txn txnif.AsyncTxn
-	{
-		// create a txn manually
-		txnIdAlloc := common.NewTxnIDAllocator()
-		store := txnStoreFactory()
-		txn = txnFactory(db.TxnMgr, store, txnIdAlloc.Alloc(), checkpointed, types.TS{})
-		store.BindTxn(txn)
-	}
-	// 2. replay all table Entries
-	if err = ckpReplayer.ReplayCatalog(txn, Phase_Open); err != nil {
-		return
-	}
-
-	// 3. replay other tables' objectlist
-	if err = ckpReplayer.ReplayObjectlist(Phase_Open); err != nil {
-		return
-	}
-	logutil.Info(
-		Phase_Open,
-		zap.Duration("replay-checkpoints-cost", time.Since(now)),
-		zap.String("max-checkpoint", checkpointed.ToString()),
-	)
-
-	now = time.Now()
-	if err = db.ReplayWal(ctx, dataFactory, checkpointed, ckpLSN, valid); err != nil {
-		return
-	}
-	db.Catalog.ReplayTableRows()
-
-	// checkObjectState(db)
-	logutil.Info(
-		Phase_Open,
-		zap.Duration("replay-wal-cost", time.Since(now)),
-	)
-
-	db.DBLocker, dbLocker = dbLocker, nil
-
-	// Init timed scanner
-	scanner := NewDBScanner(db, nil)
-
-	// w-zr TODO: need to support replay and write mode
-	db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(opts.TaskServiceGetter))
-	scanner.RegisterOp(db.MergeScheduler)
-	db.Wal.Start()
-	db.BGFlusher.Start()
-
-	db.BGScanner = w.NewHeartBeater(
-		opts.CheckpointCfg.ScanInterval,
-		scanner)
-	db.BGScanner.Start()
-	// TODO: WithGCInterval requires configuration parameters
-	gc2.SetDeleteTimeout(opts.GCCfg.GCDeleteTimeout)
-	gc2.SetDeleteBatchSize(opts.GCCfg.GCDeleteBatchSize)
-
-	// sjw TODO: cleaner need to support replay and write mode
-	cleaner := gc2.NewCheckpointCleaner(
-		opts.Ctx,
-		opts.SID,
-		fs,
-		db.Wal,
-		db.BGCheckpointRunner,
-		gc2.WithCanGCCacheSize(opts.GCCfg.CacheSize),
-		gc2.WithMaxMergeCheckpointCount(opts.GCCfg.GCMergeCount),
-		gc2.WithEstimateRows(opts.GCCfg.GCestimateRows),
-		gc2.WithGCProbility(opts.GCCfg.GCProbility),
-		gc2.WithCheckOption(opts.GCCfg.CheckGC),
-		gc2.WithGCCheckpointOption(!opts.CheckpointCfg.DisableGCCheckpoint))
-	cleaner.AddChecker(
-		func(item any) bool {
-			checkpoint := item.(*checkpoint.CheckpointEntry)
-			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
-			endTS := checkpoint.GetEnd()
-			return !endTS.GE(&ts)
-		}, cmd_util.CheckerKeyTTL)
-
-	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
-	db.DiskCleaner.Start()
-
-	db.CronJobs = tasks.NewCancelableJobs()
-
-	if err = AddCronJobs(db); err != nil {
-		return
-	}
 
 	db.Controller = NewController(db)
+	if err = db.Controller.AssembleDB(ctx); err != nil {
+		return
+	}
 	db.Controller.Start()
 
 	// For debug or test

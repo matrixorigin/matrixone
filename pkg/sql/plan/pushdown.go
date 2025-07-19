@@ -14,7 +14,10 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr, separateNonEquiConds bool) (int32, []*plan.Expr) {
 	node := builder.qry.Nodes[nodeID]
@@ -124,13 +127,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 
 	case plan.Node_FILTER:
 		canPushdown = filters
-		for _, filter := range node.FilterList {
-			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
+		if !node.RollupFilter {
+			for _, filter := range node.FilterList {
+				canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(builder.GetContext(), filter))...)
+			}
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
 
-		if len(cantPushdownChild) > 0 {
+		if node.RollupFilter {
+			if len(cantPushdownChild) > 0 {
+				node.Children[0] = childID
+				node.FilterList = append(node.FilterList, cantPushdownChild...)
+			}
+		} else if len(cantPushdownChild) > 0 {
 			node.Children[0] = childID
 			node.FilterList = cantPushdownChild
 		} else {
@@ -576,7 +586,7 @@ func (builder *QueryBuilder) pushdownLimitToTableScan(nodeID int32) {
 						} else {
 							child.Stats.BlockNum = 1
 						}
-						child.Stats.Cost = float64(child.Stats.BlockNum * DefaultBlockMaxRows)
+						child.Stats.Cost = float64(child.Stats.BlockNum * objectio.BlockMaxRows)
 					}
 				}
 			}

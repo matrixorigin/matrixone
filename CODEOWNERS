@@ -2,15 +2,15 @@
 # for triage only
 
 # github and CI-related stuff
-.github @sukki37
-.github/actions @sukki37
-.github/workflow @sukki37
+.github @fengttt
+.github/actions @fengttt
+.github/workflow @fengttt
 
 # files under the top-level directory
-/*.yml @sukki37
-/*.yaml @sukki37
-/.gitignore @sukki37
-/.dockerignore @sukki37
+/*.yml @fengttt
+/*.yaml @fengttt
+/.gitignore @fengttt
+/.dockerignore @fengttt
 /Makefile @zhangxu19830126
 /README.md @dengn
 /README_CN.md @dengn
@@ -24,8 +24,8 @@
 /cgo @aunjgr
 /docs @fengttt
 /etc @zhangxu19830126
-/optools @sukki37
-/pkg @sukki37
+/optools @fengttt
+/pkg @fengttt
 /proto @zhangxu19830126
 /cmd @daviszhen @zhangxu19830126
 /test @aressu1985 @heni02
@@ -42,7 +42,7 @@
 /pkg/catalog @XuPeng-SH
 
 #pkg/cdc
-/pkg/cdc @daviszhen @ck89119
+/pkg/cdc @ck89119 @jiangxinmeng1
 
 # pkg/cnservice
 /pkg/cnservice @reusee @daviszhen
@@ -55,11 +55,11 @@
 /pkg/common @zhangxu19830126
 /pkg/common/mpool @reusee @XuPeng-SH
 /pkg/common/malloc @reusee
-/pkg/common/spool @reusee @ouyuanning @aunjgr @badboynt1
+/pkg/common/spool @reusee @ouyuanning @aunjgr
 /pkg/common/async @zhangxu19830126
 /pkg/common/bitmap @aunjgr
 /pkg/common/hashmap @aunjgr
-/pkg/common/moerror @xzxiong
+/pkg/common/moerr @xzxiong
 /pkg/common/morpc @zhangxu19830126
 /pkg/common/moprobe @fengttt
 /pkg/common/stopper @zhangxu19830126
@@ -79,7 +79,7 @@
 # pkg/container
 /pkg/container @XuPeng-SH
 /pkg/container/vector @aunjgr @XuPeng-SH
-/pkg/container/pSpool @reusee @aunjgr @ouyuanning @badboynt1
+/pkg/container/pSpool @reusee @aunjgr @ouyuanning
 
 # pkg/defines
 /pkg/defines @daviszhen
@@ -97,7 +97,7 @@
 /pkg/frontend @daviszhen @qingxinhome
 
 # pkg/hakeeper
-/pkg/hakeeper @zhangxu19830126 @w-zr
+/pkg/hakeeper @zhangxu19830126 @volgariver6
 
 # pkg/incrservice
 /pkg/incrservice @zhangxu19830126
@@ -129,7 +129,7 @@
 /pkg/pb/logservice @zhangxu19830126
 /pkg/pb/metadata @zhangxu19830126
 /pkg/pb/metric @aptend
-/pkg/pb/pipeline @badboynt1 @ouyuanning @aunjgr
+/pkg/pb/pipeline @ouyuanning @aunjgr
 /pkg/pb/plan @ouyuanning @aunjgr
 /pkg/pb/timestamp @zhangxu19830126
 /pkg/pb/txn @zhangxu19830126
@@ -138,43 +138,43 @@
 /pkg/perfcounter @reusee
 
 # pkg/sort
-/pkg/sort @aunjgr @badboynt1
+/pkg/sort @aunjgr
 
 # pkg/bootstrap
 /pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome @LeftHandCold
 
 # pkg/sql
 /pkg/sql @aunjgr
-/pkg/sql/colexec @badboynt1 @ouyuanning @aunjgr
-/pkg/sql/compile @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/colexec @ouyuanning @aunjgr
+/pkg/sql/compile @ouyuanning @aunjgr @qingxinhome
 /pkg/sql/models @qingxinhome
 /pkg/sql/parsers @iamlinjunhong
-/pkg/sql/plan @ouyuanning @aunjgr @badboynt1
+/pkg/sql/plan @ouyuanning @aunjgr
 /pkg/sql/plan/function @ouyuanning @qingxinhome @aunjgr
-/pkg/sql/plan/explain @ouyuanning @aunjgr @badboynt1 @qingxinhome
+/pkg/sql/plan/explain @ouyuanning @aunjgr @qingxinhome
 /pkg/sql/plan/tools @daviszhen @qingxinhome
-/pkg/sql/colexec/indexjoin @aunjgr @badboynt1
-/pkg/sql/colexec/indexbuild @badboynt1
-/pkg/sql/colexec/intersect @aunjgr @badboynt1
-/pkg/sql/colexec/intersectall @aunjgr @badboynt1
-/pkg/sql/colexec/loopanti @aunjgr @badboynt1
-/pkg/sql/colexec/loopjoin @aunjgr @badboynt1
-/pkg/sql/colexec/loopleft @aunjgr @badboynt1
-/pkg/sql/colexec/loopmark @aunjgr @badboynt1
-/pkg/sql/colexec/loopsingle @aunjgr @badboynt1
-/pkg/sql/colexec/right @aunjgr @badboynt1
-/pkg/sql/colexec/rightanti @aunjgr @badboynt1
-/pkg/sql/colexec/rightsemi @aunjgr @badboynt1
-/pkg/sql/colexec/anti @aunjgr @badboynt1
-/pkg/sql/colexec/single @aunjgr @badboynt1
-/pkg/sql/colexec/mark @aunjgr @badboynt1
-/pkg/sql/colexec/semi @aunjgr @badboynt1
-/pkg/sql/colexec/join @aunjgr @badboynt1
-/pkg/sql/colexec/hashbuild @aunjgr @badboynt1
-/pkg/sql/colexec/left @aunjgr @badboynt1
-/pkg/sql/colexec/shuffle @badboynt1
-/pkg/sql/colexec/shuffleV2 @badboynt1
-/pkg/sql/colexec/shufflebuild @badboynt1
+/pkg/sql/colexec/indexjoin @aunjgr
+/pkg/sql/colexec/indexbuild
+/pkg/sql/colexec/intersect @aunjgr
+/pkg/sql/colexec/intersectall @aunjgr
+/pkg/sql/colexec/loopanti @aunjgr
+/pkg/sql/colexec/loopjoin @aunjgr
+/pkg/sql/colexec/loopleft @aunjgr
+/pkg/sql/colexec/loopmark @aunjgr
+/pkg/sql/colexec/loopsingle @aunjgr
+/pkg/sql/colexec/right @aunjgr
+/pkg/sql/colexec/rightanti @aunjgr
+/pkg/sql/colexec/rightsemi @aunjgr
+/pkg/sql/colexec/anti @aunjgr
+/pkg/sql/colexec/single @aunjgr
+/pkg/sql/colexec/mark @aunjgr
+/pkg/sql/colexec/semi @aunjgr
+/pkg/sql/colexec/join @aunjgr
+/pkg/sql/colexec/hashbuild @aunjgr
+/pkg/sql/colexec/left @aunjgr
+/pkg/sql/colexec/shuffle @aunjgr
+/pkg/sql/colexec/shuffleV2 @aunjgr
+/pkg/sql/colexec/shufflebuild @aunjgr
 /pkg/sql/colexec/multi_update @ouyuanning
 
 # pkg/taskservice
@@ -208,11 +208,11 @@
 # engines and engine related stuff
 /pkg/vm @XuPeng-SH
 /pkg/vm/engine @XuPeng-SH
-/pkg/vm/pipeline @ouyuanning @badboynt1 @aunjgr
-/pkg/vm/process @reusee @aunjgr @badboynt1 @XuPeng-SH
-/pkg/vm/message @badboynt1
-/pkg/vm/engine/disttae @XuPeng-SH @triump2020
-/pkg/vm/engine/disttae/logtailreplay @triump2020 @XuPeng-SH
+/pkg/vm/pipeline @ouyuanning @aunjgr
+/pkg/vm/process @reusee @aunjgr @XuPeng-SH
+/pkg/vm/message @aunjgr
+/pkg/vm/engine/disttae @XuPeng-SH @gouhongshen
+/pkg/vm/engine/disttae/logtailreplay @XuPeng-SH @gouhongshen
 /pkg/vm/engine/tae @XuPeng-SH
 /pkg/vm/engine/memoryengine @reusee
 /pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6
@@ -226,7 +226,7 @@
 
 /pkg/stream @fengttt
 
-/pkg/udf @aylei @daviszhen @fengttt
+/pkg/udf @daviszhen @fengttt
 
 /pkg/version @zhangxu19830126
 
@@ -235,7 +235,7 @@
 /proto/logservice.proto @zhangxu19830126
 /proto/metadata.proto @zhangxu19830126
 /proto/metric.proto @aptend
-/proto/pipeline.proto @ouyuanning @aunjgr @badboynt1
+/proto/pipeline.proto @ouyuanning @aunjgr
 /proto/plan.proto @aunjgr
 /proto/timestamp.proto @zhangxu19830126
 /proto/txn.proto @zhangxu19830126

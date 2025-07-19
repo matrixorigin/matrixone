@@ -115,6 +115,10 @@ type AvgTwCacheContext struct {
 	Count int64
 }
 
+func (a *AvgTwCacheContext) Size() int64 {
+	return 16 // float64 + int64
+}
+
 func (a *AvgTwCacheContext) Marshal() []byte {
 	res := make([]byte, 16)
 	s := types.EncodeFloat64(&a.Sum)
@@ -177,6 +181,10 @@ type AvgTwCacheDecimalContext struct {
 	Sum   types.Decimal128
 	Count int64
 	Scale int32
+}
+
+func (a *AvgTwCacheDecimalContext) Size() int64 {
+	return 32
 }
 
 func (a *AvgTwCacheDecimalContext) Marshal() []byte {

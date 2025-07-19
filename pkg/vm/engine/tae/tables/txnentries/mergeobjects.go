@@ -100,14 +100,16 @@ func NewMergeObjectsEntry(
 		if err != nil {
 			return nil, err
 		}
-		entry.prepareTransferPage(ctx)
+		if err := entry.prepareTransferPage(ctx); err != nil {
+			return nil, err
+		}
 	}
 	return entry, nil
 }
 
-func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
+func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) error {
 	if entry.isTombstone {
-		return
+		return nil
 	}
 	k := 0
 	pagesToSet := make([][]*model.TransferHashPage, 0, len(entry.droppedObjs))
@@ -131,13 +133,13 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 			isTransient := !tblEntry.GetLastestSchema(false).HasPK()
 			id := obj.AsCommonID()
 			id.SetBlockOffset(uint16(j))
-			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.LocalFs.Service, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
+			page := model.NewTransferHashPage(id, bts, isTransient, entry.rt.TmpFS, model.GetTTL(), model.GetDiskTTL(), createdObjIDs)
 			page.Train(m)
 
 			start = time.Now()
 			err := model.AddTransferPage(page, ioVector)
 			if err != nil {
-				return
+				return err
 			}
 			duration += time.Since(start)
 
@@ -146,7 +148,11 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 		}
 
 		start = time.Now()
-		model.WriteTransferPage(ctx, entry.rt.LocalFs.Service, pages, *ioVector)
+		transferFS, err := model.GetTransferFS(entry.rt.TmpFS)
+		if err != nil {
+			return err
+		}
+		model.WriteTransferPage(ctx, transferFS, pages, *ioVector)
 		pagesToSet = append(pagesToSet, pages)
 		duration += time.Since(start)
 		v2.TransferPageMergeLatencyHistogram.Observe(duration.Seconds())
@@ -167,6 +173,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage(ctx context.Context) {
 	if k != len(entry.transMappings) {
 		logutil.Fatal(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings)))
 	}
+	return nil
 }
 
 func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
@@ -176,12 +183,12 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	for objectID, blkMap := range entry.delTbls {
 		for blkOffset := range blkMap {
 			blkID := objectio.NewBlockidWithObjectID(&objectID, blkOffset)
-			entry.rt.TransferDelsMap.DeleteDelsForBlk(*blkID)
+			entry.rt.TransferDelsMap.DeleteDelsForBlk(blkID)
 		}
 	}
 	entry.pageIds = nil
 
-	fs := entry.rt.Fs.Service
+	fs := entry.rt.Fs
 	// for io task, dispatch by round robin, scope can be nil
 	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, func() error {
 		// TODO: variable as timeout
@@ -298,7 +305,7 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		}
 		entry.delTbls[*entry.createdObjs[destpos.ObjIdx].ID()][destpos.BlkIdx] = struct{}{}
 		blkID := objectio.NewBlockidWithObjectID(entry.createdObjs[destpos.ObjIdx].ID(), destpos.BlkIdx)
-		entry.rt.TransferDelsMap.SetDelsForBlk(*blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
+		entry.rt.TransferDelsMap.SetDelsForBlk(blkID, int(destpos.RowIdx), entry.txn.GetPrepareTS(), ts[i])
 		var targetObj handle.Object
 		targetObj, err = entry.relation.GetObject(entry.createdObjs[destpos.ObjIdx].ID(), entry.isTombstone)
 		if err != nil {
@@ -398,7 +405,11 @@ func (entry *mergeObjectsEntry) collectDelsAndTransfer(
 func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	inst := time.Now()
 	defer func() {
-		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
+		if entry.isTombstone {
+			v2.TaskCommitTombstoneMergeDurationHistogram.Observe(time.Since(inst).Seconds())
+		} else {
+			v2.TaskCommitDataMergeDurationHistogram.Observe(time.Since(inst).Seconds())
+		}
 	}()
 	if len(entry.createdObjs) == 0 || entry.skipTransfer {
 		logutil.Info(

@@ -5,7 +5,7 @@ a int primary key,
 b varchar(10)
 );
 
-select mo_ctl('dn', 'inspect', 'policy -r 0 -m 0');
+select mo_ctl('dn', 'inspect', 'merge switch off');
 insert into t1 values (100, 'a');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'mo_ctl_merge.t1');
@@ -146,4 +146,4 @@ select rows_cnt from metadata_scan('mo_ctl_merge.%!%p2%!%p_table_01', 'col1') g;
 select rows_cnt from metadata_scan('mo_ctl_merge.%!%p3%!%p_table_01', 'col1') g;
 -- @bvt:issue
 
-select mo_ctl('dn', 'inspect', 'policy');
+select mo_ctl('dn', 'inspect', 'merge switch on');

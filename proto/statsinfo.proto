@@ -64,13 +64,16 @@ message StatsInfo {
   int64 ApproxObjectNumber = 10;
   double TableCnt = 11;
   string TableName = 12;
-  int64 TimeSecond = 13;
+  reserved 13;
+//  int64 TimeSecond = 13;
 }
 
 message StatsInfoKey {
   uint64 DatabaseID = 1;
   uint64 TableID = 2;
   uint32 AccId = 3;
+  string TableName = 4;
+  string DbName = 5;
 }
 
 message StatsInfoKeys {

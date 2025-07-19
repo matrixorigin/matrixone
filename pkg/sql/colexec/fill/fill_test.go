@@ -37,14 +37,10 @@ type fillTestCase struct {
 	proc *process.Process
 }
 
-var (
-	tcs []fillTestCase
-)
-
-func init() {
-	tcs = []fillTestCase{
+func makeTestCases(t *testing.T) []fillTestCase {
+	return []fillTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
 				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_VALUE,
@@ -71,7 +67,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
 				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_PREV,
@@ -98,7 +94,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
 				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NONE,
@@ -126,7 +122,7 @@ func init() {
 		},
 
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
 				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_NEXT,
@@ -153,7 +149,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Fill{
 				AggIds:   []int32{function.MAX},
 				FillType: plan.Node_LINEAR,
@@ -184,20 +180,20 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestFill(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.ctr.bats = make([]*batch.Batch, 10)
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)

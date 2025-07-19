@@ -38,15 +38,15 @@ func TestPrepare(t *testing.T) {
 			},
 		},
 	}
-	err := arg.Prepare(testutil.NewProc())
+	err := arg.Prepare(testutil.NewProc(t))
 	require.Error(t, err)
 	arg.FuncName = "generate_series"
-	err = arg.Prepare(testutil.NewProc())
+	err = arg.Prepare(testutil.NewProc(t))
 	require.NoError(t, err)
 	arg.FuncName = "metadata_scan"
-	err = arg.Prepare(testutil.NewProc())
+	err = arg.Prepare(testutil.NewProc(t))
 	require.NoError(t, err)
 	arg.FuncName = "not_exist"
-	err = arg.Prepare(testutil.NewProc())
+	err = arg.Prepare(testutil.NewProc(t))
 	require.Error(t, err)
 }

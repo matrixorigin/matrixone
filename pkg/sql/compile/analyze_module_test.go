@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -358,7 +360,7 @@ func Test_processPhyScope(t *testing.T) {
 
 			explainPhyPlan := models.ExplainPhyPlan(phyPlan, statsInfo, models.NormalOption)
 			t.Logf("%s", explainPhyPlan)
-			processPhyScope(&tt.args.scope, tt.args.nodes, new(statistic.StatsInfo))
+			processPhyScope(&tt.args.scope, nil, tt.args.nodes, new(statistic.StatsInfo))
 		})
 	}
 }
@@ -641,4 +643,85 @@ func Test_explainResourceOverview(t *testing.T) {
 			t.Logf("%s", tt.args.buffer.String())
 		})
 	}
+}
+
+func Test_UpdatePreparePhyScope(t *testing.T) {
+	operatorStats := &process.OperatorStats{
+		OperatorName:     "ExampleOperator",
+		CallNum:          10,
+		TimeConsumed:     5000,
+		WaitTimeConsumed: 2000,
+		MemorySize:       1024,
+		InputRows:        1000,
+		OutputRows:       950,
+		InputSize:        2048,
+		InputBlocks:      0,
+		OutputSize:       1900,
+		ScanBytes:        0,
+		NetworkIO:        600,
+		//TotalScanTime:         1500,
+		//TotalInsertTime:       0,
+	}
+	operatorStats.AddOpMetric(process.OpScanTime, 1500)
+	operatorStats.AddOpMetric(process.OpInsertTime, 2500)
+	operatorStats.AddOpMetric(process.OpIncrementTime, 3500)
+
+	phyOperator1_0 := models.PhyOperator{
+		OpName:  "Merge",
+		NodeIdx: 1,
+		Status:  isFirstFalse | isLastFalse,
+		OpStats: operatorStats,
+	}
+
+	phyOperator1_1 := models.PhyOperator{
+		OpName:   "MergeGroup",
+		NodeIdx:  1,
+		Status:   isFirstFalse | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_0},
+	}
+
+	phyOperator1_2 := models.PhyOperator{
+		OpName:   "Projection",
+		NodeIdx:  1,
+		Status:   isFirstFalse | isLastTrue,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_1},
+	}
+
+	phyOperator1_3 := models.PhyOperator{
+		OpName:   "Projection",
+		NodeIdx:  1,
+		Status:   isFirstTrue | isLastTrue,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_2},
+	}
+
+	phyOperator1_4 := models.PhyOperator{
+		OpName:   "Output",
+		NodeIdx:  -1,
+		Status:   isFirstFalse | isLastFalse,
+		OpStats:  operatorStats,
+		Children: []*models.PhyOperator{&phyOperator1_3},
+	}
+
+	phyScope1 := models.PhyScope{
+		Magic: "Merge",
+		Receiver: []models.PhyReceiver{
+			{
+				Idx:        4,
+				RemoteUuid: "",
+			},
+		},
+		RootOperator: &phyOperator1_4,
+	}
+
+	testCompile := NewMockCompile(t)
+	var reg process.WaitRegister
+	testCompile.proc.Reg.MergeReceivers = []*process.WaitRegister{&reg}
+	s2 := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection, vm.Connector})
+	res := UpdatePreparePhyScope(s2, phyScope1)
+	require.Equal(t, false, res)
 }

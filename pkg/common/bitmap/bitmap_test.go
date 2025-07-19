@@ -132,6 +132,7 @@ func TestC(t *testing.T) {
 func TestBitmapIterator_Next(t *testing.T) {
 	np := newBm(BenchmarkRows)
 	np.AddRange(0, 64)
+	require.Equal(t, 64, np.Count())
 
 	// | 63 -- 0 | 127 -- 64 | 191 -- 128 | 255 -- 192 | 319 -- 256 | 383 -- 320 | ... |
 	rows := []uint64{127, 192, 320} // add some boundary case to check if loops over word
@@ -167,13 +168,13 @@ func TestBitmap_Compatibility(t *testing.T) {
 	np2.UnmarshalV1(data)
 	require.Equal(t, np.Count(), np2.Count())
 	require.Equal(t, np.ToArray(), np2.ToArray())
-	require.Equal(t, np.ToI64Array(), np2.ToI64Array())
+	require.Equal(t, np.ToI64Array(nil), np2.ToI64Array(nil))
 
 	np3 := newBm(BenchmarkRows)
 	np3.UnmarshalNoCopyV1(data)
 	require.Equal(t, np.Count(), np3.Count())
 	require.Equal(t, np.ToArray(), np3.ToArray())
-	require.Equal(t, np.ToI64Array(), np3.ToI64Array())
+	require.Equal(t, np.ToI64Array(nil), np3.ToI64Array(nil))
 }
 
 func TestBitmap_Clear(t *testing.T) {

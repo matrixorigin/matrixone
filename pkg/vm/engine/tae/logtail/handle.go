@@ -71,21 +71,13 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -110,17 +102,23 @@ func HandleSyncLogTailReq(
 	canRetry bool) (resp api.SyncLogTailResp, closeCB func(), err error) {
 	now := time.Now()
 	logutil.Debugf("[Logtail] begin handle %+v", req)
+
+	var visitor *TableLogtailRespBuilder
+	var operator *BoundTableOperator
 	defer func() {
-		if elapsed := time.Since(now); elapsed > 5*time.Second {
+		if elapsed := time.Since(now); elapsed > time.Second {
 			logutil.Warn(
 				"LOGTAIL-SLOW-PULL",
 				zap.Duration("duration", elapsed),
 				zap.Any("request", req),
 				zap.Bool("can-retry", canRetry),
 				zap.Error(err),
+				zap.String("scanReport", operator.Report()),
+				zap.String("respSize", common.HumanReadableBytes(resp.ProtoSize())),
+				zap.Int("entries", len(resp.Commands)),
+				zap.String("ckp", resp.CkpLocation),
 			)
 		}
-		logutil.Debugf("[Logtail] end handle %d entries[%q], err %v", len(resp.Commands), resp.CkpLocation, err)
 	}()
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
@@ -153,10 +151,10 @@ func HandleSyncLogTailReq(
 		start = checkpointed.Next()
 	}
 
-	visitor := NewTableLogtailRespBuilder(ctx, ckpLoc, start, end, tableEntry)
+	visitor = NewTableLogtailRespBuilder(ctx, ckpLoc, start, end, tableEntry)
 	closeCB = visitor.Close
 
-	operator := mgr.GetTableOperator(start, end, c, did, tid, visitor)
+	operator = mgr.GetTableOperator(start, end, tableEntry, visitor)
 	if err := operator.Run(); err != nil {
 		return api.SyncLogTailResp{}, visitor.Close, err
 	}
@@ -167,6 +165,7 @@ func HandleSyncLogTailReq(
 		if (forceFlush && name == tableEntry.GetLastestSchemaLocked(false).Name) || resp.ProtoSize() > Size90M {
 			flushErr := ckpClient.FlushTable(ctx, 0, did, tid, end)
 			// try again after flushing
+			closeCB()
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
 			logutil.Info(
 				"LOGTAIL-WITH-FLUSH",
@@ -181,14 +180,6 @@ func HandleSyncLogTailReq(
 	return
 }
 
-type RespBuilder interface {
-	catalog.Processor
-	BuildResp() (api.SyncLogTailResp, error)
-	Close()
-}
-
-// CatalogLogtailRespBuilder knows how to make api-entry from block entry.
-// impl catalog.Processor interface, driven by BoundTableOperator
 type TableLogtailRespBuilder struct {
 	ctx context.Context
 	*catalog.LoopProcessor
@@ -249,73 +240,59 @@ func (b *TableLogtailRespBuilder) Close() {
 }
 
 func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
-	skip, err := b.visitObjMeta(e)
-	if err != nil {
+	if skip, err := b.visitObjMeta(e); err != nil {
 		return err
-	}
-	if skip {
+	} else if skip {
 		return nil
-	} else {
-		return b.visitObjData(e)
 	}
+	return b.visitObjData(e)
 }
+
 func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, error) {
-	mvccNodes := e.GetMVCCNodeInRange(b.start, b.end)
-	if len(mvccNodes) == 0 {
+	var destBatch *containers.Batch
+	if e.IsTombstone {
+		destBatch = b.tombstoneMetaBatch
+	} else {
+		destBatch = b.dataMetaBatch
+	}
+	e.ForeachMVCCNodeInRange(b.start, b.end, func(node *txnbase.TxnMVCCNode) error {
+		visitObject(destBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
+		return nil
+	})
+
+	if e.IsAppendable() && !e.HasDropCommitted() {
 		return false, nil
 	}
+	return true, nil
+}
 
-	var objectMVCCNode *catalog.ObjectMVCCNode
-	for _, node := range mvccNodes {
-		if e.IsTombstone {
-			visitObject(b.tombstoneMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
-		} else {
-			visitObject(b.dataMetaBatch, e, node, node.End.Equal(&e.CreatedAt), false, types.TS{})
-		}
-	}
-	return b.skipObjectData(e, objectMVCCNode), nil
-}
-func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, objectMVCCNode *catalog.ObjectMVCCNode) bool {
-	if e.IsAppendable() {
-		// appendable block has been flushed, no need to collect data
-		return objectMVCCNode != nil
-	} else {
-		return true
-	}
-}
 func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
-	var err error
+	var destBatches map[uint32]*containers.BatchWithVersion
 	if e.IsTombstone {
-		err = tables.RangeScanInMemoryByObject(b.ctx, e, b.dataDelBatches, b.start, b.end, common.LogtailAllocator)
+		destBatches = b.dataDelBatches
 	} else {
-		err = tables.RangeScanInMemoryByObject(b.ctx, e, b.dataInsBatches, b.start, b.end, common.LogtailAllocator)
+		destBatches = b.dataInsBatches
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return tables.RangeScanInMemoryByObject(b.ctx, e, destBatches, b.start, b.end, common.LogtailAllocator)
 }
+
 func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, txnMVCCNode *txnbase.TxnMVCCNode, create bool, push bool, committs types.TS) {
 	var rowid types.Rowid
+	// refer to ObjectInfoAttr for batch schema
+	if !push {
+		committs = txnMVCCNode.End
+		entry.EntryMVCCNode.AppendObjectTuple(batch, create) // createAt and deleteAt for pull
+	} else {
+		entry.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs) // createAt and deleteAt for push
+	}
+	// two padding columns
 	batch.GetVectorByName(catalog.PhyAddrColumnName).Append(rowid, false)
-	if push {
-		batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(committs, false)
-	} else {
-		batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(txnMVCCNode.End, false)
-	}
-	entry.ObjectMVCCNode.AppendTuple(entry.ID(), batch)
-	if push {
-		txnMVCCNode.AppendTupleWithCommitTS(batch, committs)
-	} else {
-		txnMVCCNode.AppendTuple(batch)
-	}
-	if push {
-		entry.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
-	} else {
-		entry.EntryMVCCNode.AppendObjectTuple(batch, create)
-	}
+	batch.GetVectorByName(objectio.DefaultCommitTS_Attr).Append(committs, false)
+
 	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
+	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(entry.ObjectMVCCNode.ObjectStats[:], false)
+	txnMVCCNode.AppendTupleWithCommitTS(batch, committs) // start prepare and commit ts
 }
 
 type TableRespKind int
@@ -338,33 +315,18 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		}
 
 		tableName := b.tname
-		switch kind {
-		case TableRespKind_Data:
-			logutil.Debugf("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
-				DebugBatchToString("data", batch, false, zap.InfoLevel))
-		case TableRespKind_DataMeta:
-			logutil.Debugf("[logtail] table data meta [%v] %d-%s: %s", typ, b.tid, b.tname,
-				DebugBatchToString("object", batch, false, zap.InfoLevel))
-		case TableRespKind_TombstoneMeta:
-			logutil.Debugf("[logtail] table tombstone meta [%v] %d-%s: %s", typ, b.tid, b.tname,
-				DebugBatchToString("object", batch, false, zap.InfoLevel))
-		}
-
-		// if b.tid == pkgcatalog.MO_DATABASE_ID || b.tid == pkgcatalog.MO_TABLES_ID || b.tid == pkgcatalog.MO_COLUMNS_ID {
-		// 	switch kind {
-		// 	case TableRespKind_Data:
-		// 		logutil.Infof("[yyyy pull] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
-		// 			DebugBatchToString("data", batch, false, zap.InfoLevel))
-		// 	case TableRespKind_Blk:
-		// 		logutil.Infof("[yyyy pull] blk meta [%v] %d-%s: %s", typ, b.tid, tableName,
-		// 			// batch.PPString(30)) // DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
-		// 			DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
-		// 	case TableRespKind_Obj:
-		// 		logutil.Infof("[yyyy pull] obj meta [%v] %d-%s: %s", typ, b.tid, tableName,
-		// 			// batch.PPString(30)) // DebugBatchToString("object", batch, false, zap.InfoLevel))
-		// 			DebugBatchToString("object", batch, false, zap.InfoLevel))
-		// 	}
+		// switch kind {
+		// case TableRespKind_Data:
+		// 	logutil.Infof("[logtail] table data [%v] %d-%s-%d: %s", typ, b.tid, b.tname, version,
+		// 		DebugBatchToString("data", batch, false, zap.InfoLevel))
+		// case TableRespKind_DataMeta:
+		// 	logutil.Infof("[logtail] table data meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+		// 		DebugBatchToString("object", batch, false, zap.InfoLevel))
+		// case TableRespKind_TombstoneMeta:
+		// 	logutil.Infof("[logtail] table tombstone meta [%v] %d-%s: %s", typ, b.tid, b.tname,
+		// 		DebugBatchToString("object", batch, false, zap.InfoLevel))
 		// }
+
 		entry := &api.Entry{
 			EntryType:    typ,
 			TableId:      b.tid,
@@ -403,205 +365,8 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		}
 	}
 
-	// if b.tid == pkgcatalog.MO_DATABASE_ID || b.tid == pkgcatalog.MO_TABLES_ID || b.tid == pkgcatalog.MO_COLUMNS_ID {
-	// 	logutil.Infof("[yyyy pull] table %s: %d, ckp:%v", b.tname, len(entries), b.checkpoint)
-	// }
-
 	return api.SyncLogTailResp{
 		CkpLocation: b.checkpoint,
 		Commands:    entries,
 	}, nil
-}
-func GetMetaIdxesByVersion(ver uint32) []uint16 {
-	meteIdxSchema := checkpointDataReferVersions[ver][MetaIDX]
-	idxes := make([]uint16, len(meteIdxSchema.attrs))
-	for attr := range meteIdxSchema.attrs {
-		idxes[attr] = uint16(attr)
-	}
-	return idxes
-}
-func LoadCheckpointEntries(
-	ctx context.Context,
-	sid string,
-	metaLoc string,
-	tableID uint64,
-	tableName string,
-	dbID uint64,
-	dbName string,
-	mp *mpool.MPool,
-	fs fileservice.FileService) ([]*api.Entry, []func(), error) {
-	if metaLoc == "" {
-		return nil, nil, nil
-	}
-	v2.LogtailLoadCheckpointCounter.Inc()
-	now := time.Now()
-	defer func() {
-		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
-	}()
-	locationsAndVersions := strings.Split(metaLoc, ";")
-
-	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
-
-	readers := make([]*ioutil.BlockReader, len(locationsAndVersions)/2)
-	objectLocations := make([]objectio.Location, len(locationsAndVersions)/2)
-	versions := make([]uint32, len(locationsAndVersions)/2)
-	locations := make([]objectio.Location, len(locationsAndVersions)/2)
-	for i := 0; i < len(locationsAndVersions); i += 2 {
-		key := locationsAndVersions[i]
-		version, err := strconv.ParseUint(locationsAndVersions[i+1], 10, 32)
-		if err != nil {
-			logutil.Error(
-				"Parse-CKP-Name-Error",
-				zap.String("loc", metaLoc),
-				zap.Int("i", i),
-				zap.Error(err),
-			)
-			return nil, nil, err
-		}
-		location, err := objectio.StringToLocation(key)
-		if err != nil {
-			logutil.Error(
-				"Parse-CKP-Name-Error",
-				zap.String("loc", metaLoc),
-				zap.Int("i", i),
-				zap.Error(err),
-			)
-			return nil, nil, err
-		}
-		locations[i/2] = location
-		reader, err := ioutil.NewObjectReader(fs, location)
-		if err != nil {
-			return nil, nil, err
-		}
-		readers[i/2] = reader
-		err = ioutil.PrefetchMeta(sid, fs, location)
-		if err != nil {
-			return nil, nil, err
-		}
-		objectLocations[i/2] = location
-		versions[i/2] = uint32(version)
-	}
-
-	shouldSkip := func(i int) bool {
-		versionTry := CheckpointCurrentVersion >= CheckpointVersion12 && versions[i] < CheckpointVersion12
-		sysTable := tableID == pkgcatalog.MO_DATABASE_ID || tableID == pkgcatalog.MO_TABLES_ID || tableID == pkgcatalog.MO_COLUMNS_ID
-		return versionTry && sysTable
-	}
-
-	for i := range objectLocations {
-		data := NewCNCheckpointData(sid)
-		meteIdxSchema := checkpointDataReferVersions[versions[i]][MetaIDX]
-		idxes := make([]uint16, len(meteIdxSchema.attrs))
-		for attr := range meteIdxSchema.attrs {
-			idxes[attr] = uint16(attr)
-		}
-		err := data.PrefetchMetaIdx(ctx, versions[i], idxes, objectLocations[i], fs)
-		if err != nil {
-			return nil, nil, err
-		}
-		datas[i] = data
-	}
-
-	for i := range datas {
-		if shouldSkip(i) {
-			continue
-		}
-		err := datas[i].InitMetaIdx(ctx, versions[i], readers[i], locations[i], mp)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	for i := range datas {
-		if shouldSkip(i) {
-			continue
-		}
-		err := datas[i].PrefetchMetaFrom(ctx, versions[i], locations[i], fs, tableID)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	for i := range datas {
-		if shouldSkip(i) {
-			continue
-		}
-		err := datas[i].PrefetchFrom(ctx, versions[i], fs, locations[i], tableID)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	closeCBs := make([]func(), 0)
-	dataBats := make([][]*batch.Batch, len(locationsAndVersions)/2)
-	var err error
-	for i, data := range datas {
-		if shouldSkip(i) {
-			continue
-		}
-		var bats []*batch.Batch
-		bats, err = data.ReadFromData(ctx, tableID, locations[i], readers[i], versions[i], mp)
-		cb := data.GetCloseCB(versions[i], mp)
-		closeCBs = append(closeCBs, func() {
-			for _, bat := range bats {
-				if bat != nil {
-					bat.Clean(mp)
-				}
-			}
-			cb()
-		})
-		if err != nil {
-			for j := range closeCBs {
-				if closeCBs[j] != nil {
-					closeCBs[j]()
-				}
-			}
-			return nil, nil, err
-		}
-		dataBats[i] = bats
-	}
-
-	entries := make([]*api.Entry, 0)
-	for i := range objectLocations {
-		if shouldSkip(i) {
-			continue
-		}
-		data := datas[i]
-		_, _, dataObj, tombstoneObj, err := data.GetTableDataFromBats(tableID, dataBats[i])
-		if err != nil {
-			for j := range closeCBs {
-				if closeCBs[j] != nil {
-					closeCBs[j]()
-				}
-			}
-			return nil, nil, err
-		}
-		if dataObj != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_DataObject,
-				TableId:      tableID,
-				TableName:    tableName,
-				DatabaseId:   dbID,
-				DatabaseName: dbName,
-				Bat:          dataObj,
-			}
-			entries = append(entries, entry)
-		}
-		if tombstoneObj != nil {
-			entry := &api.Entry{
-				EntryType:    api.Entry_TombstoneObject,
-				TableId:      tableID,
-				TableName:    tableName,
-				DatabaseId:   dbID,
-				DatabaseName: dbName,
-				Bat:          tombstoneObj,
-			}
-			entries = append(entries, entry)
-		}
-	}
-
-	// if tableID <= 3 {
-	// 	logutil.Infof("[yyyy ckp] load checkpoint entries %d: %d", tableID, len(entries))
-	// }
-	return entries, closeCBs, nil
 }

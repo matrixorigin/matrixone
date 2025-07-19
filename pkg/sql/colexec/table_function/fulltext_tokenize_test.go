@@ -63,8 +63,8 @@ var (
 	}
 )
 
-func newFTTTestCase(m *mpool.MPool, attrs []string, param string) fulltextTokenizeTestCase {
-	proc := testutil.NewProcessWithMPool("", m)
+func newFTTTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) fulltextTokenizeTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
 		for j := range fftdefaultColdefs {
@@ -97,7 +97,7 @@ func newFTTTestCase(m *mpool.MPool, attrs []string, param string) fulltextTokeni
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCall(t *testing.T) {
 
-	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "")
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, "")
 
 	inbat := makeBatchFTT(ut.proc)
 
@@ -123,7 +123,7 @@ func TestFullTextTokenizeCall(t *testing.T) {
 
 	require.Equal(t, result.Status, vm.ExecNext)
 
-	require.Equal(t, 4, result.Batch.RowCount())
+	require.Equal(t, 5, result.Batch.RowCount())
 
 	// reset
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
@@ -135,7 +135,7 @@ func TestFullTextTokenizeCall(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCallJSON(t *testing.T) {
 
-	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json\"}")
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json\"}")
 
 	inbat := makeBatchJSONFTT(ut.proc)
 
@@ -161,7 +161,7 @@ func TestFullTextTokenizeCallJSON(t *testing.T) {
 
 	require.Equal(t, result.Status, vm.ExecNext)
 
-	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, 2, result.Batch.RowCount())
 
 	// reset
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
@@ -173,7 +173,7 @@ func TestFullTextTokenizeCallJSON(t *testing.T) {
 // argvec [src_tbl, index_tbl, pattern, mode int64]
 func TestFullTextTokenizeCallJSONValue(t *testing.T) {
 
-	ut := newFTTTestCase(mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json_value\"}")
+	ut := newFTTTestCase(t, mpool.MustNewZero(), fttdefaultAttrs, "{\"parser\":\"json_value\"}")
 
 	inbat := makeBatchJSONFTT(ut.proc)
 
@@ -199,7 +199,7 @@ func TestFullTextTokenizeCallJSONValue(t *testing.T) {
 
 	require.Equal(t, result.Status, vm.ExecNext)
 
-	require.Equal(t, 1, result.Batch.RowCount())
+	require.Equal(t, 2, result.Batch.RowCount())
 
 	// reset
 	ut.arg.ctr.state.reset(ut.arg, ut.proc)
@@ -297,7 +297,7 @@ func makeBatchJSONFTT(proc *process.Process) *batch.Batch {
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0))
 
 	vector.AppendFixed[int32](bat.Vecs[0], int32(1), false, proc.Mp())
-	vector.AppendBytes(bat.Vecs[0], []byte("{\"a\":\"abcdedfghijklmnopqrstuvwxyz\"}"), false, proc.Mp())
+	vector.AppendBytes(bat.Vecs[1], []byte("{\"a\":\"abcdedfghijklmnopqrstuvwxyz\"}"), false, proc.Mp())
 
 	bat.SetRowCount(1)
 	return bat

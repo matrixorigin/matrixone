@@ -15,6 +15,7 @@
 package ioutil
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -58,6 +59,12 @@ func WithTailSizeCap(size int) SinkerOption {
 func WithMemorySizeThreshold(size int) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.staged.memorySizeThreshold = size
+	}
+}
+
+func WithOffHeap() SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.offHeap = true
 	}
 }
 
@@ -318,6 +325,7 @@ type Sinker struct {
 		dedupAll       bool
 		bufferSizeCap  int
 		tailSizeCap    int
+		offHeap        bool
 	}
 	fSinker struct {
 		executor FileSinker
@@ -345,6 +353,20 @@ type Sinker struct {
 	fs fileservice.FileService
 }
 
+func (sinker *Sinker) String() string {
+	buf := bytes.Buffer{}
+	buf.WriteString(fmt.Sprintf(
+		"schema:{attrs=%v, types=%v, sortIdx=%d}; ",
+		sinker.schema.attrs, sinker.schema.attrTypes, sinker.schema.sortKeyIdx))
+
+	buf.WriteString(fmt.Sprintf(
+		"config:{allMergeSorted=%v, dedupAll=%v, bufferSizeCap=%d, tailSizeCap=%d}; ",
+		sinker.config.allMergeSorted, sinker.config.dedupAll,
+		sinker.config.bufferSizeCap, sinker.config.tailSizeCap))
+
+	return buf.String()
+}
+
 func (sinker *Sinker) fillDefaults() {
 	if sinker.staged.memorySizeThreshold == 0 {
 		sinker.staged.memorySizeThreshold = DefaultInMemoryStagedSize
@@ -360,6 +382,7 @@ func (sinker *Sinker) fillDefaults() {
 			sinker.schema.attrs,
 			sinker.schema.attrTypes,
 		)
+		sinker.buf.buffers.SetOffHeap(sinker.config.offHeap)
 	}
 }
 
@@ -546,7 +569,6 @@ func (sinker *Sinker) Write(
 			sinker.putBackBuffer(curr)
 		}
 	}()
-
 	offset := 0
 	left := data.RowCount()
 	for left > 0 {

@@ -82,12 +82,12 @@ func TestBitmap1(t *testing.T) {
 	require.Equal(t, 4, bm1.Count())
 	require.Equal(t, 1, BitmapPool.InUseCount())
 	require.Equal(t, []uint64{2, 3, 5, 200}, bm1.ToArray())
-	require.Equal(t, []int64{2, 3, 5, 200}, bm1.ToI64Array())
+	require.Equal(t, []int64{2, 3, 5, 200}, bm1.ToI64Array(nil))
 	require.False(t, bm1.Contains(BitmapBitsInPool+1))
 
 	bm1.Release()
 
-	require.Equal(t, 0, len(bm1.ToI64Array()))
+	require.Equal(t, 0, len(bm1.ToI64Array(nil)))
 	require.Equal(t, 0, len(bm1.ToArray()))
 
 	var bm3 Bitmap

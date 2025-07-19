@@ -178,3 +178,58 @@ func TestResultSerialization(t *testing.T) {
 		require.Equal(t, before, proc.Mp().CurrNB())
 	}
 }
+
+func TestResultSize(t *testing.T) {
+	proc := hackAggMemoryManager()
+	chunkSize := 10
+
+	// Test aggResultWithFixedType
+	{
+		before := proc.Mp().CurrNB()
+		r := initAggResultWithFixedTypeResult[int64](proc, types.T_int64.ToType(), true, 0)
+		r.optInformation.chunkSize = chunkSize
+
+		initialSize := r.Size()
+		require.Greater(t, initialSize, int64(0))
+
+		// grow and check size increase
+		err := r.grows(chunkSize*2 + 1)
+		require.NoError(t, err)
+		grownSize := r.Size()
+		require.Greater(t, grownSize, initialSize)
+
+		// free and check memory release
+		r.free()
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
+
+	// Test aggResultWithBytesType
+	{
+		before := proc.Mp().CurrNB()
+		r := initAggResultWithBytesTypeResult(proc, types.T_varchar.ToType(), true, "")
+		r.optInformation.chunkSize = chunkSize
+
+		initialSize := r.Size()
+		require.Greater(t, initialSize, int64(0))
+
+		// grow and check size increase
+		err := r.grows(chunkSize*2 + 1)
+		require.NoError(t, err)
+		grownSize := r.Size()
+		require.Greater(t, grownSize, initialSize)
+
+		// populate with data and check size increase again
+		for i := range r.resultList {
+			for j := 0; j < r.resultList[i].Length(); j++ {
+				err = vector.SetBytesAt(r.resultList[i], j, []byte("test_data"), proc.Mp())
+				require.NoError(t, err)
+			}
+		}
+		populatedSize := r.Size()
+		require.GreaterOrEqual(t, populatedSize, grownSize)
+
+		// free and check memory release
+		r.free()
+		require.Equal(t, before, proc.Mp().CurrNB())
+	}
+}

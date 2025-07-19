@@ -18,6 +18,8 @@ import (
 	"context"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +30,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -59,7 +62,7 @@ func ConstructInExpr(
 	)
 }
 
-func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
+func getColDefByName(expr *plan.Expr, name string, colPos int32, tableDef *plan.TableDef) *plan.ColDef {
 	idx := strings.Index(name, ".")
 	var pos int32
 	if idx >= 0 {
@@ -68,6 +71,17 @@ func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
 	} else {
 		pos = tableDef.Name2ColIndex[name]
 	}
+	common.DoIfDebugEnabled(func() {
+		if name != tableDef.Cols[colPos].Name {
+			logutil.Error(
+				"Bad-ColExpr",
+				zap.String("col-name", name),
+				zap.Int32("col-actual-pos", colPos),
+				zap.Int32("col-expected-pos", pos),
+				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
+			)
+		}
+	})
 	return tableDef.Cols[pos]
 }
 
@@ -78,6 +92,7 @@ func compPkCol(colName string, pkName string) bool {
 }
 
 func evalValue(
+	expr *plan.Expr,
 	exprImpl *plan.Expr_F,
 	tblDef *plan.TableDef,
 	isVec bool,
@@ -97,22 +112,44 @@ func evalValue(
 	if !ok {
 		return false, 0, nil
 	}
-	if !compPkCol(col.Col.Name, pkName) {
+
+	colName := col.Col.Name
+
+	common.DoIfDebugEnabled(func() {
+		if colName == "" {
+			logutil.Error(
+				"Bad-ColExpr",
+				zap.String("col-name", colName),
+				zap.String("pk-name", pkName),
+				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
+			)
+		}
+	})
+	if !compPkCol(colName, pkName) {
 		return false, 0, nil
 	}
 
-	var colPos int32
-	if col.Col.Name == "" {
-		colPos = col.Col.ColPos
-		logutil.Warnf("colExpr.Col.Name is empty")
+	var (
+		colPos int32
+		idx    = strings.Index(colName, ".")
+	)
+	if idx == -1 {
+		colPos = tblDef.Name2ColIndex[colName]
 	} else {
-		idx := strings.Index(col.Col.Name, ".")
-		if idx == -1 {
-			colPos = tblDef.Name2ColIndex[col.Col.Name]
-		} else {
-			colPos = tblDef.Name2ColIndex[col.Col.Name[idx+1:]]
-		}
+		colPos = tblDef.Name2ColIndex[colName[idx+1:]]
 	}
+
+	common.DoIfDebugEnabled(func() {
+		if colPos != col.Col.ColPos {
+			logutil.Error(
+				"Bad-ColExpr",
+				zap.String("col-name", colName),
+				zap.Int32("col-actual-pos", col.Col.ColPos),
+				zap.Int32("col-expected-pos", colPos),
+				zap.String("col-expr", plan2.FormatExpr(expr, plan2.FormatOption{})),
+			)
+		}
+	})
 
 	if isVec {
 		return true, types.T(tblDef.Cols[colPos].Typ.Id), [][]byte{val}
@@ -153,9 +190,31 @@ func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 	vals := make([][]byte, len(exprs))
 	for idx := range exprs {
 		if fExpr, ok := exprs[idx].Expr.(*plan.Expr_Fold); ok {
-			if len(fExpr.Fold.Data) == 0 {
+			if fExpr.Fold.Data == nil {
+				// cases:
+				//   1. array/array.sql
+				//   2. array/array_index_1.sql
+				//   3. array/array_index.sql
+				//   4. dml/select/select.test
 				return nil, false
 			}
+
+			if len(fExpr.Fold.Data) == 0 {
+				// create table t (a varchar primary key);
+				// explain analyze select * from t where a = ''; (empty string)
+				//
+				// other cases:
+				// 	1. ddl/alter_table_AddDrop_column.sql
+				//  2. cases/ddl/lowercase.test
+				//  3. ddl/drop_if_exists.sql
+				//  4. ddl/create_table_as_select.sql
+				//  5. dml/delete/delete_multiple_table.sql
+
+				vals[idx] = nil
+				continue
+				//return nil, false
+			}
+
 			if !fExpr.Fold.IsConst {
 				return nil, false
 			}
@@ -163,7 +222,7 @@ func getConstBytesFromExpr(exprs []*plan.Expr) ([][]byte, bool) {
 			vals[idx] = nil
 			vals[idx] = append(vals[idx], fExpr.Fold.Data...)
 		} else {
-			logutil.Warnf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx]))
+			logutil.Warnf("const folded val expr is not a fold expr: %s\n", plan2.FormatExpr(exprs[idx], plan2.FormatOption{}))
 			return nil, false
 		}
 	}
@@ -212,7 +271,7 @@ func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byt
 			return colExpr, fExpr.Fold.Data, ok
 		}
 
-		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr))
+		logutil.Warnf("const folded val expr is not a vec expr: %s\n", plan2.FormatExpr(valExpr, plan2.FormatOption{}))
 		return nil, nil, false
 	}
 

@@ -38,7 +38,7 @@ const (
 	TableObjectsAttr_CreateTS   = "create_ts"
 	TableObjectsAttr_DeleteTS   = "delete_ts"
 
-	// TableObjects should be clustered by `table`+`object_type`+`id`
+	// TableObjects should be clustered by `table`+`object_type`+`id` + `is_deleted`
 	TableObjectsAttr_Cluster = "cluster"
 
 	// TableObjectsAttr_PhysicalAddr = objectio.PhysicalAddr_Attr
@@ -53,7 +53,8 @@ const (
 	TableObjectsAttr_CreateTS_Idx   = ioutil.TableObjectsAttr_CreateTS_Idx
 	TableObjectsAttr_DeleteTS_Idx   = ioutil.TableObjectsAttr_DeleteTS_Idx
 	TableObjectsAttr_Cluster_Idx    = ioutil.TableObjectsAttr_Cluster_Idx
-	// TableObjectsAttr_PhysicalAddr_Idx = 8
+
+	TableObjectsAttr_PhysicalAddr_Idx = 8
 )
 
 const (
@@ -100,19 +101,19 @@ var TableObjectsSeqnums = []uint16{0, 1, 2, 3, 4, 5, 6, 7}
 // }
 
 const (
-	MetaAttr_Table      = "table_id"
-	MetaAttr_ObjectType = "object_type"
-	MetaAttr_Start      = "start_rowid"
-	MetaAttr_End        = "end_rowid"
-	MetaAttr_Location   = "location"
+	MetaAttr_Table       = "table_id"
+	MetaAttr_ObjectType  = "object_type"
+	MetaAttr_Start       = "start_rowid"
+	MetaAttr_End         = "end_rowid"
+	MetaAttr_ObjectStats = "objectStats"
 )
 
 const (
-	MetaAttr_Table_Idx      = 0
-	MetaAttr_ObjectType_Idx = 1
-	MetaAttr_Start_Idx      = 2
-	MetaAttr_End_Idx        = 3
-	MetaAttr_Location_Idx   = 4
+	MetaAttr_Table_Idx       = 0
+	MetaAttr_ObjectType_Idx  = 1
+	MetaAttr_Start_Idx       = 2
+	MetaAttr_End_Idx         = 3
+	MetaAttr_ObjectStats_Idx = 4
 )
 
 var MetaAttrs = []string{
@@ -120,7 +121,7 @@ var MetaAttrs = []string{
 	MetaAttr_ObjectType,
 	MetaAttr_Start,
 	MetaAttr_End,
-	MetaAttr_Location,
+	MetaAttr_ObjectStats,
 }
 
 var MetaTypes = []types.Type{

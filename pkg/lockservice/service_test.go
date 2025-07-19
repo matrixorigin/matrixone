@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"errors"
 	"hash/crc32"
 	"hash/crc64"
 	"os"
@@ -517,7 +516,7 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 					var wg sync.WaitGroup
 					wg.Add(2)
 
-					// add txn2 into wait queue
+					// add txn2 into wait waitTxns
 					close2 := make(chan struct{})
 					go func() {
 						defer wg.Done()
@@ -529,7 +528,7 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
-					// add txn3 into wait queue
+					// add txn3 into wait waitTxns
 					close3 := make(chan struct{})
 					go func() {
 						defer wg.Done()
@@ -590,7 +589,7 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 					var wg sync.WaitGroup
 					wg.Add(2)
 
-					// add txn2 into wait queue
+					// add txn2 into wait waitTxns
 					go func() {
 						defer wg.Done()
 						_, err := s.Lock(ctx, table, rows, txn2, option)
@@ -600,7 +599,7 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
-					// add txn3 into wait queue
+					// add txn3 into wait waitTxns
 					go func() {
 						defer wg.Done()
 						_, err := s.Lock(ctx, table, rows, txn3, option)
@@ -649,7 +648,7 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 					var wg sync.WaitGroup
 					wg.Add(2)
 
-					// add txn2 op1 into wait queue
+					// add txn2 op1 into wait waitTxns
 					go func() {
 						defer wg.Done()
 						_, err := s.Lock(ctx, table, rows, txn2, option)
@@ -658,7 +657,7 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 					require.NoError(t, waitLocalWaiters(lt, rows[0], 1))
 					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
-					// add txn2 op2 into wait queue
+					// add txn2 op2 into wait waitTxns
 					go func() {
 						defer wg.Done()
 						_, err := s.Lock(ctx, table, rows, txn2, option)
@@ -708,7 +707,7 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 					var wg sync.WaitGroup
 					wg.Add(2)
 
-					// add txn2 op1 into wait queue
+					// add txn2 op1 into wait waitTxns
 					go func() {
 						defer wg.Done()
 						_, err := s.Lock(ctx, table, rows, txn2, option)
@@ -719,7 +718,7 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 					checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 					checkLock(t, lt, rows[1], [][]byte{txn1}, [][]byte{txn2}, []int32{3})
 
-					// add txn2 op2 into wait queue
+					// add txn2 op2 into wait waitTxns
 					go func() {
 						defer wg.Done()
 						_, err := s.Lock(ctx, table, rows, txn2, option)
@@ -1076,22 +1075,26 @@ func TestDeadLock(t *testing.T) {
 					wg.Add(3)
 					go func() {
 						defer wg.Done()
+						// txn2 <- txn1
 						maybeAddTestLockWithDeadlock(t, ctx, s, table, txn1, row2,
 							pb.Granularity_Row)
 						require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
 					}()
 					go func() {
 						defer wg.Done()
+						// txn3 <- txn2
 						maybeAddTestLockWithDeadlock(t, ctx, s, table, txn2, row3,
 							pb.Granularity_Row)
 						require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 					}()
 					go func() {
 						defer wg.Done()
+						// txn1 <- txn3
 						maybeAddTestLockWithDeadlock(t, ctx, s, table, txn3, row1,
 							pb.Granularity_Row)
 						require.NoError(t, s.Unlock(ctx, txn3, timestamp.Timestamp{}))
 					}()
+					// txn1 - txn3 - txn2 - txn1
 					wg.Wait()
 				})
 		})
@@ -1453,6 +1456,66 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 
 }
 
+func TestAbortRemoteDeadlockTxn(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := l2.Lock(
+					ctx,
+					0,
+					[][]byte{{1}},
+					[]byte("txn2"),
+					option)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected))
+			}()
+
+			for {
+				l1.events.mu.RLock()
+				if len(l1.events.mu.blockedWaiters) == 1 {
+					l1.events.mu.RUnlock()
+					break
+				}
+				l1.events.mu.RUnlock()
+			}
+
+			wait := pb.WaitTxn{TxnID: []byte("txn2"), WaiterAddress: l1.serviceID}
+			l2.abortDeadlockTxn(wait, ErrDeadLockDetected)
+
+			wg.Wait()
+		},
+		nil,
+	)
+
+}
+
 func TestIssue3693(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
@@ -1637,7 +1700,7 @@ func TestIssue3654(t *testing.T) {
 				[]byte("txn2"),
 				option)
 			if err != nil {
-				require.True(t, errors.Is(err, context.DeadlineExceeded))
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect))
 			}
 		},
 		nil,
@@ -2230,7 +2293,7 @@ func TestReLockSuccWithReStartCN(t *testing.T) {
 	)
 }
 
-func TestCheckRemoteTxnTimeout(t *testing.T) {
+func TestCheckTxnTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
 		zapcore.DebugLevel,
@@ -2294,8 +2357,62 @@ func TestCheckRemoteTxnTimeout(t *testing.T) {
 				}
 			}
 
-			l2.checkRemoteTxnTimeout(ctx)
+			l2.checkTxnTimeout(ctx)
 			require.True(t, l2.activeTxnHolder.empty())
+		},
+		nil,
+	)
+}
+
+func TestIssue5176(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l.cfg.TxnIterFunc = func(f func([]byte) bool) {}
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			l.activeTxnHolder.getActiveTxn([]byte("txn1"), true, "")
+
+			l.setStatus(pb.Status_ServiceLockWaiting)
+
+			l.checkTxnTimeout(ctx)
+			require.True(t, l.activeTxnHolder.empty())
+		},
+		nil,
+	)
+}
+
+func TestIssue5176_2(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			l.cfg.TxnIterFunc = func(f func([]byte) bool) {
+				f([]byte("txn1"))
+			}
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+
+			l.activeTxnHolder.getActiveTxn([]byte("txn1"), true, "")
+
+			l.setStatus(pb.Status_ServiceLockWaiting)
+
+			l.checkTxnTimeout(ctx)
+			require.False(t, l.activeTxnHolder.empty())
 		},
 		nil,
 	)
@@ -3484,6 +3601,68 @@ func TestPreTxnLockInRollingRestartCN(t *testing.T) {
 				[]byte("txn3"),
 				option)
 			require.NoError(t, err)
+		},
+	)
+}
+
+func TestIssue5543(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			oldVersion := l1.tableGroups.getVersion()
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{2}, {3}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+
+			newVersion := l1.tableGroups.getVersion()
+			if oldVersion == newVersion {
+				// Heartbeat
+				l1.tableGroups.removeWithFilter(func(_ uint64, v lockTable) bool {
+					bind := v.getBind()
+					if bind.ServiceID == l1.serviceID {
+						return true
+					}
+					return false
+				})
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err1 := l1.Lock(
+					ctx,
+					0,
+					[][]byte{{2}},
+					[]byte("txn3"),
+					option)
+				require.NoError(t, err1)
+			}()
+
+			waitWaiters(t, l1, 0, []byte{2}, 1)
+			err = l1.Unlock(
+				ctx,
+				[]byte("txn2"),
+				timestamp.Timestamp{})
+			require.NoError(t, err)
+			wg.Wait()
 		},
 	)
 }

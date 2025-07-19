@@ -67,23 +67,23 @@ func TestDeleteS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 // ----- util function ----
 func buildDeleteTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
-	eng := prepareTestEng(ctrl)
+	eng := prepareTestEng(ctrl, false)
 
 	batchs, affectRows := prepareTestDeleteBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, false)
 	return proc, retCase
 }
 
 func buildDeleteS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, true)
-	eng := prepareTestEng(ctrl)
+	eng := prepareTestEng(ctrl, false)
 
 	batchs, _ := prepareTestDeleteBatchs(proc.GetMPool(), 12, hasUniqueKey, hasSecondaryKey)
 	multiUpdateCtxs := prepareTestDeleteMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action)
+	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
@@ -101,7 +101,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 
 		rows := makeTestPkArray(int64(affectRows), rowCount)
 		columnA := testutil.MakeInt64Vector(rows, nil)
-		columnRowID := makeTestRowIDVector(mp, mainObjectID, uint16(i), rowCount)
+		columnRowID := makeTestRowIDVector(mp, &mainObjectID, uint16(i), rowCount)
 		attrs := []string{"main_rowid", "a"}
 
 		bat := &batch.Batch{
@@ -110,7 +110,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasUniqueKey {
-			columnRowID := makeTestRowIDVector(mp, uniqueObjectID, uint16(i), rowCount)
+			columnRowID := makeTestRowIDVector(mp, &uniqueObjectID, uint16(i), rowCount)
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)
@@ -118,7 +118,7 @@ func prepareTestDeleteBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSe
 		}
 
 		if hasSecondaryKey {
-			columnRowID := makeTestRowIDVector(mp, secondaryObjectID, uint16(i), rowCount)
+			columnRowID := makeTestRowIDVector(mp, &secondaryObjectID, uint16(i), rowCount)
 			columnPk := testutil.NewStringVector(rowCount, types.T_varchar.ToType(), mp, false, nil)
 			bat.Vecs = append(bat.Vecs, columnRowID)
 			bat.Vecs = append(bat.Vecs, columnPk)

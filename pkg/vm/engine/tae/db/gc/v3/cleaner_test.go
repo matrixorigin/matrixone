@@ -110,7 +110,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	diskCleaner.Start()
 	err := diskCleaner.FlushQueue(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, tryGC, 1)
+	require.Equal(t, tryGC, 0)
 	require.Equal(t, replayCnt, 1)
 	require.Equal(t, executeCnt, 0)
 
@@ -118,7 +118,7 @@ func TestDiskCleaner_WriteToReplay(t *testing.T) {
 	require.NoError(t, err)
 	err = diskCleaner.FlushQueue(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, tryGC, 1)
+	require.Equal(t, tryGC, 0)
 	require.Equal(t, replayCnt, 1)
 	require.Equal(t, executeCnt, 1)
 
@@ -181,7 +181,7 @@ func TestForMockCoverage(t *testing.T) {
 	require.Nil(t, cleaner.GetCheckpointGCWaterMark())
 	require.Nil(t, cleaner.GetScannedWindow())
 	require.Nil(t, cleaner.GetMinMerged())
-	require.Nil(t, cleaner.DoCheck())
+	require.Nil(t, cleaner.DoCheck(ctx))
 	v1, v2 := cleaner.GetPITRs()
 	require.Nil(t, v1)
 	require.Nil(t, v2)

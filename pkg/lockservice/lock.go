@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -177,7 +178,7 @@ func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
 	}()
 
 	if canRemove {
-		// close all ref in waiter queue
+		// close all ref in waiter waitTxns
 		l.waiters.iter(func(w *waiter) bool {
 			w.close("Lock closeWaiter", logger)
 			return true
@@ -299,11 +300,13 @@ func (l Lock) String() string {
 }
 
 func newHolders() *holders {
-	return &holders{}
+	return &holders{
+		txns: map[string]pb.WaitTxn{},
+	}
 }
 
 func (h *holders) add(txn pb.WaitTxn) {
-	h.txns = append(h.txns, txn)
+	h.txns[util.UnsafeBytesToString(txn.TxnID)] = txn
 }
 
 func (h *holders) String() string {
@@ -322,23 +325,12 @@ func (h *holders) size() int {
 }
 
 func (h *holders) contains(txnID []byte) bool {
-	for _, t := range h.txns {
-		if bytes.Equal(t.TxnID, txnID) {
-			return true
-		}
-	}
-	return false
+	_, ok := h.txns[util.UnsafeBytesToString(txnID)]
+	return ok
 }
 
 func (h *holders) remove(txnID []byte) {
-	newTxns := h.txns[:0]
-	for _, t := range h.txns {
-		if bytes.Equal(t.TxnID, txnID) {
-			continue
-		}
-		newTxns = append(newTxns, t)
-	}
-	h.txns = newTxns
+	delete(h.txns, util.UnsafeBytesToString(txnID))
 }
 
 func (h *holders) replace(
@@ -358,5 +350,15 @@ func (h *holders) replace(
 }
 
 func (h *holders) clear() {
-	h.txns = h.txns[:0]
+	for k := range h.txns {
+		delete(h.txns, k)
+	}
+}
+
+func (h *holders) getTxnSlice() []pb.WaitTxn {
+	values := make([]pb.WaitTxn, 0, len(h.txns))
+	for _, v := range h.txns {
+		values = append(values, v)
+	}
+	return values
 }

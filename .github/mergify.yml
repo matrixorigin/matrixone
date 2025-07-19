@@ -4,30 +4,30 @@ queue_rules:
     checks_timeout: 4h
     merge_method: squash
     commit_message_template: |
-        {{ title }} (#{{ number }})
+      {{ title }} (#{{ number }})
 
-        {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
 
-        Approved by: @{{ approved_reviews_by | join(', @') }}
-  - name: release-1.2
-    merge_conditions: []
-    checks_timeout: 4h
-    merge_method: squash
-    commit_message_template: |
-        {{ title }} (#{{ number }})
-
-        {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-
-        Approved by: @{{ approved_reviews_by | join(', @') }}
-  - name: release-2.0
+      Approved by: @{{ approved_reviews_by | join(', @') }}
+  - name: release-2.2
     merge_conditions: []
     checks_timeout: 4h
     merge_method: squash
     commit_message_template: |
       {{ title }} (#{{ number }})
-      
+
       {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
-      
+
+      Approved by: @{{ approved_reviews_by | join(', @') }}
+  - name: release-2.1
+    merge_conditions: []
+    checks_timeout: 4h
+    merge_method: squash
+    commit_message_template: |
+      {{ title }} (#{{ number }})
+
+      {{ body.split("___\n\n### **PR Type**")[0] | trim | get_section("## What this PR does / why we need it:") }}
+
       Approved by: @{{ approved_reviews_by | join(', @') }}
 
 pull_request_rules:
@@ -40,32 +40,25 @@ pull_request_rules:
       queue:
         name: main
 
-  - name: Automatic queue on approval for release-1.2
+  - name: Automatic queue on approval for release-2.2
     conditions:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
-      - base=1.2-dev
-      - approved-reviews-by=sukki37
+      - base=2.2-dev
+      - approved-reviews-by=XuPeng-SH
     actions:
       queue:
-        name: release-1.2
+        name: release-2.2
 
-  - name: Automatic queue on approval for release-2.0
+  - name: Automatic queue on approval for release-2.1
     conditions:
       - "#changes-requested-reviews-by<=0"
       - label!=do-not-merge/wip
-      - base=2.0-dev
-      - approved-reviews-by=sukki37
+      - base=2.1-dev
+      - approved-reviews-by=XuPeng-SH
     actions:
       queue:
-        name: release-2.0
-
-
-  - name: Auto update branch
-    conditions:
-      - created-at>=00:10 ago
-    actions:
-      update: 
+        name: release-2.1
 
   - name: Auto Request Reviewer For Non Main Branch
     conditions:
@@ -73,54 +66,69 @@ pull_request_rules:
     actions:
       request_reviews:
         users:
-          - sukki37
+          - XuPeng-SH
+
+  - name: Auto update branch
+    conditions:
+      - created-at>=00:10 ago
+    actions:
+      update:
 
   - name: label for Bug
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] BUG
     actions:
       label:
         add:
           - kind/bug
   - name: label for Feature
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Feature
     actions:
       label:
         add:
           - kind/feature
   - name: label for Improvement
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Improvement
     actions:
       label:
         add:
           - kind/enhancement
   - name: label for Documentation
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Documentation
     actions:
       label:
         add:
           - kind/documentation
   - name: label for Test and CI
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Test and CI
     actions:
       label:
         add:
           - kind/test-ci
   - name: label for Code Refactoring
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] Code Refactoring
     actions:
       label:
         add:
           - kind/refactor
   - name: label for API-change
-    conditions: 
+    conditions:
       - body~=(?im)- \[x\] API-change
     actions:
       label:
         add:
           - kind/api-change
+priority_rules:
+  - name: priority for queue `main`
+    conditions:
+      - queue-name=main
+    priority: 2500
+  - name: priority for queue `release-2.0`
+    conditions:
+      - queue-name=release-2.0
+    priority: 2250

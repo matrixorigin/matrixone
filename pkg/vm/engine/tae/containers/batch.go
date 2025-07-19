@@ -262,6 +262,13 @@ func (bat *Batch) Reset() {
 	bat.Deletes = nil
 }
 
+func (bat *Batch) CleanOnlyData() {
+	bat.Deletes = nil
+	for i := range bat.Vecs {
+		bat.Vecs[i].GetDownstreamVector().CleanOnlyData()
+	}
+}
+
 func (bat *Batch) Equals(o *Batch) bool {
 	if bat.Length() != o.Length() {
 		return false

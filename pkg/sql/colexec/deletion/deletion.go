@@ -31,21 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-//row id be divided into four types:
-// 1. RawBatchOffset : belong to txn's workspace
-// 2. CNBlockOffset  : belong to txn's workspace
-
-// 3. RawRowIdBatch  : belong to txn's snapshot data.
-// 4. FlushDeltaLoc   : belong to txn's snapshot data, which on S3 and pointed by delta location.
 const (
-	RawRowIdBatch = iota
-	// remember that, for one block,
-	// when it sends the info to mergedeletes,
-	// either it's Compaction or not.
-	Compaction
-	CNBlockOffset
-	RawBatchOffset
-	FlushDeltaLoc
+	FlushDeltaLoc = iota
+
+	DeletionOnTxnUnCommit
+	DeletionOnCommitted
 )
 
 const opName = "deletion"
@@ -77,11 +67,19 @@ func (deletion *Deletion) Prepare(proc *process.Process) error {
 	} else {
 		ref := deletion.DeleteCtx.Ref
 		eng := deletion.DeleteCtx.Engine
-		rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref)
-		if err != nil {
-			return err
+		if deletion.ctr.source == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, eng, ref)
+			if err != nil {
+				return err
+			}
+			deletion.ctr.source = rel
+		} else {
+			err := deletion.ctr.source.Reset(proc.GetTxnOperator())
+			if err != nil {
+				return err
+			}
 		}
-		deletion.ctr.source = rel
+
 	}
 	deletion.ctr.affectedRows = 0
 

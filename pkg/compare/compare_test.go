@@ -37,82 +37,78 @@ type testCase struct {
 	vecs []*vector.Vector
 }
 
-var (
-	tcs []testCase
-)
-
-func init() {
+func makeTestCases(t *testing.T) []testCase {
 	mp := mpool.MustNewZero()
-	tcs = []testCase{
-		newTestCase(true, mp, types.New(types.T_bool, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_bool, 0, 0)),
+	return []testCase{
+		newTestCase(t, true, mp, types.New(types.T_bool, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_bool, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_bit, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_bit, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_bit, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_bit, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_int8, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int8, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_int16, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int16, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_int32, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int32, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_int64, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_int64, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_int8, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_int8, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_int16, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_int16, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_int32, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_int32, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_int64, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_int64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_uint8, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint8, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_uint16, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint16, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_uint32, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint32, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_uint64, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_uint64, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_uint8, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_uint8, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_uint16, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_uint16, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_uint32, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_uint32, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_uint64, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_uint64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_float32, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_float32, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_float32, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_float32, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_float64, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_float64, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_float64, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_float64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_date, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_date, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_date, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_date, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_time, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_time, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_time, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_time, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_datetime, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_datetime, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_datetime, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_datetime, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_timestamp, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_timestamp, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_timestamp, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_timestamp, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_decimal64, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_decimal64, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_decimal64, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_decimal64, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_decimal128, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_decimal128, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_decimal128, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_decimal128, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
-		newTestCase(false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
+		newTestCase(t, true, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
+		newTestCase(t, false, mp, types.New(types.T_varchar, types.MaxVarcharLen, 0)),
 
-		newTestCase(true, mp, types.New(types.T_blob, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_blob, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_blob, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_blob, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_text, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_text, 0, 0)),
-		newTestCase(true, mp, types.New(types.T_datalink, 0, 0)),
-		newTestCase(false, mp, types.New(types.T_datalink, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_text, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_text, 0, 0)),
+		newTestCase(t, true, mp, types.New(types.T_datalink, 0, 0)),
+		newTestCase(t, false, mp, types.New(types.T_datalink, 0, 0)),
 
-		newTestCase(true, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),
-		newTestCase(false, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),
+		newTestCase(t, true, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),
+		newTestCase(t, false, mp, types.New(types.T_array_float32, types.MaxArrayDimension, 0)),
 
-		newTestCase(true, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
-		newTestCase(false, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
+		newTestCase(t, true, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
+		newTestCase(t, false, mp, types.New(types.T_array_float64, types.MaxArrayDimension, 0)),
 	}
 }
 
 func TestCompare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		nb0 := tc.proc.Mp().CurrNB()
 		c := New(*tc.vecs[0].GetType(), tc.desc, false)
 		c.Set(0, tc.vecs[0])
@@ -129,14 +125,14 @@ func TestCompare(t *testing.T) {
 	}
 }
 
-func newTestCase(desc bool, m *mpool.MPool, typ types.Type) testCase {
+func newTestCase(t *testing.T, desc bool, m *mpool.MPool, typ types.Type) testCase {
 	vecs := make([]*vector.Vector, 2)
 	vecs[0] = testutil.NewVector(Rows, typ, m, true, nil)
 	vecs[1] = testutil.NewVector(Rows, typ, m, true, nil)
 	return testCase{
 		desc: desc,
 		vecs: vecs,
-		proc: testutil.NewProcessWithMPool("", m),
+		proc: testutil.NewProcessWithMPool(t, "", m),
 	}
 }
 
@@ -146,8 +142,8 @@ func TestBlockRowIdsCompare(t *testing.T) {
 		var blks1 []types.Blockid
 		var blks2 []types.Blockid
 		for i := 0; i < 1000; i++ {
-			blks1 = append(blks1, *types.NewBlockidWithObjectID(obj, uint16(i)))
-			blks2 = append(blks2, *types.NewBlockidWithObjectID(obj, uint16(i)))
+			blks1 = append(blks1, types.NewBlockidWithObjectID(&obj, uint16(i)))
+			blks2 = append(blks2, types.NewBlockidWithObjectID(&obj, uint16(i)))
 		}
 
 		for range blks1 {
@@ -174,7 +170,7 @@ func TestBlockRowIdsCompare(t *testing.T) {
 				blkIdx++
 			}
 
-			rowId := types.NewRowIDWithObjectIDBlkNumAndRowID(*obj, blkIdx, uint32(i))
+			rowId := types.NewRowIDWithObjectIDBlkNumAndRowID(obj, blkIdx, uint32(i))
 			rowIds1 = append(rowIds1, rowId)
 			rowIds2 = append(rowIds2, rowId)
 		}

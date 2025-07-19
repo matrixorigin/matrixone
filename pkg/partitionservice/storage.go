@@ -17,6 +17,7 @@ package partitionservice
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-type storage struct {
+type Storage struct {
 	sid  string
 	exec executor.SQLExecutor
 	eng  engine.Engine
@@ -42,14 +43,14 @@ func NewStorage(
 	exec executor.SQLExecutor,
 	eng engine.Engine,
 ) PartitionStorage {
-	return &storage{
+	return &Storage{
 		sid:  sid,
 		exec: exec,
 		eng:  eng,
 	}
 }
 
-func (s *storage) GetTableDef(
+func (s *Storage) GetTableDef(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -65,7 +66,7 @@ func (s *storage) GetTableDef(
 	return rel.GetTableDef(ctx), nil
 }
 
-func (s *storage) GetMetadata(
+func (s *Storage) GetMetadata(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator,
@@ -154,7 +155,8 @@ func (s *storage) GetMetadata(
 						partition_table_name      ,
 						partition_name            ,
 						partition_ordinal_position,
-						partition_expression         
+						partition_expression_str  ,
+						partition_expression
 					from %s
 					where 
 						primary_table_id = %d
@@ -177,6 +179,11 @@ func (s *storage) GetMetadata(
 				) bool {
 					found = true
 					for i := 0; i < rows; i++ {
+						expr := &plan.Expr{}
+						err := expr.Unmarshal([]byte(executor.GetStringRows(cols[5])[i]))
+						if err != nil {
+							panic(err)
+						}
 						metadata.Partitions = append(
 							metadata.Partitions,
 							partition.Partition{
@@ -185,7 +192,8 @@ func (s *storage) GetMetadata(
 								PartitionTableName: executor.GetStringRows(cols[1])[i],
 								Name:               executor.GetStringRows(cols[2])[i],
 								Position:           executor.GetFixedRows[uint32](cols[3])[i],
-								Expression:         executor.GetStringRows(cols[4])[i],
+								ExprStr:            executor.GetStringRows(cols[4])[i],
+								Expr:               expr,
 							},
 						)
 					}
@@ -209,7 +217,7 @@ func (s *storage) GetMetadata(
 	return metadata, found, err
 }
 
-func (s *storage) Create(
+func (s *Storage) Create(
 	ctx context.Context,
 	def *plan.TableDef,
 	stmt *tree.CreateTable,
@@ -257,7 +265,7 @@ func (s *storage) Create(
 	)
 }
 
-func (s *storage) Delete(
+func (s *Storage) Delete(
 	ctx context.Context,
 	metadata partition.PartitionMetadata,
 	txnOp client.TxnOperator,
@@ -308,7 +316,7 @@ func (s *storage) Delete(
 			for _, p := range metadata.Partitions {
 				res, err = txn.Exec(
 					fmt.Sprintf(
-						"drop table %s",
+						"drop table `%s`",
 						p.PartitionTableName,
 					),
 					executor.StatementOption{},
@@ -324,7 +332,7 @@ func (s *storage) Delete(
 	)
 }
 
-func (s *storage) createPartitionTable(
+func (s *Storage) createPartitionTable(
 	def *plan.TableDef,
 	stmt *tree.CreateTable,
 	metadata partition.PartitionMetadata,
@@ -359,6 +367,13 @@ func (s *storage) createPartitionTable(
 		return nil
 	}
 
+	bs, err := partition.Expr.Marshal()
+	if err != nil {
+		return err
+	}
+	re := regexp.MustCompile(`\\([^'"\\0bnrtZ%_])`)
+	escapeExpr := re.ReplaceAllString(string(bs), "\\\\$1")
+
 	// add partition metadata to mo_catalog.mo_partitions
 	addPartitionMetadata := func() error {
 		txn.Use(catalog.MO_CATALOG)
@@ -370,6 +385,7 @@ func (s *storage) createPartitionTable(
 				primary_table_id, 
 				partition_name, 
 				partition_ordinal_position, 
+				partition_expression_str,
 				partition_expression
 			)
 			values
@@ -379,6 +395,7 @@ func (s *storage) createPartitionTable(
 				%d, 
 				'%s', 
 				%d, 
+				'%s',
 				'%s'
 			)`,
 			catalog.MO_CATALOG,
@@ -388,7 +405,8 @@ func (s *storage) createPartitionTable(
 			metadata.TableID,
 			partition.Name,
 			partition.Position,
-			partition.Expression,
+			partition.ExprStr,
+			escapeExpr,
 		)
 
 		res, err := txn.Exec(
@@ -409,7 +427,7 @@ func (s *storage) createPartitionTable(
 	return addPartitionMetadata()
 }
 
-func (s *storage) getTableIDByTableNameAndDatabaseName(
+func (s *Storage) getTableIDByTableNameAndDatabaseName(
 	tableName string,
 	databaseName string,
 	txn executor.TxnExecutor,
@@ -439,7 +457,7 @@ func (s *storage) getTableIDByTableNameAndDatabaseName(
 	return id, nil
 }
 
-func (s *storage) createPartitionMetadata(
+func (s *Storage) createPartitionMetadata(
 	metadata partition.PartitionMetadata,
 	txn executor.TxnExecutor,
 ) error {
@@ -478,7 +496,12 @@ func getPartitionTableCreateSQL(
 		table.ObjectNamePrefix,
 		table.AtTsExpr,
 	)
-	return tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+	return tree.StringWithOpts(
+		stmt,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
 }
 
 func getInsertMetadataSQL(

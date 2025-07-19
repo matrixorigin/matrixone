@@ -16,14 +16,15 @@ package gc
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"unsafe"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -66,9 +67,10 @@ type CheckpointBasedGCJob struct {
 	pitr             *logtail.PitrInfo
 	ts               *types.TS
 	globalCkpLoc     objectio.Location
+	globalCkpVer     uint32
 
 	result struct {
-		filesToGC  []string
+		vecToGC    *vector.Vector
 		filesNotGC []objectio.ObjectStats
 	}
 }
@@ -76,6 +78,7 @@ type CheckpointBasedGCJob struct {
 func NewCheckpointBasedGCJob(
 	ts *types.TS,
 	globalCkpLoc objectio.Location,
+	gckpVersion uint32,
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	accountSnapshots map[uint32][]types.TS,
@@ -84,6 +87,7 @@ func NewCheckpointBasedGCJob(
 	isOwner bool,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
+
 	opts ...GCJobExecutorOption,
 ) *CheckpointBasedGCJob {
 	e := &CheckpointBasedGCJob{
@@ -93,6 +97,7 @@ func NewCheckpointBasedGCJob(
 		pitr:             pitr,
 		ts:               ts,
 		globalCkpLoc:     globalCkpLoc,
+		globalCkpVer:     gckpVersion,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -112,7 +117,8 @@ func (e *CheckpointBasedGCJob) Close() error {
 	e.pitr = nil
 	e.ts = nil
 	e.globalCkpLoc = nil
-	e.result.filesToGC = nil
+	e.globalCkpVer = 0
+	e.result.vecToGC = nil
 	e.result.filesNotGC = nil
 	return e.GCExecutor.Close()
 }
@@ -130,20 +136,21 @@ func (e *CheckpointBasedGCJob) fillDefaults() {
 }
 
 func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
-	attrs, attrTypes := logtail.GetDataSchema()
+	attrs, attrTypes := ckputil.DataScan_TableIDAtrrs, ckputil.DataScan_TableIDTypes
 	buffer := containers.NewOneSchemaBatchBuffer(
 		mpool.MB*16,
 		attrs,
 		attrTypes,
 	)
 	defer buffer.Close(e.mp)
-	transObjects := make(map[string]*ObjectEntry, 100)
+	transObjects := make(map[string]map[uint64]*ObjectEntry, 100)
 	coarseFilter, err := MakeBloomfilterCoarseFilter(
 		ctx,
 		e.config.coarseEstimateRows,
 		e.config.coarseProbility,
 		buffer,
 		e.globalCkpLoc,
+		e.globalCkpVer,
 		e.ts,
 		&transObjects,
 		e.mp,
@@ -164,8 +171,8 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		return err
 	}
 
-	e.result.filesToGC = make([]string, 0, 20)
-	finalSinker, err := MakeFinalCanGCSinker(&e.result.filesToGC)
+	e.result.vecToGC = vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	finalSinker, err := MakeFinalCanGCSinker(e.result.vecToGC, e.mp)
 	if err != nil {
 		return err
 	}
@@ -187,8 +194,8 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 	return nil
 }
 
-func (e *CheckpointBasedGCJob) Result() ([]string, []objectio.ObjectStats) {
-	return e.result.filesToGC, e.result.filesNotGC
+func (e *CheckpointBasedGCJob) Result() (*vector.Vector, []objectio.ObjectStats) {
+	return e.result.vecToGC, e.result.filesNotGC
 }
 
 func MakeBloomfilterCoarseFilter(
@@ -197,32 +204,32 @@ func MakeBloomfilterCoarseFilter(
 	probability float64,
 	buffer containers.IBatchBuffer,
 	location objectio.Location,
+	ckpVersion uint32,
 	ts *types.TS,
-	transObjects *map[string]*ObjectEntry,
+	transObjects *map[string]map[uint64]*ObjectEntry,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (
 	FilterFn,
 	error,
 ) {
-	reader, err := logtail.MakeGlobalCheckpointDataReader(ctx, "", fs, location, 0)
-	if err != nil {
+	reader := logtail.NewCKPReader(ckpVersion, location, mp, fs)
+	var err error
+	if err = reader.ReadMeta(ctx); err != nil {
 		return nil, err
 	}
 	bf, err := BuildBloomfilter(
 		ctx,
 		rowCount,
 		probability,
-		2,
+		ckputil.TableObjectsAttr_ID_Idx,
 		reader.LoadBatchData,
 		buffer,
 		mp,
 	)
 	if err != nil {
-		reader.Close()
 		return nil, err
 	}
-	reader.Close()
 	return func(
 		ctx context.Context,
 		bm *bitmap.Bitmap,
@@ -250,20 +257,24 @@ func MakeBloomfilterCoarseFilter(
 				buf := bat.Vecs[0].GetRawBytesAt(i)
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().UnsafeString()
-
-				if dropTS.IsEmpty() && (*transObjects)[name] == nil {
+				tid := tableIDs[i]
+				if (*transObjects)[name] == nil ||
+					(*transObjects)[name][tableIDs[i]] == nil {
+					if (*transObjects)[name] == nil {
+						(*transObjects)[name] = make(map[uint64]*ObjectEntry)
+					}
 					object := &ObjectEntry{
 						stats:    &stats,
 						createTS: createTS,
 						dropTS:   dropTS,
 						db:       dbs[i],
-						table:    tableIDs[i],
+						table:    tid,
 					}
-					(*transObjects)[name] = object
+					(*transObjects)[name][tid] = object
 					return
 				}
-				if (*transObjects)[name] != nil {
-					(*transObjects)[name].dropTS = dropTS
+				if (*transObjects)[name] != nil && (*transObjects)[name][tid] != nil {
+					(*transObjects)[name][tid].dropTS = dropTS
 					return
 				}
 			},
@@ -278,7 +289,7 @@ func MakeSnapshotAndPitrFineFilter(
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
-	transObjects map[string]*ObjectEntry,
+	transObjects map[string]map[uint64]*ObjectEntry,
 ) (
 	filter FilterFn,
 	err error,
@@ -302,27 +313,33 @@ func MakeSnapshotAndPitrFineFilter(
 			name := stats.ObjectName().UnsafeString()
 			tableID := tableIDs[i]
 			createTS := createTSs[i]
-			dropTS := deleteTSs[i]
+			deleteTS := deleteTSs[i]
 
 			snapshots := tableSnapshots[tableID]
 			pitr := tablePitrs[tableID]
 
-			if entry := transObjects[name]; entry != nil {
-				if !logtail.ObjectIsSnapshotRefers(
-					entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
-				) {
-					bm.Add(uint64(i))
+			if transObjects[name] != nil {
+				tables := transObjects[name]
+				if entry := tables[tableID]; entry != nil {
+					if !logtail.ObjectIsSnapshotRefers(
+						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
+					) {
+						bm.Add(uint64(i))
+					}
+					continue
 				}
+			}
+			if !createTS.LT(ts) || !deleteTS.LT(ts) {
 				continue
 			}
-			if !createTS.LT(ts) || !dropTS.LT(ts) {
+			if deleteTS.IsEmpty() {
+				logutil.Warn("GC-PANIC-TS-EMPTY",
+					zap.String("name", name),
+					zap.String("createTS", createTS.ToString()))
 				continue
-			}
-			if dropTS.IsEmpty() {
-				panic(fmt.Sprintf("dropTS is empty, name: %s, createTS: %s", name, createTS.ToString()))
 			}
 			if !logtail.ObjectIsSnapshotRefers(
-				&stats, pitr, &createTS, &dropTS, snapshots,
+				&stats, pitr, &createTS, &deleteTS, snapshots,
 			) {
 				bm.Add(uint64(i))
 			}
@@ -332,16 +349,15 @@ func MakeSnapshotAndPitrFineFilter(
 }
 
 func MakeFinalCanGCSinker(
-	filesToGC *[]string,
+	vec *vector.Vector,
+	mp *mpool.MPool,
 ) (
 	SinkerFn,
 	error,
 ) {
-	buffer := make(map[string]struct{}, 100)
 	return func(
 		ctx context.Context, bat *batch.Batch,
 	) error {
-		clear(buffer)
 		var dropTSs []types.TS
 		var tableIDs []uint64
 		if bat.Vecs[0].Length() > 0 {
@@ -349,21 +365,24 @@ func MakeFinalCanGCSinker(
 			tableIDs = vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
 		}
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
-			buf := bat.Vecs[0].GetRawBytesAt(i)
-			stats := (*objectio.ObjectStats)(unsafe.Pointer(&buf[0]))
-			name := stats.ObjectName().String()
+			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
 			dropTS := dropTSs[i]
 			tableID := tableIDs[i]
 			if !dropTS.IsEmpty() {
-				buffer[name] = struct{}{}
+				if err := vector.AppendBytes(
+					vec, []byte(stats.ObjectName().UnsafeString()), false, mp,
+				); err != nil {
+					return err
+				}
 				continue
 			}
 			if !logtail.IsMoTable(tableID) {
-				buffer[name] = struct{}{}
+				if err := vector.AppendBytes(
+					vec, []byte(stats.ObjectName().UnsafeString()), false, mp,
+				); err != nil {
+					return err
+				}
 			}
-		}
-		for name := range buffer {
-			*filesToGC = append(*filesToGC, name)
 		}
 		return nil
 	}, nil

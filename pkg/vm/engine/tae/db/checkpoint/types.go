@@ -48,6 +48,20 @@ const (
 	ET_Compacted
 )
 
+func (e EntryType) String() string {
+	switch e {
+	case ET_Global:
+		return "G"
+	case ET_Incremental:
+		return "I"
+	case ET_Backup:
+		return "B"
+	case ET_Compacted:
+		return "C"
+	}
+	return "Unknown"
+}
+
 type CheckpointScheduler interface {
 	TryScheduleCheckpoint(types.TS, bool) (Intent, error)
 	RunnerReader
@@ -68,7 +82,7 @@ type Runner interface {
 	Start()
 	Stop()
 
-	BuildReplayer(string, catalog.DataFactory) *CkpReplayer
+	BuildReplayer(string) *CkpReplayer
 	GCByTS(ctx context.Context, ts types.TS) error
 }
 

@@ -405,9 +405,13 @@ const (
 	// fault inject function
 	FAULT_INJECT = 340
 
+	L2_DISTANCE_XC    = 341
+	L2_DISTANCE_SQ_XC = 342
+
+	TS_TO_TIME = 343
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 341
+	FUNCTION_END_NUMBER = 344
 )
 
 // functionIdRegister is what function we have registered already.
@@ -503,6 +507,7 @@ var functionIdRegister = map[string]int32{
 	"startswith":  STARTSWITH,
 	"to_date":     STR_TO_DATE,
 	"str_to_date": STR_TO_DATE,
+	"ts_to_time":  TS_TO_TIME,
 	"date_format": DATE_FORMAT,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
@@ -716,7 +721,9 @@ var functionIdRegister = map[string]int32{
 	"vector_dims":       VECTOR_DIMS,
 	"normalize_l2":      NORMALIZE_L2,
 	"l2_distance":       L2_DISTANCE,
+	"l2_distance_xc":    L2_DISTANCE_XC,
 	"l2_distance_sq":    L2_DISTANCE_SQ,
+	"l2_distance_sq_xc": L2_DISTANCE_SQ_XC,
 	"cosine_distance":   COSINE_DISTANCE,
 
 	"python_user_defined_function": PYTHON_UDF,

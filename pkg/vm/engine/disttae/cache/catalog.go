@@ -121,7 +121,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 		deletedCpkey := make([]*TableItem, 0, 16)
 		deletedItems := make([]*TableItem, 0, 16)
 		seenLargest := false
-		// TODO(aptend)gc stale deleted items
 		cc.tables.data.Scan(func(item *TableItem) bool {
 			if item.DatabaseId != prevDbId {
 				prevDbId = item.DatabaseId
@@ -158,7 +157,6 @@ func (cc *CatalogCache) GC(ts timestamp.Timestamp) GCReport {
 			cc.tables.cpkeyIndex.Delete(item)
 		}
 
-		// TODO(aptend): Add Metric
 	}
 	{ // database cache gc
 		var prevName string
@@ -687,6 +685,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	var primarykey *plan.PrimaryKeyDef
 	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
+	var partition *plan.Partition
 
 	tableDef := make([]engine.TableDef, 0)
 
@@ -769,6 +768,21 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		}
 	}
 
+	if tblItem.Partitioned > 0 {
+		partition = &plan.Partition{}
+		err := partition.Unmarshal(([]byte)(tblItem.Partition))
+		if err != nil {
+			logutil.Errorf("catalog-cache error: unmarshal table partition information: %v-%v-%v, err: %v",
+				tblItem.AccountId, tblItem.Id, tblItem.Name, err)
+			return nil, nil
+		}
+
+		tableDef = append(tableDef, &engine.PartitionDef{
+			Partitioned: tblItem.Partitioned,
+			Partition:   tblItem.Partition,
+		})
+	}
+
 	properties = append(properties, &plan.Property{
 		Key:   catalog.SystemRelAttr_Kind,
 		Value: tblItem.Kind,
@@ -834,5 +848,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Indexes:       indexes,
 		Version:       tblItem.Version,
 		DbId:          tblItem.DatabaseId,
+		Partition:     partition,
+		FeatureFlag:   tblItem.ExtraInfo.GetFeatureFlag(),
 	}, tableDef
 }

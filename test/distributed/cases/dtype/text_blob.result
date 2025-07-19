@@ -282,6 +282,9 @@ a    length(b)
 insert into blob_02 values(1,load_file('$resources/blob_file/blob2.mp3'));
 insert into blob_02 select 2,load_file('$resources/blob_file/blob2.mp3');
 select a,length(b) from blob_02 where a in (1,2);
+a    length(b)
+1    506267
+2    506267
 prepare stmt2 from 'create table blob_05(a int,b blob)';
 execute stmt2 ;
 prepare stmt2 from 'insert into blob_05 values(4, load_file("$resources/blob_file/blob3.jpeg"))';

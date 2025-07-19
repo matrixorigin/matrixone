@@ -15,8 +15,6 @@
 package aggexec
 
 import (
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,7 +47,7 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 
 	// groups stores the values of the column for each group.
 	// todo: it has a problem that same as the `clusterCentersExec.groupData` in `cluster_centers.go`
-	groups []*vector.Vector
+	groups []*Vectors[T]
 }
 
 func (exec *medianColumnExecSelf[T, R]) GetOptResult() SplitResult {
@@ -82,10 +80,11 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 
 func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result, empties, groups [][]byte) error {
 	if len(groups) > 0 {
-		exec.groups = make([]*vector.Vector, len(groups))
+		exec.groups = make([]*Vectors[T], len(groups))
 		for i := range exec.groups {
-			exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
-			if err := vectorUnmarshal(exec.groups[i], groups[i], mp); err != nil {
+			exec.groups[i] = NewEmptyVectors[T]()
+			var err error
+			if err = exec.groups[i].Unmarshal(groups[i], exec.singleAggInfo.argType, mp); err != nil {
 				return err
 			}
 		}
@@ -116,21 +115,21 @@ func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	if cap(exec.groups) >= oldLength+more {
 		exec.groups = exec.groups[:oldLength+more]
 	} else {
-		exec.groups = append(exec.groups, make([]*vector.Vector, more)...)
+		exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
 	}
 
 	for i, j := oldLength, len(exec.groups); i < j; i++ {
-		exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
+		exec.groups[i] = NewVectors[T](exec.singleAggInfo.argType)
 	}
 	return exec.ret.grows(more)
 }
 
 func (exec *medianColumnExecSelf[T, R]) PreAllocateGroups(more int) error {
 	if len(exec.groups) == 0 {
-		exec.groups = make([]*vector.Vector, 0, more)
+		exec.groups = make([]*Vectors[T], 0, more)
 	} else {
 		oldLength := len(exec.groups)
-		exec.groups = append(exec.groups, make([]*vector.Vector, more)...)
+		exec.groups = append(exec.groups, make([]*Vectors[T], more)...)
 		exec.groups = exec.groups[:oldLength]
 	}
 
@@ -154,7 +153,7 @@ func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []
 	exec.ret.setGroupNotEmpty(x, y)
 	value := vector.MustFixedColWithTypeCheck[T](vectors[0])[row]
 
-	return vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, value)
+	return vectorsAppendWildly(exec.groups[groupIndex], exec.ret.mp, value)
 }
 
 func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -170,7 +169,7 @@ func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vect
 	if vectors[0].IsConst() {
 		exec.ret.setGroupNotEmpty(x, y)
 		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
-		return vector.AppendMultiFixed[T](exec.groups[0], value, false, vectors[0].Length(), exec.ret.mp)
+		return AppendMultiFixed(exec.groups[0], value, false, vectors[0].Length(), exec.ret.mp)
 	}
 
 	exec.arg.prepare(vectors[0])
@@ -181,7 +180,7 @@ func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vect
 			continue
 		}
 		mustNotEmpty = true
-		if err := vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
+		if err := vectorsAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 			return err
 		}
 	}
@@ -201,7 +200,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBulkFill(groupIndex int, vectors
 
 		exec.ret.setGroupNotEmpty(x, y)
 		value := vector.MustFixedColWithTypeCheck[T](vectors[0])[0]
-		return vector.AppendMultiFixed[T](exec.groups[groupIndex], value, false, vectors[0].Length(), exec.ret.mp)
+		return AppendMultiFixed(exec.groups[groupIndex], value, false, vectors[0].Length(), exec.ret.mp)
 	}
 
 	needs, err := exec.distinctHash.bulkFill(groupIndex, vectors)
@@ -220,7 +219,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBulkFill(groupIndex int, vectors
 			continue
 		}
 		mustNotEmpty = true
-		if err = vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
+		if err = vectorsAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 			return err
 		}
 	}
@@ -247,7 +246,7 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 				x, y := exec.ret.updateNextAccessIdx(groupIndex)
 
 				exec.ret.setGroupNotEmpty(x, y)
-				if err := vectorAppendWildly(
+				if err := vectorsAppendWildly(
 					exec.groups[groupIndex],
 					exec.ret.mp, value); err != nil {
 					return err
@@ -266,7 +265,7 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 				x, y := exec.ret.updateNextAccessIdx(groupIndex)
 
 				exec.ret.setGroupNotEmpty(x, y)
-				if err := vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
+				if err := vectorsAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 					return err
 				}
 			}
@@ -290,7 +289,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBatchFill(offset int, groups []u
 				x, y := exec.ret.updateNextAccessIdx(groupIndex)
 
 				exec.ret.setGroupNotEmpty(x, y)
-				if err = vectorAppendWildly(
+				if err = vectorsAppendWildly(
 					exec.groups[groupIndex],
 					exec.ret.mp, value); err != nil {
 					return err
@@ -309,7 +308,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBatchFill(offset int, groups []u
 				x, y := exec.ret.updateNextAccessIdx(groupIndex)
 
 				exec.ret.setGroupNotEmpty(x, y)
-				if err = vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
+				if err = vectorsAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 					return err
 				}
 			}
@@ -326,8 +325,7 @@ func (exec *medianColumnExecSelf[T, R]) Merge(other *medianColumnExecSelf[T, R],
 	if other.groups[groupIdx2].Length() == 0 {
 		return nil
 	}
-	vs := vector.MustFixedColWithTypeCheck[T](other.groups[groupIdx2])
-	return vector.AppendFixedList[T](exec.groups[groupIdx1], vs, nil, exec.ret.mp)
+	return exec.groups[groupIdx1].Union(other.groups[groupIdx2], exec.ret.mp)
 }
 
 func (exec *medianColumnExecSelf[T, R]) BatchMerge(next *medianColumnExecSelf[T, R], offset int, groups []uint64) error {
@@ -353,6 +351,18 @@ func (exec *medianColumnExecSelf[T, R]) Free() {
 	}
 	exec.ret.free()
 	exec.distinctHash.free()
+}
+
+func (exec *medianColumnExecSelf[T, R]) Size() int64 {
+	var size int64
+	for _, v := range exec.groups {
+		if v != nil {
+			size += v.Size()
+		}
+	}
+	// 8 is the size of a pointer.
+	size += int64(cap(exec.groups)) * 8
+	return exec.ret.Size() + exec.distinctHash.Size() + size
 }
 
 type medianColumnNumericExec[T numeric] struct {
@@ -438,13 +448,10 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 			if rows == 0 {
 				continue
 			}
-			sort.Sort(generateSortableSlice(vector.MustFixedColWithTypeCheck[T](exec.groups[s])))
-			srcs := vector.MustFixedColWithTypeCheck[T](exec.groups[s])
-
-			if rows&1 == 1 {
-				vs[x][j] = float64(srcs[rows>>1])
-			} else {
-				vs[x][j] = float64(srcs[rows>>1-1]+srcs[rows>>1]) / 2
+			exec.ret.setGroupNotEmpty(x, j)
+			var err error
+			if vs[x][j], err = MedianNumeric(exec.groups[s]); err != nil {
+				return nil, err
 			}
 			s++
 		}
@@ -483,30 +490,9 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 				if rows == 0 {
 					continue
 				}
-
-				sort.Sort(generateSortableSlice2(vector.MustFixedColWithTypeCheck[T](exec.groups[s])))
-				srcs := vector.MustFixedColWithTypeCheck[types.Decimal128](exec.groups[s])
-				if rows&1 == 1 {
-					if vs[x][j], err = srcs[rows>>1].Scale(1); err != nil {
-						return nil, err
-					}
-				} else {
-					v1, v2 := srcs[rows>>1-1], srcs[rows>>1]
-					if vs[x][j], err = v1.Add128(v2); err != nil {
-						return nil, err
-					}
-					if vs[x][j].Sign() {
-						// scale(1) here because we set the result scale to be arg.Scale+1
-						if vs[x][j], err = vs[x][j].Minus().Scale(1); err != nil {
-							return nil, err
-						}
-						vs[x][j] = vs[x][j].Right(1).Minus()
-					} else {
-						if vs[x][j], err = vs[x][j].Scale(1); err != nil {
-							return nil, err
-						}
-						vs[x][j] = vs[x][j].Right(1)
-					}
+				exec.ret.setGroupNotEmpty(x, j)
+				if vs[x][j], err = MedianDecimal128(exec.groups[s]); err != nil {
+					return nil, err
 				}
 				s++
 			}
@@ -525,30 +511,9 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 				if rows == 0 {
 					continue
 				}
-
-				sort.Sort(generateSortableSlice2(vector.MustFixedColWithTypeCheck[T](exec.groups[s])))
-				srcs := vector.MustFixedColWithTypeCheck[types.Decimal64](exec.groups[s])
-				if rows&1 == 1 {
-					if vs[x][j], err = FromD64ToD128(srcs[rows>>1]).Scale(1); err != nil {
-						return nil, err
-					}
-				} else {
-					v1, v2 := FromD64ToD128(srcs[rows>>1-1]), FromD64ToD128(srcs[rows>>1])
-					if vs[x][j], err = v1.Add128(v2); err != nil {
-						return nil, err
-					}
-					if vs[x][j].Sign() {
-						// scale(1) here because we set the result scale to be arg.Scale+1
-						if vs[x][j], err = vs[x][j].Minus().Scale(1); err != nil {
-							return nil, err
-						}
-						vs[x][j] = vs[x][j].Right(1).Minus()
-					} else {
-						if vs[x][j], err = vs[x][j].Scale(1); err != nil {
-							return nil, err
-						}
-						vs[x][j] = vs[x][j].Right(1)
-					}
+				exec.ret.setGroupNotEmpty(x, j)
+				if vs[x][j], err = MedianDecimal64(exec.groups[s]); err != nil {
+					return nil, err
 				}
 				s++
 			}
@@ -557,46 +522,4 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 	}
 
 	return exec.ret.flushAll(), nil
-}
-
-type numericSlice[T numeric] []T
-
-func (s numericSlice[T]) Len() int {
-	return len(s)
-}
-func (s numericSlice[T]) Less(i, j int) bool {
-	return s[i] < s[j]
-}
-func (s numericSlice[T]) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-type decimal64Slice []types.Decimal64
-type decimal128Slice []types.Decimal128
-
-func (s decimal64Slice) Len() int { return len(s) }
-func (s decimal64Slice) Less(i, j int) bool {
-	return s[i].Compare(s[j]) < 0
-}
-func (s decimal64Slice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-func (s decimal128Slice) Len() int { return len(s) }
-func (s decimal128Slice) Less(i, j int) bool {
-	return s[i].Compare(s[j]) < 0
-}
-func (s decimal128Slice) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-func generateSortableSlice[T numeric](vs []T) sort.Interface {
-	return numericSlice[T](vs)
-}
-
-func generateSortableSlice2[T types.Decimal64 | types.Decimal128](vs []T) sort.Interface {
-	temp := any(vs)
-	if d64, ok := temp.([]types.Decimal64); ok {
-		return decimal64Slice(d64)
-	}
-	if d128, ok := temp.([]types.Decimal128); ok {
-		return decimal128Slice(d128)
-	}
-	panic("unsupported type")
 }

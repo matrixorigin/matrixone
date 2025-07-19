@@ -128,7 +128,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 					ctx,
 					[]uint16{uint16(schema.GetSingleSortKeyIdx())},
 					nil,
-					tbl.txnTable.store.rt.Fs.Service,
+					tbl.txnTable.store.rt.Fs,
 					loc,
 					fileservice.Policy(0),
 					false,
@@ -209,7 +209,6 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 similar to findDeletes
 */
 func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
-	// TODO(aptend): handle the iterator correctly
 	var objIt btree.IterG[*catalog.ObjectEntry]
 	if tbl.isTombstone {
 		tbl.txnTable.entry.WaitTombstoneObjectCommitted(to)

@@ -1,6 +1,7 @@
 -- TODO: run all tests with both experimental_fulltext_index = 0 and 1
 -- TODO: GENERATE the test case to cover all combinations of types (varchar, char and text)
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 
 create table src (id bigint primary key, body varchar, title text);
 
@@ -423,3 +424,19 @@ drop table if exists articles;
 create table articles (id int auto_increment not null primary key, title varchar, body text);
 create fulltext index ftidx on articles (title);
 alter table articles drop column title;
+
+-- #21678
+drop table if exists src;
+create table src (id bigint primary key, body varchar, FULLTEXT(body));
+insert into src values (0, 'SGB11型号的检验报告在对素材文件进行搜索时'), (1, '读书会 提效 社群 案例 运营 因为现在生产'), 
+(2, '使用全文索引会肥胖的原因都是因为摄入脂肪多导致的吗测试背景说明'),
+(3, '索引肥胖的原因都是因为摄入fat多导致的吗说明');
+
+select id from src where match(body) against('+SGB11型号的检验报告' IN BOOLEAN MODE);
+
+select id from src where match(body) against('肥胖的原因都是因为摄入脂肪多导致的吗' IN NATURAL LANGUAGE MODE);
+
+select id from src where match(body) against('+读书会 +提效 +社群 +案例 +运营' IN BOOLEAN MODE);
+
+select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
+

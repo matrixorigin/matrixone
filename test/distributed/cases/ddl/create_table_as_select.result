@@ -348,7 +348,10 @@ col1    col2    col3
 drop table if exists cast04;
 create table cast04(col1 char(10), col2 char(10), col3 char(10)) as select * from cast03;
 select * from cast04;
-
+col1    col2    col3
+321424    213412.23    -100.313
+-1241    2314321    0
+0    0    0
 drop table cast03;
 drop table cast04;
 drop table if exists cast05;
@@ -730,9 +733,11 @@ drop table if exists time05;
 create table time05 as select unix_timestamp(col1) from time01;
 
 show create table time05;
-
-select * from time05;
-
+Table    Create Table
+time05    CREATE TABLE `time05` (\n  `unix_timestamp(col1)` bigint DEFAULT NULL\n)
+select count(*) from time05;
+count(*)
+3
 drop table time05;
 
 drop table if exists time06;

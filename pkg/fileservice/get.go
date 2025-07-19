@@ -150,12 +150,13 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 				NoDefaultCredentialsForETL,
 			)
 
-		case "s3-opts":
+		case "s3-opts", "opts", "options", "hdfs":
 			var args ObjectStorageArguments
 			if err := args.SetFromString(fsPath.ServiceArguments); err != nil {
 				return nil, "", err
 			}
 			args.NoBucketValidation = true
+			args.IsHDFS = fsPath.Service == "hdfs"
 			res, err = NewS3FS(
 				ctx,
 				args,

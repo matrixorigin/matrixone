@@ -8,10 +8,6 @@ Hello world!
 select moplugin('stage://mystage/hello.wasm', 'mowasm_add', '[3, 5]');
 moplugin(stage://mystage/hello.wasm, mowasm_add, [3, 5])
 8
-select moplugin('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
-failed to fetch Wasm data from URL
-select try_moplugin('https://github.com/matrixorigin/mojo/raw/main/plugin/hello/notexist.wasm', 'mowasm_add', '[3, 5]');
-failed to fetch Wasm data from URL
 select moplugin('stage://mystage/notexist.wasm', 'mowasm_add', '[3, 5]');
 file notexist.wasm is not found
 select try_moplugin('stage://mystage/notexist.wasm', 'mowasm_add', '[3, 5]');

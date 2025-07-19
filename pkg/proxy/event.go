@@ -92,7 +92,7 @@ func sendResp(r []byte, c chan<- []byte) {
 // is true, means that the message has been consumed completely,
 // and do not need to send to dst anymore.
 func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
-	if msg == nil || len(msg) < preRecvLen {
+	if len(msg) < preRecvLen {
 		return nil, false
 	}
 	if isCmdQuery(msg) {

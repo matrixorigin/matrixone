@@ -501,15 +501,16 @@ var (
 		"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
 		")"
 
-	InformationSchemaTableConstraintsDDL = "CREATE TABLE information_schema.TABLE_CONSTRAINTS (" +
-		"CONSTRAINT_CATALOG varchar(64)," +
-		"CONSTRAINT_SCHEMA varchar(64)," +
-		"CONSTRAINT_NAME varchar(64)," +
-		"TABLE_SCHEMA varchar(64)," +
-		"TABLE_NAME varchar(64)," +
-		"CONSTRAINT_TYPE varchar(11) NOT NULL DEFAULT ''," +
-		"ENFORCED varchar(3) NOT NULL DEFAULT ''" +
-		")"
+	InformationSchemaTableConstraintsDDL = "CREATE VIEW information_schema.TABLE_CONSTRAINTS AS SELECT " +
+		"'def' AS CONSTRAINT_CATALOG, " +
+		"tbl.reldatabase AS CONSTRAINT_SCHEMA, " +
+		"idx.name AS CONSTRAINT_NAME, " +
+		"tbl.reldatabase AS TABLE_SCHEMA, " +
+		"tbl.relname AS TABLE_NAME, " +
+		"idx.type AS CONSTRAINT_TYPE, " +
+		"'YES' AS ENFORCED " +
+		"FROM mo_catalog.mo_indexes idx " +
+		"join mo_catalog.mo_tables tbl on idx.table_id = tbl.rel_id"
 
 	InformationSchemaEventsDDL = "CREATE TABLE information_schema.EVENTS (" +
 		"EVENT_CATALOG varchar(64)," +

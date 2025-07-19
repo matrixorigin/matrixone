@@ -68,4 +68,12 @@ delete from t1 where b='b';
 select count(*) from t1;
 count(*)
 0
+drop table if exists t1;
+create table t1(a uuid, b varchar(255), created_at datetime not null default current_timestamp) cluster by (created_at);
+insert into t1(a, b) values (uuid(), 'test');
+insert into t1(a, b) values ('a', 'test');
+invalid UUID length: 1
+select count(*) from t1;
+count(*)
+1
 drop database if exists test;

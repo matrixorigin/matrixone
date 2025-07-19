@@ -81,6 +81,13 @@ func NewS3FS(
 	var err error
 	switch {
 
+	case args.IsHDFS || strings.HasPrefix(strings.ToLower(args.Endpoint), "hdfs"):
+		// HDFS
+		fs.storage, err = NewHDFS(ctx, args, perfCounterSets)
+		if err != nil {
+			return nil, err
+		}
+
 	case args.IsMinio ||
 		// 天翼云，使用SignatureV2验证，其他SDK不再支持
 		strings.Contains(args.Endpoint, "ctyunapi.cn"):

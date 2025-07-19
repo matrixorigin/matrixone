@@ -126,7 +126,7 @@ d_street_2 varchar(20),
 d_city varchar(20),
 d_state char(2),
 d_zip char(9),
-primary key (d_w_id, d_id) ) PARTITION BY KEY(d_w_id);
+primary key (d_w_id, d_id) );
 prepare __mo_stmt_id_1 from UPDATE bmsql_district  SET d_next_o_id = d_next_o_id + 1     WHERE d_w_id = ? AND d_id = ?;
 set @__mo_stmt_var_0=1, @__mo_stmt_var_1=7;
 execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1;
@@ -289,7 +289,7 @@ prepare stmt1 from 'show columns from t1';
 execute stmt1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    YES        null
-b    INT(32)    YES        null            
+b    INT(32)    YES        null
 prepare stmt1 from 'show variables like "aaaa"';
 execute stmt1;
 Variable_name    Value
@@ -333,19 +333,19 @@ execute stmt1;
 a
 alter table t1 add column b int after a;
 execute stmt1;
-internal error: table 't1' has been changed, please reset prepare statement 'stmt1'
+a    b
 prepare stmt1 from select * from t1;
 execute stmt1;
 a    b
 truncate table t1;
 execute stmt1;
-internal error: table 't1' has been changed, please reset prepare statement 'stmt1'
+a    b
 prepare stmt1 from select * from t1;
 execute stmt1;
 a    b
 drop table t1;
 execute stmt1;
-internal error: table 't1' has been changed, please reset prepare statement 'stmt1'
+SQL parser error: table "t1" does not exist
 deallocate prepare stmt1;
 create database abc;
 use abc;
@@ -563,7 +563,7 @@ col1    col2
 1    2
 alter table prepare_test_t1 add col3 int;
 execute s_pre using @var;
-internal error: table 'prepare_test_t1' has been changed, please reset prepare statement 's_pre'
+Column count doesn't match value count at row 1
 deallocate prepare s_pre;
 drop table prepare_test_t1;
 drop database if exists db1;
@@ -575,11 +575,11 @@ execute s_pre;
 col1    col2
 drop database db1;
 execute s_pre;
-internal error: table 'prepare_t1' has been changed, please reset prepare statement 's_pre'
+No database selected
 create database db1;
 use db1;
 execute s_pre;
-internal error: table 'prepare_t1' has been changed, please reset prepare statement 's_pre'
+SQL parser error: table "prepare_t1" does not exist
 drop database db1;
 create database db1;
 drop database if exists db2;
@@ -617,7 +617,7 @@ col1    col2
 2    3
 delete from tb_delete_opt_to_truncate;
 execute st_delete_opt_to_truncate;
-internal error: table 'tb_delete_opt_to_truncate' has been changed, please reset prepare statement 'st_delete_opt_to_truncate'
+col1    col2
 set session delete_opt_to_truncate = 0;
 insert into tb_delete_opt_to_truncate values(1, 2), (2,3);
 prepare st_delete_opt_to_truncate from select * from tb_delete_opt_to_truncate order by col1;
@@ -637,7 +637,7 @@ col1    col2
 2    3
 delete from tb_delete_opt_to_truncate;
 execute st_delete_opt_to_truncate;
-internal error: table 'tb_delete_opt_to_truncate' has been changed, please reset prepare statement 'st_delete_opt_to_truncate'
+col1    col2
 set session delete_opt_to_truncate = 123;
 internal error: convert to the system variable bool type failed
 drop table tb_delete_opt_to_truncate;
@@ -654,3 +654,81 @@ execute s1 using @a;
 a    b
 2    2
 drop database prepare_test_2;
+drop database if exists db1;
+create database db1;
+use db1;
+create table test_prepare_1(col1 int);
+insert into test_prepare_1 values(1);
+prepare st_prepare from select * from test_prepare_1 order by col1;
+execute st_prepare;
+col1
+1
+alter table test_prepare_1 add col2 int;
+execute st_prepare;
+col1    col2
+1    null
+alter table test_prepare_1 drop column col2;
+execute st_prepare;
+col1
+1
+execute st_prepare;
+col1
+1
+create table test_prepare_2(col1 int);
+insert into test_prepare_2 values(1),(2);
+prepare st_prepare_2 from select * from test_prepare_1 join test_prepare_2 on test_prepare_1.col1 = test_prepare_2.col1;
+execute st_prepare_2;
+col1    col1
+1    1
+alter table test_prepare_1 add col2 int;
+alter table test_prepare_2 add col2 int;
+execute st_prepare_2;
+col1    col2    col1    col2
+1    null    1    null
+execute st_prepare_2;
+col1    col2    col1    col2
+1    null    1    null
+drop table test_prepare_1;
+drop table test_prepare_2;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a int primary key, b int);
+insert into t1 values (1,1),(2,2),(3,3);
+create table t2(a int, t1_a int, primary key(a, t1_a));
+insert into t2 values (10,1),(20,2);
+prepare s1 from select t2.* from t2 join t1 on t2.t1_a = t1.a where t2.a in (?,?);
+set @a=20;
+set @b=10;
+execute s1 using @a, @b;
+a    t1_a
+10    1
+20    2
+drop table if exists t1;
+create table t1(a int, b int);
+prepare s1 from insert into t1 values (?,?);
+set @a=1;
+set @b=2;
+set @c=3;
+set @d=4;
+set @e=30;
+set @f=null;
+execute s1 using @a, @a;
+execute s1 using @b, @f;
+execute s1 using @c, @e;
+execute s1 using @d, @f;
+select * from t1;
+a    b
+1    1
+2    null
+3    30
+4    null
+drop database db1;
+create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
+create role prepare_role1;
+grant create database on account * to prepare_role1;
+create user prepare_user1 identified by '123456' default role prepare_role1;
+select mo_ctl('cn', 'task', ':retention');
+internal error: do not have privilege to execute the statement
+drop user prepare_user1;
+drop role prepare_role1;
+drop account prepare_account_01;

@@ -37,7 +37,7 @@ type RunnerReader interface {
 	String() string
 	GetAllIncrementalCheckpoints() []*CheckpointEntry
 	GetAllGlobalCheckpoints() []*CheckpointEntry
-	GetPenddingIncrementalCount() int
+	GetIncrementalCountAfterGlobal() int
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
 	GetLowWaterMark() types.TS
@@ -53,6 +53,7 @@ type RunnerReader interface {
 
 	MaxGlobalCheckpoint() *CheckpointEntry
 	MaxIncrementalCheckpoint() *CheckpointEntry
+	MinIncrementalCheckpoint() *CheckpointEntry
 	GetDirtyCollector() logtail.Collector
 }
 
@@ -115,6 +116,10 @@ func (r *runner) MaxIncrementalCheckpoint() *CheckpointEntry {
 	return r.store.MaxIncrementalCheckpoint()
 }
 
+func (r *runner) MinIncrementalCheckpoint() *CheckpointEntry {
+	return r.store.MinIncrementalCheckpoint()
+}
+
 func (r *runner) GetCatalog() *catalog.Catalog {
 	return r.catalog
 }
@@ -148,8 +153,8 @@ func (r *runner) GetLowWaterMark() types.TS {
 	return r.store.GetLowWaterMark()
 }
 
-func (r *runner) GetPenddingIncrementalCount() int {
-	return r.store.GetPenddingIncrementalCount()
+func (r *runner) GetIncrementalCountAfterGlobal() int {
+	return r.store.GetIncrementalCountAfterGlobal()
 }
 
 func (r *runner) GetAllCheckpoints() []*CheckpointEntry {

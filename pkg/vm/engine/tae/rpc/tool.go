@@ -31,10 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -48,6 +50,8 @@ const (
 	standard = 1
 	detailed = 2
 )
+
+var PrettyJson = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type ColumnJson struct {
 	Index       uint16 `json:"col_index"`
@@ -144,8 +148,11 @@ func (c *MoInspectArg) PrepareCommand() *cobra.Command {
 	table := TableArg{}
 	moInspectCmd.AddCommand(table.PrepareCommand())
 
-	ckp := CheckpointArg{}
-	moInspectCmd.AddCommand(ckp.PrepareCommand())
+	inmemoryCkp := inmemoryCkpArg{}
+	moInspectCmd.AddCommand(inmemoryCkp.PrepareCommand())
+
+	storageCkp := storageCkpArg{}
+	moInspectCmd.AddCommand(storageCkp.PrepareCommand())
 
 	gc := gcRemoveArg{}
 	moInspectCmd.AddCommand(gc.PrepareCommand())
@@ -163,11 +170,13 @@ func (c *MoInspectArg) String() string {
 
 func (c *MoInspectArg) Usage() (res string) {
 	res += "Offline Commands:\n"
-	res += fmt.Sprintf("  %-8v show object information\n", "object")
+	res += fmt.Sprintf("  %-8v show object information in the offline mode\n", "object")
+	res += fmt.Sprintf("  %-8v show checkpoint information in the offline mode\n", "storage-ckp")
 
 	res += "\n"
 	res += "Online Commands:\n"
-	res += fmt.Sprintf("  %-8v show table information\n", "table")
+	res += fmt.Sprintf("  %-8v show table information in the online mode\n", "table")
+	res += fmt.Sprintf("  %-8v show checkpoint information in the online mode\n", "inmemory-ckp")
 
 	res += "\n"
 	res += "Usage:\n"
@@ -317,7 +326,7 @@ func (c *moObjStatArg) Run() (err error) {
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.db.Runtime.Fs
 	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {
@@ -329,38 +338,23 @@ func (c *moObjStatArg) Run() (err error) {
 	return
 }
 
-func (c *moObjStatArg) initFs(ctx context.Context, local bool) (err error) {
-	if local {
-		cfg := fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: c.dir,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
-		return
-	}
-
-	arg := fileservice.ObjectStorageArguments{
-		Name:     defines.SharedFileServiceName,
-		Endpoint: "DISK",
-		Bucket:   c.dir,
-	}
-	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
+func (c *moObjStatArg) initFs(
+	ctx context.Context, local bool,
+) (err error) {
+	fromS3 := !local
+	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, fromS3)
 	return
 }
 
 func (c *moObjStatArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		err = c.initFs(ctx, c.local)
-		if err != nil {
-			return err
+		if err = c.initFs(ctx, c.local); err != nil {
+			return
 		}
 	}
 
 	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
-
-	return err
+	return
 }
 
 func (c *moObjStatArg) checkInputs() error {
@@ -430,15 +424,13 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 		return
 	}
 
-	header := data.BlockHeader()
 	ext := c.reader.GetMetaExtent()
 	size := c.GetObjSize(&data)
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := ObjectJson{
 		Name:        c.name,
-		Rows:        header.Rows(),
-		Cols:        header.ColumnCount(),
+		Rows:        data.BlockHeader().Rows(),
+		Cols:        data.BlockHeader().ColumnCount(),
 		BlkCnt:      data.BlockCount(),
 		MetaSize:    formatBytes(ext.Length()),
 		OriMetaSize: formatBytes(ext.OriginSize()),
@@ -446,8 +438,7 @@ func (c *moObjStatArg) GetBriefStat(obj *objectio.ObjectMeta) (res string, err e
 		OriDataSize: size[1],
 	}
 
-	data, err = json.MarshalIndent(o, "", "  ")
-	if err != nil {
+	if data, err = PrettyJson.MarshalIndent(o, "", "  "); err != nil {
 		return
 	}
 
@@ -463,8 +454,6 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	header := data.BlockHeader()
-
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 	colCnt := header.ColumnCount()
 	if c.col != invalidId && c.col >= int(colCnt) {
@@ -503,8 +492,7 @@ func (c *moObjStatArg) GetStandardStat(obj *objectio.ObjectMeta) (res string, er
 		Columns:     cols,
 	}
 
-	data, err = json.MarshalIndent(o, "", "  ")
-	if err != nil {
+	if data, err = PrettyJson.MarshalIndent(o, "", "  "); err != nil {
 		return
 	}
 
@@ -566,7 +554,6 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 	}
 
 	header := data.BlockHeader()
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	colCnt := header.ColumnCount()
 	cols := make([]ColumnJson, colCnt)
 	for i := range colCnt {
@@ -595,7 +582,7 @@ func (c *moObjStatArg) GetDetailedStat(obj *objectio.ObjectMeta) (res string, er
 		Columns:     cols,
 	}
 
-	data, err = json.MarshalIndent(o, "", "  ")
+	data, err = PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -687,7 +674,7 @@ func (c *objGetArg) Run() (err error) {
 	}
 
 	if c.ctx != nil {
-		c.fs = c.ctx.db.Runtime.Fs.Service
+		c.fs = c.ctx.db.Runtime.Fs
 	}
 
 	if err = c.InitReader(ctx, c.name); err != nil {
@@ -699,38 +686,24 @@ func (c *objGetArg) Run() (err error) {
 	return
 }
 
-func (c *objGetArg) initFs(ctx context.Context, local bool) (err error) {
-	if local {
-		cfg := fileservice.Config{
-			Name:    defines.LocalFileServiceName,
-			Backend: "DISK",
-			DataDir: c.dir,
-			Cache:   fileservice.DisabledCacheConfig,
-		}
-		c.fs, err = fileservice.NewFileService(ctx, cfg, nil)
-		return
-	}
-
-	arg := fileservice.ObjectStorageArguments{
-		Name:     defines.SharedFileServiceName,
-		Endpoint: "DISK",
-		Bucket:   c.dir,
-	}
-	c.fs, err = fileservice.NewS3FS(ctx, arg, fileservice.DisabledCacheConfig, nil, false, true)
+func (c *objGetArg) initFs(
+	ctx context.Context, local bool,
+) (err error) {
+	fromS3 := !local
+	c.fs, err = objectio.NewOfflineFS(ctx, c.dir, fromS3)
 	return
 }
 
 func (c *objGetArg) InitReader(ctx context.Context, name string) (err error) {
 	if c.fs == nil {
-		err = c.initFs(ctx, c.local)
-		if err != nil {
-			return err
+		if err = c.initFs(ctx, c.local); err != nil {
+			return
 		}
 	}
 
 	c.reader, err = objectio.NewObjectReaderWithStr(name, c.fs)
 
-	return err
+	return
 }
 
 func (c *objGetArg) checkInputs() error {
@@ -826,13 +799,12 @@ func (c *objGetArg) GetData(ctx context.Context) (res string, err error) {
 		cols = append(cols, col)
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := BlockJson{
 		Index:   blk.GetID(),
 		Cols:    blk.GetColumnCount(),
 		Columns: cols,
 	}
-	data, err := json.MarshalIndent(o, "", "  ")
+	data, err := PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -964,7 +936,6 @@ func (c *tableStatArg) Run() (err error) {
 		c.cnt++
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	o := tableStatJson{
 		Name:         c.name,
 		ObjectCount:  c.cnt,
@@ -972,7 +943,7 @@ func (c *tableStatArg) Run() (err error) {
 		OriginalSize: formatBytes(uint32(c.ori)),
 	}
 
-	data, err := json.MarshalIndent(o, "", "  ")
+	data, err := PrettyJson.MarshalIndent(o, "", "  ")
 	if err != nil {
 		return
 	}
@@ -982,56 +953,403 @@ func (c *tableStatArg) Run() (err error) {
 	return
 }
 
-type CheckpointArg struct {
-}
+type inmemoryCkpArg struct{}
 
-func (c *CheckpointArg) PrepareCommand() *cobra.Command {
+func (c *inmemoryCkpArg) PrepareCommand() *cobra.Command {
 	checkpointCmd := &cobra.Command{
-		Use:   "checkpoint",
-		Short: "checkpoint",
-		Long:  "Display information about a given checkpoint",
+		Use:   "inmemory-ckp",
+		Short: "inmemory checkpoint",
+		Long:  "Display information about a given checkpoint in inmemory mode",
 		Run:   RunFactory(c),
 	}
 
 	checkpointCmd.SetUsageTemplate(c.Usage())
 
-	stat := ckpStatArg{}
+	stat := inmemoryCkpStatArg{}
 	checkpointCmd.AddCommand(stat.PrepareCommand())
 
-	list := ckpListArg{}
+	list := inmemoryCkpListArg{}
 	checkpointCmd.AddCommand(list.PrepareCommand())
 
 	return checkpointCmd
 }
 
-func (c *CheckpointArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *inmemoryCkpArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *CheckpointArg) String() string {
-	return "table"
+func (c *inmemoryCkpArg) String() string {
+	return "inmemory-ckp"
 }
 
-func (c *CheckpointArg) Usage() (res string) {
+func (c *inmemoryCkpArg) Usage() (res string) {
 	res += "Available Commands:\n"
 	res += fmt.Sprintf("  %-5v show table information\n", "stat")
 	res += fmt.Sprintf("  %-5v display checkpoint or table information\n", "list")
 
 	res += "\n"
 	res += "Usage:\n"
-	res += "inspect table [flags] [options]\n"
+	res += "inspect inmemory-ckp [flags] [options]\n"
 
 	res += "\n"
-	res += "Use \"mo-tool inspect table <command> --help\" for more information about a given command.\n"
+	res += "Use \"mo-tool inspect inmemory-ckp <command> --help\" for more information about a given command.\n"
 
 	return
 }
 
-func (c *CheckpointArg) Run() error {
+func (c *inmemoryCkpArg) Run() error {
 	return nil
 }
 
-type ckpStatArg struct {
+type storageCkpArg struct{}
+
+func (c *storageCkpArg) PrepareCommand() *cobra.Command {
+	storageCkpCmd := &cobra.Command{
+		Use:   "storage-ckp",
+		Short: "storage checkpoint",
+		Long:  "Display information about a given checkpoint in storage mode",
+		Run:   RunFactory(c),
+	}
+
+	storageCkpCmd.SetUsageTemplate(c.Usage())
+
+	list := storageCkpListArg{}
+	storageCkpCmd.AddCommand(list.PrepareCommand())
+
+	stat := storageCkpStatArg{}
+	storageCkpCmd.AddCommand(stat.PrepareCommand())
+
+	return storageCkpCmd
+}
+
+func (c *storageCkpArg) FromCommand(cmd *cobra.Command) (err error) {
+	return nil
+}
+
+func (c *storageCkpArg) String() string {
+	return "storage-ckp"
+}
+
+func (c *storageCkpArg) Usage() (res string) {
+	res += "Available Commands:\n"
+	res += fmt.Sprintf("  %-5v display checkpoint or table information from storage\n", "list")
+	res += fmt.Sprintf("  %-5v display stat of a given checkpoint from storage\n", "stat")
+
+	res += "\n"
+	res += "Usage:\n"
+	res += "inspect storage-ckp [flags] [options]\n"
+
+	res += "\n"
+	res += "Use \"mo-tool inspect storage-ckp <command> --help\" for more information about a given command.\n"
+
+	return
+}
+
+func (c *storageCkpArg) Run() error {
+	return nil
+}
+
+type storageCkpBaseArg struct {
+	ctx         *inspectContext
+	fromS3      bool
+	dir, name   string
+	tid         int
+	res         string
+	fs          fileservice.FileService
+	readEntries func(
+		ctx context.Context,
+		sid string,
+		dir string,
+		name string,
+		verbose int,
+		onEachEntry func(entry *checkpoint.CheckpointEntry),
+		mp *mpool.MPool,
+		fs fileservice.FileService,
+	) (entries []*checkpoint.CheckpointEntry, err error)
+	getRanges func(
+		entry *checkpoint.CheckpointEntry,
+	) ([]ckputil.TableRange, error)
+}
+
+func (c *storageCkpBaseArg) String() string {
+	return c.res
+}
+
+func (c *storageCkpBaseArg) FromCommand(cmd *cobra.Command) (err error) {
+	if cmd.Flag("ictx") != nil {
+		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	}
+	c.fromS3, _ = cmd.Flags().GetBool("s3")
+	c.dir, _ = cmd.Flags().GetString("dir")
+	c.name, _ = cmd.Flags().GetString("name")
+	c.tid, _ = cmd.Flags().GetInt("tid")
+	// TODO: from s3 dir
+	return nil
+}
+
+func (c *storageCkpBaseArg) initOfflineFS(
+	ctx context.Context,
+) (err error) {
+	c.fs, err = objectio.NewOfflineFS(
+		ctx, c.dir, c.fromS3,
+	)
+	return
+}
+
+func (c *storageCkpBaseArg) getEntriesFromMeta(
+	ctx context.Context,
+) (entries []*checkpoint.CheckpointEntry, err error) {
+	readEntries := c.readEntries
+	if readEntries == nil {
+		readEntries = checkpoint.ReadEntriesFromMeta
+	}
+	entries, err = readEntries(
+		ctx,
+		"",
+		ioutil.GetCheckpointDir(),
+		c.name,
+		0,
+		nil,
+		common.CheckpointAllocator,
+		c.fs,
+	)
+	return
+}
+
+type storageCkpStatArg struct {
+	storageCkpBaseArg
+}
+
+func (c *storageCkpStatArg) PrepareCommand() *cobra.Command {
+	statCmd := &cobra.Command{
+		Use:   "stat",
+		Short: "checkpoint stat",
+		Long:  "Display stat of a given checkpoint from storage",
+		Run:   RunFactory(c),
+	}
+
+	statCmd.SetUsageTemplate(c.Usage())
+
+	statCmd.Flags().StringP("name", "n", "", "name")
+	statCmd.Flags().StringP("dir", "d", "", "dir")
+	statCmd.Flags().BoolP("s3", "", false, "from s3")
+	statCmd.Flags().IntP("tid", "t", invalidId, "table id")
+
+	return statCmd
+}
+
+func (c *storageCkpStatArg) Usage() (res string) {
+	res += "Examples:\n"
+	res += "  # Display stat of a given checkpoint from storage\n"
+	res += "  inspect storage-ckp stat -n meta_0-0_1749279217089645000-1.ckp -dir mo-data/shared\n"
+	res += "  # Display stat of a given checkpoint from s3\n"
+	res += "  inspect storage-ckp stat -n meta_0-0_1749279217089645000-1.ckp -d mo-data/shared --s3\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -d, --dir=invalidPath:\n"
+	res += "    The dir checkpoint, which does not contain 'ckp/'\n"
+	res += "  -n, --name=invalidPath:\n"
+	res += "    The name of checkpoint\n"
+	res += "  -s, --s3=false:\n"
+	res += "    From s3\n"
+	res += "  -t, --tid=invalidId:\n"
+	res += "    The id of table\n"
+
+	return
+}
+
+func (c *storageCkpStatArg) Run() (err error) {
+	if c.ctx == nil {
+		return c.runOffline()
+	}
+	return c.runOnline()
+}
+
+type CkpTableRange struct {
+	Entry  *checkpoint.CheckpointEntry
+	Ranges []ckputil.TableRange
+}
+
+func (c *storageCkpStatArg) getTableRanges(
+	ctx context.Context,
+	entries []*checkpoint.CheckpointEntry,
+) (ranges []CkpTableRange, err error) {
+	ranges = make([]CkpTableRange, 0, len(entries))
+	getRanges := c.getRanges
+	if getRanges == nil {
+		getRanges = func(
+			entry *checkpoint.CheckpointEntry,
+		) ([]ckputil.TableRange, error) {
+			return entry.GetTableRangesByID(
+				ctx,
+				uint64(c.tid),
+				common.CheckpointAllocator,
+				c.fs,
+			)
+		}
+	}
+	for _, entry := range entries {
+		var tmpRanges []ckputil.TableRange
+		if tmpRanges, err = getRanges(entry); err != nil {
+			return
+		}
+		ranges = append(ranges, CkpTableRange{
+			Entry:  entry,
+			Ranges: tmpRanges,
+		})
+	}
+	return
+}
+
+func (c *storageCkpStatArg) getAllTableRanges(
+	ctx context.Context,
+	entries []*checkpoint.CheckpointEntry,
+) (ranges []CkpTableRange, err error) {
+	getRanges := c.getRanges
+	if getRanges == nil {
+		getRanges = func(
+			entry *checkpoint.CheckpointEntry,
+		) ([]ckputil.TableRange, error) {
+			return entry.GetTableRanges(ctx, common.CheckpointAllocator, c.fs)
+		}
+	}
+	ranges = make([]CkpTableRange, 0, len(entries))
+	for _, entry := range entries {
+		var tmpRanges []ckputil.TableRange
+		if tmpRanges, err = getRanges(entry); err != nil {
+			return
+		}
+		ranges = append(ranges, CkpTableRange{
+			Entry:  entry,
+			Ranges: tmpRanges,
+		})
+	}
+	return
+}
+
+func (c *storageCkpStatArg) runOffline() (err error) {
+	if err = c.initOfflineFS(context.Background()); err != nil {
+		return
+	}
+	var entries []*checkpoint.CheckpointEntry
+	if ioutil.IsMetadataName(c.name) {
+		if entries, err = c.getEntriesFromMeta(context.Background()); err != nil {
+			return
+		}
+	} else {
+		// handle checkpoint data file
+		// TODO
+		return moerr.NewInternalErrorNoCtx("not implemented")
+	}
+
+	var ranges []CkpTableRange
+	if c.tid == invalidId {
+		if ranges, err = c.getAllTableRanges(context.Background(), entries); err != nil {
+			return
+		}
+	} else {
+		if ranges, err = c.getTableRanges(context.Background(), entries); err != nil {
+			return
+		}
+	}
+	// output ranges as json
+	jsonData, err := PrettyJson.MarshalIndent(ranges, "", "  ")
+	if err != nil {
+		return
+	}
+	c.res = string(jsonData)
+
+	return
+}
+
+func (c *storageCkpStatArg) runOnline() (err error) {
+	return moerr.NewInternalErrorNoCtx("not implemented")
+}
+
+type storageCkpListArg struct {
+	storageCkpBaseArg
+}
+
+func (c *storageCkpListArg) PrepareCommand() *cobra.Command {
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "checkpoint list",
+		Long:  "Display all checkpoints from storage",
+		Run:   RunFactory(c),
+	}
+
+	listCmd.SetUsageTemplate(c.Usage())
+
+	listCmd.Flags().StringP("name", "n", "", "name")
+	listCmd.Flags().BoolP("s3", "", false, "from s3")
+	listCmd.Flags().StringP("dir", "d", "", "dir")
+
+	return listCmd
+}
+
+func (c *storageCkpListArg) Usage() (res string) {
+	res += "Examples(Note: no need to specify dir if in the online mode):\n"
+	res += "  # Display all information for the given checkpoint meta from storage\n"
+	res += "  inspect storage-ckp list -n meta_0-0_1749279217089645000-1.ckp --dir mo-data/shared\n"
+	// res += "  # Display information for the given checkpoint data from storage\n"
+	// res += "  inspect storage-ckp list -n dir/019749d5-8f7c-733c-8b4c-4dae7731ae5b_00000\n"
+
+	res += "\n"
+	res += "Options:\n"
+	res += "  -n, --name=invalidPath:\n"
+	res += "    The name of checkpoint\n"
+	res += "  -d, --dir=invalidPath:\n"
+	res += "    The dir checkpoint, which does not contain 'ckp/'\n"
+	res += "  -s, --s3=false:\n"
+	res += "    From s3\n"
+
+	return
+}
+
+func (c *storageCkpListArg) Run() (err error) {
+	if c.ctx == nil {
+		return c.runOffline()
+	}
+	return c.runOnline()
+}
+
+func (c *storageCkpListArg) runOffline() (err error) {
+	ctx := context.Background()
+	if err = c.initOfflineFS(ctx); err != nil {
+		return
+	}
+	var entries []*checkpoint.CheckpointEntry
+	if ioutil.IsMetadataName(c.name) {
+		if entries, err = c.getEntriesFromMeta(ctx); err != nil {
+			return
+		}
+	} else {
+		// handle checkpoint data file
+		// TODO
+		return moerr.NewInternalErrorNoCtx("not implemented")
+	}
+
+	ckpEntries := NewCkpEntries(len(entries))
+	for _, entry := range entries {
+		ckpEntries.Add(entry)
+	}
+
+	data, err := ckpEntries.ToJson()
+	if err != nil {
+		return
+	}
+	c.res = string(data)
+
+	return
+}
+
+func (c *storageCkpListArg) runOnline() (err error) {
+	c.res = "online mode is not implemented"
+	return nil
+}
+
+type inmemoryCkpStatArg struct {
 	ctx   *inspectContext
 	cid   uint64
 	tid   uint64
@@ -1040,11 +1358,11 @@ type ckpStatArg struct {
 	res   string
 }
 
-func (c *ckpStatArg) PrepareCommand() *cobra.Command {
+func (c *inmemoryCkpStatArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
 		Use:   "stat",
-		Short: "checkpoint stat",
-		Long:  "Display information about a given checkpoint",
+		Short: "inmemory checkpoint stat",
+		Long:  "Display information about a given checkpoint in memory, only in the online mode",
 		Run:   RunFactory(c),
 	}
 
@@ -1058,7 +1376,7 @@ func (c *ckpStatArg) PrepareCommand() *cobra.Command {
 	return ckpStatCmd
 }
 
-func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *inmemoryCkpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	id, _ := cmd.Flags().GetInt("cid")
 	c.cid = uint64(id)
 	id, _ = cmd.Flags().GetInt("tid")
@@ -1071,11 +1389,11 @@ func (c *ckpStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *ckpStatArg) String() string {
+func (c *inmemoryCkpStatArg) String() string {
 	return c.res
 }
 
-func (c *ckpStatArg) Usage() (res string) {
+func (c *inmemoryCkpStatArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display all table information for the given checkpoint\n"
 	res += "  inspect checkpoint stat -c ckp_lsn\n"
@@ -1096,7 +1414,7 @@ func (c *ckpStatArg) Usage() (res string) {
 	return
 }
 
-func (c *ckpStatArg) Run() (err error) {
+func (c *inmemoryCkpStatArg) Run() (err error) {
 	if c.ctx == nil {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
@@ -1105,22 +1423,21 @@ func (c *ckpStatArg) Run() (err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	for _, entry := range entries {
 		if entry.LSN() == c.cid {
-			var data *logtail.CheckpointData
-			data, err = getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
-			if err != nil {
-				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
-			}
 			if c.all {
 				c.tid = 0
 			}
-			if checkpointJson, err = data.GetCheckpointMetaInfo(c.tid, c.limit); err != nil {
+			if checkpointJson, err = entry.GetCheckpointMetaInfo(
+				ctx,
+				c.tid,
+				common.CheckpointAllocator,
+				c.ctx.db.Runtime.Fs,
+			); err != nil {
 				return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", c.cid, err))
 			}
 		}
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
-	jsonData, err := json.MarshalIndent(checkpointJson, "", "  ")
+	jsonData, err := PrettyJson.MarshalIndent(checkpointJson, "", "  ")
 	if err != nil {
 		return
 	}
@@ -1129,51 +1446,54 @@ func (c *ckpStatArg) Run() (err error) {
 	return
 }
 
-func getCkpData(ctx context.Context, entry *checkpoint.CheckpointEntry, fs *objectio.ObjectFS) (data *logtail.CheckpointData, err error) {
-	if data, err = entry.PrefetchMetaIdx(ctx, fs); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
-	if err = entry.ReadMetaIdx(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
-	if err = entry.Prefetch(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
-	if err = entry.Read(ctx, fs, data); err != nil {
-		err = moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v", err))
-		return
-	}
-
-	return
-}
-
 type CkpEntry struct {
-	Index  int      `json:"index"`
-	LSN    string   `json:"lsn"`
-	Detail string   `json:"detail"`
-	Table  []uint64 `json:"table,omitempty"`
+	*checkpoint.CheckpointEntry
+	Index int      `json:"index"`
+	Table []uint64 `json:"table,omitempty"`
 }
 
 type CkpEntries struct {
-	Count       int        `json:"count"`
-	Checkpoints []CkpEntry `json:"checkpoints"`
+	Count   int        `json:"count"`
+	Entries []CkpEntry `json:"entries"`
 }
 
-type ckpListArg struct {
+func NewCkpEntries(
+	capacity int,
+) *CkpEntries {
+	return &CkpEntries{
+		Count:   0,
+		Entries: make([]CkpEntry, 0, capacity),
+	}
+}
+
+func (c *CkpEntries) Add(entry *checkpoint.CheckpointEntry) {
+	c.Entries = append(c.Entries, CkpEntry{
+		Index:           c.Count,
+		CheckpointEntry: entry,
+	})
+	c.Count++
+}
+
+func (c *CkpEntries) ToJson() (string, error) {
+	jsonData, err := PrettyJson.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(jsonData), nil
+}
+
+type inmemoryCkpListArg struct {
 	ctx   *inspectContext
 	cid   uint64
 	limit int
 	res   string
 }
 
-func (c *ckpListArg) PrepareCommand() *cobra.Command {
+func (c *inmemoryCkpListArg) PrepareCommand() *cobra.Command {
 	ckpStatCmd := &cobra.Command{
 		Use:   "list",
 		Short: "checkpoint list",
-		Long:  "Display all checkpoints",
+		Long:  "Display all checkpoints in memory",
 		Run:   RunFactory(c),
 	}
 
@@ -1184,7 +1504,7 @@ func (c *ckpListArg) PrepareCommand() *cobra.Command {
 	return ckpStatCmd
 }
 
-func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *inmemoryCkpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	if cmd.Flag("ictx") != nil {
 		c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	}
@@ -1194,11 +1514,11 @@ func (c *ckpListArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *ckpListArg) String() string {
+func (c *inmemoryCkpListArg) String() string {
 	return c.res
 }
 
-func (c *ckpListArg) Usage() (res string) {
+func (c *inmemoryCkpListArg) Usage() (res string) {
 	res += "Examples:\n"
 	res += "  # Display all checkpoints in memory\n"
 	res += "  inspect checkpoint list\n"
@@ -1214,7 +1534,7 @@ func (c *ckpListArg) Usage() (res string) {
 	return
 }
 
-func (c *ckpListArg) Run() (err error) {
+func (c *inmemoryCkpListArg) Run() (err error) {
 	if c.ctx == nil {
 		return moerr.NewInfoNoCtx("it is an online command")
 	}
@@ -1228,30 +1548,21 @@ func (c *ckpListArg) Run() (err error) {
 	return
 }
 
-func (c *ckpListArg) getCkpList() (res string, err error) {
+func (c *inmemoryCkpListArg) getCkpList() (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
-	ckpEntries := make([]CkpEntry, 0, len(entries))
+	ckpEntries := NewCkpEntries(len(entries))
 	for i, entry := range entries {
 		if i >= c.limit {
 			break
 		}
-		ckpEntries = append(ckpEntries, CkpEntry{
-			Index:  i,
-			LSN:    entry.LSNString(),
-			Detail: entry.String(),
-		})
+		ckpEntries.Add(entry)
 	}
 
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
-	ckpEntriesJson := CkpEntries{
-		Count:       len(ckpEntries),
-		Checkpoints: ckpEntries,
-	}
-	jsonData, err := json.MarshalIndent(ckpEntriesJson, "", "  ")
+	data, err := ckpEntries.ToJson()
 	if err != nil {
 		return
 	}
-	res = string(jsonData)
+	res = data
 
 	return
 }
@@ -1261,7 +1572,7 @@ type TableIds struct {
 	Ids      []uint64 `json:"tables"`
 }
 
-func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
+func (c *inmemoryCkpListArg) getTableList(ctx context.Context) (res string, err error) {
 	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
 	var ids []uint64
 	for _, entry := range entries {
@@ -1269,18 +1580,21 @@ func (c *ckpListArg) getTableList(ctx context.Context) (res string, err error) {
 			continue
 		}
 
-		data, _ := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
-		ids = data.GetTableIds()
+		ids, _ = entry.GetTableIDs(
+			ctx,
+			entry.GetLocation(),
+			common.CheckpointAllocator,
+			c.ctx.db.Runtime.Fs,
+		)
 	}
 	if c.limit < len(ids) {
 		ids = ids[:c.limit]
 	}
-	var json = jsoniter.ConfigCompatibleWithStandardLibrary
 	tables := TableIds{
 		TableCnt: len(ids),
 		Ids:      ids,
 	}
-	jsonData, err := json.MarshalIndent(tables, "", "  ")
+	jsonData, err := PrettyJson.MarshalIndent(tables, "", "  ")
 	if err != nil {
 		return
 	}
@@ -1454,66 +1768,12 @@ func (c *gcDumpArg) getCheckpointObject(ctx context.Context, pinned map[string]b
 		tnObj := tnLoc.Name().String()
 		pinned[tnObj] = true
 
-		data, err := getCkpData(ctx, entry, c.ctx.db.Runtime.Fs)
+		err := entry.GetObjects(ctx, pinned, common.CheckpointAllocator, c.ctx.db.Runtime.Fs)
 		if err != nil {
 			return moerr.NewInfoNoCtx(fmt.Sprintf("failed to get checkpoint data %v, %v", entry.LSN(), err))
 		}
-		getObjectsFromCkpMeta(data, pinned)
-		getObjectsFromCkpData(data, pinned)
 	}
 	return
-}
-
-func getObjectsFromCkpMeta(data *logtail.CheckpointData, pinned map[string]bool) {
-	bats := data.GetBatches()
-
-	metaBat := bats[logtail.MetaIDX]
-	metaAttr := logtail.MetaSchemaAttr
-	for _, attr := range metaAttr {
-		if attr == logtail.SnapshotAttr_TID {
-			continue
-		}
-		vec := metaBat.GetVectorByName(attr)
-		for i := 0; i < vec.Length(); i++ {
-			v := vec.Get(i).([]byte)
-			if len(v) == 0 {
-				continue
-			}
-			loc := objectio.Location(v)
-			obj := loc.Name().String()
-			pinned[obj] = true
-		}
-	}
-
-	tnBat := bats[logtail.TNMetaIDX]
-	vec := tnBat.GetVectorByName(logtail.CheckpointMetaAttr_BlockLocation)
-	for i := 0; i < vec.Length(); i++ {
-		v := vec.Get(i).([]byte)
-		if len(v) == 0 {
-			continue
-		}
-		loc := objectio.Location(v)
-		obj := loc.Name().String()
-		pinned[obj] = true
-	}
-}
-
-func getObjectsFromCkpData(data *logtail.CheckpointData, pinned map[string]bool) {
-	bat := data.GetObjectBatchs()
-	vec := bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
-	for i := 0; i < vec.Length(); i++ {
-		v := vec.Get(i).([]byte)
-		obj := objectio.ObjectStats(v)
-		pinned[obj.ObjectName().String()] = true
-	}
-
-	bat = data.GetTombstoneObjectBatchs()
-	vec = bat.GetVectorByName(logtail.ObjectAttr_ObjectStats)
-	for i := 0; i < vec.Length(); i++ {
-		v := vec.Get(i).([]byte)
-		obj := objectio.ObjectStats(v)
-		pinned[obj.ObjectName().String()] = true
-	}
 }
 
 type gcRemoveArg struct {

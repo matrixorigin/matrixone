@@ -271,6 +271,7 @@ func (bs *baseStore) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
 	_ func() driver.ReplayMode,
+	_ *driver.ReplayOption,
 ) error {
 	r := newReplayer(h)
 	bs.addrs = r.addrs

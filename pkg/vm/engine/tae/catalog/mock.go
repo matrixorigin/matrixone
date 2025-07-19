@@ -53,11 +53,11 @@ type mockTxnStore struct {
 	entries map[txnif.TxnEntry]bool
 }
 
-func (store *mockTxnStore) AddTxnEntry(et txnif.TxnEntryType, entry txnif.TxnEntry) {
+func (store *mockTxnStore) AddTxnEntry(entry txnif.TxnEntry) {
 	store.entries[entry] = true
 }
 
-func (store *mockTxnStore) BindTxn(txn txnif.AsyncTxn) {
+func (store *mockTxnStore) BindTxn(txn txnif.AsyncTxn, _ bool) {
 	store.txn = txn
 }
 
@@ -136,7 +136,7 @@ func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) 
 	if err != nil {
 		return nil, err
 	}
-	h.Txn.GetStore().AddTxnEntry(0, tbl)
+	h.Txn.GetStore().AddTxnEntry(tbl)
 	rel = newMockTableHandle(h.catalog, h.Txn, tbl)
 	return
 }
@@ -147,7 +147,7 @@ func (h *mockDBHandle) CreateRelationWithID(def any, id uint64) (rel handle.Rela
 	if err != nil {
 		return nil, err
 	}
-	h.Txn.GetStore().AddTxnEntry(0, tbl)
+	h.Txn.GetStore().AddTxnEntry(tbl)
 	rel = newMockTableHandle(h.catalog, h.Txn, tbl)
 	return
 }
@@ -169,7 +169,7 @@ func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err
 	if err != nil {
 		return nil, err
 	}
-	h.Txn.GetStore().AddTxnEntry(0, entry)
+	h.Txn.GetStore().AddTxnEntry(entry)
 	rel = newMockTableHandle(h.catalog, h.Txn, entry)
 	return
 }
@@ -224,7 +224,7 @@ func (txn *mockTxn) CreateDatabase(name, createSql, datTyp string) (handle.Datab
 	if err != nil {
 		return nil, err
 	}
-	txn.Store.AddTxnEntry(0, entry)
+	txn.Store.AddTxnEntry(entry)
 	h := newMockDBHandle(txn.catalog, txn, entry)
 	return h, nil
 }
@@ -234,7 +234,7 @@ func (txn *mockTxn) CreateDatabaseWithID(ctx context.Context, name, createSql, d
 	if err != nil {
 		return nil, err
 	}
-	txn.Store.AddTxnEntry(0, entry)
+	txn.Store.AddTxnEntry(entry)
 	h := newMockDBHandle(txn.catalog, txn, entry)
 	return h, nil
 }
@@ -264,7 +264,7 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	txn.Store.AddTxnEntry(0, entry)
+	txn.Store.AddTxnEntry(entry)
 	return newMockDBHandle(txn.catalog, txn, entry), nil
 }
 
@@ -273,7 +273,7 @@ func (txn *mockTxn) DropDatabaseByID(id uint64) (handle.Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	txn.Store.AddTxnEntry(0, entry)
+	txn.Store.AddTxnEntry(entry)
 	return newMockDBHandle(txn.catalog, txn, entry), nil
 }
 

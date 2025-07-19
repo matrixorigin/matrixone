@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -137,24 +138,46 @@ func newImplPrefixIn() *implPrefixIn {
 	return &implPrefixIn{ready: false}
 }
 
-func (op *implPrefixIn) init(rvec *vector.Vector) {
+func (op *implPrefixIn) init(rvec *vector.Vector, mp *mpool.MPool) error {
 	op.ready = true
 	op.vals = make([][]byte, rvec.Length())
 	vlen := 0
+
+	var tmpVec *vector.Vector
+	var err error
+	if !rvec.GetSorted() {
+		tmpVec, err = rvec.Dup(mp)
+		if err != nil {
+			return err
+		}
+		tmpVec.InplaceSortAndCompact()
+		rvec = tmpVec
+	}
+	defer func() {
+		if tmpVec != nil {
+			tmpVec.Free(mp)
+		}
+	}()
+
 	rcol, rarea := vector.MustVarlenaRawData(rvec)
 	for i := 0; i < rvec.Length(); i++ {
-		rval := rcol[i].GetByteSlice(rarea)
+		var rval []byte
+		rval = append(rval, rcol[i].GetByteSlice(rarea)...)
 		if vlen == 0 || !bytes.HasPrefix(rval, op.vals[vlen-1]) {
 			op.vals[vlen] = rval
 			vlen++
 		}
 	}
 	op.vals = op.vals[:vlen]
+	return nil
 }
 
 func (op *implPrefixIn) doPrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	if !op.ready {
-		op.init(parameters[1])
+		err := op.init(parameters[1], proc.Mp())
+		if err != nil {
+			return err
+		}
 	}
 
 	lvec := parameters[0]

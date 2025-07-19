@@ -34,8 +34,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
+type WriteArena struct {
+	data       []byte
+	usedOffset int
+}
+
+func NewArena(size int) *WriteArena {
+	return &WriteArena{
+		data: make([]byte, size),
+	}
+}
+
+func (a *WriteArena) Alloc(size int) []byte {
+	if a.usedOffset+size > len(a.data) {
+		return make([]byte, size)
+	}
+	offset := a.usedOffset
+	a.usedOffset += size
+	return a.data[offset:a.usedOffset]
+}
+
+func (a *WriteArena) Reset() {
+	a.usedOffset = 0
+}
+
 type objectWriterV1 struct {
 	sync.RWMutex
+	arena             *WriteArena
 	schemaVer         uint32
 	seqnums           *Seqnums
 	object            *Object
@@ -72,6 +97,7 @@ const (
 	WriterGC
 	WriterETL
 	WriterTmp
+	WriterDumpTable
 )
 
 // make it mutable in ut
@@ -98,6 +124,8 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		name = BuildETLName()
 	case WriterTmp:
 		name = BuildTmpName()
+	case WriterDumpTable:
+		name = BuildDumpTableName()
 	}
 	writer := &objectWriterV1{
 		seqnums:       NewSeqnums(nil),
@@ -114,10 +142,11 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 	return writer, nil
 }
 
-func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersion uint32, seqnums []uint16) (*objectWriterV1, error) {
+func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersion uint32, seqnums []uint16, arena *WriteArena) (*objectWriterV1, error) {
 	fileName := name.String()
 	object := NewObject(fileName, fs)
 	writer := &objectWriterV1{
+		arena:         arena,
 		schemaVer:     schemaVersion,
 		seqnums:       NewSeqnums(seqnums),
 		fileName:      fileName,
@@ -204,6 +233,10 @@ func (w *objectWriterV1) Write(batch *batch.Batch) (BlockObject, error) {
 	block := NewBlock(w.seqnums)
 	w.AddBlock(block, batch, w.seqnums)
 	return block, nil
+}
+
+func (w *objectWriterV1) GetOrignalSize() uint32 {
+	return w.originSize
 }
 
 func (w *objectWriterV1) WriteSubBlock(batch *batch.Batch, dataType DataMetaType) (BlockObject, int, error) {
@@ -614,7 +647,11 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 		return
 	}
 	length := uint32(len(tmpData))
-	data = make([]byte, length)
+	if w.arena != nil {
+		data = w.arena.Alloc(int(length))
+	} else {
+		data = make([]byte, length)
+	}
 	copy(data, tmpData[:length])
 	extent = NewExtent(compress.Lz4, offset, length, uint32(dataLen))
 	return

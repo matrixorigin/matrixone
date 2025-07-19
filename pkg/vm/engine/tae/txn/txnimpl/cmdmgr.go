@@ -23,18 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type commandManager struct {
 	cmd    *txnbase.TxnCmd
 	lsn    uint64
 	csn    uint32
-	driver wal.Driver
+	driver wal.Store
 }
 
-func newCommandManager(driver wal.Driver, maxMessageSize uint64) *commandManager {
+func newCommandManager(driver wal.Store, maxMessageSize uint64) *commandManager {
 	return &commandManager{
 		cmd:    txnbase.NewTxnCmd(maxMessageSize),
 		driver: driver,
@@ -78,11 +78,11 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 		return
 	}
 	info := &entry.Info{
-		Group: wal.GroupPrepare,
+		Group: wal.GroupUserTxn,
 	}
 	logEntry.SetInfo(info)
 	t2 := time.Now()
-	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)
+	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupUserTxn, logEntry)
 	t3 := time.Now()
 	if t3.Sub(t1) > time.Millisecond*500 {
 		logutil.Warn(

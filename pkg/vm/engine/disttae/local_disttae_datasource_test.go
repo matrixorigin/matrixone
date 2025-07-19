@@ -47,7 +47,7 @@ func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	for i := 0; i < blkNum; i++ {
 		blkID := types.NewBlockidWithObjectID(&objID, uint16(blkNum))
 		blkInfo := objectio.BlockInfo{
-			BlockID: *blkID,
+			BlockID: blkID,
 			MetaLoc: metaLoc,
 		}
 		blkInfo.ObjectFlags |= objectio.ObjectFlag_Appendable
@@ -97,7 +97,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 	pState := logtailreplay.NewPartitionState("", true, 0)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
-		writer, err := colexec.NewS3TombstoneWriter()
+		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type)
 		require.NoError(t, err)
 
 		bat := readutil.NewCNTombstoneBatch(
@@ -130,14 +130,16 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 
-		writer.StashBatch(proc, bat)
-
-		_, ss, err := writer.SortAndSync(proc.Ctx, proc)
+		err = writer.Write(ctx, proc.Mp(), bat)
 		require.NoError(t, err)
-		require.False(t, ss.IsZero())
+
+		ss, err := writer.Sync(proc.Ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+		require.False(t, ss[0].IsZero())
 
 		//stats = append(stats, ss)
-		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss)
+		txnOp.GetWorkspace().(*Transaction).StashFlushedTombstones(ss[0])
 	}
 
 	deletedMask := objectio.GetReusableBitmap()
@@ -162,7 +164,7 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	// This batch can be obtained by 'insert into db.t1 select result from generate_series(1, 67117056) g;'
 	s3Bat := batch.NewWithSize(2)
 	s3Bat.SetRowCount(8193)
-	s3Bat.SetAttributes([]string{catalog.BlockMeta_MetaLoc, catalog.ObjectMeta_ObjectStats})
+	s3Bat.SetAttributes([]string{catalog.BlockMeta_BlockInfo, catalog.ObjectMeta_ObjectStats})
 	txn := &Transaction{
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 		op:            txnOp,

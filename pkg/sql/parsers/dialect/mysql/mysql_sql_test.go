@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -78,6 +79,64 @@ func TestOriginSQL(t *testing.T) {
 	out := tree.String(ast, dialect.MYSQL)
 	if orginSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", orginSQL.output, out)
+	}
+}
+
+var (
+	partitionSQL = struct {
+		input  string
+		output string
+	}{
+		input:  "create table `db_testalterpartitiontablewithaddcolumn_702488000`.`testalterpartitiontablewithaddcolumn_copy_01979b62-2421-7956-81bf-53bb3b5a0090` (`c` int default null comment 'abc', `b` int default null, `d` int default null) partition by hash (c) partitions 2",
+		output: "create table `db_testalterpartitiontablewithaddcolumn_702488000`.`testalterpartitiontablewithaddcolumn_copy_01979b62-2421-7956-81bf-53bb3b5a0090` (`c` int default null comment abc, `b` int default null, `d` int default null) partition by hash (`c`) partitions 2",
+	}
+)
+
+func TestQuoteIdentifer(t *testing.T) {
+	if partitionSQL.output == "" {
+		partitionSQL.output = partitionSQL.input
+	}
+	ast, err := ParseOne(context.TODO(), partitionSQL.input, 1)
+	if err != nil {
+		t.Errorf("Parse(%q) err: %v", partitionSQL.input, err)
+		return
+	}
+	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier())
+	if partitionSQL.output != out {
+		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
+	}
+}
+
+var (
+	pitrSQLs = []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create pitr pitr_d for database db1 range 1 'd' internal",
+			output: "create pitr pitr_d for database db1 range 1  d internal",
+		}, {
+			input:  "drop pitr pitr_d internal",
+			output: "drop pitr pitr_d internal",
+		},
+	}
+)
+
+func TestPitrInternal(t *testing.T) {
+	for _, pitrSQL := range pitrSQLs {
+		if pitrSQL.output == "" {
+			pitrSQL.output = pitrSQL.input
+		}
+		ast, err := ParseOne(context.TODO(), pitrSQL.input, 1)
+		if err != nil {
+			t.Errorf("Parse(%q) err: %v", pitrSQL.input, err)
+			return
+		}
+		out := tree.String(ast, dialect.MYSQL)
+		if pitrSQL.output != out {
+			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", pitrSQL.output, out)
+		}
+		require.Equal(t, ast.StmtKind().ExecLocation(), tree.EXEC_IN_ENGINE)
 	}
 }
 
@@ -3204,6 +3263,25 @@ var (
 		{
 			input:  "use ",
 			output: "use",
+		},
+		{
+			input:  "create index idx using hnsw on A (a) M 4 ef_construction 100 ef_search 32 QUANTIZATION 'BF16' OP_TYPE 'VECTOR_L2_OPS'",
+			output: "create index idx using hnsw on a (a) M 4 EF_CONSTRUCTION 100 EF_SEARCH 32 QUANTIZATION BF16 OP_TYPE VECTOR_L2_OPS ",
+		},
+		{
+			input:  "CREATE TABLE `vector_index_01` ( `a` bigint NOT NULL, `b` vecf32(128) DEFAULT NULL, PRIMARY KEY (`a`), KEY `idx01` USING hnsw (`b`) m = 4  ef_search = 64 ef_construction = 100  quantization 'bf16'  op_type 'vector_l2_ops' )",
+			output: "create table vector_index_01 (a bigint not null, b vecf32(128) default null, primary key (a), index idx01 using hnsw (b)  M 4 EF_CONSTRUCTION 100 EF_SEARCH 64 QUANTIZATION bf16 OP_TYPE vector_l2_ops )",
+		},
+		{
+			input:  "alter table t1 alter reindex idx1 hnsw",
+			output: "alter table t1 alter reindex idx1 hnsw",
+		},
+		{
+			input:  "select t.a from sa.t centroidx ('Vector_ip_ops') join u",
+			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
+		},
+		{
+			input: "alter user u1 lock",
 		},
 	}
 )

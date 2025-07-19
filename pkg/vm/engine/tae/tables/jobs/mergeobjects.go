@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -60,6 +61,9 @@ type mergeObjectsTask struct {
 	did, tid          uint64
 	isTombstone       bool
 
+	level int8
+	note  string
+
 	blkCnt     []int
 	nMergedBlk []int
 	schema     *catalog.Schema
@@ -72,6 +76,8 @@ type mergeObjectsTask struct {
 
 	segmentID *objectio.Segmentid
 	num       uint16
+
+	arena *objectio.WriteArena
 }
 
 func NewMergeObjectsTask(
@@ -151,7 +157,23 @@ func NewMergeObjectsTask(
 		task.attrs = append(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
+
+	if task.GetTotalSize() > 300*common.Const1MBytes {
+		task.arena = objectio.NewArena(300 * common.Const1MBytes)
+	}
 	return
+}
+
+func (task *mergeObjectsTask) SetLevel(level int8) {
+	task.level = level
+}
+
+func (task *mergeObjectsTask) SetTaskSourceNote(note string) {
+	task.note = note
+}
+
+func (task *mergeObjectsTask) TaskSourceNote() string {
+	return task.note
 }
 
 func (task *mergeObjectsTask) GetObjectCnt() int {
@@ -206,7 +228,7 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 func (task *mergeObjectsTask) HostHintName() string { return "TN" }
 
 func (task *mergeObjectsTask) LoadNextBatch(
-	ctx context.Context, objIdx uint32,
+	ctx context.Context, objIdx uint32, reuseBatch *batch.Batch,
 ) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
@@ -216,14 +238,35 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}
 	var err error
 	var data *containers.Batch
-	releaseF := func() {
-		if data != nil {
-			data.Close()
+	var retBatch *batch.Batch
+	var releaseF func()
+
+	if reuseBatch != nil {
+		if reuseBatch.RowCount() != 0 {
+			panic("reuseBatch is not empty")
+		}
+		data = containers.ToTNBatch(reuseBatch, common.MergeAllocator)
+	}
+
+	if task.nMergedBlk[objIdx] == task.blkCnt[objIdx]-1 {
+		releaseF = func() {
+			if data != nil {
+				data.Close()
+			}
+		}
+	} else {
+		releaseF = func() {
+			if retBatch != nil {
+				retBatch.CleanOnlyData()
+			}
 		}
 	}
+
 	defer func() {
 		if err != nil {
-			releaseF()
+			if data != nil {
+				data.Close()
+			}
 		}
 	}()
 
@@ -271,17 +314,17 @@ func (task *mergeObjectsTask) LoadNextBatch(
 	}
 	task.nMergedBlk[objIdx]++
 
-	bat := batch.New(task.attrs)
+	retBatch = batch.New(task.attrs)
 	for i, idx := range task.idxs {
 		if idx == objectio.SEQNUM_COMMITTS {
 			id := slices.Index(task.attrs, objectio.TombstoneAttr_CommitTs_Attr)
-			bat.Vecs[id] = data.Vecs[i].GetDownstreamVector()
+			retBatch.Vecs[id] = data.Vecs[i].GetDownstreamVector()
 		} else {
-			bat.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
+			retBatch.Vecs[idx] = data.Vecs[i].GetDownstreamVector()
 		}
 	}
-	bat.SetRowCount(data.Length())
-	return bat, data.Deletes, releaseF, nil
+	retBatch.SetRowCount(data.Length())
+	return retBatch, data.Deletes, releaseF, nil
 }
 
 func (task *mergeObjectsTask) GetCommitEntry() *api.MergeCommitEntry {
@@ -308,6 +351,7 @@ func (task *mergeObjectsTask) prepareCommitEntry() *api.MergeCommitEntry {
 	commitEntry.TblId = task.tid
 	commitEntry.TableName = task.schema.Name
 	commitEntry.StartTs = task.txn.GetStartTS().ToTimestamp()
+	commitEntry.Level = int32(task.level)
 	for _, o := range task.mergedObjs {
 		obj := *o.GetObjectStats()
 		commitEntry.MergedObjs = append(commitEntry.MergedObjs, obj[:])
@@ -337,7 +381,9 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 	} else if task.schema.HasSortKey() {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
-
+	if task.arena != nil {
+		task.arena.Reset()
+	}
 	writer := ioutil.ConstructWriterWithSegmentID(
 		task.segmentID,
 		task.num,
@@ -346,7 +392,8 @@ func (task *mergeObjectsTask) PrepareNewWriter() *ioutil.BlockWriter {
 		sortkeyPos,
 		sortkeyIsPK,
 		task.isTombstone,
-		task.rt.Fs.Service,
+		task.rt.Fs,
+		task.arena,
 	)
 	task.num++
 	return writer
@@ -371,6 +418,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 			)
 		}
 	}()
+	begin := time.Now()
 
 	if time.Since(task.createAt) > time.Second*10 {
 		logutil.Warn(
@@ -403,6 +451,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		task.isTombstone,
 	); err != nil {
 		return err
+	}
+
+	if task.isTombstone {
+		v2.TaskTombstoneMergeDurationHistogram.Observe(time.Since(begin).Seconds())
+	} else {
+		v2.TaskDataMergeDurationHistogram.Observe(time.Since(begin).Seconds())
 	}
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -461,6 +515,16 @@ func HandleMergeEntryInTxn(
 		// set stats and sorted property
 		objstats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
 		err := objectio.SetObjectStats(objstats, &stats)
+		// another site to SetLevel is in commiting append in table space
+		if entry.Level > 0 || objstats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+			// for layzer > 0, bump up level
+			// for layzer 0, only bump up level when the produced object's origin size > 90MB
+			if entry.Level < 7 {
+				objstats.SetLevel(int8(entry.Level + 1))
+			} else {
+				objstats.SetLevel(7)
+			}
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -167,22 +167,22 @@ func TestHybridBloomFilter(t *testing.T) {
 	obj2 := types.NewObjectid()
 	obj3 := types.NewObjectid()
 	obj4 := types.NewObjectid()
-	blk1_0 := types.NewBlockidWithObjectID(obj1, 0)
-	blk1_1 := types.NewBlockidWithObjectID(obj1, 1)
-	blk2_0 := types.NewBlockidWithObjectID(obj2, 0)
-	blk3_0 := types.NewBlockidWithObjectID(obj3, 0)
-	blk3_1 := types.NewBlockidWithObjectID(obj3, 1)
-	blk3_2 := types.NewBlockidWithObjectID(obj3, 2)
-	blk3_3 := types.NewBlockidWithObjectID(obj3, 3)
+	blk1_0 := types.NewBlockidWithObjectID(&obj1, 0)
+	blk1_1 := types.NewBlockidWithObjectID(&obj1, 1)
+	blk2_0 := types.NewBlockidWithObjectID(&obj2, 0)
+	blk3_0 := types.NewBlockidWithObjectID(&obj3, 0)
+	blk3_1 := types.NewBlockidWithObjectID(&obj3, 1)
+	blk3_2 := types.NewBlockidWithObjectID(&obj3, 2)
+	blk3_3 := types.NewBlockidWithObjectID(&obj3, 3)
 	rowids := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
 	defer rowids.Close()
 	for i := 0; i < 10; i++ {
-		rowids.Append(*types.NewRowid(blk1_0, uint32(i)), false)
-		rowids.Append(*types.NewRowid(blk1_1, uint32(i)), false)
-		rowids.Append(*types.NewRowid(blk2_0, uint32(i)), false)
-		rowids.Append(*types.NewRowid(blk3_0, uint32(i)), false)
-		rowids.Append(*types.NewRowid(blk3_1, uint32(i)), false)
-		rowids.Append(*types.NewRowid(blk3_2, uint32(i)), false)
+		rowids.Append(types.NewRowid(&blk1_0, uint32(i)), false)
+		rowids.Append(types.NewRowid(&blk1_1, uint32(i)), false)
+		rowids.Append(types.NewRowid(&blk2_0, uint32(i)), false)
+		rowids.Append(types.NewRowid(&blk3_0, uint32(i)), false)
+		rowids.Append(types.NewRowid(&blk3_1, uint32(i)), false)
+		rowids.Append(types.NewRowid(&blk3_2, uint32(i)), false)
 	}
 	objectFn := func(in []byte) []byte {
 		return in[:types.ObjectBytesSize]
@@ -204,7 +204,8 @@ func TestHybridBloomFilter(t *testing.T) {
 	err = hbf2.Unmarshal(hbf_buf)
 	require.NoError(t, err)
 
-	_, err = hbf2.PrefixMayContainsKey(types.NewRowid(blk1_0, 0)[:], 2, 1)
+	nrid := types.NewRowid(&blk1_0, 0)
+	_, err = hbf2.PrefixMayContainsKey(nrid[:], 2, 1)
 	require.NotNil(t, err)
 
 	ok, err := hbf2.PrefixMayContainsKey(obj1[:], objectFnId, 1)
@@ -253,7 +254,7 @@ func TestHybridBloomFilter(t *testing.T) {
 		require.True(t, ok)
 	}
 
-	rowid := types.NewRowid(blk3_2, 100)
+	rowid := types.NewRowid(&blk3_2, 100)
 	_, err = hbf2.MayContainsKey(rowid[:])
 	require.NoError(t, err)
 	// false postive

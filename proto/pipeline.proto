@@ -202,6 +202,7 @@ message LockTarget {
   plan.Expr lock_rows = 9;
   bool lock_table_at_the_end = 10;
   plan.ObjectRef obj_ref = 11;
+  int32 partition_col_idx_in_bat = 12;
 }
 
 message LockOp {
@@ -386,6 +387,7 @@ message ProductL2 {
   repeated int32 col_list = 2;
   plan.Expr  expr = 3;
   int32 join_map_tag = 4;
+  string vector_op_type = 5;
 }
 
 message IndexJoin {
@@ -399,6 +401,7 @@ message TableFunction {
   repeated plan.Expr args = 3;
   bytes params = 4;
   string name = 5;
+  bool is_single = 6;
 }
 
 message ExternalName2ColIndex {
@@ -505,14 +508,15 @@ message Instruction{
   DedupJoin   dedup_join = 12;
   Product    product = 13;
   TableFunction table_function = 14;
-  ExternalScan external_scan = 16;
-  Insert insert = 17;
-  OnDuplicateKey on_duplicate_key = 18;
-  PreInsert pre_insert               = 19;
-  PreInsertUnique pre_insert_unique  = 20;
-  repeated plan.OrderBySpec order_by = 21;
-  repeated plan.Expr    project_list = 22;
-  plan.Expr    filter = 23;
+  ExternalScan external_scan = 15;
+  Insert insert = 16;
+  OnDuplicateKey on_duplicate_key = 17;
+  PreInsert pre_insert               = 18;
+  PreInsertUnique pre_insert_unique  = 19;
+  repeated plan.OrderBySpec order_by = 20;
+  repeated plan.Expr project_list = 21;
+  repeated plan.Expr filters = 22;
+  repeated plan.Expr runtime_filters = 23;
   plan.Expr    limit = 24;
   plan.Expr    offset = 25;
   // isFirst identifies whether it is the first instruction of analyzeInfo corresponding to idx
@@ -567,6 +571,7 @@ message Source {
   timestamp.Timestamp timestamp = 10;
   repeated plan.RuntimeFilterSpec runtime_filter_probe_list = 11;
   bool is_const = 12;
+  repeated plan.msgHeader recv_msg_list = 13 [(gogoproto.nullable) = false];
 }
 
 message NodeInfo {

@@ -36,7 +36,7 @@ import (
 
 func Test_ConstructBasePKFilter(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	exprStrings := []string{
 		"a=10",
 		"a=20 and a=10",
@@ -757,6 +757,17 @@ func Test_ConstructBasePKFilter(t *testing.T) {
 	require.Zero(t, m.CurrNB())
 }
 
+func encodeIntToUUID(x int32) types.Uuid {
+	hex := types.EncodeInt32(&x)
+	for i := 16 - len(hex); i > 0; i-- {
+		hex = append(hex, 0)
+	}
+
+	u := types.Uuid(hex)
+
+	return u
+}
+
 func TestConstructBlockPKFilter(t *testing.T) {
 	mp, err := mpool.NewMPool("", mpool.GB*2, 0)
 	require.NoError(t, err)
@@ -768,6 +779,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		function.PREFIX_EQ,
 		function.PREFIX_IN,
 		function.PREFIX_BETWEEN,
+		function.IN,
 	}
 
 	tys := []types.T{
@@ -775,7 +787,8 @@ func TestConstructBlockPKFilter(t *testing.T) {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
 		types.T_date, types.T_timestamp,
-		types.T_decimal128, types.T_varchar,
+		types.T_decimal128, types.T_varchar, types.T_uuid,
+		types.T_char, types.T_json, types.T_binary,
 	}
 
 	needVec := func(op int) bool {
@@ -792,7 +805,16 @@ func TestConstructBlockPKFilter(t *testing.T) {
 			op == function.PREFIX_BETWEEN
 	}
 
-	for range 100 {
+	var msg string
+
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println(msg)
+			panic(r)
+		}
+	}()
+
+	for range 200 {
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 		lb := float64(rnd.Intn(100) + 2)
 		ub := float64(rnd.Intn(100) + 2)
@@ -945,7 +967,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					if needVec(op) {
 						//vec = vector.NewVec(ty.ToType())
 						for x := lb; x <= ub; x++ {
-							xx := float64(x)
+							xx := x
 							if opOnBinary(op) {
 								vector.AppendBytes(vec, types.EncodeFloat64(&xx), false, mp)
 							} else {
@@ -953,9 +975,9 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							}
 						}
 					}
-					llb = types.EncodeValue(float64(lb), ty)
-					uub = types.EncodeValue(float64(ub), ty)
-				case types.T_varchar, types.T_binary:
+					llb = types.EncodeValue(lb, ty)
+					uub = types.EncodeValue(ub, ty)
+				case types.T_varchar, types.T_binary, types.T_char, types.T_json:
 					if needVec(op) {
 						for x := lb; x <= ub; x++ {
 							vector.AppendBytes(vec, []byte(strconv.Itoa(int(x))), false, mp)
@@ -1015,6 +1037,27 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					}
 					llb = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(lb), B64_127: uint64(lb)})
 					uub = types.EncodeDecimal128(&types.Decimal128{B0_63: uint64(ub), B64_127: uint64(ub)})
+
+				case types.T_uuid:
+					if needVec(op) {
+						for x := lb; x <= ub; x++ {
+							u := encodeIntToUUID(int32(x))
+							if opOnBinary(op) {
+								vector.AppendBytes(vec, types.EncodeUuid(&u), false, mp)
+							} else {
+								vector.AppendFixed[types.Uuid](vec, u, false, mp)
+							}
+						}
+						vec.InplaceSort()
+					}
+
+					u := encodeIntToUUID(int32(lb))
+					llb = make([]byte, len(u))
+					copy(llb[:], u[:])
+
+					u = encodeIntToUUID(int32(ub))
+					uub = make([]byte, len(u))
+					copy(uub[:], u[:])
 				}
 
 				basePKFilter := BasePKFilter{
@@ -1135,7 +1178,7 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							vector.AppendFixed(inputVec, xx, false, mp)
 						}
 					}
-				case types.T_varchar:
+				case types.T_varchar, types.T_binary, types.T_char, types.T_json:
 					for x := lb - 1; x <= ub+1; x++ {
 						xx := strconv.Itoa(int(x))
 						vector.AppendBytes(inputVec, []byte(xx), false, mp)
@@ -1161,6 +1204,30 @@ func TestConstructBlockPKFilter(t *testing.T) {
 							vector.AppendFixed(inputVec, xx, false, mp)
 						}
 					}
+
+				case types.T_decimal128:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := types.Decimal128{B0_63: uint64(x)}
+
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeDecimal128(&xx), false, mp)
+						} else {
+							vector.AppendFixed(inputVec, xx, false, mp)
+						}
+					}
+
+					inputVec.InplaceSort()
+
+				case types.T_uuid:
+					for x := lb - 1; x <= ub+1; x++ {
+						xx := encodeIntToUUID(int32(x))
+						if opOnBinary(op) {
+							vector.AppendBytes(inputVec, types.EncodeUuid(&xx), false, mp)
+						} else {
+							vector.AppendFixed[types.Uuid](inputVec, xx, false, mp)
+						}
+					}
+					inputVec.InplaceSort()
 				}
 
 				if opOnBinary(op) && (ty == types.T_float32 || ty == types.T_float64) {
@@ -1168,14 +1235,15 @@ func TestConstructBlockPKFilter(t *testing.T) {
 					continue
 				}
 
+				msg = fmt.Sprintf("lb: %v, ub: %v\nbaseFilter: %v\ninputVec: %v",
+					lb, ub,
+					basePKFilter.String(),
+					common.MoVectorToString(inputVec, 100))
+
 				sel1 := blkPKFilter.SortedSearchFunc(inputVec)
 				sel2 := blkPKFilter.UnSortedSearchFunc(inputVec)
 
-				require.Equal(t, sel1, sel2,
-					fmt.Sprintf("lb: %v, ub: %v\nbaseFilter: %v\ninputVec: %v",
-						lb, ub,
-						basePKFilter.String(),
-						common.MoVectorToString(inputVec, 100)))
+				require.Equal(t, sel1, sel2, msg)
 			}
 		}
 	}
@@ -1185,7 +1253,7 @@ func TestMergeBaseFilterInKind(t *testing.T) {
 	mp, err := mpool.NewMPool("", mpool.GB, 0)
 	require.NoError(t, err)
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 
 	tys := []types.T{
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,

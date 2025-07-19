@@ -77,7 +77,7 @@ func (h *hackAggExecToTestMerge) Free() {
 var hackVecResult = vector.NewVec(types.T_int64.ToType())
 
 func hackMakeAggExecToTestMerge(r int) *hackAggExecToTestMerge {
-	makeInitialAggListFromList = func(mg aggexec.AggMemoryManager, list []aggexec.AggFuncExec) []aggexec.AggFuncExec {
+	makeInitialAggListFromList = func(mg aggexec.AggMemoryManager, list []aggexec.AggFuncExec) ([]aggexec.AggFuncExec, error) {
 		res := make([]aggexec.AggFuncExec, len(list))
 		for i := range res {
 			res[i] = &hackAggExecToTestMerge{
@@ -86,7 +86,7 @@ func hackMakeAggExecToTestMerge(r int) *hackAggExecToTestMerge {
 			}
 			list[i].(*hackAggExecToTestMerge).dst = res[i].(*hackAggExecToTestMerge)
 		}
-		return res
+		return res, nil
 	}
 
 	return &hackAggExecToTestMerge{
@@ -96,7 +96,7 @@ func hackMakeAggExecToTestMerge(r int) *hackAggExecToTestMerge {
 }
 
 func TestMergeGroup_WithoutGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	{
 		before := proc.Mp().CurrNB()
@@ -137,7 +137,7 @@ func TestMergeGroup_WithoutGroupBy(t *testing.T) {
 }
 
 func TestMergeGroup_WithGroupBy(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	{
 		before := proc.Mp().CurrNB()

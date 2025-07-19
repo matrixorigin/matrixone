@@ -211,6 +211,7 @@ func TestDbTableInfo_String(t *testing.T) {
 		SourceTblId   uint64
 		SinkDbName    string
 		SinkTblName   string
+		IdChanged     bool
 	}
 	tests := []struct {
 		name   string
@@ -225,8 +226,9 @@ func TestDbTableInfo_String(t *testing.T) {
 				SourceTblId:   1,
 				SinkDbName:    "sink_db",
 				SinkTblName:   "sink_tbl",
+				IdChanged:     false,
 			},
-			want: "source_db(1).source_tbl(1) -> sink_db.sink_tbl",
+			want: "source_db(1).source_tbl(1) -> sink_db.sink_tbl, false",
 		},
 	}
 	for _, tt := range tests {
@@ -238,6 +240,7 @@ func TestDbTableInfo_String(t *testing.T) {
 				SourceTblId:   tt.fields.SourceTblId,
 				SinkDbName:    tt.fields.SinkDbName,
 				SinkTblName:   tt.fields.SinkTblName,
+				IdChanged:     tt.fields.IdChanged,
 			}
 			assert.Equalf(t, tt.want, info.String(), "String()")
 		})
@@ -292,6 +295,71 @@ func TestDbTableInfo_Clone(t *testing.T) {
 				SinkTblName:     tt.fields.SinkTblName,
 			}
 			assert.Equalf(t, tt.want, info.Clone(), "Clone()")
+		})
+	}
+}
+
+func TestDbTableInfo_OnlyDiffinTblId(t *testing.T) {
+	type fields struct {
+		SourceDbName  string
+		SourceTblName string
+		SourceDbId    uint64
+		SourceTblId   uint64
+		SinkDbName    string
+		SinkTblName   string
+		IdChanged     bool
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   bool
+	}{
+		{
+			fields: fields{
+				SourceDbName:  "source_db",
+				SourceDbId:    2,
+				SourceTblName: "source_tbl",
+				SourceTblId:   1,
+				SinkDbName:    "sink_db",
+				SinkTblName:   "sink_tbl",
+				IdChanged:     false,
+			},
+			want: false,
+		},
+		{
+			fields: fields{
+				SourceDbName:  "source_db",
+				SourceDbId:    1,
+				SourceTblName: "source_tbl",
+				SourceTblId:   2,
+				SinkDbName:    "sink_db",
+				SinkTblName:   "sink_tbl",
+				IdChanged:     false,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := DbTableInfo{
+				SourceDbName:  tt.fields.SourceDbName,
+				SourceTblName: tt.fields.SourceTblName,
+				SourceDbId:    1,
+				SourceTblId:   1,
+				SinkDbName:    tt.fields.SinkDbName,
+				SinkTblName:   tt.fields.SinkTblName,
+				IdChanged:     tt.fields.IdChanged,
+			}
+			info := DbTableInfo{
+				SourceDbName:  tt.fields.SourceDbName,
+				SourceTblName: tt.fields.SourceTblName,
+				SourceDbId:    tt.fields.SourceDbId,
+				SourceTblId:   tt.fields.SourceTblId,
+				SinkDbName:    tt.fields.SinkDbName,
+				SinkTblName:   tt.fields.SinkTblName,
+				IdChanged:     tt.fields.IdChanged,
+			}
+			assert.Equalf(t, tt.want, base.OnlyDiffinTblId(&info), "OnlyDiffinTblId()")
 		})
 	}
 }

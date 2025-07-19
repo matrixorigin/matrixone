@@ -17,13 +17,17 @@ package etl
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -143,4 +147,42 @@ func TestContentWriter_FlushBuffer_SqlNotOK(t *testing.T) {
 
 	require.Equal(t, `hello world`, flusher.buf.String())
 	require.True(t, callbackDone)
+}
+
+func TestWriteRowRecords_WithBackoff(t *testing.T) {
+	old := db_holder.DBConnErrCount
+	defer func() {
+		db_holder.DBConnErrCount = old
+	}()
+
+	db_holder.DBConnErrCount = db_holder.NewReConnectionBackOff(time.Hour, 0)
+	db_holder.DBConnErrCount.Count()
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer db.Close()
+	mock.ExpectExec(regexp.QuoteMeta(`LOAD DATA INLINE FORMAT='csv', DATA='record1' INTO TABLE testDB.testTable FIELDS TERMINATED BY ','`)).
+		WillReturnError(moerr.NewInternalErrorNoCtx("return_err"))
+
+	newConn := false
+	stubs := gostub.Stub(&db_holder.GetOrInitDBConn, func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+		newConn = forceNewConn
+		return db, nil
+	})
+	defer stubs.Reset()
+
+	// call the function to test
+	f := &SQLFlusher{
+		database: "testDB",
+		table:    "testTable",
+	}
+	buf := bytes.NewBufferString("record1")
+	_, err = f.FlushBuffer(buf)
+	assert.Error(t, err)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+
+	require.True(t, newConn)
 }

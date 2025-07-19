@@ -69,6 +69,7 @@ type MultiUpdate struct {
 	input          vm.CallResult
 	ctr            container
 	MultiUpdateCtx []*MultiUpdateCtx
+	mainTable      uint64
 
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
@@ -92,7 +93,7 @@ type container struct {
 	affectedRows uint64
 	action       actionType
 
-	s3Writer       *s3Writer
+	s3Writer       *s3WriterDelegate
 	updateCtxInfos map[string]*updateCtxInfo
 
 	insertBuf []*batch.Batch
@@ -100,10 +101,11 @@ type container struct {
 }
 
 type MultiUpdateCtx struct {
-	ObjRef     *plan.ObjectRef
-	TableDef   *plan.TableDef
-	InsertCols []int
-	DeleteCols []int
+	ObjRef        *plan.ObjectRef
+	TableDef      *plan.TableDef
+	InsertCols    []int
+	DeleteCols    []int
+	PartitionCols []int
 }
 
 func (update MultiUpdate) TypeName() string {
@@ -139,9 +141,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 	if update.ctr.s3Writer != nil {
 		update.ctr.s3Writer.reset(proc)
 	}
-	for _, info := range update.ctr.updateCtxInfos {
-		info.Sources = nil
-	}
+
 	update.ctr.state = vm.Build
 }
 

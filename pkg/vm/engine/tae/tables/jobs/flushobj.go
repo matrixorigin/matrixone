@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -36,7 +37,7 @@ type flushObjTask struct {
 	*tasks.BaseTask
 	data      *containers.Batch
 	meta      *catalog.ObjectEntry
-	fs        *objectio.ObjectFS
+	fs        fileservice.FileService
 	name      objectio.ObjectName
 	blocks    []objectio.BlockObject
 	schemaVer uint32
@@ -54,7 +55,7 @@ func NewFlushObjTask(
 	ctx *tasks.Context,
 	schemaVer uint32,
 	seqnums []uint16,
-	fs *objectio.ObjectFS,
+	fs fileservice.FileService,
 	meta *catalog.ObjectEntry,
 	data *containers.Batch,
 	parentTask string,
@@ -95,7 +96,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
 	writer, err := ioutil.NewBlockWriterNew(
-		task.fs.Service,
+		task.fs,
 		name,
 		task.schemaVer,
 		task.seqnums,
@@ -128,6 +129,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			return nil
 		}
 	}
+	dataRows := cnBatch.RowCount()
 	inst := time.Now()
 	_, err = writer.WriteBatch(cnBatch)
 	if err != nil {
@@ -148,7 +150,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("wait", waitT),
 			common.AnyField("copy", copyT),
 			common.AnyField("io", ioT),
-			common.AnyField("data-rows", task.data.Length()),
+			common.AnyField("data-rows", dataRows),
 		)
 	}
 	task.stats = writer.GetObjectStats()

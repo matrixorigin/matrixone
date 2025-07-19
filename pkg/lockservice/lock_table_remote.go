@@ -19,6 +19,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"os"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -252,9 +254,7 @@ func (l *remoteLockTable) handleError(
 	err error,
 	mustHandleLockBindChangedErr bool,
 ) error {
-	if errors.Is(err, io.EOF) ||
-		errors.Is(err, io.ErrUnexpectedEOF) ||
-		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
+	if retryRemoteLockError(err) {
 		err = moerr.NewBackendCannotConnectNoCtx(err.Error())
 	}
 	oldError := err
@@ -284,6 +284,20 @@ func (l *remoteLockTable) handleError(
 		return nil
 	}
 	return oldError
+}
+
+func retryRemoteLockError(err error) bool {
+	if e, ok := err.(net.Error); ok && e.Timeout() {
+		return true
+	}
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, os.ErrDeadlineExceeded) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF) {
+		return true
+	}
+	return false
 }
 
 func (l *remoteLockTable) maybeHandleBindChanged(resp *pb.Response) error {

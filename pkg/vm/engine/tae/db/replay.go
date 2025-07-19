@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,11 +32,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
+
+var ErrCancelReplayAnyway = moerr.NewInternalErrorNoCtx("terminate")
 
 var (
 	skippedTbl = map[uint64]bool{
@@ -45,41 +47,114 @@ var (
 	}
 )
 
+type replayCtl struct {
+	startTime   time.Time
+	doneTime    time.Time
+	doneCh      chan struct{}
+	err         error
+	causeCancel context.CancelCauseFunc
+	mode        atomic.Int32
+	onSuccess   func()
+	replayer    *WalReplayer
+}
+
+func newReplayCtl(
+	replayer *WalReplayer,
+	mode driver.ReplayMode,
+	onSuccess func(),
+) *replayCtl {
+	ctl := &replayCtl{
+		doneCh:    make(chan struct{}),
+		startTime: time.Now(),
+		onSuccess: onSuccess,
+		replayer:  replayer,
+	}
+	ctl.mode.Store(int32(mode))
+	return ctl
+}
+
+func (ctl *replayCtl) MaxLSN() uint64 {
+	return ctl.replayer.MaxLSN()
+}
+
+func (ctl *replayCtl) Wait() (err error) {
+	<-ctl.doneCh
+	return ctl.err
+}
+
+func (ctl *replayCtl) Done(err error) {
+	ctl.err = err
+	ctl.doneTime = time.Now()
+	if ctl.onSuccess != nil {
+		ctl.onSuccess()
+	}
+	close(ctl.doneCh)
+}
+
+func (ctl *replayCtl) Stop() (err error) {
+	if ctl.causeCancel != nil {
+		ctl.causeCancel(ErrCancelReplayAnyway)
+		ctl.Wait()
+		ctl.causeCancel = nil
+	}
+
+	err = ctl.err
+	// ErrCancelReplayAnyway or nil means no error
+	return
+}
+
+func (ctl *replayCtl) StopForWrite() (err error) {
+	ctl.mode.Store(int32(driver.ReplayMode_ReplayForWrite))
+	ctl.Wait()
+	// here cancel has no effect, just close the channel
+	if ctl.causeCancel != nil {
+		ctl.causeCancel(nil)
+		ctl.causeCancel = nil
+	}
+
+	// nil means no error
+	err = ctl.err
+	return
+}
+
+func (ctl *replayCtl) GetMode() driver.ReplayMode {
+	return driver.ReplayMode(ctl.mode.Load())
+}
+
+// must be called after Wait
+func (ctl *replayCtl) Err() error {
+	return ctl.err
+}
+
+// must be called after Wait
+func (ctl *replayCtl) Duration() time.Duration {
+	return ctl.doneTime.Sub(ctl.startTime)
+}
+
 type WalReplayer struct {
-	DataFactory   *tables.DataFactory
 	db            *DB
 	maxTs         types.TS
 	once          sync.Once
-	ckpedTS       types.TS
-	wg            sync.WaitGroup
+	fromTS        types.TS
 	applyDuration time.Duration
-	txnCmdChan    chan *txnbase.TxnCmd
 	readCount     int
 	applyCount    int
-	maxLSN        uint64
+	maxLSN        atomic.Uint64
 
-	lsn            uint64
-	enableLSNCheck bool
+	lsn uint64
 }
 
 func newWalReplayer(
-	dataFactory *tables.DataFactory,
 	db *DB,
-	ckpedTS types.TS,
+	fromTS types.TS,
 	lsn uint64,
-	enableLSNCheck bool,
 ) *WalReplayer {
 	replayer := &WalReplayer{
-		DataFactory: dataFactory,
-		db:          db,
-		ckpedTS:     ckpedTS,
-		lsn:         lsn,
-		// for ckp version less than 7, lsn is always 0 and lsnCheck is disable
-		enableLSNCheck: enableLSNCheck,
-		wg:             sync.WaitGroup{},
-		txnCmdChan:     make(chan *txnbase.TxnCmd, 100),
+		db:     db,
+		fromTS: fromTS,
+		lsn:    lsn,
 	}
-	replayer.OnTimeStamp(ckpedTS)
+	replayer.OnTimeStamp(fromTS)
 	return replayer
 }
 
@@ -90,13 +165,13 @@ func (replayer *WalReplayer) PreReplayWal() {
 			return moerr.GetOkStopCurrRecur()
 		}
 		dropCommit, obj := entry.TreeMaxDropCommitEntry()
-		if dropCommit != nil && dropCommit.DeleteBeforeLocked(replayer.ckpedTS) {
+		if dropCommit != nil && dropCommit.DeleteBeforeLocked(replayer.fromTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
-		if obj != nil && obj.DeleteBefore(replayer.ckpedTS) {
+		if obj != nil && obj.DeleteBefore(replayer.fromTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
-		entry.InitData(replayer.DataFactory)
+		entry.InitData(replayer.db.Catalog.DataFactory)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
@@ -119,69 +194,119 @@ func (replayer *WalReplayer) postReplayWal() error {
 	}
 	return replayer.db.Catalog.RecurLoop(processor)
 }
-func (replayer *WalReplayer) Replay(ctx context.Context) (err error) {
-	replayer.wg.Add(1)
-	go replayer.applyTxnCmds()
-	if err = replayer.db.Wal.Replay(
-		ctx,
-		replayer.OnReplayEntry,
-		func() driver.ReplayMode { return driver.ReplayMode_ReplayForWrite },
-	); err != nil {
-		return
-	}
-	replayer.txnCmdChan <- txnbase.NewLastTxnCmd()
-	close(replayer.txnCmdChan)
-	replayer.wg.Wait()
-	if err = replayer.postReplayWal(); err != nil {
-		return
-	}
-	logutil.Info(
-		"Wal-Replay-Trace-End",
-		zap.Duration("apply-cost", replayer.applyDuration),
-		zap.Int("read-count", replayer.readCount),
-		zap.Int("apply-count", replayer.applyCount),
-		zap.Uint64("max-lsn", replayer.maxLSN),
+
+func (replayer *WalReplayer) Schedule(
+	ctx context.Context,
+	mode driver.ReplayMode,
+	onDone func(),
+) (
+	ctl *replayCtl,
+	err error,
+) {
+	var (
+		wg       sync.WaitGroup
+		cmdQueue = make(chan *txnbase.TxnCmd, 100)
 	)
+	wg.Add(1)
+	go replayer.applyReplayTxnLoop(cmdQueue, &wg)
+
+	ctl = newReplayCtl(
+		replayer,
+		mode,
+		func() {
+			replayer.db.usageMemo.EstablishFromCKPs()
+			replayer.db.Catalog.ReplayTableRows()
+			if onDone != nil {
+				onDone()
+			}
+		},
+	)
+	ctx, ctl.causeCancel = context.WithCancelCause(ctx)
+
+	go func() {
+		var err2 error
+		defer func() {
+			logger := logutil.Info
+			if err2 != nil {
+				logger = logutil.Error
+			}
+			logger(
+				"Wal-Replay-Trace-End",
+				zap.Duration("apply-cost", replayer.applyDuration),
+				zap.Int("read-count", replayer.readCount),
+				zap.Int("apply-count", replayer.applyCount),
+				zap.Uint64("max-lsn", replayer.maxLSN.Load()),
+				zap.Error(err2),
+			)
+			ctl.Done(err2)
+		}()
+		err2 = replayer.db.Wal.Replay(
+			ctx,
+			replayer.MakeReplayHandle(cmdQueue),
+			ctl.GetMode,
+			nil,
+		)
+		cmdQueue <- txnbase.NewEndCmd()
+		close(cmdQueue)
+		wg.Wait()
+		if err2 != nil {
+			return
+		}
+		err2 = replayer.postReplayWal()
+	}()
 	return
 }
 
-func (replayer *WalReplayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
-	replayer.once.Do(replayer.PreReplayWal)
-	if group != wal.GroupPrepare && group != wal.GroupC {
-		return driver.RE_Internal
-	}
-	if !replayer.checkLSN(lsn) {
-		return driver.RE_Truncate
-	}
-	if lsn > replayer.maxLSN {
-		replayer.maxLSN = lsn
-	}
-	head := objectio.DecodeIOEntryHeader(payload)
-	if head.Version < txnbase.IOET_WALTxnEntry_V4 {
+func (replayer *WalReplayer) MaxLSN() uint64 {
+	return replayer.maxLSN.Load()
+}
+
+func (replayer *WalReplayer) MakeReplayHandle(
+	sender chan<- *txnbase.TxnCmd,
+) wal.ApplyHandle {
+	return func(
+		group uint32, lsn uint64, payload []byte, typ uint16, info any,
+	) driver.ReplayEntryState {
+		replayer.once.Do(replayer.PreReplayWal)
+		if group != wal.GroupUserTxn && group != wal.GroupC {
+			return driver.RE_Internal
+		}
+		if !replayer.checkLSN(lsn) {
+			return driver.RE_Truncate
+		}
+		head := objectio.DecodeIOEntryHeader(payload)
+		if head.Version < txnbase.IOET_WALTxnEntry_V4 {
+			return driver.RE_Nomal
+		}
+		codec := objectio.GetIOEntryCodec(*head)
+		entry, err := codec.Decode(payload[4:])
+		txnCmd := entry.(*txnbase.TxnCmd)
+		txnCmd.Lsn = lsn
+		if err != nil {
+			panic(err)
+		}
+		sender <- txnCmd
 		return driver.RE_Nomal
 	}
-	codec := objectio.GetIOEntryCodec(*head)
-	entry, err := codec.Decode(payload[4:])
-	txnCmd := entry.(*txnbase.TxnCmd)
-	txnCmd.Lsn = lsn
-	if err != nil {
-		panic(err)
-	}
-	replayer.txnCmdChan <- txnCmd
-	return driver.RE_Nomal
 }
-func (replayer *WalReplayer) applyTxnCmds() {
-	defer replayer.wg.Done()
+
+func (replayer *WalReplayer) applyReplayTxnLoop(
+	receiver <-chan *txnbase.TxnCmd,
+	wg *sync.WaitGroup,
+) {
+	defer wg.Done()
 	for {
-		txnCmd := <-replayer.txnCmdChan
-		if txnCmd.IsLastCmd() {
+		txnCmd := <-receiver
+		if txnCmd.IsEnd() {
 			break
 		}
 		t0 := time.Now()
 		replayer.OnReplayTxn(txnCmd, txnCmd.Lsn)
+		if txnCmd.Lsn > replayer.maxLSN.Load() {
+			replayer.maxLSN.Store(txnCmd.Lsn)
+		}
 		txnCmd.Close()
 		replayer.applyDuration += time.Since(t0)
-
 	}
 }
 func (replayer *WalReplayer) GetMaxTS() types.TS {
@@ -194,9 +319,6 @@ func (replayer *WalReplayer) OnTimeStamp(ts types.TS) {
 	}
 }
 func (replayer *WalReplayer) checkLSN(lsn uint64) (needReplay bool) {
-	if !replayer.enableLSNCheck {
-		return true
-	}
 	if lsn <= replayer.lsn {
 		return false
 	}
@@ -223,8 +345,6 @@ func (replayer *WalReplayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 		txnCmd,
 		replayer,
 		replayer.db.Catalog,
-		replayer.DataFactory,
-		replayer.db.Wal,
 	)
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)

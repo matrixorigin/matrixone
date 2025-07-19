@@ -1,21 +1,19 @@
 drop table if exists t1;
-
 create table t1(
 a int primary key,
 b varchar(10)
 );
-
-select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1 -s');
-mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1 -s)
-\nmsg: (303406-t1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nsuccess
-select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1 -s');
-mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1 -s)
-\nmsg: run err: internal error: t1 is already locked\n\n
-select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1');
-mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1)
-\nmsg: (303406-t1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nsuccess
-select mo_ctl('dn', 'inspect', 'policy -t mo_ctl_policy.t1');
-mo_ctl(dn, inspect, policy -t mo_ctl_policy.t1)
-\nmsg: (303406-t1) maxMergeObjN: 16, maxOsizeObj: 128MB, minOsizeQualified: 110MB, offloadToCnSize: 80000MB, hints: [Auto]\n\nsuccess
+select mo_ctl('dn', 'inspect', 'merge switch off -t mo_ctl_policy.t1');
+mo_ctl(dn, inspect, merge switch off -t mo_ctl_policy.t1)
+\nmsg: merge is disabled for table (334039-t1)\n\nmerge disabled for table 334039-t1
+select mo_ctl('dn', 'inspect', 'merge show -t mo_ctl_policy.t1');
+mo_ctl(dn, inspect, merge show -t mo_ctl_policy.t1)
+\nmsg: merge show status for table 334039-t1\n\nauto merge for all: true, msg queue len: 0\n\ntable info: 334039-t1\n	auto merge: false\n	total data merge tasks: 0\n	total tombstone merge tasks: 0\n	last merge time: 2562047h47m0s ago\n	next check due: 24h0m0s\n	merge tasks in queue: 0\n	big data merge counter: 0\n\nlevel 0 basic stats  : Count: 0, AvgSize: 0B, AvgRows: 0, OSizeDist: [0 0 0 0 0 0 0 0], Tolerance: 9\n\n\nvacuum stats: TotalSize: 0B, TotalRows: 0, HistoSize: [0 0 0 0 0 0 0 0], HistoCreateAt: [0 0 0 0]\n	 HistoVacuumScore: [0 0 0 0 0], DataVacuumPercent: 0.00%, DelVacuumPercent: 0.00%, DataVacuumScoreToCompact: 50
+select mo_ctl('dn', 'inspect', 'merge switch on -t mo_ctl_policy.t1');
+mo_ctl(dn, inspect, merge switch on -t mo_ctl_policy.t1)
+\nmsg: merge is enabled for table (334039-t1)\n\nmerge enabled for table 334039-t1
+select mo_ctl('dn', 'inspect', 'merge show -t mo_ctl_policy.t1');
+mo_ctl(dn, inspect, merge show -t mo_ctl_policy.t1)
+\nmsg: merge show status for table 334039-t1\n\nauto merge for all: true, msg queue len: 0\n\ntable info: 334039-t1\n	auto merge: true\n	total data merge tasks: 0\n	total tombstone merge tasks: 0\n	last merge time: 2562047h47m0s ago\n	next check due: 1s\n	merge tasks in queue: 0\n	big data merge counter: 0\n\nlevel 0 basic stats  : Count: 0, AvgSize: 0B, AvgRows: 0, OSizeDist: [0 0 0 0 0 0 0 0], Tolerance: 3\n\n\nvacuum stats: TotalSize: 0B, TotalRows: 0, HistoSize: [0 0 0 0 0 0 0 0], HistoCreateAt: [0 0 0 0]\n	 HistoVacuumScore: [0 0 0 0 0], DataVacuumPercent: 0.00%, DelVacuumPercent: 0.00%, DataVacuumScoreToCompact: 50
 create table t2(a int primary key);
 drop table t2;

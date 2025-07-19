@@ -14,6 +14,7 @@ header:
     - 'test/'
     - 'optools/'
     - 'cgo/external/'
+    - 'thirdparties/'
     - 'pkg/frontend/test/'
     - 'pkg/vm/engine/tae/mergesort/sort.go'
     - 'pkg/vm/engine/tae/mergesort/heap.go'

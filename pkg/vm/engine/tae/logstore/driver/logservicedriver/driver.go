@@ -144,6 +144,7 @@ func (d *LogServiceDriver) Replay(
 	ctx context.Context,
 	h driver.ApplyHandle,
 	modeGetter func() driver.ReplayMode,
+	replayOpt *driver.ReplayOption,
 ) (err error) {
 	mode := modeGetter()
 
@@ -172,45 +173,49 @@ func (d *LogServiceDriver) Replay(
 		return mode == driver.ReplayMode_ReplayForever
 	}
 
+	var opts []ReplayOption
+	opts = append(opts, WithReplayerOnTruncate(
+		d.commitTruncateInfo,
+	))
+	opts = append(opts, WithReplayerNeedWriteSkip(
+		func() bool {
+			mode := modeGetter()
+			return mode == driver.ReplayMode_ReplayForWrite
+		},
+	))
+	opts = append(opts, WithReplayerWaitMore(onWaitMore))
+	opts = append(opts, WithReplayerOnLogRecord(onLogRecord))
+	// driver is mangaging the psn to dsn mapping
+	// here the replayer is responsible to provide the all the existing psn to dsn
+	// info to the driver
+	// a driver is a statemachine.
+	// INITed -> REPLAYING -> REPLAYED
+	// a driver can be readonly or readwrite
+	// for readonly driver, it is always in the REPLAYING state
+	// for readwrite driver, it can only serve the write request
+	// after the REPLAYED state
+	opts = append(opts, WithReplayerOnScheduled(
+		func(psn uint64, e LogEntry) {
+			d.recordSequenceNumbers(psn, e.DSNRange())
+		},
+	))
+	opts = append(opts, WithReplayerOnReplayDone(
+		func(replayErr error, dsnStats DSNStats) {
+			if replayErr != nil {
+				return
+			}
+			d.initState(&dsnStats)
+		},
+	))
+	if replayOpt != nil {
+		opts = append(opts, WithReplayerPollTruncateInterval(replayOpt.PollTruncateInterval))
+	}
+
 	replayer := newReplayer(
 		h,
 		d,
 		MaxReadBatchSize,
-		WithReplayerNeedWriteSkip(
-			func() bool {
-				mode := modeGetter()
-				return mode == driver.ReplayMode_ReplayForWrite
-			},
-		),
-		WithReplayerWaitMore(
-			onWaitMore,
-		),
-		WithReplayerOnLogRecord(
-			onLogRecord,
-		),
-
-		// driver is mangaging the psn to dsn mapping
-		// here the replayer is responsible to provide the all the existing psn to dsn
-		// info to the driver
-		// a driver is a statemachine.
-		// INITed -> REPLAYING -> REPLAYED
-		// a driver can be readonly or readwrite
-		// for readonly driver, it is always in the REPLAYING state
-		// for readwrite driver, it can only serve the write request
-		// after the REPLAYED state
-		WithReplayerOnScheduled(
-			func(psn uint64, e LogEntry) {
-				d.recordSequenceNumbers(psn, e.DSNRange())
-			},
-		),
-		WithReplayerOnReplayDone(
-			func(replayErr error, dsnStats DSNStats) {
-				if replayErr != nil {
-					return
-				}
-				d.initState(&dsnStats)
-			},
-		),
+		opts...,
 	)
 
 	err = replayer.Replay(ctx)
@@ -226,7 +231,6 @@ func (d *LogServiceDriver) readFromBackend(
 ) {
 	var (
 		t0         = time.Now()
-		cancel     context.CancelFunc
 		retryTimes = 0
 	)
 
@@ -255,24 +259,25 @@ func (d *LogServiceDriver) readFromBackend(
 	}
 	defer client.Putback()
 
-	cfg := d.config
-	for ; retryTimes < cfg.MaxRetryCount; retryTimes++ {
-		ctx, cancel = context.WithTimeoutCause(
+	for {
+		ctx, cancel := context.WithTimeoutCause(
 			ctx,
-			cfg.MaxTimeout,
+			DefaultOneTryTimeout,
 			moerr.CauseReadFromLogService,
 		)
+
 		if records, nextPSN, err = client.wrapped.Read(
 			ctx, firstPSN, uint64(maxSize),
-		); err != nil {
-			err = moerr.AttachCause(ctx, err)
-		}
-		cancel()
-
-		if err == nil {
+		); err == nil {
+			cancel()
 			break
 		}
-		time.Sleep(cfg.RetryInterval() * time.Duration(retryTimes+1))
+		cancel()
+		retryTimes++
+		if time.Since(t0) > d.config.MaxTimeout {
+			break
+		}
+		time.Sleep(d.config.RetryInterval(retryTimes))
 	}
 
 	return

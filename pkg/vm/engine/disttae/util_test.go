@@ -24,6 +24,7 @@ import (
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -79,7 +80,7 @@ func TestCheckExprIsZonemappable(t *testing.T) {
 
 func TestEvalZonemapFilter(t *testing.T) {
 	m := mpool.MustNewNoFixed(t.Name())
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 	type myCase = struct {
 		exprs  []*plan.Expr
 		meta   objectio.BlockObject
@@ -266,7 +267,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	statsList := mockStatsList(t, 100)
 
 	count := 0
-	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+	objectio.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -274,7 +275,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 1)
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+	objectio.ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return false
 	}, statsList...)
@@ -282,7 +283,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, len(statsList))
 
 	count = 0
-	ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+	objectio.ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)
@@ -295,7 +296,7 @@ func TestForeachBlkInObjStatsList(t *testing.T) {
 	require.Equal(t, count, 0)
 
 	count = 0
-	ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+	objectio.ForeachBlkInObjStatsList(false, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 		count++
 		return true
 	}, statsList...)
@@ -321,8 +322,8 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 
 	rowIds := make([]types.Rowid, 0)
 
-	delBlks.getDeletedRowIDs(func(row *types.Rowid) {
-		rowIds = append(rowIds, *row)
+	delBlks.getDeletedRowIDs(func(row types.Rowid) {
+		rowIds = append(rowIds, row)
 	})
 
 	for i := range rowIds {
@@ -363,4 +364,32 @@ func TestConcurrentExecutor_Run(t *testing.T) {
 		return io.EOF
 	})
 	wg.Wait()
+}
+
+func TestShrinkBatchWithRowids(t *testing.T) {
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSchema(
+		false,
+		[]string{"rowid"},
+		[]types.Type{types.T_Rowid.ToType()},
+	)
+	defer bat.Clean(mp)
+
+	var rowid objectio.Rowid
+	for i := 0; i < 10; i++ {
+		rowid.SetRowOffset(uint32(i))
+		err := vector.AppendFixed(bat.Vecs[0], rowid, false, mp)
+		require.NoError(t, err)
+	}
+	bat.SetRowCount(10)
+
+	shrinkBatchWithRowids(bat, []int64{1, 3, 5, 7})
+	require.Equal(t, bat.RowCount(), 6)
+
+	rowids := vector.MustFixedColWithTypeCheck[objectio.Rowid](bat.Vecs[0])
+	offsets := make([]uint32, 0, bat.RowCount())
+	for i := range rowids {
+		offsets = append(offsets, rowids[i].GetRowOffset())
+	}
+	require.Equal(t, offsets, []uint32{0, 1, 2, 3, 4, 5})
 }

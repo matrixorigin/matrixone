@@ -46,6 +46,7 @@ func NewLocalDataSource(
 	ctx context.Context,
 	table *txnTable,
 	txnOffset int,
+	pState *logtailreplay.PartitionState,
 	rangesSlice objectio.BlockInfoSlice,
 	extraTombstones engine.Tombstoner,
 	skipReadMem bool,
@@ -62,9 +63,7 @@ func NewLocalDataSource(
 	source.tombstonePolicy = policy
 
 	if rangesSlice != nil && rangesSlice.Len() > 0 {
-		if bytes.Equal(
-			objectio.EncodeBlockInfo(rangesSlice.Get(0)),
-			objectio.EmptyBlockInfoBytes) {
+		if rangesSlice.Get(0).IsMemBlk() {
 			rangesSlice = rangesSlice.Slice(1, rangesSlice.Len())
 		}
 
@@ -75,11 +74,7 @@ func NewLocalDataSource(
 	}
 
 	if source.category != engine.ShardingLocalDataSource {
-		state, err := table.getPartitionState(ctx)
-		if err != nil {
-			return nil, err
-		}
-		source.pState = state
+		source.pState = pState
 	}
 
 	source.table = table
@@ -445,6 +440,10 @@ func checkWorkspaceEntryType(
 		return false
 	}
 
+	if entry.bat == nil {
+		return false
+	}
+
 	// within a txn, the later statement could delete the previous
 	// inserted rows, the left rows will be recorded in `batSelectList`.
 	// if no rows left, this bat can be seen deleted.
@@ -454,7 +453,7 @@ func checkWorkspaceEntryType(
 		if entry.typ != INSERT ||
 			entry.bat == nil ||
 			entry.bat.IsEmpty() ||
-			entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 			return false
 		}
 		if deleted, exist := tbl.getTxn().batchSelectList[entry.bat]; exist &&
@@ -494,11 +493,10 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 	}
 
 	var (
-		skipMask objectio.Bitmap
-		packer   *types.Packer
-
-		enableFilter bool
-
+		skipMask       objectio.Bitmap
+		packer         *types.Packer
+		enableFilter   bool
+		offsets        []int64
 		retainedRowIds []objectio.Rowid
 	)
 
@@ -574,7 +572,7 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			put.Put()
 		}
 
-		offsets := readutil.RowIdsToOffset(retainedRowIds, int64(0), skipMask).([]int64)
+		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
 		skipMask.Release()
 
 		if len(offsets) == 0 {
@@ -931,31 +929,20 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	done := false
+	//done := false
 	writes := ls.table.getTxn().writes[:ls.txnOffset]
-
-	var delRowIds []objectio.Rowid
 
 	for idx := range writes {
 		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
 			continue
 		}
 
-		delRowIds = vector.MustFixedColWithTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-		for _, delRowId := range delRowIds {
-			b, o := delRowId.Decode()
-			if bid.Compare(b) != 0 {
-				continue
-			}
+		sorted := writes[idx].bat.Vecs[0].GetSorted()
+		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
 
-			leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, o)
-			if leftRows != nil && len(leftRows) == 0 {
-				done = true
-				break
-			}
-		}
+		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, rowIds, sorted)
 
-		if done {
+		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
 	}
@@ -1032,12 +1019,7 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceRawRowIdDeletes(
 	rawRowIdDeletes.RWMutex.RLock()
 	defer rawRowIdDeletes.RWMutex.RUnlock()
 
-	for _, o := range rawRowIdDeletes.offsets[*bid] {
-		leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, uint32(o))
-		if leftRows != nil && len(leftRows) == 0 {
-			break
-		}
-	}
+	readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, rawRowIdDeletes.offsets[*bid])
 
 	return leftRows
 }
@@ -1092,7 +1074,7 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 	leftRows = offsets
 
 	if len(leftRows) == logtailreplay.IndexScaleOne {
-		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, *types.NewRowid(bid, uint32(offsets[0]))) {
+		if ls.pState.CheckRowIdDeletedInMem(ls.snapshotTS, types.NewRowid(bid, uint32(offsets[0]))) {
 			return nil
 		}
 
@@ -1104,16 +1086,46 @@ func (ls *LocalDisttaeDataSource) applyPStateInMemDeletes(
 		return leftRows
 	}
 
+	defer func() {
+		delIter.Close()
+	}()
+
+	var (
+		deletedOffsets []int64
+	)
+
+	const stepCnt = 100
+
+	if len(leftRows) <= stepCnt {
+		// stack allocation
+		deletedOffsets = make([]int64, 0, stepCnt)
+	} else {
+		deletedOffsets = common.DefaultAllocator.GetSels()
+		defer func() {
+			if deletedOffsets != nil {
+				common.DefaultAllocator.PutSels(deletedOffsets)
+			}
+		}()
+	}
+
 	for delIter.Next() {
 		rowid := delIter.Entry().RowID
 		o := rowid.GetRowOffset()
-		leftRows = readutil.FastApplyDeletedRows(leftRows, deletedRows, o)
+
+		deletedOffsets = append(deletedOffsets, int64(o))
+		if len(deletedOffsets) >= stepCnt {
+			readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deletedOffsets)
+			deletedOffsets = deletedOffsets[:0]
+		}
+
 		if leftRows != nil && len(leftRows) == 0 {
 			break
 		}
 	}
 
-	delIter.Close()
+	if len(deletedOffsets) > 0 {
+		readutil.FastApplyDeletesByRowOffsets(&leftRows, deletedRows, deletedOffsets)
+	}
 
 	return leftRows
 }
@@ -1155,7 +1167,7 @@ func (ls *LocalDisttaeDataSource) applyPStateTombstoneObjects(
 		deleted, err := ioutil.IsRowDeleted(
 			ls.ctx,
 			&ls.snapshotTS,
-			rowid,
+			&rowid,
 			getTombstone,
 			ls.fs,
 		)

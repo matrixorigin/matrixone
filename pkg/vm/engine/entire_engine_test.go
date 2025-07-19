@@ -310,6 +310,10 @@ func (e *testEngine) Hints() (h Hints) {
 	return
 }
 
+func (e *testEngine) HasTempEngine() bool {
+	return false
+}
+
 func (e *testEngine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
 	return "", "", nil
 }
@@ -322,7 +326,7 @@ func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, e
 	return 0, nil
 }
 
-func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64, dbName, tblName string) error {
 	return nil
 }
 

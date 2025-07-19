@@ -2,7 +2,7 @@
 
 -- @session:id=1{
 begin;
-select sleep(10);
+select sleep(5);
 -- @session}
 
 select count(*) > 0 from mo_sessions() t;

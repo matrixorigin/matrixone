@@ -1308,6 +1308,7 @@ SELECT 1e18 * CAST('1.2' as numeric(3,2));
 SELECT CAST(CAST('1.234221421' AS numeric(3,2)) AS signed);
 cast(cast(1.234221421 as numeric(3, 2)) as as)
 1
+SET @v1=null;
 SELECT CAST(@v1 as numeric(22, 2));
 cast(@v1 as numeric(22, 2))
 null

@@ -146,19 +146,20 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	idxScanNodes := make([][]*plan.Node, len(dmlCtx.tableDefs))
 
 	for i, tableDef := range dmlCtx.tableDefs {
+		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
+		if hasIrregularIndex {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+		}
+		tableDef.Indexes = validIndexes
+
 		idxDefs := tableDef.Indexes
 		idxScanNodes[i] = make([]*plan.Node, len(idxDefs))
 
 		for j, idxDef := range idxDefs {
-			if !idxDef.TableExist {
-				continue
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
 			}
-
-			if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-				return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
-			}
-
-			idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
 			if len(idxTableDef.Name2ColIndex) == 0 {
 				idxTableDef.Name2ColIndex = make(map[string]int32)
 				for colIdx, col := range idxTableDef.Cols {
@@ -259,6 +260,11 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	for i, tableDef := range dmlCtx.tableDefs {
 		pkPos := colName2Idx[i][tableDef.Pkey.PkeyColName]
 		rowIDPos := colName2Idx[i][catalog.Row_ID]
+		partitionPos := int32(-1)
+		if tableDef.Partition != nil {
+			colName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
+			partitionPos = colName2Idx[i][colName]
+		}
 		updateCtx := &plan.UpdateCtx{
 			TableDef: DeepCopyTableDef(tableDef, true),
 			ObjRef:   DeepCopyObjectRef(dmlCtx.objRefs[i]),
@@ -272,6 +278,10 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 					PrimaryColIdxInBat: pkPos,
 					PrimaryColRelPos:   selectNodeTag,
 					PrimaryColTyp:      col.Typ,
+				}
+				if tableDef.Partition != nil {
+					lockTarget.HasPartitionCol = true
+					lockTarget.PartitionColIdxInBat = partitionPos
 				}
 				lockTargets = append(lockTargets, lockTarget)
 				break
@@ -287,6 +297,15 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				RelPos: selectNodeTag,
 				ColPos: pkPos,
 			},
+		}
+
+		if tableDef.Partition != nil {
+			updateCtx.PartitionCols = []plan.ColRef{
+				{
+					RelPos: selectNodeTag,
+					ColPos: partitionPos,
+				},
+			}
 		}
 
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
@@ -369,4 +388,21 @@ func (builder *QueryBuilder) updateLocksOnDemand(nodeID int32) {
 			target.LockTable = true
 		}
 	}
+}
+
+func getPartitionColName(expr *plan.Expr) string {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			switch col := e.F.Args[i].Expr.(type) {
+			case *plan.Expr_Col:
+				return col.Col.Name
+			case *plan.Expr_F:
+				if name := getPartitionColName(e.F.Args[i]); name != "" {
+					return name
+				}
+			}
+		}
+	}
+	return ""
 }

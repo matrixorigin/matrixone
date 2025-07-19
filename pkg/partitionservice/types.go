@@ -43,7 +43,8 @@ var (
 		primary_table_id 		   bigint        unsigned not null, 
 		partition_name             varchar(50)   not null,
 		partition_ordinal_position int	         unsigned not null,
-		partition_expression       varchar(2048) not null
+		partition_expression_str   varchar(2048) not null,
+    	partition_expression       varchar(2048) not null
 	)`, catalog.MO_CATALOG, catalog.MOPartitionTables)
 
 	InitSQLs = []string{
@@ -54,12 +55,6 @@ var (
 
 // PartitionService is used to maintaining the metadata of the partition table.
 type PartitionService interface {
-	Is(
-		ctx context.Context,
-		tableID uint64,
-		txnOp client.TxnOperator,
-	) (bool, partition.PartitionMetadata, error)
-
 	// Create creates metadata of the partition table.
 	Create(
 		ctx context.Context,
@@ -74,21 +69,15 @@ type PartitionService interface {
 		txnOp client.TxnOperator,
 	) error
 
-	Prune(
+	GetPartitionMetadata(
 		ctx context.Context,
 		tableID uint64,
-		bat *batch.Batch,
 		txnOp client.TxnOperator,
-	) (PruneResult, error)
-
-	Filter(
-		ctx context.Context,
-		tableID uint64,
-		filters []*plan.Expr,
-		txnOp client.TxnOperator,
-	) ([]int, error)
+	) (partition.PartitionMetadata, error)
 
 	GetStorage() PartitionStorage
+
+	Enabled() bool
 }
 
 type PartitionStorage interface {
@@ -132,6 +121,17 @@ func GetService(
 type PruneResult struct {
 	batches    []*batch.Batch
 	partitions []partition.Partition
+}
+
+func NewPruneResult(bats []*batch.Batch, partitions []partition.Partition) PruneResult {
+	var pr PruneResult
+	for i := range bats {
+		if bats[i].RowCount() != 0 {
+			pr.batches = append(pr.batches, bats[i])
+			pr.partitions = append(pr.partitions, partitions[i])
+		}
+	}
+	return pr
 }
 
 func (res PruneResult) Iter(fn func(partition partition.Partition, bat *batch.Batch) bool) {

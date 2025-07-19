@@ -29,18 +29,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 var _ Reader = new(tableReader)
+var _ TableReader = new(tableReader)
 
 type tableReader struct {
 	cnTxnClient          client.TxnClient
 	cnEngine             engine.Engine
 	mp                   *mpool.MPool
 	packerPool           *fileservice.Pool[*types.Packer]
+	accountId            uint64
+	taskId               string
 	info                 *DbTableInfo
 	sinker               Sinker
-	wMarkUpdater         IWatermarkUpdater
+	wMarkUpdater         *CDCWatermarkUpdater
 	tick                 *time.Ticker
 	initSnapshotSplitTxn bool
 	runningReaders       *sync.Map
@@ -50,6 +54,8 @@ type tableReader struct {
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
 	delTsColIdx, delCompositedPkColIdx int
+
+	wg sync.WaitGroup
 }
 
 var NewTableReader = func(
@@ -57,24 +63,36 @@ var NewTableReader = func(
 	cnEngine engine.Engine,
 	mp *mpool.MPool,
 	packerPool *fileservice.Pool[*types.Packer],
+	accountId uint64,
+	taskId string,
 	info *DbTableInfo,
 	sinker Sinker,
-	wMarkUpdater IWatermarkUpdater,
+	wMarkUpdater *CDCWatermarkUpdater,
 	tableDef *plan.TableDef,
 	initSnapshotSplitTxn bool,
 	runningReaders *sync.Map,
 	startTs, endTs types.TS,
 	noFull bool,
+	frequency string,
 ) Reader {
+	var tick *time.Ticker
+	if frequency != "" {
+		dur := parseFrequencyToDuration(frequency)
+		tick = time.NewTicker(dur)
+	} else {
+		tick = time.NewTicker(200 * time.Millisecond)
+	}
 	reader := &tableReader{
 		cnTxnClient:          cnTxnClient,
 		cnEngine:             cnEngine,
 		mp:                   mp,
 		packerPool:           packerPool,
+		accountId:            accountId,
+		taskId:               taskId,
 		info:                 info,
 		sinker:               sinker,
 		wMarkUpdater:         wMarkUpdater,
-		tick:                 time.NewTicker(200 * time.Millisecond),
+		tick:                 tick,
 		initSnapshotSplitTxn: initSnapshotSplitTxn,
 		runningReaders:       runningReaders,
 		startTs:              startTs,
@@ -95,29 +113,75 @@ var NewTableReader = func(
 	return reader
 }
 
+func (reader *tableReader) Info() *DbTableInfo {
+	return reader.info
+}
+
+func (reader *tableReader) GetWg() *sync.WaitGroup {
+	return &reader.wg
+}
+
 func (reader *tableReader) Close() {
 	reader.sinker.Close()
 }
 
-func (reader *tableReader) Run(ctx context.Context, ar *ActiveRoutine) {
+func (reader *tableReader) Run(
+	ctx context.Context,
+	ar *ActiveRoutine,
+) {
 	key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
 	if _, loaded := reader.runningReaders.LoadOrStore(key, reader); loaded {
-		logutil.Infof("cdc tableReader(%v).Run: already running, end", reader.info)
+		logutil.Warn(
+			"CDC-TableReader-DuplicateRunning",
+			zap.String("info", reader.info.String()),
+			zap.String("task-id", reader.taskId),
+			zap.Uint64("account-id", reader.accountId),
+		)
 		reader.Close()
 		return
 	}
-	logutil.Infof("cdc tableReader(%v).Run: start", reader.info)
+	logutil.Info(
+		"CDC-TableReader-RunStart",
+		zap.String("info", reader.info.String()),
+		zap.Uint64("account-id", reader.accountId),
+		zap.String("task-id", reader.taskId),
+	)
 
 	var err error
+	reader.wg.Add(1)
 	defer func() {
+		defer reader.wg.Done()
+		wKey := WatermarkKey{
+			AccountId: reader.accountId,
+			TaskId:    reader.taskId,
+			DBName:    reader.info.SourceDbName,
+			TableName: reader.info.SourceTblName,
+		}
+		defer reader.wMarkUpdater.RemoveCachedWM(ctx, &wKey)
+
 		if err != nil {
-			if err = reader.wMarkUpdater.SaveErrMsg(reader.info.SourceDbName, reader.info.SourceTblName, err.Error()); err != nil {
-				logutil.Infof("cdc tableReader(%v).Run: save err msg failed, err: %v", reader.info, err)
+			errMsg := err.Error()
+			if err = reader.wMarkUpdater.UpdateWatermarkErrMsg(
+				ctx,
+				&wKey,
+				errMsg,
+			); err != nil {
+				logutil.Error(
+					"CDC-TableReader-UpdateWatermarkErrMsgFailed",
+					zap.String("info", reader.info.String()),
+					zap.String("save-err-msg", errMsg),
+					zap.Error(err),
+				)
 			}
 		}
 		reader.Close()
 		reader.runningReaders.Delete(key)
-		logutil.Infof("cdc tableReader(%v).Run: end", reader.info)
+		logutil.Info(
+			"CDC-TableReader-RunEnd",
+			zap.String("info", reader.info.String()),
+			zap.Uint64("account-id", reader.accountId),
+			zap.String("task-id", reader.taskId),
+		)
 	}()
 
 	for {
@@ -187,8 +251,25 @@ func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (er
 		if reader.noFull {
 			watermark = types.TimestampToTS(txnOp.SnapshotTS())
 		}
-		reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, watermark)
-		logutil.Infof("cdc tableReader(%v) reset watermark success", reader.info)
+
+		key := WatermarkKey{
+			AccountId: reader.accountId,
+			TaskId:    reader.taskId,
+			DBName:    reader.info.SourceDbName,
+			TableName: reader.info.SourceTblName,
+		}
+		reader.wMarkUpdater.UpdateWatermarkOnly(
+			ctx,
+			&key,
+			&watermark,
+		)
+		logutil.Info(
+			"CDC-TableReader-ResetWatermark",
+			zap.String("info", reader.info.String()),
+			zap.Uint64("account-id", reader.accountId),
+			zap.String("task-id", reader.taskId),
+			zap.String("watermark", watermark.ToString()),
+		)
 		err = nil
 	}
 	return
@@ -208,10 +289,20 @@ func (reader *tableReader) readTableWithTxn(
 		return
 	}
 
+	key := WatermarkKey{
+		AccountId: reader.accountId,
+		TaskId:    reader.taskId,
+		DBName:    reader.info.SourceDbName,
+		TableName: reader.info.SourceTblName,
+	}
 	//step2 : define time range
 	//	from = last wmark
 	//  to = txn operator snapshot ts
-	fromTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
+	fromTs, err := reader.wMarkUpdater.GetFromCache(ctx, &key)
+	if err != nil {
+		return
+	}
+
 	if !reader.endTs.IsEmpty() && fromTs.GE(&reader.endTs) {
 		logutil.Debugf("current watermark(%v) >= endTs(%v), end", fromTs, reader.endTs)
 		return
@@ -248,29 +339,47 @@ func (reader *tableReader) readTableWithTxn(
 			deleteAtmBatch.Close()
 		}
 
-		curTs := reader.wMarkUpdater.GetFromMem(reader.info.SourceDbName, reader.info.SourceTblName)
-		// if curTs != toTs, means this procedure end abnormally, need to rollback
+		current, err := reader.wMarkUpdater.GetFromCache(ctx, &key)
+		if err != nil {
+			return
+		}
+		// if current != toTs, means this procedure end abnormally, need to rollback
 		// e.g. encounter errors, or interrupted by user (pause/cancel)
-		if !curTs.Equal(&toTs) {
-			logutil.Errorf("cdc tableReader(%v).readTableWithTxn end abnormally", reader.info)
+		if !current.Equal(&toTs) {
+			logutil.Error(
+				"CDC-TableReader-ReadTableWithTxnEndAbnormally",
+				zap.String("info", reader.info.String()),
+				zap.Uint64("account-id", reader.accountId),
+				zap.String("task-id", reader.taskId),
+				zap.String("current", current.ToString()),
+				zap.String("to", toTs.ToString()),
+			)
 			if hasBegin {
+				// clear previous error
+				reader.sinker.ClearError()
 				reader.sinker.SendRollback()
 				reader.sinker.SendDummy()
 				if rollbackErr := reader.sinker.Error(); rollbackErr != nil {
-					logutil.Errorf("cdc tableReader(%v) send rollback failed, err: %v", reader.info, rollbackErr)
+					logutil.Error(
+						"CDC-TableReader-SendRollbackFailed",
+						zap.String("info", reader.info.String()),
+						zap.String("task-id", reader.taskId),
+						zap.Uint64("account-id", reader.accountId),
+						zap.Error(rollbackErr),
+					)
 				}
 			}
 		}
 	}()
 
-	allocateAtomicBatchIfNeed := func(atmBatch *AtomicBatch) *AtomicBatch {
-		if atmBatch == nil {
-			atmBatch = NewAtomicBatch(reader.mp)
+	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
+		if atomicBatch == nil {
+			atomicBatch = NewAtomicBatch(reader.mp)
 		}
-		return atmBatch
+		return atomicBatch
 	}
 
-	var curHint engine.ChangesHandle_Hint
+	var currentHint engine.ChangesHandle_Hint
 	for {
 		select {
 		case <-ctx.Done():
@@ -288,7 +397,7 @@ func (reader *tableReader) readTableWithTxn(
 
 		v2.CdcMpoolInUseBytesGauge.Set(float64(reader.mp.Stats().NumCurrBytes.Load()))
 		start = time.Now()
-		insertData, deleteData, curHint, err = changes.Next(ctx, reader.mp)
+		insertData, deleteData, currentHint, err = changes.Next(ctx, reader.mp)
 		v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 		if err != nil {
 			return
@@ -316,7 +425,20 @@ func (reader *tableReader) readTableWithTxn(
 
 				// if commit successfully, update watermark
 				if err == nil {
-					reader.wMarkUpdater.UpdateMem(reader.info.SourceDbName, reader.info.SourceTblName, toTs)
+					if err = reader.wMarkUpdater.UpdateWatermarkOnly(
+						ctx,
+						&key,
+						&toTs,
+					); err != nil {
+						logutil.Error(
+							"CDC-TableReader-UpdateWatermarkOnlyFailed",
+							zap.String("info", reader.info.String()),
+							zap.String("task-id", reader.taskId),
+							zap.Uint64("account-id", reader.accountId),
+							zap.String("to", toTs.ToString()),
+							zap.Error(err),
+						)
+					}
 				}
 			}
 			return
@@ -324,7 +446,7 @@ func (reader *tableReader) readTableWithTxn(
 
 		addStartMetrics(insertData, deleteData)
 
-		switch curHint {
+		switch currentHint {
 		case engine.ChangesHandle_Snapshot:
 			// output sql in a txn
 			if !hasBegin && !reader.initSnapshotSplitTxn {

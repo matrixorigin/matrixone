@@ -37,7 +37,7 @@ func WithClientMaxBackendPerHost(maxBackendsPerHost int) ClientOption {
 // WithClientLogger set client logger
 func WithClientLogger(logger *zap.Logger) ClientOption {
 	return func(c *client) {
-		c.logger = logger
+		c.logger = logutil.GetPanicLoggerWithLevel(zap.FatalLevel)
 	}
 }
 

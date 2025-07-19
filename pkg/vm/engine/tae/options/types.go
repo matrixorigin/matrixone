@@ -16,6 +16,7 @@ package options
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -57,15 +58,6 @@ const (
 	DefaultAsyncWorkers = int(16)
 
 	DefaultLogtailTxnPageSize = 256
-
-	DefaultLogstoreType = LogstoreBatchStore
-)
-
-type LogstoreType string
-
-const (
-	LogstoreBatchStore LogstoreType = "batchstore"
-	LogstoreLogservice LogstoreType = "logservice"
 )
 
 type Options struct {
@@ -79,15 +71,17 @@ type Options struct {
 
 	BulkTomestoneTxnThreshold uint64
 	// MaxMessageSize is the size of max message which is sent to log-service.
-	MaxMessageSize   uint64
-	TransferTableTTL time.Duration
-	IncrementalDedup bool
-	IsStandalone     bool
-	LogStoreT        LogstoreType
+	MaxMessageSize       uint64
+	TransferTableTTL     time.Duration
+	IncrementalDedup     bool
+	IsStandalone         bool
+	EnableApplyTableData bool
+	GCTimeCheckerFactory func(any) func(*types.TS) bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`
-	Lc                logservicedriver.LogServiceClientFactory `toml:"-"`
+	TmpFs             *fileservice.TmpFileService              `toml:"-"`
+	WalClientFactory  logservicedriver.LogServiceClientFactory `toml:"-"`
 	Ctx               context.Context                          `toml:"-"`
 	Shard             metadata.TNShard                         `toml:"-"`
 	Clock             clock.Clock                              `toml:"-"`

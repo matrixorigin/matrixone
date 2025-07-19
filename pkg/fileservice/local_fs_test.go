@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"testing"
@@ -81,6 +82,40 @@ func TestLocalFS(t *testing.T) {
 			assert.Nil(t, err)
 			return fs
 		})
+	})
+
+	t.Run("error in write", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fs, err := NewLocalFS(
+			ctx,
+			"test",
+			t.TempDir(),
+			DisabledCacheConfig,
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fs.Close(ctx)
+
+		err = fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					ReaderForWrite: errReader{},
+					Size:           -1,
+				},
+				{
+					ReaderForWrite: errReader{},
+					Size:           -1,
+				},
+			},
+		})
+
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("got %v", err)
+		}
 	})
 
 }

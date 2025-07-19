@@ -18,9 +18,13 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
@@ -54,27 +58,24 @@ func BuildTestBlockid(a, b int64) (ret Blockid) {
 	return
 }
 
-func NewObjectid() *Objectid {
+func NewObjectid() (oid Objectid) {
 	sid := Uuid(uuid.Must(uuid.NewV7()))
-	var oid Objectid
 	copy(oid[:UuidSize], sid[:])
-	return &oid
+	return
 }
 
-func NewBlockidWithObjectID(id *Objectid, blknum uint16) *Blockid {
-	var bid Blockid
+func NewBlockidWithObjectID(id *Objectid, blknum uint16) (bid Blockid) {
 	size := ObjectidSize
 	copy(bid[:size], id[:])
 	copy(bid[size:size+2], EncodeUint16(&blknum))
-	return &bid
+	return
 }
 
-func NewRowid(blkid *Blockid, offset uint32) *Rowid {
-	var rowid Rowid
+func NewRowid(blkid *Blockid, offset uint32) (rowid Rowid) {
 	size := BlockidSize
 	copy(rowid[:size], blkid[:])
 	copy(rowid[size:size+4], EncodeUint32(&offset))
-	return &rowid
+	return
 }
 
 func NewRowIDWithObjectIDBlkNumAndRowID(id Objectid, blknum uint16, offset uint32) Rowid {
@@ -201,12 +202,28 @@ func (r *Rowid) SetRowOffset(offset uint32) {
 	copy(r[BlockidSize:], EncodeUint32(&offset))
 }
 
+func (r *Rowid) SetBlkOffset(offset uint16) {
+	copy(r[ObjectidSize:], EncodeUint16(&offset))
+}
+
+func (r *Rowid) SetObjOffset(offset uint16) {
+	copy(r[SegmentidSize:], EncodeUint16(&offset))
+}
+
+func (r *Rowid) SetSegment(seg Segmentid) {
+	copy(r[:SegmentidSize], seg[:])
+}
+
 func (r *Rowid) GetRowOffset() uint32 {
 	return DecodeUint32(r[BlockidSize:])
 }
 
 func (r *Rowid) GetBlockOffset() uint16 {
 	return DecodeUint16(r[ObjectBytesSize:BlockidSize])
+}
+
+func (r *Rowid) GetObjectOffset() uint16 {
+	return DecodeUint16(r[SegmentidSize:ObjectBytesSize])
 }
 
 func (r *Rowid) GetObjectString() string {
@@ -225,6 +242,95 @@ func (r *Rowid) ShortStringEx() string {
 	b := (*Blockid)(unsafe.Pointer(&r[0]))
 	s := DecodeUint32(r[BlockidSize:])
 	return fmt.Sprintf("%s-%d", b.ShortStringEx(), s)
+}
+
+func (r *Rowid) IncrBlk() error {
+	blkOffset := r.GetBlockOffset()
+	if blkOffset == math.MaxUint16 {
+		if err := r.IncrObj(); err != nil {
+			return err
+		}
+		blkOffset = 0
+	} else {
+		blkOffset++
+	}
+
+	r.SetBlkOffset(blkOffset)
+	r.SetRowOffset(0)
+
+	return nil
+}
+
+func (r *Rowid) IncrObj() error {
+	objOffset := r.GetObjectOffset()
+	if objOffset == math.MaxUint16 {
+		// we expect that the segment id of a rowId is immutable, so incr the segment
+		// cannot fix the object overflow.
+		return moerr.NewInternalErrorNoCtxf("rowId object offset overflow, curr rowId: %s", r.String())
+	}
+
+	objOffset++
+	r.SetObjOffset(objOffset)
+	r.SetBlkOffset(0)
+	r.SetRowOffset(0)
+	return nil
+}
+
+func ParseRowIdFromString(rowStr string) (*Rowid, error) {
+	const (
+		segStrLen = SegmentidSize*2 + 4
+	)
+
+	var (
+		err    error
+		seg    uuid.UUID
+		parts  []string
+		segStr string
+
+		rowId Rowid
+
+		objOffset int
+		blkOffset int
+		rowOffset int
+
+		objOffsetStr string
+		blkOffsetStr string
+		rowOffsetStr string
+	)
+
+	segStr = rowStr[:segStrLen]
+
+	parts = strings.Split(rowStr[segStrLen:], "-")
+	if len(parts) != 4 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid rowId: %s", rowStr)
+	}
+
+	objOffsetStr = parts[1]
+	blkOffsetStr = parts[2]
+	rowOffsetStr = parts[3]
+
+	if objOffset, err = strconv.Atoi(objOffsetStr); err != nil {
+		return nil, err
+	}
+
+	if blkOffset, err = strconv.Atoi(blkOffsetStr); err != nil {
+		return nil, err
+	}
+
+	if rowOffset, err = strconv.Atoi(rowOffsetStr); err != nil {
+		return nil, err
+	}
+
+	if seg, err = uuid.Parse(segStr); err != nil {
+		return nil, err
+	}
+
+	rowId.SetSegment(Segmentid(seg[:]))
+	rowId.SetObjOffset(uint16(objOffset))
+	rowId.SetBlkOffset(uint16(blkOffset))
+	rowId.SetRowOffset(uint32(rowOffset))
+
+	return &rowId, nil
 }
 
 func (b *Blockid) EQ(than *Blockid) bool {

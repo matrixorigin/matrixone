@@ -1,4 +1,4 @@
-FROM golang:1.23.0-bookworm AS builder
+FROM matrixorigin/golang:1.24-ubuntu22.04 AS builder
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
@@ -17,19 +17,16 @@ RUN go mod download
 
 COPY . .
 
-RUN make build
+RUN make clean && make build
 
-FROM ubuntu:22.04
+FROM matrixorigin/ubuntu:22.04
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
 
-# Install some utilities used for debugging or by startup script
-RUN apt-get update && apt-get install -y \
-    dnsutils \
-    curl \
-    git \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# ldconfig and run mo-service to check if the shared library is found
+RUN ldconfig && /mo-service -h
 
 WORKDIR /
 

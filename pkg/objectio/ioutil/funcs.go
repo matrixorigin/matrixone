@@ -502,7 +502,7 @@ func FindStartEndOfBlockFromSortedRowids(rowids []types.Rowid, id *types.Blockid
 	for i < j {
 		m := (i + j) / 2
 		// first value >= lowRowid
-		if !rowids[m].LT(lowRowid) {
+		if !rowids[m].LT(&lowRowid) {
 			j = m
 		} else {
 			i = m + 1

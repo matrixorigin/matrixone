@@ -1145,18 +1145,18 @@ func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock
 }
 
 // GetColumMetadataScanInfo mocks base method.
-func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
+func (m *MockRelation) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx, name)
+	ret := m.ctrl.Call(m, "GetColumMetadataScanInfo", ctx, name, visitTombstone)
 	ret0, _ := ret[0].([]*plan.MetadataScanInfo)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetColumMetadataScanInfo indicates an expected call of GetColumMetadataScanInfo.
-func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx, name interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) GetColumMetadataScanInfo(ctx, name, visitTombstone interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx, name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumMetadataScanInfo", reflect.TypeOf((*MockRelation)(nil).GetColumMetadataScanInfo), ctx, name, visitTombstone)
 }
 
 // GetDBID mocks base method.
@@ -1187,22 +1187,20 @@ func (mr *MockRelationMockRecorder) GetEngineType() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEngineType", reflect.TypeOf((*MockRelation)(nil).GetEngineType))
 }
 
-// GetHideKeys mocks base method.
-func (m *MockRelation) GetHideKeys(arg0 context.Context) ([]*engine.Attribute, error) {
+// GetExtraInfo mocks base method.
+func (m *MockRelation) GetExtraInfo() *api.SchemaExtra {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetHideKeys", arg0)
-	ret0, _ := ret[0].([]*engine.Attribute)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "GetExtraInfo")
+	ret0, _ := ret[0].(*api.SchemaExtra)
+	return ret0
 }
 
-// GetHideKeys indicates an expected call of GetHideKeys.
-func (mr *MockRelationMockRecorder) GetHideKeys(arg0 interface{}) *gomock.Call {
+// GetExtraInfo indicates an expected call of GetExtraInfo.
+func (mr *MockRelationMockRecorder) GetExtraInfo() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKeys", reflect.TypeOf((*MockRelation)(nil).GetHideKeys), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetExtraInfo", reflect.TypeOf((*MockRelation)(nil).GetExtraInfo))
 }
 
-// GetNonAppendableObjectStats mocks base method.
 func (m *MockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetNonAppendableObjectStats", ctx)
@@ -1320,7 +1318,7 @@ func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats, targetObjSize in
 }
 
 // PrimaryKeysMayBeModified mocks base method.
-func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error) {
+func (m *MockRelation) PrimaryKeysMayBeModified(ctx context.Context, from, to types.TS, batch *batch.Batch, pkIndex, _ int32) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "PrimaryKeysMayBeModified", ctx, from, to, batch, pkIndex)
 	ret0, _ := ret[0].(bool)
@@ -1465,20 +1463,6 @@ func (m *MockRelation) TableRenameInTxn(ctx context.Context, constraint [][]byte
 func (mr *MockRelationMockRecorder) TableRenameInTxn(ctx, constraint interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableRenameInTxn", reflect.TypeOf((*MockRelation)(nil).TableRenameInTxn), ctx, constraint)
-}
-
-// Update mocks base method.
-func (m *MockRelation) Update(arg0 context.Context, arg1 *batch.Batch) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Update", arg0, arg1)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Update indicates an expected call of Update.
-func (mr *MockRelationMockRecorder) Update(arg0, arg1 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockRelation)(nil).Update), arg0, arg1)
 }
 
 // UpdateConstraint mocks base method.
@@ -1828,17 +1812,17 @@ func (m *MockLogtailEngine) EXPECT() *MockLogtailEngineMockRecorder {
 }
 
 // TryToSubscribeTable mocks base method.
-func (m *MockLogtailEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2 uint64) error {
+func (m *MockLogtailEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2 uint64, arg3, arg4 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // TryToSubscribeTable indicates an expected call of TryToSubscribeTable.
-func (mr *MockLogtailEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockLogtailEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockLogtailEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockLogtailEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2, arg3, arg4)
 }
 
 // UnsubscribeTable mocks base method.
@@ -2055,6 +2039,19 @@ func (mr *MockEngineMockRecorder) LatestLogtailAppliedTime() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LatestLogtailAppliedTime", reflect.TypeOf((*MockEngine)(nil).LatestLogtailAppliedTime))
 }
 
+// HasTempEngine mocks base method.
+func (m *MockEngine) HasTempEngine() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HasTempEngine")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+func (mr *MockEngineMockRecorder) HasTempEngine() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HasTempEngine", reflect.TypeOf((*MockEngine)(nil).HasTempEngine))
+}
+
 // New mocks base method.
 func (m *MockEngine) New(ctx context.Context, op client.TxnOperator) error {
 	m.ctrl.T.Helper()
@@ -2113,17 +2110,17 @@ func (mr *MockEngineMockRecorder) Stats(ctx, key, sync interface{}) *gomock.Call
 }
 
 // TryToSubscribeTable mocks base method.
-func (m *MockEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2 uint64) error {
+func (m *MockEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2 uint64, arg3, arg4 string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "TryToSubscribeTable", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // TryToSubscribeTable indicates an expected call of TryToSubscribeTable.
-func (mr *MockEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) TryToSubscribeTable(arg0, arg1, arg2, arg3, arg4 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryToSubscribeTable", reflect.TypeOf((*MockEngine)(nil).TryToSubscribeTable), arg0, arg1, arg2, arg3, arg4)
 }
 
 // UnsubscribeTable mocks base method.

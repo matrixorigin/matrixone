@@ -231,26 +231,24 @@ func (executor *checkpointExecutor) doIncrementalCheckpoint(
 	entry *CheckpointEntry,
 ) (fields []zap.Field, files []string, err error) {
 	factory := logtail.IncrementalCheckpointDataFactory(
-		executor.runner.rt.SID(), entry.start, entry.end, true,
+		entry.start, entry.end, 0, executor.runner.rt.Fs,
 	)
 	data, err := factory(executor.runner.catalog)
 	if err != nil {
 		return
 	}
-	fields = data.ExportStats("")
 	defer data.Close()
-	var cnLocation, tnLocation objectio.Location
-	cnLocation, tnLocation, files, err = data.WriteTo(
+	var location objectio.Location
+	location, files, err = data.Sync(
 		executor.ctx,
-		executor.cfg.BlockMaxRowsHint,
-		executor.cfg.SizeHint,
-		executor.runner.rt.Fs.Service,
+		executor.runner.rt.Fs,
 	)
+	fields = data.ExportStats("")
 	if err != nil {
 		return
 	}
-	files = append(files, cnLocation.Name().String())
-	entry.SetLocation(cnLocation, tnLocation)
+	files = append(files, location.Name().String())
+	entry.SetLocation(location, location)
 
 	perfcounter.Update(executor.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)

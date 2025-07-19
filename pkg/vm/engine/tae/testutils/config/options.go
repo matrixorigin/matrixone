@@ -16,6 +16,8 @@ package config
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -28,11 +30,22 @@ func WithQuickScanAndCKPOpts2(in *options.Options, factor int) (opts *options.Op
 	opts.CheckpointCfg.MinCount = int64(factor)
 	opts.CheckpointCfg.IncrementalInterval *= time.Duration(factor)
 	opts.CheckpointCfg.BlockRows = 10
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	opts.Ctx = context.Background()
 	return opts
 }
 
-func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
+func MinTSGCCheckerFactory(e any) func(ts *types.TS) bool {
+	return func(ts *types.TS) bool {
+		minTS := e.(*db.DB).TxnMgr.MinTSForTest()
+		return !ts.GE(&minTS)
+	}
+}
+
+func WithQuickScanAndCKPOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -56,10 +69,43 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CatalogCfg = new(options.CatalogCfg)
 	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
+	for _, op := range ops {
+		op(opts)
+	}
 	return opts
 }
 
-func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
+func WithQuickScanCKPAndLongGCOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScanInterval = time.Millisecond * 10
+	opts.CheckpointCfg.FlushInterval = time.Millisecond * 10
+	opts.CheckpointCfg.MinCount = 1
+	opts.CheckpointCfg.IncrementalInterval = time.Millisecond * 20
+	opts.CheckpointCfg.GlobalMinCount = 1
+	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
+	opts.CheckpointCfg.BlockRows = 10
+	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
+	opts.Ctx = context.Background()
+	for _, op := range ops {
+		op(opts)
+	}
+	return opts
+}
+
+func WithQuickScanAndCKPAndGCOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -81,10 +127,17 @@ func WithQuickScanAndCKPAndGCOpts(in *options.Options) (opts *options.Options) {
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
+	for _, op := range ops {
+		op(opts)
+	}
 	return opts
 }
 
-func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
+func WithLongScanAndCKPOpts(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -97,10 +150,17 @@ func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.GlobalMinCount = 10000000
 	opts.CheckpointCfg.BlockRows = 10
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
+	for _, option := range ops {
+		option(opts)
+	}
 	return opts
 }
 
-func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Options) {
+func WithLongScanAndCKPOptsAndQuickGC(
+	in *options.Options,
+	ops ...func(*options.Options),
+) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)
 	} else {
@@ -117,5 +177,9 @@ func WithLongScanAndCKPOptsAndQuickGC(in *options.Options) (opts *options.Option
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
+	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
+	for _, option := range ops {
+		option(opts)
+	}
 	return opts
 }

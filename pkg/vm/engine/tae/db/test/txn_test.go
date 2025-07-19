@@ -261,7 +261,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 					return
 				}
 				id = blk.Fingerprint()
-				key := *objectio.NewRowid(&id.BlockID, uint32(row))
+				key := objectio.NewRowid(&id.BlockID, uint32(row))
 				cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
 				if err != nil {
 					return

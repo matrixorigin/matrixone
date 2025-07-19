@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,8 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type timeBasedPolicy struct {
@@ -176,7 +175,7 @@ type runner struct {
 	catalog   *catalog.Catalog
 	rt        *dbutils.Runtime
 	observers *observers
-	wal       wal.Driver
+	wal       wal.Store
 
 	// memory storage of the checkpoint entries
 	store *runnerStore
@@ -196,7 +195,7 @@ func NewRunner(
 	rt *dbutils.Runtime,
 	catalog *catalog.Catalog,
 	source logtail.Collector,
-	wal wal.Driver,
+	wal wal.Store,
 	cfg *CheckpointCfg,
 	opts ...Option,
 ) *runner {
@@ -456,7 +455,7 @@ func (r *runner) saveCheckpoint(
 	bat := r.collectCheckpointMetadata(start, end)
 	defer bat.Close()
 	name = ioutil.EncodeCKPMetadataFullName(start, end)
-	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs.Service)
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, r.rt.Fs)
 	if err != nil {
 		return
 	}
@@ -487,11 +486,7 @@ func IsAllDirtyFlushed(source logtail.Collector, cata *catalog.Catalog, start, e
 		if err != nil {
 			continue
 		}
-		ready, notFlushed = IsTableTailFlushed(table, start, end, false)
-		if !ready {
-			break
-		}
-		ready, notFlushed = IsTableTailFlushed(table, start, end, true)
+		ready, notFlushed = table.IsTableTailFlushed(start, end)
 		if !ready {
 			break
 		}
@@ -502,42 +497,4 @@ func IsAllDirtyFlushed(source logtail.Collector, cata *catalog.Catalog, start, e
 		logutil.Info("waiting for dirty tree %s", zap.String("table", tableDesc), zap.String("obj", notFlushed.StringWithLevel(2)))
 	}
 	return ready
-}
-
-func IsTableTailFlushed(table *catalog.TableEntry, start, end types.TS, isTombstone bool) (bool, *catalog.ObjectEntry) {
-	var it btree.IterG[*catalog.ObjectEntry]
-	if isTombstone {
-		table.WaitTombstoneObjectCommitted(end)
-		it = table.MakeTombstoneObjectIt()
-	} else {
-		table.WaitDataObjectCommitted(end)
-		it = table.MakeDataObjectIt()
-	}
-	defer it.Release()
-	earlybreak := false
-	// some entries shared the same timestamp with end, so we need to seek to the next one
-	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: end.Next()}}
-	var ok bool
-	if ok = it.Seek(key); !ok {
-		ok = it.Last()
-	}
-	for ; ok; ok = it.Prev() {
-		if earlybreak {
-			break
-		}
-		obj := it.Item()
-		if !obj.IsAppendable() || obj.IsDEntry() || obj.CreatedAt.GT(&end) {
-			continue
-		}
-		// check only appendable C entries
-		if obj.CreatedAt.LT(&start) {
-			earlybreak = true
-		}
-		// the C entry has no counterpart D entry or the D entry is not committed yet
-		if next := obj.GetNextVersion(); next == nil || !next.IsCommitted() {
-			return false, obj
-		}
-	}
-
-	return true, nil
 }

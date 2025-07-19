@@ -276,12 +276,12 @@ func (testTS *testTaskService) GetStorage() taskservice.TaskStorage {
 	panic("implement me")
 }
 
-func (testTS *testTaskService) AddCdcTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, f func(context.Context, taskservice.SqlExecutor) (int, error)) (int, error) {
+func (testTS *testTaskService) AddCDCTask(ctx context.Context, metadata task.TaskMetadata, details *task.Details, f func(context.Context, taskservice.SqlExecutor) (int, error)) (int, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (testTS *testTaskService) UpdateCdcTask(ctx context.Context, status task.TaskStatus, f func(context.Context, task.TaskStatus, map[taskservice.CdcTaskKey]struct{}, taskservice.SqlExecutor) (int, error), condition ...taskservice.Condition) (int, error) {
+func (testTS *testTaskService) UpdateCDCTask(ctx context.Context, status task.TaskStatus, f func(context.Context, task.TaskStatus, map[taskservice.CDCTaskKey]struct{}, taskservice.SqlExecutor) (int, error), condition ...taskservice.Condition) (int, error) {
 	//TODO implement me
 	panic("implement me")
 }

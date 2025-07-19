@@ -88,18 +88,24 @@ func (t *typedSlice) setFromVector(v *Vector) {
 }
 
 func ToSliceNoTypeCheck[T any](vec *Vector, ret *[]T) {
+	checkTypeIfRaceDetectorEnabled[T](vec)
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
 func ToSliceNoTypeCheck2[T any](vec *Vector) []T {
+	checkTypeIfRaceDetectorEnabled[T](vec)
 	return unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
 }
 
 func ToSlice[T any](vec *Vector, ret *[]T) {
-	if !typeCompatible[T](vec.typ) {
-		panic(fmt.Sprintf("type mismatch: %T %v", []T{}, vec.typ.String()))
-	}
+	checkType[T](vec)
 	*ret = unsafe.Slice((*T)(vec.col.Ptr), vec.col.Cap)
+}
+
+func checkType[T any](vec *Vector) {
+	if !typeCompatible[T](vec.typ) {
+		panic(fmt.Sprintf("type mismatch: casting %v vector to %T", vec.typ.String(), []T{}))
+	}
 }
 
 func (v *Vector) GetSorted() bool {
@@ -582,7 +588,14 @@ func SetStringAt(v *Vector, idx int, bs string, mp *mpool.MPool) error {
 //
 //	a + Null, and the vector of right part will return true
 func (v *Vector) IsConstNull() bool {
-	return v.IsConst() && len(v.data) == 0
+	if !v.IsConst() {
+		return false
+	}
+	if len(v.data) == 0 {
+		return true
+	}
+
+	return v.nsp.Count() > 0 && v.nsp.Contains(0)
 }
 
 func (v *Vector) GetArea() []byte {
@@ -803,9 +816,6 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 }
 
 func (v *Vector) ToConst() {
-	if v.nsp.Contains(0) {
-		v.data = v.data[:0]
-	}
 	v.class = CONSTANT
 }
 
@@ -892,6 +902,9 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
 func (v *Vector) Shrink(sels []int64, negate bool) {
+
+	shrinkSortedCheckIfRaceDetectorEnabled(sels)
+
 	if v.IsConst() {
 		if negate {
 			v.length -= len(sels)
@@ -4741,4 +4754,17 @@ func Union2VectorValen(
 	}
 
 	return nil
+}
+
+func (v *Vector) FillRawPtrLen(dest []uintptr) {
+	dest[0], dest[1] = v.nsp.RawPtrLen()
+	ds := v.UnsafeGetRawData()
+	dest[2] = uintptr(unsafe.Pointer(&ds[0]))
+	dest[3] = uintptr(len(ds))
+	if len(v.area) == 0 {
+		dest[4], dest[5] = 0, 0
+	} else {
+		dest[4] = uintptr(unsafe.Pointer(&v.area[0]))
+		dest[5] = uintptr(len(v.area))
+	}
 }

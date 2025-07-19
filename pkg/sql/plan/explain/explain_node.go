@@ -545,6 +545,17 @@ func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *Ex
 					describeColRef(&updateCtx.DeleteCols[i], buf)
 				}
 			}
+			if len(updateCtx.PartitionCols) > 0 {
+				buf.WriteString(" Partition Columns: ")
+				first := true
+				for i := range updateCtx.PartitionCols {
+					if !first {
+						buf.WriteString(", ")
+					}
+					first = false
+					describeColRef(&updateCtx.PartitionCols[i], buf)
+				}
+			}
 			lines = append(lines, buf.String())
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
@@ -713,7 +724,7 @@ func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *
 				buf.WriteString(", ")
 			}
 			first = false
-			describeMessage(v, buf)
+			describeMessage(&v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -737,7 +748,7 @@ func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *
 				buf.WriteString(", ")
 			}
 			first = false
-			describeMessage(v, buf)
+			describeMessage(&v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -1106,6 +1117,7 @@ func (c *CostDescribeImpl) GetDescription(ctx context.Context, options *ExplainO
 		buf.WriteString(" (cost=" + strconv.FormatFloat(c.Stats.Cost, 'f', 2, 64) +
 			" outcnt=" + strconv.FormatFloat(c.Stats.Outcnt, 'f', 2, 64) +
 			" selectivity=" + strconv.FormatFloat(c.Stats.Selectivity, 'f', 4, 64) +
+			" dop=" + strconv.FormatInt(int64(c.Stats.Dop), 10) +
 			blockNumStr + hashmapSizeStr + ")")
 	}
 	return nil
@@ -1188,6 +1200,7 @@ func (w *WinSpecDescribeImpl) GetDescription(ctx context.Context, options *Expla
 }
 
 type RowsetDataDescribeImpl struct {
+	TableDef   *plan.TableDef
 	RowsetData *plan.RowsetData
 }
 
@@ -1198,12 +1211,12 @@ func (r *RowsetDataDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	}
 
 	first := true
-	for index := range r.RowsetData.Cols {
+	for _, col := range r.TableDef.Cols {
 		if !first {
 			buf.WriteString(", ")
 		}
 		first = false
-		buf.WriteString("\"*VALUES*\".column" + strconv.Itoa(index+1))
+		buf.WriteString("\"*VALUES*\"." + col.Name)
 	}
 	return nil
 }

@@ -20,11 +20,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"go.uber.org/zap"
 )
 
 func HybridScanByBlock(
@@ -177,9 +179,43 @@ func ReadSysTableBatch(ctx context.Context, entry *catalog.TableEntry, readTxn t
 		obj := it.Item()
 		for blkOffset := range obj.BlockCnt() {
 			blkid := objectio.NewBlockidWithObjectID(obj.ID(), uint16(blkOffset))
-			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, blkid, common.CheckpointAllocator)
+			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, &blkid, common.CheckpointAllocator)
 			if err != nil || bat == nil || bat.Length() == prevLen {
-				panic(fmt.Sprintf("blkbat is nil, obj %v, blkid %v, err %v", obj.ID().String(), blkid, err))
+				panic(fmt.Sprintf("blkbat is nil, obj %v, blkid %v, err %v", obj.ID().String(), blkOffset, err))
+			}
+		}
+	}
+	if bat != nil {
+		bat.Compact()
+	}
+	return bat
+}
+
+func ReadMergeSettingsBatch(ctx context.Context, entry *catalog.TableEntry, readTxn txnif.AsyncTxn) *containers.Batch {
+	schema := entry.GetLastestSchema(false)
+	it := entry.MakeDataVisibleObjectIt(readTxn)
+	defer it.Release()
+	colIdxes := make([]int, 0, len(schema.ColDefs))
+	for _, col := range schema.ColDefs {
+		if col.IsPhyAddr() {
+			continue
+		}
+		colIdxes = append(colIdxes, col.Idx)
+	}
+	var bat *containers.Batch
+	prevLen := 0
+	for it.Next() {
+		obj := it.Item()
+		for blkOffset := range obj.BlockCnt() {
+			blkid := objectio.NewBlockidWithObjectID(obj.ID(), uint16(blkOffset))
+			err := HybridScanByBlock(ctx, entry, readTxn, &bat, schema, colIdxes, &blkid, common.MergeAllocator)
+			if err != nil || bat == nil || bat.Length() == prevLen {
+				logutil.Error("ReadMergeSettingsBatch",
+					zap.String("event", "read settings empty"),
+					zap.String("obj", obj.ID().String()),
+					zap.Int("blkOffset", blkOffset),
+					zap.Error(err),
+				)
 			}
 		}
 	}

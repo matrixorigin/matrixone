@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -185,7 +186,7 @@ func (d *dirtyCollector) Run(lag time.Duration) {
 func (d *dirtyCollector) ScanInRangePruned(from, to types.TS) (
 	tree *DirtyTreeEntry) {
 	tree, _ = d.ScanInRange(from, to)
-	if err := d.tryCompactTree(context.Background(), d.interceptor, tree.tree); err != nil {
+	if err := d.tryCompactTree(context.Background(), tree); err != nil {
 		panic(err)
 	}
 	return
@@ -209,14 +210,10 @@ func (d *dirtyCollector) ScanInRange(from, to types.TS) (
 	return
 }
 
-// DirtyCount returns unflushed table, Object, block count
-func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt int) {
+// DirtyCount returns unflushed table count
+func (d *dirtyCollector) DirtyCount() int {
 	merged := d.GetAndRefreshMerged()
-	tblCnt = merged.tree.TableCount()
-	for _, tblTree := range merged.tree.Tables {
-		objCnt += len(tblTree.Objs)
-	}
-	return
+	return merged.tree.TableCount()
 }
 
 func (d *dirtyCollector) String() string {
@@ -345,7 +342,7 @@ func (d *dirtyCollector) cleanupStorage() {
 			toDeletes = append(toDeletes, entry)
 			return true
 		}
-		if err := d.tryCompactTree(context.Background(), d.interceptor, entry.tree); err != nil {
+		if err := d.tryCompactTree(context.Background(), entry); err != nil {
 			logutil.Warnf("error: interceptor on dirty tree: %v", err)
 		}
 		if entry.tree.IsEmpty() {
@@ -376,19 +373,14 @@ func (d *dirtyCollector) cleanupStorage() {
 // Or, put it in a more concise way, **not dropped aobjects** will be kept in the tree.
 func (d *dirtyCollector) tryCompactTree(
 	ctx context.Context,
-	interceptor DirtyEntryInterceptor,
-	tree *model.Tree) (err error) {
+	entry *DirtyTreeEntry) (err error) {
 	var (
-		db  *catalog.DBEntry
-		tbl *catalog.TableEntry
+		db   *catalog.DBEntry
+		tbl  *catalog.TableEntry
+		tree = entry.tree
 	)
 	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
-		if dirtyTable.Compact() {
-			tree.Shrink(id)
-			continue
-		}
-
 		if db, err = d.catalog.GetDatabaseByID(dirtyTable.DbID); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				tree.Shrink(id)
@@ -412,37 +404,14 @@ func (d *dirtyCollector) tryCompactTree(
 			continue
 		}
 
-		checkAndTrimObject := func(id types.Objectid, isTombstone bool) error {
-			obj, err := tbl.GetObjectByID(&id, isTombstone)
-			if err != nil {
-				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					dirtyTable.Shrink(id, isTombstone)
-					return nil
-				}
-				return err
+		if flushed, _ := tbl.IsTableTailFlushed(entry.start, entry.end); flushed {
+			if _, injected := objectio.PrintFlushEntryInjected(); injected {
+				logutil.Infof("tryCompactTree: remove table %v, start %v, end %v",
+					id, entry.start.ToString(), entry.end.ToString())
 			}
-			// keep only non-dropped aobjects
-			if !(obj.IsAppendable() && !obj.HasDropCommitted()) {
-				dirtyTable.Shrink(id, isTombstone)
-				return nil
-			}
-			if err := interceptor.OnObject(obj); err != nil {
-				return err
-			}
-			return nil
-		}
-
-		for id := range dirtyTable.Objs {
-			if err = checkAndTrimObject(id, false); err != nil {
-				return
-			}
-		}
-		for id := range dirtyTable.Tombstones {
-			if err = checkAndTrimObject(id, true); err != nil {
-				return
-			}
+			tree.Shrink(id)
+			continue
 		}
 	}
-	tree.Compact()
 	return
 }

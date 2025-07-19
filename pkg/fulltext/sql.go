@@ -97,6 +97,9 @@ To simplify the SQL, (+ (GROUP (TEXT C) (TEXT D))) will not considered as JOIN.
 
 WITH t0 (A JOIN B)
 (t0) UNION ALL (t0 JOIN C) UNION ALL (t0 JOIN D) UNION ALL (t0 JOIN E)
+
+IMPORTANT NOTE:
+In SQL, please don't use ORDER BY, UNION to generate the SQL.  ORDER BY is slow and UNION will cause OOM.
 */
 type SqlNode struct {
 	Index    int32
@@ -434,6 +437,12 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 			}
 
 		}
+
+		if mode == int64(tree.FULLTEXT_BOOLEAN) {
+			// in boolean mode, we ignore the word occurrence.  GROUP BY will remove the duplicate doc_id and
+			// hence avoid a huge number of records produced after JOIN.
+			sql += " GROUP BY doc_id"
+		}
 	} else {
 
 		oncond := make([]string, len(ps)-1)
@@ -472,6 +481,12 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 		sql += strings.Join(tables, ", ")
 		sql += " WHERE "
 		sql += strings.Join(oncond, " AND ")
+
+		if mode == int64(tree.FULLTEXT_BOOLEAN) {
+			// in boolean mode, we ignore the word occurrence.  GROUP BY will remove the duplicate doc_id and
+			// hence avoid a huge number of records produced after JOIN.
+			sql += fmt.Sprintf(" GROUP BY %s.doc_id", tables[0])
+		}
 	}
 
 	//logutil.Infof("SQL is %s", sql)
@@ -480,8 +495,27 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 }
 
 // API for generate SQL from pattern
-func PatternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {
+func PatternToSql(ps []*Pattern, mode int64, idxTable string, parser string, algo FullTextScoreAlgo) (string, error) {
+	sql, err := patternToSql(ps, mode, idxTable, parser)
+	if err != nil {
+		return "", err
+	}
+	switch algo {
+	case ALGO_BM25:
+		newSql := genBM25SQL(sql, idxTable)
+		return newSql, nil
+	case ALGO_TFIDF:
+	default:
+		return "", moerr.NewInternalErrorNoCtx("invalid fulltext search mode")
+	}
+	return sql, nil
+}
 
+func genBM25SQL(sql string, idxTable string) string {
+	return fmt.Sprintf("select a.*, b.pos as doc_len from (%s) a left join %s b on a.doc_id = b.doc_id and b.word = '%s'", sql, idxTable, DOC_LEN_WORD)
+}
+
+func patternToSql(ps []*Pattern, mode int64, idxtbl string, parser string) (string, error) {
 	switch mode {
 	case int64(tree.FULLTEXT_NL), int64(tree.FULLTEXT_DEFAULT):
 		return SqlPhrase(ps, mode, idxtbl, true)

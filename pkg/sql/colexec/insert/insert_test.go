@@ -30,18 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/stretchr/testify/require"
 )
-
-type mockRelation struct {
-	engine.Relation
-	result *batch.Batch
-}
-
-func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
-	e.result = b
-	return nil
-}
 
 func TestInsertOperator(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -66,10 +57,10 @@ func TestInsertOperator(t *testing.T) {
 
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
+	relation.EXPECT().Reset(gomock.Any()).Return(nil).AnyTimes()
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	batch1 := &batch.Batch{
@@ -78,7 +69,7 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarInt64(3, 3),
 			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
 			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(types.T_int64, 3),
+			testutil.MakeScalarNull(t, types.T_int64, 3),
 		},
 		Attrs: []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 	}
@@ -102,8 +93,7 @@ func TestInsertOperator(t *testing.T) {
 			},
 		},
 		ctr: container{
-			state:  vm.Build,
-			source: &mockRelation{},
+			state: vm.Build,
 		},
 	}
 	resetChildren(&argument1, batch1)
@@ -144,7 +134,26 @@ func TestInsert_initBufForS3(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			insert := &Insert{}
+			insert := &Insert{
+				InsertCtx: &InsertCtx{
+					Engine: nil,
+				},
+			}
+			insert.initBufForS3()
+			require.NotNil(t, insert.ctr.buf)
+			require.Equal(t, 2, len(insert.ctr.buf.Attrs))
+			require.Equal(t, catalog.BlockMeta_BlockInfo, insert.ctr.buf.Attrs[0])
+			require.Equal(t, catalog.ObjectMeta_ObjectStats, insert.ctr.buf.Attrs[1])
+			require.Equal(t, types.T_text, insert.ctr.buf.Vecs[0].GetType().Oid)
+			require.Equal(t, types.T_binary, insert.ctr.buf.Vecs[1].GetType().Oid)
+		})
+
+		t.Run(tt.name, func(t *testing.T) {
+			insert := &Insert{
+				InsertCtx: &InsertCtx{
+					Engine: &memoryengine.BindedEngine{},
+				},
+			}
 			insert.initBufForS3()
 			require.NotNil(t, insert.ctr.buf)
 			require.Equal(t, 3, len(insert.ctr.buf.Attrs))

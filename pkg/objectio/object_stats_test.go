@@ -17,10 +17,11 @@ package objectio
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/stretchr/testify/require"
 )
@@ -112,4 +113,63 @@ func TestObjectStatsOptions(t *testing.T) {
 
 	WithAppendable()(stats)
 	require.True(t, stats.GetAppendable())
+}
+
+func TestObjectStats_SetLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		level    int8
+		expected int8
+	}{
+		{
+			name:     "Set level 0",
+			level:    0,
+			expected: 0,
+		},
+		{
+			name:     "Set level 7",
+			level:    7,
+			expected: 7,
+		},
+		{
+			name:     "Set negative level (should clamp to 0)",
+			level:    -1,
+			expected: 0,
+		},
+		{
+			name:     "Set level > 7 (should clamp to 7)",
+			level:    8,
+			expected: 7,
+		},
+		{
+			name:     "Set level 3",
+			level:    3,
+			expected: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stats := NewObjectStats()
+
+			// Set some flags to ensure they're preserved
+			stats[reservedOffset] = ObjectFlag_Appendable | ObjectFlag_Sorted
+
+			stats.SetLevel(tt.level)
+
+			// Verify the level was set correctly
+			got := stats.GetLevel()
+			if got != tt.expected {
+				t.Errorf("SetLevel() = %v, want %v", got, tt.expected)
+			}
+
+			// Verify other flags were preserved
+			if !stats.GetAppendable() {
+				t.Error("Appendable flag was not preserved")
+			}
+			if !stats.GetSorted() {
+				t.Error("Sorted flag was not preserved")
+			}
+		})
+	}
 }

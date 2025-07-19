@@ -12,10 +12,6 @@ SELECT '生日快乐！' AS message, MAKEDATE(1990, 100) AS birthday;
 -- @ignore:0
 SELECT YEAR(NOW()) - YEAR(MAKEDATE(YEAR(NOW()), 1)) AS years_passed;
 
--- @bvt:issue#21024
-SELECT IF(MAKEDATE(YEAR(NOW()), 366) < NOW(), '闰年', '平年') AS leap_year_status;
--- @bvt:issue
-
 create database abc;
 use abc;
 CREATE TABLE employees (

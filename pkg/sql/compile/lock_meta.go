@@ -36,8 +36,10 @@ import (
 )
 
 type LockMeta struct {
-	database_table_id uint64 //table id of mo_database
-	table_table_id    uint64 //table id of mo_tables
+	database_table_id uint64          //table id of mo_database
+	database_rel      engine.Relation //relation id of mo_database
+	table_rel         engine.Relation // relation of mo_tables
+	table_table_id    uint64          //table id of mo_tables
 
 	metaTables   map[string]struct{}        //key: (db_name table_name)
 	lockDbExe    colexec.ExpressionExecutor //executor to serial function to lock mo_database
@@ -126,9 +128,8 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 	lockDbs := make(map[string]struct{})
 	lockVec := l.lockTableVec
 
-	var bat *batch.Batch
+	bat := batch.NewWithSize(3)
 	if l.lockTableVec == nil {
-		bat = batch.NewWithSize(3)
 		for _, table := range tables {
 			names := strings.SplitN(table, " ", 2)
 			err = vector.AppendFixed(l.lockMetaVecs[0], accountId, false, proc.GetMPool()) //account_id
@@ -157,7 +158,7 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		l.lockTableVec = lockVec
 	}
 
-	err = l.lockMetaRows(e, proc, lockVec, accountId, l.table_table_id)
+	err = l.lockMetaRows(e, proc, l.table_rel, lockVec, accountId, l.table_table_id)
 	if err != nil {
 		return err
 	}
@@ -188,13 +189,13 @@ func (l *LockMeta) doLock(e engine.Engine, proc *process.Process) error {
 		l.lockDbVec = lockVec
 	}
 
-	return l.lockMetaRows(e, proc, lockVec, accountId, l.database_table_id)
+	return l.lockMetaRows(e, proc, l.database_rel, lockVec, accountId, l.database_table_id)
 }
 
-func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, lockVec *vector.Vector, accountId uint32, tableId uint64) error {
+func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engine.Relation, lockVec *vector.Vector, accountId uint32, tableId uint64) error {
 	b := batch.NewWithSize(1)
 	b.SetVector(0, lockVec)
-	if err := lockop.LockRows(e, proc, nil, tableId, b, 0, *lockVec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId); err != nil {
+	if err := lockop.LockRows(e, proc, rel, tableId, b, 0, *lockVec.GetType(), lock.LockMode_Shared, lock.Sharding_None, accountId); err != nil {
 		// if get error in locking mocatalog.mo_tables by it's dbName & tblName
 		// that means the origin table's schema was changed. then return NeedRetryWithDefChanged err
 		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
@@ -210,6 +211,8 @@ func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, lockVec 
 
 func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 	if l.lockTableExe != nil {
+		l.table_rel.Reset(proc.GetTxnOperator())
+		l.database_rel.Reset(proc.GetTxnOperator())
 		return nil
 	}
 
@@ -272,12 +275,14 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 		return err
 	}
 	l.database_table_id = rel.GetTableID(proc.Ctx)
+	l.database_rel = rel
 
 	rel, err = dbSource.Relation(proc.Ctx, catalog.MO_TABLES, nil)
 	if err != nil {
 		return err
 	}
 	l.table_table_id = rel.GetTableID(proc.Ctx)
+	l.table_rel = rel
 
 	return nil
 }

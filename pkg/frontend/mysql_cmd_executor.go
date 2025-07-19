@@ -2122,62 +2122,74 @@ var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx
 	return plan, nil
 }
 
-func checkModify(plan0 *plan.Plan, ses FeSession) bool {
+func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error)) (bool, error) {
 	if plan0 == nil {
-		return true
+		return true, nil
 	}
-	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName, nil)
+
+	checkFn := func(ref *plan.ObjectRef, def *plan.TableDef) (bool, error) {
+		if ref == nil || def == nil {
+			return true, nil
+		}
+		_, tableDef, err := resolveFn(ref.SchemaName, def.Name, nil)
+		if err != nil {
+			return true, err
+		}
 		if tableDef == nil {
-			return true
+			return true, nil
 		}
-		if tableDef.Version != version || tableDef.TblId != tableId {
-			return true
+		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+			return true, nil
 		}
-		return false
+		return false, nil
 	}
 	switch p := plan0.Plan.(type) {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
-				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def.Name, def.TblId, def.Version) {
-					return true
+				flag, err := checkFn(p.Query.Nodes[i].ObjRef, def)
+				if err != nil || flag {
+					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
-					return true
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				if err != nil || flag {
+					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
-					return true
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				if err != nil || flag {
+					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
-					return true
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				if err != nil || flag {
+					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
-					return true
-				}
-			}
-			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
-					return true
+				flag, err := checkFn(ctx.Ref, ctx.TableDef)
+				if err != nil || flag {
+					return true, err
 				}
 			}
 			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableName, ctx.TableId, ctx.TableVersion) {
-					return true
+				flag, err := checkFn(p.Query.Nodes[i].ObjRef, &plan.TableDef{
+					Name:    ctx.TableName,
+					TblId:   ctx.TableId,
+					Version: ctx.TableVersion,
+				})
+				if err != nil || flag {
+					return true, err
 				}
 			}
 		}
 	default:
 	}
-	return false
+	return false, nil
 }
 
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
@@ -2355,7 +2367,12 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 }
 
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
-func canExecuteStatementInUncommittedTransaction(reqCtx context.Context, ses FeSession, stmt tree.Statement) error {
+func canExecuteStatementInUncommittedTransaction(
+	reqCtx context.Context,
+	ses FeSession,
+	stmt tree.Statement,
+) error {
+
 	can, err := statementCanBeExecutedInUncommittedTransaction(reqCtx, ses, stmt)
 	if err != nil {
 		return err
@@ -2774,7 +2791,11 @@ func dispatchStmt(ses FeSession,
 	defer ses.ExitFPrint(FPDispatchStmt)
 	//5. check plan within txn
 	if !execCtx.input.isBinaryProtExecute && execCtx.cw.Plan() != nil {
-		if checkModify(execCtx.cw.Plan(), ses) {
+		flag, err := checkModify(execCtx.cw.Plan(), ses.GetTxnCompileCtx().Resolve)
+		if err != nil {
+			return err
+		}
+		if flag {
 			//plan changed
 			//clear all cached plan and parse sql again
 			var stmts []tree.Statement
@@ -3395,7 +3416,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		return NewGeneralOkResponse(COM_SET_OPTION, ses.GetTxnHandler().GetServerStatus()), nil
 
 	default:
-		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", req.GetCmd()))
+		resp = NewGeneralErrorResponse(req.GetCmd(), ses.GetTxnHandler().GetServerStatus(), moerr.NewInternalErrorf(execCtx.reqCtx, "unsupported command. 0x%x", int64(req.GetCmd())))
 	}
 	return resp, nil
 }

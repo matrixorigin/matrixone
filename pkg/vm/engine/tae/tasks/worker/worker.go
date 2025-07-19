@@ -213,14 +213,17 @@ func (w *OpWorker) opCancelOp(op iops.IOp) {
 }
 
 func (w *OpWorker) onOp(op iops.IOp) {
-	err := op.OnExec(w.Ctx)
+	var err error
+	defer func() {
+		op.SetError(err)
+	}()
+	err = op.OnExec(w.Ctx)
 	w.Stats.AddProcessed()
 	if err != nil {
 		w.Stats.AddFailed()
 	} else {
 		w.Stats.AddSuccessed()
 	}
-	op.SetError(err)
 	w.Stats.RecordTime(op.GetExecutTime())
 }
 

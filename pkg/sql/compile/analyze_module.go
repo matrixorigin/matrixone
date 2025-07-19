@@ -48,9 +48,12 @@ type AnalyzeModule struct {
 }
 
 // Reset When Compile reused, reset AnalyzeModule to prevent resource accumulation
-func (anal *AnalyzeModule) Reset() {
+func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 	if anal != nil {
-		anal.phyPlan = nil
+		if !isPrepare {
+			anal.phyPlan = nil
+		}
+
 		anal.remotePhyPlans = nil
 		anal.explainPhyBuffer = nil
 		anal.retryTimes = 0
@@ -142,7 +145,7 @@ func updateScopesLastFlag(updateScopes []*Scope) {
 
 // applyOpStatsToNode Recursive traversal of PhyOperator tree,
 // and add OpStats statistics to the corresponding NodeAnalyze Info
-func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
+func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.Node, scopeParalleInfo *ParallelScopeInfo) {
 	if op == nil {
 		return
 	}
@@ -201,16 +204,20 @@ func applyOpStatsToNode(op *models.PhyOperator, nodes []*plan.Node, scopeParalle
 		} else if _, isMajorOp := vm.MajorOpMap[op.OpName]; isMajorOp {
 			scopeParalleInfo.NodeIdxTimeConsumeMajor[op.NodeIdx] += op.OpStats.TimeConsumed
 		}
+
+		if qry != nil {
+			qry.BackgroundQueries = append(qry.BackgroundQueries, op.OpStats.BackgroundQueries...)
+		}
 	}
 
 	// Recursive processing of sub operators
 	for _, childOp := range op.Children {
-		applyOpStatsToNode(childOp, nodes, scopeParalleInfo)
+		applyOpStatsToNode(childOp, qry, nodes, scopeParalleInfo)
 	}
 }
 
 // processPhyScope Recursive traversal of PhyScope and processing of PhyOperators within it
-func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statistic.StatsInfo) {
+func processPhyScope(scope *models.PhyScope, qry *plan.Query, nodes []*plan.Node, stats *statistic.StatsInfo) {
 	if scope == nil {
 		return
 	}
@@ -219,7 +226,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statisti
 	// handle current Scope operator pipeline
 	if scope.RootOperator != nil {
 		scopeParallInfo := NewParallelScopeInfo()
-		applyOpStatsToNode(scope.RootOperator, nodes, scopeParallInfo)
+		applyOpStatsToNode(scope.RootOperator, qry, nodes, scopeParallInfo)
 
 		for nodeIdx, timeConsumeMajor := range scopeParallInfo.NodeIdxTimeConsumeMajor {
 			nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor = append(nodes[nodeIdx].AnalyzeInfo.TimeConsumedArrayMajor, timeConsumeMajor)
@@ -232,7 +239,7 @@ func processPhyScope(scope *models.PhyScope, nodes []*plan.Node, stats *statisti
 
 	// handle preScopes recursively
 	for _, preScope := range scope.PreScopes {
-		processPhyScope(&preScope, nodes, stats)
+		processPhyScope(&preScope, qry, nodes, stats)
 	}
 }
 
@@ -243,12 +250,12 @@ func (c *Compile) fillPlanNodeAnalyzeInfo(stats *statistic.StatsInfo) {
 
 	// handle local scopes
 	for _, localScope := range c.anal.phyPlan.LocalScope {
-		processPhyScope(&localScope, c.anal.qry.Nodes, stats)
+		processPhyScope(&localScope, c.anal.qry, c.anal.qry.Nodes, stats)
 	}
 
 	// handle remote run scopes
 	for _, remoteScope := range c.anal.phyPlan.RemoteScope {
-		processPhyScope(&remoteScope, c.anal.qry.Nodes, stats)
+		processPhyScope(&remoteScope, c.anal.qry, c.anal.qry.Nodes, stats)
 	}
 }
 
@@ -276,6 +283,24 @@ func ConvertScopeToPhyScope(scope *Scope, receiverMap map[*process.WaitRegister]
 	}
 
 	return phyScope
+}
+
+func UpdatePreparePhyScope(scope *Scope, phyScope models.PhyScope) bool {
+	res := UpdatePreparePhyOperator(scope.RootOp, phyScope.RootOperator)
+	if !res {
+		return false
+	}
+	if scope.ScopeAnalyzer != nil {
+		phyScope.PrepareTimeConsumed = scope.ScopeAnalyzer.TimeConsumed
+	}
+
+	for i, preScope := range scope.PreScopes {
+		res = UpdatePreparePhyScope(preScope, phyScope.PreScopes[i])
+		if !res {
+			return res
+		}
+	}
+	return true
 }
 
 func getScopeReceiver(s *Scope, rs []*process.WaitRegister, rmp map[*process.WaitRegister]int) []models.PhyReceiver {
@@ -336,6 +361,28 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 	return phyOp
 }
 
+func UpdatePreparePhyOperator(op vm.Operator, phyOp *models.PhyOperator) bool {
+	if op == nil {
+		return true
+	}
+
+	if op.GetOperatorBase().OpAnalyzer != nil {
+		phyOp.OpStats = op.GetOperatorBase().OpAnalyzer.GetOpStats()
+	}
+
+	children := op.GetOperatorBase().Children
+	if len(children) != len(phyOp.Children) {
+		return false
+	}
+	for i, child := range children {
+		res := UpdatePreparePhyOperator(child, phyOp.Children[i])
+		if !res {
+			return res
+		}
+	}
+	return true
+}
+
 // getDestReceiver returns the DestReceiver of the current Operator
 func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.PhyReceiver {
 	receivers := make([]models.PhyReceiver, 0)
@@ -351,8 +398,7 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 					RemoteUuid: "",
 				})
 			}
-		}
-		if id == vm.Dispatch {
+		} else if id == vm.Dispatch {
 			arg := op.(*dispatch.Dispatch)
 			for i := range arg.LocalRegs {
 				if receiverId, okk := mp[arg.LocalRegs[i]]; okk {
@@ -378,8 +424,6 @@ func getDestReceiver(op vm.Operator, mp map[*process.WaitRegister]int) []models.
 				}
 			}
 		}
-	} else {
-		panic("unkonw operator type")
 	}
 	return receivers
 }
@@ -393,6 +437,23 @@ func ConvertSourceToPhySource(source *Source) *models.PhySource {
 		RelationName: source.RelationName,
 		Attributes:   source.Attributes,
 	}
+}
+
+// true means update success, if return false, GenPhyPlan
+func (c *Compile) UpdatePreparePhyPlan(runC *Compile) bool {
+	//------------------------------------------------------------------------------------------------------
+	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
+	c.anal.curNodeIdx = runC.anal.curNodeIdx
+
+	if len(runC.scopes) > 0 {
+		for i := range runC.scopes {
+			res := UpdatePreparePhyScope(runC.scopes[i], c.anal.phyPlan.LocalScope[i])
+			if !res {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (c *Compile) GenPhyPlan(runC *Compile) {

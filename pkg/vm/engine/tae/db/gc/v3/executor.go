@@ -16,11 +16,11 @@ package gc
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -45,6 +45,7 @@ func BuildBloomfilter(
 	sourcer SourerFn,
 	buffer containers.IBatchBuffer,
 	mp *mpool.MPool,
+	dataProcess ...func(*bloomfilter.BloomFilter, *vector.Vector, *mpool.MPool) error,
 ) (bf *bloomfilter.BloomFilter, err error) {
 	nbf := bloomfilter.New(int64(rowCount), probability)
 	bf = &nbf
@@ -64,7 +65,15 @@ func BuildBloomfilter(
 		if done {
 			break
 		}
-		bf.Add(bat.Vecs[columnIdx])
+		if len(dataProcess) > 0 {
+			for _, proc := range dataProcess {
+				if err = proc(bf, bat.Vecs[columnIdx], mp); err != nil {
+					return
+				}
+			}
+		} else {
+			bf.Add(bat.Vecs[columnIdx])
+		}
 	}
 	return
 }

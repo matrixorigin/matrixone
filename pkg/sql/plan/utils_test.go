@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -122,7 +124,7 @@ func TestMakeCPKEYRuntimeFilter(t *testing.T) {
 		Name2ColIndex: name2colidx,
 	}
 	expr := GetColExpr(typ, 0, 0)
-	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef)
+	MakeCPKEYRuntimeFilter(0, 0, expr, tableDef, false)
 }
 
 func TestDbNameOfObjRef(t *testing.T) {
@@ -188,5 +190,70 @@ func TestDoResolveTimeStamp(t *testing.T) {
 				t.Errorf("for timestamp %s, expected %d, got %d", test.timeStamp, test.expected, result)
 			}
 		}
+	}
+}
+
+func TestReplaceParamVals(t *testing.T) {
+	// Setup test cases
+	tests := []struct {
+		name      string
+		plan      *Plan
+		paramVals []any
+		wantErr   bool
+	}{
+		{
+			name: "empty param values",
+			plan: &Plan{
+				Plan: &plan.Plan_Tcl{},
+			},
+			paramVals: []any{},
+			wantErr:   false,
+		},
+		{
+			name: "multiple param values",
+			plan: &Plan{
+				Plan: &plan.Plan_Tcl{},
+			},
+			paramVals: []any{42, "string", 3.14, true, time.Now(), nil},
+			wantErr:   false,
+		},
+		{
+			name: "complex plan with params",
+			plan: &Plan{
+				Plan: &plan.Plan_Query{
+					Query: &plan.Query{
+						Nodes: []*plan.Node{
+							{
+								ProjectList: []*plan.Expr{
+									{
+										Expr: &plan.Expr_P{
+											P: &plan.ParamRef{
+												Pos: 0,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			paramVals: []any{"value1", 123},
+			wantErr:   false,
+		},
+	}
+
+	// Run tests
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			err := replaceParamVals(ctx, tt.plan, tt.paramVals)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
 	}
 }

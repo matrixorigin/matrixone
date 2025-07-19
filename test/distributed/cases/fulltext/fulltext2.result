@@ -1,4 +1,5 @@
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 drop database if exists test_fulltext;
 create database test_fulltext;
 use test_fulltext;
@@ -344,9 +345,9 @@ create fulltext index f05 on jsonline_t2(col3);
 load data infile{'filepath'='$resources/load_data/char_varchar_2.jl','format'='jsonline','jsondata'='object'}into table jsonline_t2;
 select * from jsonline_t2;
 col1    col2    col3    col4
-a    中文    #¥%……&#    234cccc重要
 "a"    "b"    "c"    "d"
 'd'    '123456'    'b'    'a'
+a    中文    #¥%……&#    234cccc重要
 "'a'"    "'b'"    "'c'"    abc
  123f fff     yeah     红tu    bb"
 drop table jsonline_t2;

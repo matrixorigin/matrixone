@@ -18,6 +18,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -46,4 +49,48 @@ func TestInitGroupResultBuffer(t *testing.T) {
 	}
 
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func newExpression(pos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
+		},
+	}
+}
+
+func TestGetResultBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	invalidAggExpr := aggexec.MakeAggFunctionExpression(
+		-9999,
+		false,
+		[]*plan.Expr{newExpression(1)},
+		nil,
+	)
+	aEval := []ExprEvalVector{
+		{
+			Typ: []types.Type{types.T_int32.ToType()},
+		},
+	}
+	gEval := &ExprEvalVector{
+		Typ: []types.Type{types.T_int32.ToType()},
+	}
+	r := &GroupResultNoneBlock{
+		res: nil,
+	}
+	_, err := r.getResultBatch(
+		proc,
+		gEval,
+		aEval,
+		[]aggexec.AggFuncExecExpression{invalidAggExpr},
+	)
+	single := aggexec.SingleAggValuesString()
+	special := aggexec.SpecialAggValuesString()
+	t.Log(single)
+	t.Log(special)
+	t.Log(err)
+	require.Error(t, err)
 }

@@ -24,8 +24,8 @@ import (
 	fcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -48,15 +48,21 @@ func WithRuntimeTransientPool(vp *containers.VectorPool) RuntimeOption {
 	}
 }
 
-func WithRuntimeObjectFS(fs *objectio.ObjectFS) RuntimeOption {
+func WithRuntimeObjectFS(fs fileservice.FileService) RuntimeOption {
 	return func(r *Runtime) {
 		r.Fs = fs
 	}
 }
 
-func WithRuntimeLocalFS(fs *objectio.ObjectFS) RuntimeOption {
+func WithRuntimeLocalFS(fs fileservice.FileService) RuntimeOption {
 	return func(r *Runtime) {
 		r.LocalFs = fs
+	}
+}
+
+func WithRuntimeTmpFS(fs *fileservice.TmpFileService) RuntimeOption {
+	return func(r *Runtime) {
+		r.TmpFS = fs
 	}
 }
 
@@ -262,8 +268,9 @@ type Runtime struct {
 		Transient *containers.VectorPool
 	}
 
-	Fs      *objectio.ObjectFS
-	LocalFs *objectio.ObjectFS
+	Fs      fileservice.FileService
+	LocalFs fileservice.FileService
+	TmpFS   *fileservice.TmpFileService
 
 	TransferTable   *model.HashPageTable
 	TransferDelsMap *model.TransDelsForBlks

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ func TestTree(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTree()
 	obj2 := objectio.NewObjectid()
-	tree.AddObject(1, 2, obj2, false)
+	tree.AddObject(1, 2, &obj2, false)
 	t.Log(tree.String())
 	assert.Equal(t, 1, tree.TableCount())
 
@@ -36,23 +37,47 @@ func TestTree(t *testing.T) {
 	assert.NoError(t, err)
 
 	tree2 := NewTree()
-	_, err = tree2.ReadFromWithVersion(&w, MemoTreeVersion3)
+	_, err = tree2.ReadFromWithVersion(&w, MemoTreeVersion4)
 	assert.NoError(t, err)
 	t.Log(tree2.String())
 	assert.True(t, tree.Equal(tree2))
 }
 
-func TestTableTree_ReadOldVersion(t *testing.T) {
+func TestTableRecord_ReadOldVersion(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	tree := NewTableTree(0, 0)
 	var w bytes.Buffer
-	obj := objectio.NewObjectid()
-	tree.AddObject(obj, false)
-	_, err := tree.WriteTo(&w)
-	assert.NoError(t, err)
+	dbid := uint64(1)
+	tableid := uint64(1)
+	w.Write(types.EncodeUint64(&dbid))
+	w.Write(types.EncodeUint64(&tableid))
+	dataCnt := uint32(2)
+	w.Write(types.EncodeUint32(&dataCnt))
+	objid := objectio.NewObjectid()
+	w.Write(objid[:])
+	w.Write(objid[:])
+	tombCnt := uint32(1)
+	w.Write(types.EncodeUint32(&tombCnt))
+	tombid := objectio.NewObjectid()
+	w.Write(tombid[:])
 
-	tree2 := NewTableTree(0, 0)
-	assert.Panics(t, func() {
-		tree2.ReadFromWithVersion(&w, MemoTreeVersion2)
-	}, "not supported")
+	{
+		copyw := w.Bytes()
+		tree2 := NewTableTree(0, 0)
+		assert.Panics(t, func() {
+			tree2.ReadFromWithVersion(bytes.NewReader(copyw), MemoTreeVersion2)
+		}, "not supported")
+	}
+
+	{
+		tree2 := NewTableTree(0, 0)
+		_, err := tree2.ReadFromWithVersion(&w, MemoTreeVersion3)
+		assert.NoError(t, err)
+		assert.Equal(t, dbid, tree2.DbID)
+		assert.Equal(t, tableid, tree2.ID)
+
+		var cnt uint32
+		_, err = w.Read(types.EncodeUint32(&cnt))
+		assert.Error(t, err) // EOF
+	}
+
 }

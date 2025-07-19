@@ -85,6 +85,7 @@ func DoIfDebugEnabled(fn func()) {
 type opt struct {
 	doNotPrintBinary bool
 	specialRowid     bool // just a uint64, blockid
+	isComposite      bool
 }
 
 type TypePrintOpt interface {
@@ -98,6 +99,10 @@ func (w WithDoNotPrintBin) apply(o *opt) { o.doNotPrintBinary = true }
 type WithSpecialRowid struct{}
 
 func (w WithSpecialRowid) apply(o *opt) { o.specialRowid = true }
+
+type WithIsComposite struct{}
+
+func (w WithIsComposite) apply(o *opt) { o.isComposite = true }
 
 func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) string {
 	if isNull {
@@ -118,6 +123,21 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob, types.T_datalink:
 		buf := v.([]byte)
+		if opt.isComposite {
+			tuple, err := types.Unpack(buf)
+			if err == nil {
+				var w bytes.Buffer
+				w.WriteString("(")
+				for pos, col := range tuple.SQLStrings(nil) {
+					if pos > 0 {
+						w.WriteString(",")
+					}
+					w.WriteString(col)
+				}
+				w.WriteString(")")
+				return w.String()
+			}
+		}
 		printable := true
 		for _, c := range buf {
 			if !strconv.IsPrint(rune(c)) {

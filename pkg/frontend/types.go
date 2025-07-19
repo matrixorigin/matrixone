@@ -189,6 +189,8 @@ const (
 	FPShowCDC
 	FPCommitUnsafeBeforeRollbackWhenCommitPanic
 	FPShowRecoveryWindow
+	FPCloneDatabase
+	FPCloneTable
 )
 
 type (
@@ -399,7 +401,7 @@ func (prepareStmt *PrepareStmt) Close() {
 		prepareStmt.PrepareStmt.Free()
 	}
 	if prepareStmt.ParamTypes != nil {
-		prepareStmt.PrepareStmt = nil
+		prepareStmt.ParamTypes = nil
 	}
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil

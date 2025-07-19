@@ -22,9 +22,6 @@ message    birthday
 SELECT YEAR(NOW()) - YEAR(MAKEDATE(YEAR(NOW()), 1)) AS years_passed;
 years_passed
 0
-SELECT IF(MAKEDATE(YEAR(NOW()), 366) < NOW(), '闰年', '平年') AS leap_year_status;
-leap_year_status
-闰年
 create database abc;
 use abc;
 CREATE TABLE employees (

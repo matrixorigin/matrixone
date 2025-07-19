@@ -17,7 +17,6 @@ package plan
 import (
 	"fmt"
 	"slices"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -254,7 +253,8 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// 1.a if there are no table scans with multi-table indexes, skip
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		for _, indexDef := range scanNode.TableDef.Indexes {
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
+				catalog.IsHnswIndexAlgo(indexDef.IndexAlgo) {
 				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -268,87 +268,37 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			return nodeID, nil
 		}
 
-		//1.b if sortNode has more than one order by, skip
-		if len(sortNode.OrderBy) != 1 {
-			goto END0
-		}
-
-		// 1.c if sortNode does not have a registered distance function, skip
-		distFnExpr := sortNode.OrderBy[0].Expr.GetF()
-		if distFnExpr == nil {
-			goto END0
-		}
-		if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-			goto END0
-		}
-
-		// 1.d if the order by argument order is not of the form dist_func(col, const), swap and see
-		// if that works. if not, skip
-		if isRuntimeConstExpr(distFnExpr.Args[0]) && distFnExpr.Args[1].GetCol() != nil {
-			distFnExpr.Args[0], distFnExpr.Args[1] = distFnExpr.Args[1], distFnExpr.Args[0]
-		}
-		if !isRuntimeConstExpr(distFnExpr.Args[1]) {
-			goto END0
-		}
-		if distFnExpr.Args[0].GetCol() == nil {
-			goto END0
-		}
-		// NOTE: here we assume the first argument is the column to order by
-		colPosOrderBy := distFnExpr.Args[0].GetCol().ColPos
-
-		// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
-		distanceFunctionIndexed := false
-		var multiTableIndexWithSortDistFn *MultiTableIndex
-
 		// This is important to get consistent result.
 		// HashMap can give you random order during iteration.
 		var multiTableIndexKeys []string
 		for key := range multiTableIndexes {
 			multiTableIndexKeys = append(multiTableIndexKeys, key)
 		}
-		sort.Strings(multiTableIndexKeys)
+		//sort.Strings(multiTableIndexKeys)
 
 		for _, multiTableIndexKey := range multiTableIndexKeys {
 			multiTableIndex := multiTableIndexes[multiTableIndexKey]
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
-				if err != nil {
-					continue
-				}
-				storedOpType, ok := storedParams[catalog.IndexAlgoParamOpType]
-				if !ok {
+
+				if !builder.checkValidIvfflatDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
 					continue
 				}
 
-				// if index is not the order by column, skip
-				idxDef0 := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPosOrderBy {
+				return builder.applyIndicesForSortUsingIvfflat(nodeID, projNode, sortNode, scanNode,
+					colRefCnt, idxColMap, multiTableIndex)
+
+			case catalog.MoIndexHnswAlgo.ToString():
+
+				if !builder.checkValidHnswDistFn(nodeID, projNode, sortNode, scanNode, colRefCnt, idxColMap, multiTableIndex) {
 					continue
 				}
 
-				// if index is of the same distance function in order by, the index is valid
-				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
-					distanceFunctionIndexed = true
-					multiTableIndexWithSortDistFn = multiTableIndex
-				}
-			}
-			if distanceFunctionIndexed {
-				break
+				return builder.applyIndicesForSortUsingHnsw(nodeID, projNode, sortNode, scanNode,
+					colRefCnt, idxColMap, multiTableIndex)
+
 			}
 		}
-		if !distanceFunctionIndexed {
-			goto END0
-		}
-
-		newSortNode := builder.applyIndicesForSortUsingVectorIndex(nodeID, projNode, sortNode, scanNode,
-			colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
-
-		// TODO: consult with nitao and aungr
-		projNode.Children[0] = newSortNode
-		replaceColumnsForNode(projNode, idxColMap)
-
-		return newSortNode, nil
 	}
 END0:
 	// 2. Regular Index Check
@@ -713,7 +663,10 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	}
 
 	idxTag := builder.genNewTag()
-	idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	if e != nil {
+		panic(e)
+	}
 	builder.addNameByColRef(idxTag, idxTableDef)
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 
@@ -797,7 +750,10 @@ func (builder *QueryBuilder) getIndexForNonEquiCond(indexes []*IndexDef, node *p
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
 	idxTag := builder.genNewTag()
-	idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
+	if err != nil {
+		panic(err)
+	}
 	builder.addNameByColRef(idxTag, idxTableDef)
 
 	numParts := len(idxDef.Parts)
@@ -890,7 +846,8 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 
 		filterIdx = filterIdx[:0]
 		for j := 0; j < numKeyParts; j++ {
-			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[j])]
+			tmpName := catalog.ResolveAlias(idxDef.Parts[j])
+			colIdx := node.TableDef.Name2ColIndex[tmpName]
 			idx, ok := col2filter[colIdx]
 			if !ok {
 				break
@@ -1008,7 +965,8 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		condIdx = condIdx[:0]
 		for i := 0; i < numKeyParts; i++ {
-			colIdx := leftChild.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[i])]
+			tmpName := catalog.ResolveAlias(idxDef.Parts[i])
+			colIdx := leftChild.TableDef.Name2ColIndex[tmpName]
 			idx, ok := col2Cond[colIdx]
 			if !ok {
 				break
@@ -1022,7 +980,10 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		}
 
 		idxTag := builder.genNewTag()
-		idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(leftChild.ObjRef, idxDef.IndexTableName, scanSnapshot)
+		if err != nil {
+			panic(err)
+		}
 		builder.addNameByColRef(idxTag, idxTableDef)
 
 		rfTag := builder.genNewMsgTag()
@@ -1074,6 +1035,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			IndexTableName: idxDef.IndexTableName,
 		}
 
+		nodeProbeRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr, false)
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:               plan.Node_TABLE_SCAN,
 			TableDef:               idxTableDef,
@@ -1082,10 +1044,11 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:            []int32{idxTag},
 			ScanSnapshot:           leftChild.ScanSnapshot,
-			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr)},
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter},
 		}, builder.ctxByNode[nodeID])
 
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), rfBuildExpr))
+		nodeBuildRuntimeFilter := MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), rfBuildExpr, false)
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, nodeBuildRuntimeFilter)
 		recalcStatsByRuntimeFilter(builder.qry.Nodes[idxTableNodeID], node, builder)
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]

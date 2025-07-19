@@ -91,6 +91,37 @@ func TestSetRestartServiceRPCSend(t *testing.T) {
 	)
 }
 
+func TestAbortRemoteDeadlockTxnFailed(t *testing.T) {
+	runRPCTests(
+		t,
+		func(c Client, s Server) {
+			s.RegisterMethodHandler(
+				lock.Method_AbortRemoteDeadlockTxn,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *lock.Request,
+					resp *lock.Response,
+					cs morpc.ClientSession) {
+					resp.AbortRemoteDeadlockTxn.OK = false
+					writeResponse(getLogger(""), cancel, resp, nil, cs)
+				})
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+			defer cancel()
+			resp, err := c.Send(ctx,
+				&lock.Request{
+					Method:                 lock.Method_AbortRemoteDeadlockTxn,
+					AbortRemoteDeadlockTxn: lock.AbortRemoteDeadlockTxnRequest{Txn: lock.WaitTxn{WaiterAddress: "s1"}},
+				})
+			require.NoError(t, err)
+			assert.NotNil(t, resp)
+			require.False(t, resp.SetRestartService.OK)
+			releaseResponse(resp)
+		},
+	)
+}
+
 func TestCanRestartServiceRPCSend(t *testing.T) {
 	runRPCTests(
 		t,

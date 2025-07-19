@@ -259,6 +259,13 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	if err != nil {
 		return 0, err
 	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+		}
+	}()
+
 	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
 	defer put.Put()
 
@@ -763,7 +770,7 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry,
 				IsDir: isDir,
 				Size:  contentSize,
 			}, nil) {
-				break
+				return
 			}
 		}
 

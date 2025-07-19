@@ -105,6 +105,7 @@ func Test_BasicInsertDelete(t *testing.T) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				bat2 = batch.NewWithSize(1)
+				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](bat2.Vecs[0], waitedDeletes, nil, mp))
 				bat2.SetRowCount(len(waitedDeletes))
@@ -192,6 +193,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
+	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	{
 		reader, err := testutil.GetRelationReader(
@@ -234,6 +236,7 @@ func Test_BasicS3InsertDelete(t *testing.T) {
 	{
 		require.NoError(t, err)
 		bat2, err := tombstoneBat.Window(0, 5)
+		bat2.Attrs = tombstoneBat.Attrs
 		require.NoError(t, err)
 		require.NoError(t, testutil.WriteToRelation(ctx, txn, relation, bat2, true, true))
 		require.NoError(t, txn.Commit(ctx))
@@ -822,6 +825,7 @@ func Test_BasicRollbackStatement(t *testing.T) {
 				waitedDeletes := vector.MustFixedColWithTypeCheck[types.Rowid](entry.Bat().GetVector(0))
 				waitedDeletes = waitedDeletes[:rowsCount/2]
 				tombstoneBat = batch.NewWithSize(1)
+				tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
 				tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 				require.NoError(t, vector.AppendFixedList[types.Rowid](tombstoneBat.Vecs[0], waitedDeletes, nil, mp))
 				tombstoneBat.SetRowCount(len(waitedDeletes))
@@ -929,6 +933,7 @@ func Test_BasicRollbackStatementS3(t *testing.T) {
 
 	// read row id
 	tombstoneBat := batch.NewWithSize(1)
+	tombstoneBat.Attrs = append(tombstoneBat.Attrs, catalog.Row_ID)
 	tombstoneBat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 	{
 		reader, err := testutil.GetRelationReader(
@@ -1479,19 +1484,13 @@ func Test_DeleteUncommittedBlock(t *testing.T) {
 				entryCnt++
 
 				bat2 = batch.NewWithSize(1)
+				bat2.Attrs = append(bat2.Attrs, catalog.Row_ID)
 				bat2.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
 
-				locstr := string(entry.Bat().GetVector(0).GetBytesAt(0))
-				loc, _ := objectio.StringToLocation(locstr)
-				sid := loc.Name().SegmentId()
-				bid := objectio.NewBlockid(
-					&sid,
-					loc.Name().Num(),
-					loc.ID(),
-				)
+				blk := objectio.DecodeBlockInfo(entry.Bat().GetVector(0).GetBytesAt(0))
 				for i := 0; i < deleteCnt; i++ {
-					rid := types.NewRowid(bid, uint32(i))
-					require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], *rid, false, mp))
+					rid := types.NewRowid(&blk.BlockID, uint32(i))
+					require.NoError(t, vector.AppendFixed[types.Rowid](bat2.Vecs[0], rid, false, mp))
 				}
 				bat2.SetRowCount(deleteCnt)
 
@@ -1722,19 +1721,24 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 
 	// mock tombstone object and put it into workspace
 	{
-		w, err := colexec.NewS3TombstoneWriter()
+		proc := rel.GetProcess().(*process.Process)
+
+		w := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
 		require.NoError(t, err)
 
-		w.StashBatch(rel.GetProcess().(*process.Process), tombstoneBat)
-		_, ss, err := w.SortAndSync(ctx, rel.GetProcess().(*process.Process))
+		err = w.Write(proc.Ctx, proc.Mp(), tombstoneBat)
 		require.NoError(t, err)
 
-		require.Equal(t, bat.Length(), int(ss.Rows()))
+		ss, err := w.Sync(ctx, proc.Mp())
+		require.NoError(t, err)
+		require.Equal(t, 1, len(ss))
+
+		require.Equal(t, bat.Length(), int(ss[0].Rows()))
 
 		tbat := batch.NewWithSize(1)
 		tbat.Attrs = []string{catalog.ObjectMeta_ObjectStats}
 		tbat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-		err = vector.AppendBytes(tbat.Vecs[0], ss.Marshal(), false, p.Mp)
+		err = vector.AppendBytes(tbat.Vecs[0], ss[0].Marshal(), false, p.Mp)
 		require.NoError(t, err)
 
 		tbat.SetRowCount(tbat.Vecs[0].Length())
@@ -1743,7 +1747,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 		err = transaction.WriteFile(
 			disttae.DELETE,
 			0, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName,
-			ss.ObjectLocation().String(),
+			ss[0].ObjectLocation().String(),
 			tbat,
 			p.D.Engine.GetTNServices()[0],
 		)

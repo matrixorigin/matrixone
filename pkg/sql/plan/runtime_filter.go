@@ -84,8 +84,8 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	if node.Stats.HashmapStats.Shuffle {
 		rfTag := builder.genNewMsgTag()
-		node.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, nil))
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, 0, nil))
+		node.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, nil, false))
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, 0, nil, false))
 		return
 	}
 
@@ -189,10 +189,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 
+		notOnPk := probeCol.Name != tableDef.Pkey.PkeyColName
 		if convertToCPKey {
-			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef))
+			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeCPKEYRuntimeFilter(rfTag, 0, DeepCopyExpr(probeExprs[0]), tableDef, notOnPk))
 		} else {
-			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
+			leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0]), notOnPk))
 		}
 
 		inLimit := GetInFilterCardLimit(sid)
@@ -209,9 +210,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			},
 		}
 		if convertToCPKey {
-			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr))
+			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeSerialRuntimeFilter(builder.GetContext(), rfTag, false, inLimit, buildExpr, notOnPk))
 		} else {
-			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr))
+			node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, false, inLimit, buildExpr, notOnPk))
 		}
 		recalcStatsByRuntimeFilter(leftChild, node, builder)
 		return
@@ -271,7 +272,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			},
 		},
 	}
-	leftChild.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), 0, probeExpr))
+	leftChild.RuntimeFilterProbeList = append(node.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), 0, probeExpr, false))
 
 	buildArgs := make([]*plan.Expr, len(probeExprs))
 	for i := range probeExprs {
@@ -289,7 +290,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 
-	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), buildExpr))
+	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, cnt < len(tableDef.Pkey.Names), GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt), buildExpr, false))
 	recalcStatsByRuntimeFilter(leftChild, node, builder)
 }
 

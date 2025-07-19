@@ -1,4 +1,5 @@
 set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
 create table src (id bigint primary key, body varchar, title text);
 insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
 (4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
@@ -30,7 +31,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    2.1689975
+0    color is red    t1    1.6311431
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
@@ -46,11 +47,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.4499049
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.72495246
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.506993
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.8211576
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -93,8 +94,8 @@ select * from src where match(body, title) against('"blue is red"' in boolean mo
 id    body    title
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
-2    sky is blue    no limit    0.5481369
-3    blue is not red    colorful    0.5481369
+2    sky is blue    no limit    0.36247623
+3    blue is not red    colorful    0.36247623
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -129,15 +130,15 @@ id    body    title
 3    blue is not red    colorful
 select match(body) against('red') from src;
 MATCH (body) AGAINST (red)
-0.5481369
-0.5481369
+0.42668658
+0.42668658
 select * from src where match(body, title) against('red');
 id    body    title
 0    color is red    t1
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    2.1689975
+0    color is red    t1    1.6311431
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短>篇小說
@@ -153,11 +154,11 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.4499049
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.72495246
 select *, match(body) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.506993
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.8211576
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -187,8 +188,8 @@ id    body    title
 3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
-2    sky is blue    no limit    0.5481369
-3    blue is not red    colorful    0.5481369
+2    sky is blue    no limit    0.36247623
+3    blue is not red    colorful    0.36247623
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -318,7 +319,7 @@ id    body    title
 3    blue is not red    colorful
 select *, match(body, title) against('is red' in natural language mode) as score from src;
 id    body    title    score
-0    color is red    t1    2.1689975
+0    color is red    t1    1.6311431
 select * from src where match(body, title) against('教學指引');
 id    body    title
 6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說\n
@@ -334,8 +335,8 @@ id    body    title
 4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
 select *, match(body, title) against('遠東兒童中文' in natural language mode) as score from src;
 id    body    title    score
-4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    6.577643
-5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    3.2888215
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文    1.4499049
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文    0.72495246
 select * from src where match(body, title) against('+red blue' in boolean mode);
 id    body    title
 3    blue is not red    colorful
@@ -365,8 +366,8 @@ id    body    title
 3    blue is not red    colorful
 select src.*, match(body, title) against('blue') from src;
 id    body    title    MATCH (body, title) AGAINST (blue)
-2    sky is blue    no limit    0.5481369
-3    blue is not red    colorful    0.5481369
+2    sky is blue    no limit    0.36247623
+3    blue is not red    colorful    0.36247623
 select count(*) from src where match(title, body) against('red');
 count(*)
 2
@@ -521,7 +522,7 @@ count(*)
 30001
 select count(*) from t1 where match(b) against ('+pushdown +limit' in boolean mode) limit 1;
 count(*)
-1
+30001
 drop table t1;
 drop table if exists articles;
 create table articles (id int auto_increment not null primary key, title varchar, body text);
@@ -531,3 +532,20 @@ drop table if exists articles;
 create table articles (id int auto_increment not null primary key, title varchar, body text);
 create fulltext index ftidx on articles (title);
 alter table articles drop column title;
+drop table if exists src;
+create table src (id bigint primary key, body varchar, FULLTEXT(body));
+insert into src values (0, 'SGB11型号的检验报告在对素材文件进行搜索时'), (1, '读书会 提效 社群 案例 运营 因为现在生产'),
+(2, '使用全文索引会肥胖的原因都是因为摄入脂肪多导致的吗测试背景说明'),
+(3, '索引肥胖的原因都是因为摄入fat多导致的吗说明');
+select id from src where match(body) against('+SGB11型号的检验报告' IN BOOLEAN MODE);
+id
+0
+select id from src where match(body) against('肥胖的原因都是因为摄入脂肪多导致的吗' IN NATURAL LANGUAGE MODE);
+id
+2
+select id from src where match(body) against('+读书会 +提效 +社群 +案例 +运营' IN BOOLEAN MODE);
+id
+1
+select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
+id
+3

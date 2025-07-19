@@ -16,16 +16,18 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -120,6 +122,28 @@ func InheritCheckpointEntry(
 		opt(e)
 	}
 	return e
+}
+
+func (e *CheckpointEntry) MarshalJSON() ([]byte, error) {
+	e.RLock()
+	defer e.RUnlock()
+	return json.Marshal(&struct {
+		Start       string `json:"start"`
+		End         string `json:"end"`
+		State       State  `json:"state"`
+		EntryType   string `json:"entry_type"`
+		Location    string `json:"location"`
+		CKPLSN      uint64 `json:"ckp_lsn"`
+		TruncateLSN uint64 `json:"truncate_lsn"`
+	}{
+		Start:       e.start.ToString(),
+		End:         e.end.ToString(),
+		State:       e.state,
+		EntryType:   e.entryType.String(),
+		Location:    e.cnLocation.String(),
+		CKPLSN:      e.ckpLSN,
+		TruncateLSN: e.truncateLSN,
+	})
 }
 
 // ================================================================
@@ -368,14 +392,19 @@ func (e *CheckpointEntry) LSNString() string {
 	return fmt.Sprintf("%d-%d", e.ckpLSN, e.truncateLSN)
 }
 
+func (e *CheckpointEntry) JsonString() string {
+	json, err := e.MarshalJSON()
+	if err != nil {
+		return fmt.Sprintf("bad entry: %s:%v", e.String(), err)
+	}
+	return string(json)
+}
+
 func (e *CheckpointEntry) String() string {
 	if e == nil {
 		return "nil"
 	}
-	t := "I"
-	if !e.IsIncremental() {
-		t = "G"
-	}
+	t := e.GetType().String()
 	state := e.GetState()
 	return fmt.Sprintf(
 		"CKP[%s][%v][%v:%v][%s](%s->%s)",
@@ -393,100 +422,103 @@ func (e *CheckpointEntry) String() string {
 // read related
 //===============================================================
 
-func (e *CheckpointEntry) Prefetch(
+func (e *CheckpointEntry) GetTableRangesByID(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
-	data *logtail.CheckpointData,
-) (err error) {
-	if err = data.PrefetchFrom(
-		fs.Service,
-	); err != nil {
+	tableID uint64,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (ranges []ckputil.TableRange, err error) {
+	reader := logtail.NewCKPReaderWithTableID_V2(e.version, e.cnLocation, tableID, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
 		return
 	}
-	return
+	return reader.GetTableRanges(ctx)
 }
 
-func (e *CheckpointEntry) Read(
+func (e *CheckpointEntry) GetTableRanges(
 	ctx context.Context,
-	fs *objectio.ObjectFS,
-	data *logtail.CheckpointData,
-) (err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
-	if err != nil {
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (ranges []ckputil.TableRange, err error) {
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
 		return
 	}
-
-	if err = data.ReadFrom(
-		ctx,
-		e.version,
-		e.tnLocation,
-		reader,
-		fs.Service,
-	); err != nil {
-		return
-	}
-	return
+	return reader.GetTableRanges(ctx)
 }
 
-func (e *CheckpointEntry) PrefetchMetaIdx(
-	ctx context.Context,
-	fs *objectio.ObjectFS,
-) (data *logtail.CheckpointData, err error) {
-	data = logtail.NewCheckpointData(e.sid, common.CheckpointAllocator)
-	if err = data.PrefetchMeta(
-		fs.Service,
-		e.tnLocation,
-	); err != nil {
-		return
-	}
-	return
-}
-
-func (e *CheckpointEntry) ReadMetaIdx(
-	ctx context.Context,
-	fs *objectio.ObjectFS,
-	data *logtail.CheckpointData,
-) (err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.tnLocation)
-	if err != nil {
-		return
-	}
-	return data.ReadTNMetaBatch(ctx, e.version, e.tnLocation, reader)
-}
-
+// Only for test
+// Only fill in columns ObjectID, CreateTS and DeleteTS
 func (e *CheckpointEntry) GetTableByID(
-	ctx context.Context, fs *objectio.ObjectFS, tid uint64,
-) (ins, del, dataObject, tombstoneObject *api.Batch, err error) {
-	reader, err := ioutil.NewObjectReader(fs.Service, e.cnLocation)
-	if err != nil {
+	ctx context.Context, fs fileservice.FileService, tid uint64, mp *mpool.MPool,
+) (data *batch.Batch, err error) {
+	reader := logtail.NewCKPReaderWithTableID_V2(e.version, e.cnLocation, tid, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
 		return
 	}
-	data := logtail.NewCNCheckpointData(e.sid)
-	err = ioutil.PrefetchMeta(e.sid, fs.Service, e.cnLocation)
-	if err != nil {
+	totalLength := 0
+	data = ckputil.NewObjectListBatch()
+	if err = reader.ConsumeCheckpointWithTableID(
+		ctx,
+		func(
+			ctx context.Context,
+			obj objectio.ObjectEntry,
+			isTombstone bool,
+		) (err error) {
+			totalLength++
+			vector.AppendFixed[types.TS](
+				data.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], obj.CreateTime, false, mp,
+			)
+			vector.AppendFixed[types.TS](
+				data.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], obj.CreateTime, false, mp,
+			)
+			vector.AppendBytes(
+				data.Vecs[ckputil.TableObjectsAttr_ID_Idx], obj.ObjectStats[:], false, mp,
+			)
+			return
+		},
+	); err != nil {
 		return
 	}
-
-	err = data.PrefetchMetaIdx(ctx, e.version, logtail.GetMetaIdxesByVersion(e.version), e.cnLocation, fs.Service)
-	if err != nil {
-		return
-	}
-	err = data.InitMetaIdx(ctx, e.version, reader, e.cnLocation, common.CheckpointAllocator)
-	if err != nil {
-		return
-	}
-	err = data.PrefetchMetaFrom(ctx, e.version, e.cnLocation, fs.Service, tid)
-	if err != nil {
-		return
-	}
-	err = data.PrefetchFrom(ctx, e.version, fs.Service, e.cnLocation, tid)
-	if err != nil {
-		return
-	}
-	var bats []*batch.Batch
-	if bats, err = data.ReadFromData(ctx, tid, e.cnLocation, reader, e.version, common.CheckpointAllocator); err != nil {
-		return
-	}
-	ins, del, dataObject, tombstoneObject, err = data.GetTableDataFromBats(tid, bats)
+	data.SetRowCount(totalLength)
 	return
+}
+
+func (e *CheckpointEntry) GetCheckpointMetaInfo(
+	ctx context.Context,
+	id uint64,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (res *logtail.ObjectInfoJson, err error) {
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
+	}
+	return logtail.GetCheckpointMetaInfo(ctx, id, reader)
+}
+
+func (e *CheckpointEntry) GetTableIDs(
+	ctx context.Context,
+	loc objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (result []uint64, err error) {
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
+	}
+	return logtail.GetTableIDsFromCheckpoint(ctx, reader)
+}
+
+func (e *CheckpointEntry) GetObjects(
+	ctx context.Context,
+	pinned map[string]bool,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	reader := logtail.NewCKPReader(e.version, e.cnLocation, mp, fs)
+	if err = reader.ReadMeta(ctx); err != nil {
+		return
+	}
+	return logtail.GetObjectsFromCKPMeta(ctx, reader, pinned)
 }

@@ -137,7 +137,11 @@ func (s *sqlExecutor) ExecTxn(
 	}
 	err = execFunc(exec)
 	if err != nil {
-		logutil.Error("internal sql executor error", zap.Error(err), zap.String("sql", opts.SQL()), zap.String("txn", exec.Txn().Txn().DebugString()))
+		logutil.Error("internal sql executor error",
+			zap.Error(err),
+			zap.String("sql", opts.SQL()),
+			zap.String("txn", exec.Txn().Txn().DebugString()),
+		)
 		return exec.rollback(err)
 	}
 	if err = exec.commit(); err != nil {
@@ -266,6 +270,12 @@ func (exec *txnExecutor) Exec(
 			true)
 	}
 
+	if v := statementOption.SkipPkDedupTbl(); v != "" {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.SkipPkDedup{},
+			v)
+	}
+
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
@@ -305,17 +315,16 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
-	//accId, err := defines.GetAccountId(proc.Ctx)
-	//if err != nil {
-	//	return executor.Result{}, err
-	//}
-	//useId := defines.GetUserId(proc.Ctx)
-	//roleId := defines.GetRoleId(proc.Ctx)
+
+	prepared := false
+	if statementOption.HasParams() {
+		vec := statementOption.Params(exec.s.mp)
+		proc.SetPrepareParams(vec)
+		prepared = true
+		defer vec.Free(proc.Mp())
+	}
 
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
-	//proc.Base.SessionInfo.AccountId = accId
-	//proc.Base.SessionInfo.UserId = useId
-	//proc.Base.SessionInfo.RoleId = roleId
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
@@ -327,26 +336,70 @@ func (exec *txnExecutor) Exec(
 	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase(), lower)
 	compileContext.SetRootSql(sql)
 
-	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
+	pn, err := plan.BuildPlan(compileContext, stmts[0], prepared)
+
 	if err != nil {
 		return executor.Result{}, err
 	}
+	if prepared {
+		_, _, err := plan.ResetPreparePlan(compileContext, pn)
+		if err != nil {
+			return executor.Result{}, err
+		}
+	}
 
-	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	c := NewCompile(
+		exec.s.addr,
+		exec.getDatabase(),
+		sql,
+		"",
+		"",
+		exec.s.eng,
+		proc,
+		stmts[0],
+		false,
+		nil,
+		receiveAt,
+	)
 	c.SetOriginSQL(sql)
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
-	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-		return plan.BuildPlan(
-			exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
-			stmts[0], false)
-	})
+
+	if prepared {
+		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+			pn, err := plan.BuildPlan(
+				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
+				stmts[0], true,
+			)
+			if err != nil {
+				return pn, err
+			}
+			_, _, err = plan.ResetPreparePlan(compileContext, pn)
+			if err != nil {
+				return pn, err
+			}
+			return pn, nil
+		})
+	} else {
+		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
+			return plan.BuildPlan(
+				exec.s.getCompileContext(ctx, proc, exec.getDatabase(), lower),
+				stmts[0], false)
+		})
+	}
 
 	result := executor.NewResult(exec.s.mp)
 
 	stream_chan, err_chan, streaming := exec.opts.Streaming()
 	if streaming {
 		defer close(stream_chan)
+	}
+
+	if exec.opts.ForceRebuildPlan() {
+		pn, err = c.buildPlanFunc(proc.Ctx)
+		if err != nil {
+			return executor.Result{}, err
+		}
 	}
 
 	var batches []*batch.Batch
@@ -403,8 +456,12 @@ func (exec *txnExecutor) Exec(
 	}
 
 	if !statementOption.DisableLog() {
+		printSql := sql
+		if len(printSql) > 1000 {
+			printSql = printSql[:1000] + "..."
+		}
 		logutil.Info("sql_executor exec",
-			zap.String("sql", sql),
+			zap.String("sql", printSql),
 			zap.String("txn-id", hex.EncodeToString(exec.opts.Txn().Txn().ID)),
 			zap.Duration("duration", time.Since(receiveAt)),
 			zap.Int("BatchSize", len(batches)),
@@ -416,6 +473,7 @@ func (exec *txnExecutor) Exec(
 	result.LastInsertID = proc.GetLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows
+	result.LogicalPlan = pn.GetQuery()
 	return result, nil
 }
 

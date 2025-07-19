@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (s *service) getMetadataByRangeType(
+func (s *Service) getMetadataByRangeType(
 	option *tree.PartitionOption,
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
@@ -43,11 +43,12 @@ func (s *service) getMetadataByRangeType(
 		}
 
 		validTypeFunc = func(t plan.Type) bool {
-			return types.T(t.Id).IsInteger()
+			return types.T(t.Id).IsInteger() || types.T(t.Id) == types.T_date || types.T(t.Id) == types.T_datetime
 		}
 
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
 			tree.WithEscapeSingleQuoteString(),
 		)
 		method.Expr.Format(ctx)
@@ -59,7 +60,7 @@ func (s *service) getMetadataByRangeType(
 
 		columns = method.ColumnList[0]
 		validTypeFunc = func(t plan.Type) bool {
-			return types.T(t.Id) == types.T_date || types.T(t.Id) == types.T_datetime
+			return types.T(t.Id).IsInteger() || types.T(t.Id) == types.T_date || types.T(t.Id) == types.T_datetime
 		}
 	}
 
@@ -73,6 +74,7 @@ func (s *service) getMetadataByRangeType(
 		func(p *tree.Partition) string {
 			ctx := tree.NewFmtCtx(
 				dialect.MYSQL,
+				tree.WithQuoteIdentifier(),
 				tree.WithEscapeSingleQuoteString(),
 			)
 			p.Values.Format(ctx)

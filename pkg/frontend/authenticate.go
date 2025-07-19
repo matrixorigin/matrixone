@@ -532,8 +532,9 @@ const (
 	//	accountAdminRoleComment = "account admin role"
 
 	//user
-	userStatusLock   = "lock"
-	userStatusUnlock = "unlock"
+	userStatusLock        = "lock"
+	userStatusUnlock      = "unlock"
+	userStatusLockForever = "forbid" // only varchar(8) for status. so use "forbid" not "lock forever"
 
 	defaultPasswordEnv = "DEFAULT_PASSWORD"
 
@@ -929,6 +930,7 @@ var (
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
+		catalog.MO_MERGE_SETTINGS:     0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -971,6 +973,7 @@ var (
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_ACCOUNT_LOCK:       0,
+		catalog.MO_MERGE_SETTINGS:     0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1010,6 +1013,8 @@ var (
 		MoCatalogMoDataKeyDDL,
 		MoCatalogMoTableStatsDDL,
 		MoCatalogMoAccountLockDDL,
+		MoCatalogMergeSettingsDDL,
+		MoCatalogMergeSettingsInitData,
 	}
 
 	//drop tables for the tenant
@@ -1032,8 +1037,8 @@ var (
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
-	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 	dropMoRetention                 = `drop table if exists mo_catalog.mo_retention;`
 
@@ -1212,6 +1217,8 @@ const (
 	updateLockTimeOfUserFormat = `update mo_catalog.mo_user set lock_time = utc_timestamp() where user_name = "%s";`
 
 	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
+
+	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
@@ -1450,16 +1457,16 @@ const (
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
 	// grant ownership on database
-	grantOwnershipOnDatabaseFormat = `grant ownership on database %s to %s;`
+	grantOwnershipOnDatabaseFormat = "grant ownership on database `%s` to `%s`;"
 
 	// grant ownership on table
-	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+	grantOwnershipOnTableFormat = "grant ownership on table `%s`.`%s` to `%s`;"
 
 	// revoke ownership on database owner
-	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s from %s;`
+	revokeOwnershipFromDatabaseFormat = "revoke ownership on database `%s` from `%s`;"
 
 	// revoke ownership on table owner
-	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
+	revokeOwnershipFromTableFormat = "revoke ownership on table `%s`.`%s` from `%s`;"
 
 	// get the owner of the database
 	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
@@ -1700,6 +1707,10 @@ func getSqlForUpdateLockTimeOfUser(user string) string {
 
 func getSqlForUpdateStatusLockOfUser(status, user string) string {
 	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
+}
+
+func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
+	return fmt.Sprintf(updateStatusLockOfUserForeverFormat, status, user)
 }
 
 func getSqlForCheckRoleExists(ctx context.Context, roleID int, roleName string) (string, error) {
@@ -2712,16 +2723,23 @@ type user struct {
 }
 
 func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
-	var (
-		sql           string
-		vr            *verifiedRole
-		erArray       []ExecResult
-		encryption    string
-		needValid     bool
-		userName      string
-		isAlterUnlock bool
+	type lockOrUnlockUser int
+	const (
+		lockUser lockOrUnlockUser = iota
+		unlockUser
+		noneLockOrUnlockUser
 	)
 
+	var (
+		sql              string
+		vr               *verifiedRole
+		currentUserArray []ExecResult
+		userArray        []ExecResult
+		encryption       string
+		needValid        bool
+		userName         string
+	)
+	doLockOrUnlock := noneLockOrUnlockUser
 	account := ses.GetTenantInfo()
 	currentUser := account.GetUser()
 
@@ -2740,9 +2758,17 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 
 	if au.MiscOpt != nil {
 		if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountUnlock); ok {
-			isAlterUnlock = true
+			doLockOrUnlock = unlockUser
+		} else if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
+			if user.IdentStr != "" {
+				msg := "not support identified with lock operation, use `alter user xx lock` instead"
+				return moerr.NewInternalError(ctx, msg)
+			}
+			doLockOrUnlock = lockUser
 		} else {
-			return moerr.NewInternalError(ctx, "not support password or lock operation")
+			miscOptStr := tree.String(au.MiscOpt, dialect.MYSQL)
+			msg := fmt.Sprintf("not support operation: %s", miscOptStr)
+			return moerr.NewInternalError(ctx, msg)
 		}
 	}
 
@@ -2785,9 +2811,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	//if the user is admin user with the role moadmin or accountadmin,
-	//the user can be altered
-	//otherwise only general user can alter itself
+	//
 	if account.IsSysTenant() {
 		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
 	} else {
@@ -2796,19 +2820,37 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	if err != nil {
 		return err
 	}
-
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
 	}
-
-	erArray, err = getResultSet(ctx, bh)
+	currentUserArray, err = getResultSet(ctx, bh)
 	if err != nil {
 		return err
 	}
+	currentUserIsAdmin := execResultArrayHasData(currentUserArray)
 
-	if !isAlterUnlock {
+	if account.IsSysTenant() {
+		sql, err = getSqlForCheckUserHasRole(ctx, userName, moAdminRoleID)
+	} else {
+		sql, err = getSqlForCheckUserHasRole(ctx, userName, accountAdminRoleID)
+	}
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	userArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return err
+	}
+	targetUserIsAdmin := execResultArrayHasData(userArray)
+
+	if doLockOrUnlock == noneLockOrUnlockUser {
 		password := user.IdentStr
 		// check password
 		if len(password) == 0 {
@@ -2834,7 +2876,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			return err
 		}
 
-		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+		if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
 			if err != nil {
 				return err
@@ -2844,7 +2886,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
-			if currentUser != userName {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
 			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
@@ -2857,17 +2899,21 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			}
 		}
 	} else {
-		if execResultArrayHasData(erArray) || getPu(ses.GetService()).SV.SkipCheckPrivilege {
+		if doLockOrUnlock == lockUser {
+			sql = getSqlForUpdateStatusLockOfUserForever(userStatusLockForever, userName)
+		} else {
 			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+		}
+
+		if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
 			}
 		} else {
-			if currentUser != userName {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
-			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
 			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return err
@@ -3979,7 +4025,7 @@ func postProcessCdc(
 	//drop or pause cdc
 	switch targetAccountStatus {
 	case "drop":
-		return runUpdateCdcTask(
+		return doUpdateCDCTask(
 			ctx,
 			task.TaskStatus_CancelRequested,
 			targetAccountID,
@@ -3989,7 +4035,7 @@ func postProcessCdc(
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
 	case tree.AccountStatusSuspend.String(), tree.AccountStatusRestricted.String():
-		return runUpdateCdcTask(
+		return doUpdateCDCTask(
 			ctx,
 			task.TaskStatus_PauseRequested,
 			targetAccountID,
@@ -3999,7 +4045,7 @@ func postProcessCdc(
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
 		)
 	case tree.AccountStatusOpen.String():
-		return runUpdateCdcTask(
+		return doUpdateCDCTask(
 			ctx,
 			task.TaskStatus_ResumeRequested,
 			targetAccountID,
@@ -5616,6 +5662,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
+	case *tree.CloneTable:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+	case *tree.CloneDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll)
+		writeDatabaseAndTableDirectly = true
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -6795,6 +6849,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 				return false, stats, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
 			}
 		}
+		if isTargetMergeSettings(p) && verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+			return true, stats, nil
+		}
 		arr := extractPrivilegeTipsFromPlan(p)
 		if len(arr) == 0 {
 			return true, stats, nil
@@ -7640,6 +7697,12 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("insert into mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {

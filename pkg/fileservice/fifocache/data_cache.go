@@ -42,7 +42,7 @@ func NewDataCache(
 var seed = maphash.MakeSeed()
 
 func shardCacheKey(key fscache.CacheKey) uint64 {
-	hasher := new(maphash.Hash)
+	var hasher maphash.Hash
 	hasher.SetSeed(seed)
 	hasher.Write(util.UnsafeToBytes(&key.Offset))
 	hasher.WriteString(key.Path)
@@ -80,6 +80,7 @@ func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string)
 	for key, item := range shard.values {
 		if key.Path == path {
 			delete(shard.values, key)
+			// key deleted, call postEvict
 			if d.fifo.postEvict != nil {
 				d.fifo.postEvict(ctx, item.key, item.value, item.size)
 			}

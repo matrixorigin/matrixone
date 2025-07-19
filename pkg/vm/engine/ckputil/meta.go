@@ -17,6 +17,7 @@ package ckputil
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -58,11 +59,21 @@ func TableRangesRows(r []TableRange) int {
 }
 
 type TableRange struct {
-	TableID    uint64
-	ObjectType int8
-	Start      types.Rowid
-	End        types.Rowid
-	Location   objectio.Location
+	TableID     uint64
+	ObjectType  int8
+	Start       types.Rowid
+	End         types.Rowid
+	ObjectStats objectio.ObjectStats
+}
+
+func (r *TableRange) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"table_id":     r.TableID,
+		"object_type":  r.ObjectType,
+		"start":        fmt.Sprintf("%d-%d", r.Start.GetBlockOffset(), r.Start.GetRowOffset()),
+		"end":          fmt.Sprintf("%d-%d", r.End.GetBlockOffset(), r.End.GetRowOffset()),
+		"object_stats": r.ObjectStats.String(),
+	})
 }
 
 func (r *TableRange) String() string {
@@ -83,7 +94,7 @@ func (r *TableRange) String() string {
 		r.Start.GetRowOffset(),
 		r.End.GetBlockOffset(),
 		r.End.GetRowOffset(),
-		r.Location.String(),
+		r.ObjectStats.String(),
 	)
 }
 
@@ -126,7 +137,7 @@ func (r *TableRange) AppendTo(bat *batch.Batch, mp *mpool.MPool) (err error) {
 	); err != nil {
 		return
 	}
-	if err = vector.AppendBytes(bat.Vecs[4], r.Location, false, mp); err != nil {
+	if err = vector.AppendBytes(bat.Vecs[4], r.ObjectStats[:], false, mp); err != nil {
 		return
 	}
 	bat.AddRowCount(1)
@@ -147,7 +158,7 @@ func MakeTableRangeBatch() *batch.Batch {
 
 // data should be sorted by table id and object type
 // the schema of the table entry
-func ExportToTableRanges(
+func ExportToTableRangesByFilter(
 	data *batch.Batch,
 	tableId uint64,
 	objectType int8,
@@ -171,12 +182,50 @@ func ExportToTableRanges(
 			break
 		}
 		ranges = append(ranges, TableRange{
-			TableID:    tableId,
-			ObjectType: objectTypes[i],
-			Start:      startRows[i],
-			End:        endRows[i],
-			Location:   data.Vecs[4].GetBytesAt(i),
+			TableID:     tableId,
+			ObjectType:  objectTypes[i],
+			Start:       startRows[i],
+			End:         endRows[i],
+			ObjectStats: objectio.ObjectStats(data.Vecs[4].GetBytesAt(i)),
 		})
+	}
+	return
+}
+
+func ExportToTableRanges(
+	data *batch.Batch,
+) (ranges []TableRange) {
+	tableIds := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[0])
+	objectTypes := vector.MustFixedColNoTypeCheck[int8](data.Vecs[1])
+	startRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[2])
+	endRows := vector.MustFixedColNoTypeCheck[types.Rowid](data.Vecs[3])
+	for i, rows := 0, data.RowCount(); i < rows; i++ {
+		ranges = append(ranges, TableRange{
+			TableID:     tableIds[i],
+			ObjectType:  objectTypes[i],
+			Start:       startRows[i],
+			End:         endRows[i],
+			ObjectStats: objectio.ObjectStats(data.Vecs[4].GetBytesAt(i)),
+		})
+	}
+	return
+}
+
+func ScanObjectStats(
+	data *batch.Batch,
+) (objs []objectio.ObjectStats) {
+	if data == nil || data.RowCount() == 0 {
+		return nil
+	}
+	objectsMap := make(map[string]objectio.ObjectStats)
+	objectStatsVec := data.Vecs[MetaAttr_ObjectStats_Idx]
+	for i := 0; i < data.RowCount(); i++ {
+		stats := objectio.ObjectStats(objectStatsVec.GetBytesAt(i))
+		objectsMap[stats.String()] = stats
+	}
+	objs = make([]objectio.ObjectStats, 0, len(objectsMap))
+	for _, stats := range objectsMap {
+		objs = append(objs, stats)
 	}
 	return
 }
@@ -191,13 +240,10 @@ func CollectTableRanges(
 	if len(objs) == 0 {
 		return
 	}
-	tmpBat := MakeDataScanTableIDBatch()
-	defer tmpBat.Clean(mp)
 	for _, obj := range objs {
 		if err = CollectTableRangesFromFile(
 			ctx,
 			obj,
-			tmpBat,
 			data,
 			mp,
 			fs,
@@ -213,12 +259,18 @@ func CollectTableRanges(
 	return
 }
 
-// the data in the obj must be sorted by the table id and object type
-func CollectTableRangesFromFile(
+func ForEachFile(
 	ctx context.Context,
 	obj objectio.ObjectStats,
-	tmpBat *batch.Batch,
-	data *batch.Batch,
+	forEachRow func(
+		accout uint32,
+		dbid, tid uint64,
+		objectType int8,
+		objectStats objectio.ObjectStats,
+		start, end types.TS,
+		rowID types.Rowid,
+	) error,
+	postEachRow func() error,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 ) (err error) {
@@ -232,9 +284,12 @@ func CollectTableRangesFromFile(
 		),
 	)
 	var (
-		end         bool
-		activeRange TableRange
+		end bool
 	)
+	tmpBat := batch.NewWithSchema(
+		true, DataScan_TableIDAtrrs, DataScan_TableIDTypes,
+	)
+	defer tmpBat.Clean(mp)
 	for {
 		tmpBat.CleanOnlyData()
 		if end, err = reader.Read(
@@ -245,38 +300,93 @@ func CollectTableRangesFromFile(
 		if end {
 			break
 		}
-		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBat.Vecs[0])
-		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBat.Vecs[1])
-		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBat.Vecs[2])
+		accouts := vector.MustFixedColNoTypeCheck[uint32](tmpBat.Vecs[0])
+		dbids := vector.MustFixedColNoTypeCheck[uint64](tmpBat.Vecs[1])
+		tableIds := vector.MustFixedColNoTypeCheck[uint64](tmpBat.Vecs[2])
+		objectTypes := vector.MustFixedColNoTypeCheck[int8](tmpBat.Vecs[3])
+		objectStatsVec := tmpBat.Vecs[4]
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBat.Vecs[5])
+		deleteTSs := vector.MustFixedColNoTypeCheck[types.TS](tmpBat.Vecs[6])
+		rowids := vector.MustFixedColNoTypeCheck[types.Rowid](tmpBat.Vecs[8])
 		for i, rows := 0, tmpBat.RowCount(); i < rows; i++ {
-			if activeRange.TableID != tableIds[i] || activeRange.ObjectType != objectTypes[i] {
+			if err = forEachRow(
+				accouts[i],
+				dbids[i],
+				tableIds[i],
+				objectTypes[i],
+				objectio.ObjectStats(objectStatsVec.GetBytesAt(i)),
+				createTSs[i],
+				deleteTSs[i],
+				rowids[i],
+			); err != nil {
+				return
+			}
+		}
+	}
+	if err = postEachRow(); err != nil {
+		return
+	}
+	return
+}
+
+// the data in the obj must be sorted by the table id and object type
+func CollectTableRangesFromFile(
+	ctx context.Context,
+	obj objectio.ObjectStats,
+	data *batch.Batch,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (err error) {
+	var (
+		activeRange TableRange
+	)
+	if err = ForEachFile(
+		ctx,
+		obj,
+		func(
+			accout uint32,
+			dbid, tid uint64,
+			objectType int8,
+			objectStats objectio.ObjectStats,
+			start, end types.TS,
+			rowID types.Rowid) error {
+
+			if activeRange.TableID != tid || activeRange.ObjectType != objectType {
 				if activeRange.IsEmpty() {
 					// first table id, object type
-					activeRange.TableID = tableIds[i]
-					activeRange.ObjectType = objectTypes[i]
-					activeRange.Start = rowids[i]
-					activeRange.Location = obj.ObjectLocation()
+					activeRange.TableID = tid
+					activeRange.ObjectType = objectType
+					activeRange.Start = rowID
+					activeRange.ObjectStats = obj
 				} else {
 					// different table id, object type
 					// 1. save the active range to data
 					if err = activeRange.AppendTo(data, mp); err != nil {
-						return
+						return err
 					}
 
 					// 2. reset the active range
-					activeRange.TableID = tableIds[i]
-					activeRange.ObjectType = objectTypes[i]
-					activeRange.Start = rowids[i]
-					activeRange.Location = obj.ObjectLocation()
+					activeRange.TableID = tid
+					activeRange.ObjectType = objectType
+					activeRange.Start = rowID
+					activeRange.ObjectStats = obj
 				}
 			}
-			activeRange.End = rowids[i]
-		}
-		if !activeRange.IsEmpty() {
-			if err = activeRange.AppendTo(data, mp); err != nil {
-				return
+			activeRange.End = rowID
+			return nil
+		},
+		func() error {
+			if !activeRange.IsEmpty() {
+				if err = activeRange.AppendTo(data, mp); err != nil {
+					return err
+				}
 			}
-		}
+			return nil
+		},
+		mp,
+		fs,
+	); err != nil {
+		return
 	}
 	return
 }

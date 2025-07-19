@@ -22,10 +22,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -36,12 +35,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const DefaultBlockMaxRows = 8192
 const blockThresholdForTpQuery = 32
 const BlockThresholdForOneCN = 512
 const costThresholdForOneCN = 160000
@@ -69,32 +68,62 @@ const (
 	ExecTypeAP_MULTICN
 )
 
+// The StatsInfoWrapper is mainly for the timeSeconds to avoid
+// the data race on it.
+type StatsInfoWrapper struct {
+	Stats       *pb.StatsInfo
+	timeSeconds int64
+	sync.Mutex
+}
+
+// IsRecentlyVisitIn checks that if now - last_visit < limit,
+// if so, do nothing and return true, or update the last_visit and return false.
+func (w *StatsInfoWrapper) IsRecentlyVisitIn(limit int64) bool {
+	w.Lock()
+	defer w.Unlock()
+
+	now := time.Now().Unix()
+	recently := w.timeSeconds
+
+	if now-recently < limit {
+		return true
+	}
+
+	// update
+	w.timeSeconds = now
+	return false
+}
+
 type StatsCache struct {
-	cache map[uint64]*pb.StatsInfo
+	cache map[uint64]*StatsInfoWrapper
 }
 
 func NewStatsCache() *StatsCache {
 	return &StatsCache{
-		cache: make(map[uint64]*pb.StatsInfo, statsCacheInitSize),
+		cache: make(map[uint64]*StatsInfoWrapper, statsCacheInitSize),
 	}
 }
 
 // GetStatsInfo returns the stats info and if the info in the cache needs to be updated.
-func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *pb.StatsInfo {
+func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *StatsInfoWrapper {
 	if sc == nil {
 		return nil
 	}
-	if s, ok := sc.cache[tableID]; ok {
-		return s
+	if w, ok := sc.cache[tableID]; ok {
+		return w
 	}
+
 	if create {
 		if len(sc.cache) > statsCacheMaxSize {
-			sc.cache = make(map[uint64]*pb.StatsInfo, statsCacheInitSize)
+			sc.cache = make(map[uint64]*StatsInfoWrapper, statsCacheInitSize)
 			logutil.Infof("statscache entries more than %v in long session, release memory and create new cachepool", statsCacheMaxSize)
 		}
 		s := NewStatsInfo()
-		sc.cache[tableID] = s
-		return s
+		sc.cache[tableID] = &StatsInfoWrapper{
+			Stats:       s,
+			timeSeconds: 0,
+		}
+		return sc.cache[tableID]
 	} else {
 		return nil
 	}
@@ -102,10 +131,14 @@ func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *pb.StatsInfo {
 
 // SetStatsInfo updates the stats info in the cache.
 func (sc *StatsCache) SetStatsInfo(tableID uint64, s *pb.StatsInfo) {
-	if sc == nil {
+	if sc == nil || s == nil {
 		return
 	}
-	sc.cache[tableID] = s
+
+	sc.cache[tableID] = &StatsInfoWrapper{
+		Stats:       s,
+		timeSeconds: 0,
+	}
 }
 
 func NewStatsInfo() *pb.StatsInfo {
@@ -342,15 +375,15 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return true
 	}
 
-	s := builder.getStatsInfoByTableID(tableDef.TblId)
-	if s == nil {
+	w := builder.getStatsInfoByTableID(tableDef.TblId)
+	if w == nil {
 		return false
 	}
 	var totalNDV float64 = 1
 	for i := range cols {
-		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+		totalNDV *= w.Stats.NdvMap[tableDef.Cols[cols[i]].Name]
 	}
-	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
+	return totalNDV > w.Stats.TableCnt*highNDVcolumnThreshHold
 }
 
 func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) float64 {
@@ -362,22 +395,22 @@ func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) fl
 		return 1
 	}
 
-	s := builder.getStatsInfoByTableID(tableDef.TblId)
-	if s == nil {
+	w := builder.getStatsInfoByTableID(tableDef.TblId)
+	if w.Stats == nil {
 		return 0
 	}
 	var totalNDV float64 = 1
 	for i := range cols {
-		totalNDV *= s.NdvMap[tableDef.Cols[cols[i]].Name]
+		totalNDV *= w.Stats.NdvMap[tableDef.Cols[cols[i]].Name]
 	}
-	result := totalNDV / s.TableCnt
+	result := totalNDV / w.Stats.TableCnt
 	if result > 1 {
 		result = 1
 	}
 	return result
 }
 
-func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *pb.StatsInfo {
+func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *StatsInfoWrapper {
 	if builder == nil {
 		return nil
 	}
@@ -388,7 +421,7 @@ func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *pb.StatsInfo
 	return sc.GetStatsInfo(tableID, false)
 }
 
-func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *pb.StatsInfo {
+func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *StatsInfoWrapper {
 	if builder == nil {
 		return nil
 	}
@@ -408,11 +441,11 @@ func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *pb.StatsInfo {
 }
 
 func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
-	s := builder.getStatsInfoByCol(col)
-	if s == nil {
+	w := builder.getStatsInfoByCol(col)
+	if w == nil {
 		return -1
 	}
-	return s.NdvMap[col.Name]
+	return w.Stats.NdvMap[col.Name]
 }
 
 //func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
@@ -427,15 +460,15 @@ func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) floa
 	switch exprImpl := arg.Expr.(type) {
 	case *plan.Expr_Col:
 		col := exprImpl.Col
-		s := builder.getStatsInfoByCol(col)
-		if s == nil {
+		w := builder.getStatsInfoByCol(col)
+		if w == nil {
 			break
 		}
-		nullCnt := float64(s.NullCntMap[col.Name])
+		nullCnt := float64(w.Stats.NullCntMap[col.Name])
 		if isnull {
-			return nullCnt / s.TableCnt
+			return nullCnt / w.Stats.TableCnt
 		} else {
-			return 1 - (nullCnt / s.TableCnt)
+			return 1 - (nullCnt / w.Stats.TableCnt)
 		}
 	}
 
@@ -599,19 +632,19 @@ func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
 }
 
 func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *QueryBuilder) float64 {
-	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
+	// only filter like func(colRef)>1 , or (colRef=1) or (colRef=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	col := extractColRefInFilter(expr)
-	if col == nil {
+	colRef := extractColRefInFilter(expr)
+	if colRef == nil {
 		return 0.1
 	}
-	s := builder.getStatsInfoByCol(col)
-	if s == nil {
+	w := builder.getStatsInfoByCol(colRef)
+	if w == nil {
 		return 0.1
 	}
 
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	col, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
+	colRef, litType, literals, colFnName, hasDynamicParam := extractColRefAndLiteralsInFilter(expr)
 	if hasDynamicParam {
 		// assume dynamic parameter always has low selectivity
 		if funcName == "between" {
@@ -620,17 +653,18 @@ func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *Q
 			return 0.01
 		}
 	}
-	if col != nil && len(literals) > 0 {
-		typ := types.T(s.DataTypeMap[col.Name])
+	if colRef != nil && len(literals) > 0 {
+		typ := types.T(w.Stats.DataTypeMap[colRef.Name])
 
 		switch colFnName {
 		case "":
-			return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], typ, literals)
+			return calcSelectivityByMinMax(
+				funcName, w.Stats.MinValMap[colRef.Name], w.Stats.MaxValMap[colRef.Name], typ, literals)
 		case "year":
 			switch typ {
 			case types.T_date:
-				minVal := types.Date(s.MinValMap[col.Name])
-				maxVal := types.Date(s.MaxValMap[col.Name])
+				minVal := types.Date(w.Stats.MinValMap[colRef.Name])
+				maxVal := types.Date(w.Stats.MaxValMap[colRef.Name])
 				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
 			case types.T_datetime:
 				// TODO
@@ -713,7 +747,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder, s *pb.Stats
 				ret = 0.5
 			}
 		case "prefix_between":
-			ret = 0.1
+			ret = 0.001
 		case "isnull", "is_null":
 			ret = getNullSelectivity(exprImpl.F.Args[0], builder, true)
 		case "isnotnull", "is_not_null":
@@ -975,7 +1009,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = 1
 			node.Stats.Selectivity = 1
 		}
-		node.Stats.BlockNum = int32(childStats.Outcnt/DefaultBlockMaxRows) + 1
+		node.Stats.BlockNum = int32(childStats.Outcnt/objectio.BlockMaxRows) + 1
 
 	case plan.Node_UNION:
 		if needResetHashMapStats {
@@ -1225,11 +1259,26 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 			stepNum = 1
 		}
 	}
-	ret := (endNum - startNum) / stepNum
+	ret := (endNum - startNum + 1) / stepNum
 	if ret < 0 {
 		return 0, false
 	}
 	return ret, true
+}
+
+func transposeTableScanFilters(proc *process.Process, qry *Query, nodeId int32) {
+	node := qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
+		for i, e := range node.FilterList {
+			transposedExpr, err := ConstantTranspose(e, proc)
+			if err == nil && transposedExpr != nil {
+				node.FilterList[i] = transposedExpr
+			}
+		}
+	}
+	for _, childId := range node.Children {
+		transposeTableScanFilters(proc, qry, childId)
+	}
 }
 
 func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldInExpr bool) {
@@ -1269,7 +1318,7 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 		if newBlockNum < float64(scanNode.Stats.BlockNum) {
 			scanNode.Stats.BlockNum = int32(newBlockNum)
 		}
-		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * DefaultBlockMaxRows
+		scanNode.Stats.Cost = float64(scanNode.Stats.BlockNum) * objectio.BlockMaxRows
 		if scanNode.Stats.Cost > scanNode.Stats.TableCnt {
 			scanNode.Stats.Cost = scanNode.Stats.TableCnt
 		}
@@ -1482,15 +1531,15 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		factor1 := 1.0
 		factor2 := 1.0
 		if leftChild.NodeType == plan.Node_TABLE_SCAN && rightChild.NodeType == plan.Node_TABLE_SCAN {
-			s1 := builder.getStatsInfoByTableID(leftChild.TableDef.TblId)
-			s2 := builder.getStatsInfoByTableID(rightChild.TableDef.TblId)
-			if s1 != nil && s2 != nil {
+			w1 := builder.getStatsInfoByTableID(leftChild.TableDef.TblId)
+			w2 := builder.getStatsInfoByTableID(rightChild.TableDef.TblId)
+			if w1 != nil && w2 != nil {
 				var t1size, t2size uint64
-				for _, v := range s1.SizeMap {
+				for _, v := range w1.Stats.SizeMap {
 					t1size += v
 				}
 				factor1 = math.Pow(float64(t1size), 0.1)
-				for _, v := range s2.SizeMap {
+				for _, v := range w2.Stats.SizeMap {
 					t2size += v
 				}
 				factor2 = math.Pow(float64(t2size), 0.1)

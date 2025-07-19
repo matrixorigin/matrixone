@@ -2022,6 +2022,8 @@ func (it IndexType) ToString() string {
 		return "master"
 	case INDEX_TYPE_FULLTEXT:
 		return "fulltext"
+	case INDEX_TYPE_HNSW:
+		return "hnsw"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -2039,6 +2041,7 @@ const (
 	INDEX_TYPE_IVFFLAT
 	INDEX_TYPE_MASTER
 	INDEX_TYPE_FULLTEXT
+	INDEX_TYPE_HNSW
 )
 
 type VisibleType int
@@ -2071,13 +2074,19 @@ type IndexOption struct {
 	SecondaryEngineAttribute string
 	AlgoParamList            int64
 	AlgoParamVectorOpType    string
+	HnswM                    int64
+	HnswEfConstruction       int64
+	HnswEfSearch             int64
+	HnswQuantization         string
 }
 
 // Must follow the following sequence when test
 func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
-		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" {
+		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
+		node.HnswM != 0 || node.HnswEfConstruction != 0 ||
+		node.HnswEfSearch != 0 || node.HnswQuantization != "" {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2098,6 +2107,26 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.AlgoParamList != 0 {
 		ctx.WriteString("LISTS ")
 		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.HnswM != 0 {
+		ctx.WriteString("M ")
+		ctx.WriteString(strconv.FormatInt(node.HnswM, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.HnswEfConstruction != 0 {
+		ctx.WriteString("EF_CONSTRUCTION ")
+		ctx.WriteString(strconv.FormatInt(node.HnswEfConstruction, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.HnswEfSearch != 0 {
+		ctx.WriteString("EF_SEARCH ")
+		ctx.WriteString(strconv.FormatInt(node.HnswEfSearch, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.HnswQuantization != "" {
+		ctx.WriteString("QUANTIZATION ")
+		ctx.WriteString(node.HnswQuantization)
 		ctx.WriteByte(' ')
 	}
 	if node.AlgoParamVectorOpType != "" {

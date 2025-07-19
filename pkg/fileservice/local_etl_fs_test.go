@@ -16,6 +16,8 @@ package fileservice
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,6 +117,37 @@ func TestLocalETLFS(t *testing.T) {
 		assert.True(t, entries[0].IsDir)
 		assert.True(t, entries[1].IsDir)
 
+	})
+
+	t.Run("error in write", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fs, err := NewLocalETLFS(
+			"test",
+			t.TempDir(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fs.Close(ctx)
+
+		err = fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					ReaderForWrite: errReader{},
+					Size:           -1,
+				},
+				{
+					ReaderForWrite: errReader{},
+					Size:           -1,
+				},
+			},
+		})
+
+		if !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("got %v", err)
+		}
 	})
 
 }

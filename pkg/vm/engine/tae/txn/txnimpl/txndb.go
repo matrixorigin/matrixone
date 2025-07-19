@@ -52,21 +52,25 @@ func newTxnDB(store *txnStore, entry *catalog.DBEntry) *txnDB {
 	return db
 }
 
-func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
+func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) (err error) {
 	if db.createEntry != nil {
 		panic("logic error")
 	}
-	db.store.IncreateWriteCnt()
+	if err = db.store.IncreateWriteCnt("set create entry"); err != nil {
+		return
+	}
 	db.store.txn.GetMemo().AddCatalogChange()
 	db.createEntry = e
-	return nil
+	return
 }
 
-func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
+func (db *txnDB) SetDropEntry(e txnif.TxnEntry) (err error) {
 	if db.dropEntry != nil {
 		panic("logic error")
 	}
-	db.store.IncreateWriteCnt()
+	if err = db.store.IncreateWriteCnt("set drop entry"); err != nil {
+		return
+	}
 	db.store.txn.GetMemo().AddCatalogChange()
 	db.dropEntry = e
 	return nil
@@ -210,8 +214,8 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16, skipCheckDel
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
-	if db.store.dataFactory != nil {
-		factory = db.store.dataFactory.MakeTableFactory()
+	if db.store.catalog.DataFactory != nil {
+		factory = db.store.catalog.DataFactory.MakeTableFactory()
 	}
 	meta, err := db.entry.CreateTableEntry(schema, db.store.txn, factory)
 	if err != nil {
@@ -222,15 +226,15 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 		return
 	}
 	relation = newRelation(table)
-	table.SetCreateEntry(meta)
+	err = table.SetCreateEntry(meta)
 	return
 }
 
 func (db *txnDB) CreateRelationWithTableId(tableId uint64, def any) (relation handle.Relation, err error) {
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
-	if db.store.dataFactory != nil {
-		factory = db.store.dataFactory.MakeTableFactory()
+	if db.store.catalog.DataFactory != nil {
+		factory = db.store.catalog.DataFactory.MakeTableFactory()
 	}
 	meta, err := db.entry.CreateTableEntryWithTableId(schema, db.store.txn, factory, tableId)
 	if err != nil {
@@ -241,7 +245,7 @@ func (db *txnDB) CreateRelationWithTableId(tableId uint64, def any) (relation ha
 		return
 	}
 	relation = newRelation(table)
-	table.SetCreateEntry(meta)
+	err = table.SetCreateEntry(meta)
 	return
 }
 
@@ -589,7 +593,7 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 	return
 }
 
-func (db *txnDB) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {
+func (db *txnDB) AddTxnEntry(entry txnif.TxnEntry) {
 	// TODO
 }
 

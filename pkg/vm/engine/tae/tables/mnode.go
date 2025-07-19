@@ -107,7 +107,7 @@ func (node *memoryNode) Contains(
 	node.object.RLock()
 	defer node.object.RUnlock()
 	blkID := objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0)
-	return node.pkIndex.Contains(ctx, keys.GetDownstreamVector(), keysZM, blkID, node.checkConflictLocked(txn), mp)
+	return node.pkIndex.Contains(ctx, keys.GetDownstreamVector(), keysZM, &blkID, node.checkConflictLocked(txn), mp)
 }
 func (node *memoryNode) getDuplicatedRowsLocked(
 	ctx context.Context,
@@ -123,7 +123,7 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 		ctx,
 		keys.GetDownstreamVector(),
 		keysZM,
-		blkID,
+		&blkID,
 		rowIDs.GetDownstreamVector(),
 		getRowOffset,
 		skipFn,
@@ -240,7 +240,7 @@ func (node *memoryNode) getDataWindowLocked(
 
 func (node *memoryNode) ApplyAppendLocked(
 	bat *containers.Batch,
-	txn txnif.AsyncTxn) (from int, err error) {
+) (from int, err error) {
 	schema := node.writeSchema
 	from = int(node.mustData().Length())
 	for srcPos, attr := range bat.Attrs {

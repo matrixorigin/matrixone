@@ -24,9 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -90,6 +87,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 // Note: Now the cost going from stat is actually the number of rows, so we can only estimate a number for the size of each row.
@@ -182,7 +181,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	c.fill = fill
 	c.sql = sql
 	c.affectRows.Store(0)
-	c.anal.Reset()
+	c.anal.Reset(c.isPrepare, c.IsTpQuery())
 
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
@@ -396,6 +395,8 @@ func (c *Compile) run(s *Scope) error {
 		} else {
 			return s.CreateTable(c)
 		}
+	case CreatePitr:
+		return s.CreatePitr(c)
 	case CreateView:
 		return s.CreateView(c)
 	case AlterView:
@@ -406,6 +407,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.RenameTable(c)
 	case DropTable:
 		return s.DropTable(c)
+	case DropPitr:
+		return s.DropPitr(c)
 	case DropSequence:
 		return s.DropSequence(c)
 	case CreateSequence:
@@ -420,6 +423,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.TruncateTable(c)
 	case Replace:
 		return s.replace(c)
+	case TableClone:
+		return s.TableClone(c)
 	}
 	return nil
 }
@@ -637,6 +642,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 				newScope(DropDatabase).
 					withPlan(pn),
 			}, nil
+		case plan.DataDefinition_CREATE_PITR:
+			return []*Scope{
+				newScope(CreatePitr).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return []*Scope{
 				newScope(CreateTable).
@@ -665,6 +675,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 		case plan.DataDefinition_DROP_TABLE:
 			return []*Scope{
 				newScope(DropTable).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_DROP_PITR:
+			return []*Scope{
+				newScope(DropPitr).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
@@ -702,15 +717,21 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 			plan.DataDefinition_SHOW_COLUMNS,
 			plan.DataDefinition_SHOW_CREATETABLE:
 			return c.compileQuery(pn.GetDdl().GetQuery())
-			// 1、not supported: show arnings/errors/status/processlist
-			// 2、show variables will not return query
-			// 3、show create database/table need rewrite to create sql
+		// 1、not supported: show arnings/errors/status/processlist
+		// 2、show variables will not return query
+		// 3、show create database/table need rewrite to create sql
+
+		case plan.DataDefinition_CREATE_TABLE_WITH_CLONE:
+			return c.compileTableClone(pn)
 		}
 	}
 	return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", pn))
 }
 
 func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if objRes.NotLockMeta {
+		return
+	}
 	if !c.needLockMeta {
 		return
 	}
@@ -1254,7 +1275,11 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, c.compileTableFunction(n, ss))))
+		ss, err = c.compileTableFunction(n, ss)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
 		c.setAnalyzeCurrent(nil, int(curNodeIdx))
@@ -1301,6 +1326,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePostDml(n, ss)
 		return ss, nil
+
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -1745,24 +1771,177 @@ func (c *Compile) compileExternScanSerialReadWrite(n *plan.Node, param *tree.Ext
 	return ss, nil
 }
 
-func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) getTableFunctionParallelSize(n *plan.Node, mcpu int) int {
+	if n.TableDef.TblFunc.Name != "generate_series" {
+		return 1
+	}
+
+	temp := max(int(n.Stats.Cost)/80000, 1)
+	return min(temp, mcpu)
+}
+
+func (c *Compile) generateSeriesParallel(proc *process.Process, n *plan.Node, parallelSize int) (canOpt bool, step int64, offset [][2]int64, err error) {
+	for _, expr := range n.TblFuncExprList {
+		_, ok := expr.Expr.(*plan.Expr_Lit)
+		if !ok {
+			return false, 0, nil, nil
+		}
+	}
+
+	var start, end int64
+	switch val := n.TblFuncExprList[0].Expr.(*plan.Expr_Lit).Lit.GetValue().(type) {
+	case *plan.Literal_I32Val:
+		if len(n.TblFuncExprList) == 1 {
+			start = 1
+			end = int64(val.I32Val)
+		} else {
+			start = int64(val.I32Val)
+			if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+				end = int64(val.I32Val)
+			} else if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+				end = val.I64Val
+			} else {
+				return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
+			}
+		}
+
+	case *plan.Literal_I64Val:
+		if len(n.TblFuncExprList) == 1 {
+			start = 1
+			end = int64(val.I64Val)
+		} else {
+			start = int64(val.I64Val)
+			if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+				end = int64(val.I32Val)
+			} else if val, ok := n.TblFuncExprList[1].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+				end = val.I64Val
+			} else {
+				return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
+			}
+		}
+	default:
+		return false, 0, nil, nil
+	}
+
+	if len(n.TblFuncExprList) == 3 {
+		if val, ok := n.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I32Val); ok {
+			step = int64(val.I32Val)
+		} else if val, ok := n.TblFuncExprList[2].Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_I64Val); ok {
+			step = val.I64Val
+		} else {
+			return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series step must be int32 or int64")
+		}
+	} else {
+		if start < end {
+			step = 1
+		} else {
+			step = -1
+		}
+	}
+	if step == 0 {
+		return false, 0, nil, moerr.NewInvalidInput(proc.Ctx, "generate_series step cannot be zero")
+	}
+
+	if parallelSize == 1 {
+		return true, 0, nil, nil
+	}
+
+	temp := (end - start + 1) / int64(parallelSize)
+	for i := 0; i < parallelSize; i++ {
+		tempEnd := start + temp - 1
+		if i == parallelSize-1 {
+			tempEnd = end
+		}
+
+		arr := [2]int64{start, tempEnd}
+		offset = append(offset, arr)
+		start = tempEnd + 1
+	}
+
+	return true, step, offset, nil
+}
+
+func (c *Compile) compileSingleTableFunction(n *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
-	if len(n.Children) == 0 {
+	ds := newScope(Merge)
+	ds.NodeInfo = getEngineNode(c)
+	ds.DataSource = &Source{isConst: true, node: n}
+	ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+	ds.Proc = c.proc.NewNoContextChildProc(0)
+	op := constructTableFunction(n, c.pn.GetQuery())
+	op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+	ds.setRootOperator(op)
+	ss := []*Scope{ds}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileGenerateSeriesParallel(n *plan.Node, ss []*Scope, parallelSize int, canOpt bool, offset [][2]int64, step int64) ([]*Scope, error) {
+	currentFirstFlag := c.anal.isFirst
+	startOffset := 0
+	for i := 0; i < len(c.cnList); i++ {
 		ds := newScope(Merge)
+		currMcpu := min(c.cnList[i].Mcpu, parallelSize)
+		op := constructTableFunction(n, c.pn.GetQuery())
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+
+		if currMcpu > 1 {
+			ds.Magic = Remote
+		}
+
+		op.CanOpt = canOpt
+		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
+		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+
 		ds.NodeInfo = getEngineNode(c)
 		ds.DataSource = &Source{isConst: true, node: n}
-		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+
+		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: currMcpu}
 		ds.Proc = c.proc.NewNoContextChildProc(0)
-		ss = []*Scope{ds}
+		parallelSize -= currMcpu
+		ds.IsTbFunc = true
+		ss = append(ss, ds)
+
+		ds.setRootOperator(op)
+		if parallelSize == 0 {
+			break
+		}
+	}
+	c.anal.isFirst = false
+	return ss, nil
+}
+
+func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	currentFirstFlag := c.anal.isFirst
+
+	if len(n.Children) == 0 {
+		switch n.TableDef.TblFunc.Name {
+		case "generate_series":
+			var mcpuTotal int
+			for i := 0; i < len(c.cnList); i++ {
+				mcpuTotal += c.cnList[i].Mcpu
+			}
+			parallelSize := c.getTableFunctionParallelSize(n, mcpuTotal)
+			canOpt, step, offset, err := c.generateSeriesParallel(c.proc, n, parallelSize)
+			if err != nil {
+				return nil, err
+			}
+			if parallelSize == 1 || !canOpt {
+				return c.compileSingleTableFunction(n)
+			}
+			return c.compileGenerateSeriesParallel(n, ss, parallelSize, canOpt, offset, step)
+		default:
+			return c.compileSingleTableFunction(n)
+		}
 	}
 	for i := range ss {
-		op := constructTableFunction(n)
+		op := constructTableFunction(n, c.pn.GetQuery())
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
 	c.anal.isFirst = false
 
-	return ss
+	return ss, nil
 }
 
 func (c *Compile) compileValueScan(n *plan.Node) ([]*Scope, error) {
@@ -1832,26 +2011,16 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, first
 	return s, nil
 }
 
-func (c *Compile) compileTableScanDataSource(s *Scope) error {
+func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
 	var err error
-	var tblDef *plan.TableDef
-	var ts timestamp.Timestamp
-	var db engine.Database
-	var rel engine.Relation
 	var txnOp client.TxnOperator
 
 	node := s.DataSource.node
-	attrs := make([]string, len(node.TableDef.Cols))
-	for j, col := range node.TableDef.Cols {
-		attrs[j] = col.GetOriginCaseName()
-	}
-
-	//-----------------------------------------------------------------------------------------------------
 	ctx := c.proc.GetTopContext()
 	txnOp = c.proc.GetTxnOperator()
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if node.ScanSnapshot != nil && node.ScanSnapshot.TS != nil {
 		if !node.ScanSnapshot.TS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) &&
@@ -1868,25 +2037,50 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			}
 		}
 	}
+
+	err = disttae.CheckTxnIsValid(txnOp)
+	if err != nil {
+		return nil, nil, err
+	}
+	if util.TableIsClusterTable(node.TableDef.GetTableType()) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	if node.ObjRef.PubInfo != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.TenantId))
+	}
+	if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	return txnOp, ctx, nil
+}
+
+func (c *Compile) compileTableScanDataSource(s *Scope) error {
+	var err error
+	var tblDef *plan.TableDef
+	var ts timestamp.Timestamp
+	var db engine.Database
+
+	node := s.DataSource.node
+	attrs := make([]string, len(node.TableDef.Cols))
+	for j, col := range node.TableDef.Cols {
+		attrs[j] = col.GetOriginCaseName()
+	}
+
+	//-----------------------------------------------------------------------------------------------------
+
+	txnOp, ctx, err := c.getCompileTableScanDataSourceTxn(s)
+	if err != nil {
+		return err
+	}
+
 	//-----------------------------------------------------------------------------------------------------
 
 	if c.proc != nil && c.proc.GetTxnOperator() != nil {
 		ts = txnOp.Txn().SnapshotTS
 	}
-	{
-		err = disttae.CheckTxnIsValid(txnOp)
-		if err != nil {
-			return err
-		}
-		if util.TableIsClusterTable(node.TableDef.GetTableType()) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
-		if node.ObjRef.PubInfo != nil {
-			ctx = defines.AttachAccountId(ctx, uint32(node.ObjRef.PubInfo.TenantId))
-		}
-		if util.TableIsLoggingTable(node.ObjRef.SchemaName, node.ObjRef.ObjName) {
-			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-		}
+
+	if s.DataSource.Rel == nil {
+		var rel engine.Relation
 		db, err = c.e.Database(ctx, node.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			panic(err)
@@ -1907,6 +2101,10 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 			}
 		}
 		tblDef = rel.GetTableDef(ctx)
+		s.DataSource.Rel = rel
+	} else {
+		s.DataSource.Rel.Reset(txnOp)
+		tblDef = s.DataSource.Rel.GetTableDef(ctx)
 	}
 
 	if len(node.FilterList) != len(s.DataSource.FilterList) {
@@ -1939,12 +2137,12 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	s.DataSource.Timestamp = ts
 	s.DataSource.Attributes = attrs
 	s.DataSource.TableDef = tblDef
-	s.DataSource.Rel = rel
 	s.DataSource.RelationName = node.TableDef.Name
 	s.DataSource.SchemaName = node.ObjRef.SchemaName
 	s.DataSource.AccountId = node.ObjRef.GetPubInfo()
 	s.DataSource.RuntimeFilterSpecs = node.RuntimeFilterProbeList
 	s.DataSource.OrderBy = node.OrderBy
+	s.DataSource.RecvMsgList = node.RecvMsgList
 
 	return nil
 }
@@ -1954,10 +2152,9 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
-	filterExpr := colexec.RewriteFilterExprList(plan2.DeepCopyExprList(n.FilterList))
 	var op *filter.Filter
 	for i := range ss {
-		op = constructRestrict(n, filterExpr)
+		op = constructRestrict(n, plan2.DeepCopyExprList(n.FilterList))
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 	}
@@ -2616,6 +2813,9 @@ func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	case plan.Node_CROSSAPPLY:
 		for i := range rs {
 			op := constructApply(node, right, apply.CROSS, c.proc)
+			if op.TableFunction.IsSingle {
+				rs[i].NodeInfo.Mcpu = 1
+			}
 			op.SetIdx(c.anal.curNodeIdx)
 			rs[i].setRootOperator(op)
 		}
@@ -3337,7 +3537,7 @@ func (c *Compile) compilePreInsertSK(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileDelete(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
-	op, err := constructDeletion(n, c.e, c.proc)
+	op, err := constructDeletion(c.proc, n, c.e)
 	if err != nil {
 		return nil, err
 	}
@@ -4066,7 +4266,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 			forceSingle = true
 		}
 	}
-	if len(n.OrderBy) > 0 {
+	//if len(n.OrderBy) > 0 {
+	//	forceSingle = true
+	//}
+
+	if n.NodeType == plan.Node_TABLE_CLONE {
 		forceSingle = true
 	}
 
@@ -4482,11 +4686,26 @@ func (c *Compile) runSql(sql string) error {
 	return c.runSqlWithAccountId(sql, NoAccountId)
 }
 
+func (c *Compile) runSqlWithOptions(
+	sql string,
+	options executor.StatementOption,
+) error {
+	return c.runSqlWithAccountIdAndOptions(sql, NoAccountId, options)
+}
+
 func (c *Compile) runSqlWithAccountId(sql string, accountId int32) error {
+	return c.runSqlWithAccountIdAndOptions(sql, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runSqlWithAccountIdAndOptions(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+) error {
 	if sql == "" {
 		return nil
 	}
-	res, err := c.runSqlWithResult(sql, accountId)
+	res, err := c.runSqlWithResultAndOptions(sql, accountId, options)
 	if err != nil {
 		return err
 	}
@@ -4495,12 +4714,26 @@ func (c *Compile) runSqlWithAccountId(sql string, accountId int32) error {
 }
 
 func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result, error) {
+	return c.runSqlWithResultAndOptions(sql, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runSqlWithResultAndOptions(
+	sql string,
+	accountId int32,
+	options executor.StatementOption,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
 	}
 
 	lower := c.getLower()
+
+	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+			options = options.WithIgnoreForeignKey()
+		}
+	}
 
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
@@ -4510,13 +4743,8 @@ func (c *Compile) runSqlWithResult(sql string, accountId int32) (executor.Result
 		WithTxn(c.proc.GetTxnOperator()).
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
-		WithLowerCaseTableNames(&lower)
-
-	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
-			opts = opts.WithStatementOption(executor.StatementOption{}.WithIgnoreForeignKey())
-		}
-	}
+		WithLowerCaseTableNames(&lower).
+		WithStatementOption(options)
 
 	ctx := c.proc.Ctx
 	if accountId >= 0 {
@@ -4660,4 +4888,40 @@ func (c *Compile) getLower() int64 {
 		lower = lowerVar.(int64)
 	}
 	return lower
+}
+
+func (c *Compile) compileTableClone(
+	pn *plan.Plan,
+) ([]*Scope, error) {
+
+	var (
+		err error
+		s1  *Scope
+
+		nodes    []engine.Node
+		cloneQry = pn.GetDdl().Query
+	)
+
+	nodes, err = c.generateNodes(cloneQry.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	copyOp, err := constructTableClone(c, cloneQry.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	s1 = newScope(TableClone)
+	s1.NodeInfo = nodes[0]
+	s1.TxnOffset = c.TxnOffset
+	s1.DataSource = &Source{
+		node: cloneQry.Nodes[0],
+	}
+	s1.Plan = pn
+
+	s1.Proc = c.proc.NewNoContextChildProc(0)
+	s1.setRootOperator(copyOp)
+
+	return []*Scope{s1}, nil
 }

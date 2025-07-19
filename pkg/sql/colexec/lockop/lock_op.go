@@ -98,6 +98,15 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 				lockOp.ctr.relations[i] = rel
 			}
 		}
+	} else {
+		for i, target := range lockOp.targets {
+			if target.objRef != nil {
+				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
+				if err != nil {
+					return err
+				}
+			}
+		}
 	}
 	lockOp.ctr.parker = types.NewPacker()
 	return nil
@@ -224,6 +233,7 @@ func performLock(
 			bat,
 			target.primaryColumnIndexInBatch,
 			target.primaryColumnType,
+			target.partitionColumnIndexInBatch,
 			DefaultLockOptions(lockOp.ctr.parker).
 				WithLockMode(lock.LockMode_Exclusive).
 				WithFetchLockRowsFunc(lockOp.ctr.fetchers[idx]).
@@ -325,6 +335,7 @@ func LockTable(
 		nil,
 		0,
 		pkType,
+		-1,
 		opts)
 	if err != nil {
 		return err
@@ -392,6 +403,7 @@ func LockRows(
 		bat,
 		idx,
 		pkType,
+		-1,
 		opts)
 	if err != nil {
 		return err
@@ -420,6 +432,7 @@ func doLock(
 	bat *batch.Batch,
 	idx int32,
 	pkType types.Type,
+	partitionIdx int32,
 	opts LockOptions,
 ) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
@@ -603,7 +616,7 @@ func doLock(
 		}
 
 		// if [snapshotTS, newSnapshotTS] has been modified, need retry at new snapshot ts
-		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, snapshotTS, newSnapshotTS)
+		changed, err := fn(proc, rel, analyzer, tableID, eng, bat, idx, partitionIdx, snapshotTS, newSnapshotTS)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -734,6 +747,7 @@ func canRetryLock(table uint64, txn client.TxnOperator, err error) bool {
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
 		moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+		time.Sleep(defaultWaitTimeOnRetryLock)
 		return true
 	}
 	if moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
@@ -846,6 +860,7 @@ func (lockOp *LockOp) AddLockTarget(
 	objRef *plan.ObjectRef,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
+	partitionColIndexInBatch int32,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
 	lockTableAtTheEnd bool) *LockOp {
@@ -855,6 +870,7 @@ func (lockOp *LockOp) AddLockTarget(
 		lock.LockMode_Exclusive,
 		primaryColumnIndexInBatch,
 		primaryColumnType,
+		partitionColIndexInBatch,
 		refreshTimestampIndexInBatch,
 		lockRows,
 		lockTableAtTheEnd)
@@ -867,6 +883,7 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	mode lock.LockMode,
 	primaryColumnIndexInBatch int32,
 	primaryColumnType types.Type,
+	partitionColIndexInBatch int32,
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
 	lockTableAtTheEnd bool) *LockOp {
@@ -879,6 +896,7 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 		mode:                         mode,
 		lockRows:                     lockRows,
 		lockTableAtTheEnd:            lockTableAtTheEnd,
+		partitionColumnIndexInBatch:  partitionColIndexInBatch,
 	})
 	return lockOp
 }
@@ -959,6 +977,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 			nil,
 			primaryColumnIndexInBatch,
 			primaryColumnType,
+			-1,
 			refreshTimestampIndexInBatch,
 			lockRows,
 			lockTableAtTheEnd,
@@ -985,12 +1004,12 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
-	lockOp.ctr.relations = nil
 }
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
 	lockOp.cleanParker()
+	lockOp.ctr.relations = nil
 }
 
 func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -1031,6 +1050,7 @@ func hasNewVersionInRange(
 	eng engine.Engine,
 	bat *batch.Batch,
 	idx int32,
+	partitionIdx int32,
 	from, to timestamp.Timestamp,
 ) (bool, error) {
 	if bat == nil {
@@ -1061,7 +1081,7 @@ func hasNewVersionInRange(
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
-	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx)
+	return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {

@@ -348,8 +348,9 @@ func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) strin
 		}
 	}
 	return fmt.Sprintf(
-		"loaded:%t, oSize:%s, cSzie:%s rows:%d, zm: %s",
+		"loaded:%t, lv: %v, oSize:%s, cSzie:%s, rows:%d, zm: %s",
 		entry.GetLoaded(),
+		entry.GetLevel(),
 		common.HumanReadableBytes(int(entry.OriginSize())),
 		common.HumanReadableBytes(int(entry.Size())),
 		entry.Rows(),
@@ -391,7 +392,8 @@ func NewReplayObjectEntry() *ObjectEntry {
 }
 
 func NewStandaloneObject(table *TableEntry, ts types.TS, isTombstone bool) *ObjectEntry {
-	stats := objectio.NewObjectStatsWithObjectID(objectio.NewObjectid(), true, false, false)
+	nobjid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&nobjid, true, false, false)
 	e := &ObjectEntry{
 		table: table,
 		ObjectNode: ObjectNode{
@@ -686,24 +688,43 @@ func MockObjEntryWithTbl(tbl *TableEntry, size uint64, isTombstone bool) *Object
 	return e
 }
 
-func (entry *ObjectEntry) GetMVCCNodeInRange(start, end types.TS) (nodes []*txnbase.TxnMVCCNode) {
+func MockObjectEntry(
+	tbl *TableEntry,
+	stats *objectio.ObjectStats,
+	isTombstone bool,
+	dataFactory ObjectDataFactory,
+	ts types.TS,
+) *ObjectEntry {
+	e := &ObjectEntry{
+		table:      tbl,
+		ObjectNode: ObjectNode{IsTombstone: isTombstone},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: ts,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{*stats},
+		CreateNode:     txnbase.NewTxnMVCCNodeWithTS(ts),
+		ObjectState:    ObjectState_Create_ApplyCommit,
+	}
+	if dataFactory != nil {
+		e.objData = dataFactory(e)
+	}
+	return e
+}
+
+func (entry *ObjectEntry) ForeachMVCCNodeInRange(start, end types.TS, f func(*txnbase.TxnMVCCNode) error) error {
 	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
 	if needWait {
 		txn.GetTxnState(true)
 	}
-	in, _ := entry.CreateNode.PreparedIn(start, end)
-	if in {
-		nodes = []*txnbase.TxnMVCCNode{&entry.CreateNode}
-	}
-	if !entry.DeleteNode.IsEmpty() {
-		in, _ := entry.DeleteNode.PreparedIn(start, end)
-		if in {
-			if nodes == nil {
-				nodes = []*txnbase.TxnMVCCNode{&entry.DeleteNode}
-			} else {
-				nodes = append(nodes, &entry.DeleteNode)
-			}
+	if in, _ := entry.CreateNode.PreparedIn(start, end); in {
+		if err := f(&entry.CreateNode); err != nil {
+			return err
 		}
 	}
-	return nodes
+	if in, _ := entry.DeleteNode.PreparedIn(start, end); in {
+		if err := f(&entry.DeleteNode); err != nil {
+			return err
+		}
+	}
+	return nil
 }

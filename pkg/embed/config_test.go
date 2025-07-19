@@ -95,6 +95,10 @@ func TestFileServiceFactory(t *testing.T) {
 		Name:    defines.ETLFileServiceName,
 		Backend: "DISK-ETL",
 	})
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    defines.TmpFileServiceName,
+		Backend: "DISK-TMP",
+	})
 
 	fs, err := c.createFileService(ctx, metadata.ServiceType_CN, "")
 	assert.NoError(t, err)

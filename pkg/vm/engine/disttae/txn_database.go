@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -95,8 +94,8 @@ func (db *txnDatabase) relation(ctx context.Context, name string, proc any) (eng
 		)
 	})
 	txn := db.getTxn()
-	if txn.op.Status() == txn2.TxnStatus_Aborted {
-		return nil, moerr.NewTxnClosedNoCtx(txn.op.Txn().ID)
+	if _, err := txnIsValid(txn.op); err != nil {
+		return nil, err
 	}
 
 	p := txn.proc
@@ -167,7 +166,8 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, err
 	}
 	if rel == nil {
-		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", name)
+		err := moerr.NewNoSuchTable(ctx, db.databaseName, name)
+		return nil, err
 	}
 	return rel, nil
 }
@@ -286,7 +286,8 @@ func (db *txnDatabase) deleteTable(ctx context.Context, name string, forAlter bo
 			})),
 			zap.String("txn", db.op.Txn().DebugString()),
 			zap.Uint64("did", db.databaseId),
-			zap.Uint64("tid", rel.GetTableID(ctx)))
+			zap.Uint64("tid", rel.GetTableID(ctx)),
+			zap.String("workspace", db.getTxn().PPString()))
 		panic(fmt.Sprintf("delete table %v-%v failed %v, %v", rel.GetTableID(ctx), rel.GetTableName(), len(rowids), len(colPKs)))
 	}
 
@@ -363,7 +364,7 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	}
 
 	txn.tableOps.addCreatedInTxn(newId, txn.statementID)
-	if err := db.createWithID(ctx, name, newId, defs, false); err != nil {
+	if err := db.createWithID(ctx, name, newId, defs, false, nil); err != nil {
 		return 0, err
 	}
 
@@ -375,17 +376,29 @@ func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.Ta
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
 	}
 	txn := db.getTxn()
-	tableId, err := txn.allocateID(ctx)
-	if err != nil {
-		return err
+
+	var tableId uint64
+	var err error
+	value := ctx.Value(defines.TableIDKey{})
+	if value != nil {
+		tableId = value.(uint64)
+	} else {
+		tableId, err = txn.allocateID(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
-	return db.createWithID(ctx, name, tableId, defs, false)
+	return db.createWithID(ctx, name, tableId, defs, false, nil)
 }
 
 func (db *txnDatabase) createWithID(
 	ctx context.Context,
-	name string, tableId uint64, defs []engine.TableDef, useAlterNote bool,
+	name string,
+	tableId uint64,
+	defs []engine.TableDef,
+	useAlterNote bool,
+	extra *api.SchemaExtra,
 ) error {
 	if db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
@@ -411,11 +424,20 @@ func (db *txnDatabase) createWithID(
 		tbl.tableName = name
 		tbl.tableId = tableId
 		tbl.accountId = accountId
-		tbl.extraInfo = &api.SchemaExtra{}
+		tbl.extraInfo = extra
+
+		if tbl.extraInfo == nil {
+			tbl.extraInfo = &api.SchemaExtra{}
+		}
+
 		for _, def := range defs {
 			switch defVal := def.(type) {
 			case *engine.PropertiesDef:
 				for _, property := range defVal.Properties {
+					if property.ValueFactory != nil {
+						property.Value = property.ValueFactory()
+					}
+
 					switch strings.ToLower(property.Key) {
 					case catalog.SystemRelAttr_Comment:
 						tbl.comment = property.Value
@@ -424,7 +446,9 @@ func (db *txnDatabase) createWithID(
 					case catalog.SystemRelAttr_CreateSQL:
 						tbl.createSql = property.Value
 					case catalog.PropSchemaExtra:
-						tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
+						if extra == nil {
+							tbl.extraInfo = api.MustUnmarshalTblExtra([]byte(property.Value))
+						}
 					default:
 					}
 				}
@@ -440,6 +464,8 @@ func (db *txnDatabase) createWithID(
 				if err != nil {
 					return err
 				}
+			case *engine.VersionDef:
+				tbl.version = defVal.Version
 			}
 		}
 		tbl.extraInfo.NextColSeqnum = uint32(len(cols) - 1 /*rowid doesn't occupy seqnum*/)

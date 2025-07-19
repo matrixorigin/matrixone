@@ -138,3 +138,6 @@ select name, type, column_name from mo_catalog.mo_indexes mi where name="idx7";
 name    type    column_name
 idx7    MULTIPLE    name
 idx7    MULTIPLE    __mo_alias_id
+drop table if exists parmas;
+CREATE TABLE params (`key` VARCHAR(250) NOT NULL,run_uuid VARCHAR(32) NOT NULL,CONSTRAINT param_pk PRIMARY KEY (`key`, run_uuid));
+CREATE INDEX index_params_run_uuid ON params (run_uuid);

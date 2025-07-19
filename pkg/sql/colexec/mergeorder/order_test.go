@@ -44,36 +44,32 @@ type orderTestCase struct {
 	proc  *process.Process
 }
 
-var (
-	tcs []orderTestCase
-)
-
-func init() {
-	tcs = []orderTestCase{
-		newTestCase([]types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
-		newTestCase([]types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
-		newTestCase([]types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(1, types.T_int64), Flag: 0}}),
-		newTestCase([]types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
-		newTestCase([]types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}, {Expr: newExpression(1, types.T_int64), Flag: 0}}),
+func makeTestCases(t *testing.T) []orderTestCase {
+	return []orderTestCase{
+		newTestCase(t, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(1, types.T_int64), Flag: 0}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
+		newTestCase(t, []types.Type{types.T_int8.ToType(), types.T_int64.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}, {Expr: newExpression(1, types.T_int64), Flag: 0}}),
 	}
 }
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestOrder(t *testing.T) {
-	for tci, tc := range tcs {
+	for tci, tc := range makeTestCases(t) {
 		bats := []*batch.Batch{newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs), batch.EmptyBatch, newIntBatch(tc.types, tc.proc, Rows, tc.arg.OrderBySpecs)}
 		resetChildren(tc.arg, bats)
 		err := tc.arg.Prepare(tc.proc)
@@ -136,8 +132,8 @@ func TestOrder(t *testing.T) {
 func BenchmarkOrder(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []orderTestCase{
-			newTestCase([]types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
-			newTestCase([]types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
+			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 0}}),
+			newTestCase(b, []types.Type{types.T_int8.ToType()}, []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8), Flag: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -155,8 +151,8 @@ func BenchmarkOrder(b *testing.B) {
 	}
 }
 
-func newTestCase(ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+func newTestCase(t testing.TB, ts []types.Type, fs []*plan.OrderBySpec) orderTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	return orderTestCase{
 		types: ts,
 		proc:  proc,

@@ -93,6 +93,7 @@ type faultMap struct {
 	faultPoints map[string]*faultEntry
 	chIn        chan *faultEntry
 	chOut       chan *faultEntry
+	closeCh     chan struct{}
 	domain      Domain
 }
 
@@ -103,6 +104,7 @@ func (fm *faultMap) run() {
 		e := <-fm.chIn
 		switch e.cmd {
 		case STOP:
+			close(fm.closeCh)
 			return
 		case ADD:
 			if v, ok := fm.faultPoints[e.name]; ok && (v.constant || e.constant) {
@@ -198,6 +200,7 @@ func startFaultMap(domain Domain) bool {
 	fm.faultPoints = make(map[string]*faultEntry)
 	fm.chIn = make(chan *faultEntry)
 	fm.chOut = make(chan *faultEntry)
+	fm.closeCh = make(chan struct{})
 	fm.domain = domain
 	go fm.run()
 	if !enabled[domain].CompareAndSwap(nil, fm) {
@@ -281,7 +284,12 @@ func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, 
 	var msg faultEntry
 	msg.cmd = TRIGGER
 	msg.name = name
-	fm.chIn <- &msg
+
+	select {
+	case fm.chIn <- &msg:
+	case <-fm.closeCh:
+		return
+	}
 	out := <-fm.chOut
 
 	if out == nil {

@@ -17,7 +17,6 @@
 #ifndef _BITMAP_H_
 #define _BITMAP_H_
 
-#include "mo.h"
 #include <string.h>
 
 /*
@@ -46,6 +45,9 @@ static inline uint64_t bitmap_pos2mask(uint64_t pos) {
 }
 
 static inline bool bitmap_test(uint64_t *p, uint64_t pos) {
+    if (p == NULL) {
+        return false;
+    }
     return (p[bitmap_pos2idx(pos)] & bitmap_pos2mask(pos)) != 0;
 }
 

@@ -56,8 +56,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			})
 		}
 
+		validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
+		if hasIrregularIndex {
+			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update vector/full-text index")
+		}
+		tableDef.Indexes = validIndexes
+
 		var pkAndUkCols = make(map[string]bool)
-		var vecAndTextIndexCols = make(map[string]bool)
 
 		if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
 			for _, colName := range tableDef.Pkey.Names {
@@ -66,23 +71,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 
 		for _, idxDef := range tableDef.Indexes {
-			if !idxDef.TableExist {
+			if !idxDef.Unique {
 				continue
 			}
 
-			if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-				if !idxDef.Unique {
-					continue
-				}
-
-				if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
-					for _, colName := range idxDef.Parts {
-						pkAndUkCols[catalog.ResolveAlias(colName)] = true
-					}
-				}
-			} else {
+			if tableDef.Name == catalog.MO_PUBS || tableDef.Name == catalog.MO_SUBS {
 				for _, colName := range idxDef.Parts {
-					vecAndTextIndexCols[catalog.ResolveAlias(colName)] = true
+					pkAndUkCols[catalog.ResolveAlias(colName)] = true
 				}
 			}
 		}
@@ -90,10 +85,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		for colName, updateExpr := range dmlCtx.updateCol2Expr[i] {
 			if pkAndUkCols[colName] {
 				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update pk/uk on pub/sub table")
-			}
-
-			if vecAndTextIndexCols[colName] {
-				return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update vector index or full-text index")
 			}
 
 			if !dmlCtx.updatePartCol[i] {
@@ -209,22 +200,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				}
 			} else {
 				if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-					//pos := colName2Idx[alias+"."+col.Name]
-					//selectNode.ProjectList[pos] = col.OnUpdate.Expr
-					//
-					//if col.Typ.Id == int32(types.T_enum) {
-					//	selectNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
-					//	if err != nil {
-					//		return 0, err
-					//	}
-					//} else {
-					//	selectNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), selectNode.ProjectList[pos], col.Typ)
-					//	if err != nil {
-					//		return 0, err
-					//	}
-					//}
-					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "update column with on update")
+					newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
+					err = replaceFuncId(builder.GetContext(), newDefExpr)
+
+					oldPos := oldColName2Idx[alias+"."+col.Name]
+					newColName2Idx[alias+"."+col.Name] = oldPos
+					oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
+					selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
+					selectNode.ProjectList[oldPos] = newDefExpr
 				}
+
 				if col.Typ.Id == int32(types.T_enum) {
 					selectNode.ProjectList[originPos], err = funcCastForEnumType(builder.GetContext(), selectNode.ProjectList[originPos], col.Typ)
 					if err != nil {
@@ -274,10 +259,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		idxNeedUpdate[i] = make([]bool, len(tableDef.Indexes))
 
 		for j, idxDef := range tableDef.Indexes {
-			if !idxDef.TableExist {
-				continue
-			}
-
 			for _, colName := range idxDef.Parts {
 				if _, ok := newColName2Idx[alias+"."+catalog.ResolveAlias(colName)]; ok {
 					idxNeedUpdate[i][j] = true
@@ -417,11 +398,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			idxScanNodes[i] = make([]*plan.Node, len(tableDef.Indexes))
 
 			for j, idxDef := range tableDef.Indexes {
-				if !idxDef.TableExist || !idxDef.Unique || !idxNeedUpdate[i][j] {
+				if !idxDef.Unique || !idxNeedUpdate[i][j] {
 					continue
 				}
 
-				idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
+				idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
+				if err != nil {
+					return 0, err
+				}
 				idxTag := builder.genNewTag()
 				builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -557,15 +541,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		alias := dmlCtx.aliases[i]
 
 		for j, idxDef := range tableDef.Indexes {
-			if !idxDef.TableExist {
-				continue
-			}
-
 			if !pkNeedUpdate[i] && !idxNeedUpdate[i][j] {
 				continue
 			}
 
-			idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[i], idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
 			idxTag := builder.genNewTag()
 			builder.addNameByColRef(idxTag, idxTableDef)
 

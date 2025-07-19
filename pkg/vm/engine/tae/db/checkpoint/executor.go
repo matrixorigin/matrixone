@@ -26,9 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"go.uber.org/zap"
 )
 
@@ -113,8 +112,8 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		return
 	}
 
-	var data *logtail.CheckpointData
-	factory := logtail.GlobalCheckpointDataFactory(runner.rt.SID(), entry.end, interval)
+	var data *logtail.CheckpointData_V2
+	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval, runner.rt.Fs)
 
 	if data, err = factory(runner.catalog); err != nil {
 		runner.store.RemoveGCKPIntent()
@@ -123,20 +122,19 @@ func (job *checkpointJob) doGlobalCheckpoint(
 	}
 	defer data.Close()
 
-	fields = data.ExportStats("")
-
-	cnLocation, tnLocation, files, err := data.WriteTo(
-		job.executor.ctx, job.executor.cfg.BlockMaxRowsHint, job.executor.cfg.SizeHint, runner.rt.Fs.Service,
+	location, files, err := data.Sync(
+		job.executor.ctx, runner.rt.Fs,
 	)
+	fields = data.ExportStats("")
 	if err != nil {
 		runner.store.RemoveGCKPIntent()
 		errPhase = "flush"
 		return
 	}
 
-	entry.SetLocation(cnLocation, tnLocation)
+	entry.SetLocation(location, location)
 
-	files = append(files, cnLocation.Name().String())
+	files = append(files, location.Name().String())
 	var name string
 	if name, err = runner.saveCheckpoint(entry.start, entry.end); err != nil {
 		runner.store.RemoveGCKPIntent()
@@ -149,11 +147,11 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	files = append(files, name)
 
-	fileEntry, err := store.BuildFilesEntry(files)
+	fileEntry, err := wal.BuildFilesEntry(files)
 	if err != nil {
 		return
 	}
-	_, err = runner.wal.AppendEntry(store.GroupFiles, fileEntry)
+	_, err = runner.wal.AppendEntry(wal.GroupFiles, fileEntry)
 	if err != nil {
 		return
 	}
@@ -232,6 +230,11 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 	}
 
 	lsn = runner.source.GetMaxLSN(entry.start, entry.end)
+	if lsn == 0 {
+		if maxICKP := runner.store.MaxIncrementalCheckpoint(); maxICKP != nil {
+			lsn = maxICKP.LSN()
+		}
+	}
 	if lsn > job.executor.cfg.IncrementalReservedWALCount {
 		lsnToTruncate = lsn - job.executor.cfg.IncrementalReservedWALCount
 	}

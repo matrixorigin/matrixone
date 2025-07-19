@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,45 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
-
-func TestGetStats(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gs := NewGlobalStats(ctx, nil, nil,
-		WithUpdateWorkerFactor(4),
-		WithStatsUpdater(func(_ context.Context, key statsinfo.StatsInfoKey, info *statsinfo.StatsInfo) bool {
-			info.BlockNumber = 20
-			return true
-		}),
-	)
-
-	tids := []uint64{2000, 2001, 2002}
-	go func() {
-		time.Sleep(time.Millisecond * 20)
-		for _, tid := range tids {
-			gs.notifyLogtailUpdate(tid, true)
-		}
-	}()
-	var wg sync.WaitGroup
-	wg.Add(100)
-	for i := 0; i < 100; i++ {
-		go func(j int) {
-			defer wg.Done()
-			rd := rand.New(rand.NewSource(time.Now().UnixNano()))
-			time.Sleep(time.Millisecond * time.Duration(10+rd.Intn(20)))
-			k := statsinfo.StatsInfoKey{
-				DatabaseID: 1000,
-				TableID:    tids[j%3],
-			}
-			info := gs.Get(ctx, k, true)
-			assert.NotNil(t, info)
-			assert.Equal(t, int64(20), info.BlockNumber)
-		}(i)
-	}
-	wg.Wait()
-}
 
 func runTest(
 	t *testing.T,
@@ -163,7 +125,8 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    1001,
 			}
 			stats := plan2.NewStatsInfo()
-			updated := e.globalStats.doUpdate(ctx, k, stats)
+			ps := logtailreplay.NewPartitionState("", true, 1001)
+			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
 	})
@@ -182,7 +145,8 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			updated := e.globalStats.doUpdate(ctx, k, stats)
+			ps := logtailreplay.NewPartitionState("", true, tid)
+			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.False(t, updated)
 		})
 	})
@@ -201,41 +165,13 @@ func TestUpdateStats(t *testing.T) {
 				TableID:    tid,
 			}
 			stats := plan2.NewStatsInfo()
-			updated := e.globalStats.doUpdate(ctx, k, stats)
+			ps := logtailreplay.NewPartitionState("", true, tid)
+			updated := e.globalStats.doUpdate(ctx, ps, k, stats)
 			assert.True(t, updated)
 		}, WithApproxObjectNumUpdater(func() int64 {
 			return 10
 		}))
 	})
-}
-
-func TestWaitLogtailUpdate(t *testing.T) {
-	origInitCheckInterval := initCheckInterval
-	origMaxCheckInterval := maxCheckInterval
-	origCheckTimeout := checkTimeout
-	defer func() {
-		initCheckInterval = origInitCheckInterval
-		maxCheckInterval = origMaxCheckInterval
-		checkTimeout = origCheckTimeout
-		leaktest.AfterTest(t)()
-	}()
-	initCheckInterval = time.Millisecond * 2
-	maxCheckInterval = time.Millisecond * 10
-	checkTimeout = time.Millisecond * 200
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gs := NewGlobalStats(ctx, nil, nil)
-	assert.NotNil(t, gs)
-	tid := uint64(2)
-	gs.waitLogtailUpdated(tid)
-
-	tid = 200
-	go func() {
-		time.Sleep(time.Millisecond * 100)
-		gs.notifyLogtailUpdate(tid, true)
-	}()
-	gs.waitLogtailUpdated(tid)
 }
 
 func TestGlobalStats_ShouldUpdate(t *testing.T) {
@@ -293,48 +229,6 @@ func TestGlobalStats_ShouldUpdate(t *testing.T) {
 		wg.Wait()
 		assert.Equal(t, 1, int(count.Load()))
 	})
-}
-
-func TestGlobalStats_ClearTables(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gs := NewGlobalStats(ctx, nil, nil)
-	for i := 0; i < 10; i++ {
-		gs.notifyLogtailUpdate(uint64(2000+i), true)
-	}
-	assert.Equal(t, 10, len(gs.logtailUpdate.mu.updated))
-	gs.clearTables()
-	assert.Equal(t, 0, len(gs.logtailUpdate.mu.updated))
-}
-
-func TestWaitKeeper(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-
-	var tid uint64 = 1
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	gs := NewGlobalStats(ctx, nil, nil)
-	assert.False(t, gs.safeToUnsubscribe(tid))
-
-	w := gs.waitKeeper
-	w.add(tid)
-	_, ok := w.records[tid]
-	assert.True(t, ok)
-	assert.True(t, gs.safeToUnsubscribe(tid))
-
-	gs.RemoveTid(tid)
-	_, ok = w.records[tid]
-	assert.False(t, ok)
-	assert.False(t, gs.safeToUnsubscribe(tid))
-
-	w.add(tid)
-	_, ok = w.records[tid]
-	assert.True(t, ok)
-	gs.clearTables()
-	_, ok = w.records[tid]
-	assert.False(t, ok)
-	assert.False(t, gs.safeToUnsubscribe(tid))
 }
 
 func TestQueueWatcher(t *testing.T) {

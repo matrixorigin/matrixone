@@ -470,5 +470,20 @@ select count(*) from t7 where i=2;
 count(*)
 0
 drop table if exists t7;
+use db1;
+drop table if exists repro_delete_error;
+create table repro_delete_error(a int primary key);
+begin;
+insert into repro_delete_error values (1),(2),(3);
+delete from repro_delete_error where a=1;
+select * from repro_delete_error;
+a
+2
+3
+commit;
+select * from repro_delete_error;
+a
+2
+3
 drop database if exists db1;
 drop database if exists db2;

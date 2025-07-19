@@ -106,7 +106,7 @@ func Test_InsertRows(t *testing.T) {
 	err = txn.Commit(ctx)
 	require.Nil(t, err)
 
-	err = disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), false)
+	err = disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName, false)
 	require.Nil(t, err)
 
 	// check partition state, before flush
@@ -254,8 +254,7 @@ func TestLogtailBasic(t *testing.T) {
 	// at first, we can see nothing
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
 	reader := logMgr.GetReader(minTs, maxTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(1000, 1000).Objs))
-
+	require.False(t, reader.IsDirtyOnTable(1000, 1000))
 	schema := catalog2.MockSchemaAll(2, -1)
 	schema.Name = "test"
 	schema.Extra.BlockMaxRows = 10
@@ -302,7 +301,7 @@ func TestLogtailBasic(t *testing.T) {
 				id := obj.GetMeta().(*catalog2.ObjectEntry).ID()
 				for j := 0; j < obj.BlkCnt(); j++ {
 					blkID := objectio.NewBlockidWithObjectID(id, uint16(j))
-					deleteRowIDs = append(deleteRowIDs, *objectio.NewRowid(blkID, 5))
+					deleteRowIDs = append(deleteRowIDs, objectio.NewRowid(&blkID, 5))
 				}
 			}
 			blkIt.Close()
@@ -330,7 +329,7 @@ func TestLogtailBasic(t *testing.T) {
 		go func() {
 			for i := 0; i < 10; i++ {
 				reader := logMgr.GetReader(minTs, maxTs)
-				_ = reader.GetDirtyByTable(dbID, tableID)
+				_ = reader.IsDirtyOnTable(dbID, tableID)
 			}
 			wg.Done()
 		}()
@@ -341,12 +340,11 @@ func TestLogtailBasic(t *testing.T) {
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
 	reader = logMgr.GetReader(minTs, types.TimestampToTS(catalogWriteTs))
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Objs))
+	require.False(t, reader.IsDirtyOnTable(dbID, tableID))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	require.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Objs))
+	require.False(t, reader.IsDirtyOnTable(dbID, tableID-1))
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
-	dirties := reader.GetDirtyByTable(dbID, tableID)
-	require.Equal(t, 10, len(dirties.Objs))
+	require.True(t, reader.IsDirtyOnTable(dbID, tableID))
 
 	fixedColCnt := 2 // __rowid + commit_time, the columns for a delBatch
 	// check Bat rows count consistency
@@ -634,17 +632,21 @@ func TestInProgressTransfer(t *testing.T) {
 	var did, tid uint64
 	var theRow *batch.Batch
 	{
+		var (
+			dbName = "db"
+			tName  = "test"
+		)
 		schema := catalog2.MockSchemaAll(10, 3)
-		schema.Name = "test"
+		schema.Name = tName
 		// create and append data
 		txnop := p.StartCNTxn()
-		_, rel := p.CreateDBAndTable(txnop, "db", schema)
+		_, rel := p.CreateDBAndTable(txnop, dbName, schema)
 		did, tid = rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
 		bat := catalog2.MockBatch(schema, 10)
 		theRow = containers.ToCNBatch(bat.CloneWindow(7, 1, p.Mp))
 		require.NoError(t, rel.Write(p.Ctx, containers.ToCNBatch(bat)))
 		require.NoError(t, txnop.Commit(p.Ctx))
-		require.Nil(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
+		require.Nil(t, p.D.SubscribeTable(p.Ctx, did, tid, dbName, tName, false))
 	}
 
 	toTransferTxn1 := p.StartCNTxn()
@@ -655,7 +657,7 @@ func TestInProgressTransfer(t *testing.T) {
 		userTbl, _ := userDB.GetRelationByID(tid)
 		id, row, err := userTbl.GetByFilter(p.Ctx, handle.NewEQFilter(int64(7)))
 		require.NoError(t, err)
-		rowid := *objectio.NewRowid(&id.BlockID, row)
+		rowid := objectio.NewRowid(&id.BlockID, row)
 
 		vec1 := vector.NewVec(types.T_Rowid.ToType())
 		require.NoError(t, vector.AppendFixed(vec1, rowid, false, p.Mp))
@@ -908,7 +910,7 @@ func TestObjectStats1(t *testing.T) {
 
 	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, "db", schema.Name, false)
 	require.Nil(t, err)
 
 	ts := taeHandler.GetDB().TxnMgr.Now()
@@ -997,7 +999,7 @@ func TestObjectStats2(t *testing.T) {
 
 	testutil2.CompactBlocks(t, 0, taeHandler.GetDB(), "db", schema, false)
 
-	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, false)
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, "db", schema.Name, false)
 	require.Nil(t, err)
 
 	ts := taeHandler.GetDB().TxnMgr.Now()
@@ -1069,18 +1071,21 @@ func TestApplyDeletesForWorkspaceAndPart(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer rmFault()
-
+	var (
+		dbName = "db"
+		tName  = "mo_account"
+	)
 	schema := catalog2.MockSchemaAll(5, 1)
-	schema.Name = "mo_account"
+	schema.Name = tName
 	txnop := p.StartCNTxn()
 	bats := catalog2.MockBatch(schema, 4).Split(2)
 	bat, bat1 := bats[0], bats[1]
-	_, rel := p.CreateDBAndTable(txnop, "db", schema)
+	_, rel := p.CreateDBAndTable(txnop, dbName, schema)
 	rel.Write(p.Ctx, containers.ToCNBatch(bat)) // pk 0 and 1
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	did, tid := rel.GetDBID(p.Ctx), rel.GetTableID(p.Ctx)
-	require.NoError(t, p.D.SubscribeTable(p.Ctx, did, tid, false))
+	require.NoError(t, p.D.SubscribeTable(p.Ctx, did, tid, dbName, tName, false))
 
 	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
 	if !ok {
@@ -1345,7 +1350,7 @@ func TestWorkspaceQuota2(t *testing.T) {
 		require.NoError(t, txn.Commit(ctx))
 	}
 
-	require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), false))
+	require.NoError(t, disttaeEngine.SubscribeTable(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx), databaseName, tableName, false))
 	state, err := disttaeEngine.GetPartitionStateStats(ctx, relation.GetDBID(ctx), relation.GetTableID(ctx))
 	require.NoError(t, err)
 	t.Log(state.String())
@@ -1521,4 +1526,89 @@ func TestCacheNotServing(t *testing.T) {
 	t.Log(err)
 
 	require.NoError(t, staleTxn.Commit(p.Ctx))
+}
+
+func TestInvalidTxnOp(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	p := testutil.InitEnginePack(testutil.TestOptions{TaeEngineOptions: opts}, t)
+	defer p.Close()
+	txnop := p.StartCNTxn()
+
+	schema := catalog2.MockSchemaAll(2, 0)
+	schema.Name = "test"
+	p.CreateDBAndTable(txnop, "db", schema)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	txnop = p.StartCNTxn()
+
+	userDb, err := p.D.Engine.Database(p.Ctx, "db", txnop)
+	require.NoError(t, err)
+
+	require.NoError(t, txnop.Commit(p.Ctx))
+
+	_, err = userDb.Relation(p.Ctx, "test", nil)
+	require.Error(t, err)
+}
+
+func Test_SubUnsubTable(t *testing.T) {
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Now())
+	require.Nil(t, err)
+
+	err = disttaeEngine.Engine.Create(ctx, databaseName, txn)
+	require.Nil(t, err)
+
+	db, err := disttaeEngine.Engine.Database(ctx, databaseName, txn)
+	require.Nil(t, err)
+
+	schema := catalog2.MockSchemaAll(10, 0)
+	schema.Name = tableName
+
+	defs, err := testutil.EngineTableDefBySchema(schema)
+	require.Nil(t, err)
+
+	err = db.Create(ctx, tableName, defs)
+	require.Nil(t, err)
+
+	rel, err := db.Relation(ctx, tableName, nil)
+	require.Nil(t, err)
+	require.Contains(t, rel.GetTableName(), tableName)
+
+	bat := catalog2.MockBatch(schema, 10)
+	err = rel.Write(ctx, containers.ToCNBatch(bat))
+	require.Nil(t, err)
+
+	err = txn.Commit(ctx)
+	require.Nil(t, err)
+
+	//subscribe a valid table
+	require.Nil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), rel.GetTableID(ctx), databaseName, tableName, false))
+
+	//subscribe a invalid table
+	var (
+		inValidTableID   = rel.GetTableID(ctx) + 1
+		inValidTableName = "invalid_table"
+	)
+	require.NotNil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName, false))
 }

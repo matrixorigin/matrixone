@@ -46,7 +46,10 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		dbName = ctx.DefaultDatabase()
 	}
 
-	_, t := ctx.Resolve(dbName, tblName, nil)
+	_, t, err := ctx.Resolve(dbName, tblName, nil)
+	if err != nil {
+		return nil, err
+	}
 	if t == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}

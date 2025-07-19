@@ -72,6 +72,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 		func() driver.ReplayMode {
 			return driver.ReplayMode_ReplayForWrite
 		},
+		nil,
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, maxlsn, s.GetDSN())

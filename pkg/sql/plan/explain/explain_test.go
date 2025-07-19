@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -60,6 +61,7 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY limit 10",
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20",
 		"explain verbose select case when p_type like 'PROMO%' then l_extendedprice * (1 - l_discount) when p_type like 'PRX%' then l_extendedprice * (2 - l_discount) else 0 end from lineitem,part where l_shipdate < date '1996-04-01' + interval '1' month",
+		"explain verbose select column_2 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3))))",
 	}
 	mockOptimizer := plan.NewMockOptimizer(false)
 	runTestShouldPass(mockOptimizer, t, sqls)
@@ -311,6 +313,55 @@ func TestMultiTableDeleteSQL(t *testing.T) {
 	}
 	mockOptimizer := plan.NewMockOptimizer(true)
 	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+func TestGetUpdateCtxInfo(t *testing.T) {
+	// Create a test node with update context containing partition columns
+	node := &plan2.Node{
+		UpdateCtxList: []*plan2.UpdateCtx{
+			{
+				TableDef: &plan.TableDef{
+					Name: "test_table",
+				},
+				PartitionCols: []plan.ColRef{
+					{
+						RelPos: 0,
+						ColPos: 0,
+						Name:   "partition_col1",
+					},
+					{
+						RelPos: 0,
+						ColPos: 1,
+						Name:   "partition_col2",
+					},
+				},
+			},
+		},
+	}
+
+	// Create node description implementation
+	ndesc := NewNodeDescriptionImpl(node)
+
+	// Create explain options
+	options := &ExplainOptions{
+		Format: EXPLAIN_FORMAT_TEXT,
+	}
+
+	// Get update context info
+	lines, err := ndesc.GetUpdateCtxInfo(context.Background(), options)
+	if err != nil {
+		t.Fatalf("GetUpdateCtxInfo failed: %v", err)
+	}
+
+	// Verify the output
+	if len(lines) != 1 {
+		t.Fatalf("Expected 1 line of output, got %d", len(lines))
+	}
+
+	expectedOutput := "Table: test_table Partition Columns: partition_col1, partition_col2"
+	if lines[0] != expectedOutput {
+		t.Fatalf("Expected output: %s\nGot: %s", expectedOutput, lines[0])
+	}
 }
 
 func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {

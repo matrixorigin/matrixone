@@ -445,40 +445,6 @@ var supportedAggInNewFramework = []FuncNew{
 		},
 	},
 
-	{
-		functionId: CLUSTER_CENTERS,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 1 {
-				return fixedUnaryAggTypeCheck(inputs, aggexec.ClusterCentersSupportTypes)
-			}
-			if len(inputs) == 2 && inputs[1].IsVarlen() {
-				result := fixedUnaryAggTypeCheck(inputs[:1], aggexec.ClusterCentersSupportTypes)
-				if result.status == succeedMatched {
-					return result
-				}
-				if result.status == succeedWithCast {
-					result.finalType = append(result.finalType, types.T_varchar.ToType())
-					return result
-				}
-			}
-			return newCheckResultWithFailure(failedAggParametersWrong)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    aggexec.ClusterCentersReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "cluster_centers",
-					aggRegister: agg.RegisterClusterCenters,
-				},
-			},
-		},
-	},
-
 	// function `BITMAP_CONSTRUCT_AGG`
 	{
 		functionId: BITMAP_CONSTRUCT_AGG,

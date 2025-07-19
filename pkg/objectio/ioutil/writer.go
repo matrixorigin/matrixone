@@ -58,10 +58,11 @@ func ConstructWriterWithSegmentID(
 	sortkeyIsPK bool,
 	isTombstone bool,
 	fs fileservice.FileService,
+	arena *objectio.WriteArena,
 ) *BlockWriter {
 	name := objectio.BuildObjectName(segmentID, num)
 	return constructWriterWithName(name,
-		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, arena)
 }
 
 func ConstructWriter(
@@ -72,9 +73,10 @@ func ConstructWriter(
 	isTombstone bool,
 	fs fileservice.FileService,
 ) *BlockWriter {
-	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	noid := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&noid)
 	return constructWriterWithName(name,
-		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs)
+		ver, seqnums, sortkeyPos, sortkeyIsPK, isTombstone, fs, nil)
 }
 
 func constructWriterWithName(
@@ -85,6 +87,7 @@ func constructWriterWithName(
 	sortkeyIsPK bool,
 	isTombstone bool,
 	fs fileservice.FileService,
+	arena *objectio.WriteArena,
 ) *BlockWriter {
 	writer, err := NewBlockWriterNew(
 		fs,
@@ -151,7 +154,18 @@ func NewBlockWriterNew(
 	seqnums []uint16,
 	isTombstone bool,
 ) (*BlockWriter, error) {
-	writer, err := objectio.NewObjectWriter(name, fs, schemaVer, seqnums)
+	return NewBlockWriterWithArena(fs, name, schemaVer, seqnums, isTombstone, nil)
+}
+
+func NewBlockWriterWithArena(
+	fs fileservice.FileService,
+	name objectio.ObjectName,
+	schemaVer uint32,
+	seqnums []uint16,
+	isTombstone bool,
+	arena *objectio.WriteArena,
+) (*BlockWriter, error) {
+	writer, err := objectio.NewObjectWriter(name, fs, schemaVer, seqnums, arena)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +208,10 @@ func (w *BlockWriter) SetAppendable() {
 
 func (w *BlockWriter) GetObjectStats(opts ...objectio.ObjectStatsOptions) objectio.ObjectStats {
 	return w.writer.GetObjectStats(opts...)
+}
+
+func (w *BlockWriter) GetWrittenOriginalSize() uint32 {
+	return w.writer.GetOrignalSize()
 }
 
 // WriteBatch write a batch whose schema is decribed by seqnum in NewBlockWriterNew, write batch to memroy cache, not S3

@@ -549,6 +549,7 @@ func TestMergeBlocks2(t *testing.T) {
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
+
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.Extra.BlockMaxRows = 5
 	schema.Extra.ObjectMaxBlocks = 2
@@ -688,7 +689,7 @@ func TestCompaction2(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		t.Log("run ScanInRangePruned")
 		dirty := db.BGCheckpointRunner.GetDirtyCollector().ScanInRangePruned(types.TS{}, types.MaxTs())
-		return dirty.GetTree().Compact()
+		return dirty.GetTree().IsEmpty()
 	})
 	{
 		txn, _ := db.TxnMgr.StartTxn(nil)

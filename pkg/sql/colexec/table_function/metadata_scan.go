@@ -15,11 +15,14 @@
 package table_function
 
 import (
-	"strings"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,15 +54,75 @@ func metadataScanPrepare(proc *process.Process, tableFunction *TableFunction) (t
 	return &metadataScanState{}, err
 }
 
+func getIndexTableNameByIndexName(proc *process.Process, dbname, tablename, indexname string) (string, error) {
+	var indexTableName string
+
+	e := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	db, err := e.Database(proc.Ctx, dbname, proc.GetTxnOperator())
+	if err != nil {
+		return "", moerr.NewInternalError(proc.Ctx, "get database failed in metadata scan")
+	}
+
+	rel, err := db.Relation(proc.Ctx, tablename, nil)
+	if err != nil {
+		return "", err
+	}
+	tableid := rel.GetTableID(proc.Ctx)
+	logutil.Info("relID", zap.Uint64("value", tableid))
+
+	sql := fmt.Sprintf("SELECT distinct(index_table_name) FROM mo_catalog.mo_indexes WHERE table_id = '%d' AND name = '%s'", tableid, indexname)
+	result, err := sqlexec.RunSql(proc, sql)
+	if err != nil {
+		return "", err
+	}
+	for _, batch := range result.Batches {
+		logutil.Info("Batch debug",
+			zap.Int("vec_count", len(batch.Vecs)),
+			zap.Strings("vector_types", func() []string {
+				types := make([]string, len(batch.Vecs))
+				for i, v := range batch.Vecs {
+					types[i] = v.GetType().String()
+				}
+				return types
+			}()),
+		)
+		if len(batch.Vecs) == 0 {
+			continue
+		}
+		vec := batch.Vecs[0]
+		for row := 0; row < vec.Length(); row++ {
+			if !vec.IsNull(uint64(row)) {
+				indexTableName = vec.GetStringAt(row)
+				logutil.Info("Index table name", zap.String("value", indexTableName))
+			}
+		}
+	}
+	invalidIndexErr := "check whether the index \"" + indexname + "\" really exists"
+	if indexTableName == "" {
+		return "", moerr.NewInternalError(proc.Ctx, invalidIndexErr)
+	}
+	return indexTableName, nil
+}
+
 func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 
 	source := tf.ctr.argVecs[0]
 	col := tf.ctr.argVecs[1]
-	dbname, tablename, colname, err := handleDataSource(source, col)
-	logutil.Infof("db: %s, table: %s, col: %s in metadataScan", dbname, tablename, colname)
+	dbname, tablename, indexname, colname, visitTombstone, err := handleDataSource(source, col)
+	logutil.Infof("db: %s, table: %s, index: %s, col: %s in metadataScan", dbname, tablename, indexname, colname)
 	if err != nil {
 		return err
+	}
+
+	// When the source format is db_name.table_name.?index_name
+	// metadata_scan actually returns the metadata of the index table
+	if indexname != "" {
+		indexTableName, err := getIndexTableNameByIndexName(proc, dbname, tablename, indexname)
+		if err != nil {
+			return err
+		}
+		tablename = indexTableName
 	}
 
 	// Oh my
@@ -76,7 +139,7 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname)
+	metaInfos, err := rel.GetColumMetadataScanInfo(newCtx, colname, visitTombstone)
 	if err != nil {
 		return err
 	}
@@ -94,15 +157,44 @@ func (s *metadataScanState) start(tf *TableFunction, proc *process.Process, nthR
 	return nil
 }
 
-func handleDataSource(source, col *vector.Vector) (string, string, string, error) {
+func handleDataSource(source, col *vector.Vector) (string, string, string, string, bool, error) {
 	if source.Length() != 1 || col.Length() != 1 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong input len")
+		return "", "", "", "", false, moerr.NewInternalErrorNoCtx("wrong input len")
 	}
-	strs := strings.Split(source.GetStringAt(0), ".")
-	if len(strs) != 2 {
-		return "", "", "", moerr.NewInternalErrorNoCtx("wrong len of db and tbl input")
+	sourceStr := source.GetStringAt(0)
+	parts := strings.Split(sourceStr, ".")
+	switch len(parts) {
+	// Old source format: db_name.table_name
+	case 2:
+		dbname, tablename := parts[0], parts[1]
+		return dbname, tablename, "", col.GetStringAt(0), false, nil
+	// Newly supported source format:
+	// db_name.table_name.?index_name
+	// or db_name.table_name.#
+	case 3:
+		dbname, tablename, thirdPart := parts[0], parts[1], parts[2]
+		if len(thirdPart) == 1 && thirdPart[0] == '#' {
+			return dbname, tablename, "", col.GetStringAt(0), true, nil
+		}
+		if len(thirdPart) == 0 || thirdPart[0] != '?' {
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("index name must start with ? and follow identifier rules")
+		}
+		indexName := thirdPart[1:]
+		return dbname, tablename, indexName, col.GetStringAt(0), false, nil
+	// db_name.table_name.?index_name.#
+	case 4:
+		dbname, tablename, indexPart, tombstonePart := parts[0], parts[1], parts[2], parts[3]
+		if len(tombstonePart) != 1 || tombstonePart[0] != '#' {
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("invalid tombstone identifier: must be #")
+		}
+		if len(indexPart) == 0 || indexPart[0] != '?' {
+			return "", "", "", "", false, moerr.NewInternalErrorNoCtx("index name must start with ? and follow identifier rules")
+		}
+		indexName := indexPart[1:]
+		return dbname, tablename, indexName, col.GetStringAt(0), true, nil
+	default:
+		return "", "", "", "", false, moerr.NewInternalErrorNoCtx("source must be in db_name.table_name or db_name.table_name.?index_name or db_name.table_name.# or db_name.table_name.?index_name.# format")
 	}
-	return strs[0], strs[1], col.GetStringAt(0), nil
 }
 
 func fillMetadataInfoBat(opBat *batch.Batch, proc *process.Process, tableFunction *TableFunction, info *plan.MetadataScanInfo) error {

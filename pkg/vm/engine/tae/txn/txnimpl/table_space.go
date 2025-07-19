@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -49,7 +50,9 @@ type tableSpace struct {
 	tableHandle data.TableHandle
 	nobj        handle.Object
 
-	stats []objectio.ObjectStats
+	stats    []objectio.ObjectStats
+	statsMap map[objectio.ObjectNameShort]struct{}
+
 	// for tombstone table space
 	objs []*objectio.ObjectId
 }
@@ -69,20 +72,21 @@ func newTableSpace(table *txnTable, isTombstone bool) *tableSpace {
 }
 
 // register a non-appendable insertNode.
-func (space *tableSpace) registerStats(stats objectio.ObjectStats) {
+func (space *tableSpace) registerStats(statsList ...objectio.ObjectStats) {
 	if space.stats == nil {
 		space.stats = make([]objectio.ObjectStats, 0)
+		space.statsMap = make(map[objectio.ObjectNameShort]struct{})
 	}
-	space.stats = append(space.stats, stats)
+
+	space.stats = append(space.stats, statsList...)
+	for _, stats := range statsList {
+		space.statsMap[*stats.ObjectShortName()] = struct{}{}
+	}
 }
 
 func (space *tableSpace) isStatsExisted(o objectio.ObjectStats) bool {
-	for _, stats := range space.stats {
-		if stats.ObjectName().Equal(o.ObjectName()) {
-			return true
-		}
-	}
-	return false
+	_, ok := space.statsMap[*o.ObjectShortName()]
+	return ok
 }
 
 // register an appendable insertNode.
@@ -210,7 +214,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 		blkID := objectio.NewBlockidWithObjectID(objID, 0)
 		if err = objectio.ConstructRowidColumnTo(
 			col.GetDownstreamVector(),
-			blkID,
+			&blkID,
 			anode.GetMaxRow()-toAppend,
 			toAppend,
 			col.GetAllocator(),
@@ -228,7 +232,9 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) erro
 			count:  toAppend,
 		}
 		if created {
-			space.table.store.IncreateWriteCnt()
+			if err = space.table.store.IncreateWriteCnt("prepare apply anode"); err != nil {
+				return err
+			}
 			space.table.txnEntries.Append(anode)
 		}
 		id := appender.GetID()
@@ -261,10 +267,35 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	}
 
 	if shouldCreateNewObj() {
+		// another site to SetLevel is in committing merge task
+		if stats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
+			stats.SetLevel(1)
+		}
+		if catalog.CheckMergeTrace(space.table.entry.ID) {
+			if space.isTombstone {
+				catalog.LogInputTombstoneObjectAsync(
+					space.table.entry,
+					&stats,
+					space.table.store.txn.GetStartTS(),
+					space.table.store.rt,
+				)
+			} else {
+				catalog.LogInputDataObject(
+					space.table.entry,
+					&stats,
+					space.table.store.txn.GetStartTS(),
+				)
+			}
+		}
 		space.nobj, err = space.table.CreateNonAppendableObject(
 			&objectio.CreateObjOpt{Stats: &stats, IsTombstone: space.isTombstone})
 		if err != nil {
 			return
+		}
+		if space.isTombstone {
+			v2.TaskTombstoneInputSizeCounter.Add(float64(stats.OriginSize()))
+		} else {
+			v2.TaskDataInputSizeCounter.Add(float64(stats.OriginSize()))
 		}
 	}
 

@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -48,13 +49,13 @@ func constructorFactory(size int64, algo uint8) CacheConstructor {
 		}
 
 		// lz4 compress
-		decompressed := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
-		bs, err := compress.Decompress(data, decompressed.Bytes(), compress.Lz4)
+		decompressedData := allocator.AllocateCacheDataWithHint(ctx, int(size), malloc.NoClear)
+		bs, err := compress.Decompress(data, decompressedData.Bytes(), compress.Lz4)
 		if err != nil {
 			return
 		}
-		decompressed = decompressed.Slice(len(bs))
-		return decompressed, nil
+		decompressedData = decompressedData.Slice(len(bs))
+		return decompressedData, nil
 	}
 }
 
@@ -79,7 +80,7 @@ func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
 	}
 	header := DecodeIOEntryHeader(buf)
 	if header.Type != IOET_ColData {
-		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
+		return moerr.NewInternalError(context.Background(), fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
 	if header.Version == IOET_ColumnData_V2 {
 		err = toVec.UnmarshalBinary(buf[IOEntryHeaderSize:])
@@ -91,10 +92,10 @@ func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
 	panic(fmt.Sprintf("invalid column data: %s", header.String()))
 }
 
-func MustObjectMeta(buf []byte) ObjectMeta {
-	header := DecodeIOEntryHeader(buf)
+func MustObjectMeta(buffer []byte) ObjectMeta {
+	header := DecodeIOEntryHeader(buffer)
 	if header.Type != IOET_ObjMeta {
 		panic(fmt.Sprintf("invalid object meta: %s", header.String()))
 	}
-	return ObjectMeta(buf)
+	return ObjectMeta(buffer)
 }

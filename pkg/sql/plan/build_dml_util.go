@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,6 +29,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -156,6 +158,15 @@ func buildInsertPlans(
 	ifNeedCheckPkDup := !builder.qry.LoadTag
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
+
+	if v := ctx.GetContext().Value(defines.SkipPkDedup{}); v != nil {
+		if v.(string) == tableDef.Name {
+			logutil.Info("skip pk dedup",
+				zap.String("tableDef", tableDef.Name),
+				zap.Bool("originalDedup", ifNeedCheckPkDup))
+			ifNeedCheckPkDup = false
+		}
+	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExpr,
 		newPartitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
@@ -397,7 +408,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				childObjRef = delCtx.objRef
 				childTableDef = delCtx.tableDef
 			} else {
-				childObjRef, childTableDef = builder.compCtx.ResolveById(tableId, nil)
+				childObjRef, childTableDef, err = builder.compCtx.ResolveById(tableId, nil)
+				if err != nil {
+					return err
+				}
 			}
 			childPosMap := make(map[string]int32)
 			childTypMap := make(map[string]*plan.Type)
@@ -936,8 +950,7 @@ func makeOneInsertPlan(
 	//  case 2: the only primary key is auto increment type
 	//  case 3: create hidden table for secondary index
 
-	isSecondaryHidden := strings.Contains(tableDef.Name, catalog.SecondaryIndexTableNamePrefix)
-	if isSecondaryHidden {
+	if catalog.IsSecondaryIndexTable(tableDef.Name) {
 		return nil
 	}
 
@@ -1507,7 +1520,10 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 			fkeyId2Idx[colId] = i
 		}
 
-		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl, nil)
+		parentObjRef, parentTableDef, err := builder.compCtx.ResolveById(fk.ForeignTbl, nil)
+		if err != nil {
+			return -1, err
+		}
 		if parentTableDef == nil {
 			return -1, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
@@ -1666,8 +1682,8 @@ func makeClusterByExpr(tableDef *plan.TableDef, name2ColIndex map[string]int32) 
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     function.SerialFunctionEncodeID,
-					ObjName: function.SerialFunctionName,
+					Obj:     function.SerialFullFunctionEncodeID,
+					ObjName: function.SerialFullFunctionName,
 				},
 				Args: args,
 			},
@@ -1953,6 +1969,19 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 		posOriginPk, typeOriginPk = getPkPos(tableDef, false)
 	}
 
+	// get optype
+	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+
+	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	if err != nil {
+		return -1, err
+	}
+
+	optype, ok := params[catalog.IndexAlgoParamOpType]
+	if !ok {
+		return -1, err
+	}
+
 	//1.b Handle mo_cp_key
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
 
@@ -1970,7 +1999,7 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	}
 
 	// 4. create "CrossJoinL2" on tbl x centroids
-	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn)
+	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, optype)
 
 	// 5. Create a Project with CP Key for LockNode
 	projectWithCpKey, err := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join)
@@ -2261,7 +2290,7 @@ func appendDeleteIndexTablePlan(
 		ObjRef:                 uniqueObjRef,
 		TableDef:               uniqueTableDef,
 		ProjectList:            scanNodeProject,
-		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)},
 	}
 	leftId := builder.appendNode(leftscan, bindCtx)
 	leftscan.Stats.ForceOneCN = true //to avoid bugs ,maybe refactor in the future
@@ -2383,7 +2412,7 @@ func appendDeleteIndexTablePlan(
 		JoinType:               joinType,
 		OnList:                 joinConds,
 		ProjectList:            projectList,
-		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr)},
+		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(sid, builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr, false)},
 	}, bindCtx)
 	recalcStatsByRuntimeFilter(builder.qry.Nodes[leftId], builder.qry.Nodes[lastNodeId], builder)
 	return lastNodeId, nil
@@ -2516,6 +2545,7 @@ func appendDeleteMasterTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	return lastNodeId, nil
 }
+
 func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	entriesObjRef *ObjectRef, entriesTableDef *TableDef,
 	baseNodeId int32, tableDef *TableDef) (int32, error) {
@@ -2525,68 +2555,93 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNode(builder, lastNodeId)
-
-	var entriesRowIdPos int32 = -1
-	var entriesFkPkColPos int32 = -1
-	var entriesCpPkColPos int32 = -1
-	var cpPkType = types.T_varchar.ToType()
-	scanNodeProject := make([]*Expr, len(entriesTableDef.Cols))
-	for colIdx, col := range entriesTableDef.Cols {
-		if col.Name == catalog.Row_ID {
-			entriesRowIdPos = int32(colIdx)
-		} else if col.Name == catalog.SystemSI_IVFFLAT_TblCol_Entries_pk {
-			entriesFkPkColPos = int32(colIdx)
-		} else if col.Name == catalog.CPrimaryKeyColName {
-			entriesCpPkColPos = int32(colIdx)
-		}
-		scanNodeProject[colIdx] = &plan.Expr{
-			Typ: col.Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(colIdx),
-					Name:   col.Name,
-				},
-			},
+	for i := range projectList {
+		col := projectList[i].GetCol()
+		if col != nil && col.RelPos == 0 {
+			col.RelPos = 1
 		}
 	}
-	rightId := builder.appendNode(&plan.Node{
+
+	neededCols := make([]*plan.ColDef, 0, 3)
+	scanNodeProject := make([]*Expr, 3)
+	for _, col := range entriesTableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			scanNodeProject[0] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(len(neededCols)),
+						Name:   col.Name,
+					},
+				},
+			}
+			neededCols = append(neededCols, col)
+		} else if col.Name == catalog.CPrimaryKeyColName {
+			scanNodeProject[1] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(len(neededCols)),
+						Name:   col.Name,
+					},
+				},
+			}
+			neededCols = append(neededCols, col)
+		} else if col.Name == catalog.SystemSI_IVFFLAT_TblCol_Entries_pk {
+			scanNodeProject[2] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(len(neededCols)),
+						Name:   col.Name,
+					},
+				},
+			}
+			neededCols = append(neededCols, col)
+		}
+	}
+
+	newEntriesTableDef := DeepCopyTableDef(entriesTableDef, false)
+	newEntriesTableDef.Cols = neededCols
+
+	ivfScanId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
 		ObjRef:      entriesObjRef,
-		TableDef:    entriesTableDef,
+		TableDef:    newEntriesTableDef,
 		ProjectList: scanNodeProject,
 	}, bindCtx)
 
 	// append projection
 	projectList = append(projectList,
 		&plan.Expr{
-			Typ: entriesTableDef.Cols[entriesRowIdPos].Typ,
+			Typ: scanNodeProject[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: entriesRowIdPos,
+					RelPos: 0,
+					ColPos: 0,
 					Name:   catalog.Row_ID,
 				},
 			},
 		},
 		&plan.Expr{
-			Typ: makePlan2Type(&cpPkType),
+			Typ: scanNodeProject[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: entriesCpPkColPos,
+					RelPos: 0,
+					ColPos: 1,
 					Name:   catalog.CPrimaryKeyColName,
 				},
 			},
 		},
 	)
 
-	rightExpr := &plan.Expr{
-		Typ: entriesTableDef.Cols[entriesFkPkColPos].Typ,
+	ivfExpr := &plan.Expr{
+		Typ: scanNodeProject[2].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
-				ColPos: entriesFkPkColPos,
+				RelPos: 0,
+				ColPos: 2,
 				Name:   catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			},
 		},
@@ -2594,11 +2649,11 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	// append join node
 	var joinConds []*Expr
-	var leftExpr = &plan.Expr{
+	var origExpr = &plan.Expr{
 		Typ: originPkType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 0,
+				RelPos: 1,
 				ColPos: int32(originPkColumnPos),
 				Name:   tableDef.Cols[originPkColumnPos].Name,
 			},
@@ -2614,7 +2669,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 		   older versions of the entries to be stale.
 	*/
 
-	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{origExpr, ivfExpr})
 	if err != nil {
 		return -1, err
 	}
@@ -2622,8 +2677,8 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
-		JoinType:    plan.Node_LEFT,
-		Children:    []int32{lastNodeId, rightId},
+		JoinType:    plan.Node_RIGHT,
+		Children:    []int32{ivfScanId, lastNodeId},
 		OnList:      joinConds,
 		ProjectList: projectList,
 	}, bindCtx)
@@ -2869,6 +2924,7 @@ func makePreUpdateDeletePlan(
 			if err != nil {
 				return -1, err
 			}
+			newPkPos = int32(len(lastProjectList))
 			lastProjectList = append(lastProjectList, cpPkExpr)
 			projNode := &Node{
 				NodeType:    plan.Node_PROJECT,
@@ -3430,6 +3486,7 @@ func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	sourceStep int32, multiTableIndexes map[string]*MultiTableIndex) error {
 	var lastNodeId int32
+	var err error
 
 	for _, multiTableIndex := range multiTableIndexes {
 
@@ -3443,9 +3500,18 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 			//idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
 
-			idxRefs[0], idxTableDefs[0] = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
-			idxRefs[1], idxTableDefs[1] = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
-			idxRefs[2], idxTableDefs[2] = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
+			if err != nil {
+				return err
+			}
+			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
+			if err != nil {
+				return err
+			}
+			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			if err != nil {
+				return err
+			}
 
 			// remove row_id
 			for i := range idxTableDefs {
@@ -3494,6 +3560,7 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 
 func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, multiTableIndexes map[string]*MultiTableIndex) error {
 	isUpdate := delCtx.updateColLength > 0
+	var err error
 
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
@@ -3507,9 +3574,18 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 			//idxRefs[1], idxTableDefs[1] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, timestamp.Timestamp{})
 			//idxRefs[2], idxTableDefs[2] = ctx.Resolve(delCtx.objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, timestamp.Timestamp{})
 
-			idxRefs[0], idxTableDefs[0] = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
-			idxRefs[1], idxTableDefs[1] = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
-			idxRefs[2], idxTableDefs[2] = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			idxRefs[0], idxTableDefs[0], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, nil)
+			if err != nil {
+				return err
+			}
+			idxRefs[1], idxTableDefs[1], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName, nil)
+			if err != nil {
+				return err
+			}
+			idxRefs[2], idxTableDefs[2], err = ctx.ResolveIndexTableByRef(delCtx.objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+			if err != nil {
+				return err
+			}
 
 			entriesObjRef, entriesTableDef := idxRefs[2], idxTableDefs[2]
 			if entriesTableDef == nil {
@@ -3640,7 +3716,10 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
 
-	idxRef, idxTableDef := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	idxRef, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	// remove row_id
 	idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(col *ColDef) bool {
 		return col.Name == catalog.Row_ID
@@ -3662,7 +3741,10 @@ func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder 
 	// with the primary key of the hidden table as the unique key.
 	// package contains some information needed by the fuzzy filter to run background SQL.
 	if indexdef.GetUnique() {
-		_, idxTableDef := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+		_, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+		if err != nil {
+			return err
+		}
 		// remove row_id
 		idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(colVal *ColDef) bool {
 			return colVal.Name == catalog.Row_ID
@@ -3746,7 +3828,10 @@ func buildPreInsertRegularIndex(stmt *tree.Insert, ctx CompilerContext, builder 
 
 func buildPreInsertMasterIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
-	idxRef, idxTableDef := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	idxRef, idxTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	// remove row_id
 	idxTableDef.Cols = RemoveIf[*ColDef](idxTableDef.Cols, func(colVal *ColDef) bool {
 		return colVal.Name == catalog.Row_ID
@@ -3796,12 +3881,14 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	var isUk = indexdef.Unique
 	var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
 
-	uniqueObjRef, uniqueTableDef := builder.compCtx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	uniqueObjRef, uniqueTableDef, err := builder.compCtx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	if uniqueTableDef == nil {
 		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexTableName)
 	}
 	var lastNodeId int32
-	var err error
 	var uniqueDeleteIdx int
 	var uniqueTblPkPos int
 	var uniqueTblPkTyp Type
@@ -3907,13 +3994,15 @@ func buildDeleteMasterIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx 
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 	isUpdate := delCtx.updateColLength > 0
 	// Used by pre-insert vector index.
-	masterObjRef, masterTableDef := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	masterObjRef, masterTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	if masterTableDef == nil {
 		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexName)
 	}
 
 	var lastNodeId int32
-	var err error
 	var masterDeleteIdx int
 	var masterTblPkPos int
 	var masterTblPkTyp Type
@@ -4320,7 +4409,10 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 
-	indexObjRef, indexTableDef := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	if indexTableDef == nil {
 		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
 	}
@@ -4373,7 +4465,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	var partitionExpr *Expr
 	var indexSourceColTypes []*Type
 	var fuzzymessage *OriginTableMessageForFuzzy
-	err := makeOneInsertPlan(ctx, builder, bindCtx, indexObjRef, insertEntriesTableDef,
+	err = makeOneInsertPlan(ctx, builder, bindCtx, indexObjRef, insertEntriesTableDef,
 		updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
 		pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, ifInsertFromUnique,
 		indexSourceColTypes, fuzzymessage)
@@ -4417,57 +4509,93 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		// create sink scan and join with index table JOIN LEFT ON (sink.pkcol = index.docid) and project with (docid, row_id)
 		// see appendDeleteMasterTablePlan
 
+		rfTag := builder.genNewTag()
 		lastNodeId := appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
 		orgPkColPos, orgPkType := getPkPos(delCtx.tableDef, false)
 
-		var rightRowIdPos int32 = -1
-		var rightDocidPos int32 = 0  // doc_id
-		var rightFakePkPos int32 = 3 // __mo_fake_pk_col_
-		scanNodeProject := make([]*Expr, len(indexTableDef.Cols))
-		for colIdx, colVal := range indexTableDef.Cols {
+		var docIdPos int32 = -1
 
+		neededCols := make([]*plan.ColDef, 0, 3)
+		scanNodeProject := make([]*Expr, 3)
+		for _, colVal := range indexTableDef.Cols {
 			if colVal.Name == catalog.Row_ID {
-				rightRowIdPos = int32(colIdx)
-			}
-			if colVal.Name == catalog.FakePrimaryKeyColName {
-				rightFakePkPos = int32(colIdx)
-			}
-
-			scanNodeProject[colIdx] = &plan.Expr{
-				Typ: colVal.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						ColPos: int32(colIdx),
-						Name:   colVal.Name,
+				scanNodeProject[0] = &plan.Expr{
+					Typ: colVal.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(len(neededCols)),
+							Name:   colVal.Name,
+						},
 					},
-				},
+				}
+				neededCols = append(neededCols, colVal)
+			} else if colVal.Name == catalog.FullTextIndex_TabCol_Id {
+				scanNodeProject[1] = &plan.Expr{
+					Typ: colVal.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(len(neededCols)),
+							Name:   colVal.Name,
+						},
+					},
+				}
+				docIdPos = int32(len(neededCols))
+				neededCols = append(neededCols, colVal)
+			} else if colVal.Name == catalog.FakePrimaryKeyColName {
+				scanNodeProject[2] = &plan.Expr{
+					Typ: colVal.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(len(neededCols)),
+							Name:   colVal.Name,
+						},
+					},
+				}
+				neededCols = append(neededCols, colVal)
 			}
 		}
 
-		rightId := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			Stats:       &plan.Stats{},
-			ObjRef:      indexObjRef,
-			TableDef:    indexTableDef,
-			ProjectList: scanNodeProject,
-		}, bindCtx)
+		newIndexTableDef := DeepCopyTableDef(indexTableDef, false)
+		newIndexTableDef.Cols = neededCols
 
-		var rightExpr = &plan.Expr{
-			Typ: indexTableDef.Cols[rightDocidPos].Typ,
+		probeExpr := &plan.Expr{
+			Typ: scanNodeProject[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightDocidPos,
+					RelPos: 0,
+					ColPos: docIdPos,
 					Name:   "doc_id",
 				},
 			},
 		}
 
+		idxScanNode := &plan.Node{
+			NodeType:               plan.Node_TABLE_SCAN,
+			Stats:                  &plan.Stats{},
+			ObjRef:                 indexObjRef,
+			TableDef:               newIndexTableDef,
+			ProjectList:            scanNodeProject,
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr, true)},
+		}
+		idxScanId := builder.appendNode(idxScanNode, bindCtx)
+		idxScanNode.Stats.ForceOneCN = true
+
 		var leftExpr = &plan.Expr{
-			Typ: orgPkType,
+			Typ: scanNodeProject[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
+					ColPos: 1,
+					Name:   "doc_id",
+				},
+			},
+		}
+
+		var rightExpr = &plan.Expr{
+			Typ: orgPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
 					ColPos: int32(orgPkColPos),
 					Name:   delCtx.tableDef.Pkey.PkeyColName,
 				},
@@ -4481,46 +4609,58 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 
 		projectList := make([]*Expr, 0, 2)
 		projectList = append(projectList, &plan.Expr{
-			Typ: indexTableDef.Cols[rightRowIdPos].Typ,
+			Typ: scanNodeProject[0].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightRowIdPos,
+					RelPos: 0,
+					ColPos: 0,
 					Name:   catalog.Row_ID,
 				},
 			},
 		}, &plan.Expr{
-			Typ: indexTableDef.Cols[rightDocidPos].Typ,
+			Typ: scanNodeProject[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightDocidPos,
+					RelPos: 0,
+					ColPos: 1,
 					Name:   "doc_id",
 				},
 			},
 		}, &plan.Expr{
-			Typ: indexTableDef.Cols[rightFakePkPos].Typ,
+			Typ: scanNodeProject[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: rightFakePkPos,
+					RelPos: 0,
+					ColPos: 2,
 					Name:   catalog.FakePrimaryKeyColName,
 				},
 			},
 		},
 		)
 
+		rfBuildExpr := &plan.Expr{
+			Typ: orgPkType,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 0,
+				},
+			},
+		}
+
+		sid := builder.compCtx.GetProcess().GetService()
 		lastNodeId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_JOIN,
-			JoinType:    plan.Node_LEFT,
-			Children:    []int32{lastNodeId, rightId},
-			OnList:      []*Expr{joinCond},
-			ProjectList: projectList,
+			NodeType:               plan.Node_JOIN,
+			JoinType:               plan.Node_RIGHT,
+			Children:               []int32{idxScanId, lastNodeId},
+			OnList:                 []*Expr{joinCond},
+			ProjectList:            projectList,
+			RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimit(sid), rfBuildExpr, true)},
 		}, bindCtx)
 
 		deleteIdx := 0
 		retPkPos := deleteIdx + 2
-		retPkTyp := indexTableDef.Cols[rightFakePkPos].Typ
+		retPkTyp := scanNodeProject[2].Typ
 
 		return lastNodeId, deleteIdx, retPkPos, retPkTyp, nil
 	}
@@ -4564,7 +4704,10 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 
 	//isUpdate := delCtx.updateColLength > 0
-	indexObjRef, indexTableDef := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	if indexTableDef == nil {
 		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexName)
 	}
@@ -4631,7 +4774,10 @@ func buildPostDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 	isDelete := true
 	isInsert := delCtx.updateColLength > 0
 
-	indexObjRef, indexTableDef := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	if indexTableDef == nil {
 		return moerr.NewNoSuchTable(builder.GetContext(), delCtx.objRef.SchemaName, indexdef.IndexName)
 	}
@@ -4649,7 +4795,10 @@ func buildPostInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builde
 	isInsert := true
 	isDeleteWithoutFilters := false
 
-	indexObjRef, indexTableDef := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
+	if err != nil {
+		return err
+	}
 	if indexTableDef == nil {
 		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
 	}

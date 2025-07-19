@@ -29,30 +29,20 @@ import (
 const (
 	IOET_WALTxnCommand_Database uint16 = 3009
 	IOET_WALTxnCommand_Table    uint16 = 3010
-	IOET_WALTxnCommand_Segment  uint16 = 3011
-	IOET_WALTxnCommand_Block    uint16 = 3012
 	IOET_WALTxnCommand_Object   uint16 = 3015
 
 	IOET_WALTxnCommand_Database_V1 uint16 = 1
-	IOET_WALTxnCommand_Table_V1    uint16 = 1
-	IOET_WALTxnCommand_Table_V2    uint16 = 2
 	IOET_WALTxnCommand_Table_V3    uint16 = 3
-	IOET_WALTxnCommand_Segment_V1  uint16 = 1
-	IOET_WALTxnCommand_Block_V1    uint16 = 1
 	IOET_WALTxnCommand_Object_V1   uint16 = 1
 
 	IOET_WALTxnCommand_Database_CurrVer = IOET_WALTxnCommand_Database_V1
 	IOET_WALTxnCommand_Table_CurrVer    = IOET_WALTxnCommand_Table_V3
-	IOET_WALTxnCommand_Segment_CurrVer  = IOET_WALTxnCommand_Segment_V1
-	IOET_WALTxnCommand_Block_CurrVer    = IOET_WALTxnCommand_Block_V1
 	IOET_WALTxnCommand_Object_CurrVer   = IOET_WALTxnCommand_Object_V1
 )
 
 var cmdNames = map[uint16]string{
 	IOET_WALTxnCommand_Database: "UDB",
 	IOET_WALTxnCommand_Table:    "UTBL",
-	IOET_WALTxnCommand_Segment:  "USEG",
-	IOET_WALTxnCommand_Block:    "UBLK",
 	IOET_WALTxnCommand_Object:   "UOBJ",
 }
 
@@ -78,34 +68,6 @@ func init() {
 	objectio.RegisterIOEnrtyCodec(
 		objectio.IOEntryHeader{
 			Type:    IOET_WALTxnCommand_Table,
-			Version: IOET_WALTxnCommand_Table_V1,
-		}, nil,
-		func(b []byte) (any, error) {
-			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Table,
-				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
-				func() *TableNode { return &TableNode{} },
-				IOET_WALTxnCommand_Table_V1)
-			err := cmd.UnmarshalBinary(b)
-			return cmd, err
-		},
-	)
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnCommand_Table,
-			Version: IOET_WALTxnCommand_Table_V2,
-		}, nil,
-		func(b []byte) (any, error) {
-			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Table,
-				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
-				func() *TableNode { return &TableNode{} },
-				IOET_WALTxnCommand_Table_V2)
-			err := cmd.UnmarshalBinary(b)
-			return cmd, err
-		},
-	)
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnCommand_Table,
 			Version: IOET_WALTxnCommand_Table_V3,
 		}, nil,
 		func(b []byte) (any, error) {
@@ -113,34 +75,6 @@ func init() {
 				NewEmptyMVCCNodeFactory(NewEmptyTableMVCCNode),
 				func() *TableNode { return &TableNode{} },
 				IOET_WALTxnCommand_Table_V3)
-			err := cmd.UnmarshalBinary(b)
-			return cmd, err
-		},
-	)
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnCommand_Segment,
-			Version: IOET_WALTxnCommand_Segment_V1,
-		}, nil,
-		func(b []byte) (any, error) {
-			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Segment,
-				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-				func() *ObjectNode { return &ObjectNode{} },
-				IOET_WALTxnCommand_Segment_V1)
-			err := cmd.UnmarshalBinary(b)
-			return cmd, err
-		},
-	)
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_WALTxnCommand_Block,
-			Version: IOET_WALTxnCommand_Block_V1,
-		}, nil,
-		func(b []byte) (any, error) {
-			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Block,
-				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-				func() *BlockNode { return &BlockNode{} },
-				IOET_WALTxnCommand_Block_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
@@ -173,6 +107,8 @@ type EntryCommand[T BaseNode[T], N Node] struct {
 	ID       *common.ID
 	mvccNode *MVCCNode[T]
 	node     N
+
+	applyCommitFn func()
 }
 
 func newEmptyEntryCmd[T BaseNode[T], N Node](cmdType uint16, mvccNodeFactory func() *MVCCNode[T], nodeFactory func() N, ver uint16) *EntryCommand[T, N] {
@@ -233,8 +169,8 @@ func (cmd *EntryCommand[T, N]) SetReplayTxn(txn txnif.AsyncTxn) {
 }
 
 func (cmd *EntryCommand[T, N]) ApplyCommit() {
-	if err := cmd.mvccNode.ApplyCommit(cmd.mvccNode.Txn.GetID()); err != nil {
-		panic(err)
+	if cmd.applyCommitFn != nil {
+		cmd.applyCommitFn()
 	}
 }
 
@@ -259,12 +195,8 @@ func (cmd *EntryCommand[T, N]) IDString() string {
 		s = fmt.Sprintf("%sCommonID=%s", s, id.DBString())
 	case IOET_WALTxnCommand_Table:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.TableString())
-	case IOET_WALTxnCommand_Segment:
-		s = fmt.Sprintf("%sCommonID=%s", s, id.ObjectString())
 	case IOET_WALTxnCommand_Object:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.ObjectString())
-	case IOET_WALTxnCommand_Block:
-		s = fmt.Sprintf("%sCommonID=%s", s, id.BlockString())
 	}
 	return s
 }
@@ -290,10 +222,6 @@ func (cmd *EntryCommand[T, N]) GetCurrVersion() uint16 {
 		return IOET_WALTxnCommand_Table_CurrVer
 	case IOET_WALTxnCommand_Object:
 		return IOET_WALTxnCommand_Object_CurrVer
-	case IOET_WALTxnCommand_Segment:
-		return IOET_WALTxnCommand_Segment_CurrVer
-	case IOET_WALTxnCommand_Block:
-		return IOET_WALTxnCommand_Block_CurrVer
 	default:
 		panic(fmt.Sprintf("not support type %d", cmd.cmdType))
 	}

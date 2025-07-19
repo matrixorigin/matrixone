@@ -445,20 +445,20 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 		}
 	}
 
-	s := builder.getStatsInfoByTableID(tableDef.TblId)
-	if s == nil {
+	w := builder.getStatsInfoByTableID(tableDef.TblId)
+	if w == nil {
 		return
 	}
 	if node.NodeType == plan.Node_AGG {
-		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+		if shouldUseHashShuffle(w.Stats.ShuffleRangeMap[colName]) {
 			return
 		}
 	}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-	node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
-	node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
-	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
+	node.Stats.HashmapStats.ShuffleColMin = int64(w.Stats.MinValMap[colName])
+	node.Stats.HashmapStats.ShuffleColMax = int64(w.Stats.MaxValMap[colName])
+	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(w.Stats.ShuffleRangeMap[colName], colName)
+	node.Stats.HashmapStats.Nullcnt = int64(w.Stats.NullCntMap[colName])
 }
 
 // to determine if join need to go shuffle
@@ -702,8 +702,8 @@ func determineShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 2 { // always go hashshuffle for scan
 		return
 	}
-	s := builder.getStatsInfoByTableID(n.TableDef.TblId)
-	if s == nil {
+	w := builder.getStatsInfoByTableID(n.TableDef.TblId)
+	if w == nil {
 		return
 	}
 
@@ -716,7 +716,7 @@ func determineShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		firstSortColName = n.TableDef.Pkey.Names[0]
 	}
 
-	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
+	if w.Stats.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
 	firstSortColID, ok := n.TableDef.Name2ColIndex[firstSortColName]
@@ -724,13 +724,14 @@ func determineShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	switch types.T(n.TableDef.Cols[firstSortColID].Typ.Id) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64,
+		types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		n.Stats.HashmapStats.ShuffleColIdx = n.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
-		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
-		n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
-		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
-		n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
+		n.Stats.HashmapStats.ShuffleColMin = int64(w.Stats.MinValMap[firstSortColName])
+		n.Stats.HashmapStats.ShuffleColMax = int64(w.Stats.MaxValMap[firstSortColName])
+		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(w.Stats.ShuffleRangeMap[firstSortColName], firstSortColName)
+		n.Stats.HashmapStats.Nullcnt = int64(w.Stats.NullCntMap[firstSortColName])
 	}
 }
 

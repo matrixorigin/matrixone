@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -50,11 +51,6 @@ func RegisterApproxCountAgg(id int64) {
 func RegisterMedian(id int64) {
 	specialAgg[id] = true
 	aggIdOfMedian = id
-}
-
-func RegisterClusterCenters(id int64) {
-	specialAgg[id] = true
-	aggIdOfClusterCenters = id
 }
 
 func RegisterRowNumberWin(id int64) {
@@ -93,17 +89,16 @@ var (
 	registeredAggFunctions = make(map[aggKey]aggImplementation)
 
 	// list of special aggregation function IDs.
-	aggIdOfCountColumn    = int64(-1)
-	aggIdOfCountStar      = int64(-2)
-	aggIdOfGroupConcat    = int64(-3)
-	aggIdOfApproxCount    = int64(-4)
-	aggIdOfMedian         = int64(-5)
-	aggIdOfClusterCenters = int64(-6)
-	winIdOfRowNumber      = int64(-7)
-	winIdOfRank           = int64(-8)
-	winIdOfDenseRank      = int64(-9)
-	groupConcatSep        = ","
-	getCroupConcatRet     = func(args ...types.Type) types.Type {
+	aggIdOfCountColumn = int64(-1)
+	aggIdOfCountStar   = int64(-2)
+	aggIdOfGroupConcat = int64(-3)
+	aggIdOfApproxCount = int64(-4)
+	aggIdOfMedian      = int64(-5)
+	winIdOfRowNumber   = int64(-7)
+	winIdOfRank        = int64(-8)
+	winIdOfDenseRank   = int64(-9)
+	groupConcatSep     = ","
+	getCroupConcatRet  = func(args ...types.Type) types.Type {
 		for _, p := range args {
 			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
 				return types.T_blob.ToType()
@@ -112,6 +107,22 @@ var (
 		return types.T_text.ToType()
 	}
 )
+
+func SingleAggValuesString() string {
+	pairs := make([]string, 0, len(singleAgg))
+	for key, value := range singleAgg {
+		pairs = append(pairs, fmt.Sprintf("%d:%v", key, value))
+	}
+	return strings.Join(pairs, "; ")
+}
+
+func SpecialAggValuesString() string {
+	pairs := make([]string, 0, len(specialAgg))
+	for key, value := range specialAgg {
+		pairs = append(pairs, fmt.Sprintf("%d:%v", key, value))
+	}
+	return strings.Join(pairs, "; ")
+}
 
 func getSingleAggImplByInfo(
 	id int64, arg types.Type) (aggInfo aggImplementation, err error) {

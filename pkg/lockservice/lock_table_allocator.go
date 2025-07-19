@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
@@ -154,8 +155,8 @@ func (l *lockTableAllocator) Valid(
 	binds []pb.LockTable,
 ) ([]uint64, error) {
 	var invalid []uint64
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	for _, b := range binds {
 		if !b.Valid {
@@ -210,8 +211,8 @@ func (l *lockTableAllocator) Close() error {
 }
 
 func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTable {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	m := l.getLockTablesLocked(groupID)
 	if old, ok := m[tableID]; ok {
@@ -415,15 +416,41 @@ func (l *lockTableAllocator) registerBind(
 	return l.createBindLocked(binds, group, tableID, originTableID, sharding)
 }
 
+// parseServiceID parses a serviceID into timestamp and uuid parts
+// serviceID format: timestamp(19 digits) + uuid
+func parseServiceID(serviceID string) (int64, string) {
+	if len(serviceID) <= 19 { // timestamp is 19 digits
+		return 0, ""
+	}
+	timestamp, _ := strconv.ParseInt(serviceID[:19], 10, 64)
+	return timestamp, serviceID[19:]
+}
+
 func (l *lockTableAllocator) tryRebindLocked(
 	binds *serviceBinds,
 	group uint32,
 	old pb.LockTable,
 	tableID uint64) pb.LockTable {
+	// Compare serviceIDs to check if the new service is a newer version of the same service
+	oldTimestamp, oldUUID := parseServiceID(old.ServiceID)
+	newTimestamp, newUUID := parseServiceID(binds.serviceID)
+
+	// If the new service has a newer timestamp and same UUID, update the binding
+	if newTimestamp > oldTimestamp && oldUUID == newUUID {
+		old.Valid = false
+
+		l.logger.Info("bind updated with newer service version",
+			zap.Uint64("table", tableID),
+			zap.Uint64("version", old.Version),
+			zap.String("service", binds.serviceID),
+			zap.Int64("old timestamp", oldTimestamp),
+			zap.Int64("new timestamp", newTimestamp))
+	}
 	// find a valid table and service bind
 	if old.Valid {
 		return old
 	}
+
 	// reaches here, it means that the original table and service bindings have
 	// been invalidated, and the current service has also been invalidated, so
 	// there is no need for any re-bind operation here, and the invalid bind
@@ -432,7 +459,7 @@ func (l *lockTableAllocator) tryRebindLocked(
 		return old
 	}
 
-	// current service get the bind
+	// If not a newer version of the same service, create new binding
 	old.ServiceID = binds.serviceID
 	old.Version++
 	old.Valid = true

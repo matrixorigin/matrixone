@@ -16,11 +16,18 @@ package disttae
 
 import (
 	"bytes"
+	"math"
+	"math/rand"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,5 +67,87 @@ func Test_GetUncommittedS3Tombstone(t *testing.T) {
 
 		require.True(t, found)
 		return true
+	})
+}
+
+func Test_BatchAllocNewRowIds(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	t.Run("A", func(t *testing.T) {
+		txn := Transaction{
+			proc: proc,
+		}
+
+		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
+		for i := 0; i < 10; i++ {
+			ll := rand.Intn(100) + 1
+			vec, err := txn.batchAllocNewRowIds(ll)
+			require.NoError(t, err)
+			require.Equal(t, ll, vec.Length())
+
+			rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
+			require.Equal(t, int(0), int(rowIds[0].GetRowOffset()))
+			require.Equal(t, int(ll-1), int(rowIds[len(rowIds)-1].GetRowOffset()))
+
+			vec.Free(common.DefaultAllocator)
+		}
+	})
+
+	t.Run("B", func(t *testing.T) {
+		txn := Transaction{
+			proc: proc,
+		}
+
+		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
+		ll := options.DefaultBlockMaxRows*11 + 1
+		mm1 := make(map[types.Blockid]struct{})
+		mm2 := make(map[types.Objectid]struct{})
+
+		vec, err := txn.batchAllocNewRowIds(ll)
+		require.NoError(t, err)
+		require.Equal(t, ll, vec.Length())
+
+		rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](vec)
+		for i := range rowIds {
+			if i%options.DefaultBlockMaxRows == 0 {
+				require.Equal(t, 0, int(rowIds[i].GetRowOffset()))
+				if i > 0 {
+					require.Equal(t, int(rowIds[i-1].GetBlockOffset()+1), int(rowIds[i].GetBlockOffset()))
+					require.Equal(t, int(options.DefaultBlockMaxRows-1), int(rowIds[i-1].GetRowOffset()))
+				}
+			}
+
+			mm1[*rowIds[i].BorrowBlockID()] = struct{}{}
+			mm2[*rowIds[i].BorrowObjectID()] = struct{}{}
+		}
+
+		require.Equal(t, 12, len(mm1))
+		require.Equal(t, 1, len(mm2))
+
+		vec.Free(common.DefaultAllocator)
+	})
+
+	t.Run("C", func(t *testing.T) {
+		txn := Transaction{
+			proc: proc,
+		}
+
+		txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
+		ll := math.MaxUint16
+		for i := 0; i < ll; i++ {
+			err := txn.currentRowId.IncrObj()
+			require.NoError(t, err)
+		}
+
+		for i := 0; i < ll; i++ {
+			err := txn.currentRowId.IncrBlk()
+			require.NoError(t, err)
+		}
+
+		_, err := txn.batchAllocNewRowIds(1)
+		require.Error(t, err)
 	})
 }

@@ -299,7 +299,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Product), Product: &pipeline.Product{}},
 		{Op: int32(vm.ProductL2), ProductL2: &pipeline.ProductL2{}},
 		{Op: int32(vm.Projection), ProjectList: []*plan.Expr{}},
-		{Op: int32(vm.Filter), Filter: &plan.Expr{}},
+		{Op: int32(vm.Filter), Filters: []*plan.Expr{}, RuntimeFilters: []*plan.Expr{}},
 		{Op: int32(vm.Semi), SemiJoin: &pipeline.SemiJoin{}},
 		{Op: int32(vm.Single), SingleJoin: &pipeline.SingleJoin{}},
 		{Op: int32(vm.Top), Limit: plan.MakePlan2Int64ConstExprWithType(1)},
@@ -359,9 +359,9 @@ func Test_decodeBatch(t *testing.T) {
 		nil,
 		nil)
 	aggexec.RegisterGroupConcatAgg(0, ",")
-	agg0 := aggexec.MakeAgg(
+	agg0, err := aggexec.MakeAgg(
 		vp, 0, false, []types.Type{types.T_varchar.ToType()}...)
-
+	require.Nil(t, err)
 	bat := &batch.Batch{
 		Recursive:  0,
 		ShuffleIDX: 0,
@@ -514,7 +514,7 @@ func (f fakeTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 }
 
 func Test_prepareRemoteRunSendingData(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
 
@@ -590,7 +590,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 }
 
 func Test_ReceiveMessageFromCnServer(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	sender := messageSenderOnClient{
 		ctx:          context.Background(),
 		streamSender: &fakeStreamSender{},
@@ -661,7 +661,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 }
 
 func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = fakeTxnOperator{}
 	// a standalone pipeline tree should return true.
 	{

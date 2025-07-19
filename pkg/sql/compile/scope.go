@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
@@ -113,7 +114,6 @@ func (s *Scope) resetForReuse(c *Compile) (err error) {
 	}
 
 	if s.DataSource != nil && !s.DataSource.isConst {
-		s.DataSource.Rel = nil
 		s.DataSource.R = nil
 	}
 
@@ -129,9 +129,6 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.Rel != nil {
-		return nil
-	}
 	return c.compileTableScanDataSource(s)
 }
 
@@ -193,8 +190,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 			}
 
 			var tag int32
-			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
-				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			if len(s.DataSource.RecvMsgList) > 0 {
+				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
@@ -473,6 +470,10 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		parallelScope, err = buildScanParallelRun(s, c)
 		//fmt.Println("after scan parallel run", DebugShowScopes([]*Scope{parallelScope}, OldLevel))
 
+	// probability 3: src op is tablefunction
+	case s.IsTbFunc:
+		parallelScope, err = buildLoadParallelRun(s, c)
+
 	// others.
 	default:
 		parallelScope, err = s, nil
@@ -534,12 +535,19 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		return s, nil
 	}
 
-	if len(s.DataSource.OrderBy) > 0 {
-		return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
-	}
+	//if len(s.DataSource.OrderBy) > 0 {
+	//	return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
+	//}
 
 	ms, ss := newParallelScope(s)
 	for i := range ss {
+		recvMsgList := slices.Clone(s.DataSource.RecvMsgList)
+		for j := range recvMsgList {
+			if recvMsgList[j].MsgType == int32(message.MsgTopValue) {
+				recvMsgList[j].MsgTag += int32(i) << 16
+			}
+		}
+
 		ss[i].DataSource = &Source{
 			R:            readers[i],
 			SchemaName:   s.DataSource.SchemaName,
@@ -547,6 +555,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 			Attributes:   s.DataSource.Attributes,
 			AccountId:    s.DataSource.AccountId,
 			node:         s.DataSource.node,
+			RecvMsgList:  recvMsgList,
 		}
 	}
 
@@ -577,9 +586,11 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		if err != nil {
 			return err
 		}
-		err = s.aggOptimize(c, rel, ctx)
-		if err != nil {
-			return err
+		if _, ok := s.NodeInfo.Data.(*disttae.CombinedRelData); !ok {
+			err = s.aggOptimize(c, rel, ctx)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -611,7 +622,8 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	average := float64(s.DataSource.node.Stats.BlockNum / s.NodeInfo.CNCNT)
 	if commited.DataCnt() < int(average*0.8) ||
 		commited.DataCnt() > int(average*1.2) {
-		logutil.Warnf("workload  table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
+		logutil.Warnf(
+			"workload table %v maybe not balanced! stats blocks %v, cncnt %v cnidx %v average %v , get %v blocks",
 			s.DataSource.TableDef.Name,
 			s.DataSource.node.Stats.BlockNum,
 			s.NodeInfo.CNCNT,
@@ -634,8 +646,8 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 		if err != nil {
 			return err
 		}
-		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 
+		s.NodeInfo.Data.AppendBlockInfoSlice(commited.GetBlockInfoSlice())
 	} else {
 		tombstones := s.NodeInfo.Data.GetTombstones()
 		commited.AttachTombstones(tombstones)
@@ -645,7 +657,7 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	return nil
 }
 
-func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
+func (s *Scope) waitForRuntimeFilters(c *Compile) ([]*plan.Expr, bool, error) {
 	var runtimeInExprList []*plan.Expr
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
@@ -681,22 +693,25 @@ func (s *Scope) handleRuntimeFilter(c *Compile) ([]*plan.Expr, bool, error) {
 	return runtimeInExprList, false, nil
 }
 
-func (s *Scope) handleBlockFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
-	var appendNotPkFilter []*plan.Expr
+func (s *Scope) handleRuntimeFilters(c *Compile, runtimeInExprList []*plan.Expr) ([]*plan.Expr, error) {
+	var nonPkFilters, pkFilters []*plan.Expr
+
+	rfSpecs := s.DataSource.RuntimeFilterSpecs
 	for i := range runtimeInExprList {
 		fn := runtimeInExprList[i].GetF()
 		col := fn.Args[0].GetCol()
 		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
-		pkPos := s.DataSource.TableDef.Name2ColIndex[s.DataSource.TableDef.Pkey.PkeyColName]
-		if pkPos != col.ColPos {
-			appendNotPkFilter = append(appendNotPkFilter, plan2.DeepCopyExpr(runtimeInExprList[i]))
+		if rfSpecs[i].NotOnPk {
+			nonPkFilters = append(nonPkFilters, runtimeInExprList[i])
+		} else {
+			pkFilters = append(pkFilters, runtimeInExprList[i])
 		}
 	}
 
 	// reset filter
-	if len(appendNotPkFilter) > 0 {
+	if len(nonPkFilters) > 0 {
 		// put expr in filter instruction
 		op := vm.GetLeafOp(s.RootOp)
 		if _, ok := op.(*table_scan.TableScan); ok {
@@ -706,19 +721,15 @@ func (s *Scope) handleBlockFilters(c *Compile, runtimeInExprList []*plan.Expr) (
 		if !ok {
 			panic("missing instruction for runtime filter!")
 		}
-		err := arg.SetRuntimeExpr(s.Proc, appendNotPkFilter)
-		if err != nil {
-			return nil, err
-		}
+		arg.RuntimeFilterExprs = nonPkFilters
 	}
 
 	// reset datasource
-	if len(runtimeInExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(runtimeInExprList)
+	if len(pkFilters) > 0 {
 		if s.DataSource.FilterExpr != nil {
-			newExprList = append(newExprList, s.DataSource.FilterExpr)
+			pkFilters = append(pkFilters, s.DataSource.FilterExpr)
 		}
-		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(pkFilters)
 	}
 
 	for _, e := range s.DataSource.BlockFilterList {
@@ -728,11 +739,7 @@ func (s *Scope) handleBlockFilters(c *Compile, runtimeInExprList []*plan.Expr) (
 		}
 	}
 
-	newExprList := plan2.DeepCopyExprList(runtimeInExprList)
-	if len(s.DataSource.node.BlockFilterList) > 0 {
-		newExprList = append(newExprList, s.DataSource.BlockFilterList...)
-	}
-	return newExprList, nil
+	return append(runtimeInExprList, s.DataSource.BlockFilterList...), nil
 }
 
 func (s *Scope) isTableScan() bool {
@@ -948,10 +955,12 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 				hasTombstone bool
 				err2         error
 			)
-			fs, err := fileservice.Get[fileservice.FileService](c.proc.GetFileService(), defines.SharedFileServiceName)
+
+			fs, err := colexec.GetSharedFSFromProc(c.proc)
 			if err != nil {
 				return err
 			}
+
 			tombstones, err := collectTombstones(c, node, rel, engine.Policy_CollectAllTombstones)
 			if err != nil {
 				return err
@@ -973,6 +982,7 @@ func (s *Scope) aggOptimize(c *Compile, rel engine.Relation, ctx context.Context
 			}); err != nil {
 				return err
 			}
+
 			if partialResults != nil {
 				s.NodeInfo.Data = newRelData
 				//find the last mergegroup
@@ -1010,7 +1020,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// receive runtime filter and optimize the datasource.
 	var runtimeFilterList, blockFilterList []*plan.Expr
 	var emptyScan bool
-	runtimeFilterList, emptyScan, err = s.handleRuntimeFilter(c)
+	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
 	if err != nil {
 		return
 	}
@@ -1021,7 +1031,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 	}
 	if !emptyScan {
-		blockFilterList, err = s.handleBlockFilters(c, runtimeFilterList)
+		blockFilterList, err = s.handleRuntimeFilters(c, runtimeFilterList)
 		if err != nil {
 			return
 		}

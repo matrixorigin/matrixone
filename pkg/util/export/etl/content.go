@@ -180,10 +180,16 @@ func NewSQLFlusher(tbl *table.Table) *SQLFlusher {
 }
 
 func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
-	// FIXME: if error sometime, pls back-off
-	conn, err := db_holder.GetOrInitDBConn(false, true)
+	forceNewConn := !db_holder.DBConnErrCount.Check()
+	conn, err := db_holder.GetOrInitDBConn(forceNewConn, true)
 	if err != nil {
 		v2.TraceMOLoggerErrorConnDBCounter.Inc()
+		_ = db_holder.DBConnErrCount.Count()
+		return 0, err
+	}
+	if err = conn.Ping(); err != nil {
+		v2.TraceMOLoggerErrorPingDBCounter.Inc()
+		_ = db_holder.DBConnErrCount.Count()
 		return 0, err
 	}
 
@@ -210,6 +216,9 @@ func (f *SQLFlusher) FlushBuffer(buf *bytes.Buffer) (int, error) {
 	_, err = conn.Exec(loadSQL)
 	if len(loadSQL) > 10*mpool.MB {
 		logutil.Info("generate req sql", zap.String("type", f.table), zap.Int("csv", buf.Len()), zap.Int("sql", len(loadSQL)))
+	}
+	if err != nil {
+		_ = db_holder.DBConnErrCount.Count()
 	}
 
 	return 0, err

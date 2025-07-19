@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -75,7 +76,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	// read data
 	batchs, err := r.ReadAll(ctx)
 	require.Nil(t, err)
-	require.Equal(t, (cnt+BatchSize)/BatchSize, len(batchs))
+	require.Equal(t, (cnt+objectio.BlockMaxRows)/objectio.BlockMaxRows, len(batchs))
 
 	_, err = r.ReadLine()
 	require.Nil(t, err)

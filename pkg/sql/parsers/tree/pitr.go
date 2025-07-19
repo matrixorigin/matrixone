@@ -76,6 +76,7 @@ func (node *ShowPitr) GetQueryType() string     { return QueryTypeDQL }
 type DropPitr struct {
 	statementImpl
 
+	Internal bool
 	IfExists bool
 	Name     Identifier // pitr name
 }
@@ -87,6 +88,9 @@ func (node *DropPitr) Format(ctx *FmtCtx) {
 		ctx.WriteString("if exists ")
 	}
 	node.Name.Format(ctx)
+	if node.Internal {
+		ctx.WriteString(" internal")
+	}
 }
 
 func (node *DropPitr) reset() { *node = DropPitr{} }
@@ -106,6 +110,7 @@ func (node *DropPitr) GetQueryType() string     { return QueryTypeOth }
 type CreatePitr struct {
 	statementImpl
 
+	Internal    bool
 	IfNotExists bool
 	Name        Identifier // pitr name
 
@@ -149,6 +154,10 @@ func (node *CreatePitr) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("%v ", node.PitrValue))
 	ctx.WriteString(" ")
 	ctx.WriteString(node.PitrUnit)
+
+	if node.Internal {
+		ctx.WriteString(" internal")
+	}
 }
 
 func (node *CreatePitr) GetStatementType() string { return "Create PITR" }

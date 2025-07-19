@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
 
@@ -128,8 +127,7 @@ type Config struct {
 	// FileService file service configuration
 
 	Engine struct {
-		Type     EngineType           `toml:"type"`
-		Logstore options.LogstoreType `toml:"logstore"`
+		Type EngineType `toml:"type"`
 
 		MoTableStatsUseOldImpl         bool          `toml:"mo-table-stats-use-old-impl"`
 		CNTransferTxnLifespanThreshold time.Duration `toml:"cn-transfer-txn-lifespan-threshold"`
@@ -348,9 +346,6 @@ func (c *Config) Validate() error {
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
-	if c.Engine.Logstore == "" {
-		c.Engine.Logstore = options.LogstoreLogservice
-	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -506,9 +501,6 @@ func (c *Config) SetDefaultValue() {
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
-	if c.Engine.Logstore == "" {
-		c.Engine.Logstore = options.LogstoreLogservice
-	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -643,7 +635,6 @@ type service struct {
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
 	distributeTaeMp        *mpool.MPool
-	cdcMp                  *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService
 	fileService            fileservice.FileService

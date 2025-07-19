@@ -74,6 +74,10 @@ type unnestState struct {
 	batch *batch.Batch
 }
 
+func (u *unnestState) end(tf *TableFunction, proc *process.Process) error {
+	return nil
+}
+
 func (u *unnestState) reset(tf *TableFunction, proc *process.Process) {
 	if u.batch != nil {
 		u.batch.CleanOnlyData()

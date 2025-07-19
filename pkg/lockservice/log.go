@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -29,6 +30,8 @@ import (
 func getLogger(sid string) *log.MOLogger {
 	return runtime.ServiceRuntime(sid).Logger().Named("lockservice")
 }
+
+const maxLogRowCnt = 100
 
 func logLocalLock(
 	logger *log.MOLogger,
@@ -123,7 +126,7 @@ func logHolderAdded(
 			zap.Uint64("table", c.result.LockedOn.Table),
 			bytesArrayField("rows", c.rows),
 			zap.String("opts", c.opts.DebugString()),
-			waitTxnArrayField("holders", lock.holders.txns),
+			waitTxnArrayField("holders", lock.holders.getTxnSlice()),
 			bytesArrayField("waiters", waits),
 		)
 	}
@@ -142,12 +145,17 @@ func logLocalLockFailed(
 	}
 
 	if logger.Enabled(zap.ErrorLevel) {
+		var rs [][]byte
+		if len(rows) > maxLogRowCnt {
+			rs = rows[:100]
+		}
 		logger.Log(
 			"failed to lock on local",
 			getLogOptions(zap.ErrorLevel),
 			txnField(txn),
 			zap.Uint64("table", tableID),
-			bytesArrayField("rows", rows),
+			bytesArrayField("rows", rs),
+			zap.Int("row count", len(rows)),
 			zap.String("opts", options.DebugString()),
 			zap.Error(err),
 		)
@@ -270,12 +278,16 @@ func logRemoteLockFailed(
 	if logger == nil {
 		return
 	}
-
+	var rs [][]byte
+	if len(rows) > maxLogRowCnt {
+		rs = rows[:100]
+	}
 	logger.Log(
 		"failed to lock on remote",
 		getLogOptions(zap.ErrorLevel),
 		txnField(txn),
-		bytesArrayField("rows", rows),
+		bytesArrayField("rows", rs),
+		zap.Int("row count", len(rows)),
 		zap.String("opts", opts.DebugString()),
 		zap.String("remote", remote.DebugString()),
 		zap.Error(err),
@@ -396,17 +408,17 @@ func logLockTableClosed(
 func logDeadLockFound(
 	logger *log.MOLogger,
 	txn pb.WaitTxn,
-	waiters *waiters,
+	cycle string,
 ) {
 	if logger == nil {
 		return
 	}
 
-	if logger.Enabled(zap.DebugLevel) {
+	if logger.Enabled(zap.InfoLevel) {
 		logger.Log("dead lock found",
-			getLogOptions(zap.DebugLevel),
-			zap.String("txn", txn.DebugString()),
-			waitTxnArrayField("wait-txn-list", waiters.waitTxns),
+			getLogOptions(zap.InfoLevel),
+			zap.String("deadlock txn", txn.DebugString()),
+			zap.String("cycle", cycle),
 		)
 	}
 }
@@ -944,6 +956,25 @@ func logTxnCreated(
 			"txn created",
 			getLogOptions(zap.DebugLevel),
 			txnField(txn),
+		)
+	}
+}
+
+func logAbortRemoteDeadlockFailed(
+	logger *log.MOLogger,
+	txn pb.WaitTxn,
+	err error,
+) {
+	if logger == nil {
+		return
+	}
+
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Log(
+			"abort remote dead lock failed",
+			getLogOptions(zap.ErrorLevel),
+			zap.String("txn", txn.DebugString()),
+			zap.Error(err),
 		)
 	}
 }

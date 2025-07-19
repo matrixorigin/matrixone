@@ -21,10 +21,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap"
 )
+
+var ErrCronJobsOpen = moerr.NewInternalErrorNoCtx("cron jobs mock error")
 
 const (
 	CronJobs_Name_GCTransferTable = "GC-Transfer-Table"
@@ -37,6 +40,7 @@ const (
 	CronJobs_Name_ReportStats = "Report-Stats"
 
 	CronJobs_Name_Checker = "Checker"
+	// CronJobs_Name_Scanner = "Scanner"
 )
 
 var CronJobs_Open_WriteMode = []string{
@@ -47,6 +51,7 @@ var CronJobs_Open_WriteMode = []string{
 	CronJobs_Name_GCLogtail,
 	CronJobs_Name_GCLockMerge,
 	CronJobs_Name_ReportStats,
+	// CronJobs_Name_Scanner,
 }
 
 var CronJobs_Open_ReplayMode = []string{
@@ -69,6 +74,7 @@ var CronJobs_Spec = map[string][]bool{
 	CronJobs_Name_GCLockMerge:     {true, true, true, false},
 	CronJobs_Name_ReportStats:     {true, true, true, true},
 	CronJobs_Name_Checker:         {true, false, true, false},
+	// CronJobs_Name_Scanner:         {true, true, false, false},
 }
 
 func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
@@ -85,6 +91,9 @@ func CanAddCronJob(name string, isWriteModeDB, skipMode bool) bool {
 }
 
 func AddCronJobs(db *DB) (err error) {
+	if objectio.SimpleInjected(objectio.FJ_CronJobsOpen) {
+		return ErrCronJobsOpen
+	}
 	isWriteMode := db.IsWriteMode()
 	if isWriteMode {
 		for _, name := range CronJobs_Open_WriteMode {
@@ -121,8 +130,6 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCTransferTable,
 			db.Opts.CheckpointCfg.TransferInterval,
 			func(context.Context) {
-				db.Runtime.PoolUsageReport()
-				// dbutils.PrintMemStats()
 				db.Runtime.TransferDelsMap.Prune(db.Opts.TransferTableTTL)
 				db.Runtime.TransferTable.RunTTL()
 			},
@@ -169,11 +176,27 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if db.Opts.CatalogCfg.DisableGC {
 					return
 				}
-				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if gcWaterMark == nil {
+				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+				if ckp == nil {
 					return
 				}
-				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
+				wartMark := ckp.GetEnd()
+				if wartMark.IsEmpty() {
+					return
+				}
+
+				ts := types.BuildTS(wartMark.Physical()-
+					int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
+				if wartMark.GE(&ts) {
+					wartMark = ts
+				}
+				if db.Opts.GCTimeCheckerFactory != nil {
+					op := db.Opts.GCTimeCheckerFactory(db)
+					if !op(&wartMark) {
+						return
+					}
+				}
+				db.Catalog.GCByTS(ctx, wartMark)
 			},
 			1,
 		)
@@ -202,6 +225,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCLockMerge,
 			options.DefaultLockMergePruneInterval,
 			func(ctx context.Context) {
+				db.Runtime.PoolUsageReport()
 				db.Runtime.LockMergeService.Prune()
 			},
 			1,

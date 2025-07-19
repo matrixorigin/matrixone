@@ -109,6 +109,8 @@ type AggFuncExec interface {
 	// Flush return the aggregation result.
 	Flush() ([]*vector.Vector, error)
 
+	Size() int64
+
 	// Free clean the resource and reuse the aggregation if possible.
 	Free()
 }
@@ -150,28 +152,33 @@ func (m SimpleAggMemoryManager) Mp() *mpool.MPool {
 func MakeAgg(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
-	param ...types.Type) AggFuncExec {
-
+	param ...types.Type,
+) (AggFuncExec, error) {
 	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	if ok {
-		return exec
+		return exec, nil
 	}
 	if _, ok = singleAgg[aggID]; ok && len(param) == 1 {
-		return makeSingleAgg(mg, aggID, isDistinct, param[0])
+		return makeSingleAgg(mg, aggID, isDistinct, param[0]), nil
 	}
-	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
+	errmsg := fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param)
+	return nil, moerr.NewInternalErrorNoCtx(errmsg)
 }
 
-func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) []AggFuncExec {
+func MakeInitialAggListFromList(mg AggMemoryManager, list []AggFuncExec) ([]AggFuncExec, error) {
 	result := make([]AggFuncExec, 0, len(list))
 	for _, v := range list {
 		param, _ := v.TypesInfo()
-		result = append(result, MakeAgg(mg, v.AggID(), v.IsDistinct(), param...))
+		exec, err := MakeAgg(mg, v.AggID(), v.IsDistinct(), param...)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, exec)
 	}
-	return result
+	return result, nil
 }
 
 // makeSingleAgg supports to create an aggregation function executor for single column.
@@ -210,7 +217,8 @@ func makeSingleAgg(
 
 func makeSpecialAggExec(
 	mg AggMemoryManager,
-	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool, error) {
+	id int64, isDistinct bool, params ...types.Type,
+) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
 		case aggIdOfCountColumn:
@@ -224,9 +232,6 @@ func makeSpecialAggExec(
 			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
 		case aggIdOfApproxCount:
 			return makeApproxCount(mg, id, params[0]), true, nil
-		case aggIdOfClusterCenters:
-			exec, err := makeClusterCenters(mg, id, isDistinct, params[0])
-			return exec, true, err
 		case winIdOfRowNumber, winIdOfRank, winIdOfDenseRank:
 			exec, err := makeWindowExec(mg, id, isDistinct)
 			return exec, true, err
@@ -280,18 +285,6 @@ func makeMedian(
 		emptyNull: true,
 	}
 	return newMedianExecutor(mg, info)
-}
-
-func makeClusterCenters(
-	mg AggMemoryManager, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
-	info := singleAggInfo{
-		aggID:     aggID,
-		distinct:  isDistinct,
-		argType:   param,
-		retType:   ClusterCentersReturnType([]types.Type{param}),
-		emptyNull: true,
-	}
-	return newClusterCentersExecutor(mg, info)
 }
 
 func makeWindowExec(

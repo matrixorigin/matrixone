@@ -121,14 +121,14 @@ func ConstructCNTombstoneObjectsTransferFlow(
 		),
 	)
 
-	return ConstructTransferFlow(
+	flow := ConstructTransferFlow(
 		table,
 		objectio.HiddenColumnSelection_None,
-		r,
-		isObjectDeletedFn,
-		newDataObjects,
-		mp,
-		fs), logs, nil
+		r, isObjectDeletedFn, newDataObjects,
+		mp, fs,
+	)
+
+	return flow, logs, nil
 }
 
 func ConstructTransferFlow(

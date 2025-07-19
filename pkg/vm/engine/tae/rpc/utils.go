@@ -81,7 +81,7 @@ func (h *Handle) prefetchDeleteRowID(
 	//start loading jobs asynchronously,should create a new root context.
 	for _, stats := range req.TombstoneStats {
 		location := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
-		err := ioutil.Prefetch(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
+		err := ioutil.Prefetch(h.db.Opts.SID, h.db.Runtime.Fs, location)
 		if err != nil {
 			return err
 		}
@@ -104,7 +104,7 @@ func (h *Handle) prefetchMetadata(
 	//start loading jobs asynchronously,should create a new root context.
 	for _, stats := range req.DataObjectStats {
 		location := stats.BlockLocation(uint16(0), objectio.BlockMaxRows)
-		err := ioutil.PrefetchMeta(h.db.Opts.SID, h.db.Runtime.Fs.Service, location)
+		err := ioutil.PrefetchMeta(h.db.Opts.SID, h.db.Runtime.Fs, location)
 		if err != nil {
 			return err
 		}

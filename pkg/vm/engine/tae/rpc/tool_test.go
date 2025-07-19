@@ -86,12 +86,12 @@ func Test_gcArg(t *testing.T) {
 
 	tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	testutils.WaitExpect(2000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 
 	tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 5*time.Second)
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Runtime.Scheduler.GetPenddingLSNCnt() == 0
+		return tae.AllCheckpointsFinished()
 	})
 
 	assert.NoError(t, txn.Commit(context.Background()))

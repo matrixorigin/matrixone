@@ -37,7 +37,7 @@ func Test_runSql(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Base.SessionInfo.Buf = buffer.New()
 
 	ctx := context.Background()

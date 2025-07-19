@@ -36,6 +36,7 @@ type IBatchBuffer interface {
 
 type OneSchemaBatchBuffer struct {
 	sync.Mutex
+	offHeap   bool
 	sizeCap   int
 	currSize  int
 	highWater int
@@ -60,6 +61,12 @@ func NewOneSchemaBatchBuffer(
 	}
 }
 
+func (bb *OneSchemaBatchBuffer) SetOffHeap(offHeap bool) {
+	bb.Lock()
+	defer bb.Unlock()
+	bb.offHeap = offHeap
+}
+
 func (bb *OneSchemaBatchBuffer) Len() int {
 	bb.Lock()
 	defer bb.Unlock()
@@ -82,7 +89,7 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 		}
 	}
 	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(false, bb.attrs, bb.typs)
+		return batch.NewWithSchema(bb.offHeap, bb.attrs, bb.typs)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -94,7 +101,7 @@ func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 	bb.Lock()
 	defer bb.Unlock()
 	if len(bb.buffer) == 0 {
-		return batch.NewWithSchema(false, bb.attrs, bb.typs)
+		return batch.NewWithSchema(bb.offHeap, bb.attrs, bb.typs)
 	}
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
@@ -1144,4 +1151,32 @@ func DedupSortedBatches(
 		}
 	}
 	return nil
+}
+
+func VectorsCopyToBatch(
+	vecs Vectors,
+	outputBat *batch.Batch,
+	mp *mpool.MPool,
+) (err error) {
+	if len(vecs) == 0 {
+		return
+	}
+	for i, vec := range vecs {
+		if outputBat.Vecs[i] == nil {
+			outputBat.Vecs[i] = movec.NewVec(*vec.GetType())
+		} else {
+			outputBat.Vecs[i].ResetWithNewType(vec.GetType())
+		}
+		if err = outputBat.Vecs[i].UnionBatch(
+			&vec,
+			0,
+			vec.Length(),
+			nil,
+			mp,
+		); err != nil {
+			return
+		}
+	}
+	outputBat.SetRowCount(outputBat.Vecs[0].Length())
+	return
 }

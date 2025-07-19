@@ -324,6 +324,7 @@ const (
 	CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS   uint32 = 0x00400000
 	CLIENT_SESSION_TRACK                  uint32 = 0x00800000
 	CLIENT_DEPRECATE_EOF                  uint32 = 0x01000000
+	CLIENT_ZSTD_COMPRESSION_ALGORITHM     uint32 = 0x04000000
 )
 
 // server status
@@ -367,6 +368,7 @@ const (
 	COM_TIME                CommandType = 0x0f
 	COM_DELAYED_INSERT      CommandType = 0x10
 	COM_CHANGE_USER         CommandType = 0x11
+	COM_REGISTER_SLAVE      CommandType = 0x15
 	COM_STMT_PREPARE        CommandType = 0x16
 	COM_STMT_EXECUTE        CommandType = 0x17
 	COM_STMT_SEND_LONG_DATA CommandType = 0x18
@@ -375,6 +377,7 @@ const (
 	COM_SET_OPTION          CommandType = 0x1b
 	COM_STMT_FETCH          CommandType = 0x1c
 	COM_DAEMON              CommandType = 0x1d
+	COM_BINLOG_DUMP_GTID    CommandType = 0x1e
 	COM_RESET_CONNECTION    CommandType = 0x1f
 )
 

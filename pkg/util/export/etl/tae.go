@@ -33,8 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
 
-const BatchSize = 8192
-
 var _ table.RowWriter = (*TAEWriter)(nil)
 
 // TAEWriter implements table.RowWriter and writes data to a tae file.
@@ -59,11 +57,11 @@ type TAEWriter struct {
 func NewTAEWriter(ctx context.Context, tbl *table.Table, mp *mpool.MPool, filePath string, fs fileservice.FileService) *TAEWriter {
 	w := &TAEWriter{
 		ctx:       ctx,
-		batchSize: BatchSize,
+		batchSize: objectio.BlockMaxRows,
 		mp:        mp,
 		filename:  filePath,
 		fs:        fs,
-		rows:      make([]*table.Row, 0, BatchSize),
+		rows:      make([]*table.Row, 0, objectio.BlockMaxRows),
 	}
 
 	w.idxs = make([]uint16, len(tbl.Columns))

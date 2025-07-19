@@ -1013,7 +1013,7 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 	return n, nil
 }
 
-func (m *mysqlTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (int, error) {
+func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, callback func(context.Context, SqlExecutor) (int, error)) (n int, err error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
 	}
@@ -1052,11 +1052,22 @@ func (m *mysqlTaskStorage) AddCdcTask(ctx context.Context, dt task.DaemonTask, c
 		err = moerr.NewInternalError(ctx, "add cdc task status failed.")
 		return 0, err
 	}
-	return daemonTaskRowsAffected, nil
+	n = daemonTaskRowsAffected
+	return
 }
 
-func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.TaskStatus, callback func(context.Context, task.TaskStatus, map[CdcTaskKey]struct{}, SqlExecutor) (int, error), condition ...Condition) (int, error) {
-	if taskFrameworkDisabled() {
+func (m *mysqlTaskStorage) UpdateCDCTask(
+	ctx context.Context,
+	targetStatus task.TaskStatus,
+	taskCollector func(
+		context.Context,
+		task.TaskStatus,
+		map[CDCTaskKey]struct{},
+		SqlExecutor,
+	) (int, error),
+	condition ...Condition,
+) (int, error) {
+	if taskFrameworkDisabled() || taskCollector == nil {
 		return 0, nil
 	}
 	var affectedCdcRow, affectedTaskRow int
@@ -1076,12 +1087,18 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 		}
 	}()
 
-	taskKeyMap := make(map[CdcTaskKey]struct{}, 0)
-	if callback != nil {
-		affectedCdcRow, err = callback(ctx, targetStatus, taskKeyMap, tx)
-		if err != nil {
-			return 0, err
-		}
+	taskKeyMap := make(map[CDCTaskKey]struct{}, 0)
+	if affectedCdcRow, err = taskCollector(
+		ctx,
+		targetStatus,
+		taskKeyMap,
+		tx,
+	); err != nil {
+		return 0, err
+	}
+
+	if len(taskKeyMap) == 0 {
+		return 0, nil
 	}
 
 	//step3: collect daemon task that we want to update
@@ -1099,7 +1116,7 @@ func (m *mysqlTaskStorage) UpdateCdcTask(ctx context.Context, targetStatus task.
 			return 0, err
 		}
 		//skip task we do not need
-		tInfo := CdcTaskKey{
+		tInfo := CDCTaskKey{
 			AccountId: uint64(dTask.Details.AccountID), //from account  that creates cdc
 			TaskId:    details.CreateCdc.TaskId,
 		}

@@ -19,7 +19,6 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -219,6 +218,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
+			RecvMsgList:            s.DataSource.RecvMsgList,
 		}
 	}
 	// PreScope
@@ -331,6 +331,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
 			isConst:            dsc.IsConst,
+			RecvMsgList:        dsc.RecvMsgList,
 		}
 	}
 	//var relData engine.RelData
@@ -633,14 +634,16 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *productl2.Productl2:
 		relList, colList := getRelColList(t.Result)
 		in.ProductL2 = &pipeline.ProductL2{
-			RelList:    relList,
-			ColList:    colList,
-			JoinMapTag: t.JoinMapTag,
+			RelList:      relList,
+			ColList:      colList,
+			JoinMapTag:   t.JoinMapTag,
+			VectorOpType: t.VectorOpType,
 		}
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
 	case *filter.Filter:
-		in.Filter = t.E
+		in.Filters = t.FilterExprs
+		in.RuntimeFilters = t.RuntimeFilterExprs
 	case *semi.SemiJoin:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,
@@ -706,11 +709,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:  t.Attrs,
-			Rets:   t.Rets,
-			Args:   t.Args,
-			Params: t.Params,
-			Name:   t.FuncName,
+			Attrs:    t.Attrs,
+			Rets:     t.Rets,
+			Args:     t.Args,
+			Params:   t.Params,
+			Name:     t.FuncName,
+			IsSingle: t.IsSingle,
 		}
 
 	case *external.External:
@@ -817,11 +821,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:     convertToPlanTypes(t.Typs),
 		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:  t.TableFunction.Attrs,
-			Rets:   t.TableFunction.Rets,
-			Args:   t.TableFunction.Args,
-			Params: t.TableFunction.Params,
-			Name:   t.TableFunction.FuncName,
+			Attrs:    t.TableFunction.Attrs,
+			Rets:     t.TableFunction.Rets,
+			Args:     t.TableFunction.Args,
+			Params:   t.TableFunction.Params,
+			Name:     t.TableFunction.FuncName,
+			IsSingle: t.TableFunction.IsSingle,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
@@ -839,6 +844,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			updateCtxList[i].DeleteCols = make([]plan.ColRef, len(muCtx.DeleteCols))
 			for j, pos := range muCtx.DeleteCols {
 				updateCtxList[i].DeleteCols[j].ColPos = int32(pos)
+			}
+
+			updateCtxList[i].PartitionCols = make([]plan.ColRef, len(muCtx.PartitionCols))
+			for j, pos := range muCtx.PartitionCols {
+				updateCtxList[i].PartitionCols[j].ColPos = int32(pos)
 			}
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
@@ -922,7 +932,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
@@ -1146,7 +1156,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
-		arg.E = opr.Filter
+		arg.FilterExprs = opr.Filters
+		arg.RuntimeFilterExprs = opr.RuntimeFilters
 		op = arg
 	case vm.Semi:
 		t := opr.GetSemiJoin()
@@ -1216,6 +1227,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Args = opr.TableFunction.Args
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
+		arg.IsSingle = opr.TableFunction.IsSingle
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
@@ -1330,6 +1342,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.Args = opr.TableFunction.Args
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
+		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()

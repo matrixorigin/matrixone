@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -83,6 +82,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shufflebuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
@@ -90,14 +90,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 var constBat *batch.Batch
@@ -126,8 +129,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		IsLast:      srcOpBase.IsLast,
 		CnAddr:      srcOpBase.CnAddr,
 		OperatorID:  srcOpBase.OperatorID,
-		MaxParallel: srcOpBase.MaxParallel,
-		ParallelID:  srcOpBase.ParallelID,
+		MaxParallel: int32(maxParallel),
+		ParallelID:  int32(index),
 	}
 	switch sourceOp.OpType() {
 	case vm.ShuffleBuild:
@@ -331,6 +334,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Result = t.Result
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
+		op.VectorOpType = t.VectorOpType
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -342,7 +346,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.Filter:
 		t := sourceOp.(*filter.Filter)
 		op := filter.NewArgument()
-		op.E = t.E
+		op.FilterExprs = t.FilterExprs
+		op.RuntimeFilterExprs = t.RuntimeFilterExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Semi:
@@ -376,7 +381,9 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		t := sourceOp.(*top.Top)
 		op := top.NewArgument()
 		op.Limit = t.Limit
-		op.TopValueTag = t.TopValueTag
+		if t.TopValueTag > 0 {
+			op.TopValueTag = t.TopValueTag + int32(index)<<16
+		}
 		op.Fs = t.Fs
 		op.SetInfo(&info)
 		return op
@@ -414,10 +421,16 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op := table_function.NewArgument()
 		op.FuncName = t.FuncName
 		op.Args = t.Args
+		op.OffsetTotal = t.OffsetTotal
 		op.Rets = t.Rets
+		op.CanOpt = t.CanOpt
 		op.Attrs = t.Attrs
 		op.Params = t.Params
+		op.IsSingle = t.IsSingle
 		op.SetInfo(&info)
+		if op.FuncName == "generate_series" {
+			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
+		}
 		return op
 	case vm.External:
 		t := sourceOp.(*external.External)
@@ -602,6 +615,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.TableFunction.Rets = t.TableFunction.Rets
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
+		op.TableFunction.IsSingle = t.TableFunction.IsSingle
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -653,14 +667,18 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceOp.OpType()))
 }
 
-func constructRestrict(n *plan.Node, filterExpr *plan.Expr) *filter.Filter {
+func constructRestrict(n *plan.Node, filterExprs []*plan.Expr) *filter.Filter {
 	op := filter.NewArgument()
-	op.E = filterExpr
+	op.FilterExprs = filterExprs
 	op.IsEnd = n.IsEnd
 	return op
 }
 
-func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (vm.Operator, error) {
+func constructDeletion(
+	proc *process.Process,
+	n *plan.Node,
+	eg engine.Engine,
+) (vm.Operator, error) {
 	oldCtx := n.DeleteCtx
 	delCtx := &deletion.DeleteCtx{
 		Ref:             oldCtx.Ref,
@@ -675,19 +693,9 @@ func constructDeletion(n *plan.Node, eg engine.Engine, proc *process.Process) (v
 	op.DeleteCtx = delCtx
 
 	ps := proc.GetPartitionService()
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		oldCtx.TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return op, nil
 	}
-
 	return deletion.NewPartitionDelete(op, oldCtx.TableDef.TblId), nil
 }
 
@@ -832,8 +840,12 @@ func constructMergeblock(eg engine.Engine, n *plan.Node) *mergeblock.MergeBlock 
 func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.LockOp, error) {
 	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
+		partitionColPos := int32(-1)
+		if target.HasPartitionCol {
+			partitionColPos = target.PartitionColIdxInBat
+		}
 		typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+		arg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, partitionColPos, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 	}
 	for _, target := range n.LockTargets {
 		if target.LockTable {
@@ -866,26 +878,23 @@ func constructMultiUpdate(
 			deleteCols[j] = int(col.ColPos)
 		}
 
+		partitionCols := make([]int, len(updateCtx.PartitionCols))
+		for j, col := range updateCtx.PartitionCols {
+			partitionCols[j] = int(col.ColPos)
+		}
+
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
-			ObjRef:     updateCtx.ObjRef,
-			TableDef:   updateCtx.TableDef,
-			InsertCols: insertCols,
-			DeleteCols: deleteCols,
+			ObjRef:        updateCtx.ObjRef,
+			TableDef:      updateCtx.TableDef,
+			InsertCols:    insertCols,
+			DeleteCols:    deleteCols,
+			PartitionCols: partitionCols,
 		}
 	}
 	arg.Action = action
 
 	ps := proc.GetPartitionService()
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		n.UpdateCtxList[0].TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(n.UpdateCtxList[0].TableDef.FeatureFlag) {
 		return arg, nil
 	}
 
@@ -920,20 +929,7 @@ func constructInsert(
 	arg.ToWriteS3 = toS3
 
 	ps := proc.GetPartitionService()
-	if ps == nil {
-		return arg, nil
-	}
-
-	ok, _, err := ps.Is(
-		proc.Ctx,
-		oldCtx.TableDef.TblId,
-		proc.GetTxnOperator(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if !ok {
+	if !ps.Enabled() || !features.IsPartitioned(oldCtx.TableDef.FeatureFlag) {
 		return arg, nil
 	}
 
@@ -991,7 +987,7 @@ func constructStream(n *plan.Node, p [2]int64) *source.Source {
 	return arg
 }
 
-func constructTableFunction(n *plan.Node) *table_function.TableFunction {
+func constructTableFunction(n *plan.Node, qry *plan.Query) *table_function.TableFunction {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.GetOriginCaseName()
@@ -1002,6 +998,7 @@ func constructTableFunction(n *plan.Node) *table_function.TableFunction {
 	arg.Args = n.TblFuncExprList
 	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param
+	arg.IsSingle = n.TableDef.TblFunc.IsSingle
 	arg.Limit = n.Limit
 	return arg
 }
@@ -1010,7 +1007,7 @@ func constructTop(n *plan.Node, topN *plan.Expr) *top.Top {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
-	if len(n.SendMsgList) > 0 {
+	if len(n.SendMsgList) > 0 && n.SendMsgList[0].MsgType == int32(message.MsgTopValue) {
 		arg.TopValueTag = n.SendMsgList[0].MsgTag
 	}
 	return arg
@@ -1728,6 +1725,7 @@ func constructProductL2(n *plan.Node, proc *process.Process) *productl2.Productl
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
+	arg.VectorOpType = n.ExtraOptions
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(n.OnList)
 	for i := range n.SendMsgList {
@@ -2163,7 +2161,7 @@ func constructApply(n, right *plan.Node, applyType int, proc *process.Process) *
 	arg.ApplyType = applyType
 	arg.Result = result
 	arg.Typs = rightTyps
-	arg.TableFunction = constructTableFunction(right)
+	arg.TableFunction = constructTableFunction(right, nil)
 	return arg
 }
 
@@ -2280,4 +2278,89 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 	op := postdml.NewArgument()
 	op.PostDmlCtx = delCtx
 	return op
+}
+
+func constructTableClone(
+	c *Compile,
+	n *plan.Node,
+) (*table_clone.TableClone, error) {
+
+	metaCopy := table_clone.NewTableClone()
+
+	metaCopy.Ctx = &table_clone.TableCloneCtx{
+		Eng:       c.e,
+		SrcTblDef: n.TableDef,
+		SrcObjDef: n.ObjRef,
+
+		ScanSnapshot:    n.ScanSnapshot,
+		DstTblName:      n.InsertCtx.TableDef.Name,
+		DstDatabaseName: n.InsertCtx.TableDef.DbName,
+	}
+
+	var (
+		err error
+		ret executor.Result
+		sql string
+
+		account     = uint32(math.MaxUint32)
+		colOffset   map[int32]uint64
+		hasAutoIncr bool
+	)
+
+	for _, colDef := range n.TableDef.Cols {
+		if colDef.Typ.AutoIncr {
+			hasAutoIncr = true
+			break
+		}
+	}
+
+	if !hasAutoIncr {
+		return metaCopy, nil
+	}
+
+	sql = fmt.Sprintf(
+		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d", n.TableDef.TblId)
+
+	if n.ScanSnapshot != nil {
+		if n.ScanSnapshot.Tenant != nil {
+			account = n.ScanSnapshot.Tenant.TenantID
+		}
+
+		if n.ScanSnapshot.TS != nil {
+			sql = fmt.Sprintf(
+				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
+				n.ScanSnapshot.TS.PhysicalTime, n.TableDef.TblId)
+		}
+	}
+
+	if account == math.MaxUint32 {
+		if account, err = defines.GetAccountId(c.proc.Ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	if ret, err = c.runSqlWithResult(sql, int32(account)); err != nil {
+		return nil, err
+	}
+
+	ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if colOffset == nil {
+			colOffset = make(map[int32]uint64)
+		}
+
+		colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
+		offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+
+		for i := 0; i < rows; i++ {
+			colOffset[colIdxes[i]] = offsets[i]
+		}
+
+		return true
+	})
+
+	ret.Close()
+
+	metaCopy.Ctx.SrcAutoIncrOffsets = colOffset
+
+	return metaCopy, nil
 }

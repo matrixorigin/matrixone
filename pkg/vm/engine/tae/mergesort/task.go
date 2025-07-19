@@ -17,6 +17,7 @@ package mergesort
 import (
 	"context"
 	"fmt"
+	"iter"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ type MergeTaskHost interface {
 	DisposableVecPool
 	Name() string
 	HostHintName() string
+	TaskSourceNote() string
 	GetCommitEntry() *api.MergeCommitEntry
 	InitTransferMaps(blkCnt int)
 	GetTransferMaps() api.TransferMaps
@@ -57,7 +59,7 @@ type MergeTaskHost interface {
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
-	LoadNextBatch(ctx context.Context, objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
+	LoadNextBatch(ctx context.Context, objIdx uint32, reuseBatch *batch.Batch) (*batch.Batch, *nulls.Nulls, func(), error)
 	GetTotalSize() uint64 // total size of all objects, definitely there are cases where the size exceeds 4G, so use uint64
 	GetTotalRowCnt() uint32
 	GetBlockMaxRows() uint32
@@ -95,11 +97,13 @@ func DoMergeAndWrite(
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
 	logMergeStart(
+		mergehost.TaskSourceNote(),
 		mergehost.Name(),
 		txnInfo,
 		mergehost.HostHintName(),
 		commitEntry.StartTs.DebugString(),
 		commitEntry.MergedObjs,
+		int8(commitEntry.Level),
 	)
 	defer func() {
 		if err != nil {
@@ -204,34 +208,47 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 	}
 }
 
-func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
+func iterStatsBs(bss [][]byte) iter.Seq[*objectio.ObjectStats] {
+	return func(yield func(*objectio.ObjectStats) bool) {
+		for _, bs := range bss {
+			stat := objectio.ObjectStats(bs)
+			yield(&stat)
+		}
+	}
+}
+
+func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [][]byte, level int8) {
 	var fromObjsDescBuilder strings.Builder
 	fromSize, estSize := float64(0), float64(0)
 	rows, blkn := 0, 0
+	isTombstone := false
 	for _, o := range mergedObjs {
 		obj := objectio.ObjectStats(o)
 		zm := obj.SortKeyZoneMap()
 		if strings.Contains(name, "tombstone") {
+			isTombstone = true
 			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v),",
 				obj.ObjectName().ObjectId().ShortStringEx(),
 				obj.BlkCnt(),
 				units.BytesSize(float64(obj.OriginSize())),
 				obj.Rows()))
 		} else {
+			isStatement := strings.Contains(name, "statement_info")
 			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v)[%v, %v],",
 				obj.ObjectName().ObjectId().ShortStringEx(),
 				obj.BlkCnt(),
 				units.BytesSize(float64(obj.OriginSize())),
 				obj.Rows(),
-				cutIfByteSlice(zm.GetMin()),
-				cutIfByteSlice(zm.GetMax())))
+				cutIfByteSlice(zm.GetMin(), isStatement),
+				cutIfByteSlice(zm.GetMax(), isStatement)))
 		}
 
 		fromSize += float64(obj.OriginSize())
-		estSize += float64(obj.Rows() * 20)
 		rows += int(obj.Rows())
 		blkn += int(obj.BlkCnt())
 	}
+
+	estSize = float64(EstimateMergeSize(iterStatsBs(mergedObjs)))
 
 	logutil.Info(
 		"[MERGE-START]",
@@ -245,20 +262,23 @@ func logMergeStart(name, txnInfo, host, startTS string, mergedObjs [][]byte) {
 		zap.Int("num-obj", len(mergedObjs)),
 		common.AnyField("num-blk", blkn),
 		common.AnyField("rows", rows),
+		common.AnyField("task-source-note", tasksource),
+		common.AnyField("level", level),
 	)
 
 	if host == "TN" {
-		v2.TaskDNMergeScheduledByCounter.Inc()
-		v2.TaskDNMergedSizeCounter.Add(fromSize)
-	} else if host == "CN" {
-		v2.TaskCNMergeScheduledByCounter.Inc()
-		v2.TaskCNMergedSizeCounter.Add(fromSize)
+		if isTombstone {
+			v2.TaskTombstoneMergeSizeCounter.Add(fromSize)
+		} else {
+			v2.TaskDataMergeSizeCounter.Add(fromSize)
+		}
 	}
 }
 
 func logMergeEnd(name string, start time.Time, objs [][]byte) {
 	toObjsDesc := ""
 	toSize := float64(0)
+	isStatement := strings.Contains(name, "statement_info")
 	for _, o := range objs {
 		obj := objectio.ObjectStats(o)
 		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
@@ -266,6 +286,11 @@ func logMergeEnd(name string, start time.Time, objs [][]byte) {
 			obj.BlkCnt(),
 			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
+		if isStatement {
+			toObjsDesc += fmt.Sprintf("[%v, %v],",
+				cutIfByteSlice(obj.SortKeyZoneMap().GetMin(), isStatement),
+				cutIfByteSlice(obj.SortKeyZoneMap().GetMax(), isStatement))
+		}
 		toSize += float64(obj.OriginSize())
 	}
 
@@ -278,11 +303,36 @@ func logMergeEnd(name string, start time.Time, objs [][]byte) {
 	)
 }
 
-func cutIfByteSlice(value any) any {
-	switch value.(type) {
+func cutIfByteSlice(value any, forCompose bool) any {
+	switch v := value.(type) {
 	case []byte:
-		return "-"
+		if !forCompose {
+			return "-"
+		} else {
+			t, _, _, _ := types.DecodeTuple(v)
+			return t.ErrString(nil)
+		}
 	default:
 	}
 	return value
+}
+
+func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
+	estSize := 0
+	totalSize := 0
+	for obj := range objs {
+		blkRowCnt := 8192
+		if r := obj.Rows(); r == 0 {
+			continue
+		} else if r < 8192 {
+			blkRowCnt = int(r)
+		}
+		// read one block, x 2 factor
+		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2
+		// transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
+		estSize += int(obj.Rows()) * 30
+		totalSize += int(obj.OriginSize()) / 2
+	}
+	estSize += totalSize / 3 * 2 // leave some margin for gc
+	return estSize
 }

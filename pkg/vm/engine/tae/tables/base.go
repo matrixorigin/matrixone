@@ -149,8 +149,8 @@ func (obj *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
 	x := obj.appendMVCC.GetLatestAppendPrepareTSLocked()
 	return x.GT(&startts)
 }
-func (obj *baseObject) GetFs() *objectio.ObjectFS { return obj.rt.Fs }
-func (obj *baseObject) GetID() *common.ID         { return obj.meta.Load().AsCommonID() }
+func (obj *baseObject) GetFs() fileservice.FileService { return obj.rt.Fs }
+func (obj *baseObject) GetID() *common.ID              { return obj.meta.Load().AsCommonID() }
 
 func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) {
 	if !obj.meta.Load().ObjectPersisted() {
@@ -177,7 +177,7 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 		context.Background(),
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		nil,
-		obj.rt.Fs.Service,
+		obj.rt.Fs,
 		location,
 		fileservice.Policy(0),
 		true,
@@ -223,7 +223,7 @@ func (obj *baseObject) Prefetch(blkID uint16) error {
 		if err != nil {
 			return err
 		}
-		return ioutil.Prefetch(obj.rt.SID(), obj.rt.Fs.Service, key)
+		return ioutil.Prefetch(obj.rt.SID(), obj.rt.Fs, key)
 	}
 }
 
@@ -563,7 +563,7 @@ func (obj *baseObject) GetValue(
 		var bat *containers.Batch
 		blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 		err = HybridScanByBlock(
-			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, blkID, mp)
+			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, &blkID, mp)
 		if err != nil {
 			return
 		}
