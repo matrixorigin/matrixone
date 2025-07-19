@@ -53,6 +53,7 @@ const (
 	IndexJoin
 	IndexBuild
 	DedupJoin
+	RightDedupJoin
 
 	Merge
 	MergeTop
