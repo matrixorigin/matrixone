@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2_3_0
+package v3_0_0
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"

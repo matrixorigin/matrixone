@@ -94,3 +94,4 @@ select @id;
 @id
 1000
 drop procedure test_inout_param;
+drop database if exists procedure_test;

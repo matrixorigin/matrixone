@@ -27,8 +27,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-17 19:13:03.71695    cluster            
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp01    2025-07-19 05:49:56.315422    cluster            
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
 insert into s3t values (300001, 34, 23, 1);
@@ -179,6 +178,7 @@ drop database if exists acc_test04;
 create database acc_test04;
 use acc_test04;
 drop table if exists index03;
+
 create table index03 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -193,8 +193,10 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 select count(*) from acc_test02.pri01;
 count(*)
 4
@@ -327,9 +329,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-17 19:13:06.28045    cluster            
-sp07    2025-07-17 19:13:06.256827    cluster            
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp08    2025-07-19 05:49:58.876581    cluster            
+sp07    2025-07-19 05:49:58.859805    cluster            
 use test01;
 create table table03 (col1 int);
 insert into table03 values (1),(2);

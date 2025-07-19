@@ -621,7 +621,6 @@ drop account test_account_01;
 drop snapshot snapshot_01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 drop snapshot if exists snapshot_01;
 create snapshot snapshot_01 for account;
 restore account sys database mo_catalog from snapshot snapshot_01;
@@ -640,4 +639,3 @@ drop account if exists test_account_01;
 drop account if exists test_account_02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        

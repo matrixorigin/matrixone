@@ -25,8 +25,7 @@ drop snapshot if exists sp01;
 create snapshot sp01 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp01    2025-07-17 19:16:03.687915    account    acc01        
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp01    2025-07-19 05:52:55.707381    account    acc01        
 use acc_test01;
 insert into s3t values (300001, 34, 23, 1);
 select count(*) from s3t;
@@ -180,6 +179,7 @@ drop database if exists acc_test04;
 create database acc_test04;
 use acc_test04;
 drop table if exists index03;
+
 create table index03 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -194,8 +194,10 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 select count(*) from acc_test02.pri01;
 count(*)
 4
@@ -330,9 +332,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-17 19:16:06.343817    account    acc01        
-sp07    2025-07-17 19:16:06.319243    account    acc01        
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp08    2025-07-19 05:52:58.143598    account    acc01        
+sp07    2025-07-19 05:52:58.119    account    acc01        
 restore account acc01 from snapshot sp07 to account acc02;
 restore account acc01 from snapshot sp08 to account acc02;
 use test01;
@@ -465,4 +466,3 @@ drop account acc01;
 drop account acc02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        

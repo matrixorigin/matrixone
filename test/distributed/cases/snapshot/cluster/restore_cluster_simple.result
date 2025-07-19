@@ -495,12 +495,10 @@ count(*)
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:06:21.366961    account    sys        
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2025-07-17 19:11:48.839946    cluster            
-account_sp    2025-07-17 19:06:21.366961    account    sys        
+cluster_sp    2025-07-19 05:48:42.971832    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 drop database if exists snapshot_read_1;
@@ -594,4 +592,3 @@ show databases like 'test_snapshot_restore';
 Database
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:06:21.366961    account    sys        

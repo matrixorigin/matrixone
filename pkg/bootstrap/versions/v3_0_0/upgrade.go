@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v2_3_0
+package v3_0_0
 
 import (
 	"context"
@@ -28,7 +28,7 @@ import (
 var (
 	Handler = &versionHandle{
 		metadata: versions.Version{
-			Version:           "2.3.0",
+			Version:           "3.0.0",
 			MinUpgradeVersion: "2.2.0",
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,

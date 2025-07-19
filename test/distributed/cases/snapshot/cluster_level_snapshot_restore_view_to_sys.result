@@ -435,6 +435,7 @@ drop snapshot sp04;
 drop table employees;
 drop table departments;
 drop table if exists partition01;
+
 create table partition01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -449,10 +450,14 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 drop view if exists view01;
+
 create view view01 as select * from partition01;
+
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
@@ -460,6 +465,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 drop snapshot if exists sp05;
 create snapshot sp05 for cluster;
 insert into partition01 values (9003,'1999-02-20', 'BOB', 'DOCTOR', 'F', '2009-02-20');
+
 select * from view01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
@@ -481,6 +487,7 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop table partition01;
+
 select * from view01;
 SQL parser error: table "partition01" does not exist
 select * from view01{snapshot = 'sp05'};
@@ -499,9 +506,11 @@ emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 9003    1999-02-20    BOB    DOCTOR    F    2009-02-20
 drop view view01;
+
 drop snapshot sp06;
 drop snapshot sp05;
 drop table partition01;
+
 drop database test;
 drop database if exists test01;
 create database test01;
@@ -771,4 +780,3 @@ drop snapshot sp100;
 drop snapshot sp101;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        

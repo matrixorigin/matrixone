@@ -65,7 +65,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-306727    test01    def    create database test01    0    1    2025-07-17 12:13:09    0    
+306623    test01    def    create database test01    0    1    2025-07-18 22:50:02    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -102,7 +102,7 @@ count(*)
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-306727    test01    def    create database test01    0    1    2025-07-17 12:13:09    0    
+306623    test01    def    create database test01    0    1    2025-07-18 22:50:02    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 attname
 col1
@@ -156,10 +156,10 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-306755    test02    def    create database test02    0    1    2025-07-17 12:13:09    0    
+306651    test02    def    create database test02    0    1    2025-07-18 22:50:03    0    
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-1    mo_catalog    mo_catalog        0    0    2025-07-17 12:05:10    0    
+1    mo_catalog    mo_catalog        0    0    2025-07-18 22:30:42    0    
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
@@ -272,7 +272,7 @@ count(*)
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 dat_id    datname    dat_catalog_name    dat_createsql    owner    creator    created_time    account_id    dat_type
-306786    test03    def    create database test03    0    1    2025-07-17 12:13:10    0    
+306681    test03    def    create database test03    0    1    2025-07-18 22:50:03    0    
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 attname
 empno
@@ -290,7 +290,7 @@ loc
 __mo_rowid
 show snapshots where snapshot_name = 'sp04';
 snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
-sp04    2025-07-17 19:13:10.950069    cluster            
+sp04    2025-07-19 05:50:04.085836    cluster            
 select * from aff01{snapshot = 'sp04'};
 empno    ename    job    mgr    hiredate    sal    comm    deptno
 7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
@@ -526,9 +526,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp08    2025-07-17 19:13:12.53012    cluster            
-sp07    2025-07-17 19:13:12.506337    cluster            
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp08    2025-07-19 05:50:05.133412    cluster            
+sp07    2025-07-19 05:50:05.110286    cluster            
 restore account sys from snapshot sp08;
 select * from table02;
 col1    col2
@@ -577,9 +576,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sp10    2025-07-17 19:13:12.951626    cluster            
-sp09    2025-07-17 19:13:12.926271    cluster            
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+sp10    2025-07-19 05:50:05.547588    cluster            
+sp09    2025-07-19 05:50:05.524238    cluster            
 restore account sys from snapshot sp09;
 select * from table02;
 col1    col2

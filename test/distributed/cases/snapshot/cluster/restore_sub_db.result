@@ -8,7 +8,7 @@ insert into t1 values (1),(2),(3);
 create publication pubname1 database db1 account acc01 comment 'publish db1 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    acc01        2025-07-17 12:12:33    null    publish db1 database
+pubname1    db1    *    acc01        2025-07-18 22:49:26    null    publish db1 database
 show databases like 'db1';
 Database
 db1
@@ -33,7 +33,7 @@ insert into t2 values (1),(2),(3);
 create publication pubname2 database db2 account sys comment 'publish db2 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    sys        2025-07-17 12:12:33    null    publish db2 database
+pubname2    db2    *    sys        2025-07-18 22:49:26    null    publish db2 database
 show databases like 'db2';
 Database
 db2
@@ -41,7 +41,7 @@ drop snapshot if exists snap1;
 create snapshot snap1 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snap1    2025-07-17 19:12:33.34907    account    acc01        
+snap1    2025-07-19 05:49:26.873258    account    acc01        
 drop database if exists sub_db1;
 show databases like 'sub_db1';
 Database
@@ -88,7 +88,7 @@ insert into t1 values (1),(2),(3);
 create publication pubname1 database db1 account acc01 comment 'publish db1 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname1    db1    *    acc01        2025-07-17 12:12:33    null    publish db1 database
+pubname1    db1    *    acc01        2025-07-18 22:49:28    null    publish db1 database
 show databases like 'db1';
 Database
 db1
@@ -113,7 +113,7 @@ insert into t2 values (1),(2),(3);
 create publication pubname2 database db2 account sys comment 'publish db2 database';
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pubname2    db2    *    sys        2025-07-17 12:12:33    null    publish db2 database
+pubname2    db2    *    sys        2025-07-18 22:49:28    null    publish db2 database
 show databases like 'db2';
 Database
 db2
@@ -121,8 +121,7 @@ drop snapshot if exists snap2;
 create snapshot snap2 for account acc01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-snap2    2025-07-17 19:12:33.975018    account    acc01        
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+snap2    2025-07-19 05:49:28.727931    account    acc01        
 drop database if exists sub_db1;
 show databases like 'sub_db1';
 Database
@@ -159,6 +158,5 @@ drop publication if exists pubname1;
 drop database if exists db1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2025-07-17 19:12:33.077715    account    sys        
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
