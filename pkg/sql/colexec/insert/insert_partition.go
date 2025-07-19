@@ -16,6 +16,7 @@ package insert
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -30,6 +31,7 @@ type PartitionInsert struct {
 
 	raw     *Insert
 	tableID uint64
+	meta    partition.PartitionMetadata
 }
 
 func NewPartitionInsert(
@@ -69,6 +71,11 @@ func (op *PartitionInsert) Prepare(
 		op.OpAnalyzer.Reset()
 	}
 
+	var err error
+	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(proc.Ctx, op.tableID, proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
 	op.raw.OperatorBase = op.OperatorBase
 	return op.raw.Prepare(proc)
 }
@@ -89,16 +96,8 @@ func (op *PartitionInsert) Call(
 	}
 
 	op.raw.delegated = true
-	op.raw.input = input
 
-	ps := proc.GetPartitionService()
-
-	res, err := ps.Prune(
-		proc.Ctx,
-		op.tableID,
-		input.Batch,
-		proc.GetTxnOperator(),
-	)
+	res, err := partitionprune.Prune(proc, input.Batch, op.meta, -1)
 	if err != nil {
 		return vm.CallResult{}, err
 	}
@@ -131,6 +130,7 @@ func (op *PartitionInsert) Call(
 				return false
 			}
 			op.raw.ctr.source = rel
+			op.raw.input = vm.CallResult{Batch: bat}
 			_, e := op.raw.Call(proc)
 			if e != nil {
 				err = e

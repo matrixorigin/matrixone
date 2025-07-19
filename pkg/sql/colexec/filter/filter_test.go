@@ -18,8 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 type filterTestCase struct {
@@ -39,14 +38,9 @@ type filterTestCase struct {
 	getRowCount int
 }
 
-var tcs []filterTestCase
-
-func init() {
+func makeTestCases(t *testing.T) []filterTestCase {
 	boolType := types.T_bool.ToType()
 	int32Type := types.T_int32.ToType()
-
-	fr0, _ := function.GetFunctionByName(context.TODO(), "and", []types.Type{boolType, boolType})
-	fid0 := fr0.GetEncodedOverloadID()
 
 	fr1, _ := function.GetFunctionByName(context.TODO(), ">", []types.Type{int32Type, int32Type})
 	fid1 := fr1.GetEncodedOverloadID()
@@ -54,32 +48,34 @@ func init() {
 	fr2, _ := function.GetFunctionByName(context.TODO(), "<", []types.Type{int32Type, int32Type})
 	fid2 := fr2.GetEncodedOverloadID()
 
-	tcs = []filterTestCase{
+	return []filterTestCase{
 		// case1: Contains one conditional expression
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Filter{
-				E: &plan.Expr{
-					Typ: plan2.MakePlan2Type(&boolType),
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: &plan.ObjectRef{
-								ObjName: ">",
-								Obj:     fid1,
-							},
+				FilterExprs: []*plan.Expr{
+					{
+						Typ: plan2.MakePlan2Type(&boolType),
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: ">",
+									Obj:     fid1,
+								},
 
-							Args: []*plan.Expr{
-								{
-									Typ: plan2.MakePlan2Type(&int32Type),
-									Expr: &plan.Expr_Col{
-										Col: &plan.ColRef{
-											RelPos: 0,
-											ColPos: 0,
-											Name:   "a",
+								Args: []*plan.Expr{
+									{
+										Typ: plan2.MakePlan2Type(&int32Type),
+										Expr: &plan.Expr_Col{
+											Col: &plan.ColRef{
+												RelPos: 0,
+												ColPos: 0,
+												Name:   "a",
+											},
 										},
 									},
+									makePlan2Int32ConstExprWithType(10),
 								},
-								makePlan2Int32ConstExprWithType(10),
 							},
 						},
 					},
@@ -96,66 +92,55 @@ func init() {
 		},
 		// case2: Contains two conditional expressions
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			arg: &Filter{
-				E: &plan.Expr{
-					Typ: plan2.MakePlan2Type(&boolType),
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: &plan.ObjectRef{
-								ObjName: "and",
-								Obj:     fid0,
-							},
-							Args: []*plan.Expr{
-								{
-									Typ: plan2.MakePlan2Type(&boolType),
-									Expr: &plan.Expr_F{
-										F: &plan.Function{
-											Func: &plan.ObjectRef{
-												ObjName: ">",
-												Obj:     fid1,
-											},
-
-											Args: []*plan.Expr{
-												{
-													Typ: plan2.MakePlan2Type(&int32Type),
-													Expr: &plan.Expr_Col{
-														Col: &plan.ColRef{
-															RelPos: 0,
-															ColPos: 0,
-															Name:   "a",
-														},
-													},
-												},
-												makePlan2Int32ConstExprWithType(10),
-											},
-										},
-									},
+				FilterExprs: []*plan.Expr{
+					{
+						Typ: plan2.MakePlan2Type(&boolType),
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: ">",
+									Obj:     fid1,
 								},
-								{
-									Typ: plan2.MakePlan2Type(&boolType),
-									Expr: &plan.Expr_F{
-										F: &plan.Function{
-											Func: &plan.ObjectRef{
-												ObjName: "<",
-												Obj:     fid2,
-											},
 
-											Args: []*plan.Expr{
-												{
-													Typ: plan2.MakePlan2Type(&int32Type),
-													Expr: &plan.Expr_Col{
-														Col: &plan.ColRef{
-															RelPos: 0,
-															ColPos: 1,
-															Name:   "b",
-														},
-													},
-												},
-												makePlan2Int32ConstExprWithType(40),
+								Args: []*plan.Expr{
+									{
+										Typ: plan2.MakePlan2Type(&int32Type),
+										Expr: &plan.Expr_Col{
+											Col: &plan.ColRef{
+												RelPos: 0,
+												ColPos: 0,
+												Name:   "a",
 											},
 										},
 									},
+									makePlan2Int32ConstExprWithType(10),
+								},
+							},
+						},
+					},
+					{
+						Typ: plan2.MakePlan2Type(&boolType),
+						Expr: &plan.Expr_F{
+							F: &plan.Function{
+								Func: &plan.ObjectRef{
+									ObjName: "<",
+									Obj:     fid2,
+								},
+
+								Args: []*plan.Expr{
+									{
+										Typ: plan2.MakePlan2Type(&int32Type),
+										Expr: &plan.Expr_Col{
+											Col: &plan.ColRef{
+												RelPos: 0,
+												ColPos: 1,
+												Name:   "b",
+											},
+										},
+									},
+									makePlan2Int32ConstExprWithType(40),
 								},
 							},
 						},
@@ -175,7 +160,7 @@ func init() {
 }
 
 func TestFilter(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg, tc.proc)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
@@ -364,7 +349,7 @@ func MakeFilterMockBatchs() *batch.Batch {
 
 func TestIssue18454(t *testing.T) {
 	mp, _ := mpool.NewMPool("", 0, 0)
-	proc := testutil.NewProcessWithMPool("", mp)
+	proc := testutil.NewProcessWithMPool(t, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
@@ -399,7 +384,7 @@ func TestIssue18454(t *testing.T) {
 
 func BenchmarkPlanConstandFold1(b *testing.B) {
 	mp, _ := mpool.NewMPool("", 0, 0)
-	proc := testutil.NewProcessWithMPool("", mp)
+	proc := testutil.NewProcessWithMPool(b, "", mp)
 	expr := generateFoldCase1()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -414,7 +399,7 @@ func BenchmarkPlanConstandFold1(b *testing.B) {
 
 func BenchmarkExecutorConstandFold1(b *testing.B) {
 	mp, _ := mpool.NewMPool("", 0, 0)
-	proc := testutil.NewProcessWithMPool("", mp)
+	proc := testutil.NewProcessWithMPool(b, "", mp)
 	expr := generateFoldCase1()
 	proc.SetBaseProcessRunningStatus(true)
 	b.ResetTimer()
@@ -428,7 +413,7 @@ func BenchmarkExecutorConstandFold1(b *testing.B) {
 
 func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 	mp, _ := mpool.NewMPool("", 0, 0)
-	proc := testutil.NewProcessWithMPool("", mp)
+	proc := testutil.NewProcessWithMPool(b, "", mp)
 	proc.SetBaseProcessRunningStatus(true)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
@@ -452,7 +437,7 @@ func BenchmarkExecutorConstandFold2_Reuse(b *testing.B) {
 
 func BenchmarkExecutorConstandFold2_NoFree(b *testing.B) {
 	mp, _ := mpool.NewMPool("", 0, 0)
-	proc := testutil.NewProcessWithMPool("", mp)
+	proc := testutil.NewProcessWithMPool(b, "", mp)
 	newParamForFoldCase2(proc)
 	expr := generateFoldCase2()
 	proc.SetBaseProcessRunningStatus(true)
@@ -698,5 +683,361 @@ func generateFoldCase2() *plan.Expr {
 				},
 			},
 		},
+	}
+}
+
+func TestConstantTranspose(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	int32Type := types.T_int32.ToType()
+	boolType := types.T_bool.ToType()
+
+	fr, _ := function.GetFunctionByName(proc.Ctx, "=", []types.Type{int32Type, int32Type})
+	fid := fr.GetEncodedOverloadID()
+
+	makeConstExpr := func(val int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{
+				Id:          int32(types.T_int32),
+				NotNullable: true,
+			},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Isnull: false,
+					Value:  &plan.Literal_I32Val{I32Val: val},
+				},
+			},
+		}
+	}
+
+	makeAddExpr := func(left, right *plan.Expr) *plan.Expr {
+		expr, _ := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{left, right})
+		return expr
+	}
+
+	makeSubExpr := func(left, right *plan.Expr) *plan.Expr {
+		expr, _ := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "-", []*plan.Expr{left, right})
+		return expr
+	}
+
+	colExpr := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&int32Type),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 0},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		input  *plan.Expr
+		expect *plan.Expr
+	}{
+		{
+			name: "simple-const-right",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeConstExpr(42),
+						},
+					},
+				},
+			},
+			expect: nil,
+		},
+		{
+			name: "complex-expr",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							makeAddExpr(
+								colExpr,
+								makeConstExpr(10),
+							),
+							makeConstExpr(42),
+						},
+					},
+				},
+			},
+			expect: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeSubExpr(
+								makeConstExpr(42),
+								makeConstExpr(10),
+							),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "only-swap-already-simple",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							makeConstExpr(100),
+							colExpr,
+						},
+					},
+				},
+			},
+			expect: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeConstExpr(100),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "complex-expression-with-multiple-ops",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							makeConstExpr(-1),
+							makeAddExpr(
+								makeAddExpr(
+									makeAddExpr(
+										makeAddExpr(
+											makeConstExpr(-8),
+											makeConstExpr(2),
+										),
+										colExpr,
+									),
+									makeConstExpr(-1),
+								),
+								makeConstExpr(5),
+							),
+						},
+					},
+				},
+			},
+			expect: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeSubExpr(
+								makeSubExpr(
+									makeSubExpr(
+										makeConstExpr(-1),
+										makeConstExpr(5),
+									),
+									makeConstExpr(-1),
+								),
+								makeAddExpr(
+									makeConstExpr(-8),
+									makeConstExpr(2),
+								),
+							),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "multiple-constants-in-both-sides",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							makeAddExpr(
+								colExpr,
+								makeConstExpr(10),
+							),
+							makeAddExpr(
+								makeConstExpr(5),
+								makeConstExpr(5),
+							),
+						},
+					},
+				},
+			},
+			expect: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeSubExpr(
+								makeAddExpr(
+									makeConstExpr(5),
+									makeConstExpr(5),
+								),
+								makeConstExpr(10),
+							),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "nested-expressions",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							makeAddExpr(
+								makeAddExpr(
+									makeConstExpr(100),
+									colExpr,
+								),
+								makeConstExpr(50),
+							),
+							makeConstExpr(200),
+						},
+					},
+				},
+			},
+			expect: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeSubExpr(
+								makeSubExpr(
+									makeConstExpr(200),
+									makeConstExpr(50),
+								),
+								makeConstExpr(100),
+							),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "unsupported-expression",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "*", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeConstExpr(5),
+						},
+					},
+				},
+			},
+			expect: nil,
+		},
+		{
+			name: "more-complex-expression-with-multiple-operations",
+			input: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							makeConstExpr(2),
+							makeAddExpr(
+								makeSubExpr(
+									makeAddExpr(
+										makeAddExpr(
+											makeAddExpr(
+												makeSubExpr(
+													makeAddExpr(
+														makeConstExpr(-9),
+														makeConstExpr(8),
+													),
+													makeConstExpr(7),
+												),
+												makeConstExpr(6),
+											),
+											makeConstExpr(2),
+										),
+										colExpr,
+									),
+									makeConstExpr(1),
+								),
+								makeConstExpr(5),
+							),
+						},
+					},
+				},
+			},
+			expect: &plan.Expr{
+				Typ: plan2.MakePlan2Type(&boolType),
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{ObjName: "=", Obj: fid},
+						Args: []*plan.Expr{
+							colExpr,
+							makeSubExpr(
+								makeAddExpr(
+									makeSubExpr(
+										makeConstExpr(2),
+										makeConstExpr(5),
+									),
+									makeConstExpr(1),
+								),
+								makeAddExpr(
+									makeAddExpr(
+										makeSubExpr(
+											makeAddExpr(
+												makeConstExpr(-9),
+												makeConstExpr(8),
+											),
+											makeConstExpr(7),
+										),
+										makeConstExpr(6),
+									),
+									makeConstExpr(2),
+								),
+							),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := plan2.DeepCopyExpr(tt.input)
+
+			result, err := plan2.ConstantTranspose(input, proc)
+			require.NoError(t, err)
+
+			if tt.expect == nil {
+				require.Equal(t, tt.input.String(), result.String())
+			} else {
+				require.Equal(t, tt.expect.String(), result.String())
+			}
+		})
 	}
 }

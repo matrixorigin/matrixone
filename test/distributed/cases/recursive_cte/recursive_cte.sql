@@ -28,3 +28,8 @@ CREATE TABLE employees_hierarchy (id INT PRIMARY KEY, name VARCHAR(50),manager_i
 INSERT INTO employees_hierarchy (id, name, manager_id) VALUES(1, 'Alice', NULL), (2, 'Bob', 1),(3, 'Charlie', 1),(4, 'David', 2),(5, 'Eve', 2),(6, 'Frank', 3);
 WITH RECURSIVE employee_hierarchy_cte (id, name, manager_id, level) AS (SELECT id, name, manager_id, 0 FROM employees_hierarchy WHERE name = 'Alice' UNION ALL SELECT e.id, e.name, e.manager_id, eh.level + 1 FROM employees_hierarchy AS e JOIN employee_hierarchy_cte AS eh ON e.manager_id = eh.id) SELECT name, level FROM employee_hierarchy_cte;
 WITH RECURSIVE employee_hierarchy_cte (id, name, manager_id, level) AS (SELECT id, name, manager_id, 0 FROM employees_hierarchy WHERE name = 'Alice' UNION ALL SELECT e.id, e.name, e.manager_id, eh.level + 1 FROM employees_hierarchy AS e JOIN employee_hierarchy_cte AS eh ON e.manager_id = eh.id) SELECT t.name, t.level FROM employee_hierarchy_cte as t;
+drop table if exists t1;
+create table t1(id bigint primary key, parent_id bigint, tenant_id varchar(50));
+insert into t1 select *,*,* from generate_series(1000000) g;
+WITH recursive tb (id, parent_id) AS (SELECT id,parent_id FROM t1 WHERE id IN ( 1937478033946447874, 1,2,3) AND tenant_id != '000000' UNION ALL SELECT c.id, c.parent_id FROM t1 c JOIN tb t ON c.id = t.parent_id WHERE c.tenant_id != '000000') select count(*) from tb;
+drop table if exists t1;

@@ -58,6 +58,7 @@ var (
 	GetTableShards           = strings.ToUpper("get-table-shards")
 	MoTableStats             = strings.ToUpper("MoTableStats")
 	WorkspaceThreshold       = strings.ToUpper("WorkspaceThreshold")
+	TableExtra               = strings.ToUpper("table-extra")
 )
 
 var (
@@ -100,6 +101,7 @@ var (
 		GetTableShards:           handleGetTableShards,
 		MoTableStats:             handleMoTableStats,
 		WorkspaceThreshold:       handleWorkspaceThreshold,
+		TableExtra:               handleTableExtra,
 	}
 )
 

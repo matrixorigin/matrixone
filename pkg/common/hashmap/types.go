@@ -15,6 +15,7 @@
 package hashmap
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -46,6 +47,10 @@ type HashMap interface {
 	GroupCount() uint64
 	// Size returns the hash map's size
 	Size() int64
+	// MarshalBinary serializes the hash map into a byte slice.
+	MarshalBinary() ([]byte, error)
+	// UnmarshalBinary deserializes a byte slice into the hash map.
+	UnmarshalBinary(data []byte, allocator malloc.Allocator) error
 }
 
 // Iterator allows users to do insert or find operations on hash tables in bulk.

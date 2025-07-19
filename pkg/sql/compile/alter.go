@@ -20,10 +20,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
@@ -47,11 +53,17 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
+	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	originRel, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		return err
 	}
 
+	oldId := originRel.GetTableID(c.proc.Ctx)
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 0. lock origin database metadata in catalog
@@ -120,9 +132,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
-
+	opt := executor.StatementOption{}
+	if qry.SkipPkDedup {
+		opt = opt.WithSkipPkDedup(qry.CopyTableDef.Name)
+	}
 	// 4. copy the original table data to the temporary replica table
-	err = c.runSql(qry.InsertTmpDataSql)
+	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", c.db),
@@ -134,7 +149,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 
 	// 5. drop original table
-	if err = dbSource.Delete(c.proc.Ctx, tblName); err != nil {
+	if err := c.runSqlWithOptions("drop table `"+tblName+"`", executor.StatementOption{}.WithIgnoreForeignKey()); err != nil {
 		c.proc.Error(c.proc.Ctx, "drop original table for alter table",
 			zap.String("databaseName", c.db),
 			zap.String("origin tableName", qry.GetTableDef().Name),
@@ -160,22 +175,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	// 5.2 delete all index table of the original table
-	if qry.TableDef.Indexes != nil {
-		for _, indexdef := range qry.TableDef.Indexes {
-			if indexdef.TableExist {
-				if err = dbSource.Delete(c.proc.Ctx, indexdef.IndexTableName); err != nil {
-					c.proc.Error(c.proc.Ctx, "delete all index table of origin table for alter table",
-						zap.String("databaseName", c.db),
-						zap.String("origin tableName", qry.GetTableDef().Name),
-						zap.String("origin tableName index table", indexdef.IndexTableName),
-						zap.Error(err))
-					return err
-				}
-			}
-		}
-	}
-
 	//6. obtain relation for new tables
 	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
@@ -187,6 +186,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	newId := newRel.GetTableID(c.proc.Ctx)
 	//--------------------------------------------------------------------------------------------------------------
 	// 7. rename temporary replica table into the original table( Table Id remains unchanged)
 	copyTblName := qry.CopyTableDef.Name
@@ -210,6 +210,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		// 8. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
+		extra := newRel.GetExtraInfo()
+		id := newRel.GetTableID(c.proc.Ctx)
 
 		for _, indexDef := range newTableDef.Indexes {
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) ||
@@ -226,9 +228,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		for _, multiTableIndex := range multiTableIndexes {
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorIvfFlatIndex(c, id, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(c, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
+				err = s.handleVectorHnswIndex(c, id, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
@@ -283,6 +285,18 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			}
 		}
 	}
+
+	// update merge settings in mo_catalog.mo_merge_settings
+	err = c.runSqlWithSystemTenant(fmt.Sprintf(updateMoMergeSettings, newId, accountId, oldId))
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "update mo_catalog.mo_merge_settings for alter table",
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Uint64("origin table id", oldId),
+			zap.Uint64("copy table id", newId),
+			zap.Error(err))
+		return err
+	}
 	return nil
 }
 
@@ -294,6 +308,65 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetAlterTable()
+
+	ps := c.proc.GetPartitionService()
+	if !ps.Enabled() ||
+		!features.IsPartitioned(qry.TableDef.FeatureFlag) {
+		return s.doAlterTable(c)
+	}
+
+	switch qry.AlgorithmType {
+	case plan.AlterTable_COPY:
+		return s.doAlterTable(c)
+	default:
+		// alter primary table
+		if err := s.doAlterTable(c); err != nil {
+			return err
+		}
+
+		// alter all partition tables
+		metadata, err := ps.GetPartitionMetadata(
+			c.proc.Ctx,
+			qry.TableDef.TblId,
+			c.proc.Base.TxnOperator,
+		)
+		if err != nil {
+			return err
+		}
+
+		st, _ := parsers.ParseOne(
+			c.proc.Ctx,
+			dialect.MYSQL,
+			qry.RawSQL,
+			c.getLower(),
+		)
+		stmt := st.(*tree.AlterTable)
+		table := stmt.Table
+		stmt.PartitionOption = nil
+		for _, p := range metadata.Partitions {
+			stmt.Table = tree.NewTableName(
+				tree.Identifier(p.PartitionTableName),
+				table.ObjectNamePrefix,
+				table.AtTsExpr,
+			)
+			sql := tree.StringWithOpts(
+				stmt,
+				dialect.MYSQL,
+				tree.WithQuoteIdentifier(),
+				tree.WithSingleQuoteString(),
+			)
+			if err := c.runSql(sql); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func (s *Scope) doAlterTable(c *Compile) error {
+	qry := s.Plan.GetDdl().GetAlterTable()
+
+	var err error
 	if qry.AlgorithmType == plan.AlterTable_COPY {
 		err = s.AlterTableCopy(c)
 	} else {
@@ -312,7 +385,6 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 			}
 		}
 	}
-
 	return err
 }
 

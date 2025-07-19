@@ -40,14 +40,10 @@ type projectionTestCase struct {
 	proc  *process.Process
 }
 
-var (
-	tcs []projectionTestCase
-)
-
-func init() {
-	tcs = []projectionTestCase{
+func makeTestCases(t *testing.T) []projectionTestCase {
+	return []projectionTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int8.ToType(),
 			},
@@ -74,20 +70,20 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestPrepare(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 	}
 }
 
 func TestProjection(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		resetChildren(tc.arg)
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)

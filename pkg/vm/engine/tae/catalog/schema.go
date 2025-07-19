@@ -202,11 +202,9 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 			return moerr.NewInternalErrorNoCtxf("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
 		}
 		targetCol.Name = rename.NewName
-		// a -> b, z -> a, m -> z
-		// only m column deletion should be sent to cn. a and z can be seen as update according to pk, <tid-colname>
-		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, rename.OldName)
-		s.removeDroppedName(rename.NewName)
-		logutil.Infof("[Alter] rename column %s %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
+		s.NameMap[targetCol.Name] = targetCol.Idx
+		s.Extra.ColumnChanged = true
+		logutil.Infof("[Alter] rename column %s -> %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
 		add := req.GetAddColumn()
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)
@@ -232,7 +230,6 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		}
 
 		s.Extra.ColumnChanged = true
-		s.removeDroppedName(newcol.Name)
 		s.Extra.NextColSeqnum += 1
 		return s.Finalize(true) // rebuild sortkey
 	case apipb.AlterKind_DropColumn:
@@ -283,18 +280,6 @@ func (s *Schema) EstimateRowSize() (size int) {
 func (s *Schema) IsSameColumns(other *Schema) bool {
 	return s.Extra.NextColSeqnum == other.Extra.NextColSeqnum &&
 		len(s.ColDefs) == len(other.ColDefs)
-}
-
-func (s *Schema) removeDroppedName(name string) {
-	idx := -1
-	for i, s := range s.Extra.DroppedAttrs {
-		if s == name {
-			idx = i
-		}
-	}
-	if idx >= 0 {
-		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs[:idx], s.Extra.DroppedAttrs[idx+1:]...)
-	}
 }
 
 func (s *Schema) HasPK() bool      { return s.SortKey != nil && s.SortKey.IsPrimary() }
@@ -362,14 +347,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	}
 	n += int64(sn2)
 
-	if ver <= IOET_WALTxnCommand_Table_V1 {
-		s.CatalogVersion = pkgcatalog.CatalogVersion_V1
-	} else {
-		if sn2, err = r.Read(types.EncodeUint32(&s.CatalogVersion)); err != nil {
-			return
-		}
-		n += int64(sn2)
+	if sn2, err = r.Read(types.EncodeUint32(&s.CatalogVersion)); err != nil {
+		return
 	}
+	n += int64(sn2)
 
 	var sn int64
 	if sn, err = s.AcInfo.ReadFrom(r); err != nil {
@@ -480,14 +461,10 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 			return
 		}
 		n += sn
-		if ver <= IOET_WALTxnCommand_Table_V2 {
-			def.EnumValues = ""
-		} else {
-			if def.EnumValues, sn, err = objectio.ReadString(r); err != nil {
-				return
-			}
-			n += sn
+		if def.EnumValues, sn, err = objectio.ReadString(r); err != nil {
+			return
 		}
+		n += sn
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -603,7 +580,8 @@ func (s *Schema) ReadFromBatch(
 	idxes []int32,
 	seqNums []uint16,
 	offset int,
-	targetTid uint64) (next int) {
+	checkFn func(currentName string, currentTid uint64) (goNext bool),
+) (next int) {
 	nameVec := bat.GetVectorByName(pkgcatalog.SystemColAttr_RelName)
 	defer func() {
 		slices.SortStableFunc(s.ColDefs, func(i, j *ColDef) int {
@@ -617,7 +595,7 @@ func (s *Schema) ReadFromBatch(
 		name := nameVec.GetDownstreamVector().GetStringAt(offset)
 		id := tids[offset]
 		// every schema has 1 rowid column as last column, if have one, break
-		if name != s.Name || targetTid != id {
+		if !checkFn(name, id) {
 			break
 		}
 		def := new(ColDef)

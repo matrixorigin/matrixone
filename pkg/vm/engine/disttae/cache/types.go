@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -143,6 +144,14 @@ type TableItem struct {
 
 func (item *TableItem) IsDeleted() bool {
 	return item.deleted
+}
+
+func (item *TableItem) IsPartitionTable() bool {
+	return item.TableDef != nil && features.IsPartitioned(item.TableDef.FeatureFlag)
+}
+
+func (item *TableItem) IsIndexTable() bool {
+	return item.TableDef != nil && features.IsIndexTable(item.TableDef.FeatureFlag)
 }
 
 func (item *TableItem) String() string {

@@ -44,7 +44,7 @@ func mockSchema(colCnt int, pkIdx int) ([]string, []types.Type, []uint16) {
 }
 
 func TestNewSinker(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	fs, err := fileservice.Get[fileservice.FileService](
 		proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func makeTestSinker(
 }
 
 func TestNewSinker2(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	fs, err := fileservice.Get[fileservice.FileService](
 		proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)

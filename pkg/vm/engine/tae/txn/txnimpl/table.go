@@ -377,7 +377,8 @@ func (tbl *txnTable) TransferDeletes(
 		if sinker != nil {
 			sinker.Sync(ctx)
 			stats, bats := sinker.GetResult()
-			tbl.tombstoneTable.tableSpace.stats = append(tbl.tombstoneTable.tableSpace.stats, stats...)
+
+			tbl.tombstoneTable.tableSpace.registerStats(stats...)
 
 			if len(bats) != 0 {
 				panic(fmt.Sprintf("TN-TRANSFER-TOMBSTONE-FILES, batch is %d", len(bats)))
@@ -996,6 +997,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_UpdatePolicy,
 		apipb.AlterKind_AddPartition,
 		apipb.AlterKind_RenameColumn:
+	case apipb.AlterKind_ReplaceDef:
+		return nil
 	default:
 		return moerr.NewNYIf(ctx, "alter table %s", req.Kind.String())
 	}

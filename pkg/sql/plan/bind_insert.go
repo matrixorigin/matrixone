@@ -22,9 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"go.uber.org/zap"
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
@@ -68,7 +71,51 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 		return true
 	}
 
+	if v := builder.compCtx.GetContext().Value(defines.SkipPkDedup{}); v != nil {
+		if v.(string) == tableDef.Name {
+			logutil.Info("skip pk dedup",
+				zap.String("tableDef", tableDef.Name))
+			return true
+		}
+	}
+
 	return catalog.IsSecondaryIndexTable(tableDef.Name)
+}
+
+func getValidIndexes(tableDef *plan.TableDef) (indexes []*plan.IndexDef, hasIrregularIndex bool) {
+	if tableDef == nil || len(tableDef.Indexes) == 0 {
+		return
+	}
+
+	for _, idxDef := range tableDef.Indexes {
+		if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+			hasIrregularIndex = true
+			continue
+		}
+
+		if !idxDef.TableExist {
+			continue
+		}
+
+		colMap := make(map[string]bool)
+		for _, part := range idxDef.Parts {
+			colMap[part] = true
+		}
+
+		notCoverPk := false
+		for _, part := range tableDef.Pkey.Names {
+			if !colMap[part] {
+				notCoverPk = true
+				break
+			}
+		}
+
+		if notCoverPk {
+			indexes = append(indexes, idxDef)
+		}
+	}
+
+	return
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
@@ -85,12 +132,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	if tableDef.TableType != catalog.SystemOrdinaryRel &&
 		tableDef.TableType != catalog.SystemIndexRel {
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into vector/text index table")
-	}
-
-	for _, idxDef := range tableDef.Indexes {
-		if !catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
-			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
-		}
 	}
 
 	var (
@@ -153,10 +194,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.TableExist {
-			continue
-		}
-
 		for _, part := range idxDef.Parts {
 			if _, ok := updateExprs[catalog.ResolveAlias(part)]; ok {
 				if idxDef.Unique {
@@ -189,11 +226,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 	// lock unique key table
-	for j, idxDef := range tableDef.Indexes {
-		if !idxDef.TableExist || skipUniqueIdx[j] || !idxDef.Unique {
+	for i, idxDef := range tableDef.Indexes {
+		if !idxDef.Unique || skipUniqueIdx[i] {
 			continue
 		}
-		idxObjRef, idxTableDef := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(dmlCtx.objRefs[0], idxDef.IndexTableName, bindCtx.snapshot)
+		if err != nil {
+			return 0, err
+		}
 		var pkIdxInBat int32
 
 		if len(idxDef.Parts) == 1 {
@@ -222,14 +262,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	// handle primary/unique key confliction
-	if builder.canSkipDedup(dmlCtx.tableDefs[0]) {
+	if builder.canSkipDedup(tableDef) {
 		// load do not handle primary/unique key confliction
 		for i, idxDef := range tableDef.Indexes {
-			if !idxDef.TableExist || skipUniqueIdx[i] {
+			if skipUniqueIdx[i] {
 				continue
 			}
 
-			idxObjRefs[i], idxTableDefs[i] = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
 		}
 	} else {
 		if pkName != catalog.FakePrimaryKeyColName {
@@ -318,11 +361,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		for i, idxDef := range tableDef.Indexes {
-			if !idxDef.TableExist || skipUniqueIdx[i] {
+			if skipUniqueIdx[i] {
 				continue
 			}
 
-			idxObjRefs[i], idxTableDefs[i] = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
 
 			if !idxDef.Unique {
 				continue
@@ -408,7 +454,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	newProjLen := len(selectNode.ProjectList)
 	for _, idxDef := range tableDef.Indexes {
-		if idxDef.TableExist && !idxDef.Unique {
+		if !idxDef.Unique {
 			newProjLen++
 		}
 	}
@@ -453,7 +499,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		for i, idxDef := range tableDef.Indexes {
-			if !idxDef.TableExist || idxDef.Unique {
+			if idxDef.Unique {
 				continue
 			}
 
@@ -916,11 +962,17 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
 	}
 
+	validIndexes, hasIrregularIndex := getValidIndexes(tableDef)
+	if hasIrregularIndex {
+		return 0, nil, nil, moerr.NewUnsupportedDML(builder.GetContext(), "have vector index table")
+	}
+	tableDef.Indexes = validIndexes
+
 	skipUniqueIdx := make([]bool, len(tableDef.Indexes))
 	pkName := tableDef.Pkey.PkeyColName
 	pkPos := tableDef.Name2ColIndex[pkName]
 	for i, idxDef := range tableDef.Indexes {
-		if !idxDef.TableExist || !idxDef.Unique {
+		if !idxDef.Unique {
 			continue
 		}
 

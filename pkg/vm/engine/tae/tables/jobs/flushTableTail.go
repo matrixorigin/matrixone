@@ -444,6 +444,17 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		zap.Any("extra-info", task))
 	v2.TaskFlushTableTailDurationHistogram.Observe(duration.Seconds())
 
+	if o := task.createdObjHandles; o != nil {
+		v2.TaskDataInputSizeCounter.Add(
+			float64(o.GetMeta().(*catalog.ObjectEntry).OriginSize()),
+		)
+	}
+	if o := task.createdTombstoneHandles; o != nil {
+		v2.TaskTombstoneInputSizeCounter.Add(
+			float64(o.GetMeta().(*catalog.ObjectEntry).OriginSize()),
+		)
+	}
+
 	if time.Since(task.createAt) > SlowFlushTaskOverall {
 		logutil.Info(
 			"[FLUSH-SUMMARY]",
@@ -738,6 +749,25 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 		createdObjectHandle = task.createdObjHandles
 	}
+
+	if catalog.CheckMergeTrace(task.rel.ID()) {
+		entry := task.rel.GetMeta().(*catalog.TableEntry)
+		if isTombstone {
+			catalog.LogInputTombstoneObjectWithExistingBatches(
+				entry,
+				stats,
+				task.txn.GetStartTS(),
+				writtenBatches,
+			)
+		} else {
+			catalog.LogInputDataObject(
+				entry,
+				stats,
+				task.txn.GetStartTS(),
+			)
+		}
+	}
+
 	err = createdObjectHandle.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
 	if err != nil {
 		return

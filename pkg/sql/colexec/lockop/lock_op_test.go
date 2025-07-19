@@ -50,6 +50,7 @@ var testFunc = func(
 	eng engine.Engine,
 	bat *batch.Batch,
 	idx int32,
+	partitionIdx int32,
 	from, to timestamp.Timestamp) (bool, error) {
 	return false, nil
 }
@@ -342,6 +343,7 @@ func TestLockWithHasNewVersionInLockedTS(t *testing.T) {
 				eng engine.Engine,
 				bat *batch.Batch,
 				idx int32,
+				partitionIdx int32,
 				from, to timestamp.Timestamp) (bool, error) {
 				return true, nil
 			}
@@ -382,7 +384,7 @@ func runLockNonBlockingOpTest(
 				IsLast:  false,
 			}
 			for idx, table := range tables {
-				arg.AddLockTarget(table, nil, offset, pkType, offset+1, nil, true)
+				arg.AddLockTarget(table, nil, offset, pkType, -1, offset+1, nil, true)
 
 				vec := vector.NewVec(pkType)
 				vector.AppendFixedList(vec, values[idx], nil, proc.Mp())

@@ -150,7 +150,7 @@ func mockDataBatch(
 }
 
 func Test_Sinker1(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	fs, err := fileservice.Get[fileservice.FileService](
 		proc.GetFileService(), defines.SharedFileServiceName,
 	)

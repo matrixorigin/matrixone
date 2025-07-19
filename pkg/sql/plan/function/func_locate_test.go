@@ -228,7 +228,7 @@ func TestLocate(t *testing.T) {
 	testCases := initLocateTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.info {

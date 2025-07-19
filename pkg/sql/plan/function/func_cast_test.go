@@ -15,7 +15,11 @@
 package function
 
 import (
+	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"math"
 	"testing"
 	"time"
 
@@ -1745,7 +1749,7 @@ func TestCast(t *testing.T) {
 	testCases := initCastTestCase()
 
 	// do the test work.
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, NewCast)
@@ -1756,7 +1760,7 @@ func TestCast(t *testing.T) {
 
 func BenchmarkCast(b *testing.B) {
 	testCases := initCastTestCase()
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(b)
 
 	b.StartTimer()
 	for _, tc := range testCases {
@@ -1765,4 +1769,183 @@ func BenchmarkCast(b *testing.B) {
 		_ = fcTC.BenchMarkRun()
 	}
 	b.StopTimer()
+}
+
+func Test_strToSigned_Binary(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	tests := []struct {
+		name      string
+		inputs    [][]byte
+		nulls     []uint64
+		bitSize   int
+		want      []int64
+		wantNulls []uint64
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:    "empty slice",
+			inputs:  [][]byte{{}},
+			bitSize: 64,
+			wantErr: true,
+			errMsg:  "invalid arg",
+		},
+		{
+			name:    "out of range length",
+			inputs:  [][]byte{{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}},
+			bitSize: 64,
+			wantErr: true,
+			errMsg:  "out of range",
+		},
+		{
+			name:    "max int64",
+			inputs:  [][]byte{{0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}},
+			bitSize: 64,
+			want:    []int64{math.MaxInt64},
+		},
+		{
+			name:    "valid binary",
+			inputs:  [][]byte{{0x12, 0x34}},
+			bitSize: 64,
+			want:    []int64{0x1234},
+		},
+		{
+			name:      "null value",
+			inputs:    [][]byte{nil, {0x12}},
+			nulls:     []uint64{0},
+			bitSize:   64,
+			want:      []int64{0, 0x12},
+			wantNulls: []uint64{0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVec := testutil.MakeVarlenaVector(tt.inputs, tt.nulls, mp)
+			defer inputVec.Free(mp)
+			inputVec.SetIsBin(true)
+
+			from := vector.GenerateFunctionStrParameter(inputVec)
+
+			resultType := types.T_int64.ToType()
+			to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[int64])
+			defer to.Free()
+			err := to.PreExtendAndReset(len(tt.inputs))
+			require.NoError(t, err)
+
+			err = strToSigned(ctx, from, to, tt.bitSize, len(tt.inputs), nil)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errMsg)
+				return
+			}
+			require.NoError(t, err)
+
+			resultVec := to.GetResultVector()
+
+			r := vector.GenerateFunctionFixedTypeParameter[int64](resultVec)
+
+			for i := 0; i < len(tt.want); i++ {
+				want := tt.want[i]
+				get, null := r.GetValue(uint64(i))
+
+				if contains(tt.wantNulls, uint64(i)) {
+					require.True(t, null, "row %d should be null", i)
+				} else {
+					require.False(t, null, "row %d should not be null", i)
+					require.Equal(t, want, get, "row %d value not match", i)
+				}
+			}
+
+			resultNulls := to.GetResultVector().GetNulls()
+			if len(tt.wantNulls) > 0 {
+				for _, pos := range tt.wantNulls {
+					require.True(t, resultNulls.Contains(pos))
+				}
+			} else {
+				require.True(t, resultNulls.IsEmpty())
+			}
+		})
+	}
+}
+
+func contains(slice []uint64, item uint64) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func Benchmark_strToSigned_Binary(b *testing.B) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+
+	benchCases := []struct {
+		name    string
+		inputs  [][]byte
+		nulls   []uint64
+		bitSize int
+	}{
+		{
+			name:    "small_binary",
+			inputs:  [][]byte{{0x12, 0x34}, {0x56, 0x78}},
+			bitSize: 64,
+		},
+		{
+			name:    "max_int64",
+			inputs:  [][]byte{{0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}},
+			bitSize: 64,
+		},
+		{
+			name:    "mixed_with_nulls",
+			inputs:  [][]byte{nil, {0x12}, {0x34}, nil, {0x56}},
+			nulls:   []uint64{0, 3},
+			bitSize: 64,
+		},
+		{
+			name: "large_input_set",
+			inputs: func() [][]byte {
+				data := make([][]byte, 1000)
+				for i := range data {
+					data[i] = []byte{byte(i % 256), byte((i + 1) % 256)}
+				}
+				return data
+			}(),
+			bitSize: 64,
+		},
+	}
+
+	for _, bc := range benchCases {
+		b.Run(bc.name, func(b *testing.B) {
+			inputVec := testutil.MakeVarlenaVector(bc.inputs, bc.nulls, mp)
+			defer inputVec.Free(mp)
+			inputVec.SetIsBin(true)
+
+			resultType := types.T_int64.ToType()
+
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				to := vector.NewFunctionResultWrapper(resultType, mp).(*vector.FunctionResult[int64])
+				err := to.PreExtendAndReset(len(bc.inputs))
+				if err != nil {
+					b.Fatalf("PreExtendAndReset failed: %v", err)
+				}
+
+				from := vector.GenerateFunctionStrParameter(inputVec)
+
+				err = strToSigned(ctx, from, to, bc.bitSize, len(bc.inputs), nil)
+				if err != nil {
+					b.Fatalf("strToSigned failed: %v", err)
+				}
+
+				to.Free()
+			}
+		})
+	}
 }

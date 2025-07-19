@@ -72,12 +72,12 @@ func TestBuildTable_AlterView(t *testing.T) {
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
 	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 			if schemaName == "" {
 				schemaName = "db"
 			}
 			x := store[schemaName+"."+tableName]
-			return x.obj, x.table
+			return x.obj, x.table, nil
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
@@ -100,7 +100,7 @@ func Test_cte(t *testing.T) {
 	sqls := []string{
 		"select table_catalog, table_schema, table_name, table_type, engine\nfrom information_schema.tables\nwhere table_schema = 'mo_catalog' and table_type = 'BASE TABLE'\norder by table_name;",
 	}
-	testutil.NewProc()
+	testutil.NewProc(t)
 	mock := NewMockOptimizer(false)
 
 	for _, sql := range sqls {
@@ -157,7 +157,7 @@ var rightCases = []Kase{
 }
 
 func TestRightCases(t *testing.T) {
-	testutil.NewProc()
+	testutil.NewProc(t)
 	mock := NewMockOptimizer(false)
 	for _, kase := range rightCases {
 		_, err := runOneStmt(mock, t, kase.sql)
@@ -193,7 +193,7 @@ var wrongCases = []Kase{
 }
 
 func TestWrongCases(t *testing.T) {
-	testutil.NewProc()
+	testutil.NewProc(t)
 	mock := NewMockOptimizer(false)
 	for _, kase := range wrongCases {
 		_, err := runOneStmt(mock, t, kase.sql)

@@ -46,6 +46,7 @@ const (
 	FJ_CNRecvErr        = "fj/cn/recv/err"
 	FJ_CNSubSysErr      = "fj/cn/recv/subsyserr"
 	FJ_CNReplayCacheErr = "fj/cn/recv/rcacheerr"
+	FJ_CNGCDumpTable    = "fj/cn/gc/dumptable"
 
 	FJ_LogReader    = "fj/log/reader"
 	FJ_LogWorkspace = "fj/log/workspace"
@@ -311,6 +312,11 @@ func CommitWaitInjected() (string, bool) {
 	return sarg, injected
 }
 
+func GCDumpTableInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNGCDumpTable)
+	return sarg, injected
+}
+
 func WaitInjected(key string) {
 	fault.TriggerFault(key)
 }
@@ -406,6 +412,24 @@ func InjectCommitWait(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CommitWait)
+	}
+	return
+}
+
+func InjectGCDumpTable(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CNGCDumpTable,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CNGCDumpTable)
 	}
 	return
 }

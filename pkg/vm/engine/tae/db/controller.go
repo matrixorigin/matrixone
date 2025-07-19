@@ -47,6 +47,9 @@ const (
 	ControlCmd_Customized ControlCmdType = iota
 	ControlCmd_ToReplayMode
 	ControlCmd_ToWriteMode
+
+	ControlCmd_ToStopGC
+	ControlCmd_ToStartGC
 )
 
 type ControlCmd interface {
@@ -222,6 +225,10 @@ func (c *Controller) onCmd(cmds ...any) {
 			c.handleToReplayCmd(command)
 		case ControlCmd_ToWriteMode:
 			c.handleToWriteCmd(command)
+		case ControlCmd_ToStopGC:
+			c.handleToStopGC(command)
+		case ControlCmd_ToStartGC:
+			c.handleToStartGC(command)
 		default:
 			command.setError(
 				moerr.NewInternalErrorNoCtxf("unknown command type %d", command.typ),
@@ -447,11 +454,13 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 		// Rollback
 		return
 	}
-	if err = AddCronJob(
-		c.db, CronJobs_Name_GCDisk, true,
-	); err != nil {
-		// Rollback
-		return
+	if !c.db.Opts.GCCfg.DisableGC {
+		if err = AddCronJob(
+			c.db, CronJobs_Name_GCDisk, true,
+		); err != nil {
+			// Rollback
+			return
+		}
 	}
 	if err = AddCronJob(
 		c.db, CronJobs_Name_GCCheckpoint, true,
@@ -472,6 +481,74 @@ func (c *Controller) handleToWriteCmd(cmd *controlCmd) {
 	// 5.x TODO
 
 	WithTxnMode(DBTxnMode_Write)(c.db)
+}
+func (c *Controller) handleToStopGC(cmd *controlCmd) {
+	var (
+		err   error
+		start time.Time = time.Now()
+	)
+
+	ctx, cancel := context.WithTimeout(cmd.ctx, 10*time.Minute)
+	defer cancel()
+
+	logger := logutil.Info
+	logger(
+		"DB-StopGC-Start",
+		zap.String("cmd", cmd.String()),
+	)
+
+	defer func() {
+		cmd.setError(err)
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"DB-StopGC-Done",
+			zap.String("cmd", cmd.String()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err),
+		)
+	}()
+	RemoveCronJob(c.db, CronJobs_Name_GCDisk)
+	c.db.DiskCleaner.CancelRunning(gc2.CauseStopGC)
+	if err = c.db.DiskCleaner.FlushQueue(ctx); err != nil {
+		return
+	}
+}
+
+func (c *Controller) handleToStartGC(cmd *controlCmd) {
+	var (
+		err   error
+		start time.Time = time.Now()
+	)
+	if c.db.Opts.GCCfg.DisableGC {
+		return
+	}
+
+	logger := logutil.Info
+	logger(
+		"DB-StartGC-Start",
+		zap.String("cmd", cmd.String()),
+	)
+
+	defer func() {
+		cmd.setError(err)
+		if err != nil {
+			logger = logutil.Error
+		}
+		logger(
+			"DB-StartGC-Done",
+			zap.String("cmd", cmd.String()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err),
+		)
+	}()
+	if err = AddCronJob(
+		c.db, CronJobs_Name_GCDisk, true,
+	); err != nil {
+		// Rollback
+		return
+	}
 }
 
 func (c *Controller) Start() {
@@ -509,6 +586,10 @@ func (c *Controller) SwitchTxnMode(
 		typ = ControlCmd_ToReplayMode
 	case 2:
 		typ = ControlCmd_ToWriteMode
+	case 3:
+		typ = ControlCmd_ToStopGC
+	case 4:
+		typ = ControlCmd_ToStartGC
 	default:
 		return moerr.NewTxnControlErrorNoCtxf("unknown txn mode switch iarg %d", iarg)
 	}
@@ -690,8 +771,9 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 
 	db.MergeScheduler = merge.NewMergeScheduler(
 		db.Runtime.Options.CheckpointCfg.ScanInterval,
-		db.Catalog,
+		&merge.TNCatalogEventSource{Catalog: db.Catalog, TxnManager: db.TxnMgr},
 		merge.NewTNMergeExecutor(db.Runtime),
+		merge.NewStdClock(),
 	)
 	db.MergeScheduler.Start()
 	rollbackSteps.Add("stop merge scheduler", func() error {

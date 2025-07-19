@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -275,6 +276,14 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	if o.LocalFs == nil {
 		o.LocalFs = objectio.TmpNewFileservice(o.Ctx, path.Join(dirname, "data"))
+	}
+
+	if o.TmpFs == nil {
+		var err error
+		o.TmpFs, err = fileservice.NewTestTmpFileService("TMP", path.Join(dirname, "data"), fileservice.TmpFileGCInterval)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	return o

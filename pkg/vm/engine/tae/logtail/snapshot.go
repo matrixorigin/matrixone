@@ -391,18 +391,19 @@ func (sm *SnapshotMeta) updateTableInfo(
 		return orderedInfos[i].createAt.LT(&orderedInfos[j].createAt)
 	})
 
-	for _, info := range orderedInfos {
-		if info.stats.BlkCnt() != 1 {
-			panic(fmt.Sprintf("mo_table object %v blk cnt %v",
-				info.stats.ObjectName(), info.stats.BlkCnt()))
+	for _, obj := range orderedInfos {
+		if obj.stats.BlkCnt() != 1 {
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P1",
+				zap.String("object", obj.stats.ObjectName().String()),
+				zap.Uint32("blkCnt", obj.stats.BlkCnt()))
 		}
-		if !info.deleteAt.IsEmpty() {
-			sm.aobjDelTsMap[info.deleteAt] = struct{}{}
+		if !obj.deleteAt.IsEmpty() {
+			sm.aobjDelTsMap[obj.deleteAt] = struct{}{}
 		}
 		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
-			info.stats.ObjectLocation(),
+			obj.stats.ObjectLocation(),
 			objectio.SchemaData,
 		)
 		if err != nil {
@@ -412,22 +413,23 @@ func (sm *SnapshotMeta) updateTableInfo(
 		// 1 is table name
 		// 11 is account id
 		// len(objectBat.Vecs)-1 is commit ts
-		ids := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[0])
+		tids := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[0])
 		nameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](objectBat.Vecs[1])
 		nameArea := objectBat.Vecs[1].GetArea()
 		dbs := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[3])
 		accounts := vector.MustFixedColWithTypeCheck[uint32](objectBat.Vecs[11])
 		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
-		for i := 0; i < len(ids); i++ {
+		for i := 0; i < len(tids); i++ {
 			createAt := creates[i]
 			if createAt.LT(&startts) || createAt.GT(&endts) {
 				continue
 			}
 			name := string(nameVarlena[i].GetByteSlice(nameArea))
-			tid := ids[i]
+			tid := tids[i]
 			account := accounts[i]
 			db := dbs[i]
-			tuple, _, _, err := types.DecodeTuple(
+			var tuple types.Tuple
+			tuple, _, _, err = types.DecodeTuple(
 				objectBat.Vecs[len(objectBat.Vecs)-3].GetRawBytesAt(i))
 			if err != nil {
 				return err
@@ -444,7 +446,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			}
 			if name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
-					logutil.Warn("GC-PANIC-UPDATE-TABLE-P8",
+					logutil.Warn(
+						"GC-PANIC-UPDATE-TABLE-P2",
 						zap.Uint64("tid", tid),
 						zap.Uint64("old-tid", sm.pitr.tid),
 					)
@@ -458,55 +461,60 @@ func (sm *SnapshotMeta) updateTableInfo(
 			if sm.tables[account] == nil {
 				sm.tables[account] = make(map[uint64]*tableInfo)
 			}
-			table := sm.tables[account][tid]
-			if table != nil {
-				if table.createAt.GT(&createAt) {
-					panic(fmt.Sprintf("table %v %v create at %v is greater than %v",
-						tid, tuple.ErrString(nil), table.createAt.ToString(), createAt.ToString()))
+			tInfo := sm.tables[account][tid]
+			if tInfo != nil {
+				if tInfo.createAt.GT(&createAt) {
+					logutil.Warn("GC-PANIC-UPDATE-TABLE-P3",
+						zap.Uint64("tid", tid),
+						zap.String("name", tuple.ErrString(nil)),
+						zap.String("old-create-at", tInfo.createAt.ToString()),
+						zap.String("new-create-at", createAt.ToString()))
+					tInfo.createAt = createAt
 				}
-				if table.pk == pk {
-					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
+				if tInfo.pk == pk {
+					sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], tInfo)
 					continue
 				}
-				createAt = table.createAt
+				createAt = tInfo.createAt
 			}
-			table = &tableInfo{
+			tInfo = &tableInfo{
 				accountID: account,
 				dbID:      db,
 				tid:       tid,
 				createAt:  createAt,
 				pk:        pk,
 			}
-			sm.tables[account][tid] = table
-			sm.tableIDIndex[tid] = table
+			sm.tables[account][tid] = tInfo
+			sm.tableIDIndex[tid] = tInfo
 			if sm.tablePKIndex[pk] == nil {
 				sm.tablePKIndex[pk] = make([]*tableInfo, 0)
 			}
-			sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], table)
+			sm.tablePKIndex[pk] = append(sm.tablePKIndex[pk], tInfo)
 		}
 	}
 
 	deleteRows := make([]tombstone, 0)
-	for _, info := range tTombstones {
-		if info.stats.BlkCnt() != 1 {
-			panic(fmt.Sprintf("mo_table tombstone %v blk cnt %v",
-				info.stats.ObjectName(), info.stats.BlkCnt()))
+	for _, obj := range tTombstones {
+		if obj.stats.BlkCnt() != 1 {
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P4",
+				zap.String("object", obj.stats.ObjectName().String()),
+				zap.Uint32("blk-cnt", obj.stats.BlkCnt()))
 		}
 		objectBat, _, err := ioutil.LoadOneBlock(
 			ctx,
 			fs,
-			info.stats.ObjectLocation(),
+			obj.stats.ObjectLocation(),
 			objectio.SchemaData,
 		)
 		if err != nil {
 			return err
 		}
 
-		commitTsVec := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
-		rowIDVec := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
-		for i := 0; i < len(commitTsVec); i++ {
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
+		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](objectBat.Vecs[0])
+		for i := 0; i < len(commitTSs); i++ {
 			pk, _, _, _ := types.DecodeTuple(objectBat.Vecs[1].GetRawBytesAt(i))
-			commitTs := commitTsVec[i]
+			commitTs := commitTSs[i]
 			if commitTs.LT(&startts) || commitTs.GT(&endts) {
 				continue
 			}
@@ -515,7 +523,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 				continue
 			}
 			deleteRows = append(deleteRows, tombstone{
-				rowid: rowIDVec[i],
+				rowid: rowIDs[i],
 				pk:    pk,
 				ts:    commitTs,
 			})
@@ -526,21 +534,28 @@ func (sm *SnapshotMeta) updateTableInfo(
 		return deleteRows[i].ts.LT(&ts2)
 	})
 
-	for _, del := range deleteRows {
-		pk := del.pk.ErrString(nil)
+	for _, delRow := range deleteRows {
+		pk := delRow.pk.ErrString(nil)
 		if sm.tablePKIndex[pk] == nil {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) == 0 {
-			logutil.Warnf("[UpdateTableInfoWarn] delete table %v not found @ rowid %v, commit %v, start is %v, end is %v",
-				del.pk.ErrString(nil), del.rowid.String(), del.ts.ToString(), startts.ToString(), endts.ToString())
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P5",
+				zap.String("pk", delRow.pk.ErrString(nil)),
+				zap.String("rowid", delRow.rowid.String()),
+				zap.String("commit", delRow.ts.ToString()),
+				zap.String("start", startts.ToString()),
+				zap.String("end", endts.ToString()))
 			continue
 		}
 		table := sm.tablePKIndex[pk][0]
-		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&del.ts) {
-			panic(fmt.Sprintf("table %v delete at %v is greater than %v", table.tid, table.deleteAt, del.ts))
+		if !table.deleteAt.IsEmpty() && table.deleteAt.GT(&delRow.ts) {
+			logutil.Warn("GC-PANIC-UPDATE-TABLE-P6",
+				zap.Uint64("tid", table.tid),
+				zap.String("old-delete-at", table.deleteAt.ToString()),
+				zap.String("new-delete-at", delRow.ts.ToString()))
 		}
-		table.deleteAt = del.ts
+		table.deleteAt = delRow.ts
 		sm.tablePKIndex[pk] = sm.tablePKIndex[pk][1:]
 		if len(sm.tablePKIndex[pk]) != 0 {
 			continue
@@ -560,17 +575,18 @@ func (sm *SnapshotMeta) updateTableInfo(
 		sm.tables[table.accountID][table.tid] = table
 	}
 
-	for pk, tables := range sm.tablePKIndex {
-		if len(tables) > 1 {
-			logutil.Warn("UpdateSnapTable-Error",
-				zap.String("table", pk),
-				zap.Int("len", len(tables)),
+	for pkIndex, tInfos := range sm.tablePKIndex {
+		if len(tInfos) > 1 {
+			logutil.Warn(
+				"GC-PANIC-UPDATE-TABLE-P7",
+				zap.String("table", pkIndex),
+				zap.Int("len", len(tInfos)),
 			)
 		}
-		if len(tables) == 0 {
+		if len(tInfos) == 0 {
 			continue
 		}
-		tables[0].deleteAt = types.TS{}
+		tInfos[0].deleteAt = types.TS{}
 	}
 	return nil
 }
@@ -786,15 +802,15 @@ func (sm *SnapshotMeta) GetSnapshot(
 		snapshotSchemaTypes[ColLevel],
 		snapshotSchemaTypes[ColObjId],
 	}
-	for tid, objectMap := range objects {
+	for tid, objMap := range objects {
 		select {
 		case <-ctx.Done():
 			return nil, context.Cause(ctx)
 		default:
 		}
 		tombstonesStats := make([]objectio.ObjectStats, 0)
-		for ttid, tombstoneMap := range tombstones {
-			if ttid != tid {
+		for tombstoneTid, tombstoneMap := range tombstones {
+			if tombstoneTid != tid {
 				continue
 			}
 			for _, object := range tombstoneMap {
@@ -802,9 +818,9 @@ func (sm *SnapshotMeta) GetSnapshot(
 			}
 			break
 		}
-		checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-		ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
-		for _, object := range objectMap {
+		ckpTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+		ds := NewSnapshotDataSource(ctx, fs, ckpTS, tombstonesStats)
+		for _, object := range objMap {
 			for i := uint32(0); i < object.stats.BlkCnt(); i++ {
 				blk := object.stats.ConstructBlockInfo(uint16(i))
 				buildBatch := func() *batch.Batch {
@@ -854,7 +870,7 @@ func (sm *SnapshotMeta) GetSnapshot(
 						snapshotList[id] = containers.MakeVector(types.T_TS.ToType(), mp)
 					}
 					// TODO: info to debug
-					logutil.Info(
+					logutil.Debug(
 						"GetSnapshot-P2",
 						zap.String("ts", snapTs.ToString()),
 						zap.Uint32("account", id),
@@ -871,6 +887,15 @@ func (sm *SnapshotMeta) GetSnapshot(
 	}
 	for i := range snapshotList {
 		snapshotList[i].GetDownstreamVector().InplaceSort()
+		count := 0
+		if snapshotList[i].GetDownstreamVector() != nil {
+			count = snapshotList[i].GetDownstreamVector().Length()
+		}
+		logutil.Info(
+			"GetSnapshot-P3",
+			zap.Uint32("account", i),
+			zap.Int("snapshot count", count),
+		)
 	}
 	return snapshotList, nil
 }
@@ -894,12 +919,12 @@ func (sm *SnapshotMeta) GetPITR(
 ) (*PitrInfo, error) {
 	idxes := []uint16{ColPitrLevel, ColPitrObjId, ColPitrLength, ColPitrUnit}
 	tombstonesStats := make([]objectio.ObjectStats, 0)
-	for _, tombstone := range sm.pitr.tombstones {
-		tombstonesStats = append(tombstonesStats, tombstone.stats)
+	for _, obj := range sm.pitr.tombstones {
+		tombstonesStats = append(tombstonesStats, obj.stats)
 	}
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
-	pitr := &PitrInfo{
+	pitrInfo := &PitrInfo{
 		cluster:  types.TS{},
 		account:  make(map[uint32]types.TS),
 		database: make(map[uint64]types.TS),
@@ -929,62 +954,85 @@ func (sm *SnapshotMeta) GetPITR(
 			lengList := vector.MustFixedColWithTypeCheck[uint8](bat.Vecs[2])
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
 				length := lengList[r]
-				leng := int(length)
+				val := int(length)
 				unit := bat.Vecs[3].GetStringAt(r)
 				var ts time.Time
 				if unit == PitrUnitYear {
-					ts = AddDate(gcTime, 1-leng, 0, 0)
+					ts = AddDate(gcTime, -val, 0, 0)
 				} else if unit == PitrUnitMonth {
-					ts = AddDate(gcTime, 0, 1-leng, 0)
+					ts = AddDate(gcTime, 0, -val, 0)
 				} else if unit == PitrUnitDay {
-					ts = gcTime.AddDate(0, 0, 1-leng)
+					ts = gcTime.AddDate(0, 0, -val)
 				} else if unit == PitrUnitHour {
-					ts = gcTime.Add(-time.Duration(leng) * time.Hour)
+					ts = gcTime.Add(-time.Duration(val) * time.Hour)
 				} else if unit == PitrUnitMinute {
-					ts = gcTime.Add(-time.Duration(leng) * time.Minute)
+					ts = gcTime.Add(-time.Duration(val) * time.Minute)
 				}
-				pitrTs := types.BuildTS(ts.UnixNano(), 0)
+				pitrTS := types.BuildTS(ts.UnixNano(), 0)
 				account := objIDList[r]
 				level := bat.Vecs[0].GetStringAt(r)
 				if level == PitrLevelCluster {
-					if !pitr.cluster.IsEmpty() {
-						panic("cluster duplicate pitr ")
+					if !pitrInfo.cluster.IsEmpty() {
+						logutil.Warn("GC-PANIC-DUP-PIRT-P1",
+							zap.String("level", "cluster"),
+							zap.String("old", pitrInfo.cluster.ToString()),
+							zap.String("new", pitrTS.ToString()),
+						)
+						if pitrInfo.cluster.LT(&pitrTS) {
+							continue
+						}
 					}
-					pitr.cluster = pitrTs
+					pitrInfo.cluster = pitrTS
 
 				} else if level == PitrLevelAccount {
 					id := uint32(account)
-					p := pitr.account[id]
-					if !p.IsEmpty() && p.LT(&pitrTs) {
+					p := pitrInfo.account[id]
+					if !p.IsEmpty() && p.LT(&pitrTS) {
 						continue
 					}
-					pitr.account[id] = pitrTs
+					pitrInfo.account[id] = pitrTS
 				} else if level == PitrLevelDatabase {
 					id := uint64(account)
-					p := pitr.database[id]
+					p := pitrInfo.database[id]
 					if !p.IsEmpty() {
-						panic("db duplicate pitr ")
+						logutil.Warn("GC-PANIC-DUP-PIRT-P2",
+							zap.String("level", "database"),
+							zap.Uint64("id", id),
+							zap.String("old", p.ToString()),
+							zap.String("new", pitrTS.ToString()),
+						)
+						if p.LT(&pitrTS) {
+							continue
+						}
 					}
-					pitr.database[id] = pitrTs
+					pitrInfo.database[id] = pitrTS
 				} else if level == PitrLevelTable {
 					id := uint64(account)
-					p := pitr.tables[id]
+					p := pitrInfo.tables[id]
 					if !p.IsEmpty() {
-						panic("table duplicate pitr ")
+						logutil.Warn("GC-PANIC-DUP-PIRT-P3",
+							zap.String("level", "table"),
+							zap.Uint64("id", id),
+							zap.String("old", p.ToString()),
+							zap.String("new", pitrTS.ToString()),
+						)
+						if p.LT(&pitrTS) {
+							continue
+						}
 					}
-					pitr.tables[id] = pitrTs
+					pitrInfo.tables[id] = pitrTS
 				}
 				// TODO: info to debug
 				logutil.Info(
 					"GC-GetPITR",
 					zap.String("level", level),
 					zap.Uint64("id", account),
-					zap.String("ts", pitrTs.ToString()),
+					zap.String("ts", pitrTS.ToString()),
 				)
 			}
 		}
 	}
-	return pitr, nil
+	return pitrInfo, nil
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
@@ -1181,7 +1229,8 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 			continue
 		}
 		if len(sm.tablePKIndex[pk]) > 0 {
-			logutil.Warn("RebuildTableInfo-PK-Exists",
+			logutil.Warn(
+				"GC-PANIC-REBUILD-TABLE",
 				zap.String("pk", pk),
 				zap.Uint64("table", tid))
 		}

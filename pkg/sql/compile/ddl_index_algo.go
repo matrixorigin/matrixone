@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -35,15 +36,22 @@ const (
 	hnswIndexFlag     = "experimental_hnsw_index"
 )
 
-func (s *Scope) handleUniqueIndexTable(c *Compile, dbSource engine.Database,
-	indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleUniqueIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	if err := indexTableBuild(c, def, dbSource); err != nil {
+	if err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource); err != nil {
 		return err
 	}
 	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
@@ -61,30 +69,45 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	return nil
 }
 
-func (s *Scope) handleRegularSecondaryIndexTable(c *Compile, dbSource engine.Database,
-	indexDef *plan.IndexDef, qryDatabase string,
-	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleRegularSecondaryIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	if err := indexTableBuild(c, def, dbSource); err != nil {
+	if err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource); err != nil {
 		return err
 	}
 
 	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
-func (s *Scope) handleMasterIndexTable(c *Compile, dbSource engine.Database,
-	indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleMasterIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuild(c, def, dbSource)
+	err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
 	if err != nil {
 		return err
 	}
@@ -99,8 +122,16 @@ func (s *Scope) handleMasterIndexTable(c *Compile, dbSource engine.Database,
 	return nil
 }
 
-func (s *Scope) handleFullTextIndexTable(c *Compile, dbSource engine.Database, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleFullTextIndexTable(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 	if ok, err := s.isExperimentalEnabled(c, fulltextIndexFlag); err != nil {
 		return err
 	} else if !ok {
@@ -111,7 +142,7 @@ func (s *Scope) handleFullTextIndexTable(c *Compile, dbSource engine.Database, i
 	}
 
 	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuild(c, def, dbSource)
+	err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
 	if err != nil {
 		return err
 	}
@@ -459,7 +490,16 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 	return nil
 }
 
-func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+func (s *Scope) handleVectorHnswIndex(
+	c *Compile,
+	mainTableID uint64,
+	mainExtra *api.SchemaExtra,
+	dbSource engine.Database,
+	indexDefs map[string]*plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	indexInfo *plan.CreateTable,
+) error {
 
 	if ok, err := s.isExperimentalEnabled(c, hnswIndexFlag); err != nil {
 		return err
@@ -478,7 +518,7 @@ func (s *Scope) handleVectorHnswIndex(c *Compile, dbSource engine.Database, inde
 	// 2. create hidden tables
 	if indexInfo != nil {
 		for _, table := range indexInfo.GetIndexTables() {
-			if err := indexTableBuild(c, table, dbSource); err != nil {
+			if err := indexTableBuild(c, mainTableID, mainExtra, table, dbSource); err != nil {
 				return err
 			}
 		}

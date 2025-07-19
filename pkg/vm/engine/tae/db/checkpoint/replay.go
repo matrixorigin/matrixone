@@ -157,8 +157,8 @@ func (c *CkpReplayer) readCheckpointEntries() (
 				zap.String("entry", entry.String()),
 			)
 		}
-		if len(entries) != 1 {
-			panic(fmt.Sprintf("invalid compacted checkpoint file %s", maxEntry.GetName()))
+		for _, e := range entries {
+			logutil.Infof("compacted checkpoint entry: %v", e.String())
 		}
 		if err = c.r.ReplayCKPEntry(entries[0]); err != nil {
 			return

@@ -43,14 +43,10 @@ type shuffleTestCase struct {
 	proc  *process.Process
 }
 
-var (
-	tcs []shuffleTestCase
-)
-
-func init() {
-	tcs = []shuffleTestCase{
+func makeTestCases(t *testing.T) []shuffleTestCase {
+	return []shuffleTestCase{
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int16.ToType(),
 			},
@@ -65,7 +61,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
@@ -80,7 +76,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int64.ToType(),
 			},
@@ -95,7 +91,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint16.ToType(),
 			},
@@ -110,7 +106,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint32.ToType(),
 			},
@@ -125,7 +121,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint64.ToType(),
 			},
@@ -140,7 +136,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int16.ToType(),
 			},
@@ -154,7 +150,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
@@ -168,7 +164,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int64.ToType(),
 			},
@@ -182,7 +178,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint16.ToType(),
 			},
@@ -196,7 +192,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint32.ToType(),
 			},
@@ -210,7 +206,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint64.ToType(),
 			},
@@ -224,7 +220,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int64.ToType(),
 			},
@@ -237,7 +233,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint64.ToType(),
 			},
@@ -250,7 +246,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int32.ToType(),
 			},
@@ -263,7 +259,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint32.ToType(),
 			},
@@ -276,7 +272,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_int16.ToType(),
 			},
@@ -289,7 +285,7 @@ func init() {
 			},
 		},
 		{
-			proc: testutil.NewProcessWithMPool("", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
 			types: []types.Type{
 				types.T_uint16.ToType(),
 			},
@@ -325,7 +321,7 @@ func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
 
 func TestShuffle(t *testing.T) {
 
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		runShuffleCase(t, tc, true)
 		// second run
 		runShuffleCase(t, tc, false)
@@ -335,13 +331,13 @@ func TestShuffle(t *testing.T) {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestFree(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Free(tc.proc, false, nil)
@@ -350,7 +346,7 @@ func TestFree(t *testing.T) {
 }
 
 func TestReset(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
 		tc.arg.Reset(tc.proc, false, nil)

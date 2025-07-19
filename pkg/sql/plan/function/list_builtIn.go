@@ -990,6 +990,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return LengthUTF8
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_text},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LengthUTF8
+				},
+			},
 		},
 	},
 
@@ -3646,6 +3656,38 @@ var supportedMathBuiltIns = []FuncNew{
 }
 
 var supportedDateAndTimeBuiltIns = []FuncNew{
+
+	// function `ts_to_time`
+	{
+		functionId: TS_TO_TIME,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 && inputs[0].Oid == types.T_TS {
+				return newCheckResultWithSuccess(0)
+			}
+			if len(inputs) == 2 && inputs[0].Oid == types.T_TS && inputs[1].Oid == types.T_int64 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					typ := types.T_timestamp.ToType()
+					typ.Scale = 6
+					return typ
+				},
+				newOp: func() executeLogicOfOverload {
+					return TSToTimestamp
+				},
+			},
+		},
+	},
+
 	// function `convert_tz`
 	{
 		functionId: CONVERT_TZ,

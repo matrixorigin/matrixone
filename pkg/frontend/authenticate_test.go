@@ -5888,7 +5888,7 @@ func Test_doInterpretCall(t *testing.T) {
 
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.GetTxnCompileCtx().execCtx = &ExecCtx{
@@ -5931,7 +5931,7 @@ func Test_doInterpretCall(t *testing.T) {
 
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
@@ -5984,7 +5984,7 @@ func Test_doInterpretCall(t *testing.T) {
 
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.FileService = getPu(ses.GetService()).FileService
 		proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
@@ -6440,6 +6440,12 @@ func Test_doAlterUser(t *testing.T) {
 			})
 			bh.sql2result[sql] = mrs
 
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "u1", moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
+				{0, 0},
+			})
+			bh.sql2result[sql] = mrs
+
 			sql = getSqlForUpdateStatusLockOfUserForever(userStatusLockForever, user.Username)
 			bh.sql2result[sql] = &MysqlResultSet{}
 		}
@@ -6487,6 +6493,12 @@ func Test_doAlterUser(t *testing.T) {
 			bh.sql2result[sql] = mrs
 
 			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "root", moAdminRoleID)
+			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
+				{0, 0},
+			})
+			bh.sql2result[sql] = mrs
+
+			sql, _ = getSqlForCheckUserHasRole(context.TODO(), "u1", moAdminRoleID)
 			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{
 				{0, 0},
 			})
@@ -10228,7 +10240,7 @@ func TestUpload(t *testing.T) {
 	convey.Convey("call upload func", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
-		proc := testutil.NewProc()
+		proc := testutil.NewProc(t)
 		tConn := &testConn{}
 		defer tConn.Close()
 		writeExceptResult(tConn, []*Packet{
@@ -10633,7 +10645,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
@@ -10695,7 +10707,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
@@ -10757,7 +10769,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
@@ -10823,7 +10835,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
@@ -10889,7 +10901,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
@@ -10956,7 +10968,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
@@ -11023,7 +11035,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
 		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
 		// process.
-		ses.proc = testutil.NewProc()
+		ses.proc = testutil.NewProc(t)
 		ses.proc.Base.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,

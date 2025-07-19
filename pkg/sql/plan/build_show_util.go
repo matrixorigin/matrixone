@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -271,9 +272,12 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 			fkTableDef = tableDef
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
-				_, fkTableDef = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
+				_, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
 			} else {
-				_, fkTableDef = ctx.ResolveById(fk.ForeignTbl, snapshot)
+				_, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot)
+			}
+			if err != nil {
+				return "", nil, err
 			}
 		}
 
@@ -320,6 +324,49 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 	}
 
 	createStr += comment
+
+	if tableDef.Partition != nil {
+		ps := ctx.GetProcess().GetPartitionService()
+		if ps.Enabled() {
+			partitionBy := " partition by "
+			meta, _, err := ps.GetStorage().GetMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
+			if err != nil {
+				return "", nil, err
+			}
+			rangeOrList := false
+			switch meta.Method {
+			case partition.PartitionMethod_Hash:
+				partitionBy += "hash"
+			case partition.PartitionMethod_Key:
+				partitionBy += "key"
+			case partition.PartitionMethod_Range:
+				rangeOrList = true
+				partitionBy += "range "
+			case partition.PartitionMethod_List:
+				rangeOrList = true
+				partitionBy += "List "
+			}
+
+			cols := "("
+			cols += meta.Description
+			cols += ")"
+
+			if rangeOrList {
+				partitionBy += "columns" + cols + " ("
+				for i, p := range meta.Partitions {
+					if i > 0 {
+						partitionBy += ", "
+					}
+					partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
+				}
+				partitionBy += ")"
+			} else {
+				partitionBy += cols
+				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
+			}
+			createStr += partitionBy
+		}
+	}
 
 	/**
 	Fix issue: https://github.com/matrixorigin/MO-Cloud/issues/1028#issuecomment-1667642384
@@ -503,5 +550,5 @@ func formatStr(str string) string {
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
-	return builder.resolveTsHint(AtTsExpr)
+	return builder.ResolveTsHint(AtTsExpr)
 }

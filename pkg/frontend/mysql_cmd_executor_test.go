@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	plan0 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -770,7 +771,7 @@ func Test_GetComputationWrapper(t *testing.T) {
 	convey.Convey("GetComputationWrapper succ", t, func() {
 		db, sql, user := "T", "SHOW TABLES", "root"
 		var eng engine.Engine
-		proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 
 		sysVars := make(map[string]interface{})
 		for name, sysVar := range gSysVarsDefs {
@@ -816,7 +817,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		ses := NewSession(ctx, "", proto, nil)
 		ses.respr = &MysqlResp{mysqlRrWr: proto}
 		ses.mrs = &MysqlResultSet{}
-		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(), ses: ses}
+		ses.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: ses}
 
 		convey.So(handleFun(ses), convey.ShouldBeNil)
 	})
@@ -1074,7 +1075,7 @@ func TestProcessLoadLocal(t *testing.T) {
 				Filepath: "test.csv",
 			},
 		}
-		proc := testutil.NewProc()
+		proc := testutil.NewProc(t)
 		var writer *io.PipeWriter
 		proc.Base.LoadLocalReader, writer = io.Pipe()
 		ctrl := gomock.NewController(t)
@@ -1691,4 +1692,105 @@ func Test_handleShowTableStatus(t *testing.T) {
 		ec = newTestExecCtx(context.Background(), ctrl)
 		convey.So(handleShowTableStatus(ses, ec, shv), convey.ShouldNotBeNil)
 	})
+}
+
+func Test_checkModify(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	resolveFn := func(schemaName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		if schemaName == "err_db" {
+			return nil, nil, &moerr.Error{}
+		}
+		return nil, nil, nil
+	}
+	tests := []struct {
+		node          *plan.Node
+		expected_flag bool
+		expected_err  bool
+	}{
+		{
+			node:          &plan.Node{},
+			expected_flag: false,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				TableDef: &plan.TableDef{},
+				ObjRef: &plan.ObjectRef{
+					SchemaName: "err_db",
+				},
+			},
+			expected_flag: true,
+			expected_err:  true,
+		},
+		{
+			node: &plan.Node{
+				TableDef: &plan.TableDef{
+					Name:    "test",
+					TblId:   1,
+					Version: 1,
+				},
+				ObjRef: &plan.ObjectRef{
+					SchemaName: "test_db",
+				},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				InsertCtx: &plan0.InsertCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				ReplaceCtx: &plan0.ReplaceCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				DeleteCtx: &plan0.DeleteCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				PreInsertCtx: &plan0.PreInsertCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+		{
+			node: &plan.Node{
+				OnDuplicateKey: &plan0.OnDuplicateKeyCtx{},
+			},
+			expected_flag: true,
+			expected_err:  false,
+		},
+	}
+
+	flag, _ := checkModify(nil, resolveFn)
+	assert.Equal(t, true, flag)
+
+	for _, test := range tests {
+		flag, err := checkModify(&plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: &plan.Query{
+					Nodes: []*plan.Node{
+						test.node,
+					},
+				},
+			},
+		}, resolveFn)
+		assert.Equal(t, test.expected_flag, flag)
+		if !test.expected_err {
+			assert.Nil(t, err)
+		}
+	}
 }

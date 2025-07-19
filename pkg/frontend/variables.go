@@ -87,6 +87,8 @@ func errorSystemVariableIsGlobal() string { return "the system variable is globa
 
 func errorSystemVariableIsReadOnly() string { return "the system variable is read only" }
 
+func errorUserVariableDoesNotExist() string { return "the user variable %s does not exist" }
+
 type Scope int
 
 const (
@@ -959,7 +961,10 @@ type GlobalSysVarsMgr struct {
 
 func useTomlConfigOverOtherConfigs(CNServiceConfig *config.FrontendParameters, sysVarsMp map[string]interface{}) {
 	sysVarsMp["version_comment"] = CNServiceConfig.VersionComment
-	sysVarsMp["version"] = CNServiceConfig.ServerVersionPrefix + CNServiceConfig.MoVersion
+
+	verVal := serverVersion.Load().(string)
+	verPrefix := CNServiceConfig.ServerVersionPrefix
+	sysVarsMp["version"] = verPrefix + verVal
 }
 
 // Get return sys vars of accountId

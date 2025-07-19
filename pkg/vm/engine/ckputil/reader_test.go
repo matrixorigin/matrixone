@@ -32,7 +32,7 @@ import (
 )
 
 func Test_Reader1(t *testing.T) {
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	fs, err := fileservice.Get[fileservice.FileService](
 		proc.GetFileService(), defines.SharedFileServiceName,
 	)
@@ -165,7 +165,7 @@ func Test_Reader1(t *testing.T) {
 	// require.Equal(t, 1, len(tableRanges))
 	// require.Equal(t, 10, TableRangesRows(tableRanges))
 
-	tableRanges := ExportToTableRanges(
+	tableRanges := ExportToTableRangesByFilter(
 		ranges,
 		uint64(2),
 		ObjectType_Data,
@@ -191,7 +191,7 @@ func Test_Reader1(t *testing.T) {
 	iter.Close()
 	require.Equal(t, 9000, cnt)
 
-	tableRanges = ExportToTableRanges(
+	tableRanges = ExportToTableRangesByFilter(
 		ranges,
 		uint64(5),
 		ObjectType_Tombstone,

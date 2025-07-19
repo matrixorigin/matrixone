@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -81,7 +79,7 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *plan.SubscriptionMeta) (*plan.ObjectRef, *plan.TableDef, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -134,6 +132,9 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef, snapshot *plan.Snapshot) (*
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
 		return nil, err
+	}
+	if table == nil {
+		return nil, moerr.NewNoSuchTable(ctx, dbName, tableName)
 	}
 
 	newCtx := perfcounter.AttachCalcTableStatsKey(ctx)
@@ -228,43 +229,6 @@ func (c *compilerContext) DefaultDatabase() string {
 	return strings.ToLower(c.defaultDB)
 }
 
-func (c *compilerContext) GetPrimaryKeyDef(
-	dbName string,
-	tableName string,
-	snapshot *plan.Snapshot) []*plan.ColDef {
-	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
-	if err != nil {
-		return nil
-	}
-	ctx, relation, err := c.getRelation(dbName, tableName, snapshot)
-	if err != nil {
-		return nil
-	}
-
-	priKeys, err := relation.GetPrimaryKeys(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(priKeys) == 0 {
-		return nil
-	}
-
-	priDefs := make([]*plan.ColDef, 0, len(priKeys))
-	for _, key := range priKeys {
-		priDefs = append(priDefs, &plan.ColDef{
-			Name:       strings.ToLower(key.Name),
-			OriginName: key.Name,
-			Typ: plan.Type{
-				Id:    int32(key.Type.Oid),
-				Width: key.Type.Width,
-				Scale: key.Type.Scale,
-			},
-			Primary: key.Primary,
-		})
-	}
-	return priDefs
-}
-
 func (c *compilerContext) GetRootSql() string {
 	return c.sql
 }
@@ -283,6 +247,9 @@ func (c *compilerContext) GetAccountId() (uint32, error) {
 	return defines.GetAccountId(c.proc.GetTopContext())
 }
 
+func (c *compilerContext) GetAccountName() string {
+	return "sys"
+}
 func (c *compilerContext) GetContext() context.Context {
 	return c.proc.GetTopContext()
 }
@@ -291,7 +258,7 @@ func (c *compilerContext) SetContext(ctx context.Context) {
 	c.proc.ReplaceTopCtx(ctx)
 }
 
-func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (objRef *plan.ObjectRef, tableDef *plan.TableDef, err error) {
 	ctx := c.GetContext()
 	txnOpt := c.proc.GetTxnOperator()
 
@@ -303,18 +270,21 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 		}
 	}
 
-	dbName, tableName, _ := c.engine.GetNameById(ctx, txnOpt, tableId)
+	dbName, tableName, e := c.engine.GetNameById(ctx, txnOpt, tableId)
+	if e != nil {
+		return nil, nil, e
+	}
 	if dbName == "" || tableName == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	return c.Resolve(dbName, tableName, snapshot)
 }
 
-func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
 }
 
-func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef) {
+func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
 	if slices.Contains(mysql.CaseInsensitiveDbs, strings.ToLower(dbName)) {
 		dbName = strings.ToLower(dbName)
@@ -323,14 +293,31 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 
 	dbName, err := c.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil, nil
+		if moerr.IsMoErrCode(err, moerr.ErrNoDB) {
+			return nil, nil, nil
+		}
+		return nil, nil, err
 	}
 
 	ctx, table, err := c.getRelation(dbName, tableName, snapshot)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
-	return c.getTableDef(ctx, table, dbName, tableName)
+	if table == nil {
+		return nil, nil, nil
+	}
+
+	tableDef := table.CopyTableDef(ctx)
+	if tableDef.IsTemporary {
+		tableDef.Name = tableName
+	}
+	tableID := int64(table.GetTableID(ctx))
+	obj := &plan.ObjectRef{
+		SchemaName: dbName,
+		ObjName:    tableName,
+		Obj:        tableID,
+	}
+	return obj, tableDef, nil
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
@@ -389,153 +376,10 @@ func (c *compilerContext) getRelation(
 
 	table, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, nil, nil
+		}
 		return nil, nil, err
 	}
 	return ctx, table, nil
-}
-
-func (c *compilerContext) getTableDef(
-	ctx context.Context,
-	table engine.Relation,
-	dbName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
-	tableId := table.GetTableID(ctx)
-	engineDefs, err := table.TableDefs(ctx)
-	if err != nil {
-		return nil, nil
-	}
-
-	var clusterByDef *plan.ClusterByDef
-	var cols []*plan.ColDef
-	var schemaVersion uint32
-	var defs []*plan.TableDefType
-	var properties []*plan.Property
-	var TableType, Createsql string
-	var viewSql *plan.ViewDef
-	var foreignKeys []*plan.ForeignKeyDef
-	var primarykey *plan.PrimaryKeyDef
-	var indexes []*plan.IndexDef
-	var refChildTbls []uint64
-	var subscriptionName string
-
-	for _, def := range engineDefs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			col := &plan.ColDef{
-				ColId:      attr.Attr.ID,
-				Name:       strings.ToLower(attr.Attr.Name),
-				OriginName: attr.Attr.Name,
-				Typ: plan.Type{
-					Id:          int32(attr.Attr.Type.Oid),
-					Width:       attr.Attr.Type.Width,
-					Scale:       attr.Attr.Type.Scale,
-					AutoIncr:    attr.Attr.AutoIncrement,
-					Table:       tableName,
-					NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:  attr.Attr.EnumVlaues,
-				},
-				Primary:   attr.Attr.Primary,
-				Default:   attr.Attr.Default,
-				OnUpdate:  attr.Attr.OnUpdate,
-				Comment:   attr.Attr.Comment,
-				ClusterBy: attr.Attr.ClusterBy,
-				Hidden:    attr.Attr.IsHidden,
-				Seqnum:    uint32(attr.Attr.Seqnum),
-			}
-			// Is it a composite primary key
-			//if attr.Attr.Name == catalog.CPrimaryKeyColName {
-			//	continue
-			//}
-			if attr.Attr.ClusterBy {
-				clusterByDef = &plan.ClusterByDef{
-					Name: strings.ToLower(attr.Attr.Name),
-				}
-				//if util.JudgeIsCompositeClusterByColumn(attr.Attr.Name) {
-				//	continue
-				//}
-			}
-			cols = append(cols, col)
-		} else if pro, ok := def.(*engine.PropertiesDef); ok {
-			for _, p := range pro.Properties {
-				switch p.Key {
-				case catalog.SystemRelAttr_Kind:
-					TableType = p.Value
-				case catalog.SystemRelAttr_CreateSQL:
-					Createsql = p.Value
-				default:
-				}
-				properties = append(properties, &plan.Property{
-					Key:   p.Key,
-					Value: p.Value,
-				})
-			}
-		} else if viewDef, ok := def.(*engine.ViewDef); ok {
-			viewSql = &plan.ViewDef{
-				View: viewDef.View,
-			}
-		} else if c, ok := def.(*engine.ConstraintDef); ok {
-			for _, ct := range c.Cts {
-				switch k := ct.(type) {
-				case *engine.IndexDef:
-					indexes = k.Indexes
-				case *engine.ForeignKeyDef:
-					foreignKeys = k.Fkeys
-				case *engine.RefChildTableDef:
-					refChildTbls = k.Tables
-				case *engine.PrimaryKeyDef:
-					primarykey = k.Pkey
-				}
-			}
-		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
-			properties = append(properties, &plan.Property{
-				Key:   catalog.SystemRelAttr_Comment,
-				Value: commnetDef.Comment,
-			})
-		} else if v, ok := def.(*engine.VersionDef); ok {
-			schemaVersion = v.Version
-		}
-	}
-	if len(properties) > 0 {
-		defs = append(defs, &plan.TableDefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
-				},
-			},
-		})
-	}
-
-	if primarykey != nil && primarykey.PkeyColName == catalog.CPrimaryKeyColName {
-		//cols = append(cols, plan.MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
-		primarykey.CompPkeyCol = plan.GetColDefFromTable(cols, catalog.CPrimaryKeyColName)
-	}
-	if clusterByDef != nil && util.JudgeIsCompositeClusterByColumn(clusterByDef.Name) {
-		//cols = append(cols, plan.MakeHiddenColDefByName(clusterByDef.Name))
-		clusterByDef.CompCbkeyCol = plan.GetColDefFromTable(cols, clusterByDef.Name)
-	}
-	rowIdCol := plan.MakeRowIdColDef()
-	cols = append(cols, rowIdCol)
-
-	//convert
-	obj := &plan.ObjectRef{
-		SchemaName:       dbName,
-		ObjName:          tableName,
-		SubscriptionName: subscriptionName,
-	}
-
-	tableDef := &plan.TableDef{
-		TblId:        tableId,
-		Name:         tableName,
-		Cols:         cols,
-		Defs:         defs,
-		TableType:    TableType,
-		Createsql:    Createsql,
-		Pkey:         primarykey,
-		ViewSql:      viewSql,
-		Fkeys:        foreignKeys,
-		RefChildTbls: refChildTbls,
-		ClusterBy:    clusterByDef,
-		Indexes:      indexes,
-		Version:      schemaVersion,
-		DbName:       dbName,
-	}
-	return obj, tableDef
 }

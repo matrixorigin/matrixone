@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -216,7 +217,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -228,6 +229,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+		relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12").AnyTimes()
@@ -256,7 +258,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -268,6 +270,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+		relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12").AnyTimes()
@@ -311,7 +314,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -323,6 +326,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+		relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12").AnyTimes()
@@ -366,7 +370,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -378,6 +382,7 @@ func TestScope_AlterTableInplace(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+		relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12").AnyTimes()
@@ -636,7 +641,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -648,6 +653,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+		relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12").AnyTimes()
@@ -674,7 +680,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -686,6 +692,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+		relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12").AnyTimes()
@@ -727,7 +734,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -739,6 +746,7 @@ func TestScope_AlterTableCopy(t *testing.T) {
 
 		relation := mock_frontend.NewMockRelation(ctrl)
 		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
+		relation.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{}).AnyTimes()
 
 		mockDb := mock_frontend.NewMockDatabase(ctrl)
 		mockDb.EXPECT().GetDatabaseId(gomock.Any()).Return("12").AnyTimes()

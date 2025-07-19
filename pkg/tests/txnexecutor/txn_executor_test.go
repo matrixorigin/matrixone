@@ -19,11 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_TxnExecutorExec(t *testing.T) {
@@ -46,4 +45,68 @@ func Test_TxnExecutorExec(t *testing.T) {
 		return nil
 	}, executor.Options{}.WithWaitCommittedLogApplied())
 	require.NoError(t, err)
+}
+
+func TestPreparedParams(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			exec := testutils.GetSQLExecutor(cn)
+			require.NotNil(t, exec)
+
+			db := testutils.GetDatabaseName(t)
+			testutils.CreateTestDatabase(t, db, cn)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+			defer cancel()
+			exec.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					txn.Use(db)
+
+					_, err := txn.Exec(
+						"create table t (id int primary key, name varchar(20))",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+
+					_, err = txn.Exec(
+						"insert into t values (?, ?), (?, ?)",
+						executor.StatementOption{}.WithParams([]string{"1", "test", "3", "test3"}),
+					)
+					require.NoError(t, err)
+
+					res, err := txn.Exec(
+						"select count(1) from t",
+						executor.StatementOption{},
+					)
+					require.NoError(t, err)
+					require.Equal(t, 2, testutils.ReadCount(res))
+					res.Close()
+					return nil
+				},
+				executor.Options{},
+			)
+
+			_, err = exec.Exec(
+				ctx,
+				"insert into t values (?, ?)",
+				executor.Options{}.WithDatabase(db).WithForceRebuildPlan().WithStatementOption(
+					executor.StatementOption{}.WithParams([]string{"2", "test2"}),
+				),
+			)
+			require.NoError(t, err)
+
+			res, err := exec.Exec(
+				ctx,
+				"select count(1) from t",
+				executor.Options{}.WithDatabase(db),
+			)
+			require.NoError(t, err)
+			require.Equal(t, 3, testutils.ReadCount(res))
+			res.Close()
+		},
+	)
 }

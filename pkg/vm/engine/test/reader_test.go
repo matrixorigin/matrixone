@@ -129,7 +129,7 @@ func Test_ReaderCanReadRangesBlocksWithoutDeletes(t *testing.T) {
 	// }
 
 	var exes []colexec.ExpressionExecutor
-	proc := testutil3.NewProcessWithMPool("", mp)
+	proc := testutil3.NewProcessWithMPool(t, "", mp)
 	expr := []*plan.Expr{
 		readutil.MakeFunctionExprForTest("=", []*plan.Expr{
 			readutil.MakeColExprForTest(int32(primaryKeyIdx), schema.ColDefs[primaryKeyIdx].Type.Oid, schema.ColDefs[primaryKeyIdx].Name),
@@ -1339,7 +1339,7 @@ func Test_ShardingLocalReader(t *testing.T) {
 
 func Test_SimpleReader(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
-	proc := testutil3.NewProcessWithMPool("", mp)
+	proc := testutil3.NewProcessWithMPool(t, "", mp)
 	pkType := types.T_int32.ToType()
 	bat1 := readutil.NewCNTombstoneBatch(
 		&pkType,
@@ -1541,4 +1541,92 @@ func TestGetStats(t *testing.T) {
 		require.Equal(t, 2, int(stats.GetBlockNumber()))
 	}
 
+}
+
+func TestHandleShardingReadPrimaryKeysMayBeModified(t *testing.T) {
+	var (
+		err          error
+		accountId    = catalog.System_Account
+		tableName    = "test_reader_table"
+		databaseName = "test_reader_database"
+
+		primaryKeyIdx int = 3
+
+		taeEngine     *testutil.TestTxnStorage
+		rpcAgent      *testutil.MockRPCAgent
+		disttaeEngine *testutil.TestDisttaeEngine
+		mp            *mpool.MPool
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	schema := catalog2.MockSchemaAll(4, primaryKeyIdx)
+	schema.Name = tableName
+
+	disttaeEngine, taeEngine, rpcAgent, mp = testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeEngine.Close(true)
+		rpcAgent.Close()
+	}()
+
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	_, _, err = disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+
+	// Get table and create process info
+	_, rel, txn, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+	require.NoError(t, err)
+
+	pInfo, err := process.MockProcessInfoWithPro("", rel.GetProcess())
+	require.NoError(t, err)
+
+	// Create test timestamps
+	fromTS := types.BuildTS(1, 1)
+	toTS := types.BuildTS(2, 2)
+	fromBytes, err := fromTS.Marshal()
+	require.NoError(t, err)
+	toBytes, err := toTS.Marshal()
+	require.NoError(t, err)
+
+	// Create a test vector and serialize it
+	keyVector := vector.NewVec(schema.ColDefs[primaryKeyIdx].Type)
+	err = vector.AppendFixed[int64](keyVector, 1, false, mp)
+	require.NoError(t, err)
+	keyVectorBytes, err := keyVector.MarshalBinary()
+	require.NoError(t, err)
+
+	// Create test ReadParam
+	param := shard.ReadParam{
+		Process: pInfo,
+		TxnTable: shard.TxnTable{
+			DatabaseID:   rel.GetDBID(ctx),
+			DatabaseName: databaseName,
+			AccountID:    uint64(catalog.System_Account),
+			TableName:    tableName,
+		},
+		PrimaryKeysMayBeModifiedParam: shard.PrimaryKeysMayBeModifiedParam{
+			From:      fromBytes,
+			To:        toBytes,
+			KeyVector: keyVectorBytes,
+		},
+	}
+
+	// Test HandleShardingReadPrimaryKeysMayBeModified
+	res, err := disttae.HandleShardingReadPrimaryKeysMayBeModified(
+		ctx,
+		shard.TableShard{},
+		disttaeEngine.Engine,
+		param,
+		timestamp.Timestamp{},
+		morpc.NewBuffer(),
+	)
+	require.NoError(t, err)
+
+	// Verify the result
+	require.NotNil(t, res)
+	require.NoError(t, txn.Commit(ctx))
 }

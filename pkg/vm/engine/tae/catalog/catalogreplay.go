@@ -458,7 +458,10 @@ func (catalog *Catalog) ReplayMOTables(ctx context.Context, txnNode *txnbase.Txn
 			name := tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Name).GetDownstreamVector().GetStringAt(i)
 			schema := NewEmptySchema(name)
 			schema.ReadFromBatch(
-				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset, tid,
+				colBat, colTids, nullables, isHiddens, clusterbys, autoIncrements, idxes, seqNums, startOffset,
+				func(currentName string, currentTid uint64) (goNext bool) {
+					return currentName == name && currentTid == tid
+				},
 			)
 			schema.Comment = tblBat.GetVectorByName(pkgcatalog.SystemRelAttr_Comment).GetDownstreamVector().GetStringAt(i)
 			schema.Version = versions[i]

@@ -43,6 +43,14 @@ type MockCompilerContext struct {
 
 	// ctx default: nil
 	ctx context.Context
+
+	// Add function fields for test overrides
+	GetAccountNameFunc    func() string
+	GetAccountIdFunc      func() (uint32, error)
+	DatabaseExistsFunc    func(string, *Snapshot) bool
+	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
+	ResolveAccountIdsFunc func([]string) ([]uint32, error)
+	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -72,12 +80,12 @@ func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pu
 	panic("implement me")
 }
 
-func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	return m.Resolve(DbNameOfObjRef(ref), tblName, snapshot)
 }
 
-func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef) {
-	return nil, nil
+func (m *MockCompilerContext) ResolveSubscriptionTableById(tableId uint64, pubmeta *SubscriptionMeta) (*ObjectRef, *TableDef, error) {
+	return nil, nil, nil
 }
 
 func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*function.Udf, error) {
@@ -85,6 +93,9 @@ func (m *MockCompilerContext) ResolveUdf(name string, ast []*plan.Expr) (*functi
 }
 
 func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, error) {
+	if m.ResolveAccountIdsFunc != nil {
+		return m.ResolveAccountIdsFunc(accountNames)
+	}
 	return []uint32{catalog.System_Account}, nil
 }
 
@@ -1164,6 +1175,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) DatabaseExists(name string, snapshot *Snapshot) bool {
+	if m.DatabaseExistsFunc != nil {
+		return m.DatabaseExistsFunc(name, snapshot)
+	}
 	if _, ok := m.dbs[strings.ToLower(name)]; ok {
 		return true
 	}
@@ -1171,6 +1185,9 @@ func (m *MockCompilerContext) DatabaseExists(name string, snapshot *Snapshot) bo
 }
 
 func (m *MockCompilerContext) GetDatabaseId(dbName string, snapshot *Snapshot) (uint64, error) {
+	if m.GetDatabaseIdFunc != nil {
+		return m.GetDatabaseIdFunc(dbName, snapshot)
+	}
 	return 0, nil
 }
 
@@ -1186,7 +1203,7 @@ func (m *MockCompilerContext) GetUserName() string {
 	return "root"
 }
 
-func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := strings.ToLower(tableName)
 	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
@@ -1208,10 +1225,10 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot 
 	if tableDef != nil {
 		tableDef.DbName = dbName
 	}
-	return m.objects[name], tableDef
+	return m.objects[name], tableDef, nil
 }
 
-func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef) {
+func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := m.id2name[tableId]
 	tableDef := DeepCopyTableDef(m.tables[name], true)
 	if tableDef != nil && !m.isDml {
@@ -1222,15 +1239,7 @@ func (m *MockCompilerContext) ResolveById(tableId uint64, snapshot *Snapshot) (*
 			}
 		}
 	}
-	return m.objects[name], tableDef
-}
-
-func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string, snapshot *Snapshot) []*ColDef {
-	defs := make([]*ColDef, 0, 2)
-	for _, pk := range m.pks[tableName] {
-		defs = append(defs, m.tables[tableName].Cols[pk])
-	}
-	return defs
+	return m.objects[name], tableDef, nil
 }
 
 func (m *MockCompilerContext) Stats(obj *ObjectRef, snapshot *Snapshot) (*pb.StatsInfo, error) {
@@ -1241,7 +1250,17 @@ func (m *MockCompilerContext) GetStatsCache() *StatsCache {
 	return nil
 }
 
+func (m *MockCompilerContext) GetAccountName() string {
+	if m.GetAccountNameFunc != nil {
+		return m.GetAccountNameFunc()
+	}
+	return ""
+}
+
 func (m *MockCompilerContext) GetAccountId() (uint32, error) {
+	if m.GetAccountIdFunc != nil {
+		return m.GetAccountIdFunc()
+	}
 	return 0, nil
 }
 
@@ -1254,7 +1273,7 @@ func (m *MockCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
-	return testutil.NewProc()
+	return testutil.NewProc(nil)
 }
 
 func (m *MockCompilerContext) GetQueryResultMeta(uuid string) ([]*ColDef, string, error) {

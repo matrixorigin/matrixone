@@ -46,8 +46,27 @@
 | 3013 | 1       | TxnCommand_PersistedDeleteNode    |
 | 3014 | 1       | IOET_WALTxnCommand_FlushTableTail |
 
-## MatrixOne 1.1 (TBD)
+## MatrixOne 1.1
 
 ### Log Entry
+
+| Type | Version | Name |
+| ---- | ------- | ---- |
 | 3015 | 1       | IOET_WALTxnCommand_Object |
 | 3000 | 2       | TxnEntry              |
+
+## MatrixOne 2.1
+
+### LogEntry
+
+| Type | Version | Name |
+| ---- | ------- | ---- |
+| 1000 | 2 | IOET_WALRecord |
+| 3000 | 3, 4 | IOET_WALTxnEntry |
+
+## MatrxOne 2.2 (TBD)
+
+
+| Type | Version | Name |
+| ---- | ------- | ---- |
+| 3000 | 5 | IOET_WALTxnEntry |

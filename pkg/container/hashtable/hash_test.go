@@ -15,10 +15,13 @@
 package hashtable
 
 import (
-	//"fmt"
-
+	"fmt"
+	"math/rand"
 	"reflect"
+	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 var data = [][]byte{
@@ -161,5 +164,269 @@ func TestHashFn(t *testing.T) {
 				golden[i][0], golden[i][1], golden[i][2])
 
 		}
+	}
+}
+
+func TestInt64HashMap_MarshalUnmarshal_Empty(t *testing.T) {
+	originalMap := &Int64HashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &Int64HashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(0), unmarshaledMap.elemCnt)
+	require.Equal(t, uint64(0), unmarshaledMap.Cardinality())
+	require.Equal(t, uint64(kInitialCellCnt), unmarshaledMap.cellCnt)
+}
+
+func TestInt64HashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
+	originalMap := &Int64HashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	key := uint64(12345)
+	hashes := make([]uint64, 1)
+	values := make([]uint64, 1)
+	err = originalMap.InsertBatch(1, hashes, toUnsafePointer(&key), values)
+	require.NoError(t, err)
+	expectedMappedValue := values[0]
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &Int64HashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(1), unmarshaledMap.elemCnt)
+	require.Equal(t, uint64(1), unmarshaledMap.Cardinality())
+
+	// Verify by finding the key
+	foundValues := make([]uint64, 1)
+	unmarshaledMap.FindBatch(1, hashes, toUnsafePointer(&key), foundValues)
+	require.Equal(t, expectedMappedValue, foundValues[0])
+}
+
+func TestInt64HashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
+	originalMap := &Int64HashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	numElements := 50
+	originalKeys := make([]uint64, numElements)
+	originalMappedValues := make(map[uint64]uint64)
+
+	for i := 0; i < numElements; i++ {
+		key := uint64(rand.Int63())
+		originalKeys[i] = key
+		hashes := make([]uint64, 1)
+		values := make([]uint64, 1)
+		err = originalMap.InsertBatch(1, hashes, toUnsafePointer(&key), values)
+		require.NoError(t, err)
+		originalMappedValues[key] = values[0]
+	}
+
+	require.Equal(t, uint64(numElements), originalMap.elemCnt)
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &Int64HashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(numElements), unmarshaledMap.elemCnt)
+	require.Equal(t, uint64(numElements), unmarshaledMap.Cardinality())
+
+	// Verify all elements
+	for _, key := range originalKeys {
+		hashes := make([]uint64, 1)
+		foundValues := make([]uint64, 1)
+		unmarshaledMap.FindBatch(1, hashes, toUnsafePointer(&key), foundValues)
+		require.Equal(t, originalMappedValues[key], foundValues[0], "key %d", key)
+	}
+}
+
+func TestInt64HashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T) {
+	originalMap := &Int64HashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	numElements := 2000 // This should trigger multiple resizes
+	originalKeys := make([]uint64, numElements)
+	originalMappedValues := make(map[uint64]uint64)
+
+	for i := 0; i < numElements; i++ {
+		key := uint64(rand.Int63())
+		originalKeys[i] = key
+		hashes := make([]uint64, 1)
+		values := make([]uint64, 1)
+		err = originalMap.InsertBatch(1, hashes, toUnsafePointer(&key), values)
+		require.NoError(t, err)
+		originalMappedValues[key] = values[0]
+	}
+
+	require.Equal(t, uint64(numElements), originalMap.elemCnt)
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &Int64HashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(numElements), unmarshaledMap.elemCnt)
+	require.Equal(t, uint64(numElements), unmarshaledMap.Cardinality())
+
+	// Verify all elements
+	for _, key := range originalKeys {
+		hashes := make([]uint64, 1)
+		foundValues := make([]uint64, 1)
+		unmarshaledMap.FindBatch(1, hashes, toUnsafePointer(&key), foundValues)
+		require.Equal(t, originalMappedValues[key], foundValues[0], "key %d", key)
+	}
+}
+
+func TestStringHashMap_MarshalUnmarshal_Empty(t *testing.T) {
+	originalMap := &StringHashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &StringHashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(0), unmarshaledMap.elemCnt)
+	require.Equal(t, uint64(kInitialCellCnt), unmarshaledMap.cellCnt)
+}
+
+func TestStringHashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
+	originalMap := &StringHashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	key := []byte("test_string_key")
+	keys := [][]byte{key}
+	states := make([][3]uint64, 1)
+	values := make([]uint64, 1)
+
+	err = originalMap.InsertStringBatch(states, keys, values)
+	require.NoError(t, err)
+	expectedMappedValue := values[0]
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &StringHashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(1), unmarshaledMap.elemCnt)
+
+	// Verify by finding the key
+	foundValues := make([]uint64, 1)
+	unmarshaledMap.FindStringBatch(states, keys, foundValues)
+	require.Equal(t, expectedMappedValue, foundValues[0])
+}
+
+func TestStringHashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
+	originalMap := &StringHashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	numElements := 50
+	originalKeys := make([][]byte, numElements)
+	originalMappedValues := make(map[string]uint64)
+
+	for i := 0; i < numElements; i++ {
+		key := []byte(fmt.Sprintf("key_%d", i))
+		originalKeys[i] = key
+		states := make([][3]uint64, 1)
+		values := make([]uint64, 1)
+		err = originalMap.InsertStringBatch(states, [][]byte{key}, values)
+		require.NoError(t, err)
+		originalMappedValues[string(key)] = values[0]
+	}
+
+	require.Equal(t, uint64(numElements), originalMap.elemCnt)
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &StringHashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(numElements), unmarshaledMap.elemCnt)
+
+	// Verify all elements
+	for _, key := range originalKeys {
+		states := make([][3]uint64, 1)
+		foundValues := make([]uint64, 1)
+		unmarshaledMap.FindStringBatch(states, [][]byte{key}, foundValues)
+		require.Equal(t, originalMappedValues[string(key)], foundValues[0], "key %s", string(key))
+	}
+}
+
+func TestStringHashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T) {
+	originalMap := &StringHashMap{}
+	err := originalMap.Init(nil)
+	require.NoError(t, err)
+	defer originalMap.Free()
+
+	numElements := 2000 // This should trigger multiple resizes
+	originalKeys := make([][]byte, numElements)
+	originalMappedValues := make(map[string]uint64)
+
+	for i := 0; i < numElements; i++ {
+		key := []byte(strconv.Itoa(i) + "_long_string_to_test_resize_behavior_and_hashing_across_blocks")
+		originalKeys[i] = key
+		states := make([][3]uint64, 1)
+		values := make([]uint64, 1)
+		err = originalMap.InsertStringBatch(states, [][]byte{key}, values)
+		require.NoError(t, err)
+		originalMappedValues[string(key)] = values[0]
+	}
+
+	require.Equal(t, uint64(numElements), originalMap.elemCnt)
+
+	marshaledData, err := originalMap.MarshalBinary()
+	require.NoError(t, err)
+
+	unmarshaledMap := &StringHashMap{}
+	err = unmarshaledMap.UnmarshalBinary(marshaledData, DefaultAllocator())
+	require.NoError(t, err)
+	defer unmarshaledMap.Free()
+
+	require.Equal(t, uint64(numElements), unmarshaledMap.elemCnt)
+
+	// Verify all elements
+	for _, key := range originalKeys {
+		states := make([][3]uint64, 1)
+		foundValues := make([]uint64, 1)
+		unmarshaledMap.FindStringBatch(states, [][]byte{key}, foundValues)
+		require.Equal(t, originalMappedValues[string(key)], foundValues[0], "key %s", string(key))
 	}
 }

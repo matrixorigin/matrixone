@@ -208,41 +208,47 @@ func UpdateMappingAfterMerge(b api.TransferMaps, mapping []int, toLayout []uint3
 	}
 }
 
+func iterStatsBs(bss [][]byte) iter.Seq[*objectio.ObjectStats] {
+	return func(yield func(*objectio.ObjectStats) bool) {
+		for _, bs := range bss {
+			stat := objectio.ObjectStats(bs)
+			yield(&stat)
+		}
+	}
+}
+
 func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [][]byte, level int8) {
 	var fromObjsDescBuilder strings.Builder
 	fromSize, estSize := float64(0), float64(0)
 	rows, blkn := 0, 0
+	isTombstone := false
 	for _, o := range mergedObjs {
 		obj := objectio.ObjectStats(o)
 		zm := obj.SortKeyZoneMap()
 		if strings.Contains(name, "tombstone") {
+			isTombstone = true
 			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v),",
 				obj.ObjectName().ObjectId().ShortStringEx(),
 				obj.BlkCnt(),
 				units.BytesSize(float64(obj.OriginSize())),
 				obj.Rows()))
 		} else {
+			isStatement := strings.Contains(name, "statement_info")
 			fromObjsDescBuilder.WriteString(fmt.Sprintf("%s(%v, %s)Rows(%v)[%v, %v],",
 				obj.ObjectName().ObjectId().ShortStringEx(),
 				obj.BlkCnt(),
 				units.BytesSize(float64(obj.OriginSize())),
 				obj.Rows(),
-				cutIfByteSlice(zm.GetMin()),
-				cutIfByteSlice(zm.GetMax())))
+				cutIfByteSlice(zm.GetMin(), isStatement),
+				cutIfByteSlice(zm.GetMax(), isStatement)))
 		}
 
 		fromSize += float64(obj.OriginSize())
-		estSize += float64(obj.Rows() * 30)
-		rowcnt := 8192
-		if obj.Rows() < 8192 {
-			rowcnt = int(obj.Rows())
-		}
-		estSize += float64(rowcnt * int(obj.OriginSize()/obj.Rows()) * 3 / 2)
-		estSize += float64(obj.Rows()) * 30  // transfer page
-		estSize += float64(obj.OriginSize()) // objectio write buffer
 		rows += int(obj.Rows())
 		blkn += int(obj.BlkCnt())
 	}
+
+	estSize = float64(EstimateMergeSize(iterStatsBs(mergedObjs)))
 
 	logutil.Info(
 		"[MERGE-START]",
@@ -261,17 +267,18 @@ func logMergeStart(tasksource, name, txnInfo, host, startTS string, mergedObjs [
 	)
 
 	if host == "TN" {
-		v2.TaskDNMergeScheduledByCounter.Inc()
-		v2.TaskDNMergedSizeCounter.Add(fromSize)
-	} else if host == "CN" {
-		v2.TaskCNMergeScheduledByCounter.Inc()
-		v2.TaskCNMergedSizeCounter.Add(fromSize)
+		if isTombstone {
+			v2.TaskTombstoneMergeSizeCounter.Add(fromSize)
+		} else {
+			v2.TaskDataMergeSizeCounter.Add(fromSize)
+		}
 	}
 }
 
 func logMergeEnd(name string, start time.Time, objs [][]byte) {
 	toObjsDesc := ""
 	toSize := float64(0)
+	isStatement := strings.Contains(name, "statement_info")
 	for _, o := range objs {
 		obj := objectio.ObjectStats(o)
 		toObjsDesc += fmt.Sprintf("%s(%v, %s)Rows(%v),",
@@ -279,6 +286,11 @@ func logMergeEnd(name string, start time.Time, objs [][]byte) {
 			obj.BlkCnt(),
 			units.BytesSize(float64(obj.OriginSize())),
 			obj.Rows())
+		if isStatement {
+			toObjsDesc += fmt.Sprintf("[%v, %v],",
+				cutIfByteSlice(obj.SortKeyZoneMap().GetMin(), isStatement),
+				cutIfByteSlice(obj.SortKeyZoneMap().GetMax(), isStatement))
+		}
 		toSize += float64(obj.OriginSize())
 	}
 
@@ -291,10 +303,15 @@ func logMergeEnd(name string, start time.Time, objs [][]byte) {
 	)
 }
 
-func cutIfByteSlice(value any) any {
-	switch value.(type) {
+func cutIfByteSlice(value any, forCompose bool) any {
+	switch v := value.(type) {
 	case []byte:
-		return "-"
+		if !forCompose {
+			return "-"
+		} else {
+			t, _, _, _ := types.DecodeTuple(v)
+			return t.ErrString(nil)
+		}
 	default:
 	}
 	return value
@@ -310,8 +327,10 @@ func EstimateMergeSize(objs iter.Seq[*objectio.ObjectStats]) int {
 		} else if r < 8192 {
 			blkRowCnt = int(r)
 		}
-		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2 // read one block, x 2 factor
-		estSize += int(obj.Rows()) * 30                             // transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
+		// read one block, x 2 factor
+		estSize += blkRowCnt * int(obj.OriginSize()/obj.Rows()) * 2
+		// transfer page, 4-byte key + (4+2+1)byte value, x 1.5 factor
+		estSize += int(obj.Rows()) * 30
 		totalSize += int(obj.OriginSize()) / 2
 	}
 	estSize += totalSize / 3 * 2 // leave some margin for gc

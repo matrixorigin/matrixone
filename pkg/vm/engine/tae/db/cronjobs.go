@@ -130,8 +130,6 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCTransferTable,
 			db.Opts.CheckpointCfg.TransferInterval,
 			func(context.Context) {
-				db.Runtime.PoolUsageReport()
-				// dbutils.PrintMemStats()
 				db.Runtime.TransferDelsMap.Prune(db.Opts.TransferTableTTL)
 				db.Runtime.TransferTable.RunTTL()
 			},
@@ -178,11 +176,27 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if db.Opts.CatalogCfg.DisableGC {
 					return
 				}
-				gcWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if gcWaterMark == nil {
+				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+				if ckp == nil {
 					return
 				}
-				db.Catalog.GCByTS(ctx, gcWaterMark.GetEnd())
+				wartMark := ckp.GetEnd()
+				if wartMark.IsEmpty() {
+					return
+				}
+
+				ts := types.BuildTS(wartMark.Physical()-
+					int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
+				if wartMark.GE(&ts) {
+					wartMark = ts
+				}
+				if db.Opts.GCTimeCheckerFactory != nil {
+					op := db.Opts.GCTimeCheckerFactory(db)
+					if !op(&wartMark) {
+						return
+					}
+				}
+				db.Catalog.GCByTS(ctx, wartMark)
 			},
 			1,
 		)
@@ -211,6 +225,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			CronJobs_Name_GCLockMerge,
 			options.DefaultLockMergePruneInterval,
 			func(ctx context.Context) {
+				db.Runtime.PoolUsageReport()
 				db.Runtime.LockMergeService.Prune()
 			},
 			1,
@@ -236,19 +251,6 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			1,
 		)
 		return
-		// case CronJobs_Name_Scanner:
-		// scanner := NewDBScanner(db, nil)
-		// db.MergeScheduler = merge.NewScheduler(db.Runtime, merge.NewTaskServiceGetter(db.Opts.TaskServiceGetter))
-		// scanner.RegisterOp(db.MergeScheduler)
-		// err = db.CronJobs.AddJob(
-		// 	CronJobs_Name_Scanner,
-		// 	db.Opts.CheckpointCfg.ScanInterval,
-		// 	func(ctx context.Context) {
-		// 		scanner.OnExec()
-		// 	},
-		// 	1,
-		// )
-		// return
 	}
 	err = moerr.NewInternalErrorNoCtxf(
 		"unknown cron job name: %s", name,

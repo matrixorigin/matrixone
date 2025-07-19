@@ -32,6 +32,7 @@ mo_database
 mo_foreign_keys
 mo_indexes
 mo_locks
+mo_merge_settings
 mo_mysql_compatibility_mode
 mo_pitr
 mo_pubs
@@ -184,4 +185,14 @@ drop database if exists s;
 drop database if exists v;
 drop role if exists r1;
 drop user if exists u1;
+create account `test_create_user` ADMIN_NAME "admin" IDENTIFIED BY "123";
+create user if not exists user1 identified by '123';
+create role if not exists role1;
+grant CONNECT,create user,alter user, drop user on account * to role1;
+grant role1 to user1;
+create user user2 identified by '123' default role role1;
+internal error: do not have privilege to execute the statement
+create user user2 identified by '123' default role role1;
+internal error: do not have privilege to execute the statement
+drop account `test_create_user`;
 set global enable_privilege_cache = on;

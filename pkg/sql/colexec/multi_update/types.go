@@ -69,6 +69,7 @@ type MultiUpdate struct {
 	input          vm.CallResult
 	ctr            container
 	MultiUpdateCtx []*MultiUpdateCtx
+	mainTable      uint64
 
 	Action                 UpdateAction
 	IsOnduplicateKeyUpdate bool
@@ -100,10 +101,11 @@ type container struct {
 }
 
 type MultiUpdateCtx struct {
-	ObjRef     *plan.ObjectRef
-	TableDef   *plan.TableDef
-	InsertCols []int
-	DeleteCols []int
+	ObjRef        *plan.ObjectRef
+	TableDef      *plan.TableDef
+	InsertCols    []int
+	DeleteCols    []int
+	PartitionCols []int
 }
 
 func (update MultiUpdate) TypeName() string {

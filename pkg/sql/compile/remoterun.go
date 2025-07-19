@@ -642,7 +642,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *projection.Projection:
 		in.ProjectList = t.ProjectList
 	case *filter.Filter:
-		in.Filter = t.E
+		in.Filters = t.FilterExprs
+		in.RuntimeFilters = t.RuntimeFilterExprs
 	case *semi.SemiJoin:
 		in.SemiJoin = &pipeline.SemiJoin{
 			Result:                 t.Result,
@@ -844,6 +845,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			for j, pos := range muCtx.DeleteCols {
 				updateCtxList[i].DeleteCols[j].ColPos = int32(pos)
 			}
+
+			updateCtxList[i].PartitionCols = make([]plan.ColRef, len(muCtx.PartitionCols))
+			for j, pos := range muCtx.PartitionCols {
+				updateCtxList[i].PartitionCols[j].ColPos = int32(pos)
+			}
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
 			AffectedRows:  t.GetAffectedRows(),
@@ -926,7 +932,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTarget(target.GetTableId(), target.GetObjRef(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
@@ -1150,7 +1156,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Filter:
 		arg := filter.NewArgument()
-		arg.E = opr.Filter
+		arg.FilterExprs = opr.Filters
+		arg.RuntimeFilterExprs = opr.RuntimeFilters
 		op = arg
 	case vm.Semi:
 		t := opr.GetSemiJoin()

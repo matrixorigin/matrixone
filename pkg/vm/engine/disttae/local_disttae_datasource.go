@@ -63,9 +63,7 @@ func NewLocalDataSource(
 	source.tombstonePolicy = policy
 
 	if rangesSlice != nil && rangesSlice.Len() > 0 {
-		if bytes.Equal(
-			objectio.EncodeBlockInfo(rangesSlice.Get(0)),
-			objectio.EmptyBlockInfoBytes) {
+		if rangesSlice.Get(0).IsMemBlk() {
 			rangesSlice = rangesSlice.Slice(1, rangesSlice.Len())
 		}
 
@@ -455,7 +453,7 @@ func checkWorkspaceEntryType(
 		if entry.typ != INSERT ||
 			entry.bat == nil ||
 			entry.bat.IsEmpty() ||
-			entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
+			entry.bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 			return false
 		}
 		if deleted, exist := tbl.getTxn().batchSelectList[entry.bat]; exist &&

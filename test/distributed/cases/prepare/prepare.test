@@ -100,7 +100,7 @@ d_street_2 varchar(20),
 d_city varchar(20),
 d_state char(2),
 d_zip char(9),
-primary key (d_w_id, d_id) ) PARTITION BY KEY(d_w_id);
+primary key (d_w_id, d_id) );
 prepare __mo_stmt_id_1 from UPDATE bmsql_district  SET d_next_o_id = d_next_o_id + 1     WHERE d_w_id = ? AND d_id = ?;
 set @__mo_stmt_var_0=1, @__mo_stmt_var_1=7;
 execute __mo_stmt_id_1 using @__mo_stmt_var_0,@__mo_stmt_var_1;
@@ -538,6 +538,20 @@ prepare s1 from select t2.* from t2 join t1 on t2.t1_a = t1.a where t2.a in (?,?
 set @a=20;
 set @b=10;
 execute s1 using @a, @b;
+drop table if exists t1;
+create table t1(a int, b int);
+prepare s1 from insert into t1 values (?,?);
+set @a=1;
+set @b=2;
+set @c=3;
+set @d=4;
+set @e=30;
+set @f=null;
+execute s1 using @a, @a;
+execute s1 using @b, @f;
+execute s1 using @c, @e;
+execute s1 using @d, @f;
+select * from t1;
 drop database db1;
 
 create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
@@ -556,6 +570,3 @@ drop role prepare_role1;
 -- @session
 
 drop account prepare_account_01;
-
-
-

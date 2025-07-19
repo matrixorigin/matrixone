@@ -46,6 +46,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseRefCntForColRefList(updateCtx.InsertCols, 2, colRefCnt)
 		increaseRefCntForColRefList(updateCtx.DeleteCols, 2, colRefCnt)
+		increaseRefCntForColRefList(updateCtx.PartitionCols, 2, colRefCnt)
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -248,6 +249,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	for _, updateCtx := range node.UpdateCtxList {
 		replaceColumnsForColRefList(updateCtx.InsertCols, projMap)
 		replaceColumnsForColRefList(updateCtx.DeleteCols, projMap)
+		replaceColumnsForColRefList(updateCtx.PartitionCols, projMap)
 	}
 
 	if node.NodeType == plan.Node_LOCK_OP {
@@ -472,6 +474,7 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseTagCntForColRefList(updateCtx.InsertCols, 2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, 2, tagCnt)
+		increaseTagCntForColRefList(updateCtx.PartitionCols, 2, tagCnt)
 	}
 
 	for i, childID := range node.Children {
@@ -515,6 +518,7 @@ END:
 	for _, updateCtx := range node.UpdateCtxList {
 		increaseTagCntForColRefList(updateCtx.InsertCols, -2, tagCnt)
 		increaseTagCntForColRefList(updateCtx.DeleteCols, -2, tagCnt)
+		increaseTagCntForColRefList(updateCtx.PartitionCols, -2, tagCnt)
 	}
 
 	return nodeID
@@ -1099,6 +1103,7 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 
 func (builder *QueryBuilder) optimizeFilters(rootID int32) int32 {
 	rootID, _ = builder.pushdownFilters(rootID, nil, false)
+	transposeTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, false)
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.mergeFiltersOnCompositeKey(rootID)
@@ -1137,7 +1142,11 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 	tableIDs[tableDef.TblId] = true
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist {
-			_, idxTableDef := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
+			_, idxTableDef, e := builder.compCtx.ResolveIndexTableByRef(objRef, idx.IndexTableName, nil)
+			if e != nil {
+				err = e
+				return
+			}
 			if idxTableDef == nil {
 				return
 			}

@@ -49,6 +49,143 @@ type Node struct {
 	CNIDX int32 // cn index , starts from 0
 }
 
+func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
+	planDefs := tableDef.GetDefs()
+	c := new(ConstraintDef)
+	for _, def := range planDefs {
+		switch defVal := def.GetDef().(type) {
+		case *plan.TableDef_DefType_Properties:
+			c.Cts = append(c.Cts, &StreamConfigsDef{
+				Configs: defVal.Properties.GetProperties(),
+			})
+		}
+	}
+
+	if tableDef.Indexes != nil {
+		c.Cts = append(c.Cts, &IndexDef{
+			Indexes: tableDef.Indexes,
+		})
+	}
+
+	if tableDef.Fkeys != nil {
+		c.Cts = append(c.Cts, &ForeignKeyDef{
+			Fkeys: tableDef.Fkeys,
+		})
+	}
+
+	if tableDef.Pkey != nil {
+		c.Cts = append(c.Cts, &PrimaryKeyDef{
+			Pkey: tableDef.Pkey,
+		})
+	}
+
+	if len(tableDef.RefChildTbls) > 0 {
+		c.Cts = append(c.Cts, &RefChildTableDef{
+			Tables: tableDef.RefChildTbls,
+		})
+	}
+
+	return c
+}
+
+var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
+	planDefs := tableDef.GetDefs()
+	var exeDefs []TableDef
+	var propDef *PropertiesDef
+	for _, def := range planDefs {
+		switch defVal := def.GetDef().(type) {
+		case *plan.TableDef_DefType_Properties:
+			properties := make([]Property, len(defVal.Properties.GetProperties()))
+			for i, p := range defVal.Properties.GetProperties() {
+				properties[i] = Property{
+					Key:   p.GetKey(),
+					Value: p.GetValue(),
+				}
+			}
+			propDef = &PropertiesDef{Properties: properties}
+			exeDefs = append(exeDefs, propDef)
+		}
+	}
+
+	if propDef == nil {
+		propDef = &PropertiesDef{Properties: make([]Property, 0)}
+		exeDefs = append(exeDefs, propDef)
+	}
+	extra := &api.SchemaExtra{
+		FeatureFlag: tableDef.FeatureFlag,
+	}
+	propDef.Properties = append(
+		propDef.Properties,
+		Property{
+			Key: "schema_extra",
+			ValueFactory: func() string {
+				return string(api.MustMarshalTblExtra(extra))
+			},
+		},
+	)
+
+	if tableDef.ViewSql != nil {
+		exeDefs = append(exeDefs, &ViewDef{
+			View: tableDef.ViewSql.View,
+		})
+	}
+
+	if tableDef.Partition != nil {
+		bytes, err := tableDef.Partition.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		exeDefs = append(exeDefs, &PartitionDef{
+			Partitioned: 1,
+			Partition:   string(bytes),
+		})
+	}
+
+	c := PlanDefToCstrDef(tableDef)
+	if len(c.Cts) > 0 {
+		exeDefs = append(exeDefs, c)
+	}
+
+	if tableDef.ClusterBy != nil {
+		exeDefs = append(exeDefs, &ClusterByDef{
+			Name: tableDef.ClusterBy.Name,
+		})
+	}
+
+	return exeDefs, extra, nil
+}
+
+func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
+	exeCols := make([]TableDef, len(planCols))
+	for i, col := range planCols {
+		var alg compress.T
+		switch col.Alg {
+		case plan.CompressType_None:
+			alg = compress.None
+		case plan.CompressType_Lz4:
+			alg = compress.Lz4
+		}
+		colTyp := col.GetTyp()
+		exeCols[i] = &AttributeDef{
+			Attr: Attribute{
+				Name:          col.GetOriginCaseName(),
+				Alg:           alg,
+				Type:          types.New(types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale()),
+				Default:       planCols[i].GetDefault(),
+				OnUpdate:      planCols[i].GetOnUpdate(),
+				Primary:       col.GetPrimary(),
+				Comment:       col.GetComment(),
+				ClusterBy:     col.ClusterBy,
+				AutoIncrement: col.Typ.GetAutoIncr(),
+				IsHidden:      col.Hidden,
+				Seqnum:        uint16(col.Seqnum),
+				EnumVlaues:    colTyp.GetEnumvalues(),
+			},
+		}
+	}
+	return exeCols
+}
+
 // Attribute is a column
 type Attribute struct {
 	// IsHide whether the attribute is hidden or not
@@ -86,8 +223,9 @@ type PropertiesDef struct {
 }
 
 type Property struct {
-	Key   string
-	Value string
+	Key          string
+	Value        string
+	ValueFactory func() string
 }
 
 type ClusterByDef struct {
@@ -865,6 +1003,8 @@ type Relation interface {
 
 	TableDefs(context.Context) ([]TableDef, error)
 
+	GetExtraInfo() *api.SchemaExtra
+
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
 	GetTableDef(context.Context) *plan.TableDef
 	CopyTableDef(context.Context) *plan.TableDef
@@ -929,12 +1069,12 @@ type Relation interface {
 	GetProcess() any
 
 	// Note: GetColumMetadataScanInfo Will access Fileservice
-	GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error)
+	GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
 
 	// PrimaryKeysMayBeModified reports whether any rows with any primary keys in keyVector was modified during `from` to `to`
 	// If not sure, returns true
 	// Initially added for implementing locking rows by primary keys
-	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
+	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex, partitionIndex int32) (bool, error)
 
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
@@ -1038,6 +1178,8 @@ type Engine interface {
 	GetService() string
 
 	LatestLogtailAppliedTime() timestamp.Timestamp
+
+	HasTempEngine() bool
 }
 
 type VectorPool interface {
@@ -1053,10 +1195,6 @@ type Hints struct {
 type EntireEngine struct {
 	Engine     Engine // original engine
 	TempEngine Engine // new engine for temporarily table
-}
-
-func IsMemtable(tblRange []byte) bool {
-	return bytes.Equal(tblRange, objectio.EmptyBlockInfoBytes)
 }
 
 type forceBuildRemoteDSConfig struct {

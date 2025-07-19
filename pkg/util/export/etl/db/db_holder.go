@@ -373,7 +373,7 @@ func GetLabelSelector() map[string]string {
 var _ table.BackOff = (*ReConnectionBackOff)(nil)
 
 type ReConnectionBackOff struct {
-	sync.Mutex
+	lock sync.Mutex
 	// setting
 	window    time.Duration
 	threshold int
@@ -394,8 +394,9 @@ func NewReConnectionBackOff(window time.Duration, threshold int) *ReConnectionBa
 // Count implement table.BackOff
 // return true, means not in backoff cycle. You can run your code.
 func (b *ReConnectionBackOff) Count() bool {
-	b.Lock()
-	defer b.Unlock()
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	if time.Since(b.last) > b.window {
 		b.count = 1
 		b.last = time.Now()
@@ -409,6 +410,9 @@ func (b *ReConnectionBackOff) Count() bool {
 
 // Check return same as Count, but without changed.
 func (b *ReConnectionBackOff) Check() bool {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	return b.count <= b.threshold ||
 		(time.Now().Before(b.last) || time.Since(b.last) > b.window)
 }

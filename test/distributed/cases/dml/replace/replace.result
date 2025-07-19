@@ -63,4 +63,19 @@ replace into `replace`.`names` values (2, "Dylan", 20);
 select name, age from `replace`.`names` where id = 2;
 name    age
 Dylan    20
+drop table if exists c;
+create table c(a int primary key , b int, v vecf32(3));
+replace into c values(1,1,'[1,2,3]');
+select * from c;
+a    b    v
+1    1    [1, 2, 3]
+drop table c;
+drop table if exists c;
+create table c(a int primary key , b int, v vecf32(3));
+replace into c values(1,1,'[1,2,3]');
+drop table if exists f;
+create table f (a int primary key, b int, c int, v vecf32(3));
+replace into f with c1 as (select * from c), src as (select * from (values row(1,1, cast('[3,4,5]' as vecf32(3))))) select a, column_0, column_1, column_2 from c1,src where c1.a = src.column_0;
+drop table f;
+drop table c;
 drop database replace_db;

@@ -159,6 +159,12 @@ func (s *store) newTAEStorage(
 		return nil, err2
 	}
 
+	// tmp fs
+	tmpFs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.TmpFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	ckpcfg := &options.CheckpointCfg{
 		MinCount:               s.cfg.Ckp.MinCount,
 		ScanInterval:           s.cfg.Ckp.ScanInterval.Duration,
@@ -205,20 +211,22 @@ func (s *store) newTAEStorage(
 	max2LogServiceMsgSizeLimit := uint64(math.MaxUint64 / 2)
 
 	opt := &options.Options{
-		Clock:             s.rt.Clock(),
-		Fs:                fs,
-		LocalFs:           localFs,
-		WalClientFactory:  logservicedriver.LogServiceClientFactory(factory),
-		Shard:             shard,
-		CheckpointCfg:     ckpcfg,
-		GCCfg:             gcCfg,
-		MergeCfg:          mergeCfg,
-		IncrementalDedup:  s.cfg.Txn.IncrementalDedup == "true",
-		IsStandalone:      s.cfg.InStandalone,
-		Ctx:               ctx,
-		MaxMessageSize:    max2LogServiceMsgSizeLimit,
-		TaskServiceGetter: s.GetTaskService,
-		SID:               s.cfg.UUID,
+		Clock:                s.rt.Clock(),
+		Fs:                   fs,
+		LocalFs:              localFs,
+		TmpFs:                tmpFs.(*fileservice.TmpFileService),
+		WalClientFactory:     logservicedriver.LogServiceClientFactory(factory),
+		Shard:                shard,
+		CheckpointCfg:        ckpcfg,
+		GCCfg:                gcCfg,
+		MergeCfg:             mergeCfg,
+		IncrementalDedup:     s.cfg.Txn.IncrementalDedup == "true",
+		IsStandalone:         s.cfg.InStandalone,
+		Ctx:                  ctx,
+		MaxMessageSize:       max2LogServiceMsgSizeLimit,
+		TaskServiceGetter:    s.GetTaskService,
+		SID:                  s.cfg.UUID,
+		EnableApplyTableData: s.cfg.Txn.DebugMode,
 	}
 
 	return taestorage.NewTAEStorage(
