@@ -83,7 +83,8 @@ func TestCacheEvict2(t *testing.T) {
 func TestCacheEvict3(t *testing.T) {
 	ctx := context.Background()
 	var nEvict, nGet, nSet int
-	cache := New(fscache.ConstCapacity(1024),
+	cache := New(
+		fscache.ConstCapacity(1024),
 		ShardInt[int],
 		func(_ context.Context, _ int, _ bool, _ int64) {
 			nSet++
@@ -134,4 +135,33 @@ func TestDoubleFree(t *testing.T) {
 	cache.Set(t.Context(), 2, 2, 1)
 	// check
 	assert.Equal(t, 1, evicts[1])
+}
+
+func TestGhostQueue(t *testing.T) {
+	numSet := make(map[int]int)
+	numEvict := make(map[int]int)
+	cache := New(
+		fscache.ConstCapacity(1),
+		ShardInt,
+		func(ctx context.Context, key int, value int, size int64) {
+			numSet[key]++
+		},
+		nil,
+		func(ctx context.Context, key int, value int, size int64) {
+			numEvict[key]++
+		},
+	)
+	cache.Set(t.Context(), 1, 1, 1)
+	cache.Set(t.Context(), 2, 2, 1)
+	assert.Equal(t, 1, numEvict[1])
+	// 1 is in the ghost queue now
+	_, ok := cache.Get(t.Context(), 1)
+	if ok {
+		t.Fatal()
+	}
+	cache.Set(t.Context(), 1, 1, 1)
+	assert.Equal(t, 2, numSet[1])
+	// 2 is in the ghost queue now
+	cache.Set(t.Context(), 3, 3, 1)
+	// 2 was evicted from ghost queue
 }
