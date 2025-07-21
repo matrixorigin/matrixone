@@ -829,8 +829,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	if ckpMaxEnd.GT(checkpointLowWaterMark) {
 		logutil.Warn("GC-PANIC-MERGE-FILES",
 			zap.String("task", c.TaskNameLocked()),
-			zap.String("ckpMaxEnd", ckpMaxEnd.ToString()),
-			zap.String("checkpointLowWaterMark", checkpointLowWaterMark.ToString()),
+			zap.String("ckp-max", ckpMaxEnd.ToString()),
+			zap.String("ckp-low", checkpointLowWaterMark.ToString()),
 		)
 		return
 	}
@@ -849,7 +849,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	window := c.GetScannedWindowLocked()
 	if ckpMaxEnd.GT(&window.tsRange.end) {
 		logutil.Warn("GC-PANIC-MERGE-FILES",
-			zap.String("ckpMaxEnd", ckpMaxEnd.ToString()),
+			zap.String("ckp-max", ckpMaxEnd.ToString()),
 			zap.String("window-end", window.tsRange.end.ToString()),
 		)
 		return
@@ -902,7 +902,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 		logutil.Error(
 			"GC-TRACE-MERGE-CHECKPOINT-FILES",
 			zap.String("task", c.TaskNameLocked()),
-			zap.Int("file len", len(newFiles)),
+			zap.Int("file-len", len(newFiles)),
 			zap.Error(err),
 		)
 		return
@@ -948,7 +948,7 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			logutil.Info(
 				"GC-TRACE-DELETE-CHECKPOINT-FILE",
 				zap.String("task", c.TaskNameLocked()),
-				zap.String("delete file", deleteFile),
+				zap.String("delete-file", deleteFile),
 			)
 			c.checkpointCli.RemoveCheckpointMetaFile(decodedFile.GetName())
 		}
@@ -1141,7 +1141,7 @@ func (c *checkpointCleaner) tryGCAgainstGCKPLocked(
 	if scanMark.IsEmpty() {
 		logutil.Warn("GC-PANIC-SCANMARK-EMPTY",
 			zap.String("task", c.TaskNameLocked()),
-			zap.String("mergeMark", mergeMark.ToString()))
+			zap.String("merge-mark", mergeMark.ToString()))
 		return nil
 	}
 	if waterMark.GT(&scanMark) {
@@ -1574,7 +1574,7 @@ func (c *checkpointCleaner) tryScanLocked(
 			cpt := c.checkpointCli.GetCompacted()
 			if cpt == nil {
 				logutil.Info("GC-PANIC-REBUILD-TABLE",
-					zap.String("max gCkp", maxGCkp.String()),
+					zap.String("max-gckp", maxGCkp.String()),
 					zap.String("start", start.ToString()))
 			} else {
 				candidates = append(candidates, cpt)
@@ -1583,8 +1583,8 @@ func (c *checkpointCleaner) tryScanLocked(
 			gcWaterMark := c.GetGCWaterMark()
 			if gcWaterMark != nil {
 				logutil.Warn("GC-PANIC-REBUILD-GC-WATER-MARK",
-					zap.String("max gCkp", maxGCkp.String()),
-					zap.String("gcWaterMark", gcWaterMark.String()))
+					zap.String("max-gckp", maxGCkp.String()),
+					zap.String("gc-water-mark", gcWaterMark.String()))
 			}
 			c.updateGCWaterMark(maxGCkp)
 			tryGC = false

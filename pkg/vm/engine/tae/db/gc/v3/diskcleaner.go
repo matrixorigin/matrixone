@@ -346,6 +346,12 @@ func (cleaner *DiskCleaner) Start() {
 	cleaner.onceStart.Do(func() {
 		cleaner.processQueue.Start()
 		step := cleaner.step.Load()
+		defer func() {
+			logutil.Info(
+				"GC-DISK-CLEANER-START",
+				zap.Uint32("step", cleaner.step.Load()),
+			)
+		}()
 		switch step {
 		case StateStep_Write:
 			if err := cleaner.forceScheduleJob(JT_GCReplayAndExecute); err != nil {
@@ -366,7 +372,7 @@ func (cleaner *DiskCleaner) Stop() {
 		cleaner.processQueue.Stop()
 		cleaner.cleaner.Stop()
 		logutil.Info(
-			"GC-DiskCleaner-Started",
+			"GC-DISK-CLEANER-STOP",
 			zap.Uint32("step", cleaner.step.Load()),
 		)
 	})
