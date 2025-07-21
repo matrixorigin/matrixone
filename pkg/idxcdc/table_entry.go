@@ -231,6 +231,9 @@ func toErrorCode(err error) int {
 }
 
 func (t *TableInfo_2) UpdateWatermark(from, to types.TS) {
+	if from.GE(&to) {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, sinker := range t.sinkers {
