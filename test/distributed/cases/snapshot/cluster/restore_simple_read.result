@@ -5,17 +5,16 @@ insert into test_snapshot_read (a) values(1), (2), (3), (4), (5),(6), (7), (8), 
 select count(*) from snapshot_read.test_snapshot_read;
 count(*)
 100
+drop snapshot if exists account_sp;
 drop snapshot if exists cluster_sp;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-account_sp    2024-06-28 06:13:04.389609    account    sys        
 create snapshot cluster_sp for cluster;
 create snapshot account_sp for account;
-internal error: snapshot account_sp already exists
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-28 06:21:19.645732    cluster            
-account_sp    2024-06-28 06:13:04.389609    account    sys        
+account_sp    2025-07-18 09:42:42.437528    account    sys
+cluster_sp    2025-07-18 09:42:42.433074    cluster
 delete from snapshot_read.test_snapshot_read where a > 10;
 insert into test_snapshot_read (a) values(11),(12), (13), (14), (15),(16), (17), (18), (19), (20);
 select count(*) from snapshot_read.test_snapshot_read where a in (select a from snapshot_read.test_snapshot_read {snapshot = 'cluster_sp'});
@@ -32,15 +31,147 @@ count(*)
 0
 select count(*) from snapshot_read.test_snapshot_read {snapshot = 'cluster_sp'} where a in (select a from snapshot_read.test_snapshot_read);
 count(*)
-100
+20
 select count(*) from snapshot_read.test_snapshot_read {snapshot = 'account_sp'} where a in (select a from snapshot_read.test_snapshot_read);
 count(*)
-100
+20
 select count(*) from snapshot_read.test_snapshot_read {snapshot = 'cluster_sp'} where a not in (select a from snapshot_read.test_snapshot_read);
 count(*)
-0
+80
 select count(*) from snapshot_read.test_snapshot_read {snapshot = 'account_sp'} where a not in (select a from snapshot_read.test_snapshot_read);
 count(*)
-0
+80
 drop snapshot if exists cluster_sp;
+drop snapshot if exists account_sp;
 drop database if exists snapshot_read;
+drop database if exists db1;
+create database db1;
+use db1;
+create table t1 (a int);
+insert into t1 select * from generate_series(1, 5)g;
+create table t2 clone t1;
+select * from t1, t2 order by t1.a asc;
+a    a
+1    1
+1    2
+1    3
+1    4
+1    5
+2    1
+2    2
+2    3
+2    4
+2    5
+3    1
+3    2
+3    3
+3    4
+3    5
+4    1
+4    2
+4    3
+4    4
+4    5
+5    1
+5    2
+5    3
+5    4
+5    5
+drop snapshot if exists sp0;
+create snapshot sp0 for database db1;
+delete from t1 where a in (2, 3);
+delete from t2 where a in (2, 3);
+select * from t1, t2 order by t1.a asc;
+a    a
+1    1
+1    4
+1    5
+4    1
+4    4
+4    5
+5    1
+5    4
+5    5
+select * from t1 {snapshot = "sp0"}, t2 order by t1.a asc;
+a    a
+1    1
+1    4
+1    5
+2    1
+2    4
+2    5
+3    1
+3    4
+3    5
+4    1
+4    4
+4    5
+5    1
+5    4
+5    5
+select * from t1 {snapshot = "sp0"}, t2 {snapshot = "sp0"} order by t1.a asc;
+a    a
+1    1
+1    2
+1    3
+1    4
+1    5
+2    1
+2    2
+2    3
+2    4
+2    5
+3    1
+3    2
+3    3
+3    4
+3    5
+4    1
+4    2
+4    3
+4    4
+4    5
+5    1
+5    2
+5    3
+5    4
+5    5
+select * from t1 {snapshot = "sp0"} where a in (select a from t2);
+a
+1
+4
+5
+select a from t1 {snapshot = "sp0"} where a in (select a from t2 {snapshot = "sp0"});
+a
+1
+2
+3
+4
+5
+select a from t1 {snapshot = "sp0"} except select a from t2;
+a
+2
+3
+select a from t1 except select a from t2 {snapshot = "sp0"};
+a
+select a from t1 {snapshot = "sp0"} except select a from t2 {snapshot = "sp0"};
+a
+select t1.a, t2.a from t1 {snapshot = "sp0"} join t2 on t1.a = t2.a;
+a    a
+1    1
+4    4
+5    5
+select t1.a, t2.a from t1 join t2 {snapshot = "sp0"} on t1.a = t2.a;
+a    a
+1    1
+4    4
+5    5
+select t1.a, t2.a from t1 {snapshot = "sp0"} join t2 {snapshot = "sp0"} on t1.a = t2.a;
+a    a
+1    1
+2    2
+3    3
+4    4
+5    5
+drop snapshot sp0;
+drop database db1;
