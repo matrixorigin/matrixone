@@ -65,10 +65,6 @@ func (d *DataCache) Capacity() int64 {
 }
 
 func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
-	if SingleMutexFlag {
-		d.fifo.mutex.Lock()
-		defer d.fifo.mutex.Unlock()
-	}
 	deletes := make([]*_CacheItem[fscache.CacheKey, fscache.Data], 0, 10)
 	for _, path := range paths {
 
@@ -80,6 +76,10 @@ func (d *DataCache) DeletePaths(ctx context.Context, paths []string) {
 		})
 	}
 
+	if SingleMutexFlag {
+		d.fifo.mutex.Lock()
+		defer d.fifo.mutex.Unlock()
+	}
 	// FSCACHEDATA RELEASE
 	for _, item := range deletes {
 		item.MarkAsDeleted(ctx, d.fifo.postEvict)

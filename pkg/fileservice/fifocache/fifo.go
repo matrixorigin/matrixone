@@ -232,12 +232,6 @@ func New[K comparable, V any](
 }
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
-
-	if SingleMutexFlag {
-		c.mutex.Lock()
-		defer c.mutex.Unlock()
-	}
-
 	item := &_CacheItem[K, V]{
 		key:   key,
 		value: value,
@@ -246,6 +240,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 
 	// FSCACHEDATA RETAIN
 	// increment the ref counter first no matter what to make sure the memory is occupied before hashtable.Set
+	// we don't need mutex here since item is still local
 	item.Retain(ctx, nil)
 
 	ok := c.htab.Set(key, item, nil)
@@ -253,8 +248,14 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		// existed
 		// FSCACHEDATA RELEASE
 		// decrement the ref counter if not set to release the resource
+		// still okay without mutex since item is not in hashtable
 		item.MarkAsDeleted(ctx, nil)
 		return
+	}
+
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
 	}
 
 	// postSet
@@ -269,16 +270,16 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
-	if SingleMutexFlag {
-		c.mutex.Lock()
-		defer c.mutex.Unlock()
-	}
-
 	var item *_CacheItem[K, V]
 
 	item, ok = c.htab.Get(key, nil)
 	if !ok {
 		return
+	}
+
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
 	}
 
 	// FSCACHEDATA RETAIN
@@ -294,17 +295,19 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
+	item, ok := c.htab.GetAndDelete(key, nil)
+	if !ok {
+		// key not found
+		return
+	}
+
 	if SingleMutexFlag {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
 	}
-	item, ok := c.htab.GetAndDelete(key, nil)
-
-	if ok {
-		// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
-		// item.deleted makes sure postEvict only call once.
-		item.MarkAsDeleted(ctx, c.postEvict)
-	}
+	// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
+	// item.deleted makes sure postEvict only call once.
+	item.MarkAsDeleted(ctx, c.postEvict)
 
 }
 
