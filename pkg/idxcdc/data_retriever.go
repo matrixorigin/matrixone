@@ -76,7 +76,6 @@ type DataRetrieverImpl struct {
 	typ int8
 
 	insertDataCh chan *CDCData
-	ackChan      chan struct{}
 	ctx          context.Context
 	cancel       context.CancelFunc
 	err          error
@@ -94,7 +93,6 @@ func NewDataRetriever(
 		SinkerEntry:  consumer,
 		Iteration:    iteration,
 		insertDataCh: make(chan *CDCData, 1),
-		ackChan:      make(chan struct{}, 1),
 		typ:          dataType,
 		ctx:          ctx,
 		cancel:       cancel,
@@ -103,9 +101,6 @@ func NewDataRetriever(
 
 func (r *DataRetrieverImpl) Next() (cdcData *CDCData) {
 	data := <-r.insertDataCh
-	defer func() {
-		r.ackChan <- struct{}{}
-	}()
 	return data
 }
 
@@ -133,11 +128,11 @@ func (r *DataRetrieverImpl) SetNextBatch(data *CDCData) {
 	if r.hasError() {
 		return
 	}
-	r.insertDataCh <- data
 	select {
+	case r.insertDataCh <- data:
+		return
 	case <-r.ctx.Done():
 		return
-	case <-r.ackChan:
 	}
 }
 
@@ -163,5 +158,4 @@ func (r *DataRetrieverImpl) SetError(err error) {
 
 func (r *DataRetrieverImpl) Close() {
 	close(r.insertDataCh)
-	close(r.ackChan)
 }
