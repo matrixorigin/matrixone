@@ -216,6 +216,9 @@ func (reader *tableReader) Run(
 		return
 	}
 
+	if reader.frequency <= 0 {
+		reader.frequency = 200 * time.Millisecond
+	}
 	if reader.tick != nil {
 		reader.tick.Stop()
 	}
