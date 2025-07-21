@@ -207,10 +207,8 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				batSize := bat.RowCount()
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
-						ap.ctr.buf[i].Vecs[j], err = bat.Vecs[rp.Pos].Dup(proc.Mp())
-						if err != nil {
-							return err
-						}
+						ap.ctr.buf[i].Vecs[j] = bat.Vecs[rp.Pos]
+						bat.Vecs[rp.Pos] = nil
 					} else {
 						ap.ctr.buf[i].Vecs[j] = vector.NewVec(ap.LeftTypes[rp.Pos])
 						if err = vector.AppendMultiFixed(ap.ctr.buf[i].Vecs[j], 0, true, batSize, proc.Mp()); err != nil {
