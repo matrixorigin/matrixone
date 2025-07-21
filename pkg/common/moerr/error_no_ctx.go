@@ -166,7 +166,7 @@ func NewInvalidPathNoCtx(f string) *Error {
 }
 
 func NewInvalidStateNoCtxf(format string, args ...any) *Error {
-	return NewInvalidStateNoCtx(fmt.Sprintf(format, args...))
+	return newError(Context(), ErrInvalidState, fmt.Sprintf(format, args...))
 }
 
 func NewInvalidStateNoCtx(msg string) *Error {
