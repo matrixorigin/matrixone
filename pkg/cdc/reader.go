@@ -184,9 +184,18 @@ func (reader *tableReader) Run(
 		)
 	}()
 
-	if err = reader.readTable(ctx, ar); err != nil {
-		logutil.Errorf("cdc tableReader(%v) initial sync failed, err: %v", reader.info, err)
+	select {
+	case <-ctx.Done():
 		return
+	case <-ar.Pause:
+		return
+	case <-ar.Cancel:
+		return
+	default:
+		if err = reader.readTable(ctx, ar); err != nil {
+			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
+			return
+		}
 	}
 
 	for {
