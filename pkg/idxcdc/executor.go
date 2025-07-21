@@ -60,6 +60,7 @@ const (
 	DefaultFlushWatermarkInterval = time.Hour
 
 	DefaultRetryTimes = 5
+	DefaultRetryDuration = time.Second
 )
 
 type CDCExecutorOption struct {
@@ -810,6 +811,7 @@ func  retry(fn func() error, retryTimes int) (err error) {
 		if err == nil {
 			return
 		}
+		time.Sleep(DefaultRetryDuration)
 	}
 	logutil.Errorf("Async-Index-CDC-Task retry failed, err: %v", err)
 	return
