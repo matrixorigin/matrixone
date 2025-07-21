@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2022 - 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +37,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/syncthing/notify"
 )
 
 const (
@@ -463,8 +465,38 @@ func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
 	ctx := context.Background()
 
+	evChan := make(chan notify.EventInfo, 1024)
+	err := notify.Watch(filepath.Join(root, "..."), evChan, notify.All)
+	assert.Nil(t, err)
+	defer notify.Stop(evChan)
+
+	testDone := make(chan struct{})
+	fsLogDone := make(chan struct{})
+	go func() {
+		defer func() {
+			close(fsLogDone)
+		}()
+		for {
+			select {
+			case ev := <-evChan:
+				t.Logf("notify: %+v", ev)
+			case <-testDone:
+				time.Sleep(time.Second * 3) // wait event
+				// drain
+				for {
+					select {
+					case ev := <-evChan:
+						t.Logf("notify: %+v", ev)
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
+
 	// create a/b/c
-	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
+	err = os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
 	assert.Nil(t, err)
 
 	// write a/b/c/foo
@@ -505,7 +537,7 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Equal(t, 1, len(files))
 	assert.Equal(t, fooPathInB, files[0])
 
-	path1 := root + "/a//b/./../b/c/foo"
+	path1 := filepath.Join(root, "a", "b", "..", "b", "c", "foo")
 	files1, _, err := plan2.ReadDir(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: path1,
@@ -515,9 +547,15 @@ func TestReadDirSymlink(t *testing.T) {
 		},
 	})
 	assert.Nil(t, err)
-	pathWant1 := root + "/a/b/c/foo"
+	pathWant1 := filepath.Join(root, "a", "b", "c", "foo")
 	assert.Equal(t, 1, len(files1))
 	assert.Equal(t, pathWant1, files1[0])
+
+	err = os.Remove(filepath.Join(root, "a", "b", "c", "foo"))
+	assert.Nil(t, err)
+
+	close(testDone)
+	<-fsLogDone
 }
 
 func Test_fliterByAccountAndFilename(t *testing.T) {
