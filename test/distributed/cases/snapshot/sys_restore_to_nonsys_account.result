@@ -433,7 +433,9 @@ drop database if exists fulltext_acc01;
 create database fulltext_acc01;
 use fulltext_acc01;
 drop table if exists src;
+set experimental_fulltext_index=1;
 create table src (id bigint primary key, json1 text, json2 varchar, fulltext(json1) with parser json);
+set experimental_fulltext_index=0;
 insert into src values  (0, '{"a":1, "b":"red"}', '{"d": "happy birthday", "f":"winter"}'),
 (1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
 (2, '{"a":3, "b":"red blue"}', '{"d":"兒童中文"}');
