@@ -1282,10 +1282,6 @@ func NewTxnInternal(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnInternal)
 }
 
-func NewTxnReadConflictf(ctx context.Context, format string, args ...any) *Error {
-	return NewTxnReadConflict(ctx, fmt.Sprintf(format, args...))
-}
-
 func NewTxnReadConflict(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrTxnReadConflict, msg)
 }

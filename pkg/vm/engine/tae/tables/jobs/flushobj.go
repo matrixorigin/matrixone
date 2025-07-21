@@ -129,6 +129,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			return nil
 		}
 	}
+	dataRows := cnBatch.RowCount()
 	inst := time.Now()
 	_, err = writer.WriteBatch(cnBatch)
 	if err != nil {
@@ -149,7 +150,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 			common.AnyField("wait", waitT),
 			common.AnyField("copy", copyT),
 			common.AnyField("io", ioT),
-			common.AnyField("data-rows", task.data.Length()),
+			common.AnyField("data-rows", dataRows),
 		)
 	}
 	task.stats = writer.GetObjectStats()
