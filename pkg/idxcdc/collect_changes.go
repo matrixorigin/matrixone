@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -59,9 +58,6 @@ func CollectChanges_2(
 		return
 	}
 	defer changes.Close()
-	//step3: pull data
-	var insertData, deleteData *batch.Batch
-	var insertAtmBatch, deleteAtmBatch *AtomicBatch
 
 	tableDef := rel.CopyTableDef(ctx)
 	insTSColIdx := len(tableDef.Cols) - 1
@@ -71,21 +67,6 @@ func CollectChanges_2(
 	if len(tableDef.Pkey.Names) == 1 {
 		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
 	}
-
-	defer func() {
-		if insertData != nil {
-			insertData.Clean(mp)
-		}
-		if deleteData != nil {
-			deleteData.Clean(mp)
-		}
-		if insertAtmBatch != nil {
-			insertAtmBatch.Close()
-		}
-		if deleteAtmBatch != nil {
-			deleteAtmBatch.Close()
-		}
-	}()
 
 	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
 		if atomicBatch == nil {
@@ -141,6 +122,8 @@ func CollectChanges_2(
 				if insertData == nil && deleteData == nil {
 					data = NewCDCData(true, nil, nil, err)
 				} else {
+					var insertAtmBatch *AtomicBatch
+					var deleteAtmBatch *AtomicBatch
 					switch currentHint {
 					case engine.ChangesHandle_Snapshot:
 						if typ != CDCDataType_Snapshot {
