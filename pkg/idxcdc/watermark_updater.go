@@ -226,6 +226,9 @@ func getTableID(
 		}
 		return true
 	})
+	if tableID == 0 {
+		panic(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
+	}
 	return
 }
 

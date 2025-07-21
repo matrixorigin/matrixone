@@ -491,7 +491,7 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		accountIDs := vector.MustFixedColNoTypeCheck[uint32](cols[0])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](cols[1])
-		watermarkVector := cols[3]
+		watermarkVector := cols[4]
 		errorCodes := vector.MustFixedColNoTypeCheck[int32](cols[5])
 		consumerInfoVector := cols[9]
 		dropAtVector := cols[8]
@@ -638,11 +638,11 @@ func (exec *CDCTaskExecutor) getTableByID(ctx context.Context, tableID uint64) (
 	if err != nil {
 		return
 	}
-	dbName, tableName, err := exec.txnEngine.GetNameById(ctx, txn, tableID)
+	_, _, table, err = cdc.GetRelationById(ctx, exec.txnEngine, txn, tableID)
 	if err != nil {
 		return
 	}
-	return exec.getRelation(ctx, txn, dbName, tableName)
+	return
 }
 func (exec *CDCTaskExecutor) getCandidateTables() []*TableInfo_2 {
 	ret := make([]*TableInfo_2, 0)
