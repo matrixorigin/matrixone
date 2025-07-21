@@ -50,6 +50,7 @@ type tableReader struct {
 	runningReaders       *sync.Map
 	startTs, endTs       types.TS
 	noFull               bool
+	frequency            time.Duration
 
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
@@ -76,12 +77,13 @@ var NewTableReader = func(
 	frequency string,
 ) Reader {
 	var tick *time.Ticker
+	var dur time.Duration
 	if frequency != "" {
-		dur := parseFrequencyToDuration(frequency)
-		tick = time.NewTicker(dur)
+		dur = parseFrequencyToDuration(frequency)
 	} else {
-		tick = time.NewTicker(200 * time.Millisecond)
+		dur = 200 * time.Millisecond
 	}
+	tick = time.NewTicker(dur)
 	reader := &tableReader{
 		cnTxnClient:          cnTxnClient,
 		cnEngine:             cnEngine,
@@ -99,6 +101,7 @@ var NewTableReader = func(
 		endTs:                endTs,
 		noFull:               noFull,
 		tableDef:             tableDef,
+		frequency:            dur,
 	}
 
 	// batch columns layout:
@@ -184,19 +187,39 @@ func (reader *tableReader) Run(
 		)
 	}()
 
-	select {
-	case <-ctx.Done():
-		return
-	case <-ar.Pause:
-		return
-	case <-ar.Cancel:
-		return
-	default:
-		if err = reader.readTable(ctx, ar); err != nil {
-			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
+	lastSync, err := reader.getLastSyncTime(ctx)
+	if err != nil {
+		logutil.Errorf("GetLastSyncTime failed: %v", err)
+		lastSync = time.Time{}
+	}
+
+	nextSyncTime := time.Now()
+	if !lastSync.IsZero() {
+		nextSyncTime = lastSync.Add(reader.frequency)
+	}
+
+	if now := time.Now(); now.Before(nextSyncTime) {
+		wait := nextSyncTime.Sub(now)
+		select {
+		case <-ctx.Done():
 			return
+		case <-ar.Pause:
+			return
+		case <-ar.Cancel:
+			return
+		case <-time.After(wait):
 		}
 	}
+
+	if err = reader.readTable(ctx, ar); err != nil {
+		logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
+		return
+	}
+
+	if reader.tick != nil {
+		reader.tick.Stop()
+	}
+	reader.tick = time.NewTicker(reader.frequency)
 
 	for {
 		select {
@@ -214,6 +237,27 @@ func (reader *tableReader) Run(
 			return
 		}
 	}
+}
+
+func (reader *tableReader) getLastSyncTime(ctx context.Context) (time.Time, error) {
+	wKey := WatermarkKey{
+		AccountId: reader.accountId,
+		TaskId:    reader.taskId,
+		DBName:    reader.info.SourceDbName,
+		TableName: reader.info.SourceTblName,
+	}
+
+	ts, err := reader.wMarkUpdater.GetFromCache(ctx, &wKey)
+	if err == nil && !ts.ToTimestamp().IsEmpty() {
+		return ts.ToTimestamp().ToStdTime(), nil
+	}
+
+	defaultTS := reader.startTs
+	ts, err = reader.wMarkUpdater.GetOrAddCommitted(ctx, &wKey, &defaultTS)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return ts.ToTimestamp().ToStdTime(), nil
 }
 
 var readTableWithTxn = func(
