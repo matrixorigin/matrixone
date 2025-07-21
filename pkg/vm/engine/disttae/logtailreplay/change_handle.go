@@ -615,9 +615,6 @@ func (p *baseHandle) Next(ctx context.Context, bat **batch.Batch, mp *mpool.MPoo
 func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool.MPool) (err error) {
 	if p.aobjHandle != nil {
 		err = p.aobjHandle.QuickNext(ctx, bat, mp)
-		if err == nil {
-			return
-		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			p.aobjHandle = nil
 			err = nil
@@ -626,11 +623,11 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 			return
 		}
 	}
+	if (*bat).RowCount() > p.changesHandle.coarseMaxRow {
+		return
+	}
 	if p.inMemoryHandle != nil {
 		err = p.inMemoryHandle.QuickNext(bat, mp)
-		if err == nil {
-			return
-		}
 		if moerr.IsMoErrCode(err, moerr.OkExpectedEOF) {
 			p.inMemoryHandle.Close()
 			p.inMemoryHandle = nil
@@ -639,6 +636,9 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 		if err != nil {
 			return
 		}
+	}
+	if (*bat).RowCount() > p.changesHandle.coarseMaxRow {
+		return
 	}
 	err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
 	return
