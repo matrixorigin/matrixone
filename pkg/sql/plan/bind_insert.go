@@ -22,9 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"go.uber.org/zap"
 )
 
 func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext) (int32, error) {
@@ -66,6 +69,14 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 
 	if builder.qry.LoadTag || builder.isRestore {
 		return true
+	}
+
+	if v := builder.compCtx.GetContext().Value(defines.SkipPkDedup{}); v != nil {
+		if v.(string) == tableDef.Name {
+			logutil.Info("skip pk dedup",
+				zap.String("tableDef", tableDef.Name))
+			return true
+		}
 	}
 
 	return catalog.IsSecondaryIndexTable(tableDef.Name)

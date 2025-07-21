@@ -62,6 +62,12 @@ func WithMemorySizeThreshold(size int) SinkerOption {
 	}
 }
 
+func WithOffHeap() SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.offHeap = true
+	}
+}
+
 func WithBuffer(buffer *containers.OneSchemaBatchBuffer, isOwner bool) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.buf.isOwner = isOwner
@@ -319,6 +325,7 @@ type Sinker struct {
 		dedupAll       bool
 		bufferSizeCap  int
 		tailSizeCap    int
+		offHeap        bool
 	}
 	fSinker struct {
 		executor FileSinker
@@ -375,6 +382,7 @@ func (sinker *Sinker) fillDefaults() {
 			sinker.schema.attrs,
 			sinker.schema.attrTypes,
 		)
+		sinker.buf.buffers.SetOffHeap(sinker.config.offHeap)
 	}
 }
 
@@ -561,7 +569,6 @@ func (sinker *Sinker) Write(
 			sinker.putBackBuffer(curr)
 		}
 	}()
-
 	offset := 0
 	left := data.RowCount()
 	for left > 0 {

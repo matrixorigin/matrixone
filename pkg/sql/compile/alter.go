@@ -132,9 +132,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
-
+	opt := executor.StatementOption{}
+	if qry.SkipPkDedup {
+		opt = opt.WithSkipPkDedup(qry.CopyTableDef.Name)
+	}
 	// 4. copy the original table data to the temporary replica table
-	err = c.runSql(qry.InsertTmpDataSql)
+	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
 			zap.String("databaseName", c.db),
