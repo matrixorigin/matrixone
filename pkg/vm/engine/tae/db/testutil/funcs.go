@@ -428,13 +428,13 @@ func ForEachColumnView(t *testing.T, rel handle.Relation, colIdx int, fn func(vi
 		for i := 0; i < blkCnt; i++ {
 			var view *containers.Batch
 			err := blk.HybridScan(context.Background(), &view, uint16(i), []int{colIdx}, common.DefaultAllocator)
-			if view == nil {
-				logutil.Warnf("blk %v", blk.String())
-				continue
-			}
 			if err != nil {
 				t.Errorf("blk %v, %v", blk.String(), err)
 				return err
+			}
+			if view == nil {
+				logutil.Warnf("blk %v", blk.String())
+				continue
 			}
 			defer view.Close()
 			err = fn(view)

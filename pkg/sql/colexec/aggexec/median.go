@@ -353,6 +353,18 @@ func (exec *medianColumnExecSelf[T, R]) Free() {
 	exec.distinctHash.free()
 }
 
+func (exec *medianColumnExecSelf[T, R]) Size() int64 {
+	var size int64
+	for _, v := range exec.groups {
+		if v != nil {
+			size += v.Size()
+		}
+	}
+	// 8 is the size of a pointer.
+	size += int64(cap(exec.groups)) * 8
+	return exec.ret.Size() + exec.distinctHash.Size() + size
+}
+
 type medianColumnNumericExec[T numeric] struct {
 	medianColumnExecSelf[T, float64]
 }

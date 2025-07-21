@@ -270,6 +270,12 @@ func (exec *txnExecutor) Exec(
 			true)
 	}
 
+	if v := statementOption.SkipPkDedupTbl(); v != "" {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.SkipPkDedup{},
+			v)
+	}
+
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
@@ -331,6 +337,7 @@ func (exec *txnExecutor) Exec(
 	compileContext.SetRootSql(sql)
 
 	pn, err := plan.BuildPlan(compileContext, stmts[0], prepared)
+
 	if err != nil {
 		return executor.Result{}, err
 	}

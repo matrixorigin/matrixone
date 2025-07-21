@@ -27,12 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -83,6 +83,7 @@ func newTxnTableWithItem(
 
 type txnTableDelegate struct {
 	origin *txnTable
+	parent engine.Relation
 
 	// sharding info
 	shard struct {
@@ -92,10 +93,9 @@ type txnTableDelegate struct {
 		is      bool
 	}
 
-	// partition info
-	partition struct {
-		tbl     *partitionTxnTable
-		service partitionservice.PartitionService
+	// combined info
+	combined struct {
+		tbl     *combinedTxnTable
 		is      bool
 		tableID uint64
 	}
@@ -133,9 +133,9 @@ func MockTableDelegate(
 	return tbl, nil
 }
 
-func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.CollectChanges(ctx, from, to, skipDeletes, mp)
+func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.TS,skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.CollectChanges(ctx, from, to, mp)
 	}
 
 	return tbl.origin.CollectChanges(ctx, from, to, skipDeletes, mp)
@@ -145,8 +145,8 @@ func (tbl *txnTableDelegate) Stats(
 	ctx context.Context,
 	sync bool,
 ) (*pb.StatsInfo, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Stats(ctx, sync)
+	if tbl.combined.is {
+		return tbl.combined.tbl.Stats(ctx, sync)
 	}
 
 	is, err := tbl.isLocal()
@@ -193,8 +193,8 @@ func (tbl *txnTableDelegate) Stats(
 func (tbl *txnTableDelegate) Rows(
 	ctx context.Context,
 ) (uint64, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Rows(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.Rows(ctx)
 	}
 
 	is, err := tbl.isLocal()
@@ -227,8 +227,8 @@ func (tbl *txnTableDelegate) Size(
 	ctx context.Context,
 	columnName string,
 ) (uint64, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Size(ctx, columnName)
+	if tbl.combined.is {
+		return tbl.combined.tbl.Size(ctx, columnName)
 	}
 
 	is, err := tbl.isLocal()
@@ -260,8 +260,8 @@ func (tbl *txnTableDelegate) Size(
 }
 
 func (tbl *txnTableDelegate) Ranges(ctx context.Context, rangesParam engine.RangesParam) (engine.RelData, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Ranges(ctx, rangesParam)
+	if tbl.combined.is {
+		return tbl.combined.tbl.Ranges(ctx, rangesParam)
 	}
 
 	is, err := tbl.isLocal()
@@ -339,8 +339,8 @@ func (tbl *txnTableDelegate) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.CollectTombstones(ctx, txnOffset, policy)
+	if tbl.combined.is {
+		return tbl.combined.tbl.CollectTombstones(ctx, txnOffset, policy)
 	}
 
 	is, err := tbl.isLocal()
@@ -390,8 +390,8 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 	name string,
 	visitTombstone bool,
 ) ([]*plan.MetadataScanInfo, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetColumMetadataScanInfo(ctx, name, visitTombstone)
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetColumMetadataScanInfo(ctx, name, visitTombstone)
 	}
 
 	is, err := tbl.isLocal()
@@ -430,8 +430,8 @@ func (tbl *txnTableDelegate) GetColumMetadataScanInfo(
 func (tbl *txnTableDelegate) ApproxObjectsNum(
 	ctx context.Context,
 ) int {
-	if tbl.partition.is {
-		return tbl.partition.tbl.ApproxObjectsNum(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.ApproxObjectsNum(ctx)
 	}
 
 	is, err := tbl.isLocal()
@@ -474,8 +474,8 @@ func (tbl *txnTableDelegate) BuildReaders(
 	policy engine.TombstoneApplyPolicy,
 	filterHint engine.FilterHint,
 ) ([]engine.Reader, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.BuildReaders(
+	if tbl.combined.is {
+		return tbl.combined.tbl.BuildReaders(
 			ctx,
 			proc,
 			expr,
@@ -527,8 +527,8 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 	orderBy bool,
 	policy engine.TombstoneApplyPolicy,
 ) ([]engine.Reader, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.BuildShardingReaders(
+	if tbl.combined.is {
+		return tbl.combined.tbl.BuildShardingReaders(
 			ctx,
 			p,
 			expr,
@@ -665,8 +665,8 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 	pkIndex int32,
 	partitionIndex int32,
 ) (bool, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.PrimaryKeysMayBeModified(
+	if tbl.combined.is {
+		return tbl.combined.tbl.PrimaryKeysMayBeModified(
 			ctx,
 			from,
 			to,
@@ -732,8 +732,8 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(
 	bat *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.PrimaryKeysMayBeUpserted(
+	if tbl.combined.is {
+		return tbl.combined.tbl.PrimaryKeysMayBeUpserted(
 			ctx,
 			from,
 			to,
@@ -795,8 +795,8 @@ func (tbl *txnTableDelegate) MergeObjects(
 	objstats []objectio.ObjectStats,
 	targetObjSize uint32,
 ) (*api.MergeCommitEntry, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.MergeObjects(
+	if tbl.combined.is {
+		return tbl.combined.tbl.MergeObjects(
 			ctx,
 			objstats,
 			targetObjSize,
@@ -838,8 +838,8 @@ func (tbl *txnTableDelegate) MergeObjects(
 }
 
 func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetNonAppendableObjectStats(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetNonAppendableObjectStats(ctx)
 	}
 
 	is, err := tbl.isLocal()
@@ -877,8 +877,8 @@ func (tbl *txnTableDelegate) GetNonAppendableObjectStats(ctx context.Context) ([
 func (tbl *txnTableDelegate) TableDefs(
 	ctx context.Context,
 ) ([]engine.TableDef, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.TableDefs(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.TableDefs(ctx)
 	}
 	return tbl.origin.TableDefs(ctx)
 }
@@ -886,8 +886,8 @@ func (tbl *txnTableDelegate) TableDefs(
 func (tbl *txnTableDelegate) GetTableDef(
 	ctx context.Context,
 ) *plan.TableDef {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetTableDef(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetTableDef(ctx)
 	}
 	return tbl.origin.GetTableDef(ctx)
 }
@@ -895,8 +895,8 @@ func (tbl *txnTableDelegate) GetTableDef(
 func (tbl *txnTableDelegate) CopyTableDef(
 	ctx context.Context,
 ) *plan.TableDef {
-	if tbl.partition.is {
-		return tbl.partition.tbl.CopyTableDef(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.CopyTableDef(ctx)
 	}
 	return tbl.origin.CopyTableDef(ctx)
 }
@@ -904,8 +904,8 @@ func (tbl *txnTableDelegate) CopyTableDef(
 func (tbl *txnTableDelegate) GetPrimaryKeys(
 	ctx context.Context,
 ) ([]*engine.Attribute, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetPrimaryKeys(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetPrimaryKeys(ctx)
 	}
 	return tbl.origin.GetPrimaryKeys(ctx)
 }
@@ -914,8 +914,8 @@ func (tbl *txnTableDelegate) Write(
 	ctx context.Context,
 	bat *batch.Batch,
 ) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Write(ctx, bat)
+	if tbl.combined.is {
+		return tbl.combined.tbl.Write(ctx, bat)
 	}
 	return tbl.origin.Write(ctx, bat)
 }
@@ -925,8 +925,8 @@ func (tbl *txnTableDelegate) Delete(
 	bat *batch.Batch,
 	name string,
 ) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Delete(ctx, bat, name)
+	if tbl.combined.is {
+		return tbl.combined.tbl.Delete(ctx, bat, name)
 	}
 	return tbl.origin.Delete(ctx, bat, name)
 }
@@ -935,8 +935,8 @@ func (tbl *txnTableDelegate) AddTableDef(
 	ctx context.Context,
 	def engine.TableDef,
 ) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.AddTableDef(ctx, def)
+	if tbl.combined.is {
+		return tbl.combined.tbl.AddTableDef(ctx, def)
 	}
 	return tbl.origin.AddTableDef(ctx, def)
 }
@@ -945,8 +945,8 @@ func (tbl *txnTableDelegate) DelTableDef(
 	ctx context.Context,
 	def engine.TableDef,
 ) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.DelTableDef(ctx, def)
+	if tbl.combined.is {
+		return tbl.combined.tbl.DelTableDef(ctx, def)
 	}
 	return tbl.origin.DelTableDef(ctx, def)
 }
@@ -956,8 +956,8 @@ func (tbl *txnTableDelegate) AlterTable(
 	c *engine.ConstraintDef,
 	reqs []*api.AlterTableReq,
 ) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.AlterTable(ctx, c, reqs)
+	if tbl.combined.is {
+		return tbl.combined.tbl.AlterTable(ctx, c, reqs)
 	}
 	return tbl.origin.AlterTable(ctx, c, reqs)
 }
@@ -966,8 +966,8 @@ func (tbl *txnTableDelegate) UpdateConstraint(
 	ctx context.Context,
 	c *engine.ConstraintDef,
 ) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.UpdateConstraint(ctx, c)
+	if tbl.combined.is {
+		return tbl.combined.tbl.UpdateConstraint(ctx, c)
 	}
 	return tbl.origin.UpdateConstraint(ctx, c)
 }
@@ -976,8 +976,8 @@ func (tbl *txnTableDelegate) TableRenameInTxn(
 	ctx context.Context,
 	constraint [][]byte,
 ) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.TableRenameInTxn(ctx, constraint)
+	if tbl.combined.is {
+		return tbl.combined.tbl.TableRenameInTxn(ctx, constraint)
 	}
 	return tbl.origin.TableRenameInTxn(ctx, constraint)
 }
@@ -985,15 +985,15 @@ func (tbl *txnTableDelegate) TableRenameInTxn(
 func (tbl *txnTableDelegate) GetTableID(
 	ctx context.Context,
 ) uint64 {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetTableID(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetTableID(ctx)
 	}
 	return tbl.origin.GetTableID(ctx)
 }
 
 func (tbl *txnTableDelegate) GetTableName() string {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetTableName()
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetTableName()
 	}
 	return tbl.origin.GetTableName()
 }
@@ -1001,8 +1001,8 @@ func (tbl *txnTableDelegate) GetTableName() string {
 func (tbl *txnTableDelegate) GetDBID(
 	ctx context.Context,
 ) uint64 {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetDBID(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetDBID(ctx)
 	}
 	return tbl.origin.GetDBID(ctx)
 }
@@ -1010,8 +1010,8 @@ func (tbl *txnTableDelegate) GetDBID(
 func (tbl *txnTableDelegate) TableColumns(
 	ctx context.Context,
 ) ([]*engine.Attribute, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.TableColumns(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.TableColumns(ctx)
 	}
 	return tbl.origin.TableColumns(ctx)
 }
@@ -1019,22 +1019,22 @@ func (tbl *txnTableDelegate) TableColumns(
 func (tbl *txnTableDelegate) MaxAndMinValues(
 	ctx context.Context,
 ) ([][2]any, []uint8, error) {
-	if tbl.partition.is {
-		return tbl.partition.tbl.MaxAndMinValues(ctx)
+	if tbl.combined.is {
+		return tbl.combined.tbl.MaxAndMinValues(ctx)
 	}
 	return tbl.origin.MaxAndMinValues(ctx)
 }
 
 func (tbl *txnTableDelegate) GetEngineType() engine.EngineType {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetEngineType()
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetEngineType()
 	}
 	return tbl.origin.GetEngineType()
 }
 
 func (tbl *txnTableDelegate) GetProcess() any {
-	if tbl.partition.is {
-		return tbl.partition.tbl.GetProcess()
+	if tbl.combined.is {
+		return tbl.combined.tbl.GetProcess()
 	}
 	return tbl.origin.GetProcess()
 }
@@ -1044,8 +1044,8 @@ func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
 }
 
 func (tbl *txnTableDelegate) Reset(op client.TxnOperator) error {
-	if tbl.partition.is {
-		return tbl.partition.tbl.Reset(op)
+	if tbl.combined.is {
+		return tbl.combined.tbl.Reset(op)
 	}
 	return tbl.origin.Reset(op)
 }
@@ -1100,6 +1100,60 @@ func (tbl *txnTableDelegate) getReadRequest(
 		},
 		Apply: apply,
 	}, nil
+}
+
+func (tbl *txnTableDelegate) getPartitionIndexesTables(
+	proc *process.Process,
+) ([]engine.Relation, error) {
+	ps := proc.GetPartitionService()
+	metadata, err := ps.GetPartitionMetadata(
+		proc.Ctx,
+		tbl.parent.GetTableID(proc.Ctx),
+		proc.GetTxnOperator(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	e := tbl.origin.db.getEng()
+	idx := -1
+	for i, indexID := range tbl.parent.GetExtraInfo().IndexTables {
+		if indexID == tbl.origin.tableId {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		panic("BUG: index table not found in main table")
+	}
+
+	relations := make([]engine.Relation, 0, len(metadata.Partitions))
+	for _, p := range metadata.Partitions {
+		_, _, r, err := e.GetRelationById(
+			proc.Ctx,
+			proc.GetTxnOperator(),
+			p.PartitionID,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		_, _, r, err = e.GetRelationById(
+			proc.Ctx,
+			proc.GetTxnOperator(),
+			r.GetExtraInfo().IndexTables[idx],
+		)
+		if err != nil {
+			return nil, err
+		}
+		relations = append(relations, r)
+	}
+	return relations, nil
+}
+
+func (tbl *txnTableDelegate) IsPartitionIndexTable() bool {
+	return tbl.parent != nil &&
+		features.IsPartitioned(tbl.parent.GetExtraInfo().FeatureFlag)
 }
 
 // Just for UT.

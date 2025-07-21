@@ -124,7 +124,9 @@ type (
 // todo: consider that change them to deliver []byte directly, and agg developer choose how to use the []byte.
 //
 //	because the []byte can be set to one byte vector, and we can use the `mpool` to manage the memory easily.
+
 type AggCanMarshal interface {
 	Marshal() []byte
 	Unmarshal([]byte)
+	Size() int64
 }

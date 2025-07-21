@@ -118,6 +118,23 @@ func (a *AggContext) decodeGroupContexts(encodings [][]byte, resultType types.Ty
 	}
 }
 
+func (a *AggContext) Size() int64 {
+	var size int64
+	if a.hasCommonContext && a.commonContext != nil {
+		size += a.commonContext.Size()
+	}
+	if a.hasGroupContext {
+		for _, g := range a.groupContext {
+			if g != nil {
+				size += g.Size()
+			}
+		}
+		// 16 is the size of an interface.
+		size += int64(cap(a.groupContext)) * 16
+	}
+	return size
+}
+
 // AggCommonExecContext stores the common context for all the groups.
 // like the type scale, timezone and so on.
 type AggCommonExecContext interface {

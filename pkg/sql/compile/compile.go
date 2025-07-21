@@ -423,6 +423,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.TruncateTable(c)
 	case Replace:
 		return s.replace(c)
+	case TableClone:
+		return s.TableClone(c)
 	}
 	return nil
 }
@@ -715,15 +717,21 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 			plan.DataDefinition_SHOW_COLUMNS,
 			plan.DataDefinition_SHOW_CREATETABLE:
 			return c.compileQuery(pn.GetDdl().GetQuery())
-			// 1、not supported: show arnings/errors/status/processlist
-			// 2、show variables will not return query
-			// 3、show create database/table need rewrite to create sql
+		// 1、not supported: show arnings/errors/status/processlist
+		// 2、show variables will not return query
+		// 3、show create database/table need rewrite to create sql
+
+		case plan.DataDefinition_CREATE_TABLE_WITH_CLONE:
+			return c.compileTableClone(pn)
 		}
 	}
 	return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", pn))
 }
 
 func (c *Compile) appendMetaTables(objRes *plan.ObjectRef) {
+	if objRes.NotLockMeta {
+		return
+	}
 	if !c.needLockMeta {
 		return
 	}
@@ -1318,6 +1326,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, ns []*plan.Node
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compilePostDml(n, ss)
 		return ss, nil
+
 	default:
 		return nil, moerr.NewNYI(c.proc.Ctx, fmt.Sprintf("query '%s'", n))
 	}
@@ -4261,6 +4270,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, error) {
 	//	forceSingle = true
 	//}
 
+	if n.NodeType == plan.Node_TABLE_CLONE {
+		forceSingle = true
+	}
+
 	var nodes engine.Nodes
 	// scan on current CN
 	if shouldScanOnCurrentCN(c, n, forceSingle) {
@@ -4716,6 +4729,12 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
+	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+			options = options.WithIgnoreForeignKey()
+		}
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -4726,12 +4745,6 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options)
-
-	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
-			opts = opts.WithStatementOption(executor.StatementOption{}.WithIgnoreForeignKey())
-		}
-	}
 
 	ctx := c.proc.Ctx
 	if accountId >= 0 {
@@ -4875,4 +4888,40 @@ func (c *Compile) getLower() int64 {
 		lower = lowerVar.(int64)
 	}
 	return lower
+}
+
+func (c *Compile) compileTableClone(
+	pn *plan.Plan,
+) ([]*Scope, error) {
+
+	var (
+		err error
+		s1  *Scope
+
+		nodes    []engine.Node
+		cloneQry = pn.GetDdl().Query
+	)
+
+	nodes, err = c.generateNodes(cloneQry.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	copyOp, err := constructTableClone(c, cloneQry.Nodes[0])
+	if err != nil {
+		return nil, err
+	}
+
+	s1 = newScope(TableClone)
+	s1.NodeInfo = nodes[0]
+	s1.TxnOffset = c.TxnOffset
+	s1.DataSource = &Source{
+		node: cloneQry.Nodes[0],
+	}
+	s1.Plan = pn
+
+	s1.Proc = c.proc.NewNoContextChildProc(0)
+	s1.setRootOperator(copyOp)
+
+	return []*Scope{s1}, nil
 }

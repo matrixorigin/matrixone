@@ -327,6 +327,20 @@ func (exec *approxCountFixedExec[T]) Free() {
 	exec.groups = nil
 }
 
+func (exec *approxCountFixedExec[T]) Size() int64 {
+	var size int64
+	for _, s := range exec.groups {
+		if s != nil {
+			if data, err := s.MarshalBinary(); err == nil {
+				size += int64(len(data))
+			}
+		}
+	}
+	// 8 is the size of a pointer.
+	size += int64(cap(exec.groups)) * 8
+	return exec.ret.Size() + size
+}
+
 func (exec *approxCountVarExec) GroupGrow(more int) error {
 	oldLen, newLen := len(exec.groups), len(exec.groups)+more
 	if cap(exec.groups) >= newLen {
@@ -464,4 +478,18 @@ func (exec *approxCountVarExec) Flush() ([]*vector.Vector, error) {
 func (exec *approxCountVarExec) Free() {
 	exec.ret.free()
 	exec.groups = nil
+}
+
+func (exec *approxCountVarExec) Size() int64 {
+	var size int64
+	for _, s := range exec.groups {
+		if s != nil {
+			if data, err := s.MarshalBinary(); err == nil {
+				size += int64(len(data))
+			}
+		}
+	}
+	// 8 is the size of a pointer.
+	size += int64(cap(exec.groups)) * 8
+	return exec.ret.Size() + size
 }

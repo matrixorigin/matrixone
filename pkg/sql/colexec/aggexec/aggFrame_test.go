@@ -57,6 +57,9 @@ func fromValueListToVector(
 		case types.T_bool:
 			err = vector.AppendFixedList[bool](v, values.([]bool), isNull, mp)
 
+		case types.T_decimal128:
+			err = vector.AppendFixedList[types.Decimal128](v, values.([]types.Decimal128), isNull, mp)
+
 		default:
 			panic(fmt.Sprintf("test util do not support the type %s now", typ))
 		}
@@ -67,6 +70,15 @@ func fromValueListToVector(
 	}
 	return v
 }
+
+type avgDemoCtx struct {
+	count int64
+}
+
+func (d *avgDemoCtx) Marshal() []byte    { return types.EncodeInt64(&d.count) }
+func (d *avgDemoCtx) Unmarshal(b []byte) { d.count = types.DecodeInt64(b) }
+func (d *avgDemoCtx) Size() int64        { return 8 } // size of count
+var _ AggGroupExecContext = &avgDemoCtx{}
 
 func fromIdxListToNullList(start, end int, idxList []int) []bool {
 	if len(idxList) == 0 {
@@ -386,12 +398,6 @@ func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
 		emptyNull: true,
 	}
 
-	// a demo agg to calculate the AVG but only keep the integer part.
-	type demoCtx struct {
-		AggCanMarshal
-		count int
-	}
-
 	implement := aggImplementation{
 		ret: func(i []types.Type) types.Type {
 			return types.T_int64.ToType()
@@ -400,7 +406,7 @@ func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
 			hasCommonContext: false,
 			hasGroupContext:  true,
 			generateGroupContext: func(resultType types.Type, parameters ...types.Type) AggGroupExecContext {
-				return &demoCtx{count: 0}
+				return &avgDemoCtx{count: 0}
 			},
 		},
 		logic: aggLogicImplementation{
@@ -411,29 +417,31 @@ func TestFixedToFixedFrameWork_withExecContext(t *testing.T) {
 
 			fill: fixedFixedFill[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
-					execContext.(*demoCtx).count++
+					execContext.(*avgDemoCtx).count++
 					resultSetter(resultGetter() + value)
 					return nil
 				}),
 
 			fills: fixedFixedFills[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, value int64, count int, aggIsEmpty bool, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
-					execContext.(*demoCtx).count += count
+					execContext.(*avgDemoCtx).count += int64(count)
 					resultSetter(resultGetter() + value*int64(count))
 					return nil
 				}),
 
 			merge: fixedFixedMerge[int64, int64](
 				func(ctx1, ctx2 AggGroupExecContext, commonContext AggCommonExecContext, aggIsEmpty1, aggIsEmpty2 bool, resultGetter1, resultGetter2 AggGetter[int64], resultSetter AggSetter[int64]) error {
-					ctx1.(*demoCtx).count += ctx2.(*demoCtx).count
+					ctx1.(*avgDemoCtx).count += ctx2.(*avgDemoCtx).count
 					resultSetter(resultGetter1() + resultGetter2())
 					return nil
 				}),
 
 			flush: fixedFixedFlush[int64, int64](
 				func(execContext AggGroupExecContext, commonContext AggCommonExecContext, resultGetter AggGetter[int64], resultSetter AggSetter[int64]) error {
-					count := execContext.(*demoCtx).count
-					resultSetter(resultGetter() / int64(count))
+					count := execContext.(*avgDemoCtx).count
+					if count > 0 {
+						resultSetter(resultGetter() / int64(count))
+					}
 					return nil
 				}),
 		},
@@ -461,4 +469,208 @@ func TestMakeInitialAggListFromList(t *testing.T) {
 	require.Equal(t, 1, len(res))
 	require.Equal(t, int64(123), res[0].AggID())
 	require.Equal(t, true, res[0].IsDistinct())
+}
+
+func TestAggExecSize(t *testing.T) {
+	m := hackAggMemoryManager()
+	defer func() {
+		// ensure all memory is released
+		require.Equal(t, int64(0), m.Mp().CurrNB())
+	}()
+
+	testCases := []struct {
+		name       string
+		factory    func(mg AggMemoryManager) (AggFuncExec, error)
+		groupCount int
+		// fillFunc fills data into the aggregator and returns whether the size is expected to increase.
+		fillFunc func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) (sizeShouldIncrease bool)
+	}{
+		{
+			name: "count_star",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				return makeCount(mg, true, aggIdOfCountStar, false, types.T_int64.ToType()), nil
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					require.NoError(t, agg.BulkFill(i, []*vector.Vector{v}))
+				}
+				return false // Size should not increase as it only updates a counter.
+			},
+		},
+		{
+			name: "count_column",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				return makeCount(mg, false, aggIdOfCountColumn, false, types.T_int64.ToType()), nil
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					require.NoError(t, agg.BulkFill(i, []*vector.Vector{v}))
+				}
+				return false // Size should not increase as it only updates a counter.
+			},
+		},
+		{
+			name: "count_column_distinct",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				return makeCount(mg, false, aggIdOfCountColumn, true, types.T_int64.ToType()), nil
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					require.NoError(t, agg.BulkFill(i, []*vector.Vector{v}))
+				}
+				return true // Size should increase due to distinct hash map.
+			},
+		},
+		{
+			name: "median",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				info := singleAggInfo{
+					aggID:     aggIdOfMedian,
+					distinct:  false,
+					argType:   types.T_int64.ToType(),
+					retType:   MedianReturnType([]types.Type{types.T_int64.ToType()}),
+					emptyNull: true,
+				}
+				return newMedianColumnNumericExec[int64](mg, info), nil
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					require.NoError(t, agg.BulkFill(i, []*vector.Vector{v}))
+				}
+				return true // Size should increase as it buffers all values.
+			},
+		},
+		{
+			name: "group_concat",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				return makeGroupConcat(mg, aggIdOfGroupConcat, false, []types.Type{types.T_varchar.ToType()}, getCroupConcatRet(types.T_varchar.ToType()), ","), nil
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_varchar.ToType(), []string{"a", "b", "c"}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					require.NoError(t, agg.BulkFill(i, []*vector.Vector{v}))
+				}
+				return false // Size should increase as the result string grows.
+			},
+		},
+		{
+			name: "approx_count",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				return makeApproxCount(mg, aggIdOfApproxCount, types.T_int64.ToType()), nil
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					require.NoError(t, agg.BulkFill(i, []*vector.Vector{v}))
+				}
+				return true // Size should increase due to HLL sketch.
+			},
+		},
+		{
+			name: "window_rank",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				return makeWindowExec(mg, winIdOfRank, false)
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					for j := 0; j < v.Length(); j++ {
+						require.NoError(t, agg.Fill(i, j, []*vector.Vector{v}))
+					}
+				}
+				return true // Size should increase as it buffers partition data.
+			},
+		},
+		{
+			name: "fixed_to_fixed_with_context",
+			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
+				info := singleAggInfo{
+					distinct:  false,
+					argType:   types.T_int64.ToType(),
+					retType:   types.T_int64.ToType(),
+					emptyNull: true,
+				}
+				implement := aggImplementation{
+					ret: func(i []types.Type) types.Type { return types.T_int64.ToType() },
+					ctx: aggContextImplementation{
+						hasGroupContext: true,
+						generateGroupContext: func(resultType types.Type, parameters ...types.Type) AggGroupExecContext {
+							return &avgDemoCtx{count: 0}
+						},
+					},
+					logic: aggLogicImplementation{
+						init: InitFixedResultOfAgg[int64](func(r types.Type, p ...types.Type) int64 { return 0 }),
+						fill: fixedFixedFill[int64, int64](func(g AggGroupExecContext, c AggCommonExecContext, v int64, e bool, r AggGetter[int64], s AggSetter[int64]) error {
+							return nil
+						}),
+						fills: fixedFixedFills[int64, int64](func(g AggGroupExecContext, c AggCommonExecContext, v int64, count int, e bool, r AggGetter[int64], s AggSetter[int64]) error {
+							return nil
+						}),
+						merge: fixedFixedMerge[int64, int64](func(g1, g2 AggGroupExecContext, c AggCommonExecContext, e1, e2 bool, r1, r2 AggGetter[int64], s AggSetter[int64]) error {
+							return nil
+						}),
+					},
+				}
+				return newSingleAggFuncExec1NewVersion(mg, info, implement), nil
+			},
+			groupCount: 10,
+			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
+				v := fromValueListToVector(mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5}, nil)
+				defer v.Free(mp)
+				for i := 0; i < groupCount; i++ {
+					require.NoError(t, agg.BulkFill(i, []*vector.Vector{v}))
+				}
+				return false // Size should not increase.
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := m.Mp().CurrNB()
+
+			agg, err := tc.factory(m)
+			require.NoError(t, err)
+
+			initialSize := agg.Size()
+			require.GreaterOrEqual(t, initialSize, int64(0))
+
+			err = agg.GroupGrow(tc.groupCount)
+			require.NoError(t, err)
+			grownSize := agg.Size()
+			require.Greater(t, grownSize, initialSize)
+
+			if tc.fillFunc != nil {
+				sizeShouldIncrease := tc.fillFunc(t, agg, m.Mp(), tc.groupCount)
+				filledSize := agg.Size()
+				if sizeShouldIncrease {
+					require.Greater(t, filledSize, grownSize, "Size() should increase after filling data")
+				} else {
+					// It might increase if internal structures are allocated on demand, but it must not decrease.
+					require.GreaterOrEqual(t, filledSize, grownSize, "Size() should not decrease after filling data")
+				}
+			}
+
+			agg.Free()
+			require.Equal(t, before, m.Mp().CurrNB(), "memory leak detected in %s", tc.name)
+		})
+	}
 }

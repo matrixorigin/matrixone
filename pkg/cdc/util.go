@@ -212,6 +212,8 @@ func convertColIntoSql(
 	case types.T_json:
 		sqlBuff = appendByte(sqlBuff, '\'')
 		temp = data.(bytejson.ByteJson).String()
+		temp = strings.Replace(temp, "\\", "\\\\", -1)
+		temp = strings.Replace(temp, "'", "\\'", -1)
 		sqlBuff = appendString(sqlBuff, temp)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_bool:

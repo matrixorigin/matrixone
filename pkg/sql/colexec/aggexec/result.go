@@ -102,6 +102,13 @@ type aggResultWithFixedType[T types.FixedSizeTExceptStrType] struct {
 	values [][]T
 }
 
+func (r *aggResultWithFixedType[T]) Size() int64 {
+	size := r.optSplitResult.Size()
+	// 24 is the size of a slice header.
+	size += int64(cap(r.values)) * 24
+	return size
+}
+
 func (r *aggResultWithFixedType[T]) unmarshalFromBytes(resultData [][]byte, emptyData [][]byte) error {
 	if err := r.optSplitResult.unmarshalFromBytes(resultData, emptyData); err != nil {
 		return err
@@ -135,11 +142,20 @@ func (r *aggResultWithFixedType[T]) set(value T) {
 	r.values[r.accessIdx1][r.accessIdx2] = value
 }
 
+func (r *aggResultWithFixedType[T]) free() {
+	r.optSplitResult.free()
+	r.values = nil
+}
+
 type aggResultWithBytesType struct {
 	optSplitResult
 
 	// the initial value for a new result row.
 	InitialValue []byte
+}
+
+func (r *aggResultWithBytesType) Size() int64 {
+	return r.optSplitResult.Size() + int64(cap(r.InitialValue))
 }
 
 func (r *aggResultWithBytesType) grows(more int) error {
@@ -190,6 +206,10 @@ func (r *aggResultWithBytesType) get() []byte {
 
 func (r *aggResultWithBytesType) set(value []byte) error {
 	return vector.SetBytesAt(r.resultList[r.accessIdx1], r.accessIdx2, value, r.mp)
+}
+
+func (r *aggResultWithBytesType) free() {
+	r.optSplitResult.free()
 }
 
 // optSplitResult is a more stable version for aggregation basic result.
@@ -544,6 +564,28 @@ func (r *optSplitResult) free() {
 	}
 	r.resultList = nil
 	r.emptyList = nil
+	r.bsFromEmptyList = nil
+}
+
+func (r *optSplitResult) Size() int64 {
+	var size int64
+	for _, v := range r.resultList {
+		if v != nil {
+			size += int64(v.Allocated())
+		}
+	}
+	for _, v := range r.emptyList {
+		if v != nil {
+			size += int64(v.Allocated())
+		}
+	}
+	// 8 is the size of a pointer.
+	size += int64(cap(r.resultList)) * 8
+	// 8 is the size of a pointer.
+	size += int64(cap(r.emptyList)) * 8
+	// 24 is the size of a slice header.
+	size += int64(cap(r.bsFromEmptyList)) * 24
+	return size
 }
 
 func setValueFromX1Y1ToX2Y2[T types.FixedSizeTExceptStrType](
