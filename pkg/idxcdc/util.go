@@ -76,7 +76,6 @@ func extractRowFromEveryVector(
 	return nil
 }
 
-
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
