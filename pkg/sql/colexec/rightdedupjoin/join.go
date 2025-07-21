@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -163,6 +164,11 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		ctr.mp = message.NewJoinMap(message.JoinSels{}, intHashMap, strHashMap, nil, nil, proc.Mp())
 	} else {
 		ctr.groupCount = ctr.mp.GetGroupCount()
+		ctr.buildGroupCount = ctr.groupCount
+		if !proc.GetTxnOperator().Txn().IsPessimistic() {
+			ctr.matched = &bitmap.Bitmap{}
+			ctr.matched.InitWithSize(int64(ctr.buildGroupCount))
+		}
 	}
 
 	return
@@ -199,7 +205,22 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 			switch ap.OnDuplicateAction {
 			case plan.Node_FAIL:
-				if v <= ctr.groupCount && isPessimistic {
+				reportDup := false
+				if isPessimistic {
+					reportDup = v <= ctr.groupCount
+				} else {
+					if v <= ctr.buildGroupCount {
+						if ctr.matched.Contains(v) {
+							reportDup = true
+						} else {
+							ctr.matched.Add(v)
+						}
+					} else {
+						reportDup = v <= ctr.groupCount
+					}
+				}
+
+				if reportDup {
 					var rowStr string
 					if len(ap.DedupColTypes) == 1 {
 						if ap.DedupColName == catalog.IndexTableIndexColName {

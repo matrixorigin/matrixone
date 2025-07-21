@@ -15,6 +15,7 @@
 package rightdedupjoin
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -49,9 +50,12 @@ type container struct {
 
 	mp *message.JoinMap
 
+	matched *bitmap.Bitmap
+
 	maxAllocSize int64
 
-	groupCount uint64
+	groupCount      uint64
+	buildGroupCount uint64
 }
 
 type RightDedupJoin struct {
@@ -114,6 +118,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	}
 	ctr.maxAllocSize = 0
 
+	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
 	ctr.resetExprExecutor()
 	ctr.resetEvalVectors()
@@ -122,6 +127,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 
 func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &rightDedupJoin.ctr
+	ctr.cleanBitmap(proc)
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
@@ -149,6 +155,10 @@ func (ctr *container) cleanHashMap() {
 		ctr.mp.Free()
 		ctr.mp = nil
 	}
+}
+
+func (ctr *container) cleanBitmap(proc *process.Process) {
+	ctr.matched = nil
 }
 
 func (ctr *container) cleanEvalVectors() {
