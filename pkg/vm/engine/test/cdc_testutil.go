@@ -29,22 +29,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/idxcdc"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
-
-	// "github.com/matrixorigin/matrixone/pkg/defines"
-	// "github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
-	// "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
 
-	// ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -324,157 +318,6 @@ func getReplayFn(
 	}
 }
 
-func getDeleteFn(
-	t *testing.T,
-	de *testutil.TestDisttaeEngine,
-	mp *mpool.MPool,
-) func(
-	ctx context.Context,
-	tableID uint64,
-	accountID uint32,
-	indexID int32,
-) (
-	err error,
-) {
-	return func(
-		ctx context.Context,
-		tableID uint64,
-		accountID uint32,
-		indexID int32,
-	) (
-		err error,
-	) {
-		txn, rel, reader, err := testutil.GetTableTxnReader(ctx, de, "mo_catalog", "mo_async_index_log", nil, mp, t)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, reader.Close())
-		}()
-
-		bat := newMoAsyncIndexLogBatch(mp, true)
-
-		done := false
-		deleteRowIDs := make([]types.Rowid, 0)
-		deletePks := make([]int32, 0)
-		for !done {
-			done, err = reader.Read(ctx, bat.Attrs, nil, mp, bat)
-			assert.NoError(t, err)
-			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
-			accountIDs := vector.MustFixedColNoTypeCheck[int32](bat.Vecs[1])
-			indexIDs := vector.MustFixedColNoTypeCheck[int32](bat.Vecs[3])
-			rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](bat.Vecs[9])
-			pks := vector.MustFixedColNoTypeCheck[int32](bat.Vecs[0])
-			for i := 0; i < bat.Vecs[0].Length(); i++ {
-				if tableIDs[i] == tableID && accountIDs[i] == int32(accountID) && indexIDs[i] == indexID {
-					deleteRowIDs = append(deleteRowIDs, rowIDs[i])
-					deletePks = append(deletePks, pks[i])
-				}
-			}
-		}
-		if len(deleteRowIDs) != 1 {
-			panic(fmt.Sprintf("logic err: rowCount:%d,tableID:%d,accountID:%d,indexID:%d, ts %v", len(deleteRowIDs), tableID, accountID, indexID, txn.SnapshotTS()))
-		}
-
-		deleteBatch := batch.New([]string{catalog.Row_ID, objectio.TombstoneAttr_PK_Attr})
-		deleteBatch.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
-		deleteBatch.Vecs[1] = vector.NewVec(types.T_int32.ToType())
-		vector.AppendFixed(deleteBatch.Vecs[0], deleteRowIDs[0], false, mp)
-		vector.AppendFixed(deleteBatch.Vecs[1], deletePks[0], false, mp)
-		deleteBatch.SetRowCount(1)
-
-		assert.NoError(t, rel.Delete(ctx, deleteBatch, catalog.Row_ID))
-		assert.NoError(t, txn.Commit(ctx))
-		return err
-	}
-}
-
-// func getCDCExecutor(
-// 	ctx context.Context,
-// 	t *testing.T,
-// 	idAllocator idAllocator,
-// 	accountID uint32,
-// 	cnTestEngine *testutil.TestDisttaeEngine,
-// 	taeHandler *testutil.TestTxnStorage,
-// ) *frontend.CDCTaskExecutor {
-
-// 	mockSpec := &task.CreateCdcDetails{
-// 		TaskName: "cdc_task",
-// 	}
-
-// 	ieFactory := func() ie.InternalExecutor {
-// 		return frontend.NewInternalExecutor(cnTestEngine.Engine.GetService())
-// 	}
-
-// 	txnFactory := func() (client.TxnOperator, error) {
-// 		return cnTestEngine.NewTxnOperator(ctx, cnTestEngine.Now())
-// 	}
-// 	sinkerFactory := func(dbName, tableName string, tableDefs []engine.TableDef) (cdc.Sinker, error) {
-// 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
-// 		return frontend.MockCNSinker(
-// 			ctx,
-// 			func(ctx context.Context) (engine.Relation, client.TxnOperator, error) {
-// 				_, rel, txn, err := cnTestEngine.GetTable(ctx, dbName, tableName)
-// 				return rel, txn, err
-// 			},
-// 			func(ctx context.Context, dstDefs []engine.TableDef) error {
-// 				txn, err := cnTestEngine.NewTxnOperator(ctx, cnTestEngine.Now())
-// 				if err != nil {
-// 					return err
-// 				}
-// 				db, err := cnTestEngine.Engine.Database(ctx, dbName, txn)
-// 				if err != nil {
-// 					return err
-// 				}
-
-// 				if _, err = db.Relation(ctx, tableName, nil); err == nil {
-// 					return nil
-// 				}
-
-// 				err = db.Create(ctx, tableName, dstDefs)
-// 				if err != nil {
-// 					return err
-// 				}
-// 				return txn.Commit(ctx)
-// 			},
-// 			tableDefs,
-// 			common.DebugAllocator,
-// 		)
-// 	}
-// 	cdcExecutor := frontend.NewCDCTaskExecutor(
-// 		ctx,
-// 		uint64(accountID),
-// 		mockSpec,
-// 		ieFactory,
-// 		sinkerFactory,
-// 		txnFactory,
-// 		cnTestEngine.Engine,
-// 		cnTestEngine.Engine.GetService(),
-// 		taeHandler.GetRPCHandle().HandleGetChangedTableList,
-// 		getInsertWatermarkFn(t, idAllocator, cnTestEngine, common.DebugAllocator),
-// 		getFlushWatermarkFn(t, cnTestEngine, common.DebugAllocator),
-// 		getReplayFn(t, cnTestEngine, common.DebugAllocator),
-// 		getDeleteFn(t, cnTestEngine, common.DebugAllocator),
-// 		common.DebugAllocator,
-// 	)
-// 	return cdcExecutor
-// }
-
-/*
-CREATE TABLE mo_async_index_log (
-
-	id INT AUTO_INCREMENT PRIMARY KEY,
-	account_id INT NOT NULL,
-	table_id INT NOT NULL,
-	db_id VARCHAR NOT NULL,
-	index_name VARCHAR NOT NULL,
-	last_sync_txn_ts VARCHAR(32)  NOT NULL,
-	err_code INT NOT NULL,
-	error_msg VARCHAR(255) NOT NULL,
-	info VARCHAR(255) NOT NULL,
-	drop_at VARCHAR(32) NULL,
-	consumer_config VARCHAR(32) NULL,
-
-);
-*/
 func mock_mo_async_index_log(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
@@ -548,21 +391,6 @@ func mock_mo_async_index_log(
 	return
 }
 
-/*
-CREATE TABLE mo_async_index_iterations (
-
-	id INT AUTO_INCREMENT PRIMARY KEY,// ignore id in ut, or preinsert will panic
-	account_id INT UNSIGNED NOT NULL,
-	table_id BIGINT UNSIGNED NOT NULL,// use table_id as primary key instead
-	index_names VARCHAR(255),--multiple indexes
-	from_ts VARCHAR(32) NOT NULL,
-	to_ts VARCHAR(32) NOT NULL,
-	error_json VARCHAR(255) NOT NULL,--Multiple errors are stored. Different consumers may have different errors.
-	start_at DATETIME NULL,
-	end_at DATETIME NULL,
-
-);
-*/
 func mock_mo_async_index_iterations(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
@@ -606,28 +434,6 @@ func mock_mo_async_index_iterations(
 	return err
 }
 
-/*
-CREATE TABLE `mo_indexes` (
-
-	`id` bigint unsigned NOT NULL,
-	`table_id` bigint unsigned NOT NULL,
-	`database_id` bigint unsigned NOT NULL,
-	`name` varchar(64) NOT NULL,
-	`type` varchar(11) NOT NULL,
-	`algo` varchar(11) DEFAULT NULL,
-	`algo_table_type` varchar(11) DEFAULT NULL,
-	`algo_params` varchar(2048) DEFAULT NULL,
-	`is_visible` tinyint NOT NULL,
-	`hidden` tinyint NOT NULL,
-	`comment` varchar(2048) NOT NULL,
-	`column_name` varchar(256) NOT NULL,
-	`ordinal_position` int unsigned NOT NULL,
-	`options` text DEFAULT NULL,
-	`index_table_name` varchar(5000) DEFAULT NULL,
-	PRIMARY KEY (`id`,`column_name`)
-
-)
-*/
 func mock_mo_indexes(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
@@ -758,66 +564,6 @@ func getCDCPitrTablesString(
 	return tableStr
 }
 
-// func addCDCTask(
-// 	ctx context.Context,
-// 	exec *frontend.CDCTaskExecutor,
-// 	srcDB, srcTable string,
-// 	dstDB, dstTable string,
-// ) error {
-// 	err := exec.StartTables(
-// 		ctx,
-// 		frontend.CDCCreateTaskOptions{
-// 			PitrTables: getCDCPitrTablesString(
-// 				srcDB,
-// 				srcTable,
-// 				dstDB,
-// 				dstTable,
-// 			),
-// 		},
-// 	)
-// 	return err
-// }
-
-// func pauseCDCTask(
-// 	ctx context.Context,
-// 	exec *frontend.CDCTaskExecutor,
-// 	srcDB, srcTable string,
-// 	dstDB, dstTable string,
-// ) error {
-// 	err := exec.PauseTables(
-// 		ctx,
-// 		frontend.CDCCreateTaskOptions{
-// 			PitrTables: getCDCPitrTablesString(
-// 				srcDB,
-// 				srcTable,
-// 				dstDB,
-// 				dstTable,
-// 			),
-// 		},
-// 	)
-// 	return err
-// }
-
-// func dropCDCTask(
-// 	ctx context.Context,
-// 	exec *frontend.CDCTaskExecutor,
-// 	srcDB, srcTable string,
-// 	dstDB, dstTable string,
-// ) error {
-// 	err := exec.DropTables(
-// 		ctx,
-// 		frontend.CDCCreateTaskOptions{
-// 			PitrTables: getCDCPitrTablesString(
-// 				srcDB,
-// 				srcTable,
-// 				dstDB,
-// 				dstTable,
-// 			),
-// 		},
-// 	)
-// 	return err
-// }
-
 func CreateDBAndTableForHNSWAndGetAppendData(
 	t *testing.T,
 	de *testutil.TestDisttaeEngine,
@@ -895,7 +641,7 @@ func GetTestCDCExecutorOption() *idxcdc.CDCExecutorOption {
 		GCTTL:                  time.Millisecond,
 		SyncTaskInterval:       time.Millisecond * 100,
 		FlushWatermarkInterval: time.Millisecond * 500,
-		RetryTimes: 1,
+		RetryTimes:             1,
 	}
 }
 

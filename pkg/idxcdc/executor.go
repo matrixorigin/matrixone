@@ -59,7 +59,7 @@ const (
 	DefaultSyncTaskInterval       = time.Millisecond * 100
 	DefaultFlushWatermarkInterval = time.Hour
 
-	DefaultRetryTimes = 5
+	DefaultRetryTimes    = 5
 	DefaultRetryDuration = time.Second
 )
 
@@ -805,7 +805,7 @@ func (exec *CDCTaskExecutor) String() string {
 	return str
 }
 
-func  retry(fn func() error, retryTimes int) (err error) {
+func retry(fn func() error, retryTimes int) (err error) {
 	for i := 0; i < retryTimes; i++ {
 		err = fn()
 		if err == nil {

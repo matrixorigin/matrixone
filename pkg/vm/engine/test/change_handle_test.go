@@ -1409,7 +1409,7 @@ func TestCDCExecutor1(t *testing.T) {
 			GCTTL:                  time.Hour,
 			SyncTaskInterval:       time.Millisecond * 100,
 			FlushWatermarkInterval: time.Millisecond * 100,
-			RetryTimes: 1,
+			RetryTimes:             1,
 		},
 		common.DebugAllocator,
 	)
@@ -1709,7 +1709,7 @@ func TestCDCExecutor3(t *testing.T) {
 			FlushWatermarkInterval: time.Hour,
 			GCTTL:                  time.Hour,
 			GCInterval:             time.Hour,
-			RetryTimes: 1,
+			RetryTimes:             1,
 		},
 		common.DebugAllocator,
 	)
@@ -1944,7 +1944,7 @@ func TestCDCExecutor4(t *testing.T) {
 			FlushWatermarkInterval: time.Hour,
 			GCTTL:                  time.Hour,
 			GCInterval:             time.Hour,
-			RetryTimes: 1,
+			RetryTimes:             1,
 		},
 		common.DebugAllocator,
 	)
@@ -2154,7 +2154,7 @@ func TestCDCExecutor5(t *testing.T) {
 			FlushWatermarkInterval: time.Hour,
 			GCTTL:                  time.Hour,
 			GCInterval:             time.Hour,
-			RetryTimes: 1,
+			RetryTimes:             1,
 		},
 		common.DebugAllocator,
 	)
@@ -2288,7 +2288,7 @@ func TestCDCExecutor6(t *testing.T) {
 			FlushWatermarkInterval: time.Hour,
 			GCTTL:                  time.Hour,
 			GCInterval:             time.Hour,
-			RetryTimes: 1,
+			RetryTimes:             1,
 		},
 		common.DebugAllocator,
 	)

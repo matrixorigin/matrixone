@@ -213,19 +213,6 @@ const (
 		"%s" +
 		" AND relkind = '%s' " +
 		" AND reldatabase NOT IN (%s)"
-		/*
-			CREATE TABLE mo_async_index_log (
-				account_id INT UNSIGNED NOT NULL,//0
-				table_id BIGINT UNSIGNED NOT NULL,//1
-				index_name VARCHAR NOT NULL,//2
-				last_sync_txn_ts VARCHAR(32)  NOT NULL,//3
-				err_code INT NOT NULL,//4
-				error_msg VARCHAR(255) NOT NULL,//5
-				info VARCHAR(255) NOT NULL,//6
-				drop_at DATETIME NULL,//7
-				consumer_config VARCHAR(255) NULL,//8
-			);
-		*/
 	CDCInsertMOAsyncIndexLogSqlTemplate = `REPLACE INTO mo_catalog.mo_async_index_log (` +
 		`account_id,` +
 		`table_id,` +
@@ -270,18 +257,6 @@ const (
 		`account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND index_name = '%s'`
-	/*
-		CREATE TABLE mo_async_index_iterations (
-			account_id INT UNSIGNED NOT NULL,
-			table_id BIGINT UNSIGNED NOT NULL,
-			index_names VARCHAR(255),--multiple indexes
-			from_ts VARCHAR(32) NOT NULL,
-			to_ts VARCHAR(32) NOT NULL,
-			error_json VARCHAR(255) NOT NULL,--Multiple errors are stored. Different consumers may have different errors.
-			start_at DATETIME NULL,
-			end_at DATETIME NULL,
-		);
-	*/
 	CDCInsertMOAsyncIndexIterationsTemplate = `INSERT INTO mo_catalog.mo_async_index_iterations(` +
 		`account_id,` +
 		`table_id,` +
@@ -303,28 +278,6 @@ const (
 		`)`
 	CDCDeleteMOAsyncIndexIterationsTemplate = `DELETE FROM mo_catalog.mo_async_index_iterations WHERE ` +
 		`end_at < '%s'`
-	/*  CREATE TABLE `mo_tables` (
-		`rel_id` bigint unsigned DEFAULT NULL,
-		`relname` varchar(5000) DEFAULT NULL,
-		`reldatabase` varchar(5000) DEFAULT NULL,
-		`reldatabase_id` bigint unsigned DEFAULT NULL,
-		`relpersistence` varchar(5000) DEFAULT NULL,
-		`relkind` varchar(5000) DEFAULT NULL,
-		`rel_comment` varchar(5000) DEFAULT NULL,
-		`rel_createsql` text DEFAULT NULL,
-		`created_time` timestamp NULL DEFAULT NULL,
-		`creator` int unsigned DEFAULT NULL,
-		`owner` int unsigned DEFAULT NULL,
-		`account_id` int unsigned DEFAULT NULL,
-		`partitioned` tinyint DEFAULT NULL,
-		`partition_info` blob DEFAULT NULL,
-		`viewdef` varchar(5000) DEFAULT NULL,
-		`constraint` varchar(5000) DEFAULT NULL,
-		`rel_version` int unsigned DEFAULT NULL,
-		`catalog_version` int unsigned DEFAULT NULL,
-		PRIMARY KEY (`account_id`,`reldatabase`,`relname`)
-	  )
-	*/
 	CDCGetTableIDTemplate = "SELECT " +
 		"rel_id, " +
 		"reldatabase_id " +
