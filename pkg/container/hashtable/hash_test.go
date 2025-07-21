@@ -16,6 +16,7 @@ package hashtable
 
 import (
 	"fmt"
+	"io"
 	"math/rand"
 	"reflect"
 	"strconv"
@@ -429,4 +430,54 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsWithResize(t *testing.T)
 		unmarshaledMap.FindStringBatch(states, [][]byte{key}, foundValues)
 		require.Equal(t, originalMappedValues[string(key)], foundValues[0], "key %s", string(key))
 	}
+}
+
+func TestWriteToError(t *testing.T) {
+	t.Run("int64", func(t *testing.T) {
+		m := new(Int64HashMap)
+		require.NoError(t, m.Init(nil))
+		defer m.Free()
+
+		w := &errorAfterNWriter{
+			N: -1,
+		}
+		_, err := m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 0
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 8
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 16
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 24
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+	})
+
+	t.Run("string", func(t *testing.T) {
+		m := new(StringHashMap)
+		require.NoError(t, m.Init(nil))
+		defer m.Free()
+
+		w := &errorAfterNWriter{
+			N: -1,
+		}
+		_, err := m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 0
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 8
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 16
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+		w.N = 24
+		_, err = m.WriteTo(w)
+		require.Equal(t, io.ErrUnexpectedEOF, err)
+	})
 }
