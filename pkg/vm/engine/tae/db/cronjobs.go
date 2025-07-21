@@ -176,23 +176,27 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				if db.Opts.CatalogCfg.DisableGC {
 					return
 				}
-				scanWaterMark := db.DiskCleaner.GetCleaner().GetScanWaterMark()
-				if scanWaterMark == nil {
+				ckp := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+				if ckp == nil {
 					return
 				}
-				ts := scanWaterMark.GetEnd()
-				// If gcWaterMark has not been updated for a long time
-				// exceeding GlobalVersionInterval, use GlobalVersionInterval
-				// must be more than 10 minutes to be effective,
-				// because in some cases of ut, GlobalVersionInterval will be very short
-				if db.Opts.CheckpointCfg.GlobalVersionInterval > 10*time.Minute {
-					interval := types.BuildTS(time.Now().UTC().UnixNano()-
-						int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
-					if ts.LE(&interval) {
-						ts = interval
+				wartMark := ckp.GetEnd()
+				if wartMark.IsEmpty() {
+					return
+				}
+
+				ts := types.BuildTS(wartMark.Physical()-
+					int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
+				if wartMark.GE(&ts) {
+					wartMark = ts
+				}
+				if db.Opts.GCTimeCheckerFactory != nil {
+					op := db.Opts.GCTimeCheckerFactory(db)
+					if !op(&wartMark) {
+						return
 					}
 				}
-				db.Catalog.GCByTS(ctx, ts)
+				db.Catalog.GCByTS(ctx, wartMark)
 			},
 			1,
 		)

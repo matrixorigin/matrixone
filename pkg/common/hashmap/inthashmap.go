@@ -15,8 +15,11 @@
 package hashmap
 
 import (
+	"bytes"
+	"io"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -288,4 +291,68 @@ func uint32AddScalar(x uint32, ys, rs []uint32) []uint32 {
 		rs[i] = x + y
 	}
 	return rs
+}
+
+func (m *IntHashMap) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+
+	// Serialize hasNull (1 byte)
+	if m.hasNull {
+		buf.WriteByte(1)
+	} else {
+		buf.WriteByte(0)
+	}
+
+	// Serialize rows (8 bytes)
+	buf.Write(types.EncodeUint64(&m.rows))
+
+	// Serialize the underlying Int64HashMap
+	hashMapData, err := m.hashMap.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	// Write length of hash map data (4 bytes)
+	size := uint32(len(hashMapData))
+	buf.Write(types.EncodeUint32(&size))
+	// Write hash map data
+	buf.Write(hashMapData)
+
+	return buf.Bytes(), nil
+}
+
+func (m *IntHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
+	r := bytes.NewReader(data)
+
+	// Deserialize hasNull
+	b, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+	m.hasNull = b == 1
+
+	// Deserialize rows
+	rowsData := make([]byte, 8)
+	if _, err := io.ReadFull(r, rowsData); err != nil {
+		return err
+	}
+	m.rows = types.DecodeUint64(rowsData)
+
+	// Deserialize the underlying Int64HashMap
+	sizeData := make([]byte, 4)
+	if _, err := io.ReadFull(r, sizeData); err != nil {
+		return err
+	}
+	hashMapSize := types.DecodeUint32(sizeData)
+
+	hashMapData := make([]byte, hashMapSize)
+	if _, err := io.ReadFull(r, hashMapData); err != nil {
+		return err
+	}
+
+	m.hashMap = &hashtable.Int64HashMap{}
+	if err := m.hashMap.UnmarshalBinary(hashMapData, allocator); err != nil {
+		return err
+	}
+
+	return nil
 }

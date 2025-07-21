@@ -228,6 +228,16 @@ func (vs *Vectors[T]) Free(mp *mpool.MPool) {
 	}
 }
 
+func (vs *Vectors[T]) Size() int64 {
+	var size int64
+	for _, vec := range vs.vecs {
+		size += int64(vec.Allocated())
+	}
+	// 8 is the size of a pointer.
+	size += int64(cap(vs.vecs)) * 8
+	return size
+}
+
 func MedianDecimal64[T numeric | types.Decimal64 | types.Decimal128](vs *Vectors[T]) (types.Decimal128, error) {
 	vals := make([]types.Decimal64, 0)
 	for _, vec := range vs.vecs {

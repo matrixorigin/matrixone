@@ -158,6 +158,7 @@ func Test_refreshAddCdcTask(t *testing.T) {
 		return 1, nil
 	}
 
+	mock.ExpectCommit()
 	cnt, err := s.AddCDCTask(context.Background(), dt, callback)
 	assert.NoError(t, err)
 	assert.Greater(t, cnt, 0)

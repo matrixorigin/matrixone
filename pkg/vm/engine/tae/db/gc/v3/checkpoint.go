@@ -455,6 +455,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
+		defer ckpBatch.Clean(common.CheckpointAllocator)
 		logtail.FillUsageBatOfCompacted(
 			ctx,
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
