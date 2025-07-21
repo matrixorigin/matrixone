@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -54,6 +55,22 @@ func ExecWithResult(
 
 // return true if create, return false if task already exists, return error when error
 func RegisterJob(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	pitr_name string,
+	sinkerinfo_json *ConsumerInfo,
+) (ok bool, err error) {
+	return ok, retry(
+		func() error {
+			ok, err = registerJob(ctx, cnUUID, txn, pitr_name, sinkerinfo_json)
+			return err
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func registerJob(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
@@ -133,6 +150,21 @@ func RegisterJob(
 
 // return true if delete success, return false if no task found, return error when delete failed.
 func UnregisterJob(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	consumerInfo *ConsumerInfo,
+) (ok bool, err error) {
+	return ok, retry(
+		func() error {
+			ok, err = unregisterJob(ctx, cnUUID, txn, consumerInfo)
+			return err
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func unregisterJob(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
@@ -219,15 +251,19 @@ func getTableID(
 	defer result.Close()
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows != 1 {
-			panic(fmt.Sprintf("invalid rows %d", rows))
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid rows %d", rows))
+			return false
 		}
 		for i := 0; i < rows; i++ {
 			tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
 		}
 		return true
 	})
+	if err != nil {
+		return 0, err
+	}
 	if tableID == 0 {
-		panic(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
+		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
 	}
 	return
 }

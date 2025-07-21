@@ -453,15 +453,21 @@ func (exec *CDCTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *a
 		watermark := types.StringToTS(watermarkStr)
 		if watermark.IsEmpty() && errorCodes[i] == 0 && dropAtVector.IsNull(uint64(i)) {
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
-			go exec.retry(func() error {
-				return exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr)
-			})
+			go retry(
+				func() error {
+					return exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr)
+				},
+				exec.option.RetryTimes,
+			)
 		}
 		if !dropAtVector.IsNull(uint64(i)) {
 			indexName := indexNameVector.GetStringAt(i)
-			go exec.retry(func() error {
-				return exec.deleteIndex(accountIDs[i], tid, indexName)
-			})
+			go retry(
+				func() error {
+					return exec.deleteIndex(accountIDs[i], tid, indexName)
+				},
+				exec.option.RetryTimes,
+			)
 		}
 	}
 
@@ -511,7 +517,7 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 			indexCount++
 			watermarkStr := watermarkVector.GetStringAt(i)
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
-			exec.retry(
+			retry(
 				func() error {
 					return exec.addIndex(
 						accountIDs[i],
@@ -520,7 +526,9 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 						int(errorCodes[i]),
 						consumerInfoStr,
 					)
-				})
+				},
+				exec.option.RetryTimes,
+			)
 		}
 		return true
 	})
@@ -796,8 +804,8 @@ func (exec *CDCTaskExecutor) String() string {
 	return str
 }
 
-func (exec *CDCTaskExecutor) retry(fn func() error) (err error) {
-	for i := 0; i < exec.option.RetryTimes; i++ {
+func  retry(fn func() error, retryTimes int) (err error) {
+	for i := 0; i < retryTimes; i++ {
 		err = fn()
 		if err == nil {
 			return
