@@ -572,7 +572,12 @@ func (h *Handle) HandleDiskCleaner(
 		return
 	case cmd_util.ForceGC:
 		minTS := types.StringToTS(value)
+		err = h.db.ForceGlobalCheckpoint(ctx, minTS, 0)
+		if err != nil {
+			return
+		}
 		err = h.db.DiskCleaner.ForceGC(ctx, &minTS)
+		return
 	case cmd_util.AddChecker:
 		break
 	}
