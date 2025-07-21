@@ -23,7 +23,7 @@ import (
 func TestQueue(t *testing.T) {
 	queue := NewQueue[int]()
 	for i := 0; i < maxQueuePartCapacity*1024; i++ {
-		queue.enqueue(i)
+		queue.enqueue(i, 8)
 	}
 	for i := 0; i < maxQueuePartCapacity*1024; i++ {
 		n, ok := queue.dequeue()

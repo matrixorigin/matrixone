@@ -14,7 +14,15 @@
 
 package fifocache
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
+
+type QueueItem[T any] struct {
+	v    T
+	size int64
+}
 
 type Queue[T any] struct {
 	mu       sync.Mutex // Mutex to protect queue operations
@@ -22,10 +30,11 @@ type Queue[T any] struct {
 	tail     *queuePart[T]
 	partPool sync.Pool
 	size     int
+	used     atomic.Int64
 }
 
 type queuePart[T any] struct {
-	values []T
+	values []QueueItem[T]
 	begin  int
 	next   *queuePart[T]
 }
@@ -37,7 +46,7 @@ func NewQueue[T any]() *Queue[T] {
 		partPool: sync.Pool{
 			New: func() any {
 				return &queuePart[T]{
-					values: make([]T, 0, maxQueuePartCapacity),
+					values: make([]QueueItem[T], 0, maxQueuePartCapacity),
 				}
 			},
 		},
@@ -59,7 +68,7 @@ func (p *queuePart[T]) reset() {
 	p.next = nil
 }
 
-func (p *Queue[T]) enqueue(v T) {
+func (p *Queue[T]) enqueue(v T, dsize int64) {
 	if !SingleMutexFlag {
 		p.mu.Lock()         // Acquire lock
 		defer p.mu.Unlock() // Ensure lock is released
@@ -72,8 +81,9 @@ func (p *Queue[T]) enqueue(v T) {
 		p.head.next = newPart
 		p.head = newPart
 	}
-	p.head.values = append(p.head.values, v)
+	p.head.values = append(p.head.values, QueueItem[T]{v: v, size: dsize})
 	p.size++
+	p.used.Add(dsize)
 }
 
 func (p *Queue[T]) dequeue() (ret T, ok bool) {
@@ -99,12 +109,14 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 		p.partPool.Put(part) // Return the old part to the pool
 	}
 
-	ret = p.tail.values[p.tail.begin]
-	var zero T
+	retitem := p.tail.values[p.tail.begin]
+	ret = retitem.v
+	var zero QueueItem[T]
 	p.tail.values[p.tail.begin] = zero
 	p.tail.begin++
 	p.size--
 	ok = true
+	p.used.Add(-retitem.size)
 	return
 }
 
@@ -114,4 +126,12 @@ func (p *Queue[T]) Len() int {
 		defer p.mu.Unlock() // Ensure lock is released
 	}
 	return p.size
+}
+
+func (p *Queue[T]) Used() int64 {
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
+	return p.used.Load()
 }

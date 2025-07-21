@@ -17,7 +17,6 @@ package fifocache
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
@@ -36,10 +35,8 @@ type Cache[K comparable, V any] struct {
 	mutex sync.Mutex
 	htab  CacheMap[K, *_CacheItem[K, V]]
 
-	usedSmall atomic.Int64
-	small     Queue[*_CacheItem[K, V]]
-	usedMain  atomic.Int64
-	main      Queue[*_CacheItem[K, V]]
+	small Queue[*_CacheItem[K, V]]
+	main  Queue[*_CacheItem[K, V]]
 }
 
 type _CacheItem[K comparable, V any] struct {
@@ -158,6 +155,14 @@ func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Conte
 	return true
 }
 
+func (c *_CacheItem[K, V]) Size() int64 {
+	if !SingleMutexFlag {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
+	return c.size
+}
+
 // INTERNAL: non-thread safe.
 // if deleted = true, item value is already released by this Cache and is NOT valid to use it inside the Cache.
 // if deleted = false, increment the reference counter of the value and it is safe to use now.
@@ -237,8 +242,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	c.evictAll(ctx, nil, 0)
 
 	// enqueue
-	c.small.enqueue(item)
-	c.usedSmall.Add(item.size)
+	c.small.enqueue(item, item.Size())
 
 }
 
@@ -299,7 +303,7 @@ func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
 	}
-	capacityCut := c.capacity() - c.usedSmall.Load() + c.usedMain.Load() + n
+	capacityCut := c.capacity() - c.small.Used() + c.main.Used() + n
 	c.evictAll(ctx, nil, capacityCut)
 }
 
@@ -308,7 +312,7 @@ func (c *Cache[K, V]) Used() int64 {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
 	}
-	return c.usedSmall.Load() + c.usedMain.Load()
+	return c.small.Used() + c.main.Used()
 }
 
 func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
@@ -322,8 +326,8 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 		targetSmall = 0
 	}
 
-	usedsmall := c.usedSmall.Load()
-	usedmain := c.usedMain.Load()
+	usedsmall := c.small.Used()
+	usedmain := c.main.Used()
 
 	for usedmain+usedsmall > target {
 		if usedsmall > targetSmall {
@@ -331,8 +335,8 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 		} else {
 			c.evictMain(ctx)
 		}
-		usedsmall = c.usedSmall.Load()
-		usedmain = c.usedMain.Load()
+		usedsmall = c.small.Used()
+		usedmain = c.main.Used()
 	}
 
 	return target + 1
@@ -340,7 +344,7 @@ func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut
 
 func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 	// small fifo
-	for c.usedSmall.Load() > 0 {
+	for c.small.Used() > 0 {
 		item, ok := c.small.dequeue()
 		if !ok {
 			// queue empty
@@ -349,19 +353,15 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 
 		deleted := item.IsDeleted()
 		if deleted {
-			c.usedSmall.Add(-item.size)
 			return
 		}
 
 		if item.GetFreq() > 1 {
 			// put main
-			c.main.enqueue(item)
-			c.usedSmall.Add(-item.size)
-			c.usedMain.Add(item.size)
+			c.main.enqueue(item, item.Size())
 		} else {
 			// evict
 			c.htab.Remove(item.key)
-			c.usedSmall.Add(-item.size)
 			// mark item as deleted and item should not be accessed again
 			item.MarkAsDeleted(ctx, c.postEvict)
 			return
@@ -371,7 +371,7 @@ func (c *Cache[K, V]) evictSmall(ctx context.Context) {
 
 func (c *Cache[K, V]) evictMain(ctx context.Context) {
 	// main fifo
-	for c.usedMain.Load() > 0 {
+	for c.main.Used() > 0 {
 		item, ok := c.main.dequeue()
 		if !ok {
 			// empty queue
@@ -380,18 +380,16 @@ func (c *Cache[K, V]) evictMain(ctx context.Context) {
 
 		deleted := item.IsDeleted()
 		if deleted {
-			c.usedMain.Add(-item.size)
 			return
 		}
 
 		if item.GetFreq() > 0 {
 			// re-enqueue
 			item.Dec()
-			c.main.enqueue(item)
+			c.main.enqueue(item, item.size)
 		} else {
 			// evict
 			c.htab.Remove(item.key)
-			c.usedMain.Add(-item.size)
 			// mark item as deleted and item should not be accessed again
 			item.MarkAsDeleted(ctx, c.postEvict)
 			return
