@@ -623,7 +623,7 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 			return
 		}
 	}
-	if (*bat).RowCount() > p.changesHandle.coarseMaxRow {
+	if (*bat) != nil && (*bat).RowCount() > p.changesHandle.coarseMaxRow {
 		return
 	}
 	if p.inMemoryHandle != nil {
@@ -637,7 +637,7 @@ func (p *baseHandle) QuickNext(ctx context.Context, bat **batch.Batch, mp *mpool
 			return
 		}
 	}
-	if (*bat).RowCount() > p.changesHandle.coarseMaxRow {
+	if (*bat) != nil && (*bat).RowCount() > p.changesHandle.coarseMaxRow {
 		return
 	}
 	err = p.cnObjectHandle.QuickNext(ctx, bat, mp)
@@ -785,9 +785,10 @@ func (p *ChangeHandler) decideMode() {
 		p.quick = true
 		return
 	}
-	if p.dataHandle.IsSmall() && p.tombstoneHandle.IsSmall() {
-		p.quick = true
-	}
+	// todo:
+	// if p.dataHandle.IsSmall() && p.tombstoneHandle.IsSmall() {
+	// 	p.quick = true
+	// }
 }
 func (p *ChangeHandler) decideNextHandle() int {
 	tombstoneTS := p.tombstoneHandle.NextTS()
