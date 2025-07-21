@@ -29,7 +29,6 @@ type CacheMap[K comparable, V any] interface {
 }
 
 var _ CacheMap[int, string] = &ShardMap[int, string]{}
-var _ CacheMap[int, string] = &SingleMap[int, string]{}
 
 const numShards = 256
 
