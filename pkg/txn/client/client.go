@@ -386,7 +386,7 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 	for _, op := range client.mu.activeTxns {
 		ops = append(ops, op)
 	}
-	defer client.mu.RUnlock()
+	client.mu.RUnlock()
 
 	min := timestamp.Timestamp{}
 	for _, op := range ops {
