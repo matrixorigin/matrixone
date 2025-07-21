@@ -515,6 +515,7 @@ func (s *interalSqlConsumer) getDeleteRowBuf(ctx context.Context) (err error) {
 
 	if len(s.deleteTypes) == 1 {
 		// single column pk
+		s.rowBuf = appendBytes(s.rowBuf, []byte(s.pkColNames[0]+"="))
 		// transform column into text values
 		if s.rowBuf, err = convertColIntoSql(ctx, s.deleteRow[0], s.deleteTypes[0], s.rowBuf); err != nil {
 			return
