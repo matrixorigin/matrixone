@@ -260,8 +260,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 	result.Batch = batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
-		result.Batch.Vecs[i] = bat.Vecs[rp.Pos]
-		bat.Vecs[rp.Pos] = nil
+		typ := ap.LeftTypes[rp.Pos]
+		result.Batch.Vecs[i] = vector.NewVec(typ)
+		if err := vector.GetUnionAllFunction(typ, proc.Mp())(result.Batch.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+			return err
+		}
 	}
 	result.Batch.SetRowCount(count)
 
