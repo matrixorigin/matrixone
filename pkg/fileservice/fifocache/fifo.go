@@ -17,6 +17,7 @@ package fifocache
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
@@ -45,41 +46,62 @@ type _CacheItem[K comparable, V any] struct {
 	size  int64
 
 	// mutex protect the deleted, freq and postFn
-	mu      sync.Mutex
-	freq    int8
-	deleted bool // flag indicate item is already deleted by either hashtable or evict
+	mu         sync.Mutex   // only used when SingleMutexFlag = false
+	freq       int32        // same as atomicFreq but only used when SingleMytexFlag = true
+	atomicFreq atomic.Int32 // same as freq but only used when SingleMytexFlag = false
+	deleted    bool         // flag indicate item is already deleted by either hashtable or evict
 }
 
 // Thread-safe
 func (c *_CacheItem[K, V]) Inc() {
-
+	max_freq := int32(3)
 	if !SingleMutexFlag {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	}
+		// multi mutex
+		for {
+			freq := c.atomicFreq.Load()
+			if freq >= max_freq {
+				return
+			}
 
-	if c.freq < 3 {
-		c.freq += 1
+			if c.atomicFreq.CompareAndSwap(freq, freq+1) {
+				return
+			}
+		}
+
+	} else {
+		// single mutex
+		if c.freq < max_freq {
+			c.freq += 1
+		}
 	}
 }
 
 // Thread-safe
 func (c *_CacheItem[K, V]) Dec() {
+	min_freq := int32(0)
 	if !SingleMutexFlag {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-	}
-
-	if c.freq > 0 {
-		c.freq -= 1
+		// multi mutex
+		for {
+			freq := c.atomicFreq.Load()
+			if freq <= min_freq {
+				return
+			}
+			if c.atomicFreq.CompareAndSwap(freq, freq-1) {
+				return
+			}
+		}
+	} else {
+		// single mutex
+		if c.freq > min_freq {
+			c.freq -= 1
+		}
 	}
 }
 
 // Thread-safe
-func (c *_CacheItem[K, V]) GetFreq() int8 {
+func (c *_CacheItem[K, V]) GetFreq() int32 {
 	if !SingleMutexFlag {
-		c.mu.Lock()
-		defer c.mu.Unlock()
+		return c.atomicFreq.Load()
 	}
 	return c.freq
 }
