@@ -169,7 +169,7 @@ func CollectChanges_2(
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
-			err := consumerEntry.consumer.Consume(ctx, dataRetrievers[i])
+			err := consumerEntry.consumer.Consume(context.Background(), dataRetrievers[i])
 			if err != nil {
 				logutil.Error(
 					"Async-Index-CDC-Task sink consume failed",

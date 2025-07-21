@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -220,10 +221,11 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 		}
 	}
 
-	err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+	switch data.GetDataType() {
+	case CDCDataType_Snapshot:
 		for {
 			cdcData := data.Next()
-			noMoreData, err := s.consumeData(ctx, data.GetDataType(), cdcData, txn)
+			noMoreData, err := s.consumeData(ctx, data.GetDataType(), cdcData, nil)
 			if err != nil {
 				return err
 			}
@@ -231,8 +233,27 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 				return nil
 			}
 		}
-	}, executor.Options{})
-	return err
+	case CDCDataType_Tail:
+		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+		defer cancel()
+		err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			for {
+				cdcData := data.Next()
+				noMoreData, err := s.consumeData(ctx, data.GetDataType(), cdcData, txn)
+				if err != nil {
+					return err
+				}
+				if noMoreData {
+					return nil
+				}
+			}
+		}, executor.Options{})
+		return err
+	default:
+		panic("logic error")
+	}
+
 }
 func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, cdcData *CDCData, txn executor.TxnExecutor) (noMoreData bool, err error) {
 	defer cdcData.Done()
@@ -254,7 +275,7 @@ func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, cdc
 	}
 
 	if dataType == CDCDataType_Snapshot {
-		err = s.sinkSnapshot(ctx, insertBatch, txn)
+		err = s.sinkSnapshot(ctx, insertBatch)
 		if err != nil {
 			return
 		}
@@ -269,7 +290,7 @@ func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, cdc
 	return
 }
 
-func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch, txn executor.TxnExecutor) error {
+func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch) error {
 	var err error
 
 	// if last row is not insert row, means this is the first snapshot batch
@@ -292,12 +313,12 @@ func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch,
 			}
 
 			// step3: append to sqlBuf, send sql if sqlBuf is full
-			if sqlBuffer, err = s.appendSqlBuf(UpsertRow, sqlBuffer, txn); err != nil {
+			if sqlBuffer, err = s.appendSqlBuf(UpsertRow, sqlBuffer, nil); err != nil {
 				panic(err)
 			}
 		}
 	}
-	err = s.tryFlushSqlBuf(txn, sqlBuffer)
+	err = s.tryFlushSqlBuf(nil, sqlBuffer)
 	if err != nil {
 		return err
 	}
@@ -406,6 +427,17 @@ func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicB
 
 func (s *interalSqlConsumer) tryFlushSqlBuf(txn executor.TxnExecutor, sqlBuffer []byte) (err error) {
 	if len(sqlBuffer) == 0 {
+		return
+	}
+	if txn == nil {
+		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+		defer cancel()
+		_, err = s.internalSqlExecutor.Exec(ctx, string(sqlBuffer), executor.Options{})
+		if err != nil {
+			logutil.Errorf("cdc interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
+			panic(err)
+		}
 		return
 	}
 	if _, err := txn.Exec(string(sqlBuffer), executor.StatementOption{}); err != nil {

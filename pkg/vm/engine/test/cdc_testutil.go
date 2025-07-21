@@ -895,6 +895,7 @@ func GetTestCDCExecutorOption() *idxcdc.CDCExecutorOption {
 		GCTTL:                  time.Millisecond,
 		SyncTaskInterval:       time.Millisecond * 100,
 		FlushWatermarkInterval: time.Millisecond * 500,
+		RetryTimes: 1,
 	}
 }
 
