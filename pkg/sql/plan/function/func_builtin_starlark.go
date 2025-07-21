@@ -157,7 +157,12 @@ func (op *opBuiltInStarlark) tryStarlarkImpl(params []*vector.Vector, result vec
 				return err
 			}
 		}
-		rs.AppendBytes([]byte(res.String()), false)
+
+		if res == nil {
+			rs.AppendBytes(nil, true)
+		} else {
+			rs.AppendBytes([]byte(res.String()), false)
+		}
 	}
 	return nil
 }
