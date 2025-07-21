@@ -572,7 +572,8 @@ func (h *Handle) HandleDiskCleaner(
 		return
 	case cmd_util.ForceGC:
 		minTS := types.StringToTS(value)
-		err = h.db.ForceGlobalCheckpoint(ctx, minTS, 0)
+		histroyRetention := time.Now().UTC().UnixNano() - minTS.Physical()
+		err = h.db.ForceGlobalCheckpoint(ctx, minTS, time.Duration(histroyRetention))
 		if err != nil {
 			return
 		}
