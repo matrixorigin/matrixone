@@ -58,6 +58,8 @@ const (
 	DefaultGCTTL                  = time.Hour
 	DefaultSyncTaskInterval       = time.Millisecond * 100
 	DefaultFlushWatermarkInterval = time.Hour
+
+	DefaultRetryTimes = 5
 )
 
 type CDCExecutorOption struct {
@@ -65,6 +67,7 @@ type CDCExecutorOption struct {
 	GCTTL                  time.Duration
 	SyncTaskInterval       time.Duration
 	FlushWatermarkInterval time.Duration
+	RetryTimes             int
 }
 
 type TxnFactory func() (client.TxnOperator, error)
@@ -163,6 +166,7 @@ func NewCDCTaskExecutor(
 			zap.Any("gcttl", option.GCTTL),
 			zap.Any("syncTaskInterval", option.SyncTaskInterval),
 			zap.Any("flushWatermarkInterval", option.FlushWatermarkInterval),
+			zap.Any("retryTimes", option.RetryTimes),
 			zap.Error(err),
 		)
 	}()
@@ -172,6 +176,7 @@ func NewCDCTaskExecutor(
 			GCTTL:                  DefaultGCTTL,
 			SyncTaskInterval:       DefaultSyncTaskInterval,
 			FlushWatermarkInterval: DefaultFlushWatermarkInterval,
+			RetryTimes:             DefaultRetryTimes,
 		}
 	}
 	if txnFactory == nil {
@@ -448,11 +453,15 @@ func (exec *CDCTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *a
 		watermark := types.StringToTS(watermarkStr)
 		if watermark.IsEmpty() && errorCodes[i] == 0 && dropAtVector.IsNull(uint64(i)) {
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
-			go exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr)
+			go exec.retry(func() error {
+				return exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr)
+			})
 		}
 		if !dropAtVector.IsNull(uint64(i)) {
 			indexName := indexNameVector.GetStringAt(i)
-			go exec.deleteIndex(accountIDs[i], tid, indexName)
+			go exec.retry(func() error {
+				return exec.deleteIndex(accountIDs[i], tid, indexName)
+			})
 		}
 	}
 
@@ -502,13 +511,16 @@ func (exec *CDCTaskExecutor) replay(ctx context.Context) {
 			indexCount++
 			watermarkStr := watermarkVector.GetStringAt(i)
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
-			exec.addIndex(
-				accountIDs[i],
-				tableIDs[i],
-				watermarkStr,
-				int(errorCodes[i]),
-				consumerInfoStr,
-			)
+			exec.retry(
+				func() error {
+					return exec.addIndex(
+						accountIDs[i],
+						tableIDs[i],
+						watermarkStr,
+						int(errorCodes[i]),
+						consumerInfoStr,
+					)
+				})
 		}
 		return true
 	})
@@ -782,4 +794,15 @@ func (exec *CDCTaskExecutor) String() string {
 		str += t.String()
 	}
 	return str
+}
+
+func (exec *CDCTaskExecutor) retry(fn func() error) (err error) {
+	for i := 0; i < exec.option.RetryTimes; i++ {
+		err = fn()
+		if err == nil {
+			return
+		}
+	}
+	logutil.Errorf("Async-Index-CDC-Task retry failed, err: %v", err)
+	return
 }
