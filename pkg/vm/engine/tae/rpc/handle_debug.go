@@ -570,6 +570,9 @@ func (h *Handle) HandleDiskCleaner(
 	case cmd_util.StartGC:
 		err = h.db.Controller.SwitchTxnMode(ctx, 4, "")
 		return
+	case cmd_util.ForceGC:
+		minTS := types.StringToTS(value)
+		err = h.db.DiskCleaner.ForceGC(ctx, &minTS)
 	case cmd_util.AddChecker:
 		break
 	}
