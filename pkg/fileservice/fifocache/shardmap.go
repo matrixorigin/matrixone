@@ -44,12 +44,6 @@ type ShardMap[K comparable, V any] struct {
 
 func NewCacheMap[K comparable, V any](hashfn func(K) uint64) CacheMap[K, V] {
 
-	/*
-		if SingleMutexFlag {
-			return NewSingleMap[K, V]()
-		}
-	*/
-
 	return NewShardMap[K, V](hashfn)
 }
 
