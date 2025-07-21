@@ -189,7 +189,7 @@ func (c *_CacheItem[K, V]) Size() int64 {
 // if deleted = true, item value is already released by this Cache and is NOT valid to use it inside the Cache.
 // if deleted = false, increment the reference counter of the value and it is safe to use now.
 func (c *_CacheItem[K, V]) retainValue() {
-	cdata, ok := any(c.value).(fscache.Data)
+	cdata, ok := any(c.value).(fscache.SelfMaintainMemObj)
 	if ok {
 		cdata.Retain()
 	}
@@ -198,7 +198,7 @@ func (c *_CacheItem[K, V]) retainValue() {
 // INTERNAL: non-thread safe.
 // decrement the reference counter
 func (c *_CacheItem[K, V]) releaseValue() {
-	cdata, ok := any(c.value).(fscache.Data)
+	cdata, ok := any(c.value).(fscache.SelfMaintainMemObj)
 	if ok {
 		cdata.Release()
 	}
