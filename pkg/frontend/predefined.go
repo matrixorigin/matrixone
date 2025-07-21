@@ -142,8 +142,8 @@ var (
 			pitr_id uuid unique key,
 			pitr_name varchar(5000),
 			create_account bigint unsigned,
-			create_time timestamp,
-			modified_time timestamp,
+			create_time bigint not null,
+			modified_time bigint not null,
 			level varchar(10),
 			account_id bigint unsigned,
 			account_name varchar(300),
@@ -153,7 +153,7 @@ var (
 			pitr_length tinyint unsigned,
 			pitr_unit varchar(10),
 			pitr_status tinyint unsigned default 1 comment '1: active, 0: inactive',
-			pitr_status_changed_time timestamp default UTC_TIMESTAMP,
+			pitr_status_changed_time bigint not null,
 			primary key(pitr_name, create_account)
 			)`, catalog.MO_CATALOG, catalog.MO_PITR)
 

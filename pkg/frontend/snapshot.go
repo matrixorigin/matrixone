@@ -1840,13 +1840,43 @@ func getCreateTableSql(
 	return colsList[0][0], nil
 }
 
-func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (uint32, error) {
-	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-	sql := getAccountIdNamesSql
-	if len(accountName) > 0 {
-		sql += fmt.Sprintf(" and account_name = '%s'", accountName)
-	}
+//func getAccountIdBySnapshot(
+//	ctx context.Context,
+//	bh BackgroundExec,
+//	accountName string,
+//	snapshot string,
+//) (uint32, error) {
+//
+//	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+//	sql := fmt.Sprintf(
+//		"select account_id from mo_catalog.mo_account {SNAPSHOT = %s} where account_name = %s",
+//		snapshot, accountName,
+//	)
+//
+//	return getAccountIdHelper(ctx, bh, sql, accountName)
+//}
 
+func getAccountIdByTS(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountName string,
+	ts int64,
+) (uint32, error) {
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	sql := fmt.Sprintf(
+		"select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s'",
+		ts, accountName,
+	)
+
+	return getAccountIdHelper(ctx, bh, sql, accountName)
+}
+
+func getAccountIdHelper(
+	ctx context.Context,
+	bh BackgroundExec,
+	sql string,
+	accountName string,
+) (uint32, error) {
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, sql); err != nil {
 		return 0, err
@@ -1866,6 +1896,21 @@ func getAccountId(ctx context.Context, bh BackgroundExec, accountName string) (u
 	}
 
 	return 0, moerr.NewInternalErrorf(ctx, "no such account, account name: %v", accountName)
+}
+
+func getAccountId(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountName string,
+) (uint32, error) {
+
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	sql := getAccountIdNamesSql
+	if len(accountName) > 0 {
+		sql += fmt.Sprintf(" and account_name = '%s'", accountName)
+	}
+
+	return getAccountIdHelper(ctx, bh, sql, accountName)
 }
 
 func getFkDeps(
