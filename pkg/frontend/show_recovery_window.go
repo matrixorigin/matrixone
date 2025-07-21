@@ -254,20 +254,32 @@ func constructRecoveryWindow(
 		jsonBuf.Reset()
 		jsonBuf.WriteString("[")
 
+		cnt := len(tableToSnaps[val]) + len(tableToPitrs[val])
+
 		for _, snap := range tableToSnaps[val] {
 			jsonBuf.WriteString(
 				fmt.Sprintf(
-					"{'timestamp':'%s', 'source':'snapshot', 'source_name':'%s'}, ",
+					"{'timestamp':'%s', 'source':'snapshot', 'source_name':'%s'}",
 					snap.ts, snap.name,
 				))
+
+			cnt--
+			if cnt > 0 {
+				jsonBuf.WriteString(", ")
+			}
 		}
 
 		for _, pitr := range tableToPitrs[val] {
 			jsonBuf.WriteString(
 				fmt.Sprintf(
-					"{'start_time':'%s', 'end_time':'%s', 'source':'pitr', 'source_name':'%s'}, ",
+					"{'start_time':'%s', 'end_time':'%s', 'source':'pitr', 'source_name':'%s'}",
 					pitr.start, pitr.end, pitr.name,
 				))
+
+			cnt--
+			if cnt > 0 {
+				jsonBuf.WriteString(", ")
+			}
 		}
 
 		jsonBuf.WriteString("]")
