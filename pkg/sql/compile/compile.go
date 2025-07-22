@@ -4729,6 +4729,12 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
+	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+			options = options.WithIgnoreForeignKey()
+		}
+	}
+
 	exec := v.(executor.SQLExecutor)
 	opts := executor.Options{}.
 		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
@@ -4740,12 +4746,6 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithLowerCaseTableNames(&lower).
 		WithStatementOption(options).
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
-
-	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
-		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
-			opts = opts.WithStatementOption(executor.StatementOption{}.WithIgnoreForeignKey())
-		}
-	}
 
 	ctx := c.proc.Ctx
 	if accountId >= 0 {

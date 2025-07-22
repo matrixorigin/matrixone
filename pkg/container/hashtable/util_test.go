@@ -1,10 +1,10 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,23 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package hashtable
 
-import (
-	"testing"
+import "io"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/stretchr/testify/assert"
-)
+// errorAfterNWriter returns error after N bytes was written
+type errorAfterNWriter struct {
+	N int
+}
 
-func TestBytes(t *testing.T) {
-	t.Run("Bytes without refs", func(t *testing.T) {
-		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
-		assert.Nil(t, err)
-		bs := &Bytes{
-			bytes:       bytes,
-			deallocator: deallocator,
-		}
-		bs.Release()
-	})
+var _ io.Writer = new(errorAfterNWriter)
+
+func (e *errorAfterNWriter) Write(p []byte) (n int, err error) {
+	if e.N < 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	e.N -= len(p)
+	return len(p), nil
 }

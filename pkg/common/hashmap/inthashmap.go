@@ -295,64 +295,78 @@ func uint32AddScalar(x uint32, ys, rs []uint32) []uint32 {
 
 func (m *IntHashMap) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
-
-	// Serialize hasNull (1 byte)
-	if m.hasNull {
-		buf.WriteByte(1)
-	} else {
-		buf.WriteByte(0)
-	}
-
-	// Serialize rows (8 bytes)
-	buf.Write(types.EncodeUint64(&m.rows))
-
-	// Serialize the underlying Int64HashMap
-	hashMapData, err := m.hashMap.MarshalBinary()
-	if err != nil {
+	if _, err := m.WriteTo(&buf); err != nil {
 		return nil, err
 	}
-	// Write length of hash map data (4 bytes)
-	size := uint32(len(hashMapData))
-	buf.Write(types.EncodeUint32(&size))
-	// Write hash map data
-	buf.Write(hashMapData)
-
 	return buf.Bytes(), nil
 }
 
 func (m *IntHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
 	r := bytes.NewReader(data)
+	_, err := m.UnmarshalFrom(r, allocator)
+	return err
+}
+
+func (m *IntHashMap) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+
+	// Serialize hasNull (1 byte)
+	if m.hasNull {
+		if _, err := w.Write([]byte{1}); err != nil {
+			return 0, err
+		}
+	} else {
+		if _, err := w.Write([]byte{0}); err != nil {
+			return 0, err
+		}
+	}
+	n++
+
+	// Serialize rows (8 bytes)
+	rowsBytes := types.EncodeUint64(&m.rows)
+	wn, err := w.Write(rowsBytes)
+	if err != nil {
+		return 0, err
+	}
+	n += int64(wn)
+
+	// Serialize the underlying Int64HashMap
+	subn, err := m.hashMap.WriteTo(w)
+	if err != nil {
+		return 0, err
+	}
+	n += subn
+
+	return n, nil
+}
+
+func (m *IntHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int64, error) {
+	var n int64
 
 	// Deserialize hasNull
-	b, err := r.ReadByte()
+	b := make([]byte, 1)
+	rn, err := io.ReadFull(r, b)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	m.hasNull = b == 1
+	n += int64(rn)
+	m.hasNull = b[0] == 1
 
 	// Deserialize rows
 	rowsData := make([]byte, 8)
-	if _, err := io.ReadFull(r, rowsData); err != nil {
-		return err
+	if rn, err = io.ReadFull(r, rowsData); err != nil {
+		return 0, err
 	}
+	n += int64(rn)
 	m.rows = types.DecodeUint64(rowsData)
 
 	// Deserialize the underlying Int64HashMap
-	sizeData := make([]byte, 4)
-	if _, err := io.ReadFull(r, sizeData); err != nil {
-		return err
-	}
-	hashMapSize := types.DecodeUint32(sizeData)
-
-	hashMapData := make([]byte, hashMapSize)
-	if _, err := io.ReadFull(r, hashMapData); err != nil {
-		return err
-	}
-
 	m.hashMap = &hashtable.Int64HashMap{}
-	if err := m.hashMap.UnmarshalBinary(hashMapData, allocator); err != nil {
-		return err
+	subn, err := m.hashMap.UnmarshalFrom(r, allocator)
+	if err != nil {
+		return 0, err
 	}
+	n += subn
 
-	return nil
+	return n, nil
 }

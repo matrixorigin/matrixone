@@ -1,4 +1,4 @@
-// Copyright 2024 Matrix Origin
+// Copyright 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package v3_0_0
 
-import (
-	"testing"
+import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-	"github.com/stretchr/testify/assert"
-)
-
-func TestBytes(t *testing.T) {
-	t.Run("Bytes without refs", func(t *testing.T) {
-		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
-		assert.Nil(t, err)
-		bs := &Bytes{
-			bytes:       bytes,
-			deallocator: deallocator,
-		}
-		bs.Release()
-	})
-}
+var tenantUpgEntries = []versions.UpgradeEntry{}

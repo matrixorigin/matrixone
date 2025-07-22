@@ -78,6 +78,7 @@ type StatementOption struct {
 	disableLog       bool
 	ignoreForeignKey bool
 	params           []string
+	skipPkDedupTbl   string
 }
 
 // Result exec sql result

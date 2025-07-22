@@ -164,6 +164,15 @@ func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
 	return opts
 }
 
+func (opts StatementOption) WithSkipPkDedup(tbl string) StatementOption {
+	opts.skipPkDedupTbl = tbl
+	return opts
+}
+
+func (opts StatementOption) SkipPkDedupTbl() string {
+	return opts.skipPkDedupTbl
+}
+
 func (opts StatementOption) AccountID() uint32 {
 	return opts.accountId
 }

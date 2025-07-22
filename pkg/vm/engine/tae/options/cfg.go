@@ -58,6 +58,7 @@ type CheckpointCfg struct {
 
 type GCCfg struct {
 	GCTTL             time.Duration `toml:"gc-ttl"`
+	GCInMemoryTTL     time.Duration `toml:"gc-in-memory-ttl"`
 	ScanGCInterval    time.Duration `toml:"scan-gc-interval"`
 	DisableGC         bool          `toml:"disable-gc"`
 	CheckGC           bool          `toml:"check-gc"`
