@@ -259,17 +259,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		}
 	}
 
-	if ctr.rbat == nil {
-		ctr.rbat = batch.NewWithSize(len(ap.Result))
-	}
+	result.Batch = batch.NewWithSize(len(ap.Result))
+	result.Batch.SetRowCount(count)
 
 	for i, rp := range ap.Result {
-		ctr.rbat.Vecs[i] = bat.Vecs[rp.Pos]
+		result.Batch.Vecs[i] = bat.Vecs[rp.Pos]
 		bat.Vecs[rp.Pos] = nil
 	}
-
-	ctr.rbat.SetRowCount(count)
-	result.Batch = ctr.rbat
 
 	return nil
 }
