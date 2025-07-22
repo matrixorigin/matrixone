@@ -319,7 +319,7 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 		builder.swapJoinChildren(child)
 	}
 
-	if node.BuildOnLeft {
+	if node.IsRightJoin {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		if node.JoinType == plan.Node_LEFT {
 			node.JoinType = plan.Node_RIGHT
@@ -1010,7 +1010,7 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 					force = true
 				}
 			case plan.Node_SEMI, plan.Node_ANTI:
-				if node.BuildOnLeft && !node.Stats.HashmapStats.Shuffle {
+				if node.IsRightJoin && !node.Stats.HashmapStats.Shuffle {
 					force = true
 				}
 			case plan.Node_INDEX:
