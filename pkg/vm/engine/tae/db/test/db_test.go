@@ -6871,7 +6871,6 @@ func TestSnapshotGC(t *testing.T) {
 
 	opts := new(options.Options)
 	opts = config.WithQuickScanAndCKPOpts(opts)
-	opts.CheckpointCfg.GlobalVersionInterval = 20 * time.Minute
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
