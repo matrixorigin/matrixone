@@ -4365,6 +4365,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		if tbl.AtTsExpr != nil {
+			old := ctx.snapshot
+			defer func() {
+				ctx.snapshot = old
+			}()
+
 			ctx.snapshot, err = builder.ResolveTsHint(tbl.AtTsExpr)
 			if err != nil {
 				return 0, err

@@ -316,6 +316,10 @@ func (exec *txnExecutor) Exec(
 	)
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
+	if exec.opts.ResolveVariableFunc() != nil {
+		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
+	}
+
 	prepared := false
 	if statementOption.HasParams() {
 		vec := statementOption.Params(exec.s.mp)
