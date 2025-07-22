@@ -52,7 +52,7 @@ func (t *startTask) Handle(_ context.Context) error {
 				return
 			}
 			// if async index cdc task quit without error
-			if t.task.task.TaskType == task.TaskType_TypeAsyncIndexCdc && err == nil {
+			if t.task.task.TaskType == task.TaskType_ISCP && err == nil {
 				return
 			}
 			t.runner.removeDaemonTask(t.task.task.ID)

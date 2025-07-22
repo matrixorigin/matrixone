@@ -173,7 +173,7 @@ const (
 
 	MO_MERGE_SETTINGS = "mo_merge_settings"
 
-	MO_ASYNC_INDEX_LOG = "mo_async_index_log"
+	MO_INTRA_SYSTEM_CHANGE_PROPAGATION_LOG = "mo_intra_system_change_propagation_log"
 )
 
 func IsSystemTable(id uint64) bool {

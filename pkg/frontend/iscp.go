@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
-func AddAsyncIndexCdcTaskIfNotExists(
+func AddISCPTaskIfNotExists(
 	ctx context.Context,
 	ts taskservice.TaskService,
 ) error {
@@ -30,7 +30,7 @@ func AddAsyncIndexCdcTaskIfNotExists(
 		ctx,
 		taskservice.WithTaskExecutorCond(
 			taskservice.EQ,
-			task.TaskCode_Async_Index_CDC,
+			task.TaskCode_ISCPExecutor,
 		),
 	)
 	if err != nil {
@@ -43,7 +43,7 @@ func AddAsyncIndexCdcTaskIfNotExists(
 	taskID := uuid.Must(uuid.NewV7())
 	metadata := task.TaskMetadata{
 		ID:       taskID.String(),
-		Executor: task.TaskCode_Async_Index_CDC,
+		Executor: task.TaskCode_ISCPExecutor,
 		Options: task.TaskOptions{
 			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
 			RetryInterval: defaultConnectorTaskRetryInterval,
@@ -54,9 +54,9 @@ func AddAsyncIndexCdcTaskIfNotExists(
 	details := &task.Details{
 		AccountID: sysAccountID,
 		Account:   sysAccountName,
-		Details: &task.Details_AsyncIndexCdc{
-			AsyncIndexCdc: &task.AsyncIndexCdcDetails{
-				TaskName: "async-index-cdc",
+		Details: &task.Details_ISCP{
+			ISCP: &task.ISCPDetails{
+				TaskName: "iscp",
 				TaskId:   taskID.String(),
 			},
 		},

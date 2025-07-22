@@ -164,7 +164,6 @@ mysql
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
-mo_async_index_log
 mo_indexes
 mo_table_partitions
 mo_tables

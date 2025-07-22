@@ -133,7 +133,7 @@ func registerJob(
 		return false, nil
 	}
 	ok = true
-	sql := cdc.CDCSQLBuilder.AsyncIndexLogInsertSQL(
+	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogInsertSQL(
 		tenantId,
 		tableID,
 		sinkerinfo_json.IndexName,
@@ -220,7 +220,7 @@ func unregisterJob(
 		return false, nil
 	}
 	ok = true
-	sql := cdc.CDCSQLBuilder.AsyncIndexLogUpdateDropAtSQL(
+	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogUpdateDropAtSQL(
 		tenantId,
 		tableID,
 		consumerInfo.IndexName,
@@ -277,7 +277,7 @@ func queryIndexLog(
 	tableID uint64,
 	indexName string,
 ) (exist, dropped bool, err error) {
-	selectSql := cdc.CDCSQLBuilder.AsyncIndexLogSelectByTableSQL(
+	selectSql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogSelectByTableSQL(
 		tenantId,
 		tableID,
 		indexName,

@@ -32,11 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-func mock_mo_async_index_log(
+func mock_mo_intra_system_change_propagation_log(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
 ) (err error) {
-	sql := `CREATE TABLE mo_catalog.mo_async_index_log (
+	sql := `CREATE TABLE mo_catalog.mo_intra_system_change_propagation_log (
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,
 				job_name VARCHAR NOT NULL,

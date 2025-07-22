@@ -1371,7 +1371,7 @@ func TestISCPExecutor1(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -1520,7 +1520,7 @@ func TestISCPExecutor2(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -1676,7 +1676,7 @@ func TestISCPExecutor3(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -1909,7 +1909,7 @@ func TestISCPExecutor4(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -2105,7 +2105,7 @@ func TestISCPExecutor5(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -2242,7 +2242,7 @@ func TestISCPExecutor6(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 

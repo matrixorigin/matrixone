@@ -108,7 +108,7 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 	if r.typ == ISCPDataType_Snapshot {
 		return nil
 	}
-	updateWatermarkSQL := cdc.CDCSQLBuilder.AsyncIndexLogUpdateResultSQL(
+	updateWatermarkSQL := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogUpdateResultSQL(
 		r.tableInfo.accountID,
 		r.tableInfo.tableID,
 		r.indexName,

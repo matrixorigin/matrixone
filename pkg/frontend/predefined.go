@@ -273,7 +273,7 @@ var (
     			primary key(account_id,task_id,db_name,table_name)
 			)`
 
-	MoCatalogMoCdcAsyncIndexLogDDL = `CREATE TABLE mo_catalog.mo_async_index_log (
+	MoCatalogMoISCPLogDDL = `CREATE TABLE mo_catalog.mo_intra_system_change_propagation_log (
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,
 				job_name VARCHAR NOT NULL,

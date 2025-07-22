@@ -213,7 +213,7 @@ const (
 		"%s" +
 		" AND relkind = '%s' " +
 		" AND reldatabase NOT IN (%s)"
-	CDCInsertMOAsyncIndexLogSqlTemplate = `REPLACE INTO mo_catalog.mo_async_index_log (` +
+	CDCInsertMOIntraSystemChangePropagationLogSqlTemplate = `REPLACE INTO mo_catalog.mo_intra_system_change_propagation_log (` +
 		`account_id,` +
 		`table_id,` +
 		`job_name,` +
@@ -238,7 +238,7 @@ const (
 		`'%s',` + // consumer_config
 		`null` + // drop_at
 		`)`
-	CDCUpdateMOAsyncIndexLogSqlTemplate = `UPDATE mo_catalog.mo_async_index_log SET ` +
+	CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate = `UPDATE mo_catalog.mo_intra_system_change_propagation_log SET ` +
 		`err_code = %d,` +
 		`error_msg = '%s',` +
 		`last_sync_txn_ts = '%s'` +
@@ -246,16 +246,16 @@ const (
 		` account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'`
-	CDCUpdateMOAsyncIndexLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_async_index_log SET ` +
+	CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_intra_system_change_propagation_log SET ` +
 		`drop_at = now()` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'`
-	CDCDeleteMOAsyncIndexLogSqlTemplate = `DELETE FROM mo_catalog.mo_async_index_log WHERE ` +
+	CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate = `DELETE FROM mo_catalog.mo_intra_system_change_propagation_log WHERE ` +
 		`drop_at < '%s'`
-	CDCSelectMOAsyncIndexLogSqlTemplate        = `SELECT * from mo_catalog.mo_async_index_log`
-	CDCSelectMOAsyncIndexLogByTableSqlTemplate = `SELECT drop_at from mo_catalog.mo_async_index_log WHERE ` +
+	CDCSelectMOIntraSystemChangePropagationLogSqlTemplate        = `SELECT * from mo_catalog.mo_intra_system_change_propagation_log`
+	CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate = `SELECT drop_at from mo_catalog.mo_intra_system_change_propagation_log WHERE ` +
 		`account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'`
@@ -290,12 +290,12 @@ const (
 	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
 
-	CDCInsertMOAsyncIndexLogSqlTemplate_Idx        = 19
-	CDCUpdateMOAsyncIndexLogSqlTemplate_Idx        = 20
-	CDCUpdateMOAsyncIndexLogDropAtSqlTemplate_Idx  = 21
-	CDCDeleteMOAsyncIndexLogSqlTemplate_Idx        = 22
-	CDCSelectMOAsyncIndexLogSqlTemplate_Idx        = 23
-	CDCSelectMOAsyncIndexLogByTableSqlTemplate_Idx = 24
+	CDCInsertMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 19
+	CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 20
+	CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate_Idx  = 21
+	CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 22
+	CDCSelectMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 23
+	CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate_Idx = 24
 
 	CDCGetTableIDTemplate_Idx = 25
 
@@ -393,20 +393,20 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 		},
 	},
 
-	CDCInsertMOAsyncIndexLogSqlTemplate_Idx: {
-		SQL: CDCInsertMOAsyncIndexLogSqlTemplate,
+	CDCInsertMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCInsertMOIntraSystemChangePropagationLogSqlTemplate,
 	},
-	CDCUpdateMOAsyncIndexLogSqlTemplate_Idx: {
-		SQL: CDCUpdateMOAsyncIndexLogSqlTemplate,
+	CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate,
 	},
-	CDCUpdateMOAsyncIndexLogDropAtSqlTemplate_Idx: {
-		SQL: CDCUpdateMOAsyncIndexLogDropAtSqlTemplate,
+	CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate_Idx: {
+		SQL: CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate,
 	},
-	CDCDeleteMOAsyncIndexLogSqlTemplate_Idx: {
-		SQL: CDCDeleteMOAsyncIndexLogSqlTemplate,
+	CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate,
 	},
-	CDCSelectMOAsyncIndexLogSqlTemplate_Idx: {
-		SQL: CDCSelectMOAsyncIndexLogSqlTemplate,
+	CDCSelectMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCSelectMOIntraSystemChangePropagationLogSqlTemplate,
 		OutputAttrs: []string{
 			"account_id",
 			"table_id",
@@ -422,8 +422,8 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"consumer_config",
 		},
 	},
-	CDCSelectMOAsyncIndexLogByTableSqlTemplate_Idx: {
-		SQL: CDCSelectMOAsyncIndexLogByTableSqlTemplate,
+	CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate_Idx: {
+		SQL: CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate,
 		OutputAttrs: []string{
 			"drop_at",
 		},
@@ -768,7 +768,7 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 // Async Index Log SQL
 // ------------------------------------------------------------------------------------------------
 
-func (b cdcSQLBuilder) AsyncIndexLogInsertSQL(
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogInsertSQL(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
@@ -778,7 +778,7 @@ func (b cdcSQLBuilder) AsyncIndexLogInsertSQL(
 	consumerConfig string,
 ) string {
 	return fmt.Sprintf(
-		CDCSQLTemplates[CDCInsertMOAsyncIndexLogSqlTemplate_Idx].SQL,
+		CDCSQLTemplates[CDCInsertMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
 		jobName,
@@ -792,7 +792,7 @@ func (b cdcSQLBuilder) AsyncIndexLogInsertSQL(
 	)
 }
 
-func (b cdcSQLBuilder) AsyncIndexLogUpdateResultSQL(
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogUpdateResultSQL(
 	accountID uint32,
 	tableID uint64,
 	indexName string,
@@ -801,7 +801,7 @@ func (b cdcSQLBuilder) AsyncIndexLogUpdateResultSQL(
 	errorMsg string,
 ) string {
 	return fmt.Sprintf(
-		CDCSQLTemplates[CDCUpdateMOAsyncIndexLogSqlTemplate_Idx].SQL,
+		CDCSQLTemplates[CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL,
 		errorCode,
 		errorMsg,
 		newWatermark.ToString(),
@@ -811,37 +811,37 @@ func (b cdcSQLBuilder) AsyncIndexLogUpdateResultSQL(
 	)
 }
 
-func (b cdcSQLBuilder) AsyncIndexLogUpdateDropAtSQL(
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogUpdateDropAtSQL(
 	accountID uint32,
 	tableID uint64,
 	indexName string,
 ) string {
 	return fmt.Sprintf(
-		CDCSQLTemplates[CDCUpdateMOAsyncIndexLogDropAtSqlTemplate_Idx].SQL,
+		CDCSQLTemplates[CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
 		indexName,
 	)
 }
 
-func (b cdcSQLBuilder) AsyncIndexLogGCSQL(t time.Time) string {
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogGCSQL(t time.Time) string {
 	return fmt.Sprintf(
-		CDCSQLTemplates[CDCDeleteMOAsyncIndexLogSqlTemplate_Idx].SQL,
+		CDCSQLTemplates[CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL,
 		t.Format(time.DateTime),
 	)
 }
 
-func (b cdcSQLBuilder) AsyncIndexLogSelectSQL() string {
-	return CDCSQLTemplates[CDCSelectMOAsyncIndexLogSqlTemplate_Idx].SQL
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogSelectSQL() string {
+	return CDCSQLTemplates[CDCSelectMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL
 }
 
-func (b cdcSQLBuilder) AsyncIndexLogSelectByTableSQL(
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogSelectByTableSQL(
 	accountID uint32,
 	tableID uint64,
 	indexName string,
 ) string {
 	return fmt.Sprintf(
-		CDCSQLTemplates[CDCSelectMOAsyncIndexLogByTableSqlTemplate_Idx].SQL,
+		CDCSQLTemplates[CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
 		indexName,
