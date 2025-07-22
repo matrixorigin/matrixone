@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-type CDCData struct {
+type ISCPData struct {
 	refcnt atomic.Int32
 
 	insertBatch *AtomicBatch
@@ -32,13 +32,13 @@ type CDCData struct {
 	err         error
 }
 
-func NewCDCData(
+func NewISCPData(
 	noMoreData bool,
 	insertBatch *AtomicBatch,
 	deleteBatch *AtomicBatch,
 	err error,
-) *CDCData {
-	d := &CDCData{
+) *ISCPData {
+	d := &ISCPData{
 		noMoreData:  noMoreData,
 		insertBatch: insertBatch,
 		deleteBatch: deleteBatch,
@@ -47,11 +47,11 @@ func NewCDCData(
 	return d
 }
 
-func (d *CDCData) Set(cnt int) {
+func (d *ISCPData) Set(cnt int) {
 	d.refcnt.Add(int32(cnt))
 }
 
-func (d *CDCData) Done() {
+func (d *ISCPData) Done() {
 	newRefcnt := d.refcnt.Add(-1)
 	if newRefcnt == 0 {
 		if d.insertBatch != nil {
@@ -66,16 +66,16 @@ func (d *CDCData) Done() {
 }
 
 const (
-	CDCDataType_Snapshot int8 = iota
-	CDCDataType_Tail
+	ISCPDataType_Snapshot int8 = iota
+	ISCPDataType_Tail
 )
 
 type DataRetrieverImpl struct {
-	*SinkerEntry
+	*JobEntry
 	*Iteration
 	typ int8
 
-	insertDataCh chan *CDCData
+	insertDataCh chan *ISCPData
 	ctx          context.Context
 	cancel       context.CancelFunc
 	err          error
@@ -84,28 +84,28 @@ type DataRetrieverImpl struct {
 }
 
 func NewDataRetriever(
-	consumer *SinkerEntry,
+	consumer *JobEntry,
 	iteration *Iteration,
 	dataType int8,
 ) *DataRetrieverImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DataRetrieverImpl{
-		SinkerEntry:  consumer,
+		JobEntry:     consumer,
 		Iteration:    iteration,
-		insertDataCh: make(chan *CDCData, 1),
+		insertDataCh: make(chan *ISCPData, 1),
 		typ:          dataType,
 		ctx:          ctx,
 		cancel:       cancel,
 	}
 }
 
-func (r *DataRetrieverImpl) Next() (cdcData *CDCData) {
+func (r *DataRetrieverImpl) Next() *ISCPData {
 	data := <-r.insertDataCh
 	return data
 }
 
 func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts executor.StatementOption) error {
-	if r.typ == CDCDataType_Snapshot {
+	if r.typ == ISCPDataType_Snapshot {
 		return nil
 	}
 	updateWatermarkSQL := cdc.CDCSQLBuilder.AsyncIndexLogUpdateResultSQL(
@@ -124,7 +124,7 @@ func (r *DataRetrieverImpl) GetDataType() int8 {
 	return r.typ
 }
 
-func (r *DataRetrieverImpl) SetNextBatch(data *CDCData) {
+func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) {
 	if r.hasError() {
 		return
 	}

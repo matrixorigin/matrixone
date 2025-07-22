@@ -327,7 +327,7 @@ func NotifyInjected(key string) {
 	fault.TriggerFault(key)
 }
 
-func CDCExecutorInjected() (string, bool) {
+func ISCPExecutorInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_CDCExecutor)
 	return sarg, injected
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"context"
@@ -32,7 +32,7 @@ import (
 // 3. all sinkers
 type Iteration struct {
 	table   *TableEntry
-	sinkers []*SinkerEntry
+	sinkers []*JobEntry
 	from    types.TS
 	to      types.TS
 	err     []error
@@ -53,7 +53,7 @@ func (iter *Iteration) Run() {
 		for i, sinkerErr := range iter.err {
 			if sinkerErr != nil {
 				logutil.Error(
-					"Async-Index-CDC-Task iteration failed",
+					"Async-Index-ISCP-Task iteration failed",
 					zap.Uint32("tenantID", iter.table.accountID),
 					zap.Uint64("tableID", iter.table.tableID),
 					zap.String("indexName", iter.sinkers[i].indexName),
@@ -68,7 +68,7 @@ func (iter *Iteration) Run() {
 	if txn != nil {
 		defer txn.Commit(ctx)
 	}
-	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "iterationCreateTxn" {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iterationCreateTxn" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
@@ -84,7 +84,7 @@ func (iter *Iteration) Run() {
 		iter.table.dbName,
 		iter.table.tableName,
 	)
-	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "iterationGetRelation" {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iterationGetRelation" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {

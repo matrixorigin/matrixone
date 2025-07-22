@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"context"
@@ -37,7 +37,7 @@ const (
 	createTable            = "create table"
 	createTableIfNotExists = "create table if not exists"
 
-	targetDbName = "test_async_index_cdc"
+	TargetDbName = "test_intra_system_change_propagation"
 )
 
 func NewConsumer(
@@ -115,7 +115,7 @@ func NewInteralSqlConsumer(
 		indexName: info.IndexName,
 	}
 	s.maxAllowedPacket = uint64(1024 * 1024)
-	logutil.Infof("cdc mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, s.maxAllowedPacket)
+	logutil.Infof("iscp mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, s.maxAllowedPacket)
 
 	v, ok := moruntime.ServiceRuntime(cnUUID).
 		GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -126,7 +126,7 @@ func NewInteralSqlConsumer(
 	exec := v.(executor.SQLExecutor)
 	s.internalSqlExecutor = exec
 	s.targetTableName = fmt.Sprintf("test_table_%d_%v", tableDef.TblId, info.IndexName)
-	logutil.Infof("cdc %v->%vs", tableDef.Name, s.targetTableName)
+	logutil.Infof("iscp %v->%vs", tableDef.Name, s.targetTableName)
 	err := s.createTargetTable(context.Background())
 	if err != nil {
 		return nil, err
@@ -135,8 +135,8 @@ func NewInteralSqlConsumer(
 	s.rowBuf = make([]byte, 0, 1024)
 
 	// prefix and suffix
-	s.insertPrefix = []byte(fmt.Sprintf("Insert INTO `%s`.`%s` VALUES ", targetDbName, s.targetTableName))
-	s.upsertPrefix = []byte(fmt.Sprintf("Replace INTO `%s`.`%s` VALUES ", targetDbName, s.targetTableName))
+	s.insertPrefix = []byte(fmt.Sprintf("Insert INTO `%s`.`%s` VALUES ", TargetDbName, s.targetTableName))
+	s.upsertPrefix = []byte(fmt.Sprintf("Replace INTO `%s`.`%s` VALUES ", TargetDbName, s.targetTableName))
 	s.insertSuffix = []byte(";")
 	s.insertRowPrefix = []byte("(")
 	s.insertColSeparator = []byte(",")
@@ -147,7 +147,7 @@ func NewInteralSqlConsumer(
 	// e.g. delete from t1 where pk1=a1 and pk2=a2 or pk1=b1 and pk2=b2 or pk1=c1 and pk2=c2 ...;
 	//                                   ^
 	//                            deleteColSeparator
-	s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE ", targetDbName, s.targetTableName))
+	s.deletePrefix = []byte(fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE ", TargetDbName, s.targetTableName))
 	s.deleteSuffix = []byte(";")
 	s.deleteRowPrefix = []byte("")
 	s.deleteColSeparator = []byte(" and ")
@@ -188,14 +188,14 @@ func NewInteralSqlConsumer(
 }
 
 func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
-	createDBSql := fmt.Sprintf("create database if not exists %s", targetDbName)
+	createDBSql := fmt.Sprintf("create database if not exists %s", TargetDbName)
 	srcCreateSql := s.tableInfo.Createsql
 	if len(srcCreateSql) < len(createTableIfNotExists) || !strings.EqualFold(srcCreateSql[:len(createTableIfNotExists)], createTableIfNotExists) {
 		srcCreateSql = createTableIfNotExists + srcCreateSql[len(createTable):]
 	}
 	tableStart := len(createTableIfNotExists)
 	tableEnd := strings.Index(srcCreateSql, "(")
-	newTablePart := fmt.Sprintf("%s.%s", targetDbName, s.targetTableName)
+	newTablePart := fmt.Sprintf("%s.%s", TargetDbName, s.targetTableName)
 	createTableSql := srcCreateSql[:tableStart] + " " + newTablePart + srcCreateSql[tableEnd:]
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -209,10 +209,10 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 
 func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) error {
 	s.dataRetriever = data
-	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "consume" {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "consume" {
 		return moerr.NewInternalErrorNoCtx(msg)
 	}
-	if msg, injected := objectio.CDCExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithIndexName") {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithIndexName") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
 			if s.indexName == strs[i] {
@@ -222,10 +222,10 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 	}
 
 	switch data.GetDataType() {
-	case CDCDataType_Snapshot:
+	case ISCPDataType_Snapshot:
 		for {
-			cdcData := data.Next()
-			noMoreData, err := s.consumeData(ctx, data.GetDataType(), cdcData, nil)
+			iscpData := data.Next()
+			noMoreData, err := s.consumeData(ctx, data.GetDataType(), iscpData, nil)
 			if err != nil {
 				return err
 			}
@@ -233,14 +233,14 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 				return nil
 			}
 		}
-	case CDCDataType_Tail:
+	case ISCPDataType_Tail:
 		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
 		err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			for {
-				cdcData := data.Next()
-				noMoreData, err := s.consumeData(ctx, data.GetDataType(), cdcData, txn)
+				iscpData := data.Next()
+				noMoreData, err := s.consumeData(ctx, data.GetDataType(), iscpData, txn)
 				if err != nil {
 					return err
 				}
@@ -255,17 +255,17 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 	}
 
 }
-func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, cdcData *CDCData, txn executor.TxnExecutor) (noMoreData bool, err error) {
-	defer cdcData.Done()
-	if cdcData.err != nil {
-		return false, cdcData.err
+func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, iscpData *ISCPData, txn executor.TxnExecutor) (noMoreData bool, err error) {
+	defer iscpData.Done()
+	if iscpData.err != nil {
+		return false, iscpData.err
 	}
-	insertBatch := cdcData.insertBatch
-	deleteBatch := cdcData.deleteBatch
-	noMoreData = cdcData.noMoreData
+	insertBatch := iscpData.insertBatch
+	deleteBatch := iscpData.deleteBatch
+	noMoreData = iscpData.noMoreData
 	if noMoreData {
 
-		if s.dataRetriever.GetDataType() != CDCDataType_Snapshot {
+		if s.dataRetriever.GetDataType() != ISCPDataType_Snapshot {
 			err = s.dataRetriever.UpdateWatermark(txn, executor.StatementOption{})
 			if err != nil {
 				return
@@ -274,12 +274,12 @@ func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, cdc
 		return
 	}
 
-	if dataType == CDCDataType_Snapshot {
+	if dataType == ISCPDataType_Snapshot {
 		err = s.sinkSnapshot(ctx, insertBatch)
 		if err != nil {
 			return
 		}
-	} else if dataType == CDCDataType_Tail {
+	} else if dataType == ISCPDataType_Tail {
 		err = s.sinkTail(ctx, insertBatch, deleteBatch, txn)
 		if err != nil {
 			return
@@ -435,13 +435,13 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(txn executor.TxnExecutor, sqlBuffer 
 		defer cancel()
 		_, err = s.internalSqlExecutor.Exec(ctx, string(sqlBuffer), executor.Options{})
 		if err != nil {
-			logutil.Errorf("cdc interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
+			logutil.Errorf("iscp interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
 			panic(err)
 		}
 		return
 	}
 	if _, err := txn.Exec(string(sqlBuffer), executor.StatementOption{}); err != nil {
-		logutil.Errorf("cdc interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
+		logutil.Errorf("iscp interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
 		// record error
 		panic(err)
 	}

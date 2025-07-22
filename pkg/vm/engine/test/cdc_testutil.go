@@ -24,7 +24,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/idxcdc"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
@@ -33,15 +33,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
-type idAllocator interface {
-	Alloc() uint64
-}
-
 func mock_mo_async_index_log(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
 ) (err error) {
-	sql := `CREATE TABLE mo_async_index_log (
+	sql := `CREATE TABLE mo_catalog.mo_async_index_log (
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,
 				job_name VARCHAR NOT NULL,
@@ -283,8 +279,8 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 	)
 }
 
-func GetTestCDCExecutorOption() *idxcdc.CDCExecutorOption {
-	return &idxcdc.CDCExecutorOption{
+func GetTestISCPExecutorOption() *iscp.ISCPExecutorOption {
+	return &iscp.ISCPExecutorOption{
 		GCInterval:             time.Millisecond * 100,
 		GCTTL:                  time.Millisecond,
 		SyncTaskInterval:       time.Millisecond * 100,
@@ -302,7 +298,7 @@ func CheckTableData(
 	tableID uint64,
 	indexName string,
 ) {
-	asyncIndexDBName := "test_async_index_cdc"
+	asyncIndexDBName := iscp.TargetDbName
 	asyncIndexTableName := fmt.Sprintf("test_table_%d_%v", tableID, indexName)
 	sql1 := fmt.Sprintf(
 		"SELECT * FROM %v.%v EXCEPT SELECT * FROM %v.%v;",

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"context"
@@ -30,7 +30,7 @@ import (
 
 type DataRetrieverConsumer interface {
 	DataRetriever
-	SetNextBatch(*CDCData)
+	SetNextBatch(*ISCPData)
 	SetError(error)
 	Close()
 }
@@ -41,14 +41,14 @@ func CollectChangesForIteration(
 	rel engine.Relation,
 	fromTs types.TS,
 	toTs types.TS,
-	consumers []*SinkerEntry,
+	consumers []*JobEntry,
 	initSnapshotSplitTxn bool,
 	packer *types.Packer,
 	mp *mpool.MPool,
 ) (errs []error) {
 	errs = make([]error, len(consumers))
 	changes, err := CollectChanges(ctx, rel, fromTs, toTs, mp)
-	if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "collectChanges" {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
@@ -76,9 +76,9 @@ func CollectChangesForIteration(
 	}
 
 	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
-	typ := CDCDataType_Tail
+	typ := ISCPDataType_Tail
 	if fromTs.IsEmpty() {
-		typ = CDCDataType_Snapshot
+		typ = ISCPDataType_Snapshot
 	}
 	waitGroups := make([]sync.WaitGroup, len(consumers))
 	for i, consumer := range consumers {
@@ -97,9 +97,9 @@ func CollectChangesForIteration(
 				return
 			default:
 			}
-			var data *CDCData
+			var data *ISCPData
 			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
-			if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "changesNext" {
+			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
 				err = moerr.NewInternalErrorNoCtx(msg)
 			}
 			if err != nil {
@@ -108,7 +108,7 @@ func CollectChangesForIteration(
 					indexNames = fmt.Sprintf("%s%s, ", indexNames, sinker.indexName)
 				}
 				logutil.Error(
-					"Async-Index-CDC-Task sink iteration failed",
+					"Async-Index-ISCP-Task sink iteration failed",
 					zap.Uint32("tenantID", iter.table.accountID),
 					zap.Uint64("tableID", iter.table.tableID),
 					zap.String("indexName", indexNames),
@@ -116,36 +116,34 @@ func CollectChangesForIteration(
 					zap.String("from", iter.from.ToString()),
 					zap.String("to", iter.to.ToString()),
 				)
-				data = NewCDCData(true, nil, nil, err)
+				data = NewISCPData(true, nil, nil, err)
 			} else {
 				// both nil denote no more data (end of this tail)
 				if insertData == nil && deleteData == nil {
-					data = NewCDCData(true, nil, nil, err)
+					data = NewISCPData(true, nil, nil, err)
 				} else {
 					var insertAtmBatch *AtomicBatch
 					var deleteAtmBatch *AtomicBatch
 					switch currentHint {
 					case engine.ChangesHandle_Snapshot:
-						if typ != CDCDataType_Snapshot {
+						if typ != ISCPDataType_Snapshot {
 							panic("logic error")
 						}
 						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						data = NewCDCData(false, insertAtmBatch, nil, nil)
+						data = NewISCPData(false, insertAtmBatch, nil, nil)
 					case engine.ChangesHandle_Tail_wip:
 						panic("logic error")
 					case engine.ChangesHandle_Tail_done:
-						if typ != CDCDataType_Tail {
+						if typ != ISCPDataType_Tail {
 							panic("logic error")
 						}
 						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 						deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
 						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
 						deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-						data = NewCDCData(false, insertAtmBatch, deleteAtmBatch, nil)
+						data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
 
-						addTailEndMetrics(insertAtmBatch)
-						addTailEndMetrics(deleteAtmBatch)
 					}
 				}
 			}
@@ -172,7 +170,7 @@ func CollectChangesForIteration(
 			err := consumerEntry.consumer.Consume(context.Background(), dataRetrievers[i])
 			if err != nil {
 				logutil.Error(
-					"Async-Index-CDC-Task sink consume failed",
+					"Async-Index-ISCP-Task sink consume failed",
 					zap.Uint32("tenantID", iter.table.accountID),
 					zap.Uint64("tableID", iter.table.tableID),
 					zap.String("indexName", iter.sinkers[i].indexName),

@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,30 +35,19 @@ const (
 	PermanentErrorThreshold = 10000
 )
 
-type SinkerEntry struct {
-	tableInfo    *TableEntry
-	indexName    string
-	inited       atomic.Bool
-	consumer     Consumer
-	consumerType int8
-	watermark    types.TS
-	err          error
-	consumerInfo *ConsumerInfo
-}
-
-func NewSinkerEntry(
+func NewJobEntry(
 	cnUUID string,
 	tableDef *plan.TableDef,
 	tableInfo *TableEntry,
 	sinkerConfig *ConsumerInfo,
 	watermark types.TS,
 	iterationErr error,
-) (*SinkerEntry, error) {
+) (*JobEntry, error) {
 	consumer, err := NewConsumer(cnUUID, tableDef, sinkerConfig)
 	if err != nil {
 		return nil, err
 	}
-	sinkerEntry := &SinkerEntry{
+	sinkerEntry := &JobEntry{
 		tableInfo:    tableInfo,
 		indexName:    sinkerConfig.IndexName,
 		consumer:     consumer,
@@ -72,12 +60,12 @@ func NewSinkerEntry(
 	return sinkerEntry, nil
 }
 
-func (sinkerEntry *SinkerEntry) init() {
+func (sinkerEntry *JobEntry) init() {
 	if sinkerEntry.watermark.IsEmpty() {
 		// in the 1st iteration, toTS is determined by txn.SnapshotTS()
 		iter := &Iteration{
 			table:   sinkerEntry.tableInfo,
-			sinkers: []*SinkerEntry{sinkerEntry},
+			sinkers: []*JobEntry{sinkerEntry},
 			to:      types.TS{},
 			from:    types.TS{},
 		}
@@ -87,7 +75,7 @@ func (sinkerEntry *SinkerEntry) init() {
 	}
 }
 
-func (sinkerEntry *SinkerEntry) getConsumerInfoStr() string {
+func (sinkerEntry *JobEntry) getConsumerInfoStr() string {
 	consumerInfoStr, err := json.Marshal(sinkerEntry.consumerInfo)
 	if err != nil {
 		panic(err)
@@ -96,11 +84,11 @@ func (sinkerEntry *SinkerEntry) getConsumerInfoStr() string {
 }
 
 // TODO
-func (sinkerEntry *SinkerEntry) PermanentError() bool {
+func (sinkerEntry *JobEntry) PermanentError() bool {
 	return toErrorCode(sinkerEntry.err) > PermanentErrorThreshold
 }
 
-func (sinkerEntry *SinkerEntry) StringLocked() string {
+func (sinkerEntry *JobEntry) StringLocked() string {
 	initStr := ""
 	if !sinkerEntry.inited.Load() {
 		initStr = "-N"
@@ -108,7 +96,7 @@ func (sinkerEntry *SinkerEntry) StringLocked() string {
 	return fmt.Sprintf("Index[%s%s]%d,%s,%v", sinkerEntry.indexName, initStr, sinkerEntry.consumerType, sinkerEntry.watermark.ToString(), sinkerEntry.err)
 }
 
-func (sinkerEntry *SinkerEntry) fillInAsyncIndexLogInsertSQL(firstSinker bool, w *bytes.Buffer) error {
+func (sinkerEntry *JobEntry) fillInAsyncIndexLogInsertSQL(firstSinker bool, w *bytes.Buffer) error {
 	if !firstSinker {
 		w.WriteString(",")
 	}
@@ -122,7 +110,7 @@ func (sinkerEntry *SinkerEntry) fillInAsyncIndexLogInsertSQL(firstSinker bool, w
 	return err
 }
 
-func (sinkerEntry *SinkerEntry) fillInAsyncIndexLogDeleteSQL(firstSinker bool, w *bytes.Buffer) error {
+func (sinkerEntry *JobEntry) fillInAsyncIndexLogDeleteSQL(firstSinker bool, w *bytes.Buffer) error {
 	if !firstSinker {
 		w.WriteString(" OR")
 	}

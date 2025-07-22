@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"context"
@@ -91,7 +91,7 @@ func registerJob(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-CDC-Task RegisterJob",
+			"Async-Index-ISCP-Task RegisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("indexName", sinkerinfo_json.IndexName),
@@ -182,7 +182,7 @@ func unregisterJob(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-CDC-Task UnregisterJob",
+			"Async-Index-ISCP-Task UnregisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("indexName", consumerInfo.IndexName),

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"bytes"
@@ -34,19 +34,6 @@ const (
 	TableState_Finished
 )
 
-type TableEntry struct {
-	exec      *CDCTaskExecutor
-	tableDef  *plan.TableDef
-	accountID uint32
-	dbID      uint64
-	tableID   uint64
-	tableName string
-	dbName    string
-	state     TableState
-	sinkers   []*SinkerEntry
-	mu        sync.RWMutex
-}
-
 func tableInfoLess(a, b *TableEntry) bool {
 	if a.accountID != b.accountID {
 		return a.accountID < b.accountID
@@ -55,7 +42,7 @@ func tableInfoLess(a, b *TableEntry) bool {
 }
 
 func NewTableEntry(
-	exec *CDCTaskExecutor,
+	exec *ISCPTaskExecutor,
 	accountID uint32,
 	dbID, tableID uint64,
 	dbName, tableName string,
@@ -65,7 +52,7 @@ func NewTableEntry(
 		exec:      exec,
 		accountID: accountID,
 		tableDef:  tableDef,
-		sinkers:   make([]*SinkerEntry, 0),
+		sinkers:   make([]*JobEntry, 0),
 		dbID:      dbID,
 		tableID:   tableID,
 		dbName:    dbName,
@@ -86,7 +73,7 @@ func (t *TableEntry) AddSinker(
 			return false, nil
 		}
 	}
-	sinkerEntry, err := NewSinkerEntry(t.exec.cnUUID, t.tableDef, t, sinkConfig, watermark, iterationErr)
+	sinkerEntry, err := NewJobEntry(t.exec.cnUUID, t.tableDef, t, sinkConfig, watermark, iterationErr)
 	if err != nil {
 		return false, err
 	}
@@ -179,8 +166,8 @@ func (t *TableEntry) GetMaxWaterMarkLocked() types.TS {
 	return maxWatermark
 }
 
-func (t *TableEntry) getCandidateLocked() []*SinkerEntry {
-	candidates := make([]*SinkerEntry, 0, len(t.sinkers))
+func (t *TableEntry) getCandidateLocked() []*JobEntry {
+	candidates := make([]*JobEntry, 0, len(t.sinkers))
 	for _, sinker := range t.sinkers {
 		if !sinker.inited.Load() {
 			continue
@@ -206,7 +193,7 @@ func (t *TableEntry) GetSyncTask(ctx context.Context, toTS types.TS) *Iteration 
 		t.state = TableState_Running
 		return &Iteration{
 			table:   t,
-			sinkers: []*SinkerEntry{dirtySinker},
+			sinkers: []*JobEntry{dirtySinker},
 			to:      maxTS,
 			from:    dirtySinker.watermark,
 		}
@@ -279,7 +266,7 @@ func (t *TableEntry) OnIterationFinished(iter *Iteration) {
 			t.exec.worker.Submit(
 				&Iteration{
 					table:   t,
-					sinkers: []*SinkerEntry{sinker},
+					sinkers: []*JobEntry{sinker},
 					to:      types.TS{},
 					from:    types.TS{},
 				},
@@ -323,7 +310,7 @@ func (t *TableEntry) OnIterationFinished(iter *Iteration) {
 	}
 }
 
-func (t *TableEntry) getNewSinkersLocked(candidates []*SinkerEntry) *SinkerEntry {
+func (t *TableEntry) getNewSinkersLocked(candidates []*JobEntry) *JobEntry {
 	maxTS := t.GetMaxWaterMarkLocked()
 	for _, sinker := range candidates {
 		if !sinker.inited.Load() {

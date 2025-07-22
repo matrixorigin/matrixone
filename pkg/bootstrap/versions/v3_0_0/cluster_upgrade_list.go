@@ -62,4 +62,3 @@ var upg_mo_async_index_log_new = versions.UpgradeEntry{
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_ASYNC_INDEX_LOG)
 	},
 }
-

@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
-	"time"
+	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -28,18 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
-)
-
-const (
-	CDCSourceUriPrefix = "mysql://"
-	CDCSinkUriPrefix   = "mysql://"
-
-	CDCState_Common = "common"
-	CDCState_Error  = "error"
 )
 
 type ConsumerType int8
@@ -51,18 +43,36 @@ const (
 	ConsumerType_CustomizedStart = 1000
 )
 
-const (
-	CDCPitrGranularity_Table   = "table"
-	CDCPitrGranularity_DB      = "database"
-	CDCPitrGranularity_Account = "account"
-	CDCPitrGranularity_Cluster = "cluster"
-	CDCPitrGranularity_All     = "*"
-)
-
 type DataRetriever interface {
-	Next() (cdcData *CDCData)
+	Next() (iscpData *ISCPData)
 	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
 	GetDataType() int8
+}
+
+// Intra-System Change Propagation Job Entry
+type JobEntry struct {
+	tableInfo    *TableEntry
+	indexName    string
+	inited       atomic.Bool
+	consumer     Consumer
+	consumerType int8
+	watermark    types.TS
+	err          error
+	consumerInfo *ConsumerInfo
+}
+
+// Intra-System Change Propagation Table Entry
+type TableEntry struct {
+	exec      *ISCPTaskExecutor
+	tableDef  *plan.TableDef
+	accountID uint32
+	dbID      uint64
+	tableID   uint64
+	tableName string
+	dbName    string
+	state     TableState
+	sinkers   []*JobEntry
+	mu        sync.RWMutex
 }
 
 type ConsumerInfo struct {
@@ -182,10 +192,6 @@ func (bat *AtomicBatch) Append(
 	batch *batch.Batch,
 	tsColIdx, compositedPkColIdx int,
 ) {
-	start := time.Now()
-	defer func() {
-		v2.CdcAppendDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
 
 	if batch != nil {
 		//ts columns
@@ -273,25 +279,6 @@ func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 
 func (iter *atomicBatchRowIter) Close() {
 	iter.iter.Release()
-}
-
-type UriInfo struct {
-	SinkTyp       string `json:"_"`
-	User          string `json:"user"`
-	Password      string `json:"-"`
-	Ip            string `json:"ip"`
-	Port          int    `json:"port"`
-	PasswordStart int    `json:"-"`
-	PasswordEnd   int    `json:"-"`
-	Reserved      string `json:"reserved"`
-}
-
-func (info *UriInfo) GetEncodedPassword() (string, error) {
-	return AesCFBEncode([]byte(info.Password))
-}
-
-func (info *UriInfo) String() string {
-	return fmt.Sprintf("%s%s:%s@%s:%d", CDCSourceUriPrefix, info.User, "******", info.Ip, info.Port)
 }
 
 // JsonEncode encodes the object to json
