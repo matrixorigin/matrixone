@@ -1,0 +1,118 @@
+2025/07/14 14:48:40.617540 +0800 INFO system/system.go:130 call runtime.GOMAXPROCS(8): 8, keep: 8
+2025/07/14 14:48:40.652903 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[streamReaderGC-019807b1-5bcc-7d77-bfc0-e9593189f66b-2m0s]", "interval": "2m0s"}
+=== RUN   TestConstFold
+2025/07/14 14:48:40.657330 +0800 INFO fileservice/tmp_fs.go:170 TMP-FILE-GC-START {"gc interval": "1h0m0s"}
+2025/07/14 14:48:40.666343 +0800 INFO txnbase/txnmgr.go:55 TxnManager-TxnSkipFlag-Change {"prev": "Flag[]", "current": "Flag[]"}
+2025/07/14 14:48:40.667163 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[TxnManager-HB-019807b1-5bdb-725f-af64-2e2f54744022-2ms]", "interval": "2ms"}
+2025/07/14 14:48:40.667215 +0800 INFO txnbase/txnmgr.go:865 TxnManager-Started {"is-replay-mode": false, "is-write-mode": true}
+2025/07/14 14:48:40.667383 +0800 INFO checkpoint/executor.go:354 CKP-Executor-Started {"cfg": "{\"MinCount\":100,\"IncrementalReservedWALCount\":0,\"IncrementalInterval\":60000000000,\"GlobalMinCount\":100,\"GlobalHistoryDuration\":3600000000000}"}
+2025/07/14 14:48:40.667466 +0800 INFO checkpoint/runner.go:334 CKPRunner-Started {"mode": "<RW>"}
+2025/07/14 14:48:40.667519 +0800 INFO v3/deleter.go:52 GC-Worker-Init {"delete-timeout": "10m0s", "delete-batch-size": 1000}
+2025/07/14 14:48:40.668490 +0800 INFO checkpoint/replay.go:99 Read-CKP-From-Meta {"cost": "31.024µs", "count": 0}
+2025/07/14 14:48:40.668546 +0800 INFO checkpoint/replay.go:373 Replay-Catalog {"phase": "open-tae", "cost": "100ns"}
+2025/07/14 14:48:40.668564 +0800 INFO db/controller.go:820 open-tae {"replay-checkpoints-cost": "1.002005ms", "checkpointed": "0-0", "checkpoint-lsn": 0}
+2025/07/14 14:48:40.668621 +0800 INFO batchstoredriver/store.go:283 Replay-Wal-From-LogStore {"apply-cost": "0s", "read-cost": "12.851µs"}
+2025/07/14 14:48:40.668664 +0800 INFO db/replay.go:233 Wal-Replay-Trace-End {"apply-cost": "0s", "read-count": 0, "apply-count": 0, "max-lsn": 0}
+2025/07/14 14:48:40.668703 +0800 INFO logtail/storage_usage.go:692 [storage usage] replay: {"remove old deleted db/tbl": "", "delayed tbl": 0}
+2025/07/14 14:48:40.669479 +0800 INFO merge/utils.go:105 MergeExecutorMemoryInfo {"container-limit": "0B", "host-memory": "19.41GiB", "merge-limit": "14.56GiB", "error": "memory is not limited"}
+2025/07/14 14:48:40.670383 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[flusher-019807b1-5bdb-77d4-b2c0-c3a7f278e506-5s]", "interval": "5s"}
+2025/07/14 14:48:40.670421 +0800 INFO checkpoint/flusher.go:767 flushImpl-Started {"cron-period": "5s", "flush-interval": "1m0s", "flush-lag": "3s", "force-flush-timeout": "1m30s", "force-flush-check-interval": "500ms"}
+2025/07/14 14:48:40.670455 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[GC-Transfer-Table-019807b1-5bde-76de-9639-9690cf676138-5s]", "interval": "5s"}
+2025/07/14 14:48:40.670468 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[GC-Disk-019807b1-5bde-7719-8cdb-3b8b6dc7d00d-30m0s]", "interval": "30m0s"}
+2025/07/14 14:48:40.670506 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[GC-Checkpoint-019807b1-5bde-77b0-8418-7a011c980d6e-1m0s]", "interval": "1m0s"}
+2025/07/14 14:48:40.670515 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[GC-Catalog-Cache-019807b1-5bde-77d9-aafe-5c8b14a758b8-3m0s]", "interval": "3m0s"}
+2025/07/14 14:48:40.670533 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[GC-Logtail-019807b1-5bde-781b-9d57-75382fcd984d-1m0s]", "interval": "1m0s"}
+2025/07/14 14:48:40.670541 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[GC-Lock-Merge-019807b1-5bde-783e-952e-1e480a9e339e-1m0s]", "interval": "1m0s"}
+2025/07/14 14:48:40.670551 +0800 INFO tasks/cancelablejob.go:161 Start-CronJob {"name": "CronJob[Report-Stats-019807b1-5bde-7863-8c27-c556f14c7bb2-10s]", "interval": "10s"}
+2025/07/14 14:48:40.670561 +0800 INFO db/controller.go:738 open-tae {"checkpointed": "0-0", "checkpoint-lsn": 0}
+2025/07/14 14:48:40.670639 +0800 INFO v3/checkpoint.go:301 GC-REPLAY-TRACE {"task": "gc-replay-1", "duration": "130.823µs"}
+2025/07/14 14:48:40.670742 +0800 INFO v3/checkpoint.go:247 GC-Task-Done {"task": "gc-replay-1", "duration": "184.538µs"}
+2025/07/14 14:48:40.670761 +0800 INFO v3/diskcleaner.go:291 GC-Replay {"duration": "273.593µs"}
+2025/07/14 14:48:40.670818 +0800 INFO db/open.go:91 open-tae {"total-cost": "13.383092ms", "mode": "TxnWriteMode", "db-dirname": "/tmp/cabbage-ut-workspace/engine_test/TestConstFold/tae/tae", "config": "BulkTomestoneTxnThreshold = 10000\nMaxMessageSize = 0\nTransferTableTTL = \"2m0s\"\nIncrementalDedup = false\nIsStandalone = false\nEnableApplyTableData = false\n\n[storage-cfg]\n  block-max-rows = 8192\n  object-max-blocks = 256\n\n[checkpoint-cfg]\n  flush-inerterval = \"1m0s\"\n  transfer-interval = \"5s\"\n  metadata-check-inerterval = \"0s\"\n  checkpoint-min-count = 100\n  scan-interval = \"5s\"\n  checkpoint-incremental-interval = \"1m0s\"\n  checkpoint-global-interval = 100\n  overall-flush-mem-control = 1073741824\n  ForceUpdateGlobalInterval = false\n  GlobalVersionInterval = \"1h0m0s\"\n  GCCheckpointInterval = \"1m0s\"\n  DisableGCCheckpoint = false\n  ReservedWALEntryCount = 0\n  BlockRows = 0\n  Size = 0\n\n[scheduler-cfg]\n  io-workers = 16\n  async-workers = 4\n\n[gc-cfg]\n  gc-ttl = \"1h0m0s\"\n  scan-gc-interval = \"30m0s\"\n  disable-gc = false\n  check-gc = false\n  cache-size = 0\n  gc-merge-count = 40\n  gc-estimate-rows = 0\n  gc-probility = 0.0\n  gc-delete-timeout = \"10m0s\"\n  gc-delete-batch-size = 1000\n\n[LogtailCfg]\n  page-size = 256\n\n[MergeCfg]\n  CNMergeMemControlHint = 8589934592\n  CNTakeOverAll = false\n  CNTakeOverExceed = 83886080000\n  CNStandaloneTake = false\n  DisableZMBasedMerge = false\n\n[CatalogCfg]\n  GCInterval = \"3m0s\"\n  DisableGC = false\n"}
+2025/07/14 14:48:40.671278 +0800 INFO cn-service.logtail-server start logtail service {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5"}
+2025/07/14 14:48:40.671463 +0800 INFO logtail/mgr.go:205 init waterline to 1752475720671431304-0
+2025/07/14 14:48:40.671581 +0800 INFO cn-service.logtail-server init waterline {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "to": "PhysicalTime:1752475720671431304 "}
+2025/07/14 14:48:40.673290 +0800 INFO cn-service txn client status changed to normal {"uuid": ""}
+2025/07/14 14:48:40.673462 +0800 INFO cn-service mark active txn aborted task {"uuid": ""}
+2025/07/14 14:48:40.673849 +0800 INFO disttae/stats.go:201 GlobalStats-Started {"exector-num": 8, "worker-num": 8, "worker-factor": 1}
+2025/07/14 14:48:40.673916 +0800 INFO disttae/engine.go:179 INIT-ENGINE-CONFIG {"InsertEntryMaxCount": 5000, "CommitWorkspaceThreshold": 1048576, "WriteWorkspaceThreshold": 5242880, "ExtraWorkspaceThresholdQuota": 1042085680, "CNTransferTxnLifespanThreshold": "5s"}
+2025/07/14 14:48:40.673958 +0800 INFO logtailreplay/partition_state.go:898 PS-CREATED {"table-id": 1, "service": "", "addr": "0xc000c05b80"}
+2025/07/14 14:48:40.673997 +0800 INFO logtailreplay/partition_state.go:898 PS-CREATED {"table-id": 2, "service": "", "addr": "0xc000c05e00"}
+2025/07/14 14:48:40.674037 +0800 INFO logtailreplay/partition_state.go:898 PS-CREATED {"table-id": 3, "service": "", "addr": "0xc000d28140"}
+2025/07/14 14:48:40.676036 +0800 INFO disttae/logtail_consumer.go:1630 [logtail-consumer] try to get logtail service address
+2025/07/14 14:48:40.676120 +0800 INFO disttae/logtail_consumer.go:1633 [logtail-consumer] got logtail service address: fake address for ut
+2025/07/14 14:48:40.678304 +0800 INFO cn-service.logtail-server initialize new session for morpc stream {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "stream-id": 1, "remote": ""}
+2025/07/14 14:48:40.678431 +0800 INFO cn-service.logtail-server handle subscription asynchronously {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "table": "db_id:1 tb_id:1 "}
+2025/07/14 14:48:40.678737 +0800 INFO cn-service.logtail-server send subscription response {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "stream-id": 1, "remote": "", "table": "db_id:1 tb_id:1 db_name:\"mo_catalog\" tb_name:\"mo_database\" primary_seqnum:9 ", "To": "PhysicalTime:1752475720677456988 "}
+2025/07/14 14:48:40.678929 +0800 INFO disttae/logtail_consumer.go:1331 [logtail-consumer] subscribe tbl[db: 1, tbl: 1] succeed
+2025/07/14 14:48:40.679816 +0800 INFO cn-service.logtail-server handle subscription asynchronously {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "table": "db_id:1 tb_id:2 "}
+2025/07/14 14:48:40.680023 +0800 INFO cn-service.logtail-server send subscription response {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "stream-id": 1, "remote": "", "table": "db_id:1 tb_id:2 db_name:\"mo_catalog\" tb_name:\"mo_tables\" primary_seqnum:19 ", "To": "PhysicalTime:1752475720679576761 "}
+2025/07/14 14:48:40.680121 +0800 INFO disttae/logtail_consumer.go:1331 [logtail-consumer] subscribe tbl[db: 1, tbl: 2] succeed
+2025/07/14 14:48:40.681421 +0800 INFO cn-service.logtail-server handle subscription asynchronously {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "table": "db_id:1 tb_id:3 "}
+2025/07/14 14:48:40.681742 +0800 INFO cn-service.logtail-server send subscription response {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "stream-id": 1, "remote": "", "table": "db_id:1 tb_id:3 db_name:\"mo_catalog\" tb_name:\"mo_columns\" primary_seqnum:24 ", "To": "PhysicalTime:1752475720681384888 "}
+2025/07/14 14:48:40.681886 +0800 INFO disttae/logtail_consumer.go:1331 [logtail-consumer] subscribe tbl[db: 1, tbl: 3] succeed
+2025/07/14 14:48:40.685481 +0800 INFO plan/stats.go:1274 *[transposeTableScanFilters] {"originalExpr": "typ:<id:10 > f:<func:<obj:8589934592 obj_name:\">\" > args:<typ:<id:28 > col:<rel_pos:6 name:\"dat_id\" > > args:<typ:<id:28 notNullable:true > f:<func:<obj:90194313216 obj_name:\"cast\" > args:<typ:<id:23 notNullable:true > lit:<i64val:1 > > args:<typ:<id:28 notNullable:true > t:<> > > > > "}
+2025/07/14 14:48:40.685592 +0800 INFO plan/stats.go:1279 *[transposeTableScanFilters] {"transposedExpr": "typ:<id:10 > f:<func:<obj:8589934592 obj_name:\">\" > args:<typ:<id:28 > col:<rel_pos:6 name:\"dat_id\" > > args:<typ:<id:28 notNullable:true > f:<func:<obj:90194313216 obj_name:\"cast\" > args:<typ:<id:23 notNullable:true > lit:<i64val:1 > > args:<typ:<id:28 notNullable:true > t:<> > > > > "}
+2025/07/14 14:48:40.687258 +0800 INFO disttae/logtail_consumer.go:762 FIND_TABLE read mo_catalog.mo_databases [][0] rows
+2025/07/14 14:48:40.687808 +0800 INFO plan/stats.go:1274 *[transposeTableScanFilters] {"originalExpr": "typ:<id:10 > f:<func:<obj:8589934592 obj_name:\">\" > args:<typ:<id:28 > col:<rel_pos:6 name:\"rel_id\" > > args:<typ:<id:28 notNullable:true > f:<func:<obj:90194313216 obj_name:\"cast\" > args:<typ:<id:23 notNullable:true > lit:<i64val:3 > > args:<typ:<id:28 notNullable:true > t:<> > > > > "}
+2025/07/14 14:48:40.687921 +0800 INFO plan/stats.go:1279 *[transposeTableScanFilters] {"transposedExpr": "typ:<id:10 > f:<func:<obj:8589934592 obj_name:\">\" > args:<typ:<id:28 > col:<rel_pos:6 name:\"rel_id\" > > args:<typ:<id:28 notNullable:true > f:<func:<obj:90194313216 obj_name:\"cast\" > args:<typ:<id:23 notNullable:true > lit:<i64val:3 > > args:<typ:<id:28 notNullable:true > t:<> > > > > "}
+2025/07/14 14:48:40.688399 +0800 INFO disttae/logtail_consumer.go:776 FIND_TABLE read mo_catalog.mo_tables [][0] rows
+2025/07/14 14:48:40.688800 +0800 INFO plan/stats.go:1274 *[transposeTableScanFilters] {"originalExpr": "typ:<id:10 > f:<func:<obj:8589934592 obj_name:\">\" > args:<typ:<id:28 > col:<rel_pos:6 col_pos:4 name:\"att_relname_id\" > > args:<typ:<id:28 notNullable:true > f:<func:<obj:90194313216 obj_name:\"cast\" > args:<typ:<id:23 notNullable:true > lit:<i64val:3 > > args:<typ:<id:28 notNullable:true > t:<> > > > > "}
+2025/07/14 14:48:40.688868 +0800 INFO plan/stats.go:1279 *[transposeTableScanFilters] {"transposedExpr": "typ:<id:10 > f:<func:<obj:8589934592 obj_name:\">\" > args:<typ:<id:28 > col:<rel_pos:6 col_pos:4 name:\"att_relname_id\" > > args:<typ:<id:28 notNullable:true > f:<func:<obj:90194313216 obj_name:\"cast\" > args:<typ:<id:23 notNullable:true > lit:<i64val:3 > > args:<typ:<id:28 notNullable:true > t:<> > > > > "}
+2025/07/14 14:48:40.689089 +0800 INFO disttae/txn_table.go:1979 open partition state for mo_columns {"txn": "cbf29ce48422232518520b620839f2b9/Active/S:1752475720681384888-0", "desc": "tid= 3, dataObjectCnt= 0, tombstoneObjectCnt= 0, rowsCnt= 58", "pointer": "0xc00001edc0"}
+2025/07/14 14:48:40.689505 +0800 INFO disttae/logtail_consumer.go:792 FIND_TABLE read mo_catalog.mo_columns [][0] rows
+2025/07/14 14:48:40.689546 +0800 INFO cache/catalog.go:65 FIND_TABLE CACHE update serve range {"start": "1752475720681384888-0", "end": "9223372036854775807-4294967295"}
+2025/07/14 14:48:40.689572 +0800 INFO cn-service txn client status changed to normal {"uuid": ""}
+2025/07/14 14:48:40.730821 +0800 INFO rpc/handle.go:716 PreCommit-CreateDB {"txn": "ctx[CBF29CE48422232518520B620839F2B8][1752475720681384888-1->9223372036854775807-4294967295][Active]: <nil>", "i/cnt": "1/1", "cmd": "{DatabaseId:16384 Name:db CreateSql: DatTyp: Owner:0 Creator:0 AccountId:0 CreatedTime:2025-07-14 06:48:40.730436 UTC}"}
+2025/07/14 14:48:40.730972 +0800 INFO rpc/handle.go:782 PreCommit-CreateTBL {"txn": "ctx[CBF29CE48422232518520B620839F2B8][1752475720681384888-1->9223372036854775807-4294967295][Active]: <nil>", "i/cnt": "1/1", "cmd": "{aid-0,uid-0,rid-0}: 16384-db:16385-t"}
+2025/07/14 14:48:40.731227 +0800 INFO txnimpl/table_space.go:174 CreateObject {"objH": "OBJ<1-1-019807b1-5c1b-7322-8c83-923fe7399aec_0>", "txn": "ctx[CBF29CE48422232518520B620839F2B8][1752475720681384888-1->9223372036854775807-4294967295][Active]: <nil>"}
+2025/07/14 14:48:40.731298 +0800 INFO txnimpl/table_space.go:174 CreateObject {"objH": "OBJ<1-2-019807b1-5c1b-7468-acab-a02dbd06a4d9_0>", "txn": "ctx[CBF29CE48422232518520B620839F2B8][1752475720681384888-1->9223372036854775807-4294967295][Active]: <nil>"}
+2025/07/14 14:48:40.731338 +0800 INFO txnimpl/table_space.go:174 CreateObject {"objH": "OBJ<1-3-019807b1-5c1b-750c-8975-d4788cad7769_0>", "txn": "ctx[CBF29CE48422232518520B620839F2B8][1752475720681384888-1->9223372036854775807-4294967295][Active]: <nil>"}
+2025/07/14 14:48:40.758112 +0800 INFO rpc/handle.go:580 HandleCommit-With-DDL {"commit-latency": "27.359654ms", "cn-txn": "cbf29ce48422232518520b620839f2b8/Active/S:1752475720681384888-1", "tn-txn": "ctx[CBF29CE48422232518520B620839F2B8][1752475720681384888-1->1752475720731394372-0][Committed]: <nil>"}
+2025/07/14 14:48:40.810654 +0800 INFO plan/stats.go:1274 *[transposeTableScanFilters] {"originalExpr": "typ:<id:10 notNullable:true > f:<func:<obj_name:\"=\" > args:<typ:<id:23 notNullable:true > f:<func:<obj:42949672960 obj_name:\"+\" > args:<typ:<id:23 notNullable:true > lit:<i64val:3 > > args:<typ:<id:23 notNullable:true > f:<func:<obj:47244640256 obj_name:\"-\" > args:<typ:<id:23 notNullable:true > lit:<i64val:1 > > args:<typ:<id:23 notNullable:true width:64 > col:<rel_pos:6 col_pos:3 name:\"mock_3\" > > > > > > args:<typ:<id:23 notNullable:true > lit:<i64val:7 > > > "}
+2025/07/14 14:48:40.810758 +0800 INFO plan/stats.go:1279 *[transposeTableScanFilters] {"transposedExpr": "typ:<id:10 notNullable:true > f:<func:<obj_name:\"=\" > args:<typ:<id:23 notNullable:true width:64 > col:<rel_pos:6 col_pos:3 name:\"mock_3\" > > args:<typ:<id:23 notNullable:true > f:<func:<obj:47244640256 obj_name:\"-\" > args:<typ:<id:23 notNullable:true > lit:<i64val:1 > > args:<typ:<id:23 notNullable:true > f:<func:<obj:47244640256 obj_name:\"-\" > args:<typ:<id:23 notNullable:true > lit:<i64val:7 > > args:<typ:<id:23 notNullable:true > lit:<i64val:3 > > > > > > > "}
+2025/07/14 14:48:40.810911 +0800 INFO disttae/logtail_consumer.go:497 [logtail-consumer] send subscribe tbl[db: 16384, tbl: 16385] request succeed
+2025/07/14 14:48:40.810985 +0800 INFO cn-service.logtail-server handle subscription asynchronously {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "table": "db_id:16384 tb_id:16385 "}
+2025/07/14 14:48:40.811147 +0800 INFO cn-service.logtail-server send subscription response {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "stream-id": 1, "remote": "", "table": "db_id:16384 tb_id:16385 db_name:\"db\" tb_name:\"t\" primary_seqnum:1 ", "To": "PhysicalTime:1752475720810052563 "}
+2025/07/14 14:48:40.811282 +0800 INFO logtailreplay/partition_state.go:898 PS-CREATED {"table-id": 16385, "service": "", "addr": "0xc00541b040"}
+2025/07/14 14:48:40.811339 +0800 INFO disttae/logtail_consumer.go:1342  [logtail-consumer] subscribe tbl[db: 16384, tbl: 16385] resp received, 0xc00483b860
+2025/07/14 14:48:40.812401 +0800 INFO disttae/logtail_consumer.go:437 [logtail-consumer] subscribe tbl[db: 16384, tbl: 16385, t] succeed
+2025/07/14 14:48:40.812680 +0800 INFO compile/sql_executor.go:457 sql_executor exec {"sql": "SELECT * FROM db.t WHERE 3 + (1 - mock_3) = 7", "txn-id": "cbf29ce48422232518520b620839f2ba", "duration": "2.429611ms", "BatchSize": 0, "retry-times": 0, "AffectedRows": 0}
+2025/07/14 14:48:40.818207 +0800 INFO cn-service mark active txn aborted task {"uuid": "", "cost": "144.64122ms"}
+2025/07/14 14:48:40.824260 +0800 INFO disttae/logtail_consumer.go:279 [logtail-consumer] logtail consumer stopped
+2025/07/14 14:48:40.824306 +0800 INFO disttae/logtail_consumer.go:691 [logtail-consumer] logtail consumer stopped
+2025/07/14 14:48:40.824245 +0800 ERROR disttae/logtail_consumer.go:568 [logtail-consumer] receive an error from log tail client, err: context canceled
+2025/07/14 14:48:40.824317 +0800 INFO disttae/logtail_consumer.go:1011 [logtail-consumer] unsubscribe process exit.
+2025/07/14 14:48:40.824323 +0800 ERROR disttae/logtail_consumer.go:635 [logtail-consumer] receive one logtail failed, err: context canceled
+2025/07/14 14:48:40.824337 +0800 INFO disttae/logtail_consumer.go:1048 [logtail-consumer] GC partition_state process exit.
+2025/07/14 14:48:40.824347 +0800 INFO disttae/logtail_consumer.go:619 [logtail-consumer] logtail receiver paused
+2025/07/14 14:48:40.824348 +0800 INFO disttae/stats.go:828 stats trigger queue watcher stopped
+2025/07/14 14:48:40.824359 +0800 INFO disttae/logtail_consumer.go:665 [logtail-consumer] reconnect signal is received
+2025/07/14 14:48:40.824290 +0800 INFO service/client.go:96 logtail client send worker returned: context canceled
+2025/07/14 14:48:40.871439 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[GC-Transfer-Table-019807b1-5bde-76de-9639-9690cf676138-5s]", "duration": "200.820464ms"}
+2025/07/14 14:48:40.871550 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[GC-Disk-019807b1-5bde-7719-8cdb-3b8b6dc7d00d-30m0s]", "duration": "200.934821ms"}
+2025/07/14 14:48:40.871588 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[GC-Checkpoint-019807b1-5bde-77b0-8418-7a011c980d6e-1m0s]", "duration": "200.977793ms"}
+2025/07/14 14:48:40.871627 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[GC-Catalog-Cache-019807b1-5bde-77d9-aafe-5c8b14a758b8-3m0s]", "duration": "200.987532ms"}
+2025/07/14 14:48:40.871640 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[GC-Logtail-019807b1-5bde-781b-9d57-75382fcd984d-1m0s]", "duration": "201.027692ms"}
+2025/07/14 14:48:40.871693 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[GC-Lock-Merge-019807b1-5bde-783e-952e-1e480a9e339e-1m0s]", "duration": "201.028495ms"}
+2025/07/14 14:48:40.871728 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[Report-Stats-019807b1-5bde-7863-8c27-c556f14c7bb2-10s]", "duration": "201.086528ms"}
+2025/07/14 14:48:40.871748 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[flusher-019807b1-5bdb-77d4-b2c0-c3a7f278e506-5s]", "duration": "201.288133ms"}
+2025/07/14 14:48:40.871779 +0800 INFO checkpoint/flusher.go:782 flushImpl-Stopped
+2025/07/14 14:48:40.871857 +0800 INFO checkpoint/executor.go:396 CKP-Executor-Stopped {"error": "internal error: runner stopped", "cfg": "{\"MinCount\":100,\"IncrementalReservedWALCount\":0,\"IncrementalInterval\":60000000000,\"GlobalMinCount\":100,\"GlobalHistoryDuration\":3600000000000}"}
+2025/07/14 14:48:40.871906 +0800 INFO checkpoint/runner.go:348 CKPRunner-Stopped {"mode": "<RW>"}
+2025/07/14 14:48:40.871986 +0800 INFO db/scheduler.go:86 TaskScheduler Stopped
+2025/07/14 14:48:40.872038 +0800 INFO tasks/cancelablejob.go:174 Stop-CronJob {"name": "CronJob[TxnManager-HB-019807b1-5bdb-725f-af64-2e2f54744022-2ms]", "duration": "204.767741ms"}
+2025/07/14 14:48:40.872089 +0800 INFO txnbase/txnmgr.go:880 TxnManager-Stopped {"is-replay-mode": false, "is-write-mode": true}
+2025/07/14 14:48:40.872128 +0800 INFO v3/diskcleaner.go:368 GC-DiskCleaner-Started {"step": 0}
+2025/07/14 14:48:40.872224 +0800 INFO fileservice/tmp_fs.go:181 GC tmp_file_service process exit.
+2025/07/14 14:48:40.872264 +0800 INFO fileservice/tmp_fs.go:199 TMP-FILE Service closed.
+2025/07/14 14:48:40.872350 +0800 INFO cn-service.logtail-server close logtail service {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5"}
+2025/07/14 14:48:40.872413 +0800 ERROR cn-service.logtail-server stop session error handler {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "error": "context canceled"}
+2025/07/14 14:48:40.872448 +0800 ERROR cn-service.logtail-server stop logtail pull worker {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "error": "context canceled"}
+2025/07/14 14:48:40.872455 +0800 ERROR cn-service.logtail-server stop subscription handler {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "error": "context canceled"}
+2025/07/14 14:48:40.872475 +0800 ERROR cn-service.logtail-server fail to send logtail response {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "stream-id": 1, "remote": "", "error": "context canceled", "timeout": "59.999946888s", "remote address": ""}
+2025/07/14 14:48:40.872519 +0800 ERROR cn-service.logtail-server fail to notify session error {"uuid": "", "server-id": "019807b1-5bde-7e06-9628-560d416cc4a5", "error": "context canceled"}
+--- PASS: TestConstFold (0.23s)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/vm/engine/test	0.335s
+?   	github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil	[no test files]
