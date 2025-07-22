@@ -241,7 +241,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	// FSCACHEDATA RETAIN
 	// increment the ref counter first no matter what to make sure the memory is occupied before hashtable.Set
 	// we don't need mutex here since item is still local
-	item.Retain(ctx, nil)
+	item.Retain(ctx, c.postSet)
 
 	ok := c.htab.Set(key, item, nil)
 	if !ok {
@@ -249,7 +249,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		// FSCACHEDATA RELEASE
 		// decrement the ref counter if not set to release the resource
 		// still okay without mutex since item is not in hashtable
-		item.MarkAsDeleted(ctx, nil)
+		item.MarkAsDeleted(ctx, c.postEvict)
 		return
 	}
 
@@ -257,9 +257,6 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
 	}
-
-	// postSet
-	item.PostFn(ctx, c.postSet)
 
 	// evict
 	c.evictAll(ctx, nil, 0)
