@@ -1436,6 +1436,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	}
 	for i, ckp := range debugCandidates {
 		end := ckp.GetEnd()
+		end = end.Next()
 		if end.Equal(&gcWaterMark) {
 			debugCandidates = debugCandidates[:i+1]
 			ok = true
@@ -1468,7 +1469,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 			if logtail.ObjectIsSnapshotRefers(
 				entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
 			) {
-				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cptEnd) {
+				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cptEnd) || (pList[entry.table] != nil && entry.dropTS.GT(pList[entry.table])) {
 					continue
 				}
 				logutil.Error(
