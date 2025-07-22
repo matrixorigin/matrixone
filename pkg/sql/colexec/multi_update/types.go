@@ -100,7 +100,6 @@ type container struct {
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
-	outputBat *batch.Batch
 }
 
 type MultiUpdateCtx struct {
