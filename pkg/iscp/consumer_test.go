@@ -212,7 +212,7 @@ func TestConsumer(t *testing.T) {
 
 func TestHnswSnapshot(t *testing.T) {
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -56,7 +56,7 @@ func mock_runTxn(proc *process.Process, fn func(exec executor.TxnExecutor) error
 func TestSyncUpsertWithEmpty(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql_empty
 	runSql_streaming = mock_runSql_streaming
@@ -84,7 +84,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 func TestSyncUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -113,7 +113,7 @@ func TestSyncUpsert(t *testing.T) {
 func TestSyncDelete(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -138,7 +138,7 @@ func TestSyncDelete(t *testing.T) {
 func TestSyncDeleteAndInsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -172,7 +172,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 func TestSyncUpdate(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -198,7 +198,7 @@ func TestSyncUpdate(t *testing.T) {
 func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -232,7 +232,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 func TestSyncAddOneModel(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
@@ -261,7 +261,7 @@ func TestSyncAddOneModel(t *testing.T) {
 func TestSyncDelete2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -286,7 +286,7 @@ func TestSyncDelete2Files(t *testing.T) {
 func TestSyncDeleteShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -314,7 +314,7 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 func TestSyncUpdateShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
@@ -343,7 +343,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 func TestSyncUpdateInsertShuffle2Files(t *testing.T) {
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files

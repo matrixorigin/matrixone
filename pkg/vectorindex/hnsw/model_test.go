@@ -59,7 +59,7 @@ func TestModel(t *testing.T) {
 	v1000 := []float32{1000, 2000, 3000}
 
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	// stub runSql function
 	runSql = mock_runSql

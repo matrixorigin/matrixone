@@ -444,7 +444,7 @@ func TestHnswSyncSinker_RunError(t *testing.T) {
 func TestHnswSyncSinker_Sink(t *testing.T) {
 
 	ctx := context.Background()
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	sqlexecstub := gostub.Stub(&sqlExecutorFactory, mockSqlExecutorFactory)
 	defer sqlexecstub.Reset()
