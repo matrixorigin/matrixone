@@ -32,6 +32,10 @@ const (
 	SinkerState_Finished
 )
 
+const (
+	PermanentErrorThreshold = 10000
+)
+
 type SinkerEntry struct {
 	tableInfo    *TableInfo_2
 	indexName    string
@@ -93,7 +97,7 @@ func (sinkerEntry *SinkerEntry) getConsumerInfoStr() string {
 
 // TODO
 func (sinkerEntry *SinkerEntry) PermanentError() bool {
-	return false
+	return toErrorCode(sinkerEntry.err) > PermanentErrorThreshold
 }
 
 func (sinkerEntry *SinkerEntry) StringLocked() string {

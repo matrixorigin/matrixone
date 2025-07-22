@@ -29,7 +29,6 @@ import (
 	"golang.org/x/exp/rand"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
-	pkgCatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -190,8 +189,8 @@ func EngineDefAddIndex(defs []engine.TableDef, idxColName string) []engine.Table
 		{
 			IndexName:          "hnsw_idx",
 			TableExist:         true,
-			IndexAlgo:          pkgCatalog.MoIndexHnswAlgo.ToString(),
-			IndexAlgoTableType: pkgCatalog.Hnsw_TblType_Metadata,
+			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
+			IndexAlgoTableType: catalog2.Hnsw_TblType_Metadata,
 			IndexTableName:     "meta_tbl",
 			Parts:              []string{idxColName},
 			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
@@ -199,8 +198,8 @@ func EngineDefAddIndex(defs []engine.TableDef, idxColName string) []engine.Table
 		{
 			IndexName:          "hnsw_idx",
 			TableExist:         true,
-			IndexAlgo:          pkgCatalog.MoIndexHnswAlgo.ToString(),
-			IndexAlgoTableType: pkgCatalog.Hnsw_TblType_Storage,
+			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
+			IndexAlgoTableType: catalog2.Hnsw_TblType_Storage,
 			IndexTableName:     "storage_tbl",
 			Parts:              []string{idxColName},
 			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,

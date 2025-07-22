@@ -573,16 +573,3 @@ func (s *interalSqlConsumer) getDeleteRowBuf(ctx context.Context) (err error) {
 	s.rowBuf = appendBytes(s.rowBuf, s.deleteRowSuffix)
 	return
 }
-
-func genPrimaryKeyStr(tableDef *plan.TableDef) string {
-	buf := strings.Builder{}
-	buf.WriteByte('(')
-	for i, pkName := range tableDef.Pkey.Names {
-		if i > 0 {
-			buf.WriteByte(',')
-		}
-		buf.WriteString(pkName)
-	}
-	buf.WriteByte(')')
-	return buf.String()
-}

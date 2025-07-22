@@ -857,9 +857,7 @@ func (b cdcSQLBuilder) AsyncIndexLogGCSQL(t time.Time) string {
 }
 
 func (b cdcSQLBuilder) AsyncIndexLogSelectSQL() string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCSelectMOAsyncIndexLogSqlTemplate_Idx].SQL,
-	)
+	return CDCSQLTemplates[CDCSelectMOAsyncIndexLogSqlTemplate_Idx].SQL
 }
 
 func (b cdcSQLBuilder) AsyncIndexLogSelectByTableSQL(

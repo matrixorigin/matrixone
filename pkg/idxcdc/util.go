@@ -596,22 +596,6 @@ func SplitDbTblKey(dbTblKey string) (dbName, tblName string) {
 	return s[0], s[1]
 }
 
-func addStartMetrics(insertData, deleteData *batch.Batch) {
-	count := float64(batchRowCount(insertData) + batchRowCount(deleteData))
-	allocated := float64(insertData.Allocated() + deleteData.Allocated())
-	v2.CdcTotalProcessingRecordCountGauge.Add(count)
-	v2.CdcHoldChangesBytesGauge.Add(allocated)
-	v2.CdcReadRecordCounter.Add(count)
-}
-
-func addSnapshotEndMetrics(insertData *batch.Batch) {
-	count := float64(batchRowCount(insertData))
-	allocated := float64(insertData.Allocated())
-	v2.CdcTotalProcessingRecordCountGauge.Sub(count)
-	v2.CdcHoldChangesBytesGauge.Sub(allocated)
-	v2.CdcSinkRecordCounter.Add(count)
-}
-
 func addTailEndMetrics(bat *AtomicBatch) {
 	count := float64(bat.RowCount())
 	allocated := float64(bat.Allocated())

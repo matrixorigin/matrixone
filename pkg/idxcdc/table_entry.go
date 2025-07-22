@@ -180,7 +180,7 @@ func (t *TableInfo_2) GetMaxWaterMarkLocked() types.TS {
 }
 
 func (t *TableInfo_2) getCandidateLocked() []*SinkerEntry {
-	var candidates []*SinkerEntry
+	candidates := make([]*SinkerEntry, 0, len(t.sinkers))
 	for _, sinker := range t.sinkers {
 		if !sinker.inited.Load() {
 			continue
@@ -227,6 +227,9 @@ func (t *TableInfo_2) GetSyncTask(ctx context.Context, toTS types.TS) *Iteration
 
 // TODO
 func toErrorCode(err error) int {
+	if err != nil {
+		return 1
+	}
 	return 0
 }
 
