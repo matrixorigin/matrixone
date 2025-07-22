@@ -144,18 +144,6 @@ func (t *TableEntry) GetMinWaterMark() types.TS {
 	return minWatermark
 }
 
-func (t *TableEntry) GetMaxWaterMark() types.TS {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	maxWatermark := types.TS{}
-	for _, sinker := range t.sinkers {
-		if sinker.watermark.GT(&maxWatermark) {
-			maxWatermark = sinker.watermark
-		}
-	}
-	return maxWatermark
-}
-
 func (t *TableEntry) GetMaxWaterMarkLocked() types.TS {
 	maxWatermark := types.TS{}
 	for _, sinker := range t.sinkers {
