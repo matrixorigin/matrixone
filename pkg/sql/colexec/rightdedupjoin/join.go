@@ -259,25 +259,17 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		}
 	}
 
-	if ctr.rbat == nil {
-		ctr.rbat = batch.NewWithSize(len(ap.Result))
-		for i, rp := range ap.Result {
-			typ := ap.LeftTypes[rp.Pos]
-			ctr.rbat.Vecs[i] = vector.NewVec(typ)
-		}
-	} else {
-		ctr.rbat.CleanOnlyData()
+	if ctr.rbat != nil {
+		ctr.rbat.Clean(proc.Mp())
 	}
+	ctr.rbat = batch.NewWithSize(len(ap.Result))
 
 	for i, rp := range ap.Result {
-		typ := ap.LeftTypes[rp.Pos]
-		if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
-			return err
-		}
-		ctr.rbat.Vecs[i].SetSorted(bat.Vecs[rp.Pos].GetSorted())
+		ctr.rbat.Vecs[i] = bat.Vecs[rp.Pos]
+		bat.Vecs[rp.Pos] = nil
 	}
 
-	ctr.rbat.AddRowCount(count)
+	ctr.rbat.SetRowCount(count)
 	result.Batch = ctr.rbat
 
 	return nil
