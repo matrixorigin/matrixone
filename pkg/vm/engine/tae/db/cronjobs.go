@@ -186,7 +186,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 				}
 
 				ts := types.BuildTS(wartMark.Physical()-
-					int64(db.Opts.CheckpointCfg.GlobalVersionInterval), 0)
+					int64(db.Opts.GCCfg.GCInMemoryTTL), 0)
 				if wartMark.GE(&ts) {
 					wartMark = ts
 				}

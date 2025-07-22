@@ -42,12 +42,13 @@ const (
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10
-	DefaultGlobalVersionInterval        = time.Hour
+	DefaultGlobalVersionInterval        = time.Millisecond
 	DefaultGCCheckpointInterval         = time.Minute
 	DefaultOverallFlushMemControl       = common.Const1GBytes
 
 	DefaultScanGCInterval    = time.Minute * 30
 	DefaultGCTTL             = time.Hour
+	DefaultGCInMemoryTTL     = time.Hour
 	DefaultGCMergeCount      = 40
 	DefaultGCDeleteBatchSize = 1000
 	DefaultGCDeleteTimeout   = time.Minute * 10

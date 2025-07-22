@@ -223,6 +223,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.GCCfg.GCTTL = DefaultGCTTL
 	}
 
+	if o.GCCfg.GCInMemoryTTL <= 0 {
+		o.GCCfg.GCInMemoryTTL = DefaultGCInMemoryTTL
+	}
+
 	if o.GCCfg.ScanGCInterval <= 0 {
 		o.GCCfg.ScanGCInterval = DefaultScanGCInterval
 	}
