@@ -409,7 +409,7 @@ const (
 	L2_DISTANCE_SQ_XC = 342
 
 	TS_TO_TIME = 343
-  STRCMP     = 344
+	STRCMP     = 344
 
 	STARLARK     = 345
 	TRY_STARLARK = 346

@@ -393,7 +393,7 @@ var predefinedFunids = map[int]int{
 
 	TS_TO_TIME: 343,
 	STRCMP:     344,
-  
+
 	STARLARK:     345,
 	TRY_STARLARK: 346,
 
