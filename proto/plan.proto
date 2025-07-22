@@ -438,7 +438,7 @@ message TableDef {
 message TableFunction{
 	string name = 1;
 	bytes param = 2;
-        bool is_single = 3;
+	bool is_single = 3;
 }
 
 enum ShuffleType {
@@ -761,7 +761,7 @@ message Node {
 	// JOIN
 	JoinType join_type = 6;
 	repeated Expr on_list = 7;
-	bool build_on_left = 8;
+	bool is_right_join = 8;
 
 	// FILTER
 	repeated Expr filter_list = 9;

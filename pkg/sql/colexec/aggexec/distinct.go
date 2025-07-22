@@ -43,7 +43,7 @@ func (d *distinctHash) grows(more int) error {
 
 	var err error
 	for i := oldLen; i < newLen; i++ {
-		if d.maps[i], err = hashmap.NewStrMap(true); err != nil {
+		if d.maps[i], err = hashmap.NewStrHashMap(true); err != nil {
 			return err
 		}
 		d.itrs[i] = d.maps[i].NewIterator()

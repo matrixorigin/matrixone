@@ -2401,7 +2401,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 		}
 
 	case plan.Node_ANTI:
-		if node.BuildOnLeft {
+		if node.IsRightJoin {
 			for i := range shuffleJoins {
 				op := constructRightAnti(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
@@ -2424,7 +2424,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 		}
 
 	case plan.Node_SEMI:
-		if node.BuildOnLeft {
+		if node.IsRightJoin {
 			for i := range shuffleJoins {
 				op := constructRightSemi(node, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
@@ -2467,14 +2467,26 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 			shuffleJoins[i].setRootOperator(op)
 		}
 	case plan.Node_DEDUP:
-		for i := range shuffleJoins {
-			op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
-			op.ShuffleIdx = int32(i)
-			if shuffleV2 {
-				op.ShuffleIdx = -1
+		if node.IsRightJoin {
+			for i := range shuffleJoins {
+				op := constructRightDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op.ShuffleIdx = int32(i)
+				if shuffleV2 {
+					op.ShuffleIdx = -1
+				}
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				shuffleJoins[i].setRootOperator(op)
 			}
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			shuffleJoins[i].setRootOperator(op)
+		} else {
+			for i := range shuffleJoins {
+				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op.ShuffleIdx = int32(i)
+				if shuffleV2 {
+					op.ShuffleIdx = -1
+				}
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				shuffleJoins[i].setRootOperator(op)
+			}
 		}
 
 	default:
@@ -2579,7 +2591,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_SEMI:
 		if isEq {
-			if node.BuildOnLeft {
+			if node.IsRightJoin {
 				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 				currentFirstFlag := c.anal.isFirst
 				for i := range rs {
@@ -2653,7 +2665,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		c.anal.isFirst = false
 	case plan.Node_ANTI:
 		if isEq {
-			if node.BuildOnLeft {
+			if node.IsRightJoin {
 				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
 				currentFirstFlag := c.anal.isFirst
 				for i := range rs {
@@ -2683,14 +2695,26 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 			c.anal.isFirst = false
 		}
 	case plan.Node_DEDUP:
-		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
-		currentFirstFlag := c.anal.isFirst
-		for i := range rs {
-			op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
-			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
-			rs[i].setRootOperator(op)
+		if node.IsRightJoin {
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			currentFirstFlag := c.anal.isFirst
+			for i := range rs {
+				op := constructRightDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+				rs[i].NodeInfo.Mcpu = 1
+			}
+			c.anal.isFirst = false
+		} else {
+			rs = c.newProbeScopeListForBroadcastJoin(probeScopes, true)
+			currentFirstFlag := c.anal.isFirst
+			for i := range rs {
+				op := constructDedupJoin(node, leftTyps, rightTyps, c.proc)
+				op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+				rs[i].setRootOperator(op)
+			}
+			c.anal.isFirst = false
 		}
-		c.anal.isFirst = false
 	case plan.Node_MARK:
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
