@@ -734,7 +734,7 @@ func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables() error {
 	insertSqlWriter := &bytes.Buffer{}
 	deleteSqlWriter.WriteString("DELETE FROM mo_catalog.mo_intra_system_change_propagation_log WHERE")
 	insertSqlWriter.WriteString("INSERT INTO mo_catalog.mo_intra_system_change_propagation_log " +
-		"(account_id,table_id,index_name,last_sync_txn_ts,err_code,error_msg,info,consumer_config,drop_at) VALUES")
+		"(account_id,table_id,column_names,job_name,job_type,last_sync_txn_ts,err_code,error_msg,info,consumer_config,drop_at) VALUES")
 	for i, table := range tables {
 		err := table.fillInAsyncIndexLogUpdateSQL(i == 0, insertSqlWriter, deleteSqlWriter)
 		if err != nil {

@@ -100,10 +100,11 @@ func (sinkerEntry *JobEntry) fillInAsyncIndexLogInsertSQL(firstSinker bool, w *b
 	if !firstSinker {
 		w.WriteString(",")
 	}
-	_, err := w.WriteString(fmt.Sprintf(" (%d, %d, '%s', '%s', 0, '', '', '%s', NULL)",
+	_, err := w.WriteString(fmt.Sprintf(" (%d, %d,'', '%s',%d, '%s',  0, '', '', '%s', NULL)",
 		sinkerEntry.tableInfo.accountID,
 		sinkerEntry.tableInfo.tableID,
 		sinkerEntry.indexName,
+		sinkerEntry.consumerType,
 		sinkerEntry.watermark.ToString(),
 		sinkerEntry.getConsumerInfoStr(),
 	))
@@ -115,7 +116,7 @@ func (sinkerEntry *JobEntry) fillInAsyncIndexLogDeleteSQL(firstSinker bool, w *b
 		w.WriteString(" OR")
 	}
 	_, err := w.WriteString(
-		fmt.Sprintf(" (account_id = %d AND table_id = %d AND index_name = '%s' and drop_at is null)",
+		fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = '%s' and drop_at is null)",
 			sinkerEntry.tableInfo.accountID,
 			sinkerEntry.tableInfo.tableID,
 			sinkerEntry.indexName,
