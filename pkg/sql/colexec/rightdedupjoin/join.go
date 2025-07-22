@@ -259,10 +259,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		}
 	}
 
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.Mp())
+	if ctr.rbat == nil {
+		ctr.rbat = batch.NewWithSize(len(ap.Result))
 	}
-	ctr.rbat = batch.NewWithSize(len(ap.Result))
 
 	for i, rp := range ap.Result {
 		ctr.rbat.Vecs[i] = bat.Vecs[rp.Pos]
