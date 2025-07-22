@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cdc
+package iscp
 
 import (
 	"bytes"
@@ -20,8 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
@@ -43,19 +43,10 @@ const (
 	CDCState_Error  = "error"
 )
 
-const (
-	CDCDefaultSendSqlTimeout                 = "10m"
-	CDCDefaultRetryTimes                     = -1
-	CDCDefaultRetryDuration                  = 30 * time.Minute
-	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
-	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
-)
+type ConsumerType int8
 
 const (
-	CDCSinkType_MySQL     = "mysql"
-	CDCSinkType_MO        = "matrixone"
-	CDCSinkType_Console   = "console"
-	CDCSinkType_IndexSync = "indexsync"
+	ConsumerType_IndexSync ConsumerType = iota
 )
 
 const (
@@ -66,49 +57,49 @@ const (
 	CDCPitrGranularity_All     = "*"
 )
 
-const (
-	CDCRequestOptions_Level                = "Level"
-	CDCRequestOptions_Exclude              = "Exclude"
-	CDCRequestOptions_StartTs              = "StartTs"
-	CDCRequestOptions_EndTs                = "EndTs"
-	CDCRequestOptions_SendSqlTimeout       = "SendSqlTimeout"
-	CDCRequestOptions_InitSnapshotSplitTxn = "InitSnapshotSplitTxn"
-	CDCRequestOptions_MaxSqlLength         = "MaxSqlLength"
-	CDCRequestOptions_NoFull               = "NoFull"
-	CDCRequestOptions_ConfigFile           = "ConfigFile"
-	CDCRequestOptions_Frequency            = "Frequency"
-)
+type ISCPData struct {
+	refcnt atomic.Int32
 
-const (
-	CDCTaskExtraOptions_MaxSqlLength         = CDCRequestOptions_MaxSqlLength
-	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
-	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
-	CDCTaskExtraOptions_Frequency            = CDCRequestOptions_Frequency
-)
-
-var CDCRequestOptions = []string{
-	CDCRequestOptions_Level,
-	CDCRequestOptions_Exclude,
-	CDCRequestOptions_StartTs,
-	CDCRequestOptions_EndTs,
-	CDCRequestOptions_MaxSqlLength,
-	CDCRequestOptions_SendSqlTimeout,
-	CDCRequestOptions_InitSnapshotSplitTxn,
-	CDCRequestOptions_ConfigFile,
-	CDCRequestOptions_NoFull,
-	CDCRequestOptions_Frequency,
+	insertBatch *AtomicBatch
+	deleteBatch *AtomicBatch
+	noMoreData  bool
+	err         error
 }
 
-var CDCTaskExtraOptions = []string{
-	CDCTaskExtraOptions_MaxSqlLength,
-	CDCTaskExtraOptions_SendSqlTimeout,
-	CDCTaskExtraOptions_InitSnapshotSplitTxn,
-	CDCTaskExtraOptions_Frequency,
+func (d *ISCPData) Set(cnt int) {
+	d.refcnt.Add(int32(cnt))
 }
 
-var (
-	EnableConsoleSink = false
-)
+func (d *ISCPData) Done() {
+	newRefcnt := d.refcnt.Add(-1)
+	if newRefcnt == 0 {
+		if d.insertBatch != nil {
+			d.insertBatch.Close()
+			d.insertBatch = nil
+		}
+		if d.deleteBatch != nil {
+			d.deleteBatch.Close()
+			d.deleteBatch = nil
+		}
+	}
+}
+
+type DataRetriever interface {
+	Next() *ISCPData
+	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
+	GetDataType() int8
+}
+
+type ConsumerInfo struct {
+	ConsumerType int8
+	TableName    string
+	DbName       string
+	IndexName    string
+}
+
+type Consumer interface {
+	Consume(context.Context, DataRetriever) error
+}
 
 type TaskId = uuid.UUID
 
@@ -116,81 +107,12 @@ func NewTaskId() TaskId {
 	return uuid.Must(uuid.NewV7())
 }
 
-// func StringToTaskId(s string) (TaskId, error) {
-// 	return uuid.Parse(s)
-// }
-
-type Reader interface {
-	Run(ctx context.Context, ar *ActiveRoutine)
-	Close()
-}
-
-type TableReader interface {
-	Run(ctx context.Context, ar *ActiveRoutine)
-	Close()
-	Info() *DbTableInfo
-	GetWg() *sync.WaitGroup
-}
-
-// Sinker manages and drains the sql parts
-type Sinker interface {
-	Run(ctx context.Context, ar *ActiveRoutine)
-	Sink(ctx context.Context, data *DecoderOutput)
-	SendBegin()
-	SendCommit()
-	SendRollback()
-	// SendDummy to guarantee the last sql is sent
-	SendDummy()
-	// Error must be called after Sink
-	Error() error
-	ClearError()
-	Reset()
-	Close()
-}
-
-// Sink represents the destination mysql or matrixone
-type Sink interface {
-	Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, needRetry bool) error
-	SendBegin(ctx context.Context) error
-	SendCommit(ctx context.Context) error
-	SendRollback(ctx context.Context) error
-	Close()
-}
-
-type ActiveRoutine struct {
-	sync.Mutex
-	Pause  chan struct{}
-	Cancel chan struct{}
-}
-
-func (ar *ActiveRoutine) ClosePause() {
-	ar.Lock()
-	defer ar.Unlock()
-	close(ar.Pause)
-	// can't set to nil, because some goroutines may still be running, when it goes next round loop,
-	// it found the channel is nil, not closed, will hang there forever
-}
-
-func (ar *ActiveRoutine) CloseCancel() {
-	ar.Lock()
-	defer ar.Unlock()
-	close(ar.Cancel)
-}
-
-func NewCdcActiveRoutine() *ActiveRoutine {
-	return &ActiveRoutine{
-		Pause:  make(chan struct{}),
-		Cancel: make(chan struct{}),
-	}
-}
-
-type OutputType int
-
 const (
-	OutputTypeSnapshot OutputType = iota
-	OutputTypeTail
+	ISCPDataType_Snapshot int8 = iota
+	ISCPDataType_Tail
 )
 
+/*
 func (t OutputType) String() string {
 	switch t {
 	case OutputTypeSnapshot:
@@ -201,15 +123,7 @@ func (t OutputType) String() string {
 		return "usp output type"
 	}
 }
-
-type DecoderOutput struct {
-	outputTyp      OutputType
-	noMoreData     bool
-	fromTs, toTs   types.TS
-	checkpointBat  *batch.Batch
-	insertAtmBatch *AtomicBatch
-	deleteAtmBatch *AtomicBatch
-}
+*/
 
 type RowType int
 
@@ -223,54 +137,6 @@ type RowIterator interface {
 	Next() bool
 	Row(ctx context.Context, row []any) error
 	Close()
-}
-
-type DbTableInfo struct {
-	SourceDbId      uint64
-	SourceDbName    string
-	SourceTblId     uint64
-	SourceTblName   string
-	SourceCreateSql string
-
-	SinkDbName  string
-	SinkTblName string
-
-	IdChanged bool
-}
-
-func (info DbTableInfo) String() string {
-	return fmt.Sprintf("%v(%v).%v(%v) -> %v.%v, %v",
-		info.SourceDbName,
-		info.SourceDbId,
-		info.SourceTblName,
-		info.SourceTblId,
-		info.SinkDbName,
-		info.SinkTblName,
-		info.IdChanged,
-	)
-}
-
-func (info DbTableInfo) Clone() *DbTableInfo {
-	return &DbTableInfo{
-		SourceDbId:      info.SourceDbId,
-		SourceDbName:    info.SourceDbName,
-		SourceTblId:     info.SourceTblId,
-		SourceTblName:   info.SourceTblName,
-		SourceCreateSql: info.SourceCreateSql,
-		SinkDbName:      info.SinkDbName,
-		SinkTblName:     info.SinkTblName,
-		IdChanged:       info.IdChanged,
-	}
-}
-
-func (info DbTableInfo) OnlyDiffinTblId(t *DbTableInfo) bool {
-	if info.SourceDbId != t.SourceDbId ||
-		info.SourceDbName != t.SourceDbName ||
-		info.SourceTblName != t.SourceTblName ||
-		info.SourceCreateSql != t.SourceCreateSql {
-		return false
-	}
-	return info.SourceTblId != t.SourceTblId
 }
 
 // AtomicBatch holds batches from [Tail_wip,...,Tail_done] or [Tail_done].
@@ -450,49 +316,6 @@ func (info *UriInfo) GetEncodedPassword() (string, error) {
 
 func (info *UriInfo) String() string {
 	return fmt.Sprintf("%s%s:%s@%s:%d", CDCSourceUriPrefix, info.User, "******", info.Ip, info.Port)
-}
-
-type PatternTable struct {
-	Database string `json:"database"`
-	Table    string `json:"table"`
-}
-
-func (table PatternTable) String() string {
-	return fmt.Sprintf("%s.%s", table.Database, table.Table)
-}
-
-type PatternTuple struct {
-	Source       PatternTable `json:"Source"`
-	Sink         PatternTable `json:"Sink"`
-	OriginString string       `json:"-"`
-	Reserved     string       `json:"reserved"`
-}
-
-func (tuple *PatternTuple) String() string {
-	if tuple == nil {
-		return ""
-	}
-	return fmt.Sprintf("%s,%s", tuple.Source, tuple.Sink)
-}
-
-type PatternTuples struct {
-	Pts      []*PatternTuple `json:"pts"`
-	Reserved string          `json:"reserved"`
-}
-
-func (pts *PatternTuples) Append(pt *PatternTuple) {
-	pts.Pts = append(pts.Pts, pt)
-}
-
-func (pts *PatternTuples) String() string {
-	if pts.Pts == nil {
-		return ""
-	}
-	ss := make([]string, 0)
-	for _, pt := range pts.Pts {
-		ss = append(ss, pt.String())
-	}
-	return strings.Join(ss, ",")
 }
 
 // JsonEncode encodes the object to json
