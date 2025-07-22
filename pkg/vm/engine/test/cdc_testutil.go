@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -184,28 +183,6 @@ func execSql(
 		return result, err
 	}
 	return result, nil
-}
-func getCDCPitrTablesString(
-	srcDB, srcTable string,
-	dstDB, dstTable string,
-) string {
-	table := cdc.PatternTuple{
-		Source: cdc.PatternTable{
-			Database: srcDB,
-			Table:    srcTable,
-		},
-		Sink: cdc.PatternTable{
-			Database: dstDB,
-			Table:    dstTable,
-		},
-	}
-	var tablesPatternTuples cdc.PatternTuples
-	tablesPatternTuples.Append(&table)
-	tableStr, err := cdc.JsonEncode(tablesPatternTuples)
-	if err != nil {
-		panic(err)
-	}
-	return tableStr
 }
 
 func CreateDBAndTableForHNSWAndGetAppendData(

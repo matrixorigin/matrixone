@@ -5,6 +5,7 @@ mo_columns    Tae    Dynamic    1347    0    69676    0    0    NULL    0    202
 mo_database    Tae    Dynamic    8    0    2228    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_tables    Tae    Dynamic    125    0    44845    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_account    Tae    Dynamic    1    0    1396    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+mo_async_index_log    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-22 04:29:13    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_cache    null    null    null    null    null    null    null    null    null    2024-12-23 17:45:06    null    null    null    null    null    VIEW    0    moadmin
 mo_cdc_task    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_cdc_watermark    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
@@ -38,7 +39,6 @@ mo_user_defined_function    Tae    Dynamic    0    0    0    0    0    NULL    0
 mo_user_grant    Tae    Dynamic    4    0    1037    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_variables    null    null    null    null    null    null    null    null    null    2024-12-23 17:45:06    null    null    null    null    null    VIEW    0    moadmin
 mo_version    Tae    Dynamic    1    0    1074    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
-mo_async_index_log    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL    0    moadmin
 drop database if exists testdb;
 create database testdb;
 use testdb;

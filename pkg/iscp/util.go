@@ -19,7 +19,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	cryptorand "crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -364,27 +363,6 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 		}
 	}
 	return buf
-}
-
-var openDb = sql.Open
-
-var tryConn = func(dsn string) (*sql.DB, error) {
-	db, err := openDb("mysql-mo", dsn)
-	if err != nil {
-		return nil, err
-	} else {
-		db.SetConnMaxLifetime(time.Minute * 3)
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
-		time.Sleep(time.Millisecond * 100)
-
-		//ping opens the connection
-		err = db.Ping()
-		if err != nil {
-			return nil, err
-		}
-	}
-	return db, err
 }
 
 var GetTxnOp = func(
