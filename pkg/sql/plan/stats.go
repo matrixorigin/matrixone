@@ -1562,7 +1562,7 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 			node.IsRightJoin = false
 		} else if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
 			node.IsRightJoin = false
-		} else if rightChild.Stats.Outcnt > 100 && leftChild.Stats.Outcnt*1.5 < rightChild.Stats.Outcnt {
+		} else if rightChild.Stats.Outcnt > 100 && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
 			node.IsRightJoin = true
 		}
 	}

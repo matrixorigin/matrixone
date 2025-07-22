@@ -162,6 +162,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 		}
 
 		ctr.mp = message.NewJoinMap(message.JoinSels{}, intHashMap, strHashMap, nil, nil, proc.Mp())
+		ctr.mp.IncRef(1)
 	} else {
 		ctr.groupCount = ctr.mp.GetGroupCount()
 		ctr.buildGroupCount = ctr.groupCount
