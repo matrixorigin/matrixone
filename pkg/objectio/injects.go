@@ -53,6 +53,12 @@ const (
 
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
+
+	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
+	FJ_CDCHandleErr              = "fj/cdc/handleerr"
+	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
+	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
+	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
 )
 
 const (
@@ -545,4 +551,29 @@ func CDCRecordTxnInjected(dbName, tableName string) (bool, int) {
 		return false, 0
 	}
 	return checkLoggingArgs(int(iarg), sarg, dbName, tableName)
+}
+
+func CDCHandleSlowInjected() (sleepSeconds int64, injected bool) {
+	iarg, _, injected := fault.TriggerFault(FJ_CDCHandleSlow)
+	return iarg, injected
+}
+
+func CDCHandleErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCHandleErr)
+	return injected
+}
+
+func CDCScanTableErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCScanTableErr)
+	return injected
+}
+
+func CDCAddExecErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCAddExecErr)
+	return injected
+}
+
+func CDCAddExecConsumeTruncateInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCAddExecConsumeTruncate)
+	return injected
 }
