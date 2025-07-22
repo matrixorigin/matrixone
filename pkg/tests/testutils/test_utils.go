@@ -170,7 +170,16 @@ func ExecSQLWithReadResult(
 			}
 			return nil
 		},
-		executor.Options{}.WithDatabase(db),
+		executor.Options{}.
+			WithDatabase(db).
+			WithResolveVariableFunc(
+				func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+					if varName == "sql_mode" {
+						return "", nil
+					}
+					return nil, moerr.NewInternalErrorf(ctx, "variable %s not supported", varName)
+				},
+			),
 	)
 
 	require.NoError(t, moerr.AttachCause(ctx, err), sql)
