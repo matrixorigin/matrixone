@@ -276,27 +276,17 @@ var (
 	MoCatalogMoCdcAsyncIndexLogDDL = `CREATE TABLE mo_async_index_log (
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,
-				index_name VARCHAR NOT NULL,
+				job_name VARCHAR NOT NULL,
+				job_type INT NOT NULL,
 				column_names VARCHAR NOT NULL,
 				last_sync_txn_ts VARCHAR(32)  NOT NULL,
 				err_code INT NOT NULL,
 				error_msg VARCHAR(255) NOT NULL,
-				info VARCHAR(255) NOT NULL,
+				info VARCHAR NOT NULL,
 				drop_at DATETIME NULL,
-				consumer_config VARCHAR(255) NULL
+				consumer_config VARCHAR(255) NULL,
+				primary key(account_id, table_id, job_name)
 			)`
-
-	MoCatalogMoCdcAsyncIndexIterationsDDL = `CREATE TABLE mo_async_index_iterations (
-			id INT AUTO_INCREMENT PRIMARY KEY,
-			account_id INT UNSIGNED NOT NULL,
-			table_id BIGINT UNSIGNED NOT NULL,
-			index_names VARCHAR(255),
-			from_ts VARCHAR(32) NOT NULL,
-			to_ts VARCHAR(32) NOT NULL,
-			error_json VARCHAR(255) NOT NULL,
-			start_at DATETIME NULL,
-			end_at DATETIME NULL
-		)`
 
 	MoCatalogMoSessionsDDL       = `CREATE VIEW mo_catalog.mo_sessions AS SELECT node_id, conn_id, session_id, account, user, host, db, session_start, command, info, txn_id, statement_id, statement_type, query_type, sql_source_type, query_start, client_host, role, proxy_host FROM mo_sessions() AS mo_sessions_tmp`
 	MoCatalogMoConfigurationsDDL = `CREATE VIEW mo_catalog.mo_configurations AS SELECT node_type, node_id, name, current_value, default_value, internal FROM mo_configurations() AS mo_configurations_tmp`

@@ -16,10 +16,8 @@ package idxcdc
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -33,7 +31,7 @@ import (
 // 2. dirty sinkers
 // 3. all sinkers
 type Iteration struct {
-	table   *TableInfo_2
+	table   *TableEntry
 	sinkers []*SinkerEntry
 	from    types.TS
 	to      types.TS
@@ -51,7 +49,6 @@ func (iter *Iteration) Run() {
 	var txn client.TxnOperator
 	defer func() {
 		iter.endAt = time.Now()
-		iter.insertAsyncIndexIterations(ctx)
 		iter.table.OnIterationFinished(iter)
 		for i, sinkerErr := range iter.err {
 			if sinkerErr != nil {
@@ -99,7 +96,7 @@ func (iter *Iteration) Run() {
 	if iter.from.IsEmpty() {
 		iter.to = types.TimestampToTS(txn.SnapshotTS())
 	}
-	iter.err = CollectChanges_2(
+	iter.err = CollectChangesForIteration(
 		ctx,
 		iter,
 		table,
@@ -110,81 +107,4 @@ func (iter *Iteration) Run() {
 		iter.table.exec.packer,
 		iter.table.exec.mp,
 	)
-}
-
-func (iter *Iteration) insertAsyncIndexIterations(ctx context.Context) {
-	var txn client.TxnOperator
-	var err error
-	defer func() {
-		if txn != nil {
-			if err != nil {
-				txn.Rollback(ctx)
-			} else {
-				err = txn.Commit(ctx)
-			}
-		}
-		if msg, injected := objectio.CDCExecutorInjected(); injected && msg == "insertAsyncIndexIterations" {
-			err = moerr.NewInternalErrorNoCtx(msg)
-		}
-		if err != nil {
-			indexNames := ""
-			for _, sinker := range iter.sinkers {
-				indexNames = fmt.Sprintf("%s%s, ", indexNames, sinker.indexName)
-			}
-
-			errorStr := ""
-			for _, err := range iter.err {
-				if err != nil {
-					errorStr = fmt.Sprintf("%s%s, ", errorStr, err.Error())
-				} else {
-					errorStr = fmt.Sprintf("%s%s, ", errorStr, " ")
-				}
-			}
-
-			logutil.Error(
-				"Async-Index-CDC-Task sink iteration failed",
-				zap.Uint32("tenantID", iter.table.accountID),
-				zap.Uint64("tableID", iter.table.tableID),
-				zap.String("indexName", indexNames),
-				zap.String("error", errorStr),
-				zap.String("from", iter.from.ToString()),
-				zap.String("to", iter.to.ToString()),
-				zap.String("startAt", iter.startAt.Format(time.RFC3339)),
-				zap.String("endAt", iter.endAt.Format(time.RFC3339)),
-				zap.Error(err),
-			)
-		}
-	}()
-	txn, err = iter.table.exec.txnFactory()
-	if err != nil {
-		return
-	}
-	indexNames := ""
-	for _, sinker := range iter.sinkers {
-		indexNames = fmt.Sprintf("%s%s, ", indexNames, sinker.indexName)
-	}
-
-	errorStr := ""
-	for _, err := range iter.err {
-		if err != nil {
-			errorStr = fmt.Sprintf("%s%s, ", errorStr, err.Error())
-		} else {
-			errorStr = fmt.Sprintf("%s%s, ", errorStr, " ")
-		}
-	}
-
-	sql := cdc.CDCSQLBuilder.AsyncIndexIterationsInsertSQL(
-		iter.table.accountID,
-		iter.table.tableID,
-		indexNames,
-		iter.from,
-		iter.to,
-		errorStr,
-		iter.startAt,
-		iter.endAt,
-	)
-	_, err = ExecWithResult(ctx, sql, iter.table.exec.cnUUID, txn)
-	if err != nil {
-		return
-	}
 }

@@ -74,7 +74,7 @@ type CDCExecutorOption struct {
 type TxnFactory func() (client.TxnOperator, error)
 
 type CDCTaskExecutor struct {
-	tables               *btree.BTreeG[*TableInfo_2]
+	tables               *btree.BTreeG[*TableEntry]
 	tableMu              sync.RWMutex
 	packer               *types.Packer
 	mp                   *mpool.MPool
@@ -254,7 +254,7 @@ func (exec *CDCTaskExecutor) SetRpcHandleFn(fn RpcHandleFn) {
 }
 
 // scan candidates
-func (exec *CDCTaskExecutor) getAllTables() []*TableInfo_2 {
+func (exec *CDCTaskExecutor) getAllTables() []*TableEntry {
 	exec.tableMu.RLock()
 	defer exec.tableMu.RUnlock()
 	items := exec.tables.Items()
@@ -262,18 +262,18 @@ func (exec *CDCTaskExecutor) getAllTables() []*TableInfo_2 {
 }
 
 // get watermark, register new table, delete
-func (exec *CDCTaskExecutor) getTable(accountID uint32, tableID uint64) (*TableInfo_2, bool) {
+func (exec *CDCTaskExecutor) getTable(accountID uint32, tableID uint64) (*TableEntry, bool) {
 	exec.tableMu.RLock()
 	defer exec.tableMu.RUnlock()
-	return exec.tables.Get(&TableInfo_2{accountID: accountID, tableID: tableID})
+	return exec.tables.Get(&TableEntry{accountID: accountID, tableID: tableID})
 }
 
-func (exec *CDCTaskExecutor) setTable(table *TableInfo_2) {
+func (exec *CDCTaskExecutor) setTable(table *TableEntry) {
 	exec.tableMu.Lock()
 	defer exec.tableMu.Unlock()
 	exec.tables.Set(table)
 }
-func (exec *CDCTaskExecutor) deleteTableEntry(table *TableInfo_2) {
+func (exec *CDCTaskExecutor) deleteTableEntry(table *TableEntry) {
 	exec.tableMu.Lock()
 	defer exec.tableMu.Unlock()
 	exec.tables.Delete(table)
@@ -578,10 +578,10 @@ func (exec *CDCTaskExecutor) addIndex(
 	}
 	watermark := types.StringToTS(watermarkStr)
 	tableDef := rel.GetTableDef(ctx)
-	var table *TableInfo_2
+	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableDef.TblId)
 	if !ok {
-		table = NewTableInfo_2(
+		table = NewTableEntry(
 			exec,
 			accountID,
 			tableDef.DbId,
@@ -665,8 +665,8 @@ func (exec *CDCTaskExecutor) getTableByID(ctx context.Context, tableID uint64) (
 	}
 	return
 }
-func (exec *CDCTaskExecutor) getCandidateTables() []*TableInfo_2 {
-	ret := make([]*TableInfo_2, 0)
+func (exec *CDCTaskExecutor) getCandidateTables() []*TableEntry {
+	ret := make([]*TableEntry, 0)
 	items := exec.getAllTables()
 	for _, t := range items {
 		if t.IsEmpty() {
@@ -681,7 +681,7 @@ func (exec *CDCTaskExecutor) getCandidateTables() []*TableInfo_2 {
 }
 func (exec *CDCTaskExecutor) getDirtyTables(
 	ctx context.Context,
-	candidateTables []*TableInfo_2,
+	candidateTables []*TableEntry,
 	service string,
 	eng engine.Engine,
 ) (tables map[uint64]struct{}, fromTS []timestamp.Timestamp, toTS types.TS, err error) {
@@ -783,10 +783,6 @@ func (exec *CDCTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	gcTime := time.Now().Add(-cleanupThreshold)
 	asyncIndexLogGCSql := cdc.CDCSQLBuilder.AsyncIndexLogGCSQL(gcTime)
 	if _, err = ExecWithResult(ctx, asyncIndexLogGCSql, exec.cnUUID, txn); err != nil {
-		return err
-	}
-	asyncIndexIterationsGCSql := cdc.CDCSQLBuilder.AsyncIndexIterationsGCSQL(time.Now().Add(-cleanupThreshold))
-	if _, err = ExecWithResult(ctx, asyncIndexIterationsGCSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
 	logutil.Info(

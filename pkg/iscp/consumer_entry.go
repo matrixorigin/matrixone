@@ -37,7 +37,7 @@ const (
 )
 
 type SinkerEntry struct {
-	tableInfo    *TableInfo_2
+	tableInfo    *TableEntry
 	indexName    string
 	inited       atomic.Bool
 	consumer     Consumer
@@ -50,7 +50,7 @@ type SinkerEntry struct {
 func NewSinkerEntry(
 	cnUUID string,
 	tableDef *plan.TableDef,
-	tableInfo *TableInfo_2,
+	tableInfo *TableEntry,
 	sinkerConfig *ConsumerInfo,
 	watermark types.TS,
 	iterationErr error,

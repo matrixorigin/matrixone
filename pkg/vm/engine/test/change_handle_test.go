@@ -1373,8 +1373,6 @@ func TestCDCExecutor1(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// create database and table
@@ -1523,8 +1521,6 @@ func TestCDCExecutor2(t *testing.T) {
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -1681,8 +1677,6 @@ func TestCDCExecutor3(t *testing.T) {
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -1917,8 +1911,6 @@ func TestCDCExecutor4(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
@@ -2115,8 +2107,6 @@ func TestCDCExecutor5(t *testing.T) {
 	require.NoError(t, err)
 	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	dbName := "db"
@@ -2253,8 +2243,6 @@ func TestCDCExecutor6(t *testing.T) {
 	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	err = mock_mo_async_index_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_async_index_iterations(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 

@@ -25,7 +25,6 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
 	upg_mo_async_index_log_new,
-	upg_mo_async_index_iterations_new,
 }
 
 var upg_mo_pitr = versions.UpgradeEntry{
@@ -64,12 +63,3 @@ var upg_mo_async_index_log_new = versions.UpgradeEntry{
 	},
 }
 
-var upg_mo_async_index_iterations_new = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MO_ASYNC_INDEX_ITERATIONS,
-	UpgType:   versions.CREATE_NEW_TABLE,
-	UpgSql:    frontend.MoCatalogMoCdcAsyncIndexIterationsDDL,
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_ASYNC_INDEX_ITERATIONS)
-	},
-}

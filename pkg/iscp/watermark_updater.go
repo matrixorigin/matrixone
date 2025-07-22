@@ -137,6 +137,7 @@ func registerJob(
 		tenantId,
 		tableID,
 		sinkerinfo_json.IndexName,
+		int(sinkerinfo_json.ConsumerType),
 		"",
 		"",
 		string(consumerInfoJson),

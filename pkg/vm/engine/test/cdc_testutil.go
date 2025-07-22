@@ -25,12 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/idxcdc"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
 
@@ -46,91 +41,20 @@ func mock_mo_async_index_log(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
 ) (err error) {
-	var defs = make([]engine.TableDef, 0)
-
-	addDefFn := func(name string, typ types.Type, idx int) {
-		defs = append(defs, &engine.AttributeDef{
-			Attr: engine.Attribute{
-				Type:          typ,
-				IsRowId:       false,
-				Name:          name,
-				ID:            uint64(idx),
-				Primary:       name == "table_id",
-				IsHidden:      false,
-				Seqnum:        uint16(idx),
-				ClusterBy:     false,
-				AutoIncrement: false,
-				Default: &plan.Default{
-					NullAbility: name == "drop_at",
-				},
-			},
-		})
-	}
-
-	addDefFn("account_id", types.T_uint32.ToType(), 0)
-	addDefFn("table_id", types.T_uint64.ToType(), 1)
-	addDefFn("index_name", types.T_varchar.ToType(), 2)
-	addDefFn("column_names", types.T_varchar.ToType(), 3)
-	addDefFn("last_sync_txn_ts", types.T_varchar.ToType(), 4)
-	addDefFn("err_code", types.T_int32.ToType(), 5)
-	addDefFn("error_msg", types.T_varchar.ToType(), 6)
-	addDefFn("info", types.T_varchar.ToType(), 7)
-	addDefFn("drop_at", types.T_varchar.ToType(), 8)
-	addDefFn("consumer_config", types.T_varchar.ToType(), 9)
-
-	defs = append(defs,
-		&engine.ConstraintDef{
-			Cts: []engine.Constraint{
-				&engine.PrimaryKeyDef{
-					Pkey: &plan.PrimaryKeyDef{
-						PkeyColName: "table_id",
-						Names:       []string{"table_id"},
-					},
-				},
-			},
-		},
-	)
-	dbName := "mo_catalog"
-	tableName := "mo_async_index_log"
-	var txn client.TxnOperator
-	if txn, err = de.NewTxnOperator(ctx, de.Now()); err != nil {
-		return
-	}
-
-	var database engine.Database
-	if database, err = de.Engine.Database(ctx, dbName, txn); err != nil {
-		return
-	}
-	if err = database.Create(ctx, tableName, defs); err != nil {
-		return
-	}
-
-	if _, err = database.Relation(ctx, tableName, nil); err != nil {
-		return
-	}
-
-	if err = txn.Commit(ctx); err != nil {
-		return
-	}
-	return
-}
-
-func mock_mo_async_index_iterations(
-	de *testutil.TestDisttaeEngine,
-	ctx context.Context,
-) (err error) {
-
-	sql := "CREATE TABLE mo_catalog.mo_async_index_iterations (" +
-		"account_id INT UNSIGNED NOT NULL," +
-		"table_id BIGINT UNSIGNED NOT NULL," +
-		"index_names VARCHAR," +
-		"from_ts VARCHAR(32) NOT NULL," +
-		"to_ts VARCHAR(32) NOT NULL," +
-		"error_json VARCHAR NOT NULL," +
-		"start_at DATETIME NULL," +
-		"end_at DATETIME NULL," +
-		"PRIMARY KEY (table_id, index_names,to_ts)" +
-		")"
+	sql := `CREATE TABLE mo_async_index_log (
+				account_id INT UNSIGNED NOT NULL,
+				table_id BIGINT UNSIGNED NOT NULL,
+				job_name VARCHAR NOT NULL,
+				job_type INT NOT NULL,
+				column_names VARCHAR NOT NULL,
+				last_sync_txn_ts VARCHAR(32)  NOT NULL,
+				err_code INT NOT NULL,
+				error_msg VARCHAR(255) NOT NULL,
+				info VARCHAR NOT NULL,
+				drop_at DATETIME NULL,
+				consumer_config VARCHAR(255) NULL,
+				primary key(account_id, table_id, job_name)
+			)`
 
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {

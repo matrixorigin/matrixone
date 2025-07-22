@@ -35,7 +35,7 @@ type DataRetrieverConsumer interface {
 	Close()
 }
 
-func CollectChanges_2(
+func CollectChangesForIteration(
 	ctx context.Context,
 	iter *Iteration,
 	rel engine.Relation,

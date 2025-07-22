@@ -47,6 +47,8 @@ type ConsumerType int8
 const (
 	ConsumerType_IndexSync ConsumerType = iota
 	ConsumerType_CNConsumer
+
+	ConsumerType_CustomizedStart = 1000
 )
 
 const (

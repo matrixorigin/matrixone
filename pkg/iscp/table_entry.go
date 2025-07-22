@@ -34,7 +34,7 @@ const (
 	TableState_Finished
 )
 
-type TableInfo_2 struct {
+type TableEntry struct {
 	exec      *CDCTaskExecutor
 	tableDef  *plan.TableDef
 	accountID uint32
@@ -47,21 +47,21 @@ type TableInfo_2 struct {
 	mu        sync.RWMutex
 }
 
-func tableInfoLess(a, b *TableInfo_2) bool {
+func tableInfoLess(a, b *TableEntry) bool {
 	if a.accountID != b.accountID {
 		return a.accountID < b.accountID
 	}
 	return a.tableID < b.tableID
 }
 
-func NewTableInfo_2(
+func NewTableEntry(
 	exec *CDCTaskExecutor,
 	accountID uint32,
 	dbID, tableID uint64,
 	dbName, tableName string,
 	tableDef *plan.TableDef,
-) *TableInfo_2 {
-	return &TableInfo_2{
+) *TableEntry {
+	return &TableEntry{
 		exec:      exec,
 		accountID: accountID,
 		tableDef:  tableDef,
@@ -74,7 +74,7 @@ func NewTableInfo_2(
 		mu:        sync.RWMutex{},
 	}
 }
-func (t *TableInfo_2) AddSinker(
+func (t *TableEntry) AddSinker(
 	sinkConfig *ConsumerInfo,
 	watermark types.TS,
 	iterationErr error,
@@ -95,7 +95,7 @@ func (t *TableInfo_2) AddSinker(
 }
 
 // for UT
-func (t *TableInfo_2) GetWatermark(indexName string) (watermark types.TS, ok bool) {
+func (t *TableEntry) GetWatermark(indexName string) (watermark types.TS, ok bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, sinker := range t.sinkers {
@@ -106,13 +106,13 @@ func (t *TableInfo_2) GetWatermark(indexName string) (watermark types.TS, ok boo
 	return types.TS{}, false
 }
 
-func (t *TableInfo_2) IsEmpty() bool {
+func (t *TableEntry) IsEmpty() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return len(t.sinkers) == 0
 }
 
-func (t *TableInfo_2) DeleteSinker(
+func (t *TableEntry) DeleteSinker(
 	indexName string,
 ) (isEmpty bool, err error) {
 	t.mu.Lock()
@@ -126,7 +126,7 @@ func (t *TableInfo_2) DeleteSinker(
 	return false, moerr.NewInternalErrorNoCtx("sinker not found")
 }
 
-func (t *TableInfo_2) IsInitedAndFinished() bool {
+func (t *TableEntry) IsInitedAndFinished() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	hasActiveSinker := false
@@ -139,7 +139,7 @@ func (t *TableInfo_2) IsInitedAndFinished() bool {
 	return hasActiveSinker && t.state == TableState_Finished
 }
 
-func (t *TableInfo_2) GetMinWaterMark() types.TS {
+func (t *TableEntry) GetMinWaterMark() types.TS {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	minWatermark := types.MaxTs()
@@ -157,7 +157,7 @@ func (t *TableInfo_2) GetMinWaterMark() types.TS {
 	return minWatermark
 }
 
-func (t *TableInfo_2) GetMaxWaterMark() types.TS {
+func (t *TableEntry) GetMaxWaterMark() types.TS {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	maxWatermark := types.TS{}
@@ -169,7 +169,7 @@ func (t *TableInfo_2) GetMaxWaterMark() types.TS {
 	return maxWatermark
 }
 
-func (t *TableInfo_2) GetMaxWaterMarkLocked() types.TS {
+func (t *TableEntry) GetMaxWaterMarkLocked() types.TS {
 	maxWatermark := types.TS{}
 	for _, sinker := range t.sinkers {
 		if sinker.watermark.GT(&maxWatermark) {
@@ -179,7 +179,7 @@ func (t *TableInfo_2) GetMaxWaterMarkLocked() types.TS {
 	return maxWatermark
 }
 
-func (t *TableInfo_2) getCandidateLocked() []*SinkerEntry {
+func (t *TableEntry) getCandidateLocked() []*SinkerEntry {
 	candidates := make([]*SinkerEntry, 0, len(t.sinkers))
 	for _, sinker := range t.sinkers {
 		if !sinker.inited.Load() {
@@ -193,7 +193,7 @@ func (t *TableInfo_2) getCandidateLocked() []*SinkerEntry {
 	return candidates
 }
 
-func (t *TableInfo_2) GetSyncTask(ctx context.Context, toTS types.TS) *Iteration {
+func (t *TableEntry) GetSyncTask(ctx context.Context, toTS types.TS) *Iteration {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	candidates := t.getCandidateLocked()
@@ -233,7 +233,7 @@ func toErrorCode(err error) int {
 	return 0
 }
 
-func (t *TableInfo_2) UpdateWatermark(from, to types.TS) {
+func (t *TableEntry) UpdateWatermark(from, to types.TS) {
 	if from.GE(&to) {
 		return
 	}
@@ -249,7 +249,7 @@ func (t *TableInfo_2) UpdateWatermark(from, to types.TS) {
 	}
 }
 
-func (t *TableInfo_2) fillInAsyncIndexLogUpdateSQL(firstTable bool, insertWriter, deleteWriter *bytes.Buffer) (err error) {
+func (t *TableEntry) fillInAsyncIndexLogUpdateSQL(firstTable bool, insertWriter, deleteWriter *bytes.Buffer) (err error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for i, sinker := range t.sinkers {
@@ -268,7 +268,7 @@ func (t *TableInfo_2) fillInAsyncIndexLogUpdateSQL(firstTable bool, insertWriter
 	return
 }
 
-func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
+func (t *TableEntry) OnIterationFinished(iter *Iteration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// init sinker
@@ -323,7 +323,7 @@ func (t *TableInfo_2) OnIterationFinished(iter *Iteration) {
 	}
 }
 
-func (t *TableInfo_2) getNewSinkersLocked(candidates []*SinkerEntry) *SinkerEntry {
+func (t *TableEntry) getNewSinkersLocked(candidates []*SinkerEntry) *SinkerEntry {
 	maxTS := t.GetMaxWaterMarkLocked()
 	for _, sinker := range candidates {
 		if !sinker.inited.Load() {
@@ -336,7 +336,7 @@ func (t *TableInfo_2) getNewSinkersLocked(candidates []*SinkerEntry) *SinkerEntr
 	return nil
 }
 
-func (t *TableInfo_2) String() string {
+func (t *TableEntry) String() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	tableStr := fmt.Sprintf("\tTable[%d,%s-%d,%s-%d]", t.accountID, t.dbName, t.dbID, t.tableName, t.tableID)

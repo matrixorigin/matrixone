@@ -216,7 +216,8 @@ const (
 	CDCInsertMOAsyncIndexLogSqlTemplate = `REPLACE INTO mo_catalog.mo_async_index_log (` +
 		`account_id,` +
 		`table_id,` +
-		`index_name,` +
+		`job_name,` +
+		`job_type,` +
 		`column_names,` +
 		`last_sync_txn_ts,` +
 		`err_code,` +
@@ -227,7 +228,8 @@ const (
 		`) VALUES (` +
 		`%d,` + // account_id
 		`%d,` + // table_id
-		`'%s',` + // index_name
+		`'%s',` + // job_name
+		`%d,` + // job_type
 		`'%s',` + // column_names
 		`'%s',` + // last_sync_txn_ts
 		`%d,` + // err_code
@@ -243,41 +245,20 @@ const (
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
-		`AND index_name = '%s'`
+		`AND job_name = '%s'`
 	CDCUpdateMOAsyncIndexLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_async_index_log SET ` +
 		`drop_at = now()` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
-		`AND index_name = '%s'`
+		`AND job_name = '%s'`
 	CDCDeleteMOAsyncIndexLogSqlTemplate = `DELETE FROM mo_catalog.mo_async_index_log WHERE ` +
 		`drop_at < '%s'`
 	CDCSelectMOAsyncIndexLogSqlTemplate        = `SELECT * from mo_catalog.mo_async_index_log`
 	CDCSelectMOAsyncIndexLogByTableSqlTemplate = `SELECT drop_at from mo_catalog.mo_async_index_log WHERE ` +
 		`account_id = %d ` +
 		`AND table_id = %d ` +
-		`AND index_name = '%s'`
-	CDCInsertMOAsyncIndexIterationsTemplate = `INSERT INTO mo_catalog.mo_async_index_iterations(` +
-		`account_id,` +
-		`table_id,` +
-		`index_names,` +
-		`from_ts,` +
-		`to_ts,` +
-		`error_json,` +
-		`start_at,` +
-		`end_at` +
-		`) VALUES (` +
-		`%d,` + // account_id
-		`%d,` + // table_id
-		`'%s',` + // index_names
-		`'%s',` + // from_ts
-		`'%s',` + // to_ts
-		`'%s',` + // error_json
-		`'%s',` + // start_at
-		`'%s'` + // end_at
-		`)`
-	CDCDeleteMOAsyncIndexIterationsTemplate = `DELETE FROM mo_catalog.mo_async_index_iterations WHERE ` +
-		`end_at < '%s'`
+		`AND job_name = '%s'`
 	CDCGetTableIDTemplate = "SELECT " +
 		"rel_id, " +
 		"reldatabase_id " +
@@ -316,12 +297,9 @@ const (
 	CDCSelectMOAsyncIndexLogSqlTemplate_Idx        = 23
 	CDCSelectMOAsyncIndexLogByTableSqlTemplate_Idx = 24
 
-	CDCInsertMOAsyncIndexIterationsTemplate_Idx = 25
-	CDCDeleteMOAsyncIndexIterationsTemplate_Idx = 26
+	CDCGetTableIDTemplate_Idx = 25
 
-	CDCGetTableIDTemplate_Idx = 27
-
-	CDCSqlTemplateCount = 28
+	CDCSqlTemplateCount = 26
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -430,11 +408,12 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	CDCSelectMOAsyncIndexLogSqlTemplate_Idx: {
 		SQL: CDCSelectMOAsyncIndexLogSqlTemplate,
 		OutputAttrs: []string{
-			"id",
 			"account_id",
 			"table_id",
 			"db_id",
-			"index_name",
+			"job_name",
+			"job_type",
+			"column_names",
 			"last_sync_txn_ts",
 			"err_code",
 			"error_msg",
@@ -448,12 +427,6 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 		OutputAttrs: []string{
 			"drop_at",
 		},
-	},
-	CDCInsertMOAsyncIndexIterationsTemplate_Idx: {
-		SQL: CDCInsertMOAsyncIndexIterationsTemplate,
-	},
-	CDCDeleteMOAsyncIndexIterationsTemplate_Idx: {
-		SQL: CDCDeleteMOAsyncIndexIterationsTemplate,
 	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {
 		SQL: CDCGetWatermarkWhereSqlTemplate,
@@ -798,7 +771,8 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 func (b cdcSQLBuilder) AsyncIndexLogInsertSQL(
 	accountID uint32,
 	tableID uint64,
-	indexName string,
+	jobName string,
+	jobType int,
 	columnNames string,
 	info string,
 	consumerConfig string,
@@ -807,7 +781,8 @@ func (b cdcSQLBuilder) AsyncIndexLogInsertSQL(
 		CDCSQLTemplates[CDCInsertMOAsyncIndexLogSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		indexName,
+		jobName,
+		jobType,
 		columnNames,
 		types.TS{}.ToString(),
 		0,
@@ -870,39 +845,6 @@ func (b cdcSQLBuilder) AsyncIndexLogSelectByTableSQL(
 		accountID,
 		tableID,
 		indexName,
-	)
-}
-
-// ------------------------------------------------------------------------------------------------
-// Async Index Iterations SQL
-// ------------------------------------------------------------------------------------------------
-
-func (b cdcSQLBuilder) AsyncIndexIterationsInsertSQL(
-	accountID uint32,
-	tableID uint64,
-	indexNames string,
-	fromTs types.TS,
-	toTs types.TS,
-	errorJson string,
-	startAt time.Time,
-	endAt time.Time,
-) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCInsertMOAsyncIndexIterationsTemplate_Idx].SQL,
-		accountID,
-		tableID,
-		indexNames,
-		fromTs.ToString(),
-		toTs.ToString(),
-		errorJson,
-		startAt.Format(time.DateTime),
-		endAt.Format(time.DateTime),
-	)
-}
-func (b cdcSQLBuilder) AsyncIndexIterationsGCSQL(t time.Time) string {
-	return fmt.Sprintf(
-		CDCSQLTemplates[CDCDeleteMOAsyncIndexIterationsTemplate_Idx].SQL,
-		t.Format(time.DateTime),
 	)
 }
 
