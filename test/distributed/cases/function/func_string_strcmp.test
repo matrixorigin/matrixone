@@ -1,0 +1,7 @@
+select strcmp('a', 'b');
+select strcmp('abc', 'acd');
+select strcmp('a', null);
+select strcmp('a ', 'a');
+select strcmp('a', 'a');
+select strcmp(BINARY 'a', BINARY 'A');
+select strcmp(65, 97);
