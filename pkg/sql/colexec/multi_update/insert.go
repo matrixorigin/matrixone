@@ -67,7 +67,7 @@ func (update *MultiUpdate) insert_main_table(
 	return
 }
 
-func (update *MultiUpdate) insert_uniuqe_index_table(
+func (update *MultiUpdate) insert_unique_index_table(
 	proc *process.Process,
 	analyzer process.Analyzer,
 	tableIndex int,
@@ -143,7 +143,7 @@ func (update *MultiUpdate) insert_table(
 		insertBatch.SetRowCount(rowCount)
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		update.addInsertAffectRows(tableType, uint64(rowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
@@ -193,7 +193,7 @@ func (update *MultiUpdate) check_null_and_insert_table(
 		insertBatch.SetRowCount(newRowCount)
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		update.addInsertAffectRows(tableType, uint64(newRowCount))
-		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Sources[0]
+		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
