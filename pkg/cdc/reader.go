@@ -50,6 +50,7 @@ type tableReader struct {
 	runningReaders       *sync.Map
 	startTs, endTs       types.TS
 	noFull               bool
+	frequency            time.Duration
 
 	tableDef                           *plan.TableDef
 	insTsColIdx, insCompositedPkColIdx int
@@ -76,12 +77,13 @@ var NewTableReader = func(
 	frequency string,
 ) Reader {
 	var tick *time.Ticker
+	var dur time.Duration
 	if frequency != "" {
-		dur := parseFrequencyToDuration(frequency)
-		tick = time.NewTicker(dur)
+		dur = parseFrequencyToDuration(frequency)
 	} else {
-		tick = time.NewTicker(200 * time.Millisecond)
+		dur = 200 * time.Millisecond
 	}
+	tick = time.NewTicker(dur)
 	reader := &tableReader{
 		cnTxnClient:          cnTxnClient,
 		cnEngine:             cnEngine,
@@ -99,6 +101,7 @@ var NewTableReader = func(
 		endTs:                endTs,
 		noFull:               noFull,
 		tableDef:             tableDef,
+		frequency:            dur,
 	}
 
 	// batch columns layout:
@@ -184,10 +187,29 @@ func (reader *tableReader) Run(
 		)
 	}()
 
-	if err = reader.readTable(ctx, ar); err != nil {
-		logutil.Errorf("cdc tableReader(%v) initial sync failed, err: %v", reader.info, err)
-		return
+	lastSync, err := reader.getLastSyncTime(ctx)
+	if err != nil {
+		logutil.Errorf("GetLastSyncTime failed: %v", err)
+		lastSync = time.Time{}
 	}
+
+	if reader.frequency <= 0 {
+		reader.frequency = 200 * time.Millisecond
+	}
+	nextSyncTime := time.Now()
+	if !lastSync.IsZero() {
+		nextSyncTime = lastSync.Add(reader.frequency)
+	}
+
+	var wait time.Duration
+	if now := time.Now(); now.Before(nextSyncTime) {
+		wait = nextSyncTime.Sub(now)
+	} else {
+		wait = 200 * time.Millisecond
+	}
+
+	firstSync := true
+	reader.tick.Reset(wait)
 
 	for {
 		select {
@@ -204,7 +226,34 @@ func (reader *tableReader) Run(
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 			return
 		}
+
+		if firstSync {
+			firstSync = false
+			reader.tick.Reset(reader.frequency)
+		}
+
 	}
+}
+
+func (reader *tableReader) getLastSyncTime(ctx context.Context) (time.Time, error) {
+	wKey := WatermarkKey{
+		AccountId: reader.accountId,
+		TaskId:    reader.taskId,
+		DBName:    reader.info.SourceDbName,
+		TableName: reader.info.SourceTblName,
+	}
+
+	ts, err := reader.wMarkUpdater.GetFromCache(ctx, &wKey)
+	if err == nil && !ts.ToTimestamp().IsEmpty() {
+		return ts.ToTimestamp().ToStdTime(), nil
+	}
+
+	defaultTS := reader.startTs
+	ts, err = reader.wMarkUpdater.GetOrAddCommitted(ctx, &wKey, &defaultTS)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return ts.ToTimestamp().ToStdTime(), nil
 }
 
 var readTableWithTxn = func(
@@ -220,6 +269,7 @@ var readTableWithTxn = func(
 func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (err error) {
 	//step1 : create an txnOp
 	txnOp, err := GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
+
 	if err != nil {
 		return err
 	}
@@ -319,6 +369,7 @@ func (reader *tableReader) readTableWithTxn(
 
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
+
 	v2.CdcReadDurationHistogram.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return
