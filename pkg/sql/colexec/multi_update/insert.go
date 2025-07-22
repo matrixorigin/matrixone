@@ -67,7 +67,7 @@ func (update *MultiUpdate) insert_main_table(
 	return
 }
 
-func (update *MultiUpdate) insert_uniuqe_index_table(
+func (update *MultiUpdate) insert_unique_index_table(
 	proc *process.Process,
 	analyzer process.Analyzer,
 	tableIndex int,

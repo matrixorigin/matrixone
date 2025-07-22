@@ -96,6 +96,7 @@ type container struct {
 
 	s3Writer       *s3WriterDelegate
 	updateCtxInfos map[string]*updateCtxInfo
+	sources        map[uint64]engine.Relation
 
 	insertBuf []*batch.Batch
 	deleteBuf []*batch.Batch
@@ -169,6 +170,7 @@ func (update *MultiUpdate) Free(proc *process.Process, pipelineFailed bool, err 
 	}
 
 	update.ctr.updateCtxInfos = nil
+	update.ctr.sources = nil
 }
 
 func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

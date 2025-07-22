@@ -20,8 +20,6 @@ import (
 	"errors"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 type sqlExecutor struct {
@@ -315,6 +314,7 @@ func (exec *txnExecutor) Exec(
 		exec.s.us,
 		nil,
 	)
+	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	prepared := false
 	if statementOption.HasParams() {

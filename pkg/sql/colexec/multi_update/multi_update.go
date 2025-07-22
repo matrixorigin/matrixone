@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,6 +44,10 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		update.OpAnalyzer = process.NewAnalyzer(update.GetIdx(), update.IsFirst, update.IsLast, opName)
 	} else {
 		update.OpAnalyzer.Reset()
+	}
+
+	if update.ctr.sources == nil {
+		update.ctr.sources = make(map[uint64]engine.Relation)
 	}
 
 	if update.ctr.updateCtxInfos == nil {
@@ -259,7 +264,7 @@ func (update *MultiUpdate) update(proc *process.Process, analyzer process.Analyz
 }
 
 func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	input, err := update.getInput(proc, analyzer)
+	input, err := vm.ChildrenCall(update.GetChildren(0), proc, analyzer)
 	if err != nil {
 		return input, err
 	}
@@ -268,7 +273,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	}
 
 	actions := vector.MustFixedColNoTypeCheck[uint8](input.Batch.Vecs[0])
-	updateCtxIdx := vector.MustFixedColNoTypeCheck[uint16](input.Batch.Vecs[1])
+	tables := vector.MustFixedColNoTypeCheck[uint64](input.Batch.Vecs[1])
 	rowCounts := vector.MustFixedColNoTypeCheck[uint64](input.Batch.Vecs[2])
 	nameData, nameArea := vector.MustVarlenaRawData(input.Batch.Vecs[3])
 	batData, batArea := vector.MustVarlenaRawData(input.Batch.Vecs[4])
@@ -282,7 +287,17 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	}()
 
 	for i, action := range actions {
-		updateCtx := update.MultiUpdateCtx[updateCtxIdx[i]]
+		source, err := update.getSourceByID(tables[i], proc)
+		if err != nil {
+			return input, err
+		}
+
+		tableType := UpdateMainTable
+		if catalog.IsUniqueIndexTable(source.GetTableName()) {
+			tableType = UpdateUniqueIndexTable
+		} else if catalog.IsSecondaryIndexTable(source.GetTableName()) {
+			tableType = UpdateSecondaryIndexTable
+		}
 
 		switch actionType(action) {
 		case actionDelete:
@@ -294,10 +309,8 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 			if err := batBufs[actionDelete].UnmarshalBinary(batData[i].GetByteSlice(batArea)); err != nil {
 				return input, err
 			}
-			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			update.addDeleteAffectRows(tableType, rowCounts[i])
 			name := nameData[i].UnsafeGetString(nameArea)
-			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
@@ -320,9 +333,7 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				return input, err
 			}
 
-			tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 			update.addInsertAffectRows(tableType, rowCounts[i])
-			source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
@@ -375,7 +386,7 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 			case UpdateMainTable:
 				err = update.insert_main_table(proc, analyzer, i, bat)
 			case UpdateUniqueIndexTable:
-				err = update.insert_uniuqe_index_table(proc, analyzer, i, bat)
+				err = update.insert_unique_index_table(proc, analyzer, i, bat)
 			case UpdateSecondaryIndexTable:
 				err = update.insert_secondary_index_table(proc, analyzer, i, bat)
 			}
@@ -443,12 +454,34 @@ func (update *MultiUpdate) getInput(
 	return update.input, nil
 }
 
-func (insert *MultiUpdate) getS3Writer(id uint64) (*s3WriterDelegate, error) {
-	return insert.ctr.s3Writer, nil
+func (update *MultiUpdate) getS3Writer(id uint64) (*s3WriterDelegate, error) {
+	return update.ctr.s3Writer, nil
 }
 
-func (insert *MultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
-	w := insert.ctr.s3Writer
-	insert.ctr.s3Writer = nil
+func (update *MultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
+	w := update.ctr.s3Writer
+	update.ctr.s3Writer = nil
 	return w
+}
+
+func (update *MultiUpdate) getSourceByID(
+	id uint64,
+	proc *process.Process,
+) (engine.Relation, error) {
+	r, ok := update.ctr.sources[id]
+	if ok {
+		return r, nil
+	}
+
+	_, _, r, err := update.Engine.GetRelationById(
+		proc.Ctx,
+		proc.GetTxnOperator(),
+		id,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	update.ctr.sources[id] = r
+	return r, nil
 }

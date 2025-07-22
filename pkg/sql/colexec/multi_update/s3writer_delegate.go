@@ -104,8 +104,9 @@ type s3WriterDelegate struct {
 	batchSize      uint64
 	flushThreshold uint64
 
-	checkSizeCols []int
-	buf           bytes.Buffer
+	checkSizeCols    []int
+	buf              bytes.Buffer
+	enforceFlushToS3 bool
 }
 
 func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
@@ -126,6 +127,7 @@ func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 		insertBlockRowCount: make([]uint64, tableCount),
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		isRemote:            update.IsRemote,
+		enforceFlushToS3:    update.delegated,
 	}
 
 	mainIdx := 0
@@ -566,7 +568,8 @@ func (writer *s3WriterDelegate) fillInsertBlockInfo(
 }
 
 func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process, analyzer process.Analyzer) (err error) {
-	if writer.batchSize > TagS3SizeForMOLogger {
+	if writer.enforceFlushToS3 ||
+		writer.batchSize > TagS3SizeForMOLogger {
 		//write tail batch to s3
 		err = writer.sortAndSync(proc, analyzer)
 		if err != nil {
@@ -746,7 +749,7 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 		return
 	}
 
-	err = vector.AppendFixed(output.Vecs[1], uint16(idx), false, mp)
+	err = vector.AppendFixed(output.Vecs[1], writer.updateCtxs[idx].TableDef.TblId, false, mp)
 	if err != nil {
 		return
 	}
@@ -778,7 +781,7 @@ func (writer *s3WriterDelegate) addBatchToOutput(
 func makeS3OutputBatch() *batch.Batch {
 	bat := batch.NewWithSize(5)
 	bat.Vecs[0] = vector.NewVec(types.T_uint8.ToType())   // action type  0=actionInsert, 1=actionDelete
-	bat.Vecs[1] = vector.NewVec(types.T_uint16.ToType())  // index of update.UpdateCtxs
+	bat.Vecs[1] = vector.NewVec(types.T_uint64.ToType())  // tableID
 	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())  // rowCount of s3 blocks
 	bat.Vecs[3] = vector.NewVec(types.T_varchar.ToType()) // name for delete. empty for insert
 	bat.Vecs[4] = vector.NewVec(types.T_text.ToType())    // originBatch.MarshalBinary()
