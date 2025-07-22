@@ -32,7 +32,7 @@ const (
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()
-	mp, err := NewStrMap(false)
+	mp, err := NewStrHashMap(false)
 	itr := mp.NewIterator()
 	require.NoError(t, err)
 	ts := []types.Type{
@@ -59,7 +59,7 @@ func TestInsert(t *testing.T) {
 func TestIterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(false)
+		mp, err := NewStrHashMap(false)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -84,7 +84,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true)
+		mp, err := NewStrHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -109,7 +109,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true)
+		mp, err := NewStrHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),

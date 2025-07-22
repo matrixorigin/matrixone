@@ -43,7 +43,7 @@ func (minus *Minus) Prepare(proc *process.Process) error {
 		minus.OpAnalyzer.Reset()
 	}
 
-	minus.ctr.hashTable, err = hashmap.NewStrMap(true)
+	minus.ctr.hashTable, err = hashmap.NewStrHashMap(true)
 	if err != nil {
 		return err
 	}
