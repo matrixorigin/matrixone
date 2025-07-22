@@ -59,10 +59,11 @@ func WithQuickScanAndCKPOpts(
 	opts.CheckpointCfg.GlobalMinCount = 1
 	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
 	opts.CheckpointCfg.BlockRows = 10
-	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
+	opts.CheckpointCfg.GlobalVersionInterval = 0
 	opts.GCCfg = new(options.GCCfg)
 	opts.GCCfg.ScanGCInterval = time.Millisecond * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.GCCfg.GCInMemoryTTL = time.Millisecond * 1
 	opts.GCCfg.CacheSize = 1
 	opts.GCCfg.GCProbility = 0.000001
 	opts.GCCfg.GCDeleteBatchSize = 2
@@ -93,7 +94,7 @@ func WithQuickScanCKPAndLongGCOpts(
 	opts.CheckpointCfg.GlobalMinCount = 1
 	opts.CheckpointCfg.GCCheckpointInterval = time.Millisecond * 10
 	opts.CheckpointCfg.BlockRows = 10
-	opts.CheckpointCfg.GlobalVersionInterval = time.Millisecond * 10
+	opts.CheckpointCfg.GlobalVersionInterval = 0
 	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
 	opts.Ctx = context.Background()
 	for _, op := range ops {
@@ -125,6 +126,7 @@ func WithQuickScanAndCKPAndGCOpts(
 	opts.CatalogCfg = new(options.CatalogCfg)
 	opts.CatalogCfg.GCInterval = time.Millisecond * 1
 	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.GCCfg.GCInMemoryTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
 	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory
@@ -175,6 +177,7 @@ func WithLongScanAndCKPOptsAndQuickGC(
 	opts.GCCfg = new(options.GCCfg)
 	opts.GCCfg.ScanGCInterval = time.Second * 10
 	opts.GCCfg.GCTTL = time.Millisecond * 1
+	opts.GCCfg.GCInMemoryTTL = time.Millisecond * 1
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.Ctx = context.Background()
 	opts.GCTimeCheckerFactory = MinTSGCCheckerFactory

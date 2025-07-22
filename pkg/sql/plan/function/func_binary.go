@@ -2142,6 +2142,20 @@ func getSliceFromRight(s string, offset int64) string {
 	return string(substrRune)
 }
 
+func StrCmp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	return opBinaryStrStrToFixedWithErrorCheck[int8](ivecs, result, proc, length, strcmp, nil)
+}
+
+func strcmp(s1, s2 string) (int8, error) {
+	if s1 == s2 {
+		return 0, nil
+	}
+	if s1 < s2 {
+		return -1, nil
+	}
+	return 1, nil
+}
+
 func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	vs := vector.GenerateFunctionStrParameter(ivecs[0])
