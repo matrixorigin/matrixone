@@ -474,13 +474,20 @@ func determineShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 			return
 		}
 
-		rightchild := builder.qry.Nodes[n.Children[1]]
-		if rightchild.Stats.Outcnt > 320000 {
+		newDataNode := builder.qry.Nodes[n.Children[1]]
+		var shuffleThres float64 = 320000
+		if n.IsRightJoin {
+			newDataNode = builder.qry.Nodes[n.Children[0]]
+			shuffleThres = 960000
+		}
+
+		if newDataNode.Stats.Outcnt > shuffleThres {
 			//dedup join always go hash shuffle, optimize this in the future
 			n.Stats.HashmapStats.Shuffle = true
 			n.Stats.HashmapStats.ShuffleColIdx = 0
 			n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
 		}
+
 		return
 
 	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT:
