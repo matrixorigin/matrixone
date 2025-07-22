@@ -198,31 +198,15 @@ func (reader *tableReader) Run(
 		nextSyncTime = lastSync.Add(reader.frequency)
 	}
 
+	var wait time.Duration
 	if now := time.Now(); now.Before(nextSyncTime) {
-		wait := nextSyncTime.Sub(now)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ar.Pause:
-			return
-		case <-ar.Cancel:
-			return
-		case <-time.After(wait):
-		}
+		wait = nextSyncTime.Sub(now)
+	} else {
+		wait = 200 * time.Millisecond
 	}
-
-	if err = reader.readTable(ctx, ar); err != nil {
-		logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
-		return
-	}
-
-	if reader.frequency <= 0 {
-		reader.frequency = 200 * time.Millisecond
-	}
-	if reader.tick != nil {
-		reader.tick.Stop()
-	}
-	reader.tick = time.NewTicker(reader.frequency)
+	
+	firstSync := true
+	reader.tick.Reset(wait)
 
 	for {
 		select {
@@ -239,6 +223,12 @@ func (reader *tableReader) Run(
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 			return
 		}
+
+		if firstSync {
+			firstSync = false
+			reader.tick.Reset(reader.frequency)
+		}
+
 	}
 }
 
