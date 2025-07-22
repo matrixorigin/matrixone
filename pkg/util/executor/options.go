@@ -321,14 +321,3 @@ func (opts Options) WithForceRebuildPlan() Options {
 func (opts Options) ForceRebuildPlan() bool {
 	return opts.forceRebuildPlan
 }
-
-func (opts Options) WithResolveVariableFunc(
-	f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
-) Options {
-	opts.resolveVariableFunc = f
-	return opts
-}
-
-func (opts Options) ResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-	return opts.resolveVariableFunc
-}
