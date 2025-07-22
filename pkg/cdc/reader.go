@@ -193,6 +193,9 @@ func (reader *tableReader) Run(
 		lastSync = time.Time{}
 	}
 
+	if reader.frequency <= 0 {
+		reader.frequency = 200 * time.Millisecond
+	}
 	nextSyncTime := time.Now()
 	if !lastSync.IsZero() {
 		nextSyncTime = lastSync.Add(reader.frequency)
@@ -204,7 +207,7 @@ func (reader *tableReader) Run(
 	} else {
 		wait = 200 * time.Millisecond
 	}
-	
+
 	firstSync := true
 	reader.tick.Reset(wait)
 
