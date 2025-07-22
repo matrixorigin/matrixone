@@ -4768,7 +4768,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithDatabase(c.db).
 		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
 		WithLowerCaseTableNames(&lower).
-		WithStatementOption(options)
+		WithStatementOption(options).
+		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
 	ctx := c.proc.Ctx
 	if accountId >= 0 {
