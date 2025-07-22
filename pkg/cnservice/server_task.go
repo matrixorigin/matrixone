@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/idxcdc"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -402,7 +402,7 @@ func (s *service) registerExecutorsLocked() {
 	)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_Async_Index_CDC,
-		idxcdc.AsyncIndexCdcTaskExecutorFactory(
+		iscp.AsyncIndexISCPTaskExecutorFactory(
 			s.storeEngine,
 			s._txnClient,
 			s.task.runner.Attach,
