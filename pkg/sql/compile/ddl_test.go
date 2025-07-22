@@ -776,3 +776,19 @@ func TestPitrDupError(t *testing.T) {
 		assert.Contains(t, err.Error(), c.expect)
 	}
 }
+
+func TestIsExperimentalEnabled(t *testing.T) {
+	s := newScope(TableClone)
+
+	enabled, err := s.isExperimentalEnabled(nil, fulltextIndexFlag)
+	assert.NoError(t, err)
+	assert.True(t, enabled)
+
+	enabled, err = s.isExperimentalEnabled(nil, ivfFlatIndexFlag)
+	assert.NoError(t, err)
+	assert.True(t, enabled)
+
+	enabled, err = s.isExperimentalEnabled(nil, hnswIndexFlag)
+	assert.NoError(t, err)
+	assert.True(t, enabled)
+}
