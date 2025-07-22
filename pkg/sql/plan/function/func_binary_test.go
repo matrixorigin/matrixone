@@ -1184,6 +1184,104 @@ func TestFromUnixTime(t *testing.T) {
 	}
 }
 
+func initStrCmpTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "basic",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"apple", "apple", "apple", "apple"},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"apple", "orange", "banana", "app"},
+					[]bool{false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{0, -1, -1, 1},
+				[]bool{false, false, false, false}),
+		},
+
+		{
+			info: "null handling",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"a", "", "a", ""},
+					[]bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"a", "a", "", ""},
+					[]bool{false, true, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{0, 0, 1, 0},
+				[]bool{false, true, false, true}),
+		},
+
+		{
+			info: "edge cases",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "a", "a ", "a", "A"},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "a", "a", "a ", "a"},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{0, 0, 1, -1, -1},
+				[]bool{false, false, false, false, false}),
+		},
+
+		{
+			info: "different types",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"a", "b", "c"},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_binary.ToType(),
+					[]string{"A", "b", "d"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{1, 0, -1},
+				[]bool{false, false, false}),
+		},
+
+		{
+			info: "char padding",
+			typ:  types.T_char,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_char.ToType(),
+					[]string{"a", "a ", "a  "},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"a", "a", "a"},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
+				[]int8{0, 1, 1},
+				[]bool{false, false, false}),
+		},
+	}
+}
+
+func TestStrCmp(t *testing.T) {
+	testCases := initStrCmpTestCase()
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range testCases {
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, StrCmp)
+		success, info := fcTC.Run()
+
+		require.True(t, success,
+			fmt.Sprintf("case info: %s, type: %s, error details: %s",
+				tc.info, tc.typ.String(), info))
+	}
+}
+
 func initSubStrTestCase() []tcTemp {
 	return []tcTemp{
 		{
