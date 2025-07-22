@@ -186,14 +186,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		return err
 	}
 
-	itr := ctr.mp.NewIterator()
+	if ctr.itr == nil {
+		ctr.itr = ctr.mp.NewIterator()
+	}
+
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
 	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		vals, zvals, err := itr.Insert(i, n, ctr.vecs)
+		n := min(count-i, hashmap.UnitLimit)
+		vals, zvals, err := ctr.itr.Insert(i, n, ctr.vecs)
 		if err != nil {
 			return err
 		}
@@ -258,15 +258,26 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 		}
 	}
 
-	result.Batch = batch.NewWithSize(len(ap.Result))
+	if ctr.rbat == nil {
+		ctr.rbat = batch.NewWithSize(len(ap.Result))
+		for i, rp := range ap.Result {
+			typ := ap.LeftTypes[rp.Pos]
+			ctr.rbat.Vecs[i] = vector.NewVec(typ)
+		}
+	} else {
+		ctr.rbat.CleanOnlyData()
+	}
+
 	for i, rp := range ap.Result {
 		typ := ap.LeftTypes[rp.Pos]
-		result.Batch.Vecs[i] = vector.NewVec(typ)
-		if err := vector.GetUnionAllFunction(typ, proc.Mp())(result.Batch.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
+		if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp.Pos]); err != nil {
 			return err
 		}
+		ctr.rbat.Vecs[i].SetSorted(bat.Vecs[rp.Pos].GetSorted())
 	}
-	result.Batch.SetRowCount(count)
+
+	ctr.rbat.AddRowCount(count)
+	result.Batch = ctr.rbat
 
 	return nil
 }
