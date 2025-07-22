@@ -42,10 +42,9 @@ type evalVector struct {
 }
 
 type container struct {
-	state    int
-	itr      hashmap.Iterator
-	eligible []int64
-	rbat     *batch.Batch
+	state int
+	itr   hashmap.Iterator
+	rbat  *batch.Batch
 
 	exprExecs []colexec.ExpressionExecutor
 
