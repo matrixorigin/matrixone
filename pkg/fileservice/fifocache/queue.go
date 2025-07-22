@@ -16,7 +16,6 @@ package fifocache
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 type QueueItem[T any] struct {
@@ -30,7 +29,7 @@ type Queue[T any] struct {
 	tail     *queuePart[T]
 	partPool sync.Pool
 	size     int
-	used     atomic.Int64
+	used     int64
 }
 
 type queuePart[T any] struct {
@@ -83,7 +82,7 @@ func (p *Queue[T]) enqueue(v T, dsize int64) {
 	}
 	p.head.values = append(p.head.values, QueueItem[T]{v: v, size: dsize})
 	p.size++
-	p.used.Add(dsize)
+	p.used += dsize
 }
 
 func (p *Queue[T]) dequeue() (ret T, ok bool) {
@@ -116,7 +115,7 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 	p.tail.begin++
 	p.size--
 	ok = true
-	p.used.Add(-retitem.size)
+	p.used -= retitem.size
 	return
 }
 
@@ -133,5 +132,5 @@ func (p *Queue[T]) Used() int64 {
 		p.mu.Lock()         // Acquire lock
 		defer p.mu.Unlock() // Ensure lock is released
 	}
-	return p.used.Load()
+	return p.used
 }
