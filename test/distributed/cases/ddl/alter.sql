@@ -503,11 +503,37 @@ commit;
 show create table t5;
 
 
+set experimental_fulltext_index=1;
+create table v1 (a int primary key, b int);
+
+insert into v1 values (1, 1), (2, 1);
+
+alter table v1 modify column b int unique key; -- dup, join dedup path
+
+create table v2 (a int primary key, b int, c text, fulltext f01(c));
+
+insert into v2 values (1, 1, "42"), (2, 1, "43");
+
+alter table v2 modify column b int unique key; -- dup, fuzzy dedup path
+
+
+create table v3 (a int primary key, b int, c text, unique index IdX2(b));
+
+load data infile  '$resources/load_data/dup_load.csv' into table v3 fields terminated by ',';
+
+insert into v3 values (1, 1, "boroborodesu"); -- dup
+insert into v3 values (10, 2, "boroborodesu"); -- dup
+
+alter table v3 add column d int; -- no dup because we have skipped pk and unique index dedup
+
 -- Cleanup
 drop table t1;
 drop table t2;
 drop table t3;
 drop table t4;
 drop table t5;
+drop table v1;
+drop table v2;
+drop table v3;
 drop database varchar_test;
 
