@@ -622,6 +622,7 @@ information_schema    tables    v    accountadmin
 information_schema    triggers    r    accountadmin
 information_schema    user_privileges    r    accountadmin
 information_schema    views    v    accountadmin
+mo_catalog    mo_async_index_log    r    accountadmin
 mo_catalog    mo_cache    v    accountadmin
 mo_catalog    mo_columns    r    -
 mo_catalog    mo_configurations    v    accountadmin

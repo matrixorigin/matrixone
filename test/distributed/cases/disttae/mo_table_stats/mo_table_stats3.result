@@ -38,6 +38,7 @@ mo_user_defined_function    Tae    Dynamic    0    0    0    0    0    NULL    0
 mo_user_grant    Tae    Dynamic    4    0    1037    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_variables    null    null    null    null    null    null    null    null    null    2024-12-23 17:45:06    null    null    null    null    null    VIEW    0    moadmin
 mo_version    Tae    Dynamic    1    0    1074    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+mo_async_index_log    Tae    Dynamic    0    0    0    0    0    NULL    0    2024-12-23 17:45:06    NULL    NULL    utf8mb4_bin    NULL    0    moadmin
 drop database if exists testdb;
 create database testdb;
 use testdb;
