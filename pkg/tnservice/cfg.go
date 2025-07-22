@@ -126,6 +126,7 @@ type Config struct {
 
 	GCCfg struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
+		GCInMemoryTTL  toml.Duration `toml:"gc-in-memory-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
 		CheckGC        bool          `toml:"check-gc"`
