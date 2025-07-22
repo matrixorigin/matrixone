@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"context"
@@ -109,7 +109,7 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 
 	datatype := r.GetDataType()
 
-	if datatype == int8(OutputTypeSnapshot) {
+	if datatype == ISCPDataType_Snapshot {
 		// SNAPSHOT
 		for {
 			select {
@@ -175,12 +175,56 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 
 }
 
+func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {
+	// release the data
+	defer data.Done()
+
+	insertBatch := data.insertBatch
+	deleteBatch := data.deleteBatch
+	noMoreData := data.noMoreData
+	err := data.err
+	if err != nil {
+		errch <- err
+		return true
+	}
+
+	if noMoreData {
+		err := c.flushCdc()
+		if err != nil {
+			errch <- err
+		}
+		close(c.sqlBufSendCh)
+		return noMoreData
+	}
+
+	// update index
+
+	if datatype == ISCPDataType_Snapshot {
+		// SNAPSHOT
+		err := c.sinkSnapshot(ctx, insertBatch)
+		if err != nil {
+			// error out
+			errch <- err
+			noMoreData = true
+		}
+
+	} else {
+		// sinkTail will save sql to the slice
+		err := c.sinkTail(ctx, insertBatch, deleteBatch)
+		if err != nil {
+			// error out
+			errch <- err
+			noMoreData = true
+		}
+	}
+
+	return noMoreData
+
+}
+
 func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	noMoreData := false
-	var insertBatch, deleteBatch *AtomicBatch
 	errch := make(chan error, 2)
-	var err error
-
 	c.sqlBufSendCh = make(chan []byte)
 	defer func() {
 		c.sqlBufSendCh = nil
@@ -199,44 +243,8 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 
 	// read data
 	for !noMoreData {
-
-		insertBatch, deleteBatch, noMoreData, err = r.Next()
-		if err != nil {
-			errch <- err
-			noMoreData = true
-			continue
-		}
-
-		if noMoreData {
-			err := c.flushCdc()
-			if err != nil {
-				errch <- err
-			}
-			close(c.sqlBufSendCh)
-			continue
-		}
-
-		// update index
-
-		if datatype == int8(OutputTypeSnapshot) {
-			// SNAPSHOT
-			err := c.sinkSnapshot(ctx, insertBatch)
-			if err != nil {
-				// error out
-				errch <- err
-				noMoreData = true
-			}
-
-		} else {
-			// sinkTail will save sql to the slice
-			err := c.sinkTail(ctx, insertBatch, deleteBatch)
-			if err != nil {
-				// error out
-				errch <- err
-				noMoreData = true
-			}
-		}
-
+		data := r.Next()
+		noMoreData = c.processISCPData(ctx, data, datatype, errch)
 	}
 
 	wg.Wait()

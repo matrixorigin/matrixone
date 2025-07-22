@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"bytes"
@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,8 +57,35 @@ const (
 	CDCPitrGranularity_All     = "*"
 )
 
+type ISCPData struct {
+	refcnt atomic.Int32
+
+	insertBatch *AtomicBatch
+	deleteBatch *AtomicBatch
+	noMoreData  bool
+	err         error
+}
+
+func (d *ISCPData) Set(cnt int) {
+	d.refcnt.Add(int32(cnt))
+}
+
+func (d *ISCPData) Done() {
+	newRefcnt := d.refcnt.Add(-1)
+	if newRefcnt == 0 {
+		if d.insertBatch != nil {
+			d.insertBatch.Close()
+			d.insertBatch = nil
+		}
+		if d.deleteBatch != nil {
+			d.deleteBatch.Close()
+			d.deleteBatch = nil
+		}
+	}
+}
+
 type DataRetriever interface {
-	Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error)
+	Next() *ISCPData
 	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
 	GetDataType() int8
 }
@@ -79,13 +107,12 @@ func NewTaskId() TaskId {
 	return uuid.Must(uuid.NewV7())
 }
 
-type OutputType int8
-
 const (
-	OutputTypeSnapshot OutputType = iota
-	OutputTypeTail
+	ISCPDataType_Snapshot int8 = iota
+	ISCPDataType_Tail
 )
 
+/*
 func (t OutputType) String() string {
 	switch t {
 	case OutputTypeSnapshot:
@@ -96,6 +123,7 @@ func (t OutputType) String() string {
 		return "usp output type"
 	}
 }
+*/
 
 type RowType int
 

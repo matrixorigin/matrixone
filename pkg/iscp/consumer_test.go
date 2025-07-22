@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package idxcdc
+package iscp
 
 import (
 	"context"
@@ -43,13 +43,17 @@ type MockRetriever struct {
 	dtype       int8
 }
 
-func (r *MockRetriever) Next() (insertBatch *AtomicBatch, deleteBatch *AtomicBatch, noMoreData bool, err error) {
+func (r *MockRetriever) Next() *ISCPData {
 	logutil.Infof("TxRetriever Next()")
 	if !r.noMoreData {
 		r.noMoreData = true
-		return r.insertBatch, r.deleteBatch, false, nil
+		d := &ISCPData{insertBatch: r.insertBatch, deleteBatch: r.deleteBatch, noMoreData: false, err: nil}
+		d.Set(0) // never close
+		return d
 	}
-	return nil, nil, r.noMoreData, nil
+	d := &ISCPData{insertBatch: nil, deleteBatch: nil, noMoreData: r.noMoreData, err: nil}
+	d.Set(0) // never close
+	return d
 }
 
 func (r *MockRetriever) UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error {
@@ -193,7 +197,7 @@ func TestConsumer(t *testing.T) {
 		insertBatch: nil,
 		deleteBatch: nil,
 		noMoreData:  true,
-		dtype:       int8(OutputTypeSnapshot),
+		dtype:       ISCPDataType_Snapshot,
 	}
 
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
@@ -240,7 +244,7 @@ func TestHnswSnapshot(t *testing.T) {
 		}
 
 		output := &MockRetriever{
-			dtype:       int8(OutputTypeSnapshot),
+			dtype:       ISCPDataType_Snapshot,
 			insertBatch: insertAtomicBat,
 			deleteBatch: nil,
 			noMoreData:  false,
@@ -260,7 +264,7 @@ func TestHnswSnapshot(t *testing.T) {
 		require.NoError(t, err)
 
 		output := &MockRetriever{
-			dtype:       int8(OutputTypeSnapshot),
+			dtype:       ISCPDataType_Snapshot,
 			insertBatch: nil,
 			deleteBatch: nil,
 			noMoreData:  true,
@@ -325,7 +329,7 @@ func TestHnswTail(t *testing.T) {
 	delAtomicBat.Rows.Set(AtomicBatchRow{Ts: delfromTs, Pk: []byte{2}, Offset: 1, Src: bat})
 
 	output := &MockRetriever{
-		dtype:       int8(OutputTypeTail),
+		dtype:       ISCPDataType_Tail,
 		insertBatch: insertAtomicBat,
 		deleteBatch: delAtomicBat,
 		noMoreData:  false,

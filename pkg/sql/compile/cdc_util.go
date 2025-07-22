@@ -19,31 +19,31 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/idxcdc"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 /* CDC APIs */
-func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, pitr_name string, info *idxcdc.ConsumerInfo) (bool, error) {
+func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, pitr_name string, info *iscp.ConsumerInfo) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
-	return idxcdc.RegisterJob(ctx, cnUUID, txn, pitr_name, info)
+	return iscp.RegisterJob(ctx, cnUUID, txn, pitr_name, info)
 }
 
-func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, info *idxcdc.ConsumerInfo) (bool, error) {
-	return idxcdc.UnregisterJob(ctx, cnUUID, txn, info)
+func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, info *iscp.ConsumerInfo) (bool, error) {
+	return iscp.UnregisterJob(ctx, cnUUID, txn, info)
 }
 
 /* start here */
-func CreateCdcTask(c *Compile, pitr_name string, consumerinfo idxcdc.ConsumerInfo) (bool, error) {
+func CreateCdcTask(c *Compile, pitr_name string, consumerinfo iscp.ConsumerInfo) (bool, error) {
 	logutil.Infof("Create Index Task %v", consumerinfo)
 
 	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), pitr_name, &consumerinfo)
 }
 
-func DeleteCdcTask(c *Compile, consumerinfo idxcdc.ConsumerInfo) (bool, error) {
+func DeleteCdcTask(c *Compile, consumerinfo iscp.ConsumerInfo) (bool, error) {
 	logutil.Infof("Delete Index Task %v", consumerinfo)
 	return UnregisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), &consumerinfo)
 }
@@ -103,7 +103,7 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname s
 	}
 
 	// create index cdc task
-	ok, err := CreateCdcTask(c, pitr_name, idxcdc.ConsumerInfo{ConsumerType: sinker_type, DbName: dbname, TableName: tablename, IndexName: indexname})
+	ok, err := CreateCdcTask(c, pitr_name, iscp.ConsumerInfo{ConsumerType: sinker_type, DbName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	}
 
 	// delete index cdc task
-	_, err = DeleteCdcTask(c, idxcdc.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: indexname})
+	_, err = DeleteCdcTask(c, iscp.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: indexname})
 	if err != nil {
 		return err
 	}
@@ -181,7 +181,7 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 				}
 				if async {
 					hasindex = true
-					_, e := DeleteCdcTask(c, idxcdc.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: idx.IndexName})
+					_, e := DeleteCdcTask(c, iscp.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: idx.IndexName})
 					if e != nil {
 						return e
 					}
@@ -199,11 +199,11 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 
 func getSinkerTypeFromAlgo(algo string) int8 {
 	if catalog.IsHnswIndexAlgo(algo) {
-		return int8(idxcdc.ConsumerType_IndexSync)
+		return int8(iscp.ConsumerType_IndexSync)
 	} else if catalog.IsIvfIndexAlgo(algo) {
-		return int8(idxcdc.ConsumerType_IndexSync)
+		return int8(iscp.ConsumerType_IndexSync)
 	} else if catalog.IsFullTextIndexAlgo(algo) {
-		return int8(idxcdc.ConsumerType_IndexSync)
+		return int8(iscp.ConsumerType_IndexSync)
 	}
 	return int8(0)
 }
