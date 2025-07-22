@@ -96,12 +96,22 @@ var NewSinker = func(
 	ctx := context.Background()
 	padding := strings.Repeat(" ", sqlBufReserved)
 	// create db
-	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)), false)
+	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", dbTblInfo.SinkDbName)), false)
+	if err != nil {
+		return nil, err
+	}
 	// use db
-	_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
+	err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("use `%s`", dbTblInfo.SinkDbName)), false)
+	if err != nil {
+		return nil, err
+	}
 	// possibly need to drop table first
 	if dbTblInfo.IdChanged {
-		_ = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)), false)
+		err = sink.Send(ctx, ar, []byte(padding+fmt.Sprintf("DROP TABLE IF EXISTS `%s`", dbTblInfo.SinkTblName)), false)
+		if err != nil {
+			return nil, err
+		}
+		dbTblInfo.IdChanged = false
 	}
 	// create table
 	createSql := strings.TrimSpace(dbTblInfo.SourceCreateSql)
@@ -117,7 +127,10 @@ var NewSinker = func(
 		newTablePart = dbTblInfo.SinkTblName
 	}
 	createSql = createSql[:tableStart] + " " + newTablePart + createSql[tableEnd:]
-	_ = sink.Send(ctx, ar, []byte(padding+createSql), false)
+	err = sink.Send(ctx, ar, []byte(padding+createSql), false)
+	if err != nil {
+		return nil, err
+	}
 
 	return NewMysqlSinker(
 		sink,

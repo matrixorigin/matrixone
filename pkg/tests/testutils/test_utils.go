@@ -170,7 +170,16 @@ func ExecSQLWithReadResult(
 			}
 			return nil
 		},
-		executor.Options{}.WithDatabase(db),
+		executor.Options{}.
+			WithDatabase(db).
+			WithResolveVariableFunc(
+				func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+					if varName == "sql_mode" {
+						return "", nil
+					}
+					return nil, moerr.NewInternalErrorf(ctx, "variable %s not supported", varName)
+				},
+			),
 	)
 
 	require.NoError(t, moerr.AttachCause(ctx, err), sql)
@@ -345,6 +354,19 @@ func MustParseMOCtlResult(t *testing.T, result string) string {
 	var r ctlResult
 	require.NoError(t, json.Unmarshal([]byte(result), &r))
 	return r.Result
+}
+
+func ReadCount(
+	res executor.Result,
+) int {
+	n := int64(0)
+	res.ReadRows(
+		func(rows int, cols []*vector.Vector) bool {
+			n += executor.GetFixedRows[int64](cols[0])[0]
+			return true
+		},
+	)
+	return int(n)
 }
 
 type ctlResult struct {

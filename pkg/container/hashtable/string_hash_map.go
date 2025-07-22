@@ -15,10 +15,13 @@
 package hashtable
 
 import (
+	"bytes"
+	"io"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type StringRef struct {
@@ -83,7 +86,7 @@ func (ht *StringHashMap) allocate(index int, size uint64) error {
 
 func (ht *StringHashMap) Init(allocator malloc.Allocator) (err error) {
 	if allocator == nil {
-		allocator = defaultAllocator()
+		allocator = DefaultAllocator()
 	}
 	ht.allocator = allocator
 	ht.blockCellCnt = kInitialCellCnt
@@ -326,6 +329,136 @@ func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
 		return
 	}
 	it.pos++
+
+	return
+}
+
+func (ht *StringHashMap) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := ht.WriteTo(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (ht *StringHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
+	_, err := ht.UnmarshalFrom(bytes.NewReader(data), allocator)
+	return err
+}
+
+func (ht *StringHashMap) WriteTo(w io.Writer) (n int64, err error) {
+	var wn int
+
+	if wn, err = w.Write(types.EncodeUint64(&ht.elemCnt)); err != nil {
+		return
+	}
+	n += int64(wn)
+
+	if wn, err = w.Write(types.EncodeUint64(&ht.cellCnt)); err != nil {
+		return
+	}
+	n += int64(wn)
+
+	if wn, err = w.Write(types.EncodeUint64(&ht.blockCellCnt)); err != nil {
+		return
+	}
+	n += int64(wn)
+
+	if wn, err = w.Write(types.EncodeUint64(&ht.blockMaxElemCnt)); err != nil {
+		return
+	}
+	n += int64(wn)
+
+	if wn, err = w.Write(types.EncodeUint64(&ht.cellCntMask)); err != nil {
+		return
+	}
+	n += int64(wn)
+
+	// Write active cells
+	if ht.elemCnt > 0 {
+		for _, block := range ht.cells {
+			for i := range block {
+				if block[i].Mapped != 0 {
+					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[0])); err != nil {
+						return
+					}
+					n += int64(wn)
+					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[1])); err != nil {
+						return
+					}
+					n += int64(wn)
+					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[2])); err != nil {
+						return
+					}
+					n += int64(wn)
+					if wn, err = w.Write(types.EncodeUint64(&block[i].Mapped)); err != nil {
+						return
+					}
+					n += int64(wn)
+				}
+			}
+		}
+	}
+
+	return
+}
+
+func (ht *StringHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (n int64, err error) {
+	var rn int
+
+	// Read basic metadata
+	buf := make([]byte, 8*5) // 5 uint64 fields
+	if rn, err = io.ReadFull(r, buf); err != nil {
+		return
+	}
+	n += int64(rn)
+
+	ht.elemCnt = types.DecodeUint64(buf[0:8])
+	ht.cellCnt = types.DecodeUint64(buf[8:16])
+	ht.blockCellCnt = types.DecodeUint64(buf[16:24])
+	ht.blockMaxElemCnt = types.DecodeUint64(buf[24:32])
+	ht.cellCntMask = types.DecodeUint64(buf[32:40])
+
+	if allocator == nil {
+		allocator = DefaultAllocator()
+	}
+	ht.allocator = allocator
+
+	// Initialize blocks
+	if ht.cellCnt > 0 {
+		numBlocks := ht.cellCnt / ht.blockCellCnt
+		if ht.cellCnt%ht.blockCellCnt != 0 {
+			return n, moerr.NewInternalErrorNoCtx("invalid cellCnt and blockCellCnt combination")
+		}
+		ht.rawData = make([][]byte, numBlocks)
+		ht.rawDataDeallocators = make([]malloc.Deallocator, numBlocks)
+		ht.cells = make([][]StringHashMapCell, numBlocks)
+		for i := uint64(0); i < numBlocks; i++ {
+			if err = ht.allocate(int(i), ht.blockCellCnt*strCellSize); err != nil {
+				return
+			}
+		}
+	}
+
+	// Read and insert active cells
+	if ht.elemCnt > 0 {
+		cellBuf := make([]byte, 32) // HashState + Mapped
+		for i := uint64(0); i < ht.elemCnt; i++ {
+			if rn, err = io.ReadFull(r, cellBuf); err != nil {
+				return
+			}
+			n += int64(rn)
+
+			var cell StringHashMapCell
+			cell.HashState[0] = types.DecodeUint64(cellBuf[0:8])
+			cell.HashState[1] = types.DecodeUint64(cellBuf[8:16])
+			cell.HashState[2] = types.DecodeUint64(cellBuf[16:24])
+			cell.Mapped = types.DecodeUint64(cellBuf[24:32])
+
+			newCell := ht.findEmptyCell(&cell.HashState)
+			*newCell = cell
+		}
+	}
 
 	return
 }

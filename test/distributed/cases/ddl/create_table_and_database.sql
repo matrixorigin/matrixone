@@ -36,3 +36,14 @@ drop database test02;
 drop database test03;
 drop database test04;
 drop database test05;
+drop user if exists uuu123;
+drop role if exists role112233;
+create role role112233;
+grant SHOW DATABASES, CREATE DATABASE, DROP DATABASE, CONNECT on account * to role112233;
+create user uuu123 identified by "111" default role role112233;
+-- @session:id=1&user=uuu123&password=111
+create database `中文库`;
+drop database `中文库`;
+-- @session
+drop user uuu123;
+drop role role112233;

@@ -258,9 +258,8 @@ func MakeBloomfilterCoarseFilter(
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().UnsafeString()
 				tid := tableIDs[i]
-				if dropTS.IsEmpty() &&
-					((*transObjects)[name] == nil ||
-						(*transObjects)[name][tableIDs[i]] == nil) {
+				if (*transObjects)[name] == nil ||
+					(*transObjects)[name][tableIDs[i]] == nil {
 					if (*transObjects)[name] == nil {
 						(*transObjects)[name] = make(map[uint64]*ObjectEntry)
 					}

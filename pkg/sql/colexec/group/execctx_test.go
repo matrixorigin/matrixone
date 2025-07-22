@@ -63,7 +63,7 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 func TestGetResultBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	invalidAggExpr := aggexec.MakeAggFunctionExpression(
 		-9999,
 		false,

@@ -122,3 +122,16 @@ func SimpleMultiObjectsReader(
 		ctx, ds, fs, ts, opts...,
 	)
 }
+
+func SimpleReaderWithDataSource(
+	ctx context.Context,
+	fs fileservice.FileService,
+	source engine.DataSource,
+	ts timestamp.Timestamp, // only used for appendable object
+	opts ...ReaderOption,
+) engine.Reader {
+
+	return NewSimpleReader(
+		ctx, source, fs, ts, opts...,
+	)
+}

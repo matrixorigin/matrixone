@@ -228,7 +228,7 @@ func (ctr *container) hashAndSample(bat *batch.Batch) (err error) {
 		iterator = ctr.intHashMap.NewIterator()
 	} else {
 		if ctr.strHashMap == nil {
-			ctr.strHashMap, err = hashmap.NewStrMap(ctr.groupVectorsNullable)
+			ctr.strHashMap, err = hashmap.NewStrHashMap(ctr.groupVectorsNullable)
 			if err != nil {
 				return err
 			}

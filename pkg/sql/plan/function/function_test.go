@@ -200,7 +200,7 @@ func Test_GetFunctionByName(t *testing.T) {
 		},
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for i, c := range cs {
 		msg := fmt.Sprintf("%dth case", i)
 
@@ -231,7 +231,7 @@ func TestGetFunctionIsWinfunByName(t *testing.T) {
 func TestRunFunctionDirectly(t *testing.T) {
 	// fold case.
 	{
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		v0, err1 := vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp())
 		require.NoError(t, err1)
 		v1, err2 := vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp())
@@ -257,7 +257,7 @@ func TestRunFunctionDirectly(t *testing.T) {
 
 	// non-fold case.
 	{
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		inputs := []*vector.Vector{
 			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
 			testutil.NewVector(2, types.T_bool.ToType(), proc.Mp(), false, []bool{true, true}),
@@ -293,7 +293,7 @@ func TestCastNanoToTimestamp(t *testing.T) {
 
 	testCases := initCastNanoToTimestampTestCase(inputs, outputs)
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
 		s, info := fcTC.Run()

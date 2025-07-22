@@ -178,6 +178,7 @@ func (s *store) newTAEStorage(
 
 	gcCfg := &options.GCCfg{
 		GCTTL:          s.cfg.GCCfg.GCTTL.Duration,
+		GCInMemoryTTL:  s.cfg.GCCfg.GCInMemoryTTL.Duration,
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
 		CheckGC:        s.cfg.GCCfg.CheckGC,

@@ -98,7 +98,7 @@ func TestPreInsertUnique(t *testing.T) {
 		CommitOrRollbackTimeout: time.Second,
 	}).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	// create table t1(

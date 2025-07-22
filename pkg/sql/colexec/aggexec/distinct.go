@@ -43,7 +43,7 @@ func (d *distinctHash) grows(more int) error {
 
 	var err error
 	for i := oldLen; i < newLen; i++ {
-		if d.maps[i], err = hashmap.NewStrMap(true); err != nil {
+		if d.maps[i], err = hashmap.NewStrHashMap(true); err != nil {
 			return err
 		}
 		d.itrs[i] = d.maps[i].NewIterator()
@@ -152,4 +152,20 @@ func (d *distinctHash) free() {
 			m.Free()
 		}
 	}
+}
+
+func (d *distinctHash) Size() int64 {
+	var size int64
+	for _, m := range d.maps {
+		if m != nil {
+			size += m.Size()
+		}
+	}
+	// 8 is the size of a pointer.
+	size += int64(cap(d.maps)) * 8
+	// 16 is the size of an interface.
+	size += int64(cap(d.itrs)) * 16
+	size += int64(cap(d.bs))
+	size += int64(cap(d.bs1))
+	return size
 }

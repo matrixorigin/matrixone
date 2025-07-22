@@ -411,6 +411,50 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 	return insertMoIndexesSql, nil
 }
 
+func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation) error {
+	if relation == nil {
+		return nil
+	}
+
+	ct, err := GetConstraintDef(c.proc.Ctx, relation)
+	if err != nil {
+		return err
+	}
+	if ct == nil {
+		return nil
+	}
+
+	for _, constraint := range ct.Cts {
+		if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
+			for _, idx := range idxdef.Indexes {
+				if idx.TableExist {
+					var indexflag string
+					if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+						indexflag = hnswIndexFlag
+					} else if catalog.IsIvfIndexAlgo(idx.IndexAlgo) {
+						indexflag = ivfFlatIndexFlag
+					} else if catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+						indexflag = fulltextIndexFlag
+					}
+
+					if len(indexflag) > 0 {
+						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
+							return err
+						} else if !ok {
+							return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", indexflag))
+						}
+					}
+				}
+
+			}
+
+			break
+		}
+	}
+
+	return nil
+}
+
 func partsToColsStr(parts []string) string {
 	var temp string
 	for i, part := range parts {

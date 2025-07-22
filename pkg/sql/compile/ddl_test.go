@@ -49,7 +49,7 @@ func Test_lockIndexTable(t *testing.T) {
 	defer ctrl.Finish()
 
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnOperator = txnOperator
 
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
@@ -204,7 +204,7 @@ func TestScope_CreateTable(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
@@ -234,7 +234,7 @@ func TestScope_CreateTable(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
@@ -274,7 +274,7 @@ func TestScope_CreateTable(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
@@ -307,7 +307,7 @@ func TestScope_CreateTable(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
@@ -346,7 +346,7 @@ func TestScope_CreateTable(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
@@ -386,7 +386,7 @@ func TestScope_CreateTable(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
@@ -548,7 +548,7 @@ func TestScope_CreateView(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := defines.AttachAccountId(context.Background(), sysAccountId)
@@ -577,7 +577,7 @@ func TestScope_CreateView(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		ctx := context.Background()
@@ -644,7 +644,7 @@ func TestScope_Database(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		proc := testutil.NewProcess()
+		proc := testutil.NewProcess(t)
 		proc.Base.SessionInfo.Buf = buffer.New()
 
 		proc.Ctx = context.Background()
@@ -750,8 +750,8 @@ func TestCheckSysMoCatalogPitrResult(t *testing.T) {
 	})
 }
 
-func TestPitrExistsError(t *testing.T) {
-	compile := &Compile{proc: testutil.NewProc()}
+func TestPitrDupError(t *testing.T) {
+	compile := &Compile{proc: testutil.NewProc(t)}
 	cases := []struct {
 		level       int32
 		accountName string
@@ -771,8 +771,24 @@ func TestPitrExistsError(t *testing.T) {
 			DatabaseName: c.dbName,
 			TableName:    c.tableName,
 		}
-		err := pitrExistsError(compile, p)
+		err := pitrDupError(compile, p)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), c.expect)
 	}
+}
+
+func TestIsExperimentalEnabled(t *testing.T) {
+	s := newScope(TableClone)
+
+	enabled, err := s.isExperimentalEnabled(nil, fulltextIndexFlag)
+	assert.NoError(t, err)
+	assert.True(t, enabled)
+
+	enabled, err = s.isExperimentalEnabled(nil, ivfFlatIndexFlag)
+	assert.NoError(t, err)
+	assert.True(t, enabled)
+
+	enabled, err = s.isExperimentalEnabled(nil, hnswIndexFlag)
+	assert.NoError(t, err)
+	assert.True(t, enabled)
 }

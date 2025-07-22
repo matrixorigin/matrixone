@@ -83,7 +83,7 @@ func mock_runCatalogSql(proc *process.Process, sql string) (executor.Result, err
 
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool("", m)
+	proc := testutil.NewProcessWithMPool(t, "", m)
 
 	// stub runSql function
 	runSql = mock_runSql

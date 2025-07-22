@@ -1,3 +1,8 @@
+-- create table error
+SET experimental_ivf_index = 0;
+create table vector_index_00(a int primary key, b vecf32(128),c int,key c_k(c), KEY idx using ivfflat(b) lists = 256 op_type 'vector_l2_ops');
+
+
 SET experimental_ivf_index = 1;
 SET probe_limit=1;
 

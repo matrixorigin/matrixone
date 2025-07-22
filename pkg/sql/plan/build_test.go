@@ -1242,7 +1242,7 @@ func Test_limitUint64(t *testing.T) {
 		"select * from t1 limit 18446744073709551615, 18446744073709551615",
 		"SELECT IFNULL(CAST(@var AS BIGINT UNSIGNED), 1)",
 	}
-	testutil.NewProc()
+	testutil.NewProc(t)
 	mock := NewMockOptimizer(false)
 
 	for _, sql := range sqls {

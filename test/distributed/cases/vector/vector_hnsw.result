@@ -1,3 +1,6 @@
+SET experimental_hnsw_index = 0;
+create table vector_index_00(a bigint primary key, b vecf32(128),c int,key c_k(c), KEY idx using hnsw(b) op_type 'vector_l2_ops');
+internal error: experimental_hnsw_index is not enabled
 SET experimental_hnsw_index = 1;
 CREATE TABLE vector_empty(a bigint primary key, b vecf32(32), KEY `idxname` USING HNSW(b) M = 48 EF_CONSTRUCTION = 64 EF_SEARCH = 64 OP_TYPE "vector_l2_ops");
 DROP TABLE vector_empty;

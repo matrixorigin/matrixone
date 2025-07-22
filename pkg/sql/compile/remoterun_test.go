@@ -321,6 +321,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Apply), Apply: &pipeline.Apply{}, TableFunction: &pipeline.TableFunction{}},
 		{Op: int32(vm.PostDml), PostDml: &pipeline.PostDml{}},
 		{Op: int32(vm.DedupJoin), DedupJoin: &pipeline.DedupJoin{}},
+		{Op: int32(vm.RightDedupJoin), RightDedupJoin: &pipeline.RightDedupJoin{}},
 	}
 	for _, instruction := range instructions {
 		_, err := convertToVmOperator(instruction, ctx, nil)
@@ -514,7 +515,7 @@ func (f fakeTxnOperator) Snapshot() (txn.CNTxnSnapshot, error) {
 }
 
 func Test_prepareRemoteRunSendingData(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
 	proc.Base.TxnOperator = fakeTxnOperator{}
 
@@ -590,7 +591,7 @@ func Test_MessageSenderSendPipeline(t *testing.T) {
 }
 
 func Test_ReceiveMessageFromCnServer(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	sender := messageSenderOnClient{
 		ctx:          context.Background(),
 		streamSender: &fakeStreamSender{},
@@ -661,7 +662,7 @@ func Test_ReceiveMessageFromCnServer(t *testing.T) {
 }
 
 func Test_checkPipelineStandaloneExecutableAtRemote(t *testing.T) {
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	proc.Base.TxnOperator = fakeTxnOperator{}
 	// a standalone pipeline tree should return true.
 	{

@@ -27,7 +27,7 @@ import (
 
 func TestBatches(t *testing.T) {
 	var batches Batches
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	inputBatch := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, int(100000), proc.Mp())
 	err := batches.CopyIntoBatches(inputBatch, proc)
 	inputBatch.Clean(proc.Mp())

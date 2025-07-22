@@ -16,6 +16,7 @@ package options
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -41,12 +42,13 @@ const (
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10
-	DefaultGlobalVersionInterval        = time.Hour
+	DefaultGlobalVersionInterval        = 0
 	DefaultGCCheckpointInterval         = time.Minute
 	DefaultOverallFlushMemControl       = common.Const1GBytes
 
 	DefaultScanGCInterval    = time.Minute * 30
 	DefaultGCTTL             = time.Hour
+	DefaultGCInMemoryTTL     = time.Hour
 	DefaultGCMergeCount      = 40
 	DefaultGCDeleteBatchSize = 1000
 	DefaultGCDeleteTimeout   = time.Minute * 10
@@ -75,6 +77,7 @@ type Options struct {
 	IncrementalDedup     bool
 	IsStandalone         bool
 	EnableApplyTableData bool
+	GCTimeCheckerFactory func(any) func(*types.TS) bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`

@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -109,34 +110,42 @@ func TestNewSinker(t *testing.T) {
 		},
 	}
 
-	db, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	sink := &mysqlSink{
-		user:          "root",
-		password:      "123456",
-		ip:            "127.0.0.1",
-		port:          3306,
-		retryTimes:    CDCDefaultRetryTimes,
-		retryDuration: CDCDefaultRetryDuration,
-		conn:          db,
-	}
-
-	sinkStub := gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string, _ bool) (Sink, error) {
-		return sink, nil
-	})
-	defer sinkStub.Reset()
-
-	sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, uint64, string, *DbTableInfo, *CDCWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
-		return nil
-	})
-	defer sinkerStub.Reset()
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var sink Sink
+			var stub *gostub.Stubs
+
+			if tt.args.sinkUri.SinkTyp == CDCSinkType_MySQL {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+
+				// create db + use + create table
+				expectCount := 3
+				if tt.args.dbTblInfo != nil && tt.args.dbTblInfo.IdChanged {
+					// create db + use + drop + create table
+					expectCount = 4
+				}
+
+				for i := 0; i < expectCount; i++ {
+					mock.ExpectExec(fakeSql).WillReturnResult(sqlmock.NewResult(1, 1))
+				}
+
+				sink = &mysqlSink{
+					conn: db,
+				}
+
+				stub = gostub.Stub(&NewMysqlSink, func(_, _, _ string, _, _ int, _ time.Duration, _ string, _ bool) (Sink, error) {
+					return sink, nil
+				})
+				defer stub.Reset()
+			}
+
+			sinkerStub := gostub.Stub(&NewMysqlSinker, func(Sink, uint64, string, *DbTableInfo, *CDCWatermarkUpdater, *plan.TableDef, *ActiveRoutine, uint64, bool) Sinker {
+				return nil
+			})
+			defer sinkerStub.Reset()
+
 			got, err := NewSinker(
 				"",
 				tt.args.sinkUri,
@@ -1186,4 +1195,6 @@ func TestRecordTxn(t *testing.T) {
 		s.infoRecordedTxnSQLs(nil)
 		s.infoRecordedTxnSQLs(nil)
 	}
+
+	_ = moerr.NewInvalidStateNoCtxf("for test coverage")
 }

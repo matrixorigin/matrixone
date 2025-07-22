@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2022 - 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +37,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/syncthing/notify"
 )
 
 const (
@@ -53,13 +55,12 @@ type externalTestCase struct {
 }
 
 var (
-	cases         []externalTestCase
 	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
-func newTestCase(format, jsondata string) externalTestCase {
-	proc := testutil.NewProcess()
-	proc.Base.FileService = testutil.NewFS()
+func newTestCase(t *testing.T, format, jsondata string) externalTestCase {
+	proc := testutil.NewProcess(t)
+	proc.Base.FileService = testutil.NewFS(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc:  proc,
@@ -89,20 +90,22 @@ func newTestCase(format, jsondata string) externalTestCase {
 	}
 }
 
-func init() {
-	cases = []externalTestCase{
-		newTestCase(tree.CSV, ""),
-		newTestCase(tree.JSONLINE, tree.OBJECT),
-		newTestCase(tree.JSONLINE, tree.ARRAY),
+func makeCases(t *testing.T) []externalTestCase {
+	return []externalTestCase{
+		newTestCase(t, tree.CSV, ""),
+		newTestCase(t, tree.JSONLINE, tree.OBJECT),
+		newTestCase(t, tree.JSONLINE, tree.ARRAY),
 	}
 }
 
 func Test_String(t *testing.T) {
 	buf := new(bytes.Buffer)
+	cases := makeCases(t)
 	cases[0].arg.String(buf)
 }
 
 func Test_Prepare(t *testing.T) {
+	cases := makeCases(t)
 	convey.Convey("external Prepare", t, func() {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
@@ -172,6 +175,7 @@ func Test_Prepare(t *testing.T) {
 }
 
 func Test_Call(t *testing.T) {
+	cases := makeCases(t)
 	convey.Convey("external Call", t, func() {
 		for _, tcs := range cases {
 			param := tcs.arg.Es
@@ -224,9 +228,9 @@ func Test_Call(t *testing.T) {
 
 func Test_Call2(t *testing.T) {
 	cases2 := []externalTestCase{
-		newTestCase(tree.CSV, ""),
-		newTestCase(tree.JSONLINE, tree.OBJECT),
-		newTestCase(tree.JSONLINE, tree.ARRAY),
+		newTestCase(t, tree.CSV, ""),
+		newTestCase(t, tree.JSONLINE, tree.OBJECT),
+		newTestCase(t, tree.JSONLINE, tree.ARRAY),
 	}
 	convey.Convey("external Call", t, func() {
 		for _, tcs := range cases2 {
@@ -297,7 +301,7 @@ func Test_Call2(t *testing.T) {
 }
 
 func Test_CALL3(t *testing.T) {
-	case3 := newTestCase(tree.CSV, "")
+	case3 := newTestCase(t, tree.CSV, "")
 
 	convey.Convey("external Call", t, func() {
 		tcs := case3
@@ -461,8 +465,38 @@ func TestReadDirSymlink(t *testing.T) {
 	root := t.TempDir()
 	ctx := context.Background()
 
+	evChan := make(chan notify.EventInfo, 1024)
+	err := notify.Watch(filepath.Join(root, "..."), evChan, notify.All)
+	assert.Nil(t, err)
+	defer notify.Stop(evChan)
+
+	testDone := make(chan struct{})
+	fsLogDone := make(chan struct{})
+	go func() {
+		defer func() {
+			close(fsLogDone)
+		}()
+		for {
+			select {
+			case ev := <-evChan:
+				t.Logf("notify: %+v", ev)
+			case <-testDone:
+				time.Sleep(time.Second * 3) // wait event
+				// drain
+				for {
+					select {
+					case ev := <-evChan:
+						t.Logf("notify: %+v", ev)
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
+
 	// create a/b/c
-	err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
+	err = os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0755)
 	assert.Nil(t, err)
 
 	// write a/b/c/foo
@@ -503,7 +537,7 @@ func TestReadDirSymlink(t *testing.T) {
 	assert.Equal(t, 1, len(files))
 	assert.Equal(t, fooPathInB, files[0])
 
-	path1 := root + "/a//b/./../b/c/foo"
+	path1 := filepath.Join(root, "a", "b", "..", "b", "c", "foo")
 	files1, _, err := plan2.ReadDir(&tree.ExternParam{
 		ExParamConst: tree.ExParamConst{
 			Filepath: path1,
@@ -513,9 +547,15 @@ func TestReadDirSymlink(t *testing.T) {
 		},
 	})
 	assert.Nil(t, err)
-	pathWant1 := root + "/a/b/c/foo"
+	pathWant1 := filepath.Join(root, "a", "b", "c", "foo")
 	assert.Equal(t, 1, len(files1))
 	assert.Equal(t, pathWant1, files1[0])
+
+	err = os.Remove(filepath.Join(root, "a", "b", "c", "foo"))
+	assert.Nil(t, err)
+
+	close(testDone)
+	<-fsLogDone
 }
 
 func Test_fliterByAccountAndFilename(t *testing.T) {
@@ -675,7 +715,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 						},
 					},
 				}),
-				proc:     testutil.NewProc(),
+				proc:     testutil.NewProc(t),
 				fileList: fileList,
 				fileSize: fileSize,
 			},
@@ -694,7 +734,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 						},
 					},
 				}),
-				proc:     testutil.NewProc(),
+				proc:     testutil.NewProc(t),
 				fileList: fileList,
 				fileSize: fileSize,
 			},
@@ -713,7 +753,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 						},
 					},
 				}),
-				proc:     testutil.NewProc(),
+				proc:     testutil.NewProc(t),
 				fileList: fileList,
 				fileSize: fileSize,
 			},
@@ -734,7 +774,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 // test load data local infile with a compress file which not exists
 // getUnCompressReader will return EOF err in that case, and getMOCSVReader should handle EOF, and return nil err
 func Test_getMOCSVReader(t *testing.T) {
-	case1 := newTestCase(tree.CSV, "")
+	case1 := newTestCase(t, tree.CSV, "")
 	param := case1.arg.Es
 	extern := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{

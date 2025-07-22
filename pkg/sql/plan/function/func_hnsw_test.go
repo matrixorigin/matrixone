@@ -119,7 +119,7 @@ func TestHnswCdcUpdateFn(t *testing.T) {
 		},
 	}
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 	for _, tc := range tcs {
 		fcTC := NewFunctionTestCase(proc,
 			tc.inputs, tc.expect, hnswCdcUpdate)

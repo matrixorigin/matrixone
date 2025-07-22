@@ -409,12 +409,13 @@ const (
 	L2_DISTANCE_SQ_XC = 342
 
 	TS_TO_TIME = 343
-	// hnsw function
-	HNSW_CDC_UPDATE = 344
+	STRCMP     = 344
 
+	// hnsw function
+	HNSW_CDC_UPDATE = 345
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 345
+	FUNCTION_END_NUMBER = 346
 )
 
 // functionIdRegister is what function we have registered already.
@@ -526,6 +527,7 @@ var functionIdRegister = map[string]int32{
 	"pi":                PI,
 	"round":             ROUND,
 	"rpad":              RPAD,
+	"strcmp":            STRCMP,
 	"substr":            SUBSTRING,
 	"substring":         SUBSTRING,
 	"mid":               SUBSTRING,
