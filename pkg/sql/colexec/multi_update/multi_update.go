@@ -101,6 +101,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	}
 
 	update.ctr.affectedRows = 0
+	update.ctr.flushed = false
 	update.getFlushableS3WriterFunc = update.getFlushableS3Writer
 	update.getS3WriterFunc = update.getS3Writer
 
@@ -460,7 +461,10 @@ func (update *MultiUpdate) getS3Writer(id uint64) (*s3WriterDelegate, error) {
 
 func (update *MultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
 	w := update.ctr.s3Writer
-	update.ctr.s3Writer = nil
+	if update.ctr.flushed {
+		return nil
+	}
+	update.ctr.flushed = true
 	return w
 }
 

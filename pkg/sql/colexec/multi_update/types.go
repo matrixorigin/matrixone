@@ -94,6 +94,7 @@ type container struct {
 	affectedRows uint64
 	action       actionType
 
+	flushed        bool
 	s3Writer       *s3WriterDelegate
 	updateCtxInfos map[string]*updateCtxInfo
 	sources        map[uint64]engine.Relation

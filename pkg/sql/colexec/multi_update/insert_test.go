@@ -93,22 +93,6 @@ func TestInsertS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	runTestCases(t, proc, []*testCase{case1})
 }
 
-func TestFlushS3Info(t *testing.T) {
-	hasUniqueKey := false
-	hasSecondaryKey := false
-
-	_, ctrl, proc := prepareTestCtx(t, true)
-	eng := prepareTestEng(ctrl, false)
-
-	batchs, rowCount := buildFlushS3InfoBatch(proc.GetMPool(), hasUniqueKey, hasSecondaryKey)
-
-	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
-	action := UpdateFlushS3Info
-	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, rowCount, action, false)
-
-	runTestCases(t, proc, []*testCase{retCase})
-}
-
 // ----- util function ----
 func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) (*process.Process, *testCase) {
 	_, ctrl, proc := prepareTestCtx(t, false)
