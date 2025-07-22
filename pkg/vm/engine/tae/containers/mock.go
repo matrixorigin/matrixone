@@ -208,12 +208,18 @@ func MockVector(t types.Type, rows int, unique bool, provider Vector) (vec Vecto
 			vec.Append(types.TimeFromClock(false, 1, 1, 1, 1), false)
 		}
 	case types.T_timestamp:
-		for i := int32(1); i <= int32(rows); i++ {
-			ts, err := types.ParseTimestamp(time.UTC, time.Now().Format(time.DateTime), t.Scale)
-			if err != nil {
-				panic(err)
+		if unique {
+			for i := int32(1); i <= int32(rows); i++ {
+				vec.Append(types.Timestamp(common.NextGlobalSeqNum()), false)
 			}
-			vec.Append(ts, false)
+		} else {
+			for i := int32(1); i <= int32(rows); i++ {
+				ts, err := types.ParseTimestamp(time.UTC, time.Now().Format(time.DateTime), t.Scale)
+				if err != nil {
+					panic(err)
+				}
+				vec.Append(ts, false)
+			}
 		}
 	case types.T_decimal64:
 		for i := int32(1); i <= int32(rows); i++ {
