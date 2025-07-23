@@ -57,7 +57,7 @@ var _ Consumer = &interalSqlConsumer{}
 
 type interalSqlConsumer struct {
 	internalSqlExecutor executor.SQLExecutor
-	indexName           string
+	jobName             string
 
 	dataRetriever DataRetriever
 	tableInfo     *plan.TableDef
@@ -112,7 +112,7 @@ func NewInteralSqlConsumer(
 ) (Consumer, error) {
 	s := &interalSqlConsumer{
 		tableInfo: tableDef,
-		indexName: info.IndexName,
+		jobName:   info.IndexName,
 	}
 	s.maxAllowedPacket = uint64(1024 * 1024)
 	logutil.Infof("iscp mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, s.maxAllowedPacket)
@@ -215,7 +215,7 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithIndexName") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
-			if s.indexName == strs[i] {
+			if s.jobName == strs[i] {
 				return moerr.NewInternalErrorNoCtx(strs[0])
 			}
 		}

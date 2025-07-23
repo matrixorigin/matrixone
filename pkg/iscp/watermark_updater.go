@@ -93,7 +93,7 @@ func registerJob(
 			"Async-Index-ISCP-Task RegisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
-			zap.String("indexName", sinkerinfo_json.IndexName),
+			zap.String("jobName", sinkerinfo_json.IndexName),
 			zap.Bool("create new", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -189,7 +189,7 @@ func unregisterJob(
 			"Async-Index-ISCP-Task UnregisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
-			zap.String("indexName", consumerInfo.IndexName),
+			zap.String("jobName", consumerInfo.IndexName),
 			zap.Bool("delete", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -279,12 +279,12 @@ func queryIndexLog(
 	txn client.TxnOperator,
 	tenantId uint32,
 	tableID uint64,
-	indexName string,
+	jobName string,
 ) (exist, dropped bool, err error) {
 	selectSql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogSelectByTableSQL(
 		tenantId,
 		tableID,
-		indexName,
+		jobName,
 	)
 	result, err := ExecWithResult(ctx, selectSql, cnUUID, txn)
 	if err != nil {

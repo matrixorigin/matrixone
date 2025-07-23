@@ -41,7 +41,7 @@ func NewJobEntry(
 	}
 	jobEntry := &JobEntry{
 		tableInfo:    tableInfo,
-		indexName:    sinkerConfig.IndexName,
+		jobName:      sinkerConfig.IndexName,
 		consumer:     consumer,
 		consumerType: sinkerConfig.ConsumerType,
 		jobConfig:    jobConfig,
@@ -139,7 +139,7 @@ func (jobEntry *JobEntry) StringLocked() string {
 	}
 	return fmt.Sprintf(
 		"Index[%s%s]%d,%s,%v[%v]",
-		jobEntry.indexName,
+		jobEntry.jobName,
 		initStr,
 		jobEntry.consumerType,
 		jobEntry.watermark.ToString(),
@@ -159,7 +159,7 @@ func (jobEntry *JobEntry) fillInAsyncIndexLogInsertSQL(firstSinker bool, w *byte
 	_, err = w.WriteString(fmt.Sprintf(" (%d, %d,'', '%s','%s', '%s',  0, '', '', '%s', NULL)",
 		jobEntry.tableInfo.accountID,
 		jobEntry.tableInfo.tableID,
-		jobEntry.indexName,
+		jobEntry.jobName,
 		string(jobConfigStr),
 		jobEntry.watermark.ToString(),
 		jobEntry.getConsumerInfoStr(),
@@ -175,7 +175,7 @@ func (jobEntry *JobEntry) fillInAsyncIndexLogDeleteSQL(firstSinker bool, w *byte
 		fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = '%s' and drop_at is null)",
 			jobEntry.tableInfo.accountID,
 			jobEntry.tableInfo.tableID,
-			jobEntry.indexName,
+			jobEntry.jobName,
 		))
 	return err
 }

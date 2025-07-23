@@ -60,7 +60,7 @@ const (
 // Intra-System Change Propagation Job Entry
 type JobEntry struct {
 	tableInfo    *TableEntry
-	indexName    string
+	jobName      string
 	inited       atomic.Bool
 	consumer     Consumer
 	consumerType int8

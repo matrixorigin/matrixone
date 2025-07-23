@@ -103,15 +103,15 @@ func CollectChangesForIteration(
 				err = moerr.NewInternalErrorNoCtx(msg)
 			}
 			if err != nil {
-				indexNames := ""
+				jobNames := ""
 				for _, sinker := range iter.sinkers {
-					indexNames = fmt.Sprintf("%s%s, ", indexNames, sinker.indexName)
+					jobNames = fmt.Sprintf("%s%s, ", jobNames, sinker.jobName)
 				}
 				logutil.Error(
 					"Async-Index-ISCP-Task sink iteration failed",
 					zap.Uint32("tenantID", iter.table.accountID),
 					zap.Uint64("tableID", iter.table.tableID),
-					zap.String("indexName", indexNames),
+					zap.String("jobName", jobNames),
 					zap.Error(err),
 					zap.String("from", iter.from.ToString()),
 					zap.String("to", iter.to.ToString()),
@@ -173,7 +173,7 @@ func CollectChangesForIteration(
 					"Async-Index-ISCP-Task sink consume failed",
 					zap.Uint32("tenantID", iter.table.accountID),
 					zap.Uint64("tableID", iter.table.tableID),
-					zap.String("indexName", iter.sinkers[i].indexName),
+					zap.String("jobName", iter.sinkers[i].jobName),
 					zap.Error(err),
 					zap.String("from", iter.from.ToString()),
 					zap.String("to", iter.to.ToString()),

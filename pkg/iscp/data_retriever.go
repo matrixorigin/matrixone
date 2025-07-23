@@ -111,7 +111,7 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 	updateWatermarkSQL := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogUpdateResultSQL(
 		r.tableInfo.accountID,
 		r.tableInfo.tableID,
-		r.indexName,
+		r.jobName,
 		r.to,
 		0,
 		"",

@@ -59,7 +59,7 @@ func (t *TableEntry) AddSinker(
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, sinker := range t.sinkers {
-		if sinker.indexName == sinkConfig.IndexName {
+		if sinker.jobName == sinkConfig.IndexName {
 			return false, nil
 		}
 	}
@@ -72,11 +72,11 @@ func (t *TableEntry) AddSinker(
 }
 
 // for UT
-func (t *TableEntry) GetWatermark(indexName string) (watermark types.TS, ok bool) {
+func (t *TableEntry) GetWatermark(jobName string) (watermark types.TS, ok bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, sinker := range t.sinkers {
-		if sinker.indexName == indexName {
+		if sinker.jobName == jobName {
 			return sinker.watermark, true
 		}
 	}
@@ -90,12 +90,12 @@ func (t *TableEntry) IsEmpty() bool {
 }
 
 func (t *TableEntry) DeleteSinker(
-	indexName string,
+	jobName string,
 ) (isEmpty bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for i, sinker := range t.sinkers {
-		if sinker.indexName == indexName {
+		if sinker.jobName == jobName {
 			t.sinkers = append(t.sinkers[:i], t.sinkers[i+1:]...)
 			return len(t.sinkers) == 0, nil
 		}

@@ -406,12 +406,12 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 }
 
 // For UT
-func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, indexName string) (watermark types.TS, ok bool) {
+func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, jobName string) (watermark types.TS, ok bool) {
 	table, ok := exec.getTable(accountID, srcTableID)
 	if !ok {
 		return
 	}
-	watermark, ok = table.GetWatermark(indexName)
+	watermark, ok = table.GetWatermark(jobName)
 	return
 }
 
@@ -430,7 +430,7 @@ func (exec *ISCPTaskExecutor) onISCPLogInsert(ctx context.Context, input *api.Ba
 		panic(err)
 	}
 	tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
-	indexNameVector, err := vector.ProtoVectorToVector(input.Vecs[4])
+	jobNameVector, err := vector.ProtoVectorToVector(input.Vecs[4])
 	if err != nil {
 		panic(err)
 	}
@@ -469,10 +469,10 @@ func (exec *ISCPTaskExecutor) onISCPLogInsert(ctx context.Context, input *api.Ba
 			)
 		}
 		if !dropAtVector.IsNull(uint64(i)) {
-			indexName := indexNameVector.GetStringAt(i)
+			jobName := jobNameVector.GetStringAt(i)
 			go retry(
 				func() error {
-					return exec.deleteIndex(accountIDs[i], tid, indexName)
+					return exec.deleteIndex(accountIDs[i], tid, jobName)
 				},
 				exec.option.RetryTimes,
 			)
@@ -553,7 +553,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 	consumerInfoStr string,
 	jobConfigStr string,
 ) (err error) {
-	var indexName string
+	var jobName string
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -565,7 +565,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 			"Async-Index-ISCP-Task add index",
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", tableID),
-			zap.String("indexName", indexName),
+			zap.String("jobName", jobName),
 			zap.String("watermark", watermarkStr),
 			zap.Int("errorCode", errorCode),
 			zap.Error(err),
@@ -581,7 +581,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 	if err != nil {
 		return
 	}
-	indexName = consumerInfo.IndexName
+	jobName = consumerInfo.IndexName
 	rel, err := exec.getTableByID(ctx, tableID)
 	if err != nil {
 		return
@@ -619,7 +619,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 func (exec *ISCPTaskExecutor) deleteIndex(
 	accountID uint32,
 	tableID uint64,
-	indexName string,
+	jobName string,
 ) (err error) {
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
@@ -632,7 +632,7 @@ func (exec *ISCPTaskExecutor) deleteIndex(
 			"Async-Index-ISCP-Task delete index",
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", tableID),
-			zap.String("indexName", indexName),
+			zap.String("jobName", jobName),
 			zap.Error(err),
 		)
 	}()
@@ -640,7 +640,7 @@ func (exec *ISCPTaskExecutor) deleteIndex(
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("table not found")
 	}
-	empty, err := table.DeleteSinker(indexName)
+	empty, err := table.DeleteSinker(jobName)
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "deleteIndex" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
