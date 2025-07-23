@@ -87,7 +87,7 @@ const (
 */
 type Iteration struct {
 	table   *TableEntry
-	sinkers []*JobEntry
+	jobs    []*JobEntry
 	from    types.TS
 	to      types.TS
 	err     []error
@@ -148,7 +148,7 @@ type TableEntry struct {
 	tableID   uint64
 	tableName string
 	dbName    string
-	sinkers   []*JobEntry
+	jobs      []*JobEntry
 	mu        sync.RWMutex
 }
 

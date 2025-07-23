@@ -58,10 +58,10 @@ func (jobEntry *JobEntry) init() {
 	if jobEntry.watermark.IsEmpty() {
 		// in the 1st iteration, toTS is determined by txn.SnapshotTS()
 		iter := &Iteration{
-			table:   jobEntry.tableInfo,
-			sinkers: []*JobEntry{jobEntry},
-			to:      types.TS{},
-			from:    types.TS{},
+			table: jobEntry.tableInfo,
+			jobs:  []*JobEntry{jobEntry},
+			to:    types.TS{},
+			from:  types.TS{},
 		}
 		jobEntry.tableInfo.exec.worker.Submit(iter)
 	} else {
@@ -79,10 +79,10 @@ func (jobEntry *JobEntry) OnIterationFinished(iter *Iteration, offset int) {
 			jobEntry.err = iter.err[offset]
 			jobEntry.tableInfo.exec.worker.Submit(
 				&Iteration{
-					table:   jobEntry.tableInfo,
-					sinkers: []*JobEntry{jobEntry},
-					to:      types.TS{},
-					from:    types.TS{},
+					table: jobEntry.tableInfo,
+					jobs:  []*JobEntry{jobEntry},
+					to:    types.TS{},
+					from:  types.TS{},
 				},
 			)
 		} else {

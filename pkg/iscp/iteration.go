@@ -30,7 +30,7 @@ import (
 func (iter *Iteration) Init() {
 	iter.table.mu.Lock()
 	defer iter.table.mu.Unlock()
-	for _, sinker := range iter.sinkers {
+	for _, sinker := range iter.jobs {
 		sinker.state = JobState_Running
 	}
 }
@@ -39,23 +39,23 @@ func (iter *Iteration) Run() {
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, iter.table.accountID)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	iter.err = make([]error, len(iter.sinkers))
+	iter.err = make([]error, len(iter.jobs))
 	iter.startAt = time.Now()
 	var txn client.TxnOperator
 	defer func() {
 		iter.endAt = time.Now()
 		iter.table.mu.Lock()
-		for i, sinker := range iter.sinkers {
+		for i, sinker := range iter.jobs {
 			sinker.OnIterationFinished(iter, i)
 		}
 		iter.table.mu.Unlock()
 		for i, sinkerErr := range iter.err {
 			if sinkerErr != nil {
 				logutil.Error(
-					"Async-Index-ISCP-Task iteration failed",
+					"ISCP-Task iteration failed",
 					zap.Uint32("tenantID", iter.table.accountID),
 					zap.Uint64("tableID", iter.table.tableID),
-					zap.String("jobName", iter.sinkers[i].jobName),
+					zap.String("jobName", iter.jobs[i].jobName),
 					zap.String("from", iter.from.ToString()),
 					zap.String("to", iter.to.ToString()),
 					zap.Error(sinkerErr),
@@ -71,7 +71,7 @@ func (iter *Iteration) Run() {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
-		for i := range iter.sinkers {
+		for i := range iter.jobs {
 			iter.err[i] = err
 		}
 		return
@@ -87,7 +87,7 @@ func (iter *Iteration) Run() {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
-		for i := range iter.sinkers {
+		for i := range iter.jobs {
 			iter.err[i] = err
 		}
 		return
@@ -101,7 +101,7 @@ func (iter *Iteration) Run() {
 		table,
 		iter.from,
 		iter.to,
-		iter.sinkers,
+		iter.jobs,
 		false,
 		iter.table.exec.packer,
 		iter.table.exec.mp,

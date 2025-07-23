@@ -42,7 +42,7 @@ func NewTableEntry(
 		exec:      exec,
 		accountID: accountID,
 		tableDef:  tableDef,
-		sinkers:   make([]*JobEntry, 0),
+		jobs:      make([]*JobEntry, 0),
 		dbID:      dbID,
 		tableID:   tableID,
 		dbName:    dbName,
@@ -58,7 +58,7 @@ func (t *TableEntry) AddSinker(
 ) (ok bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, sinker := range t.sinkers {
+	for _, sinker := range t.jobs {
 		if sinker.jobName == sinkConfig.JobName {
 			return false, nil
 		}
@@ -67,7 +67,7 @@ func (t *TableEntry) AddSinker(
 	if err != nil {
 		return false, err
 	}
-	t.sinkers = append(t.sinkers, sinkerEntry)
+	t.jobs = append(t.jobs, sinkerEntry)
 	return true, nil
 }
 
@@ -75,7 +75,7 @@ func (t *TableEntry) AddSinker(
 func (t *TableEntry) GetWatermark(jobName string) (watermark types.TS, ok bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for _, sinker := range t.sinkers {
+	for _, sinker := range t.jobs {
 		if sinker.jobName == jobName {
 			return sinker.watermark, true
 		}
@@ -86,7 +86,7 @@ func (t *TableEntry) GetWatermark(jobName string) (watermark types.TS, ok bool) 
 func (t *TableEntry) IsEmpty() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return len(t.sinkers) == 0
+	return len(t.jobs) == 0
 }
 
 func (t *TableEntry) DeleteSinker(
@@ -94,10 +94,10 @@ func (t *TableEntry) DeleteSinker(
 ) (isEmpty bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for i, sinker := range t.sinkers {
+	for i, sinker := range t.jobs {
 		if sinker.jobName == jobName {
-			t.sinkers = append(t.sinkers[:i], t.sinkers[i+1:]...)
-			return len(t.sinkers) == 0, nil
+			t.jobs = append(t.jobs[:i], t.jobs[i+1:]...)
+			return len(t.jobs) == 0, nil
 		}
 	}
 	return false, moerr.NewInternalErrorNoCtx("sinker not found")
@@ -106,8 +106,8 @@ func (t *TableEntry) DeleteSinker(
 func (t *TableEntry) getCandidate() (iter []*Iteration, minFromTS types.TS) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	candidates := make([]*JobEntry, 0, len(t.sinkers))
-	for _, sinker := range t.sinkers {
+	candidates := make([]*JobEntry, 0, len(t.jobs))
+	for _, sinker := range t.jobs {
 		if !sinker.IsInitedAndFinished() {
 			continue
 		}
@@ -124,7 +124,7 @@ func (t *TableEntry) getCandidate() (iter []*Iteration, minFromTS types.TS) {
 		if share {
 			for _, iter := range iterations {
 				if iter.from.EQ(&from) && iter.to.EQ(&to) {
-					iter.sinkers = append(iter.sinkers, sinker)
+					iter.jobs = append(iter.jobs, sinker)
 					foundIteration = true
 					break
 				}
@@ -132,10 +132,10 @@ func (t *TableEntry) getCandidate() (iter []*Iteration, minFromTS types.TS) {
 		}
 		if !foundIteration {
 			iterations = append(iterations, &Iteration{
-				table:   t,
-				sinkers: []*JobEntry{sinker},
-				from:    from,
-				to:      to,
+				table: t,
+				jobs:  []*JobEntry{sinker},
+				from:  from,
+				to:    to,
 			})
 			if from.LT(&minFromTS) {
 				minFromTS = from
@@ -159,7 +159,7 @@ func (t *TableEntry) UpdateWatermark(iter *Iteration) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, sinker := range iter.sinkers {
+	for _, sinker := range iter.jobs {
 		sinker.UpdateWatermark(iter.from, iter.to)
 	}
 }
@@ -167,7 +167,7 @@ func (t *TableEntry) UpdateWatermark(iter *Iteration) {
 func (t *TableEntry) fillInISCPLogUpdateSQL(firstTable bool, insertWriter, deleteWriter *bytes.Buffer) (err error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for i, sinker := range t.sinkers {
+	for i, sinker := range t.jobs {
 		if sinker.watermark.IsEmpty() {
 			continue
 		}
@@ -188,7 +188,7 @@ func (t *TableEntry) String() string {
 	defer t.mu.RUnlock()
 	tableStr := fmt.Sprintf("\tTable[%d,%s-%d,%s-%d]", t.accountID, t.dbName, t.dbID, t.tableName, t.tableID)
 	tableStr += "\n"
-	for _, sinker := range t.sinkers {
+	for _, sinker := range t.jobs {
 		tableStr += fmt.Sprintf("\t\t%s\n", sinker.StringLocked())
 	}
 	return tableStr

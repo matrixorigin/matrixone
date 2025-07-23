@@ -55,7 +55,7 @@ const (
 const (
 	DefaultGCInterval             = time.Hour
 	DefaultGCTTL                  = time.Hour
-	DefaultSyncTaskInterval       = time.Millisecond * 100
+	DefaultSyncTaskInterval       = time.Second * 10
 	DefaultFlushWatermarkInterval = time.Hour
 
 	DefaultRetryTimes    = 5
@@ -321,7 +321,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
 	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
-	gcTrigger := time.NewTicker(exec.option.GCTTL)
+	gcTrigger := time.NewTicker(exec.option.GCInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -370,7 +370,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				)
 			}
 		case <-gcTrigger.C:
-			err := exec.GC(time.Hour) // todo
+			err := exec.GC(exec.option.GCTTL)
 			if err != nil {
 				logutil.Error(
 					"ISCP-Task gc failed",

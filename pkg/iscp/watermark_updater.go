@@ -90,7 +90,7 @@ func registerJob(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-ISCP-Task RegisterJob",
+			"ISCP-Task RegisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", sinkerinfo_json.JobName),
@@ -186,7 +186,7 @@ func unregisterJob(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-ISCP-Task UnregisterJob",
+			"ISCP-Task UnregisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", consumerInfo.JobName),
