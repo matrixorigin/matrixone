@@ -104,6 +104,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	update.ctr.flushed = false
 	update.getFlushableS3WriterFunc = update.getFlushableS3Writer
 	update.getS3WriterFunc = update.getS3Writer
+	update.addAffectedRowsFunc = update.doAddAffectedRows
 
 	switch update.Action {
 	case UpdateWriteS3:
