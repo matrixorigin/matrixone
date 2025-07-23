@@ -632,8 +632,15 @@ func RoundDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 type NormalType interface {
-	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid
+	bool |
+		constraints.Float |
+		types.Date |
+		types.Datetime |
+		types.Decimal64 |
+		types.Decimal128 |
+		types.Timestamp |
+		types.Uuid |
+		constraints.Integer
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
