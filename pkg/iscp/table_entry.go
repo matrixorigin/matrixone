@@ -16,22 +16,12 @@ package iscp
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-)
-
-type TableState int8
-
-const (
-	TableState_Invalid TableState = iota
-	TableState_Init
-	TableState_Running
-	TableState_Finished
 )
 
 func tableInfoLess(a, b *TableEntry) bool {
@@ -57,7 +47,6 @@ func NewTableEntry(
 		tableID:   tableID,
 		dbName:    dbName,
 		tableName: tableName,
-		state:     TableState_Finished,
 		mu:        sync.RWMutex{},
 	}
 }
@@ -114,91 +103,46 @@ func (t *TableEntry) DeleteSinker(
 	return false, moerr.NewInternalErrorNoCtx("sinker not found")
 }
 
-func (t *TableEntry) IsInitedAndFinished() bool {
+func (t *TableEntry) getCandidate() (iter []*Iteration, minFromTS types.TS) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	hasActiveSinker := false
-	for _, sinker := range t.sinkers {
-		if !sinker.PermanentError() && sinker.inited.Load() {
-			hasActiveSinker = true
-			break
-		}
-	}
-	return hasActiveSinker && t.state == TableState_Finished
-}
-
-func (t *TableEntry) GetMinWaterMark() types.TS {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	minWatermark := types.MaxTs()
-	for _, sinker := range t.sinkers {
-		if !sinker.inited.Load() {
-			continue
-		}
-		if sinker.PermanentError() {
-			continue
-		}
-		if sinker.watermark.LT(&minWatermark) {
-			minWatermark = sinker.watermark
-		}
-	}
-	return minWatermark
-}
-
-func (t *TableEntry) GetMaxWaterMarkLocked() types.TS {
-	maxWatermark := types.TS{}
-	for _, sinker := range t.sinkers {
-		if sinker.watermark.GT(&maxWatermark) {
-			maxWatermark = sinker.watermark
-		}
-	}
-	return maxWatermark
-}
-
-func (t *TableEntry) getCandidateLocked() []*JobEntry {
 	candidates := make([]*JobEntry, 0, len(t.sinkers))
 	for _, sinker := range t.sinkers {
-		if !sinker.inited.Load() {
-			continue
-		}
-		if sinker.PermanentError() {
+		if !sinker.IsInitedAndFinished() {
 			continue
 		}
 		candidates = append(candidates, sinker)
 	}
-	return candidates
-}
-
-func (t *TableEntry) GetSyncTask(ctx context.Context, toTS types.TS) *Iteration {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	candidates := t.getCandidateLocked()
-	if len(candidates) == 0 {
-		panic("logic error")
-	}
-	dirtySinker := t.getNewSinkersLocked(candidates)
-	maxTS := t.GetMaxWaterMarkLocked()
-	if dirtySinker != nil {
-		t.state = TableState_Running
-		return &Iteration{
-			table:   t,
-			sinkers: []*JobEntry{dirtySinker},
-			to:      maxTS,
-			from:    dirtySinker.watermark,
-		}
-	}
-	t.state = TableState_Running
+	iterations := make([]*Iteration, 0, len(candidates))
+	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
-		if sinker.watermark.GT(&toTS) {
-			toTS = sinker.watermark
+		ok, from, to, share := sinker.jobConfig.Check(candidates, sinker, types.MaxTs())
+		if !ok {
+			continue
+		}
+		foundIteration := false
+		if share {
+			for _, iter := range iterations {
+				if iter.from.EQ(&from) && iter.to.EQ(&to) {
+					iter.sinkers = append(iter.sinkers, sinker)
+					foundIteration = true
+					break
+				}
+			}
+		}
+		if !foundIteration {
+			iterations = append(iterations, &Iteration{
+				table:   t,
+				sinkers: []*JobEntry{sinker},
+				from:    from,
+				to:      to,
+			})
+			if from.LT(&minFromTS) {
+				minFromTS = from
+			}
 		}
 	}
-	return &Iteration{
-		table:   t,
-		sinkers: candidates,
-		to:      toTS,
-		from:    maxTS,
-	}
+	return iterations, minFromTS
 }
 
 // TODO
@@ -209,19 +153,14 @@ func toErrorCode(err error) int {
 	return 0
 }
 
-func (t *TableEntry) UpdateWatermark(from, to types.TS) {
-	if from.GE(&to) {
+func (t *TableEntry) UpdateWatermark(iter *Iteration) {
+	if iter.from.GE(&iter.to) {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, sinker := range t.sinkers {
-		if sinker.watermark.GE(&to) {
-			panic("logic error")
-		}
-		if sinker.watermark.GE(&from) {
-			sinker.watermark = to
-		}
+	for _, sinker := range iter.sinkers {
+		sinker.UpdateWatermark(iter.from, iter.to)
 	}
 }
 
@@ -244,86 +183,10 @@ func (t *TableEntry) fillInAsyncIndexLogUpdateSQL(firstTable bool, insertWriter,
 	return
 }
 
-func (t *TableEntry) OnIterationFinished(iter *Iteration) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	// init sinker
-	if len(iter.sinkers) == 1 && !iter.sinkers[0].inited.Load() {
-		sinker := iter.sinkers[0]
-		if iter.err[0] != nil {
-			sinker.err = iter.err[0]
-			t.exec.worker.Submit(
-				&Iteration{
-					table:   t,
-					sinkers: []*JobEntry{sinker},
-					to:      types.TS{},
-					from:    types.TS{},
-				},
-			)
-		} else {
-			iter.sinkers[0].inited.Store(true)
-			sinker.watermark = iter.to
-		}
-		return
-	}
-	if t.state != TableState_Running {
-		panic("logic error")
-	}
-	// dirty sinkers
-	maxTS := t.GetMaxWaterMarkLocked()
-	if maxTS.EQ(&iter.to) {
-		if len(iter.sinkers) != 1 {
-			panic("logic error")
-		}
-		sinker := iter.sinkers[0]
-		if iter.err[0] != nil {
-			sinker.err = iter.err[0]
-		} else {
-			sinker.watermark = iter.to
-		}
-		t.state = TableState_Finished
-		return
-	}
-	// all sinkers
-	if maxTS.LT(&iter.from) {
-		// if there're new sinkers, maxTS may be greater
-		panic("logic error")
-	}
-	t.state = TableState_Finished
-	for i, sinker := range iter.sinkers {
-		if iter.err[i] != nil {
-			sinker.err = iter.err[i]
-		} else {
-			sinker.watermark = iter.to
-		}
-	}
-}
-
-func (t *TableEntry) getNewSinkersLocked(candidates []*JobEntry) *JobEntry {
-	maxTS := t.GetMaxWaterMarkLocked()
-	for _, sinker := range candidates {
-		if !sinker.inited.Load() {
-			continue
-		}
-		if sinker.watermark.LT(&maxTS) {
-			return sinker
-		}
-	}
-	return nil
-}
-
 func (t *TableEntry) String() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	tableStr := fmt.Sprintf("\tTable[%d,%s-%d,%s-%d]", t.accountID, t.dbName, t.dbID, t.tableName, t.tableID)
-	stateStr := "I"
-	if t.state == TableState_Running {
-		stateStr = "R"
-	}
-	if t.state == TableState_Finished {
-		stateStr = "F"
-	}
-	tableStr += stateStr
 	tableStr += "\n"
 	for _, sinker := range t.sinkers {
 		tableStr += fmt.Sprintf("\t\t%s\n", sinker.StringLocked())

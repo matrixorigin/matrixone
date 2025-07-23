@@ -40,6 +40,14 @@ type Iteration struct {
 	endAt   time.Time
 }
 
+func (iter *Iteration) Init() {
+	iter.table.mu.Lock()
+	defer iter.table.mu.Unlock()
+	for _, sinker := range iter.sinkers {
+		sinker.state = JobState_Running
+	}
+}
+
 func (iter *Iteration) Run() {
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, iter.table.accountID)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
@@ -49,7 +57,11 @@ func (iter *Iteration) Run() {
 	var txn client.TxnOperator
 	defer func() {
 		iter.endAt = time.Now()
-		iter.table.OnIterationFinished(iter)
+		iter.table.mu.Lock()
+		for i, sinker := range iter.sinkers {
+			sinker.OnIterationFinished(iter, i)
+		}
+		iter.table.mu.Unlock()
 		for i, sinkerErr := range iter.err {
 			if sinkerErr != nil {
 				logutil.Error(

@@ -22,14 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-type SinkerState int8
-
-const (
-	SinkerState_Invalid SinkerState = iota
-	SinkerState_Running
-	SinkerState_Finished
-)
-
 const (
 	PermanentErrorThreshold = 10000
 )
@@ -56,6 +48,7 @@ func NewJobEntry(
 		watermark:    watermark,
 		err:          iterationErr,
 		consumerInfo: sinkerConfig,
+		state:        JobState_Finished,
 	}
 	jobEntry.init()
 	return jobEntry, nil
@@ -76,6 +69,49 @@ func (jobEntry *JobEntry) init() {
 	}
 }
 
+func (jobEntry *JobEntry) IsInitedAndFinished() bool {
+	return jobEntry.inited.Load() && !jobEntry.PermanentError() && jobEntry.state == JobState_Finished
+}
+
+func (jobEntry *JobEntry) OnIterationFinished(iter *Iteration, offset int) {
+	if !jobEntry.inited.Load() {
+		if iter.err[offset] != nil {
+			jobEntry.err = iter.err[offset]
+			jobEntry.tableInfo.exec.worker.Submit(
+				&Iteration{
+					table:   jobEntry.tableInfo,
+					sinkers: []*JobEntry{jobEntry},
+					to:      types.TS{},
+					from:    types.TS{},
+				},
+			)
+		} else {
+			jobEntry.watermark = iter.to
+			jobEntry.inited.Store(true)
+		}
+		return
+	}
+	if jobEntry.state != JobState_Running {
+		panic("logic error")
+	}
+	if iter.err[offset] != nil {
+		jobEntry.err = iter.err[offset]
+	} else {
+		jobEntry.watermark = iter.to
+	}
+	jobEntry.state = JobState_Finished
+}
+
+func (jobEntry *JobEntry) UpdateWatermark(from, to types.TS) {
+	if from.GE(&to) {
+		return
+	}
+	if !jobEntry.watermark.EQ(&from) {
+		panic("logic error")
+	}
+	jobEntry.watermark = to
+}
+
 func (jobEntry *JobEntry) getConsumerInfoStr() string {
 	consumerInfoStr, err := jobEntry.consumerInfo.Marshal()
 	if err != nil {
@@ -94,18 +130,37 @@ func (jobEntry *JobEntry) StringLocked() string {
 	if !jobEntry.inited.Load() {
 		initStr = "-N"
 	}
-	return fmt.Sprintf("Index[%s%s]%d,%s,%v", jobEntry.indexName, initStr, jobEntry.consumerType, jobEntry.watermark.ToString(), jobEntry.err)
+	stateStr := "I"
+	if jobEntry.state == JobState_Running {
+		stateStr = "R"
+	}
+	if jobEntry.state == JobState_Finished {
+		stateStr = "F"
+	}
+	return fmt.Sprintf(
+		"Index[%s%s]%d,%s,%v[%v]",
+		jobEntry.indexName,
+		initStr,
+		jobEntry.consumerType,
+		jobEntry.watermark.ToString(),
+		jobEntry.err,
+		stateStr,
+	)
 }
 
 func (jobEntry *JobEntry) fillInAsyncIndexLogInsertSQL(firstSinker bool, w *bytes.Buffer) error {
 	if !firstSinker {
 		w.WriteString(",")
 	}
-	_, err := w.WriteString(fmt.Sprintf(" (%d, %d,'', '%s',%d, '%s',  0, '', '', '%s', NULL)",
+	jobConfigStr, err := jobEntry.jobConfig.Marshal()
+	if err != nil {
+		return err
+	}
+	_, err = w.WriteString(fmt.Sprintf(" (%d, %d,'', '%s','%s', '%s',  0, '', '', '%s', NULL)",
 		jobEntry.tableInfo.accountID,
 		jobEntry.tableInfo.tableID,
 		jobEntry.indexName,
-		jobEntry.consumerType,
+		string(jobConfigStr),
 		jobEntry.watermark.ToString(),
 		jobEntry.getConsumerInfoStr(),
 	))

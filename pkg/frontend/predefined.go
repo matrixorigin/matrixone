@@ -277,7 +277,6 @@ var (
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,
 				job_name VARCHAR NOT NULL,
-				job_type INT NOT NULL,
 				job_config VARCHAR NOT NULL,
 				column_names VARCHAR NOT NULL,
 				last_sync_txn_ts VARCHAR(32)  NOT NULL,
@@ -285,7 +284,7 @@ var (
 				error_msg VARCHAR(255) NOT NULL,
 				info VARCHAR NOT NULL,
 				drop_at DATETIME NULL,
-				consumer_config VARCHAR(255) NULL,
+				consumer_config VARCHAR NULL,
 				primary key(account_id, table_id, job_name)
 			)`
 

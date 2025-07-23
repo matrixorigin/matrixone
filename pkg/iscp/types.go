@@ -48,6 +48,15 @@ type DataRetriever interface {
 	GetDataType() int8
 }
 
+type JobState int8
+
+const (
+	JobState_Invalid JobState = iota
+	JobState_Init
+	JobState_Running
+	JobState_Finished
+)
+
 // Intra-System Change Propagation Job Entry
 type JobEntry struct {
 	tableInfo    *TableEntry
@@ -59,6 +68,7 @@ type JobEntry struct {
 	err          error
 	consumerInfo *ConsumerInfo
 	jobConfig    JobConfig
+	state        JobState
 }
 
 // Intra-System Change Propagation Table Entry
@@ -70,7 +80,6 @@ type TableEntry struct {
 	tableID   uint64
 	tableName string
 	dbName    string
-	state     TableState
 	sinkers   []*JobEntry
 	mu        sync.RWMutex
 }

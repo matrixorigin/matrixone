@@ -23,6 +23,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
@@ -36,21 +37,7 @@ func mock_mo_intra_system_change_propagation_log(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
 ) (err error) {
-	sql := `CREATE TABLE mo_catalog.mo_intra_system_change_propagation_log (
-				account_id INT UNSIGNED NOT NULL,
-				table_id BIGINT UNSIGNED NOT NULL,
-				job_name VARCHAR NOT NULL,
-				job_type INT NOT NULL,
-				job_config VARCHAR NOT NULL,
-				column_names VARCHAR NOT NULL,
-				last_sync_txn_ts VARCHAR(32)  NOT NULL,
-				err_code INT NOT NULL,
-				error_msg VARCHAR(255) NOT NULL,
-				info VARCHAR NOT NULL,
-				drop_at DATETIME NULL,
-				consumer_config VARCHAR(255) NULL,
-				primary key(account_id, table_id, job_name)
-			)`
+	sql := frontend.MoCatalogMoISCPLogDDL
 
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {

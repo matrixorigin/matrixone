@@ -217,7 +217,6 @@ const (
 		`account_id,` +
 		`table_id,` +
 		`job_name,` +
-		`job_type,` +
 		`job_config,` +
 		`column_names,` +
 		`last_sync_txn_ts,` +
@@ -230,7 +229,6 @@ const (
 		`%d,` + // account_id
 		`%d,` + // table_id
 		`'%s',` + // job_name
-		`%d,` + // job_type
 		`'%s',` + // job_config
 		`'%s',` + // column_names
 		`'%s',` + // last_sync_txn_ts
@@ -414,7 +412,6 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"table_id",
 			"db_id",
 			"job_name",
-			"job_type",
 			"job_config",
 			"column_names",
 			"last_sync_txn_ts",
@@ -775,7 +772,6 @@ func (b cdcSQLBuilder) IntraSystemChangePropagationLogInsertSQL(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
-	jobType int,
 	jobConfig string,
 	columnNames string,
 	info string,
@@ -786,7 +782,6 @@ func (b cdcSQLBuilder) IntraSystemChangePropagationLogInsertSQL(
 		accountID,
 		tableID,
 		jobName,
-		jobType,
 		jobConfig,
 		columnNames,
 		types.TS{}.ToString(),

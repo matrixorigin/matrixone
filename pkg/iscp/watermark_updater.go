@@ -16,7 +16,6 @@ package iscp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -103,7 +102,7 @@ func registerJob(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return false, err
 	}
-	consumerInfoJson, err := json.Marshal(sinkerinfo_json)
+	consumerInfoJson, err := sinkerinfo_json.Marshal()
 	if err != nil {
 		return false, err
 	}
@@ -142,7 +141,6 @@ func registerJob(
 		tenantId,
 		tableID,
 		sinkerinfo_json.IndexName,
-		int(jobConfig.GetType()),
 		string(jobConfigStr),
 		"",
 		"",
