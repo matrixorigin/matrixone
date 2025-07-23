@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"go.uber.org/zap"
 	"math"
 	"strconv"
@@ -128,8 +129,17 @@ func AddFaultPoint(
 		finalVal bool
 	)
 
-	if finalVal, err = doFaultPoint(proc, sql); err != nil {
-		return err
+	// this call may come from UT
+	if proc.GetSessionInfo() == nil || proc.GetSessionInfo().SqlHelper == nil {
+		if err = fault.AddFaultPoint(proc.Ctx, string(name), string(freq), string(action), iarg, string(sarg), false); err != nil {
+			return err
+		}
+		finalVal = true
+
+	} else {
+		if finalVal, err = doFaultPoint(proc, sql); err != nil {
+			return err
+		}
 	}
 
 	if err = rs.Append(finalVal, false); err != nil {
@@ -623,7 +633,7 @@ func RoundDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 type NormalType interface {
 	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-		types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid
+	types.Decimal64 | types.Decimal128 | types.Timestamp | types.Uuid
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {

@@ -1494,10 +1494,16 @@ func DisableFaultInjection(
 		finalVal bool
 	)
 
-	sql := fmt.Sprintf("select fault_inject('all.','disable_fault_injection','');")
+	// this call may come from UT
+	if proc.GetSessionInfo() == nil || proc.GetSessionInfo().SqlHelper == nil {
+		fault.Disable()
+		finalVal = true
+	} else {
+		sql := "select fault_inject('all.','disable_fault_injection','');"
 
-	if finalVal, err = doFaultPoint(proc, sql); err != nil {
-		return err
+		if finalVal, err = doFaultPoint(proc, sql); err != nil {
+			return err
+		}
 	}
 
 	return opNoneParamToFixed[bool](result, proc, length, func() bool {
@@ -1518,10 +1524,16 @@ func EnableFaultInjection(
 		finalVal bool
 	)
 
-	sql := fmt.Sprintf("select fault_inject('all.','enable_fault_injection','');")
+	// this call may come from UT
+	if proc.GetSessionInfo() == nil || proc.GetSessionInfo().SqlHelper == nil {
+		fault.Enable()
+		finalVal = true
+	} else {
+		sql := "select fault_inject('all.','enable_fault_injection','');"
 
-	if finalVal, err = doFaultPoint(proc, sql); err != nil {
-		return err
+		if finalVal, err = doFaultPoint(proc, sql); err != nil {
+			return err
+		}
 	}
 
 	return opNoneParamToFixed[bool](result, proc, length, func() bool {
