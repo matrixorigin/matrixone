@@ -953,7 +953,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-27 09:56:55.387432    cluster            
+cluster_sp    2025-07-19 05:48:35.273441    cluster            
 drop database if exists Payroll;
 drop database if exists Projects;
 drop database if exists Company;

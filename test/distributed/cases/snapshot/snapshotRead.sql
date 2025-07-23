@@ -63,6 +63,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test';
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test';
 drop snapshot sp01;
+-- @ignore:1
 show snapshots;
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase = 'test';
 -- @ignore:0,6,7
@@ -159,6 +160,7 @@ create snapshot snap01 for account acc01;
 show snapshots;
 -- @session:id=4&user=acc01:test_account&password=111
 use test01;
+-- @ignore:1
 show snapshots;
 -- @session
 select count(*) from acc01_snap{snapshot = 'snap01'};
