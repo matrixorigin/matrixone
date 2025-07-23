@@ -522,6 +522,7 @@ create table v3 (a int primary key, b int, c text, unique index IdX2(b));
 load data infile  '$resources/load_data/dup_load.csv' into table v3 fields terminated by ',';
 
 insert into v3 values (1, 1, "boroborodesu"); -- dup
+-- @pattern
 insert into v3 values (10, 2, "boroborodesu"); -- dup
 
 alter table v3 add column d int; -- no dup because we have skipped pk and unique index dedup
