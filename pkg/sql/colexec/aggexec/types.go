@@ -221,18 +221,18 @@ func makeSpecialAggExec(
 ) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		switch id {
-		case aggIdOfCountColumn:
+		case AggIdOfCountColumn:
 			return makeCount(mg, false, id, isDistinct, params[0]), true, nil
-		case aggIdOfCountStar:
+		case AggIdOfCountStar:
 			return makeCount(mg, true, id, isDistinct, params[0]), true, nil
-		case aggIdOfMedian:
+		case AggIdOfMedian:
 			exec, err := makeMedian(mg, id, isDistinct, params[0])
 			return exec, true, err
-		case aggIdOfGroupConcat:
+		case AggIdOfGroupConcat:
 			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
-		case aggIdOfApproxCount:
+		case AggIdOfApproxCount:
 			return makeApproxCount(mg, id, params[0]), true, nil
-		case winIdOfRowNumber, winIdOfRank, winIdOfDenseRank:
+		case WinIdOfRowNumber, WinIdOfRank, WinIdOfDenseRank:
 			exec, err := makeWindowExec(mg, id, isDistinct)
 			return exec, true, err
 		}

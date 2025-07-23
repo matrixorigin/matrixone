@@ -15,14 +15,10 @@
 package aggexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
-	if exec.IsDistinct() {
-		return nil, moerr.NewInternalErrorNoCtx("marshal distinct agg exec is not supported")
-	}
 	return exec.marshal()
 }
 
@@ -41,7 +37,7 @@ func UnmarshalAggFuncExec(
 		return nil, err
 	}
 
-	if encoded.Info.Id == aggIdOfGroupConcat {
+	if encoded.Info.Id == AggIdOfGroupConcat {
 		if len(encoded.Groups) > 0 && len(encoded.Groups[0]) > 0 {
 			exec.(*groupConcatExec).separator = encoded.Groups[0]
 		}

@@ -29,43 +29,43 @@ import (
 
 func RegisterCountColumnAgg(id int64) {
 	specialAgg[id] = true
-	aggIdOfCountColumn = id
+	AggIdOfCountColumn = id
 }
 
 func RegisterCountStarAgg(id int64) {
 	specialAgg[id] = true
-	aggIdOfCountStar = id
+	AggIdOfCountStar = id
 }
 
 func RegisterGroupConcatAgg(id int64, sep string) {
 	specialAgg[id] = true
-	aggIdOfGroupConcat = id
+	AggIdOfGroupConcat = id
 	groupConcatSep = sep
 }
 
 func RegisterApproxCountAgg(id int64) {
 	specialAgg[id] = true
-	aggIdOfApproxCount = id
+	AggIdOfApproxCount = id
 }
 
 func RegisterMedian(id int64) {
 	specialAgg[id] = true
-	aggIdOfMedian = id
+	AggIdOfMedian = id
 }
 
 func RegisterRowNumberWin(id int64) {
 	specialAgg[id] = true
-	winIdOfRowNumber = id
+	WinIdOfRowNumber = id
 }
 
 func RegisterRankWin(id int64) {
 	specialAgg[id] = true
-	winIdOfRank = id
+	WinIdOfRank = id
 }
 
 func RegisterDenseRankWin(id int64) {
 	specialAgg[id] = true
-	winIdOfDenseRank = id
+	WinIdOfDenseRank = id
 }
 
 type registeredAggInfo struct {
@@ -89,14 +89,14 @@ var (
 	registeredAggFunctions = make(map[aggKey]aggImplementation)
 
 	// list of special aggregation function IDs.
-	aggIdOfCountColumn = int64(-1)
-	aggIdOfCountStar   = int64(-2)
-	aggIdOfGroupConcat = int64(-3)
-	aggIdOfApproxCount = int64(-4)
-	aggIdOfMedian      = int64(-5)
-	winIdOfRowNumber   = int64(-7)
-	winIdOfRank        = int64(-8)
-	winIdOfDenseRank   = int64(-9)
+	AggIdOfCountColumn = int64(-1)
+	AggIdOfCountStar   = int64(-2)
+	AggIdOfGroupConcat = int64(-3)
+	AggIdOfApproxCount = int64(-4)
+	AggIdOfMedian      = int64(-5)
+	WinIdOfRowNumber   = int64(-7)
+	WinIdOfRank        = int64(-8)
+	WinIdOfDenseRank   = int64(-9)
 	groupConcatSep     = ","
 	getCroupConcatRet  = func(args ...types.Type) types.Type {
 		for _, p := range args {

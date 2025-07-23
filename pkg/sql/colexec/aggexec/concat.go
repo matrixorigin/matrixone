@@ -49,12 +49,26 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 		Empties: em,
 		Groups:  [][]byte{exec.separator},
 	}
+	if exec.IsDistinct() {
+		data, err := exec.distinctHash.marshal()
+		if err != nil {
+			return nil, err
+		}
+		encoded.Groups = append(encoded.Groups, data)
+	}
 	return encoded.Marshal()
 }
 
 func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
 		return err
+	}
+	if exec.IsDistinct() {
+		if len(groups) > 1 {
+			if err := exec.distinctHash.unmarshal(groups[1]); err != nil {
+				return err
+			}
+		}
 	}
 	return exec.ret.unmarshalFromBytes(result, empties)
 }
