@@ -34,7 +34,7 @@ const (
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()
-	mp, err := NewStrMap(false)
+	mp, err := NewStrHashMap(false)
 	itr := mp.NewIterator()
 	require.NoError(t, err)
 	ts := []types.Type{
@@ -61,7 +61,7 @@ func TestInsert(t *testing.T) {
 func TestIterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(false)
+		mp, err := NewStrHashMap(false)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -86,7 +86,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true)
+		mp, err := NewStrHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -111,7 +111,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true)
+		mp, err := NewStrHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -409,7 +409,7 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 	}()
 
 	t.Run("Empty Map", func(t *testing.T) {
-		mp, err := NewStrMap(false)
+		mp, err := NewStrHashMap(false)
 		require.NoError(t, err)
 		defer mp.Free()
 
@@ -426,7 +426,7 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 	})
 
 	t.Run("Single Element (No Nulls)", func(t *testing.T) {
-		mp, err := NewStrMap(false)
+		mp, err := NewStrHashMap(false)
 		require.NoError(t, err)
 		defer mp.Free()
 
@@ -462,7 +462,7 @@ func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
 	})
 
 	t.Run("Multiple Elements (With Resize, With Nulls, Mixed Types)", func(t *testing.T) {
-		mp, err := NewStrMap(true) // Test with nulls enabled
+		mp, err := NewStrHashMap(true) // Test with nulls enabled
 		require.NoError(t, err)
 		defer mp.Free()
 
