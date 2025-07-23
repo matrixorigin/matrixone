@@ -41,6 +41,7 @@ func mock_mo_intra_system_change_propagation_log(
 				table_id BIGINT UNSIGNED NOT NULL,
 				job_name VARCHAR NOT NULL,
 				job_type INT NOT NULL,
+				job_config VARCHAR NOT NULL,
 				column_names VARCHAR NOT NULL,
 				last_sync_txn_ts VARCHAR(32)  NOT NULL,
 				err_code INT NOT NULL,

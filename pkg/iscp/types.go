@@ -58,6 +58,7 @@ type JobEntry struct {
 	watermark    types.TS
 	err          error
 	consumerInfo *ConsumerInfo
+	jobConfig    JobConfig
 }
 
 // Intra-System Change Propagation Table Entry
@@ -79,6 +80,19 @@ type ConsumerInfo struct {
 	TableName    string
 	DbName       string
 	IndexName    string
+}
+
+type JobConfig interface {
+	Marshal() ([]byte, error)
+	Unmarshal([]byte) error
+	GetType() uint16
+	Check(
+		otherConsumers []*JobEntry,
+		consumer *JobEntry,
+		now types.TS,
+	) (
+		ok bool, from, to types.TS, shareIteration bool,
+	)
 }
 
 type Consumer interface {

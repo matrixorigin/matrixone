@@ -17,12 +17,10 @@ package iscp
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-
-	"sync"
-	"time"
 
 	"go.uber.org/zap"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -358,7 +356,9 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 		case <-exec.ctx.Done():
 			return
 		case <-syncTaskTrigger.C:
+			// get candidate iterations and tables
 			candidateTables := exec.getCandidateTables()
+			// check if there are any dirty tables
 			tables, fromTSs, toTS, err := exec.getDirtyTables(exec.ctx, candidateTables, exec.cnUUID, exec.txnEngine)
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
 				err = moerr.NewInternalErrorNoCtx(msg)
@@ -370,6 +370,8 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				)
 				continue
 			}
+			// run iterations with dirty table
+			// update watermark for clean tables
 			for i, table := range candidateTables {
 				_, ok := tables[table.tableID]
 				if ok {
@@ -432,20 +434,24 @@ func (exec *ISCPTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *
 	if err != nil {
 		panic(err)
 	}
-	watermarkVector, err := vector.ProtoVectorToVector(input.Vecs[7])
+	watermarkVector, err := vector.ProtoVectorToVector(input.Vecs[8])
 	if err != nil {
 		panic(err)
 	}
-	errorCodeVector, err := vector.ProtoVectorToVector(input.Vecs[8])
+	errorCodeVector, err := vector.ProtoVectorToVector(input.Vecs[9])
 	if err != nil {
 		panic(err)
 	}
 	errorCodes := vector.MustFixedColWithTypeCheck[int32](errorCodeVector)
-	consumerInfoVector, err := vector.ProtoVectorToVector(input.Vecs[12])
+	consumerInfoVector, err := vector.ProtoVectorToVector(input.Vecs[13])
 	if err != nil {
 		panic(err)
 	}
-	dropAtVector, err := vector.ProtoVectorToVector(input.Vecs[11])
+	dropAtVector, err := vector.ProtoVectorToVector(input.Vecs[12])
+	if err != nil {
+		panic(err)
+	}
+	jobConfigVector, err := vector.ProtoVectorToVector(input.Vecs[6])
 	if err != nil {
 		panic(err)
 	}
@@ -454,9 +460,10 @@ func (exec *ISCPTaskExecutor) onAsyncIndexLogInsert(ctx context.Context, input *
 		watermark := types.StringToTS(watermarkStr)
 		if watermark.IsEmpty() && errorCodes[i] == 0 && dropAtVector.IsNull(uint64(i)) {
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
+			jobConfigStr := jobConfigVector.GetStringAt(i)
 			go retry(
 				func() error {
-					return exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr)
+					return exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr, jobConfigStr)
 				},
 				exec.option.RetryTimes,
 			)
@@ -507,10 +514,11 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		accountIDs := vector.MustFixedColNoTypeCheck[uint32](cols[0])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](cols[1])
-		watermarkVector := cols[5]
-		errorCodes := vector.MustFixedColNoTypeCheck[int32](cols[6])
-		consumerInfoVector := cols[10]
-		dropAtVector := cols[9]
+		watermarkVector := cols[6]
+		errorCodes := vector.MustFixedColNoTypeCheck[int32](cols[7])
+		consumerInfoVector := cols[11]
+		dropAtVector := cols[10]
+		jobConfigVector := cols[4]
 		for i := 0; i < rows; i++ {
 			if !dropAtVector.IsNull(uint64(i)) {
 				continue
@@ -518,6 +526,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 			indexCount++
 			watermarkStr := watermarkVector.GetStringAt(i)
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
+			jobConfigStr := jobConfigVector.GetStringAt(i)
 			retry(
 				func() error {
 					return exec.addIndex(
@@ -526,6 +535,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 						watermarkStr,
 						int(errorCodes[i]),
 						consumerInfoStr,
+						jobConfigStr,
 					)
 				},
 				exec.option.RetryTimes,
@@ -541,6 +551,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 	watermarkStr string,
 	errorCode int,
 	consumerInfoStr string,
+	jobConfigStr string,
 ) (err error) {
 	var indexName string
 	defer func() {
@@ -564,7 +575,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	consumerInfo := &ConsumerInfo{}
-	err = json.Unmarshal([]byte(consumerInfoStr), consumerInfo)
+	consumerInfo, err = UnmarshalConsumerConfig([]byte(consumerInfoStr))
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "addIndex" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
@@ -573,6 +584,10 @@ func (exec *ISCPTaskExecutor) addIndex(
 	}
 	indexName = consumerInfo.IndexName
 	rel, err := exec.getTableByID(ctx, tableID)
+	if err != nil {
+		return
+	}
+	jobConfig, err := UnmarshalJobConfig([]byte(jobConfigStr))
 	if err != nil {
 		return
 	}
@@ -595,7 +610,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 	if errorCode != 0 {
 		panic("logic error") // TODO: convert error
 	}
-	ok, err = table.AddSinker(consumerInfo, watermark, nil)
+	ok, err = table.AddSinker(consumerInfo, jobConfig, watermark, nil)
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("sinker already exists")
 	}

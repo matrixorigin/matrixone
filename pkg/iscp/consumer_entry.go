@@ -16,7 +16,6 @@ package iscp
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,6 +39,7 @@ func NewJobEntry(
 	tableDef *plan.TableDef,
 	tableInfo *TableEntry,
 	sinkerConfig *ConsumerInfo,
+	jobConfig JobConfig,
 	watermark types.TS,
 	iterationErr error,
 ) (*JobEntry, error) {
@@ -52,6 +52,7 @@ func NewJobEntry(
 		indexName:    sinkerConfig.IndexName,
 		consumer:     consumer,
 		consumerType: sinkerConfig.ConsumerType,
+		jobConfig:    jobConfig,
 		watermark:    watermark,
 		err:          iterationErr,
 		consumerInfo: sinkerConfig,
@@ -76,7 +77,7 @@ func (jobEntry *JobEntry) init() {
 }
 
 func (jobEntry *JobEntry) getConsumerInfoStr() string {
-	consumerInfoStr, err := json.Marshal(jobEntry.consumerInfo)
+	consumerInfoStr, err := jobEntry.consumerInfo.Marshal()
 	if err != nil {
 		panic(err)
 	}

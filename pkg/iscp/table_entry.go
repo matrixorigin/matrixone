@@ -63,6 +63,7 @@ func NewTableEntry(
 }
 func (t *TableEntry) AddSinker(
 	sinkConfig *ConsumerInfo,
+	jobConfig JobConfig,
 	watermark types.TS,
 	iterationErr error,
 ) (ok bool, err error) {
@@ -73,7 +74,7 @@ func (t *TableEntry) AddSinker(
 			return false, nil
 		}
 	}
-	sinkerEntry, err := NewJobEntry(t.exec.cnUUID, t.tableDef, t, sinkConfig, watermark, iterationErr)
+	sinkerEntry, err := NewJobEntry(t.exec.cnUUID, t.tableDef, t, sinkConfig, jobConfig, watermark, iterationErr)
 	if err != nil {
 		return false, err
 	}

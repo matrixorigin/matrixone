@@ -132,12 +132,18 @@ func registerJob(
 	if exist && !dropped {
 		return false, nil
 	}
+	jobConfig := NewJobConfig(IOET_JobConfig_Default)
+	jobConfigStr, err := jobConfig.Marshal()
+	if err != nil {
+		return false, err
+	}
 	ok = true
 	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogInsertSQL(
 		tenantId,
 		tableID,
 		sinkerinfo_json.IndexName,
-		int(sinkerinfo_json.ConsumerType),
+		int(jobConfig.GetType()),
+		string(jobConfigStr),
 		"",
 		"",
 		string(consumerInfoJson),
