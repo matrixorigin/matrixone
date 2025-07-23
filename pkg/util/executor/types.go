@@ -66,6 +66,7 @@ type Options struct {
 	error_chan              chan error
 	sql                     string
 	forceRebuildPlan        bool
+	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 }
 
 // StatementOption statement execute option.

@@ -1,3 +1,6 @@
+SET experimental_hnsw_index = 0;
+create table vector_index_00(a bigint primary key, b vecf32(128),c int,key c_k(c), KEY idx using hnsw(b) op_type 'vector_l2_ops');
+
 SET experimental_hnsw_index = 1;
 
 -- create vector index: create->create index->insert
