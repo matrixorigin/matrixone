@@ -174,6 +174,7 @@ const (
 	MO_MERGE_SETTINGS = "mo_merge_settings"
 
 	MO_INTRA_SYSTEM_CHANGE_PROPAGATION_LOG = "mo_intra_system_change_propagation_log"
+	MO_STORED_PROCEDURE = "mo_stored_procedure"
 )
 
 func IsSystemTable(id uint64) bool {

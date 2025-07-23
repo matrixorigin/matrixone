@@ -25,7 +25,12 @@ import (
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
+<<<<<<< HEAD
 	upg_mo_intra_system_change_propagation_log_new,
+=======
+	upg_drop_mo_stored_procedure,
+	upg_create_mo_stored_procedure,
+>>>>>>> main
 }
 
 var upg_mo_pitr = versions.UpgradeEntry{
@@ -61,5 +66,26 @@ var upg_mo_intra_system_change_propagation_log_new = versions.UpgradeEntry{
 	UpgSql:    frontend.MoCatalogMoISCPLogDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_INTRA_SYSTEM_CHANGE_PROPAGATION_LOG)
+	},
+}
+var upg_drop_mo_stored_procedure = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_STORED_PROCEDURE,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    "drop table mo_catalog.mo_stored_procedure",
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_STORED_PROCEDURE)
+		return !exist, err
+	},
+}
+
+var upg_create_mo_stored_procedure = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_STORED_PROCEDURE,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    frontend.MoCatalogMoStoredProcedureDDL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_STORED_PROCEDURE)
+		return exist, err
 	},
 }

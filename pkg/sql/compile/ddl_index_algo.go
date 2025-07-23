@@ -17,6 +17,7 @@ package compile
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -424,6 +425,20 @@ func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics
 }
 
 func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
+
+	if s.Magic == TableClone {
+		skipFlags := []string{
+			fulltextIndexFlag, ivfFlatIndexFlag, hnswIndexFlag,
+		}
+
+		// if the scope is a table clone means we are trying to
+		// clone a table that has an experimental index type,
+		// if the source table (we want clone) exists already, we can just skip the flag check.
+		// (the source table existence check has done before this check, so skip at here is fine)
+		if slices.Index(skipFlags, flag) != -1 {
+			return true, nil
+		}
+	}
 
 	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
 	if err != nil {
