@@ -5,7 +5,7 @@ select @@version_comment limit 1;
 -- fir pr #7971
 use system;
 use mysql;
-select * from user limit 0;
+/* cloud_user */select * from user limit 0;
 
 -- select count(1) as cnt, statement_id, statement, status from system.statement_info group by statement_id, statement, status having count(1) > 1;
 -- WITH duplicated_ids AS (

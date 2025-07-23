@@ -20,18 +20,23 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"go.uber.org/zap"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
@@ -40,7 +45,66 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func doFaultPoint(
+	proc *process.Process,
+	sql string,
+) (ret bool, err error) {
+
+	var (
+		sqlRet [][]interface{}
+
+		cnCnt int
+		tnCnt int = 1
+
+		podResp []fj.PodResponse
+	)
+
+	if sqlRet, err = proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(proc.Ctx, sql); err != nil {
+		return false, err
+	}
+
+	if err = json.Unmarshal(sqlRet[0][0].([]byte), &podResp); err != nil {
+		return false, err
+	}
+
+	clusterservice.GetMOCluster(proc.GetService()).GetCNService(
+		clusterservice.Selector{}, func(cn metadata.CNService) bool {
+			if cn.GetWorkState() == metadata.WorkState_Working {
+				cnCnt++
+			}
+			return true
+		})
+
+	for i := range podResp {
+		ok := len(podResp[i].ErrorStr) == 0
+		if podResp[i].PodType == "CN" {
+			if ok {
+				cnCnt--
+			}
+		} else if ok {
+			tnCnt--
+		}
+	}
+
+	if cnCnt <= 0 && tnCnt <= 0 {
+		ret = true
+	}
+
+	logutil.Info("FaultPoint",
+		zap.String("sql", sql),
+		zap.String("sqlRet", string(sqlRet[0][0].([]byte))))
+
+	return ret, nil
+}
+
+func AddFaultPoint(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) (err error) {
+
 	for i := 0; i < 5; i++ {
 		if ivecs[i].IsConstNull() || !ivecs[i].IsConst() {
 			return moerr.NewInvalidArg(proc.Ctx, "AddFaultPoint", "not scalar")
@@ -53,14 +117,25 @@ func AddFaultPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	iarg, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[3]).GetValue(0)
 	sarg, _ := vector.GenerateFunctionStrParameter(ivecs[4]).GetStrValue(0)
 
-	rs := vector.MustFunctionResult[bool](result)
+	sql := fmt.Sprintf(
+		"select fault_inject('all.', 'add_fault_point', '%s#%s#%s#%d#%s#%s');",
+		name, freq, action, iarg, sarg, "false",
+	)
 
-	if err = fault.AddFaultPoint(proc.Ctx, string(name), string(freq), string(action), iarg, string(sarg), false); err != nil {
+	var (
+		rs = vector.MustFunctionResult[bool](result)
+
+		finalVal bool
+	)
+
+	if finalVal, err = doFaultPoint(proc, sql); err != nil {
 		return err
 	}
-	if err = rs.Append(true, false); err != nil {
+
+	if err = rs.Append(finalVal, false); err != nil {
 		return
 	}
+
 	return nil
 }
 

@@ -9,9 +9,9 @@ drop table hhh;
 
 select enable_fault_injection();
 
-create table t2(a int primary key);
+create table t2(a int primary key, b int);
 select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t2');
-insert into t2 select * from generate_series(1,81920)g;
+insert into t2 select *,* from generate_series(1,81920)g;
 select a from t2 where a in (1,2) or a in (10000,10001) or a in (20000,20001) or a in (40000,40001);
 drop table t2;
 drop database testdb;
