@@ -280,6 +280,30 @@ func (a *QCloudSDK) Write(
 	return
 }
 
+func (a *QCloudSDK) NewWriter(ctx context.Context, key string) (ret io.WriteCloser, err error) {
+	r, w := io.Pipe()
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- a.putObject(
+			context.WithoutCancel(ctx),
+			key,
+			r,
+			nil,
+			nil,
+		)
+	}()
+
+	return &writeCloser{
+		w: w,
+		closeFunc: func() error {
+			if err := w.Close(); err != nil {
+				return err
+			}
+			return <-errChan
+		},
+	}, nil
+}
+
 func (a *QCloudSDK) Read(
 	ctx context.Context,
 	key string,

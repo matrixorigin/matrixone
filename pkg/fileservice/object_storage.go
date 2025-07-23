@@ -59,6 +59,15 @@ type ObjectStorage interface {
 		err error,
 	)
 
+	// NewWriter returns a writer
+	NewWriter(
+		ctx context.Context,
+		key string,
+	) (
+		w io.WriteCloser,
+		err error,
+	)
+
 	// Read returns an io.Reader for specified object range
 	Read(
 		ctx context.Context,

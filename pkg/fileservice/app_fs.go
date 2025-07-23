@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"io"
 	"iter"
 	"path"
 )
@@ -39,6 +40,7 @@ func (fs *AppFS) getAppDir() string {
 func (fs *AppFS) Name() string {
 	return fs.appConfig.Name
 }
+
 func (fs *AppFS) Write(
 	ctx context.Context,
 	vector IOVector,
@@ -47,6 +49,7 @@ func (fs *AppFS) Write(
 	vector.FilePath = path.Join(dir, vector.FilePath)
 	return fs.tmpFS.Write(ctx, vector)
 }
+
 func (fs *AppFS) Read(
 	ctx context.Context,
 	vector *IOVector,
@@ -55,14 +58,17 @@ func (fs *AppFS) Read(
 	vector.FilePath = path.Join(dir, vector.FilePath)
 	return fs.tmpFS.Read(ctx, vector)
 }
+
 func (fs *AppFS) ReadCache(ctx context.Context, vector *IOVector) error {
 	panic("not implemented")
 }
+
 func (fs *AppFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
 	dir := fs.getAppDir()
 	dirPath = path.Join(dir, dirPath)
 	return fs.tmpFS.List(ctx, dirPath)
 }
+
 func (fs *AppFS) Delete(ctx context.Context, filePaths ...string) error {
 	newFilePaths := make([]string, len(filePaths))
 	dir := fs.getAppDir()
@@ -71,15 +77,32 @@ func (fs *AppFS) Delete(ctx context.Context, filePaths ...string) error {
 	}
 	return fs.tmpFS.Delete(ctx, newFilePaths...)
 }
+
 func (fs *AppFS) StatFile(ctx context.Context, filePath string) (*DirEntry, error) {
 	dir := fs.getAppDir()
 	filePath = path.Join(dir, filePath)
 	return fs.tmpFS.StatFile(ctx, filePath)
 }
+
 func (fs *AppFS) PrefetchFile(ctx context.Context, filePath string) error {
 	panic("not implemented")
 }
+
+func (fs *AppFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	dir := fs.getAppDir()
+	filePath = path.Join(dir, filePath)
+	return fs.tmpFS.NewReader(ctx, filePath)
+}
+
+func (fs *AppFS) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	dir := fs.getAppDir()
+	filePath = path.Join(dir, filePath)
+	return fs.tmpFS.NewWriter(ctx, filePath)
+}
+
 func (fs *AppFS) Cost() *CostAttr {
 	panic("not implemented")
 }
-func (fs *AppFS) Close(ctx context.Context) {}
+
+func (fs *AppFS) Close(ctx context.Context) {
+}

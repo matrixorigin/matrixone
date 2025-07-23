@@ -444,6 +444,42 @@ func (a *AwsSDKv2) Write(
 	return
 }
 
+func (a *AwsSDKv2) NewWriter(
+	ctx context.Context,
+	key string,
+) (
+	ret io.WriteCloser,
+	err error,
+) {
+
+	r, w := io.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err = a.putObject(
+			ctx,
+			&s3.PutObjectInput{
+				Bucket: ptrTo(a.bucket),
+				Key:    ptrTo(key),
+				Body:   r,
+			},
+			func(opts *s3.Options) {
+				opts.Retryer = aws.NopRetryer{}
+			},
+		)
+		<-errCh
+	}()
+
+	return &writeCloser{
+		w: w,
+		closeFunc: func() error {
+			if err := w.Close(); err != nil {
+				return err
+			}
+			return <-errCh
+		},
+	}, nil
+}
+
 func (a *AwsSDKv2) Read(
 	ctx context.Context,
 	key string,

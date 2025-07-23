@@ -350,6 +350,62 @@ func (m *MemoryFS) deleteSingle(ctx context.Context, filePath string) error {
 	return nil
 }
 
+func (m *MemoryFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, m.name)
+	if err != nil {
+		return nil, err
+	}
+
+	m.RLock()
+	defer m.RUnlock()
+
+	pivot := &_MemFSEntry{
+		FilePath: path.File,
+	}
+
+	fsEntry, ok := m.tree.Get(pivot)
+	if !ok {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+
+	return io.NopCloser(bytes.NewReader(fsEntry.Data)), nil
+}
+
+func (m *MemoryFS) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, m.name)
+	if err != nil {
+		return nil, err
+	}
+
+	buf := new(bytes.Buffer)
+	return &writeCloser{
+		w: buf,
+
+		closeFunc: func() error {
+			m.Lock()
+			defer m.Unlock()
+			pivot := &_MemFSEntry{
+				FilePath: path.File,
+			}
+			_, ok := m.tree.Get(pivot)
+			if ok {
+				return moerr.NewFileAlreadyExistsNoCtx(path.File)
+			}
+			pivot.Data = buf.Bytes()
+			m.tree.Set(pivot)
+			return nil
+		},
+	}, nil
+}
+
 func (m *MemoryFS) Cost() *CostAttr {
 	return &CostAttr{
 		List: CostLow,

@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"io"
 	"iter"
 	"strings"
 
@@ -170,6 +171,36 @@ func (f *FileServices) PrefetchFile(ctx context.Context, filePath string) error 
 		return err
 	}
 	return fs.PrefetchFile(ctx, filePath)
+}
+
+func (f *FileServices) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	path, err := ParsePathAtService(filePath, "")
+	if err != nil {
+		return nil, err
+	}
+	if path.Service == "" {
+		path.Service = f.defaultName
+	}
+	fs, err := Get[FileService](f, path.Service)
+	if err != nil {
+		return nil, err
+	}
+	return fs.NewReader(ctx, filePath)
+}
+
+func (f *FileServices) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	path, err := ParsePathAtService(filePath, "")
+	if err != nil {
+		return nil, err
+	}
+	if path.Service == "" {
+		path.Service = f.defaultName
+	}
+	fs, err := Get[FileService](f, path.Service)
+	if err != nil {
+		return nil, err
+	}
+	return fs.NewWriter(ctx, filePath)
 }
 
 func (f *FileServices) Cost() *CostAttr {

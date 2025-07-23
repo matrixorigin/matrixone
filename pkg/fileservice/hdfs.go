@@ -401,6 +401,56 @@ func (h *HDFS) Write(ctx context.Context, key string, r io.Reader, sizeHint *int
 	return nil
 }
 
+func (h *HDFS) NewWriter(ctx context.Context, key string) (ret io.WriteCloser, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	tempFile, tempFilePath, err := h.createTemp()
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tempFile.Close()
+			_ = h.client.Remove(tempFilePath)
+		}
+	}()
+
+	return &writeCloser{
+		w: tempFile,
+
+		closeFunc: func() error {
+			_, err = DoWithRetry("HDFS: FileWriter.Close", func() (bool, error) {
+				// may retrun 'replication in progress' error, retry until OK
+				return true, tempFile.Close()
+			}, maxRetryAttemps, IsRetryableError)
+			if err != nil {
+				return err
+			}
+
+			filePath := h.keyToPath(key)
+			_, err = DoWithRetry("HDFS: MkdirAll", func() (bool, error) {
+				return true, h.client.MkdirAll(path.Dir(filePath), 0755)
+			}, maxRetryAttemps, IsRetryableError)
+			if err != nil {
+				if !os.IsExist(err) {
+					return err
+				}
+			}
+
+			_, err = DoWithRetry("HDFS: Rename", func() (bool, error) {
+				return true, h.client.Rename(tempFilePath, filePath)
+			}, maxRetryAttemps, IsRetryableError)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		},
+	}, nil
+}
+
 func (o *ObjectStorageArguments) getKerberosClient() (*krb.Client, error) {
 
 	// password

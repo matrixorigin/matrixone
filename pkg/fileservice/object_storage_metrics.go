@@ -99,3 +99,8 @@ func (o *objectStorageMetrics) Write(ctx context.Context, key string, r io.Reade
 	o.numWrite.Inc()
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }
+
+func (o *objectStorageMetrics) NewWriter(ctx context.Context, key string) (w io.WriteCloser, err error) {
+	o.numWrite.Inc()
+	return o.upstream.NewWriter(ctx, key)
+}

@@ -375,6 +375,38 @@ func (a *MinioSDK) Write(
 	return
 }
 
+func (a *MinioSDK) NewWriter(
+	ctx context.Context,
+	key string,
+) (
+	ret io.WriteCloser,
+	err error,
+) {
+
+	r, w := io.Pipe()
+	errChan := make(chan error, 1)
+	go func() {
+		_, err := a.putObject(
+			context.WithoutCancel(ctx),
+			key,
+			r,
+			nil,
+			nil,
+		)
+		errChan <- err
+	}()
+
+	return &writeCloser{
+		w: w,
+		closeFunc: func() error {
+			if err := w.Close(); err != nil {
+				return err
+			}
+			return <-errChan
+		},
+	}, nil
+}
+
 func (a *MinioSDK) Read(
 	ctx context.Context,
 	key string,
