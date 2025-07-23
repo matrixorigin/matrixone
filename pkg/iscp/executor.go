@@ -359,6 +359,9 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 		case <-syncTaskTrigger.C:
 			// get candidate iterations and tables
 			iterations, candidateTables, fromTSs := exec.getCandidateTables()
+			if len(iterations) == 0 {
+				continue
+			}
 			// check if there are any dirty tables
 			tables, toTS, err := exec.getDirtyTables(exec.ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
