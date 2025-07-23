@@ -213,7 +213,7 @@ func hackAggMemoryManager() hackManager {
 func TestCount(t *testing.T) {
 	m := hackAggMemoryManager()
 	info := singleAggInfo{
-		aggID:    aggIdOfCountColumn,
+		aggID:    AggIdOfCountColumn,
 		distinct: false,
 		retType:  types.T_int64.ToType(),
 	}
@@ -490,7 +490,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "count_star",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeCount(mg, true, aggIdOfCountStar, false, types.T_int64.ToType()), nil
+				return makeCount(mg, true, AggIdOfCountStar, false, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -505,7 +505,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "count_column",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeCount(mg, false, aggIdOfCountColumn, false, types.T_int64.ToType()), nil
+				return makeCount(mg, false, AggIdOfCountColumn, false, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -520,7 +520,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "count_column_distinct",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeCount(mg, false, aggIdOfCountColumn, true, types.T_int64.ToType()), nil
+				return makeCount(mg, false, AggIdOfCountColumn, true, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -536,7 +536,7 @@ func TestAggExecSize(t *testing.T) {
 			name: "median",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
 				info := singleAggInfo{
-					aggID:     aggIdOfMedian,
+					aggID:     AggIdOfMedian,
 					distinct:  false,
 					argType:   types.T_int64.ToType(),
 					retType:   MedianReturnType([]types.Type{types.T_int64.ToType()}),
@@ -557,7 +557,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "group_concat",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeGroupConcat(mg, aggIdOfGroupConcat, false, []types.Type{types.T_varchar.ToType()}, getCroupConcatRet(types.T_varchar.ToType()), ","), nil
+				return makeGroupConcat(mg, AggIdOfGroupConcat, false, []types.Type{types.T_varchar.ToType()}, getCroupConcatRet(types.T_varchar.ToType()), ","), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -572,7 +572,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "approx_count",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeApproxCount(mg, aggIdOfApproxCount, types.T_int64.ToType()), nil
+				return makeApproxCount(mg, AggIdOfApproxCount, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -587,7 +587,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "window_rank",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeWindowExec(mg, winIdOfRank, false)
+				return makeWindowExec(mg, WinIdOfRank, false)
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -675,4 +675,298 @@ func TestAggExecSize(t *testing.T) {
 			require.Equal(t, before, m.Mp().CurrNB(), "memory leak detected in %s", tc.name)
 		})
 	}
+}
+
+func TestGroupConcatExecMarshalUnmarshal(t *testing.T) {
+	m := hackAggMemoryManager()
+	defer func() {
+		require.Equal(t, int64(0), m.Mp().CurrNB())
+	}()
+
+	{
+		info := multiAggInfo{
+			aggID:     AggIdOfGroupConcat,
+			distinct:  false,
+			argTypes:  []types.Type{types.T_varchar.ToType()},
+			retType:   getCroupConcatRet(types.T_varchar.ToType()),
+			emptyNull: true,
+		}
+		exec := newGroupConcatExec(m, info, ",")
+
+		require.NoError(t, exec.GroupGrow(2))
+		v1 := vector.NewVec(types.T_varchar.ToType())
+		defer v1.Free(m.Mp())
+		require.NoError(t, vector.AppendBytes(v1, []byte("test1"), false, m.Mp()))
+		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v1}))
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+		require.NotNil(t, data)
+
+		newExec := newGroupConcatExec(m, info, ",")
+		err = newExec.unmarshal(m.Mp(), nil, nil, [][]byte{[]byte(",")})
+		require.NoError(t, err)
+
+		require.Equal(t, []byte(","), newExec.(*groupConcatExec).separator)
+		exec.Free()
+		newExec.Free()
+	}
+
+	{
+		info := multiAggInfo{
+			aggID:     AggIdOfGroupConcat,
+			distinct:  false,
+			argTypes:  []types.Type{types.T_varchar.ToType()},
+			retType:   getCroupConcatRet(types.T_varchar.ToType()),
+			emptyNull: true,
+		}
+		exec := newGroupConcatExec(m, info, "|")
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+
+		newExec := newGroupConcatExec(m, info, ",")
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		require.Equal(t, []byte("|"), newExec.(*groupConcatExec).separator)
+		exec.Free()
+		newExec.Free()
+	}
+
+	{
+		info := multiAggInfo{
+			aggID:     AggIdOfGroupConcat,
+			distinct:  true,
+			argTypes:  []types.Type{types.T_varchar.ToType()},
+			retType:   getCroupConcatRet(types.T_varchar.ToType()),
+			emptyNull: true,
+		}
+		exec := newGroupConcatExec(m, info, ",")
+		require.NoError(t, exec.GroupGrow(1))
+
+		v1 := vector.NewVec(types.T_varchar.ToType())
+		defer v1.Free(m.Mp())
+		require.NoError(t, vector.AppendBytes(v1, []byte("distinct1"), false, m.Mp()))
+		require.NoError(t, exec.Fill(0, 0, []*vector.Vector{v1}))
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+
+		newExec := newGroupConcatExec(m, info, ",")
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		exec.Free()
+		newExec.Free()
+	}
+
+	{
+		info := multiAggInfo{
+			aggID:     AggIdOfGroupConcat,
+			distinct:  false,
+			argTypes:  []types.Type{types.T_varchar.ToType()},
+			retType:   getCroupConcatRet(types.T_varchar.ToType()),
+			emptyNull: true,
+		}
+		exec := newGroupConcatExec(m, info, ",")
+
+		exec.Free()
+	}
+}
+
+func TestCountColumnExecMarshalUnmarshal(t *testing.T) {
+	m := hackAggMemoryManager()
+	defer func() {
+		require.Equal(t, int64(0), m.Mp().CurrNB())
+	}()
+
+	{
+		info := singleAggInfo{
+			aggID:     AggIdOfCountColumn,
+			distinct:  false,
+			argType:   types.T_int64.ToType(),
+			retType:   types.T_int64.ToType(),
+			emptyNull: false,
+		}
+		exec := newCountColumnExecExec(m, info)
+		require.NoError(t, exec.GroupGrow(3))
+
+		v1 := vector.NewVec(types.T_int64.ToType())
+		defer v1.Free(m.Mp())
+		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 3}, nil, m.Mp()))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{v1}))
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+
+		newExec := newCountColumnExecExec(m, info)
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		exec.Free()
+		newExec.Free()
+	}
+
+	{
+		info := singleAggInfo{
+			aggID:     AggIdOfCountColumn,
+			distinct:  true,
+			argType:   types.T_int64.ToType(),
+			retType:   types.T_int64.ToType(),
+			emptyNull: false,
+		}
+		exec := newCountColumnExecExec(m, info)
+		require.NoError(t, exec.GroupGrow(2))
+
+		v1 := vector.NewVec(types.T_int64.ToType())
+		defer v1.Free(m.Mp())
+		require.NoError(t, vector.AppendFixedList(v1, []int64{1, 2, 1, 3}, nil, m.Mp()))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{v1}))
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+
+		newExec := newCountColumnExecExec(m, info)
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		exec.Free()
+		newExec.Free()
+	}
+
+	{
+		info := singleAggInfo{
+			aggID:     AggIdOfCountColumn,
+			distinct:  true,
+			argType:   types.T_int64.ToType(),
+			retType:   types.T_int64.ToType(),
+			emptyNull: false,
+		}
+		exec := newCountColumnExecExec(m, info)
+		require.NoError(t, exec.GroupGrow(1))
+
+		data, err := exec.marshal()
+		require.NoError(t, err)
+
+		newExec := newCountColumnExecExec(m, info)
+		encoded := &EncodedAgg{}
+		require.NoError(t, encoded.Unmarshal(data))
+
+		err = newExec.unmarshal(m.Mp(), encoded.Result, encoded.Empties, encoded.Groups)
+		require.NoError(t, err)
+
+		exec.Free()
+		newExec.Free()
+	}
+
+	{
+		info := singleAggInfo{
+			aggID:     AggIdOfCountColumn,
+			distinct:  true,
+			argType:   types.T_int64.ToType(),
+			retType:   types.T_int64.ToType(),
+			emptyNull: false,
+		}
+		exec := newCountColumnExecExec(m, info)
+
+		err := exec.unmarshal(m.Mp(), nil, nil, [][]byte{})
+		require.NoError(t, err)
+
+		exec.Free()
+	}
+}
+
+func TestDistinctHashMarshalUnmarshal(t *testing.T) {
+	m := hackAggMemoryManager()
+	defer func() {
+		require.Equal(t, int64(0), m.Mp().CurrNB())
+	}()
+
+	{
+		dh := newDistinctHash()
+
+		data, err := dh.marshal()
+		require.NoError(t, err)
+		require.Nil(t, data)
+
+		newDh := newDistinctHash()
+		err = newDh.unmarshal(nil)
+		require.NoError(t, err)
+
+		require.Equal(t, 0, len(newDh.maps))
+	}
+
+	{
+		dh := newDistinctHash()
+		require.NoError(t, dh.grows(1))
+
+		v1 := vector.NewVec(types.T_varchar.ToType())
+		defer v1.Free(m.Mp())
+		require.NoError(t, vector.AppendBytes(v1, []byte("key1"), false, m.Mp()))
+
+		_, err := dh.fill(0, []*vector.Vector{v1}, 0)
+		require.NoError(t, err)
+
+		data, err := dh.marshal()
+		require.NoError(t, err)
+		require.NotNil(t, data)
+
+		newDh := newDistinctHash()
+		err = newDh.unmarshal(data)
+		require.NoError(t, err)
+
+		require.Equal(t, 1, len(newDh.maps))
+		require.Equal(t, uint64(1), newDh.maps[0].GroupCount())
+
+		v1.Free(m.Mp())
+	}
+
+	{
+		dh := newDistinctHash()
+		require.NoError(t, dh.grows(3))
+
+		v1 := vector.NewVec(types.T_varchar.ToType())
+		defer v1.Free(m.Mp())
+		require.NoError(t, vector.AppendBytes(v1, []byte("key1"), false, m.Mp()))
+
+		v2 := vector.NewVec(types.T_varchar.ToType())
+		defer v2.Free(m.Mp())
+		require.NoError(t, vector.AppendBytes(v2, []byte("key2"), false, m.Mp()))
+
+		_, err := dh.fill(0, []*vector.Vector{v1}, 0)
+		require.NoError(t, err)
+
+		_, err = dh.fill(1, []*vector.Vector{v2}, 0)
+		require.NoError(t, err)
+
+		data, err := dh.marshal()
+		require.NoError(t, err)
+		require.NotNil(t, data)
+
+		newDh := newDistinctHash()
+		err = newDh.unmarshal(data)
+		require.NoError(t, err)
+
+		require.Equal(t, 3, len(newDh.maps))
+		require.Equal(t, uint64(1), newDh.maps[0].GroupCount())
+		require.Equal(t, uint64(1), newDh.maps[1].GroupCount())
+		require.Equal(t, uint64(0), newDh.maps[2].GroupCount())
+
+		v1.Free(m.Mp())
+		v2.Free(m.Mp())
+	}
+
 }
