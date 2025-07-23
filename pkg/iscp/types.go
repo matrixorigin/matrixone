@@ -88,7 +88,7 @@ type ConsumerInfo struct {
 	ConsumerType int8
 	TableName    string
 	DbName       string
-	IndexName    string
+	JobName      string
 }
 
 type JobConfig interface {

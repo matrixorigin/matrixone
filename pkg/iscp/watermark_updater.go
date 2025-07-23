@@ -93,7 +93,7 @@ func registerJob(
 			"Async-Index-ISCP-Task RegisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
-			zap.String("jobName", sinkerinfo_json.IndexName),
+			zap.String("jobName", sinkerinfo_json.JobName),
 			zap.Bool("create new", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -123,7 +123,7 @@ func registerJob(
 		txn,
 		tenantId,
 		tableID,
-		sinkerinfo_json.IndexName,
+		sinkerinfo_json.JobName,
 	)
 	if err != nil {
 		return false, err
@@ -140,7 +140,7 @@ func registerJob(
 	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogInsertSQL(
 		tenantId,
 		tableID,
-		sinkerinfo_json.IndexName,
+		sinkerinfo_json.JobName,
 		string(jobConfigStr),
 		"",
 		"",
@@ -189,7 +189,7 @@ func unregisterJob(
 			"Async-Index-ISCP-Task UnregisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
-			zap.String("jobName", consumerInfo.IndexName),
+			zap.String("jobName", consumerInfo.JobName),
 			zap.Bool("delete", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -215,7 +215,7 @@ func unregisterJob(
 		txn,
 		tenantId,
 		tableID,
-		consumerInfo.IndexName,
+		consumerInfo.JobName,
 	)
 	if err != nil {
 		return false, err
@@ -227,7 +227,7 @@ func unregisterJob(
 	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogUpdateDropAtSQL(
 		tenantId,
 		tableID,
-		consumerInfo.IndexName,
+		consumerInfo.JobName,
 	)
 	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {

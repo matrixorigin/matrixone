@@ -59,7 +59,7 @@ func (t *TableEntry) AddSinker(
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, sinker := range t.sinkers {
-		if sinker.jobName == sinkConfig.IndexName {
+		if sinker.jobName == sinkConfig.JobName {
 			return false, nil
 		}
 	}
@@ -164,7 +164,7 @@ func (t *TableEntry) UpdateWatermark(iter *Iteration) {
 	}
 }
 
-func (t *TableEntry) fillInAsyncIndexLogUpdateSQL(firstTable bool, insertWriter, deleteWriter *bytes.Buffer) (err error) {
+func (t *TableEntry) fillInISCPLogUpdateSQL(firstTable bool, insertWriter, deleteWriter *bytes.Buffer) (err error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for i, sinker := range t.sinkers {

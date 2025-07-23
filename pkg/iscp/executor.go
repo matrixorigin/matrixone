@@ -18,9 +18,10 @@ import (
 	"bytes"
 	"context"
 
-	"go.uber.org/zap"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -72,14 +73,14 @@ type ISCPExecutorOption struct {
 type TxnFactory func() (client.TxnOperator, error)
 
 type ISCPTaskExecutor struct {
-	tables               *btree.BTreeG[*TableEntry]
-	tableMu              sync.RWMutex
-	packer               *types.Packer
-	mp                   *mpool.MPool
-	cnUUID               string
-	txnFactory           func() (client.TxnOperator, error)
-	txnEngine            engine.Engine
-	asyncIndexLogTableID uint64
+	tables         *btree.BTreeG[*TableEntry]
+	tableMu        sync.RWMutex
+	packer         *types.Packer
+	mp             *mpool.MPool
+	cnUUID         string
+	txnFactory     func() (client.TxnOperator, error)
+	txnEngine      engine.Engine
+	iscpLogTableID uint64
 
 	rpcHandleFn func(
 		ctx context.Context,
@@ -105,11 +106,11 @@ func GetTxnFactory(
 	cnTxnClient client.TxnClient,
 ) func() (client.TxnOperator, error) {
 	return func() (client.TxnOperator, error) {
-		return GetTxnOp(ctx, cnEngine, cnTxnClient, "default async index iscp executor")
+		return GetTxnOp(ctx, cnEngine, cnTxnClient, "default iscp executor")
 	}
 }
 
-func AsyncIndexISCPTaskExecutorFactory(
+func ISCPTaskExecutorFactory(
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	attachToTask func(context.Context, uint64, taskservice.ActiveRoutine) error,
@@ -160,7 +161,7 @@ func NewISCPTaskExecutor(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-ISCP-Task Executor init",
+			"ISCP-Task Executor init",
 			zap.Any("gcInterval", option.GCInterval),
 			zap.Any("gcttl", option.GCTTL),
 			zap.Any("syncTaskInterval", option.SyncTaskInterval),
@@ -195,11 +196,11 @@ func NewISCPTaskExecutor(
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	err = exec.setAsyncIndexLogTableID(ctx)
+	err = exec.setISCPLogTableID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	err = exec.subscribeMOAsyncIndexLog(ctx)
+	err = exec.subscribeMOISCPLog(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +208,7 @@ func NewISCPTaskExecutor(
 	return exec, nil
 }
 
-func (exec *ISCPTaskExecutor) setAsyncIndexLogTableID(ctx context.Context) (err error) {
+func (exec *ISCPTaskExecutor) setISCPLogTableID(ctx context.Context) (err error) {
 	tenantId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
@@ -222,10 +223,10 @@ func (exec *ISCPTaskExecutor) setAsyncIndexLogTableID(ctx context.Context) (err 
 	if err != nil {
 		return err
 	}
-	exec.asyncIndexLogTableID = tableID
+	exec.iscpLogTableID = tableID
 	return nil
 }
-func (exec *ISCPTaskExecutor) subscribeMOAsyncIndexLog(ctx context.Context) (err error) {
+func (exec *ISCPTaskExecutor) subscribeMOISCPLog(ctx context.Context) (err error) {
 	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogSelectSQL()
 	txn, err := exec.txnFactory()
 	if err != nil {
@@ -307,7 +308,7 @@ func (exec *ISCPTaskExecutor) Start() {
 func (exec *ISCPTaskExecutor) initStateLocked() {
 	exec.running = true
 	logutil.Info(
-		"Async-Index-ISCP-Task Start",
+		"ISCP-Task Start",
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	worker := NewWorker()
@@ -327,7 +328,7 @@ func (exec *ISCPTaskExecutor) Stop() {
 	}
 	exec.running = false
 	logutil.Info(
-		"Async-Index-ISCP-Task Stop",
+		"ISCP-Task Stop",
 	)
 	exec.worker.Stop()
 	exec.cancel()
@@ -338,11 +339,11 @@ func (exec *ISCPTaskExecutor) Stop() {
 
 func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 	logutil.Info(
-		"Async-Index-ISCP-Task Run",
+		"ISCP-Task Run",
 	)
 	defer func() {
 		logutil.Info(
-			"Async-Index-ISCP-Task Run Done",
+			"ISCP-Task Run Done",
 		)
 	}()
 	defer exec.wg.Done()
@@ -365,7 +366,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 			}
 			if err != nil {
 				logutil.Error(
-					"Async-Index-ISCP-Task get dirty tables failed",
+					"ISCP-Task get dirty tables failed",
 					zap.Error(err),
 				)
 				continue
@@ -389,7 +390,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 			err := exec.FlushWatermarkForAllTables()
 			if err != nil {
 				logutil.Error(
-					"Async-Index-ISCP-Task flush watermark failed",
+					"ISCP-Task flush watermark failed",
 					zap.Error(err),
 				)
 			}
@@ -397,7 +398,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 			err := exec.GC(time.Hour) // todo
 			if err != nil {
 				logutil.Error(
-					"Async-Index-ISCP-Task gc failed",
+					"ISCP-Task gc failed",
 					zap.Error(err),
 				)
 			}
@@ -416,7 +417,7 @@ func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, 
 }
 
 func (exec *ISCPTaskExecutor) onISCPLogInsert(ctx context.Context, input *api.Batch, tableID uint64) {
-	if tableID != exec.asyncIndexLogTableID {
+	if tableID != exec.iscpLogTableID {
 		return
 	}
 	// first 2 columns are rowID and commitTS
@@ -463,7 +464,7 @@ func (exec *ISCPTaskExecutor) onISCPLogInsert(ctx context.Context, input *api.Ba
 			jobConfigStr := jobConfigVector.GetStringAt(i)
 			go retry(
 				func() error {
-					return exec.addIndex(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr, jobConfigStr)
+					return exec.addJob(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr, jobConfigStr)
 				},
 				exec.option.RetryTimes,
 			)
@@ -472,7 +473,7 @@ func (exec *ISCPTaskExecutor) onISCPLogInsert(ctx context.Context, input *api.Ba
 			jobName := jobNameVector.GetStringAt(i)
 			go retry(
 				func() error {
-					return exec.deleteIndex(accountIDs[i], tid, jobName)
+					return exec.deleteJob(accountIDs[i], tid, jobName)
 				},
 				exec.option.RetryTimes,
 			)
@@ -483,7 +484,7 @@ func (exec *ISCPTaskExecutor) onISCPLogInsert(ctx context.Context, input *api.Ba
 
 func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 	var err error
-	indexCount := 0
+	jobCount := 0
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -492,8 +493,8 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-ISCP-Task replay",
-			zap.Int("indexCount", indexCount),
+			"ISCP-Task replay",
+			zap.Int("jobCount", jobCount),
 			zap.Error(err),
 		)
 	}()
@@ -523,13 +524,13 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 			if !dropAtVector.IsNull(uint64(i)) {
 				continue
 			}
-			indexCount++
+			jobCount++
 			watermarkStr := watermarkVector.GetStringAt(i)
 			consumerInfoStr := consumerInfoVector.GetStringAt(i)
 			jobConfigStr := jobConfigVector.GetStringAt(i)
 			retry(
 				func() error {
-					return exec.addIndex(
+					return exec.addJob(
 						accountIDs[i],
 						tableIDs[i],
 						watermarkStr,
@@ -545,7 +546,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 	})
 }
 
-func (exec *ISCPTaskExecutor) addIndex(
+func (exec *ISCPTaskExecutor) addJob(
 	accountID uint32,
 	tableID uint64,
 	watermarkStr string,
@@ -562,7 +563,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-ISCP-Task add index",
+			"ISCP-Task add job",
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobName),
@@ -575,13 +576,13 @@ func (exec *ISCPTaskExecutor) addIndex(
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	consumerInfo, err := UnmarshalConsumerConfig([]byte(consumerInfoStr))
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "addIndex" {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "addJob" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		return
 	}
-	jobName = consumerInfo.IndexName
+	jobName = consumerInfo.JobName
 	rel, err := exec.getTableByID(ctx, tableID)
 	if err != nil {
 		return
@@ -616,7 +617,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 	return
 }
 
-func (exec *ISCPTaskExecutor) deleteIndex(
+func (exec *ISCPTaskExecutor) deleteJob(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
@@ -629,7 +630,7 @@ func (exec *ISCPTaskExecutor) deleteIndex(
 			logger = logutil.Info
 		}
 		logger(
-			"Async-Index-ISCP-Task delete index",
+			"ISCP-Task delete job",
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobName),
@@ -641,7 +642,7 @@ func (exec *ISCPTaskExecutor) deleteIndex(
 		return moerr.NewInternalErrorNoCtx("table not found")
 	}
 	empty, err := table.DeleteSinker(jobName)
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "deleteIndex" {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "deleteJob" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
@@ -755,7 +756,7 @@ func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables() error {
 	insertSqlWriter.WriteString("INSERT INTO mo_catalog.mo_intra_system_change_propagation_log " +
 		"(account_id,table_id,column_names,job_name,job_config,last_sync_txn_ts,err_code,error_msg,info,consumer_config,drop_at) VALUES")
 	for i, table := range tables {
-		err := table.fillInAsyncIndexLogUpdateSQL(i == 0, insertSqlWriter, deleteSqlWriter)
+		err := table.fillInISCPLogUpdateSQL(i == 0, insertSqlWriter, deleteSqlWriter)
 		if err != nil {
 			return err
 		}
@@ -785,7 +786,7 @@ func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables() error {
 		return err
 	}
 	logutil.Info(
-		"Async-Index-ISCP-Task flush watermark",
+		"ISCP-Task flush watermark",
 		zap.Any("table count", len(tables)),
 	)
 	return nil
@@ -800,12 +801,12 @@ func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	defer cancel()
 	defer txn.Commit(ctx)
 	gcTime := time.Now().Add(-cleanupThreshold)
-	asyncIndexLogGCSql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogGCSQL(gcTime)
-	if _, err = ExecWithResult(ctx, asyncIndexLogGCSql, exec.cnUUID, txn); err != nil {
+	iscpLogGCSql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogGCSQL(gcTime)
+	if _, err = ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn); err != nil {
 		return err
 	}
 	logutil.Info(
-		"Async-Index-ISCP-Task GC",
+		"ISCP-Task GC",
 		zap.Any("gcTime", gcTime),
 	)
 	return err
@@ -828,6 +829,6 @@ func retry(fn func() error, retryTimes int) (err error) {
 		}
 		time.Sleep(DefaultRetryDuration)
 	}
-	logutil.Errorf("Async-Index-ISCP-Task retry failed, err: %v", err)
+	logutil.Errorf("ISCP-Task retry failed, err: %v", err)
 	return
 }

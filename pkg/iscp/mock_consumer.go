@@ -112,7 +112,7 @@ func NewInteralSqlConsumer(
 ) (Consumer, error) {
 	s := &interalSqlConsumer{
 		tableInfo: tableDef,
-		jobName:   info.IndexName,
+		jobName:   info.JobName,
 	}
 	s.maxAllowedPacket = uint64(1024 * 1024)
 	logutil.Infof("iscp mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, s.maxAllowedPacket)
@@ -125,7 +125,7 @@ func NewInteralSqlConsumer(
 
 	exec := v.(executor.SQLExecutor)
 	s.internalSqlExecutor = exec
-	s.targetTableName = fmt.Sprintf("test_table_%d_%v", tableDef.TblId, info.IndexName)
+	s.targetTableName = fmt.Sprintf("test_table_%d_%v", tableDef.TblId, info.JobName)
 	logutil.Infof("iscp %v->%vs", tableDef.Name, s.targetTableName)
 	err := s.createTargetTable(context.Background())
 	if err != nil {
@@ -212,7 +212,7 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "consume" {
 		return moerr.NewInternalErrorNoCtx(msg)
 	}
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithIndexName") {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "consumeWithJobName") {
 		strs := strings.Split(msg, ":")
 		for i := 1; i < len(strs); i++ {
 			if s.jobName == strs[i] {

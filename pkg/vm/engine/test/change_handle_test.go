@@ -1426,7 +1426,7 @@ func TestISCPExecutor1(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		},
 	)
 	assert.True(t, ok)
@@ -1475,7 +1475,7 @@ func TestISCPExecutor1(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_IndexSync),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		})
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -1563,7 +1563,7 @@ func TestISCPExecutor2(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_IndexSync),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		})
 	assert.False(t, ok)
 	assert.NoError(t, err)
@@ -1578,7 +1578,7 @@ func TestISCPExecutor2(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		},
 	)
 	assert.True(t, ok)
@@ -1593,7 +1593,7 @@ func TestISCPExecutor2(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		})
 	assert.False(t, ok)
 	assert.NoError(t, err)
@@ -1607,7 +1607,7 @@ func TestISCPExecutor2(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_IndexSync),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		})
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -1621,7 +1621,7 @@ func TestISCPExecutor2(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_IndexSync),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		})
 	assert.False(t, ok)
 	assert.NoError(t, err)
@@ -1635,7 +1635,7 @@ func TestISCPExecutor2(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		})
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -1728,7 +1728,7 @@ func TestISCPExecutor3(t *testing.T) {
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 				DbName:       "srcdb",
 				TableName:    "src_table",
-				IndexName:    indexName,
+				JobName:      indexName,
 			},
 		)
 		assert.True(t, ok)
@@ -1744,7 +1744,7 @@ func TestISCPExecutor3(t *testing.T) {
 				ConsumerType: int8(iscp.ConsumerType_IndexSync),
 				DbName:       "srcdb",
 				TableName:    "src_table",
-				IndexName:    indexName,
+				JobName:      indexName,
 			})
 		assert.True(t, ok)
 		assert.NoError(t, err)
@@ -1961,7 +1961,7 @@ func TestISCPExecutor4(t *testing.T) {
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 				DbName:       "srcdb",
 				TableName:    "src_table",
-				IndexName:    indexName,
+				JobName:      indexName,
 			},
 		)
 		assert.True(t, ok)
@@ -2060,7 +2060,7 @@ func TestISCPExecutor4(t *testing.T) {
 		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
 	}
 	// consume, firstTxn failed
-	rmFn, err = objectio.InjectCDCExecutor("consumeWithIndexName:hnsw_idx_0")
+	rmFn, err = objectio.InjectCDCExecutor("consumeWithJobName:hnsw_idx_0")
 	assert.NoError(t, err)
 	appendFn(8)
 	checkWaterMarkFn("hnsw_idx_0", 100, false)
@@ -2166,7 +2166,7 @@ func TestISCPExecutor5(t *testing.T) {
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 				DbName:       dbName,
 				TableName:    tableName,
-				IndexName:    indexName,
+				JobName:      indexName,
 			},
 		)
 		assert.True(t, ok)
@@ -2297,7 +2297,7 @@ func TestISCPExecutor6(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "idx",
+			JobName:      "idx",
 		},
 	)
 	assert.True(t, ok)
@@ -2399,7 +2399,7 @@ func TestISCPExecutor7(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		},
 	)
 	assert.True(t, ok)
@@ -2504,7 +2504,7 @@ func TestISCPExecutor8(t *testing.T) {
 			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
 			DbName:       "srcdb",
 			TableName:    "src_table",
-			IndexName:    "hnsw_idx",
+			JobName:      "hnsw_idx",
 		},
 	)
 	assert.True(t, ok)

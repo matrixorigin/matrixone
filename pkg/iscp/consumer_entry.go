@@ -41,7 +41,7 @@ func NewJobEntry(
 	}
 	jobEntry := &JobEntry{
 		tableInfo:    tableInfo,
-		jobName:      sinkerConfig.IndexName,
+		jobName:      sinkerConfig.JobName,
 		consumer:     consumer,
 		consumerType: sinkerConfig.ConsumerType,
 		jobConfig:    jobConfig,

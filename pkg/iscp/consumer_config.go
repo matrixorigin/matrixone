@@ -73,7 +73,7 @@ func (c *ConsumerInfo) Marshal() (buf []byte, err error) {
 	if _, err = objectio.WriteString(c.DbName, &w); err != nil {
 		return nil, err
 	}
-	if _, err = objectio.WriteString(c.IndexName, &w); err != nil {
+	if _, err = objectio.WriteString(c.JobName, &w); err != nil {
 		return nil, err
 	}
 	return w.Bytes(), nil
@@ -90,7 +90,7 @@ func (c *ConsumerInfo) Unmarshal(data []byte) (err error) {
 	if c.DbName, _, err = objectio.ReadString(r); err != nil {
 		return err
 	}
-	if c.IndexName, _, err = objectio.ReadString(r); err != nil {
+	if c.JobName, _, err = objectio.ReadString(r); err != nil {
 		return err
 	}
 	return nil

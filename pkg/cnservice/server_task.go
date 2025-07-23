@@ -402,7 +402,7 @@ func (s *service) registerExecutorsLocked() {
 	)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
-		iscp.AsyncIndexISCPTaskExecutorFactory(
+		iscp.ISCPTaskExecutorFactory(
 			s.storeEngine,
 			s._txnClient,
 			s.task.runner.Attach,
