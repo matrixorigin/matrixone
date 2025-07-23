@@ -574,8 +574,7 @@ func (exec *ISCPTaskExecutor) addIndex(
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
-	consumerInfo := &ConsumerInfo{}
-	consumerInfo, err = UnmarshalConsumerConfig([]byte(consumerInfoStr))
+	consumerInfo, err := UnmarshalConsumerConfig([]byte(consumerInfoStr))
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "addIndex" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
