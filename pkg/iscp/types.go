@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,7 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
 )
@@ -56,6 +61,69 @@ const (
 	JobState_Running
 	JobState_Finished
 )
+
+// In an iteration, the table's data is propagated downstream.
+// A newly created job will immediately trigger an iteration.
+// Subsequent iterations are triggered according to the job's configuration.
+// In an iteration, data is collected via CollectChanges and distributed to consumers through data retrievers.
+// A single iteration can correspond to multiple consumers.
+/*
+              +--------------------+
+              |   Source Table     |
+              |  data [from, to]   |
+              +--------+-----------+
+                       |
+               [Read a data batch]
+                       |
+        +--------------+--------------+--------------+
+        |                             |              |
+   +----v----+                  +-----v----+    +-----v----+
+   |Consumer1|                  |Consumer2 |    |Consumer3 |
+   | .Next() |                  | .Next()  |    | .Next()  |
+   +---------+                  +----------+    +----------+
+        |                             |              |
+  Receives batch               Receives batch   Receives batch
+
+*/
+type Iteration struct {
+	table   *TableEntry
+	sinkers []*JobEntry
+	from    types.TS
+	to      types.TS
+	err     []error
+	startAt time.Time
+	endAt   time.Time
+}
+
+// Intra-System Change Propagation Task Executor
+// iscp executor manages iterations, updates watermarks, and updates the iscp table.
+type ISCPTaskExecutor struct {
+	tables         *btree.BTreeG[*TableEntry]
+	tableMu        sync.RWMutex
+	packer         *types.Packer
+	mp             *mpool.MPool
+	cnUUID         string
+	txnFactory     func() (client.TxnOperator, error)
+	txnEngine      engine.Engine
+	iscpLogTableID uint64
+
+	rpcHandleFn func(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.GetChangedTableListReq,
+		resp *cmd_util.GetChangedTableListResp,
+	) (func(), error) // for test
+	option *ISCPExecutorOption
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	worker Worker
+	wg     sync.WaitGroup
+
+	running   bool
+	runningMu sync.Mutex
+}
 
 // Intra-System Change Propagation Job Entry
 type JobEntry struct {

@@ -72,34 +72,6 @@ type ISCPExecutorOption struct {
 
 type TxnFactory func() (client.TxnOperator, error)
 
-type ISCPTaskExecutor struct {
-	tables         *btree.BTreeG[*TableEntry]
-	tableMu        sync.RWMutex
-	packer         *types.Packer
-	mp             *mpool.MPool
-	cnUUID         string
-	txnFactory     func() (client.TxnOperator, error)
-	txnEngine      engine.Engine
-	iscpLogTableID uint64
-
-	rpcHandleFn func(
-		ctx context.Context,
-		meta txn.TxnMeta,
-		req *cmd_util.GetChangedTableListReq,
-		resp *cmd_util.GetChangedTableListResp,
-	) (func(), error) // for test
-	option *ISCPExecutorOption
-
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	worker Worker
-	wg     sync.WaitGroup
-
-	running   bool
-	runningMu sync.Mutex
-}
-
 func GetTxnFactory(
 	ctx context.Context,
 	cnEngine engine.Engine,

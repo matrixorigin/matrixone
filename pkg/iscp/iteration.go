@@ -27,19 +27,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// 1. init sinker
-// 2. dirty sinkers
-// 3. all sinkers
-type Iteration struct {
-	table   *TableEntry
-	sinkers []*JobEntry
-	from    types.TS
-	to      types.TS
-	err     []error
-	startAt time.Time
-	endAt   time.Time
-}
-
 func (iter *Iteration) Init() {
 	iter.table.mu.Lock()
 	defer iter.table.mu.Unlock()
