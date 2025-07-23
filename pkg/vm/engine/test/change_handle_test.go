@@ -1778,7 +1778,7 @@ func TestISCPExecutor3(t *testing.T) {
 		}
 	}
 	// add index
-	rmFn, err := objectio.InjectCDCExecutor("addIndex")
+	rmFn, err := objectio.InjectCDCExecutor("addJob")
 	assert.NoError(t, err)
 
 	registerFn("hnsw_idx_0")
