@@ -636,7 +636,7 @@ func TestHnswSyncSinker_ErrorHandling(t *testing.T) {
 
 func TestHnswSyncSinker_Sink_AtomicBatch(t *testing.T) {
 
-	proc := testutil.NewProcess()
+	proc := testutil.NewProcess(t)
 
 	dbTblInfo := newTestDbTableInfo()
 	ctx := context.Background()
