@@ -25,12 +25,9 @@ import (
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pitr,
-<<<<<<< HEAD
 	upg_mo_intra_system_change_propagation_log_new,
-=======
 	upg_drop_mo_stored_procedure,
 	upg_create_mo_stored_procedure,
->>>>>>> main
 }
 
 var upg_mo_pitr = versions.UpgradeEntry{
