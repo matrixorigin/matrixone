@@ -892,6 +892,106 @@ func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	return nil
 }
 
+var _ ReaderWriterFileService = new(LocalFS)
+
+func (l *LocalFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+
+	file, err := os.Open(nativePath)
+	if os.IsNotExist(err) {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil && file != nil {
+			_ = file.Close()
+		}
+	}()
+
+	fileWithChecksum := NewFileWithChecksum(ctx, file, _BlockContentSize, l.perfCounterSets)
+
+	return &readCloser{
+		r:         fileWithChecksum,
+		closeFunc: file.Close,
+	}, nil
+}
+
+func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+
+	// check existence
+	_, err = os.Stat(nativePath)
+	if err == nil {
+		// existed
+		return nil, moerr.NewFileAlreadyExistsNoCtx(path.File)
+	}
+
+	f, err := os.CreateTemp(
+		l.rootPath,
+		".tmp.*",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+		}
+	}()
+
+	fileWithChecksum, put := NewFileWithChecksumOSFile(ctx, f, _BlockContentSize, l.perfCounterSets)
+
+	return &writeCloser{
+		w: fileWithChecksum,
+		closeFunc: func() error {
+			// put
+			defer put.Put()
+			// sync
+			if err := f.Sync(); err != nil {
+				return err
+			}
+			// close
+			if err := f.Close(); err != nil {
+				return err
+			}
+			// ensure parent dir
+			parentDir, _ := filepath.Split(nativePath)
+			err = l.ensureDir(parentDir)
+			if err != nil {
+				return err
+			}
+			// move
+			if err := os.Rename(f.Name(), nativePath); err != nil {
+				return err
+			}
+			// sync parent dir
+			if err := l.syncDir(parentDir); err != nil {
+				return err
+			}
+			return nil
+		},
+	}, nil
+}
+
 func (l *LocalFS) ensureDir(nativePath string) error {
 	nativePath = filepath.Clean(nativePath)
 	if nativePath == "" {
