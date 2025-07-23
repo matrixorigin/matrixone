@@ -1,248 +1,147 @@
-drop pitr if exists pitr01;
-create pitr pitr01 for account range 1 'h';
-drop snapshot if exists sp01;
-create snapshot sp01 for account;
-drop database if exists test;
-create database test;
-use test;
-create table t1(col int, col2 int);
-insert into t1 values(1,1);
-create table t2(col int, col2 int);
-insert into t2 values(2,2);
-create table t3(col int, col2 int);
-insert into t3 values(3,3);
-drop pitr if exists pitr02;
-create pitr pitr02 for database test range 1 'h';
-drop snapshot if exists sp02;
-create snapshot sp02 for database test;
-drop pitr if exists pitr03;
-create pitr pitr03 for table test t1 range 1 'h';
-drop snapshot if exists sp03;
-create snapshot sp03 for table test t1;
-drop pitr if exists pitr04;
-create pitr pitr04 for table test t2 range 1 'h';
-drop snapshot if exists sp04;
-create snapshot sp04 for table test t2;
-drop pitr if exists pitr05;
-create pitr pitr05 for table test t3 range 1 'h';
-drop snapshot if exists sp05;
-create snapshot sp05 for table test t3;
-show recovery_window for account;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    sys    test    t1    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp01"}
-database    sys    test    t2    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp01"}
-database    sys    test    t3    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp01"}
-show recovery_window for database test;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    sys    test    t1    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"}
-database    sys    test    t2    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"}
-database    sys    test    t3    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"}
-show recovery_window for table test t1;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t1    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr03"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"}
-show recovery_window for table test t2;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t2    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr04"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"}
-show recovery_window for table test t3;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t3    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:31", "source": "pitr", "source_name": "pitr05"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp05"}
-drop database test;
-drop snapshot sp01;
-drop snapshot sp02;
-drop snapshot sp03;
-drop snapshot sp04;
-drop snapshot sp05;
-drop pitr pitr01;
-drop pitr pitr02;
-drop pitr pitr03;
-drop pitr pitr04;
-drop pitr pitr05;
-drop pitr if exists pitr01;
-create pitr pitr01 for account range 1 'h';
-drop snapshot if exists sp01;
-create snapshot sp01 for account;
-drop database if exists test;
-create database test;
-use test;
-create table t1(col int, col2 int);
-insert into t1 values(1,1);
-create table t2(col int, col2 int);
-insert into t2 values(2,2);
-create table t3(col int, col2 int);
-insert into t3 values(3,3);
-drop pitr if exists pitr02;
-create pitr pitr02 for database test range 1 'h';
-drop snapshot if exists sp02;
-create snapshot sp02 for database test;
-drop pitr if exists pitr03;
-create pitr pitr03 for table test t1 range 1 'h';
-drop snapshot if exists sp03;
-create snapshot sp03 for table test t1;
-drop pitr if exists pitr04;
-create pitr pitr04 for table test t2 range 1 'h';
-drop snapshot if exists sp04;
-create snapshot sp04 for table test t2;
-drop pitr if exists pitr05;
-create pitr pitr05 for table test t3 range 1 'h';
-drop snapshot if exists sp05;
-create snapshot sp05 for table test t3;
-show recovery_window for account;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    sys    test    t1    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp01"}
-database    sys    test    t2    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp01"}
-database    sys    test    t3    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp01"}
-show recovery_window for database test;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    sys    test    t1    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"}
-database    sys    test    t2    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"}
-database    sys    test    t3    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"}
-show recovery_window for table test t1;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t1    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"}
-show recovery_window for table test t2;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t2    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"}
-show recovery_window for table test t3;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t3    {"start_time": "2025-01-13 13:57:31", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"}
-drop database test;
-create database test;
-use test;
-create table t1(col int, col2 int);
-insert into t1 values(1,1);
-create table t2(col int, col2 int);
-insert into t2 values(2,2);
-create table t3(col int, col2 int);
-insert into t3 values(3,3);
-drop pitr if exists pitr01;
-create pitr pitr06 for account range 1 'h';
-drop snapshot if exists sp01;
-create snapshot sp06 for account;
-drop pitr if exists pitr07;
-create pitr pitr07 for database test range 1 'h';
-drop snapshot if exists sp07;
-create snapshot sp07 for database test;
-drop pitr if exists pitr08;
-create pitr pitr08 for table test t1 range 1 'h';
-drop snapshot if exists sp08;
-create snapshot sp08 for table test t1;
-drop pitr if exists pitr09;
-create pitr pitr09 for table test t2 range 1 'h';
-drop snapshot if exists sp09;
-create snapshot sp09 for table test t2;
-drop pitr if exists pitr10;
-create pitr pitr10 for table test t3 range 1 'h';
-drop snapshot if exists sp10;
-create snapshot sp10 for table test t3;
-show recovery_window for account;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    sys    test    t1    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr08"},\n{"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr07"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr06"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp08"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp07"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp06"}
-database    sys    test    t2    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr09"},\n{"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr07"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr06"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp09"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp07"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp06"}
-database    sys    test    t3    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr10"},\n{"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr07"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr06"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp10"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp07"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp06"}
-show recovery_window for database test;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    sys    test    t1    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr08"},\n{"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr07"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp08"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp07"}
-database    sys    test    t2    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr09"},\n{"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr07"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp09"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp07"}
-database    sys    test    t3    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr10"},\n{"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr07"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp10"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp07"}
-show recovery_window for table test t1;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t1    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr08"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp08"}
-show recovery_window for table test t2;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t2    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr09"},\n{"timestamp": "2025-01-13 13:57:31", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp09"}
-show recovery_window for table test t3;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    sys    test    t3    {"start_time": "2025-01-13 12:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr10"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp10"}
-drop database test;
-drop snapshot sp01;
-internal error: snapshot sp01 does not exist
-drop snapshot sp02;
-drop snapshot sp03;
-drop snapshot sp04;
-drop snapshot sp05;
-drop snapshot sp06;
-drop snapshot sp07;
-drop snapshot sp08;
-drop snapshot sp09;
-drop snapshot sp10;
-drop pitr pitr01;
-internal error: pitr pitr01 does not exist
-drop pitr pitr02;
-drop pitr pitr03;
-drop pitr pitr04;
-drop pitr pitr05;
-drop pitr pitr06;
-drop pitr pitr07;
-drop pitr pitr08;
-drop pitr pitr09;
-drop pitr pitr10;
-show recovery_window for account acc01;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-show recovery_window for database mo_catalog;
-internal error: can not show recovery window for system database
-show recovery_window for table mo_catalog mo_pitr;
-internal error: can not show recovery window for system table
-drop account if exists acc01;
-create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists db1;
+drop database if exists db2;
+drop database if exists db3;
+drop account if exists acc1;
+create account acc1 admin_name "root1" identified by "111";
+drop database if exists test1;
+create database test1;
+create database test2;
+create table test1.t1 (a int);
+create table test2.t1 (a int);
+drop snapshot if exists acc_sp0;
+drop snapshot if exists acc_sp1;
+drop snapshot if exists acc_sp2;
+drop pitr if exists acc_pitr0;
+drop pitr if exists acc_pitr1;
+create snapshot acc_sp0 for account acc1;
+create snapshot acc_sp1 for database test1;
+create snapshot acc_sp2 for table test1 t1;
+create pitr acc_pitr0 for database test1 range 2 'h';
+create pitr acc_pitr1 for table test1 t1 range 3 'h';
+show recovery_window for account acc1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+account    acc1    test1    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, ]'timestamp':'2025-07-21 05:14:28.890681 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp1'}, {'timestamp':'2025-07-21 05:14:28.896928 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp2'}, {'start_time':'2025-07-20 22:14:28.901757', 'end_time':'2025-07-20 22:14:28.923928', 'source':'pitr', 'source_name':'acc_pitr0'}, {'start_time':'2025-07-20 22:14:28.916419', 'end_time':'2025-07-20 22:14:28.924184', 'source':'pitr', 'source_name':'acc_pitr1'}, ]
+account    acc1    test2    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, ]
+show recovery_window for database test1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+database    acc1    test1    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, {'timestamp':'2025-07-21 05:14:28.890681 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp1'}, {'timestamp':'2025-07-21 05:14:28.896928 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp2'}, {'start_time':'2025-07-20 22:14:28.901757', 'end_time':'2025-07-20 22:14:28.928256', 'source':'pitr', 'source_name':'acc_pitr0'}, {'start_time':'2025-07-20 22:14:28.916419', 'end_time':'2025-07-20 22:14:28.928693', 'source':'pitr', 'source_name':'acc_pitr1'}, ]
+show recovery_window for table test2 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    acc1    test2    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, ]
+drop table test1.t1;
+show recovery_window for table test1 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    acc1    test1    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, {'timestamp':'2025-07-21 05:14:28.890681 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp1'}, {'timestamp':'2025-07-21 05:14:28.896928 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp2'}, {'start_time':'2025-07-20 22:14:28.901757', 'end_time':'2025-07-20 22:14:28.946741', 'source':'pitr', 'source_name':'acc_pitr0'}, {'start_time':'2025-07-20 22:14:28.916419', 'end_time':'2025-07-20 22:14:28.928308', 'source':'pitr', 'source_name':'acc_pitr1'}, ]
+drop database test1;
+show recovery_window for database test1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+database    acc1    test1    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, {'timestamp':'2025-07-21 05:14:28.890681 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp1'}, {'timestamp':'2025-07-21 05:14:28.896928 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp2'}, {'start_time':'2025-07-20 22:14:28.916419', 'end_time':'2025-07-20 22:14:28.928308', 'source':'pitr', 'source_name':'acc_pitr1'}, {'start_time':'2025-07-20 22:14:28.901757', 'end_time':'2025-07-20 22:14:28.946311', 'source':'pitr', 'source_name':'acc_pitr0'}, ]
+show recovery_window for account acc1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+account    acc1    test1    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, ]'timestamp':'2025-07-21 05:14:28.890681 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp1'}, {'timestamp':'2025-07-21 05:14:28.896928 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp2'}, {'start_time':'2025-07-20 22:14:28.916419', 'end_time':'2025-07-20 22:14:28.928308', 'source':'pitr', 'source_name':'acc_pitr1'}, {'start_time':'2025-07-20 22:14:28.901757', 'end_time':'2025-07-20 22:14:28.946311', 'source':'pitr', 'source_name':'acc_pitr0'}, ]
+account    acc1    test2    t1    [{'timestamp':'2025-07-21 05:14:28.877243 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp0'}, ]
+drop snapshot acc_sp0;
+drop snapshot acc_sp1;
+drop pitr acc_pitr0;
+show recovery_window for table test1 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    acc1    test1    t1    [{'timestamp':'2025-07-21 05:14:28.896928 +0000 UTC', 'source':'snapshot', 'source_name':'acc_sp2'}, {'start_time':'2025-07-20 22:14:28.916419', 'end_time':'2025-07-20 22:14:28.928308', 'source':'pitr', 'source_name':'acc_pitr1'}, ]
+drop snapshot acc_sp2;
+drop pitr acc_pitr1;
+show recovery_window for table test1 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+create database db1;
+create table db1.t1 (a int);
+create database db2;
+create table db2.t1 (a int);
+drop snapshot if exists sys_sp0;
+drop snapshot if exists sys_sp1;
+drop snapshot if exists sys_sp2;
+drop snapshot if exists sys_sp3;
+drop snapshot if exists sys_sp4;
+drop snapshot if exists sys_sp5;
+drop pitr if exists sys_pitr0;
+drop pitr if exists sys_pitr1;
+drop pitr if exists sys_pitr2;
+drop pitr if exists sys_pitr3;
+drop pitr if exists sys_pitr4;
+drop pitr if exists sys_pitr5;
+create snapshot sys_sp0 for account acc1;
+create snapshot sys_sp1 for account sys;
+create snapshot sys_sp2 for database db1;
+create snapshot sys_sp3 for database db2;
+create snapshot sys_sp4 for table db1 t1;
+create snapshot sys_sp5 for table db2 t1;
+create pitr sys_pitr0 for account acc1 range 1 'h';
+create pitr sys_pitr1 for account sys  range 1 'h';
+create pitr sys_pitr2 for database db1 range 1 'h';
+create pitr sys_pitr3 for database db2 range 1 'h';
+create pitr sys_pitr4 for table db1 t1 range 1 'h';
+create pitr sys_pitr5 for table db2 t1 range 1 'h';
 show recovery_window for account sys;
-internal error: only sys account can show other account's recovery window
-drop pitr if exists pitr01;
-create pitr pitr01 for account range 1 'h';
-drop snapshot if exists sp01;
-create snapshot sp01 for account;
-drop database if exists test;
-create database test;
-use test;
-create table t1(col int, col2 int);
-insert into t1 values(1,1);
-create table t2(col int, col2 int);
-insert into t2 values(2,2);
-create table t3(col int, col2 int);
-insert into t3 values(3,3);
-drop pitr if exists pitr02;
-create pitr pitr02 for database test range 1 'h';
-drop snapshot if exists sp02;
-create snapshot sp02 for database test;
-drop pitr if exists pitr03;
-create pitr pitr03 for table test t1 range 1 'h';
-drop snapshot if exists sp03;
-create snapshot sp03 for table test t1;
-drop pitr if exists pitr04;
-create pitr pitr04 for table test t2 range 1 'h';
-drop snapshot if exists sp04;
-create snapshot sp04 for table test t2;
-drop pitr if exists pitr05;
-create pitr pitr05 for table test t3 range 1 'h';
-drop snapshot if exists sp05;
-create snapshot sp05 for table test t3;
-show recovery_window for account;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    acc01    test    t1    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp01"}
-database    acc01    test    t2    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp01"}
-database    acc01    test    t3    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr01"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp01"}
-show recovery_window for database test;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-database    acc01    test    t1    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp03"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp02"}
-database    acc01    test    t2    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp04"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp02"}
-database    acc01    test    t3    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr02"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp02"}
-show recovery_window for table test t1;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    acc01    test    t1    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr03"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp03"}
-show recovery_window for table test t2;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    acc01    test    t2    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr04"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp04"}
-show recovery_window for table test t3;
-Recovery_Window_Level    Account_Name    Database_Name    Table_Name    Recovery_Windows
-table    acc01    test    t3    {"start_time": "2025-01-13 13:57:32", "end_time": "2025-01-13 13:57:32", "source": "pitr", "source_name": "pitr05"},\n{"timestamp": "2025-01-13 13:57:32", "source": "snapshot", "source_name": "sp05"}
-drop database test;
-drop snapshot sp01;
-drop snapshot sp02;
-drop snapshot sp03;
-drop snapshot sp04;
-drop snapshot sp05;
-drop pitr pitr01;
-drop pitr pitr02;
-drop pitr pitr03;
-drop pitr pitr04;
-drop pitr pitr05;
-drop account if exists acc01;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+account    sys    db1    t1    [{'timestamp':'2025-07-21 05:14:29.050539 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp1'}, {'timestamp':'2025-07-21 05:14:29.060552 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp3'}, {'timestamp':'2025-07-21 05:14:29.07514 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp5'}, {'start_time':'2025-07-20 22:14:29.088147', 'end_time':'2025-07-20 22:14:29.122369', 'source':'pitr', 'source_name':'sys_pitr1'}, {'start_time':'2025-07-20 22:14:29.101012', 'end_time':'2025-07-20 22:14:29.123057', 'source':'pitr', 'source_name':'sys_pitr3'}, {'start_time':'2025-07-20 22:14:29.114562', 'end_time':'2025-07-20 22:14:29.123333', 'source':'pitr', 'source_name':'sys_pitr5'}, ]]
+account    sys    db2    t1    [{'timestamp':'2025-07-21 05:14:29.050539 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp1'}, {'timestamp':'2025-07-21 05:14:29.060552 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp3'}, {'timestamp':'2025-07-21 05:14:29.07514 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp5'}, {'start_time':'2025-07-20 22:14:29.088147', 'end_time':'2025-07-20 22:14:29.122369', 'source':'pitr', 'source_name':'sys_pitr1'}, {'start_time':'2025-07-20 22:14:29.101012', 'end_time':'2025-07-20 22:14:29.123057', 'source':'pitr', 'source_name':'sys_pitr3'}, {'start_time':'2025-07-20 22:14:29.114562', 'end_time':'2025-07-20 22:14:29.123333', 'source':'pitr', 'source_name':'sys_pitr5'}, ]
+show recovery_window for account acc1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+account    acc1    test2    t1    [{'timestamp':'2025-07-21 05:14:29.040106 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp0'}, {'start_time':'2025-07-20 22:14:29.081029', 'end_time':'2025-07-20 22:14:29.125755', 'source':'pitr', 'source_name':'sys_pitr0'}, ]
+show recovery_window for table db1 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    sys    db1    t1    [{'timestamp':'2025-07-21 05:14:29.050539 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp1'}, {'timestamp':'2025-07-21 05:14:29.055642 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp2'}, {'timestamp':'2025-07-21 05:14:29.066941 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp4'}, {'start_time':'2025-07-20 22:14:29.088147', 'end_time':'2025-07-20 22:14:29.128859', 'source':'pitr', 'source_name':'sys_pitr1'}, {'start_time':'2025-07-20 22:14:29.094907', 'end_time':'2025-07-20 22:14:29.12906', 'source':'pitr', 'source_name':'sys_pitr2'}, {'start_time':'2025-07-20 22:14:29.107388', 'end_time':'2025-07-20 22:14:29.129282', 'source':'pitr', 'source_name':'sys_pitr4'}, ]
+show recovery_window for table db2 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    sys    db2    t1    [{'timestamp':'2025-07-21 05:14:29.050539 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp1'}, {'timestamp':'2025-07-21 05:14:29.060552 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp3'}, {'timestamp':'2025-07-21 05:14:29.07514 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp5'}, {'start_time':'2025-07-20 22:14:29.088147', 'end_time':'2025-07-20 22:14:29.131785', 'source':'pitr', 'source_name':'sys_pitr1'}, {'start_time':'2025-07-20 22:14:29.101012', 'end_time':'2025-07-20 22:14:29.132054', 'source':'pitr', 'source_name':'sys_pitr3'}, {'start_time':'2025-07-20 22:14:29.114562', 'end_time':'2025-07-20 22:14:29.132291', 'source':'pitr', 'source_name':'sys_pitr5'}, ]
+drop account acc1;
+show recovery_window for account acc1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+account    acc1    test2    t1    [{'timestamp':'2025-07-21 05:14:29.040106 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp0'}, {'start_time':'2025-07-20 22:14:29.081029', 'end_time':'2025-07-20 22:14:29.132287', 'source':'pitr', 'source_name':'sys_pitr0'}, ]
+drop database db1;
+show recovery_window for table db1 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    sys    db1    t1    [{'timestamp':'2025-07-21 05:14:29.050539 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp1'}, {'timestamp':'2025-07-21 05:14:29.055642 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp2'}, {'timestamp':'2025-07-21 05:14:29.066941 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp4'}, {'start_time':'2025-07-20 22:14:29.088147', 'end_time':'2025-07-20 22:14:29.350622', 'source':'pitr', 'source_name':'sys_pitr1'}, {'start_time':'2025-07-20 22:14:29.107388', 'end_time':'2025-07-20 22:14:29.330315', 'source':'pitr', 'source_name':'sys_pitr4'}, {'start_time':'2025-07-20 22:14:29.094907', 'end_time':'2025-07-20 22:14:29.330315', 'source':'pitr', 'source_name':'sys_pitr2'}, ]
+drop database db2;
+show recovery_window for table db2 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    sys    db2    t1    [{'timestamp':'2025-07-21 05:14:29.050539 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp1'}, {'timestamp':'2025-07-21 05:14:29.060552 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp3'}, {'timestamp':'2025-07-21 05:14:29.07514 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp5'}, {'start_time':'2025-07-20 22:14:29.088147', 'end_time':'2025-07-20 22:14:29.36571', 'source':'pitr', 'source_name':'sys_pitr1'}, {'start_time':'2025-07-20 22:14:29.114562', 'end_time':'2025-07-20 22:14:29.344546', 'source':'pitr', 'source_name':'sys_pitr5'}, {'start_time':'2025-07-20 22:14:29.101012', 'end_time':'2025-07-20 22:14:29.344546', 'source':'pitr', 'source_name':'sys_pitr3'}, ]
+drop snapshot sys_sp0;
+drop snapshot sys_sp1;
+drop snapshot sys_sp2;
+drop snapshot sys_sp3;
+drop snapshot sys_sp4;
+drop pitr sys_pitr0;
+drop pitr sys_pitr1;
+drop pitr sys_pitr2;
+drop pitr sys_pitr3;
+drop pitr sys_pitr4;
+show recovery_window for table db1 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+show recovery_window for table db2 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    sys    db2    t1    [{'timestamp':'2025-07-21 05:14:29.07514 +0000 UTC', 'source':'snapshot', 'source_name':'sys_sp5'}, {'start_time':'2025-07-20 22:14:29.114562', 'end_time':'2025-07-20 22:14:29.344546', 'source':'pitr', 'source_name':'sys_pitr5'}, ]
+drop snapshot sys_sp5;
+drop pitr sys_pitr5;
+show recovery_window for table db2 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+create database db3;
+use db3;
+create table t1(a int);
+create snapshot sp0 for table db3 t1;
+create pitr pitr0 for table db3 t1 range 1 'h';
+drop table t1;
+create table t1(a int);
+create snapshot sp1 for table db3 t1;
+create pitr pitr1 for table db3 t1 range 1 'h';
+drop table t1;
+create table t1(a int);
+create snapshot sp2 for table db3 t1;
+create pitr pitr2 for table db3 t1 range 1 'h';
+show recovery_window for table db3 t1;
+RecoveryWindowLevel    AccountName    DatabaseName    TableName    RecoveryWindows
+table    sys    db3    t1    [{'timestamp':'2025-07-21 05:14:29.448623 +0000 UTC', 'source':'snapshot', 'source_name':'sp0'}, {'timestamp':'2025-07-21 05:14:29.481031 +0000 UTC', 'source':'snapshot', 'source_name':'sp1'}, {'timestamp':'2025-07-21 05:14:29.509069 +0000 UTC', 'source':'snapshot', 'source_name':'sp2'}, {'start_time':'2025-07-20 22:14:29.453904', 'end_time':'2025-07-20 22:14:29.455155', 'source':'pitr', 'source_name':'pitr0'}, {'start_time':'2025-07-20 22:14:29.486942', 'end_time':'2025-07-20 22:14:29.487814', 'source':'pitr', 'source_name':'pitr1'}, {'start_time':'2025-07-20 22:14:29.514843', 'end_time':'2025-07-20 22:14:29.521355', 'source':'pitr', 'source_name':'pitr2'}, ]
+drop database db3;
+drop pitr pitr0;
+drop pitr pitr1;
+drop pitr pitr2;
+drop snapshot sp0;
+drop snapshot sp1;
+drop snapshot sp2;

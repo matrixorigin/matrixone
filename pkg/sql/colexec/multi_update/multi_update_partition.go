@@ -16,11 +16,11 @@ package multi_update
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,15 +29,25 @@ import (
 type PartitionMultiUpdate struct {
 	vm.OperatorBase
 
-	raw     *MultiUpdate
-	tableID uint64
-	meta    partition.PartitionMetadata
+	raw              *MultiUpdate
+	tableID          uint64
+	meta             partition.PartitionMetadata
+	mainIndexes      []uint64
+	partitionIndexes map[uint64][]engine.Relation
+	rawTableIDs      []uint64
+	rawTableFlags    []uint64
+	writers          map[uint64]*s3WriterDelegate
+	freeWriters      []*s3WriterDelegate
 }
 
 func NewPartitionMultiUpdate(
 	raw *MultiUpdate,
 	tableID uint64,
 ) vm.Operator {
+	if raw.Action == UpdateFlushS3Info {
+		return raw
+	}
+
 	return &PartitionMultiUpdate{
 		raw:     raw,
 		tableID: tableID,
@@ -74,15 +84,55 @@ func (op *PartitionMultiUpdate) Prepare(
 	}
 
 	var err error
-	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(proc.Ctx, op.tableID, proc.GetTxnOperator())
+	op.meta, _, err = proc.GetPartitionService().GetStorage().GetMetadata(
+		proc.Ctx,
+		op.tableID,
+		proc.GetTxnOperator(),
+	)
 	if err != nil {
 		return err
 	}
+	_, _, r, err := op.raw.Engine.GetRelationById(
+		proc.Ctx,
+		proc.GetTxnOperator(),
+		op.tableID,
+	)
+	if err != nil {
+		return err
+	}
+	if len(r.GetExtraInfo().IndexTables) > 0 {
+		op.mainIndexes = r.GetExtraInfo().IndexTables
+		op.partitionIndexes = make(map[uint64][]engine.Relation, len(op.meta.Partitions))
+	}
+
 	op.raw.OperatorBase = op.OperatorBase
-	return op.raw.Prepare(proc)
+	if err = op.raw.Prepare(proc); err != nil {
+		return err
+	}
+
+	op.raw.getS3WriterFunc = op.getS3Writer
+	op.raw.getFlushableS3WriterFunc = op.getFlushableS3Writer
+	op.writers = make(map[uint64]*s3WriterDelegate, len(op.meta.Partitions))
+
+	op.rawTableIDs = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
+	op.rawTableFlags = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
+	for _, c := range op.raw.MultiUpdateCtx {
+		op.rawTableIDs = append(op.rawTableIDs, c.TableDef.TblId)
+		op.rawTableFlags = append(op.rawTableFlags, c.TableDef.FeatureFlag)
+	}
+	return nil
 }
 
 func (op *PartitionMultiUpdate) Call(
+	proc *process.Process,
+) (vm.CallResult, error) {
+	if op.raw.Action == UpdateWriteTable {
+		return op.writeTable(proc)
+	}
+	return op.writeS3(proc)
+}
+
+func (op *PartitionMultiUpdate) writeTable(
 	proc *process.Process,
 ) (vm.CallResult, error) {
 	input, err := vm.ChildrenCall(
@@ -119,20 +169,32 @@ func (op *PartitionMultiUpdate) Call(
 			partition partition.Partition,
 			bat *batch.Batch,
 		) bool {
-			for _, c := range op.raw.MultiUpdateCtx {
-				c.ObjRef.ObjName = partition.PartitionTableName
-				rel, err = colexec.GetRelAndPartitionRelsByObjRef(
-					proc.Ctx,
-					proc,
-					op.raw.Engine,
-					c.ObjRef,
-				)
-				if err != nil {
-					return false
+			_, _, rel, err = op.raw.Engine.GetRelationById(
+				proc.Ctx,
+				proc.GetTxnOperator(),
+				partition.PartitionID,
+			)
+			if err != nil {
+				return false
+			}
+
+			// mapping all main table and index table to partition's.
+			for i, c := range op.raw.MultiUpdateCtx {
+				r := rel
+				if features.IsIndexTable(op.rawTableFlags[i]) {
+					r, err = op.getPartitionIndex(
+						proc,
+						op.rawTableIDs[i],
+						partition.PartitionID,
+						rel,
+					)
+					if err != nil {
+						return false
+					}
 				}
 
-				c.ObjRef.ObjName = partition.PartitionTableName
-				c.TableDef = rel.GetTableDef(proc.Ctx)
+				c.ObjRef.ObjName = r.GetTableName()
+				c.TableDef = r.GetTableDef(proc.Ctx)
 			}
 			op.raw.resetMultiUpdateCtxs()
 			if err = op.raw.resetMultiSources(proc); err != nil {
@@ -150,6 +212,96 @@ func (op *PartitionMultiUpdate) Call(
 	return input, nil
 }
 
+func (op *PartitionMultiUpdate) writeS3(
+	proc *process.Process,
+) (vm.CallResult, error) {
+	for {
+		input, err := vm.ChildrenCall(
+			op.GetChildren(0),
+			proc,
+			op.raw.OpAnalyzer,
+		)
+		if err != nil {
+			return input, err
+		}
+
+		op.raw.delegated = true
+		op.raw.input = input
+
+		if input.Batch == nil {
+			if _, err := op.raw.Call(proc); err != nil {
+				return input, err
+			}
+			return op.raw.Call(proc)
+		}
+
+		if input.Batch.IsEmpty() {
+			continue
+		}
+
+		pos := int32(-1)
+		if len(op.raw.MultiUpdateCtx[0].PartitionCols) > 0 {
+			pos = int32(op.raw.MultiUpdateCtx[0].PartitionCols[0])
+		}
+		res, err := partitionprune.Prune(proc, input.Batch, op.meta, pos)
+		if err != nil {
+			return vm.CallResult{}, err
+		}
+		defer res.Close()
+		if res.Empty() {
+			panic("Prune result is empty")
+		}
+
+		var rel engine.Relation
+		res.Iter(
+			func(
+				partition partition.Partition,
+				bat *batch.Batch,
+			) bool {
+				_, _, rel, err = op.raw.Engine.GetRelationById(
+					proc.Ctx,
+					proc.GetTxnOperator(),
+					partition.PartitionID,
+				)
+				if err != nil {
+					return false
+				}
+
+				// mapping all main table and index table to partition's.
+				for i, c := range op.raw.MultiUpdateCtx {
+					r := rel
+					if features.IsIndexTable(op.rawTableFlags[i]) {
+						r, err = op.getPartitionIndex(
+							proc,
+							op.rawTableIDs[i],
+							partition.PartitionID,
+							rel,
+						)
+						if err != nil {
+							return false
+						}
+					}
+
+					c.ObjRef.ObjName = r.GetTableName()
+					c.TableDef = r.GetTableDef(proc.Ctx)
+				}
+				op.raw.resetMultiUpdateCtxs()
+				if err = op.raw.resetMultiSources(proc); err != nil {
+					return false
+				}
+				op.raw.mainTable = partition.PartitionID
+				op.raw.input = vm.CallResult{Batch: bat}
+
+				_, err = op.raw.Call(proc)
+				return err == nil
+			},
+		)
+		if err != nil {
+			return vm.CallResult{}, err
+		}
+	}
+}
+
 func (op *PartitionMultiUpdate) ExecProjection(
 	proc *process.Process,
 	input *batch.Batch,
@@ -163,6 +315,11 @@ func (op *PartitionMultiUpdate) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
+
+	for _, w := range op.freeWriters {
+		w.free(proc)
+	}
+
 	*op = PartitionMultiUpdate{}
 }
 
@@ -180,4 +337,62 @@ func (op *PartitionMultiUpdate) Reset(
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &op.OperatorBase
+}
+
+func (op *PartitionMultiUpdate) getPartitionIndex(
+	proc *process.Process,
+	tableID uint64,
+	partitionID uint64,
+	partitionRel engine.Relation,
+) (engine.Relation, error) {
+	for i, id := range op.mainIndexes {
+		if id == tableID {
+			indexes, ok := op.partitionIndexes[partitionID]
+			if ok {
+				return indexes[i], nil
+			}
+
+			relations := make([]engine.Relation, 0, len(op.meta.Partitions))
+			for _, index := range partitionRel.GetExtraInfo().IndexTables {
+				_, _, rel, err := op.raw.Engine.GetRelationById(
+					proc.Ctx,
+					proc.GetTxnOperator(),
+					index,
+				)
+				if err != nil {
+					return nil, err
+				}
+				relations = append(relations, rel)
+			}
+			op.partitionIndexes[partitionID] = relations
+
+			return relations[i], nil
+		}
+	}
+
+	panic("BUG")
+}
+
+func (op *PartitionMultiUpdate) getS3Writer(
+	id uint64,
+) (*s3WriterDelegate, error) {
+	var err error
+	w, ok := op.writers[id]
+	if !ok {
+		w, err = newS3Writer(op.raw)
+		if err != nil {
+			return nil, err
+		}
+		op.writers[id] = w
+	}
+	return w, nil
+}
+
+func (op *PartitionMultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
+	for k, w := range op.writers {
+		delete(op.writers, k)
+		op.freeWriters = append(op.freeWriters, w)
+		return w
+	}
+	return nil
 }

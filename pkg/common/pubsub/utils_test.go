@@ -45,7 +45,7 @@ func (MockTxnExecutor) Exec(sql string, options executor.StatementOption) (execu
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"Name"}, nil)
 	bat.Vecs[2] = testutil.MakeVarcharVector([]string{"Status"}, nil)
 	bat.Vecs[3] = testutil.MakeUint64Vector([]uint64{1}, nil)
-	bat.Vecs[4] = testutil.MakeScalarNull(types.T_timestamp, 1)
+	bat.Vecs[4] = testutil.MakeScalarNull(nil, types.T_timestamp, 1)
 	bat.SetRowCount(1)
 	return executor.Result{
 		Batches: []*batch.Batch{bat},

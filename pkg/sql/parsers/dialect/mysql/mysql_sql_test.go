@@ -18,6 +18,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -103,6 +105,39 @@ func TestQuoteIdentifer(t *testing.T) {
 	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier())
 	if partitionSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
+	}
+}
+
+var (
+	pitrSQLs = []struct {
+		input  string
+		output string
+	}{
+		{
+			input:  "create pitr pitr_d for database db1 range 1 'd' internal",
+			output: "create pitr pitr_d for database db1 range 1  d internal",
+		}, {
+			input:  "drop pitr pitr_d internal",
+			output: "drop pitr pitr_d internal",
+		},
+	}
+)
+
+func TestPitrInternal(t *testing.T) {
+	for _, pitrSQL := range pitrSQLs {
+		if pitrSQL.output == "" {
+			pitrSQL.output = pitrSQL.input
+		}
+		ast, err := ParseOne(context.TODO(), pitrSQL.input, 1)
+		if err != nil {
+			t.Errorf("Parse(%q) err: %v", pitrSQL.input, err)
+			return
+		}
+		out := tree.String(ast, dialect.MYSQL)
+		if pitrSQL.output != out {
+			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", pitrSQL.output, out)
+		}
+		require.Equal(t, ast.StmtKind().ExecLocation(), tree.EXEC_IN_ENGINE)
 	}
 }
 
@@ -2709,11 +2744,11 @@ var (
 		},
 		{
 			input:  "create procedure test1 (in param1 int) 'test test'",
-			output: "create procedure test1 (in param1 int) 'test test'",
+			output: "create procedure test1 (in param1 int) language 'sql' 'test test'",
 		},
 		{
 			input:  "create procedure test2 (param1 int, inout param2 char(5)) 'test test'",
-			output: "create procedure test2 (in param1 int, inout param2 char(5)) 'test test'",
+			output: "create procedure test2 (in param1 int, inout param2 char(5)) language 'sql' 'test test'",
 		},
 		{
 			input:  "drop procedure test1",

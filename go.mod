@@ -81,12 +81,14 @@ require (
 	github.com/spf13/cobra v1.8.0
 	github.com/spkg/bom v1.0.0
 	github.com/stretchr/testify v1.9.0
+	github.com/syncthing/notify v0.0.0-20250528144937-c7027d4f7465
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.55
 	github.com/ti-mo/conntrack v0.5.1
 	github.com/ti-mo/netfilter v0.5.2
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
 	github.com/unum-cloud/usearch/golang v0.0.0-20250207215718-306d6646b8f5
+	go.starlark.net v0.0.0-20250701195324-d457b4515e0e
 	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0

@@ -15,12 +15,14 @@
 package hashmap
 
 import (
+	"io"
 	"math/rand"
 	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -32,7 +34,7 @@ const (
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()
-	mp, err := NewStrMap(false)
+	mp, err := NewStrHashMap(false)
 	itr := mp.NewIterator()
 	require.NoError(t, err)
 	ts := []types.Type{
@@ -59,7 +61,7 @@ func TestInsert(t *testing.T) {
 func TestIterator(t *testing.T) {
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(false)
+		mp, err := NewStrHashMap(false)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -84,7 +86,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true)
+		mp, err := NewStrHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -109,7 +111,7 @@ func TestIterator(t *testing.T) {
 	}
 	{
 		m := mpool.MustNewZero()
-		mp, err := NewStrMap(true)
+		mp, err := NewStrHashMap(true)
 		require.NoError(t, err)
 		ts := []types.Type{
 			types.New(types.T_int8, 0, 0),
@@ -398,4 +400,121 @@ func newStringVector(n int, typ types.Type, m *mpool.MPool, random bool, vs []st
 		}
 	}
 	return vec
+}
+
+func TestStrHashMap_MarshalUnmarshal(t *testing.T) {
+	m := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
+	}()
+
+	t.Run("Empty Map", func(t *testing.T) {
+		mp, err := NewStrHashMap(false)
+		require.NoError(t, err)
+		defer mp.Free()
+
+		data, err := mp.MarshalBinary()
+		require.NoError(t, err)
+
+		unmarshaledMp := &StrHashMap{}
+		err = unmarshaledMp.UnmarshalBinary(data, hashtable.DefaultAllocator())
+		require.NoError(t, err)
+		defer unmarshaledMp.Free()
+
+		require.Equal(t, uint64(0), unmarshaledMp.GroupCount())
+		require.Equal(t, mp.HasNull(), unmarshaledMp.HasNull())
+	})
+
+	t.Run("Single Element (No Nulls)", func(t *testing.T) {
+		mp, err := NewStrHashMap(false)
+		require.NoError(t, err)
+		defer mp.Free()
+
+		rowCount := 1
+		vecs := []*vector.Vector{
+			newVector(rowCount, types.T_varchar.ToType(), m, false, []string{"hello"}),
+		}
+		defer func() {
+			for _, vec := range vecs {
+				vec.Free(m)
+			}
+		}()
+
+		itr := mp.NewIterator()
+		vs, _, err := itr.Insert(0, rowCount, vecs)
+		require.NoError(t, err)
+		expectedMappedValue := vs
+		expectedGroupCount := mp.GroupCount()
+
+		data, err := mp.MarshalBinary()
+		require.NoError(t, err)
+
+		unmarshaledMp := &StrHashMap{}
+		err = unmarshaledMp.UnmarshalBinary(data, hashtable.DefaultAllocator())
+		require.NoError(t, err)
+		defer unmarshaledMp.Free()
+
+		require.Equal(t, expectedGroupCount, unmarshaledMp.GroupCount())
+		require.Equal(t, mp.HasNull(), unmarshaledMp.HasNull())
+
+		foundVs, _ := unmarshaledMp.NewIterator().Find(0, rowCount, vecs)
+		require.Equal(t, expectedMappedValue, foundVs)
+	})
+
+	t.Run("Multiple Elements (With Resize, With Nulls, Mixed Types)", func(t *testing.T) {
+		mp, err := NewStrHashMap(true) // Test with nulls enabled
+		require.NoError(t, err)
+		defer mp.Free()
+
+		numElements := 128
+		ts := []types.Type{
+			types.New(types.T_int32, 0, 0),
+			types.New(types.T_varchar, 50, 0),
+		}
+		vecs := newVectorsWithNull(ts, true, numElements, m) // Random data with nulls
+		defer func() {
+			for _, vec := range vecs {
+				vec.Free(m)
+			}
+		}()
+
+		itr := mp.NewIterator()
+		originalVs, originalZvs, err := itr.Insert(0, numElements, vecs)
+		require.NoError(t, err)
+		expectedGroupCount := mp.GroupCount()
+
+		data, err := mp.MarshalBinary()
+		require.NoError(t, err)
+
+		unmarshaledMp := &StrHashMap{}
+		err = unmarshaledMp.UnmarshalBinary(data, hashtable.DefaultAllocator())
+		require.NoError(t, err)
+		defer unmarshaledMp.Free()
+
+		require.Equal(t, expectedGroupCount, unmarshaledMp.GroupCount())
+		require.Equal(t, mp.HasNull(), unmarshaledMp.HasNull())
+
+		foundVs, foundZvs := unmarshaledMp.NewIterator().Find(0, numElements, vecs)
+		for i := 0; i < numElements; i++ {
+			require.Equal(t, originalVs[i], foundVs[i], "Mismatch at index %d for mapped value", i)
+			require.Equal(t, originalZvs[i], foundZvs[i], "Mismatch at index %d for zValue", i)
+		}
+	})
+
+	t.Run("bad input", func(t *testing.T) {
+		var m StrHashMap
+		err := m.UnmarshalBinary(nil, nil)
+		if err != io.EOF {
+			t.Fatal()
+		}
+		err = m.UnmarshalBinary([]byte{1, 0}, nil)
+		if err != io.ErrUnexpectedEOF {
+			t.Fatalf("got %v", err)
+		}
+		err = m.UnmarshalBinary([]byte{1, 1, 2, 3, 4, 5, 6, 7, 8, 0}, nil)
+		if err != io.ErrUnexpectedEOF {
+			t.Fatalf("got %v", err)
+		}
+	})
+
 }

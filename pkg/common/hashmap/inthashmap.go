@@ -15,8 +15,11 @@
 package hashmap
 
 import (
+	"bytes"
+	"io"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -288,4 +291,82 @@ func uint32AddScalar(x uint32, ys, rs []uint32) []uint32 {
 		rs[i] = x + y
 	}
 	return rs
+}
+
+func (m *IntHashMap) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (m *IntHashMap) UnmarshalBinary(data []byte, allocator malloc.Allocator) error {
+	r := bytes.NewReader(data)
+	_, err := m.UnmarshalFrom(r, allocator)
+	return err
+}
+
+func (m *IntHashMap) WriteTo(w io.Writer) (int64, error) {
+	var n int64
+
+	// Serialize hasNull (1 byte)
+	if m.hasNull {
+		if _, err := w.Write([]byte{1}); err != nil {
+			return 0, err
+		}
+	} else {
+		if _, err := w.Write([]byte{0}); err != nil {
+			return 0, err
+		}
+	}
+	n++
+
+	// Serialize rows (8 bytes)
+	rowsBytes := types.EncodeUint64(&m.rows)
+	wn, err := w.Write(rowsBytes)
+	if err != nil {
+		return 0, err
+	}
+	n += int64(wn)
+
+	// Serialize the underlying Int64HashMap
+	subn, err := m.hashMap.WriteTo(w)
+	if err != nil {
+		return 0, err
+	}
+	n += subn
+
+	return n, nil
+}
+
+func (m *IntHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (int64, error) {
+	var n int64
+
+	// Deserialize hasNull
+	b := make([]byte, 1)
+	rn, err := io.ReadFull(r, b)
+	if err != nil {
+		return 0, err
+	}
+	n += int64(rn)
+	m.hasNull = b[0] == 1
+
+	// Deserialize rows
+	rowsData := make([]byte, 8)
+	if rn, err = io.ReadFull(r, rowsData); err != nil {
+		return 0, err
+	}
+	n += int64(rn)
+	m.rows = types.DecodeUint64(rowsData)
+
+	// Deserialize the underlying Int64HashMap
+	m.hashMap = &hashtable.Int64HashMap{}
+	subn, err := m.hashMap.UnmarshalFrom(r, allocator)
+	if err != nil {
+		return 0, err
+	}
+	n += subn
+
+	return n, nil
 }

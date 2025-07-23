@@ -140,6 +140,17 @@ func (exec *singleWindowExec) Free() {
 	exec.ret.free()
 }
 
+func (exec *singleWindowExec) Size() int64 {
+	var size int64
+	size += exec.ret.Size()
+	for _, group := range exec.groups {
+		size += int64(cap(group)) * int64(types.T_int64.ToType().TypeSize())
+	}
+	// 24 is the size of a slice header.
+	size += int64(cap(exec.groups)) * 24
+	return size
+}
+
 func (exec *singleWindowExec) flushRank() ([]*vector.Vector, error) {
 	values := exec.ret.values
 

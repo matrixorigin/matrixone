@@ -41,7 +41,7 @@ func TestString(t *testing.T) {
 	arg.String(buf)
 }
 
-func prepareDeletionTest(ctrl *gomock.Controller, relResetExpectErr bool) (*process.Process, engine.Engine) {
+func prepareDeletionTest(t *testing.T, ctrl *gomock.Controller, relResetExpectErr bool) (*process.Process, engine.Engine) {
 	ctx := context.TODO()
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -73,7 +73,7 @@ func prepareDeletionTest(ctrl *gomock.Controller, relResetExpectErr bool) (*proc
 
 	database.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(relation, nil).AnyTimes()
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
 	proc.Base.TxnOperator = txnOperator
@@ -84,7 +84,7 @@ func TestNormalDeletion(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc, eng := prepareDeletionTest(ctrl, false)
+	proc, eng := prepareDeletionTest(t, ctrl, false)
 	arg := Deletion{
 		DeleteCtx: &DeleteCtx{
 			Ref: &plan.ObjectRef{
@@ -119,7 +119,7 @@ func TestNormalDeletionError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc, eng := prepareDeletionTest(ctrl, true)
+	proc, eng := prepareDeletionTest(t, ctrl, true)
 
 	arg := Deletion{
 		DeleteCtx: &DeleteCtx{

@@ -189,7 +189,6 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 			}
 		},
 	)
-
 }
 
 func TestShowCreatePartitionTable(t *testing.T) {

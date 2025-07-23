@@ -1037,8 +1037,8 @@ var (
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
-	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
-	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
+	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 	dropMoRetention                 = `drop table if exists mo_catalog.mo_retention;`
 
@@ -1094,6 +1094,7 @@ var (
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
 		name,
 		args,
+		lang,
 		body,
 		db,
 		definer,
@@ -1104,7 +1105,23 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ("%s",'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
+
+	updateMoStoredProcedureFormat = `update mo_catalog.mo_stored_procedure
+			set 
+			    args = '%s',
+				lang = '%s',
+			    body = '%s',
+				db = '%s',
+			    definer = '%s',
+			    modified_time = '%s',
+			    type = '%s',
+			    security_type = '%s',
+			    comment = '%s',
+			    character_set_client = '%s',
+			    collation_connection = '%s',
+			    database_collation = '%s'
+			where proc_id = %d;`
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
@@ -1447,6 +1464,8 @@ const (
 
 	checkProcedureExistence = `select proc_id from mo_catalog.mo_stored_procedure where name = "%s" and db = "%s" order by proc_id;`
 
+	deleteProcedureUsingDB = `delete from mo_catalog.mo_stored_procedure where db = '%s';`
+
 	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
 	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d order by role_id;`
 
@@ -1457,16 +1476,16 @@ const (
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 
 	// grant ownership on database
-	grantOwnershipOnDatabaseFormat = `grant ownership on database %s to %s;`
+	grantOwnershipOnDatabaseFormat = "grant ownership on database `%s` to `%s`;"
 
 	// grant ownership on table
-	grantOwnershipOnTableFormat = `grant ownership on table %s.%s to %s;`
+	grantOwnershipOnTableFormat = "grant ownership on table `%s`.`%s` to `%s`;"
 
 	// revoke ownership on database owner
-	revokeOwnershipFromDatabaseFormat = `revoke ownership on database %s from %s;`
+	revokeOwnershipFromDatabaseFormat = "revoke ownership on database `%s` from `%s`;"
 
 	// revoke ownership on table owner
-	revokeOwnershipFromTableFormat = `revoke ownership on table %s.%s from %s;`
+	revokeOwnershipFromTableFormat = "revoke ownership on table `%s`.`%s` from `%s`;"
 
 	// get the owner of the database
 	getOwnerOfDatabaseFormat = `select owner from mo_catalog.mo_database where datname = '%s';`
@@ -1519,7 +1538,7 @@ const (
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
-	fetchSqlOfSpFormat = `select body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
+	fetchSqlOfSpFormat = `select lang, body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
 	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
@@ -3939,11 +3958,20 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		ts := time.Now().UTC().UnixNano()
+		if ses != nil && ses.proc != nil && ses.proc.GetTxnOperator() != nil {
+			ts = ses.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
+		}
+
 		// update pitr
-		rtnErr = updatePitrObjectId(ctx, bh, da.Name, uint64(accountId))
-		if rtnErr != nil {
+		if rtnErr = updatePitrObjectId(
+			ctx, bh, da.Name,
+			uint64(accountId),
+			ts,
+		); rtnErr != nil {
 			return rtnErr
 		}
+
 		return rtnErr
 	}
 
@@ -4403,6 +4431,36 @@ func doDropFunctionWithDB(ctx context.Context, ses *Session, stmt tree.Statement
 	}
 
 	return err
+}
+
+func doDropProcedureWithDB(ctx context.Context, ses *Session, stmt tree.Statement) (err error) {
+	var dbName string
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		dbName = string(st.Name)
+	default:
+		return moerr.NewInternalErrorf(ctx, "unsupported statement type: %T", stmt)
+	}
+
+	// XXXSP
+	// Why do we need to start a transaction here?
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	bh.ClearExecResultSet()
+	sql := fmt.Sprintf(deleteProcedureUsingDB, dbName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) (err error) {
@@ -5662,6 +5720,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
+	case *tree.CloneTable:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDatabaseAndTableDirectly = true
+	case *tree.CloneDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll)
+		writeDatabaseAndTableDirectly = true
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -8507,11 +8573,17 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 
 	// build argmap and marshal as json
-	argList := make(map[string]tree.ProcedureArgForMarshal)
+	argList := make([]tree.ProcedureArgForMarshal, len(cp.Args))
 	for i := 0; i < len(cp.Args); i++ {
 		curName := cp.Args[i].GetName(fmtctx)
 		fmtctx.Reset()
-		argList[curName] = tree.ProcedureArgForMarshal{
+
+		if curName == "mo" || strings.HasPrefix(curName, "mo.") || strings.HasPrefix(curName, "out_") {
+			return moerr.NewInvalidInput(ctx, "mo, mo.*, out_* are reserved and cannot be used as a procedure argument name")
+		}
+
+		argList[i] = tree.ProcedureArgForMarshal{
+			ArgName:   curName,
 			Name:      cp.Args[i].(*tree.ProcedureArgDecl).Name,
 			Type:      cp.Args[i].(*tree.ProcedureArgDecl).Type,
 			InOutType: cp.Args[i].(*tree.ProcedureArgDecl).InOutType,
@@ -8535,7 +8607,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		return err
 	}
 
-	if execResultArrayHasData(erArray) {
+	if execResultArrayHasData(erArray) && !cp.Replace {
 		return moerr.NewProcedureAlreadyExistsNoCtx(string(cp.Name.Name.ObjectName))
 	}
 
@@ -8547,11 +8619,24 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		return err
 	}
 
-	initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
-		string(cp.Name.Name.ObjectName),
-		string(argsJson),
-		cp.Body, dbName,
-		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	if execResultArrayHasData(erArray) {
+		var id int64
+		id, err = erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return err
+		}
+		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
+			string(argsJson),
+			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			int32(id))
+	} else {
+		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
+			string(cp.Name.Name.ObjectName),
+			string(argsJson),
+			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+	}
 	err = bh.Exec(ctx, initMoProcedure)
 	if err != nil {
 		return err
@@ -8839,27 +8924,27 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	return resultConfig, err
 }
 
-func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]ExecResult, error) {
+func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg bool) ([]ExecResult, error) {
 	// fetch related
+	var spLang string
 	var spBody string
 	var dbName string
 	var sql string
 	var argstr string
 	var err error
 	var erArray []ExecResult
-	var argList map[string]tree.ProcedureArgForMarshal
+	var argList []tree.ProcedureArgForMarshal
 	// execute related
-	var interpreter Interpreter
 	var varScope [](map[string]interface{})
 	var argsMap map[string]tree.Expr
 	var argsAttr map[string]tree.InOutArgType
 
 	// a database must be selected or specified as qualifier when create a function
 	if call.Name.HasNoNameQualifier() {
-		if ses.DatabaseNameIsEmpty() {
+		dbName = ses.GetDatabaseName()
+		if dbName == "" {
 			return nil, moerr.NewNoDBNoCtx()
 		}
-		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(call.Name.Name.SchemaName)
 	}
@@ -8869,11 +8954,16 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	// XXXSP
+	var bh BackgroundExec
+	if bg {
+		bh = ses.GetShareTxnBackgroundExec(ctx, false)
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
 	defer bh.Close()
 
 	bh.ClearExecResultSet()
-
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return nil, err
@@ -8886,11 +8976,15 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 
 	if execResultArrayHasData(erArray) {
 		// function with provided name and db exists, for now we don't support overloading for stored procedure, so go to handle deletion.
-		spBody, err = erArray[0].GetString(ctx, 0, 0)
+		spLang, err = erArray[0].GetString(ctx, 0, 0)
 		if err != nil {
 			return nil, err
 		}
-		argstr, err = erArray[0].GetString(ctx, 0, 1)
+		spBody, err = erArray[0].GetString(ctx, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+		argstr, err = erArray[0].GetString(ctx, 0, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -8908,30 +9002,20 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
 	}
 
-	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		for _, st := range stmt {
-			st.Free()
-		}
-	}()
-
 	fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-
 	argsAttr = make(map[string]tree.InOutArgType)
 	argsMap = make(map[string]tree.Expr) // map arg to param
 
 	// build argsAttr and argsMap
 	ses.Info(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
-	for curName, v := range argList {
-		argsAttr[curName] = v.InOutType
-		argsMap[curName] = call.Args[i]
+	for _, v := range argList {
+		argsAttr[v.ArgName] = v.InOutType
+		argsMap[v.ArgName] = call.Args[i]
 		i++
 	}
 
+	var interpreter Interpreter
 	interpreter.ctx = ctx
 	interpreter.fmtctx = fmtctx
 	interpreter.ses = ses
@@ -8942,11 +9026,34 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	interpreter.argsAttr = argsAttr
 	interpreter.outParamMap = make(map[string]interface{})
 
-	err = interpreter.ExecuteSp(stmt[0], dbName)
-	if err != nil {
-		return nil, err
+	switch spLang {
+	case "sql":
+		stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, st := range stmt {
+				st.Free()
+			}
+		}()
+
+		err = interpreter.ExecuteSp(stmt[0], dbName)
+		if err != nil {
+			return nil, err
+		}
+		return interpreter.GetResult(), nil
+
+	case "starlark":
+		err = interpreter.ExecuteStarlark(spBody, dbName, bg)
+		if err != nil {
+			return nil, err
+		}
+		return interpreter.GetResult(), nil
+
+	default:
+		return nil, moerr.NewInternalError(ctx, "unknown language")
 	}
-	return interpreter.GetResult(), nil
 }
 
 func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {

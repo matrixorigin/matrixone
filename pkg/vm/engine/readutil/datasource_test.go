@@ -51,7 +51,7 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 		}))
 	}
 
-	proc := testutil.NewProc()
+	proc := testutil.NewProc(t)
 	ctx := proc.Ctx
 	proc.Base.FileService = testutil.NewSharedFS()
 

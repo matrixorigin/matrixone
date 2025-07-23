@@ -1,0 +1,21 @@
+select strcmp('a', 'b');
+strcmp(a, b)
+-1
+select strcmp('abc', 'acd');
+strcmp(abc, acd)
+-1
+select strcmp('a', null);
+strcmp(a, null)
+null
+select strcmp('a ', 'a');
+strcmp(a , a)
+1
+select strcmp('a', 'a');
+strcmp(a, a)
+0
+select strcmp(BINARY 'a', BINARY 'A');
+strcmp(BINARY(a), BINARY(A))
+1
+select strcmp(65, 97);
+strcmp(65, 97)
+-1

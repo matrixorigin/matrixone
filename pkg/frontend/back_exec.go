@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -82,6 +83,8 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 	}
 }
 
+var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
+
 func (back *backExec) Exec(ctx context.Context, sql string) error {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
@@ -128,8 +131,11 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	}
 
 	var isRestore bool
-	if _, ok := statements[0].(*tree.Insert); ok {
-		if strings.Contains(sql, "MO_TS =") {
+	if restoreSqlRegx.MatchString(sql) {
+		switch statements[0].(type) {
+		case *tree.Insert:
+			isRestore = true
+		case *tree.CloneTable:
 			isRestore = true
 		}
 	}
@@ -391,11 +397,19 @@ func doComQueryInBack(
 		backSes.mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
 
-		if insertStmt, ok := stmt.(*tree.Insert); ok && input.isRestore {
-			insertStmt.IsRestore = true
-			insertStmt.FromDataTenantID = input.opAccount
-			if input.isRestoreByTs {
-				insertStmt.IsRestoreByTs = true
+		if input.isRestore {
+			switch s := stmt.(type) {
+			case *tree.Insert:
+				s.IsRestore = true
+				s.FromDataTenantID = input.opAccount
+				s.IsRestoreByTs = s.IsRestoreByTs || input.isRestoreByTs
+
+			case *tree.CloneTable:
+				s.Sql = input.sql
+				s.IsRestore = true
+				s.FromAccount = input.opAccount
+				s.ToAccountId = input.toAccount
+				s.IsRestoreByTS = s.IsRestoreByTS || input.isRestoreByTs
 			}
 		}
 
@@ -575,7 +589,13 @@ var NewBackgroundExec = func(
 	upstream FeSession,
 	opts ...*BackgroundExecOption,
 ) BackgroundExec {
-	return upstream.InitBackExec(nil, "", fakeDataSetFetcher2, opts...)
+	// XXXSP
+	var txnOp TxnOperator
+	//
+	// We do not compute and pass in txnOp, but when InitBackExec sees nil, it will pass to its upsteam.
+	// txnOp = upstream.GetTxnHandler().GetTxn()
+	//
+	return upstream.InitBackExec(txnOp, "", fakeDataSetFetcher2, opts...)
 }
 
 var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {
@@ -766,6 +786,10 @@ func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack 
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
 		return be
+	} else if backSes.upstream != nil {
+		// XXXSP
+		// If we have an upstream, use it.
+		return backSes.upstream.InitBackExec(nil, db, callBack, opts...)
 	} else {
 		panic("backSession does not support non-txn-shared backExec recursively")
 	}
@@ -981,7 +1005,17 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
-	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
+	if backSes.upstream == nil {
+		return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
+	}
+	return backSes.upstream.GetUserDefinedVar(name)
+}
+
+func (backSes *backSession) SetUserDefinedVar(name string, value interface{}, sql string) error {
+	if backSes.upstream == nil {
+		return moerr.NewInternalError(context.Background(), "do not support set user defined var in background exec")
+	}
+	return backSes.upstream.SetUserDefinedVar(name, value, sql)
 }
 
 func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {

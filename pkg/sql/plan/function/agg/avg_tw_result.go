@@ -49,6 +49,10 @@ type AvgTwResultContext struct {
 	Count int64
 }
 
+func (a *AvgTwResultContext) Size() int64 {
+	return 16 // float64 + int64
+}
+
 func (a *AvgTwResultContext) Marshal() []byte {
 	res := make([]byte, 16)
 	s := types.EncodeFloat64(&a.Sum)
@@ -111,6 +115,10 @@ type AvgTwResultDecimalContext struct {
 	Sum   types.Decimal128
 	Count int64
 	Scale int32
+}
+
+func (a *AvgTwResultDecimalContext) Size() int64 {
+	return 32
 }
 
 func (a *AvgTwResultDecimalContext) Marshal() []byte {

@@ -189,6 +189,8 @@ const (
 	FPShowCDC
 	FPCommitUnsafeBeforeRollbackWhenCommitPanic
 	FPShowRecoveryWindow
+	FPCloneDatabase
+	FPCloneTable
 )
 
 type (
@@ -325,6 +327,8 @@ func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryT
 // ExecResult is the result interface of the execution
 type ExecResult interface {
 	GetRowCount() uint64
+
+	GetColumnCount() uint64
 
 	GetString(ctx context.Context, rindex, cindex uint64) (string, error)
 
@@ -477,6 +481,7 @@ type FeSession interface {
 	GetSessionSysVars() *SystemVariables
 	GetSessionSysVar(name string) (interface{}, error)
 	GetUserDefinedVar(name string) (*UserDefinedVar, error)
+	SetUserDefinedVar(name string, value interface{}, sql string) error
 	GetDebugString() string
 	GetFromRealUser() bool
 	getLastCommitTS() timestamp.Timestamp

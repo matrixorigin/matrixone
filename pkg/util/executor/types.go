@@ -34,8 +34,6 @@ type SQLExecutor interface {
 	Exec(ctx context.Context, sql string, opts Options) (Result, error)
 	// ExecTxn executor sql in a txn. execFunc can use TxnExecutor to exec multiple sql
 	// in a transaction.
-	// NOTE: Pass SQL stmts one by one to TxnExecutor.Exec(). If you pass multiple SQL stmts to
-	// TxnExecutor.Exec() as `\n` seperated string, it will only execute the first SQL statement causing Bug.
 	ExecTxn(ctx context.Context, execFunc func(txn TxnExecutor) error, opts Options) error
 }
 
@@ -67,6 +65,8 @@ type Options struct {
 	stream_chan             chan Result
 	error_chan              chan error
 	sql                     string
+	forceRebuildPlan        bool
+	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 }
 
 // StatementOption statement execute option.
@@ -77,6 +77,8 @@ type StatementOption struct {
 	userId           uint32
 	disableLog       bool
 	ignoreForeignKey bool
+	params           []string
+	skipPkDedupTbl   string
 }
 
 // Result exec sql result

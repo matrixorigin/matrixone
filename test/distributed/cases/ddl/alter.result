@@ -64,13 +64,18 @@ drop table  tm1;
 drop table  ti2;
 drop table  tm2;
 drop table if exists foreign01;
+
 create temporary table foreign01(col1 int primary key,
 col2 varchar(20),
 col3 int,
 col4 bigint);
+
 insert into foreign01 values(1,'shujuku',100,3247984);
+
 insert into foreign01 values(2,'数据库',328932,32324423432);
+
 drop table if exists foreign02;
+
 create temporary table foreign02(col1 int,
 col2 int,
 col3 int primary key,
@@ -81,6 +86,7 @@ no such table test.foreign02
 insert into foreign02 values(2,2,2);
 no such table test.foreign02
 delete from foreign01 where col3 = 100;
+
 show create table foreign02;
 no such table test.foreign02
 alter table foreign02 drop foreign key fk;
@@ -88,20 +94,33 @@ no such table test.foreign02
 show create table foreign02;
 no such table test.foreign02
 drop table foreign01;
+
 drop table foreign02;
 no such table test.foreign02
 drop table if exists ti1;
+
 drop table if exists tm1;
+
 drop table if exists ti2;
+
 drop table if exists tm2;
+
 create temporary table ti1(a INT not null, b INT, c INT);
+
 create temporary table tm1(a INT not null, b INT, c INT);
+
 create temporary table ti2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+
 create temporary table tm2(a INT primary key AUTO_INCREMENT, b INT, c INT);
+
 insert into ti1 values (1,1,1), (2,2,2);
+
 insert into ti2 values (1,1,1), (2,2,2);
+
 insert into tm1 values (1,1,1), (2,2,2);
+
 insert into tm2 values (1,1,1), (2,2,2);
+
 alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 alter table for temporary table is not yet implemented
 alter table tm1 add constraint fm1 foreign key (b) references tm2(a);
@@ -113,7 +132,9 @@ show create table tm1;
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 delete from ti2 where c = 1;
+
 delete from tm2 where c = 1;
+
 alter table ti1 drop foreign key fi1;
 alter table for temporary table is not yet implemented
 alter table tm1 drop foreign key fm1;
@@ -125,11 +146,17 @@ show create table tm1;
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL\n)
 delete from ti2 where c = 1;
+
 delete from tm2 where c = 1;
+
 drop table  ti1;
+
 drop table  tm1;
+
 drop table  ti2;
+
 drop table  tm2;
+
 drop table if exists index01;
 create table index01(col1 int,key key1(col1));
 show index from index01;
@@ -556,6 +583,18 @@ id    content
 show create table t5;
 Table    Create Table
 t5    CREATE TABLE `t5` (\n  `id` int NOT NULL,\n  `content` varchar(1000) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+begin;
+alter table t5 rename column content to new_content;
+select mo_ctl('dn', 'flush', 'mo_catalog.mo_columns');
+mo_ctl(dn, flush, mo_catalog.mo_columns)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select sleep(0.51);
+sleep(0.51)
+0
+commit;
+show create table t5;
+Table    Create Table
+t5    CREATE TABLE `t5` (\n  `id` int NOT NULL,\n  `new_content` varchar(1000) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
 drop table t1;
 drop table t2;
 drop table t3;

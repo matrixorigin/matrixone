@@ -489,6 +489,20 @@ alter table t5 modify column content varchar(1000);
 select * from t5;
 show create table t5;
 
+begin;
+
+alter table t5 rename column content to new_content;
+
+-- @separator:table
+select mo_ctl('dn', 'flush', 'mo_catalog.mo_columns');
+
+select sleep(0.51);
+
+commit;
+
+show create table t5;
+
+
 -- Cleanup
 drop table t1;
 drop table t2;

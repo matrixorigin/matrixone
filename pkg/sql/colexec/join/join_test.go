@@ -50,14 +50,13 @@ type joinTestCase struct {
 }
 
 var (
-	tcs []joinTestCase
 	tag int32
 )
 
-func init() {
+func makeTestCases(t *testing.T) []joinTestCase {
 	tag = 0
-	tcs = []joinTestCase{
-		newTestCase(2, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+	return []joinTestCase{
+		newTestCase(t, 2, []bool{false}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -66,7 +65,7 @@ func init() {
 					newExpr(0, types.T_int32.ToType()),
 				},
 			}),
-		newTestCase(2, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
+		newTestCase(t, 2, []bool{true}, []types.Type{types.T_int32.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(1, 0)},
 			[][]*plan.Expr{
 				{
 					newExpr(0, types.T_int32.ToType()),
@@ -80,13 +79,13 @@ func init() {
 
 func TestString(t *testing.T) {
 	buf := new(bytes.Buffer)
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
 }
 
 func TestJoin(t *testing.T) {
-	for _, tc := range tcs {
+	for _, tc := range makeTestCases(t) {
 
 		resetChildren(tc.arg)
 		resetHashBuildChildren(tc.barg)
@@ -284,8 +283,8 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
-	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
+func newTestCase(t *testing.T, rows int, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	ctx, cancel := context.WithCancel(context.Background())
 	fr, _ := function.GetFunctionByName(ctx, "=", ts)

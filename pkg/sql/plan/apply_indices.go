@@ -881,7 +881,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	sid := builder.compCtx.GetProcess().GetService()
 
 	if node.JoinType != plan.Node_INNER && node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_SEMI &&
-		(node.JoinType != plan.Node_ANTI || !node.BuildOnLeft) {
+		(node.JoinType != plan.Node_ANTI || !node.IsRightJoin) {
 		return nodeID
 	}
 

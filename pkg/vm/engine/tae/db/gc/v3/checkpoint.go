@@ -455,6 +455,7 @@ func (c *checkpointCleaner) Replay(inputCtx context.Context) (err error) {
 			)
 			return
 		}
+		defer ckpBatch.Clean(common.CheckpointAllocator)
 		logtail.FillUsageBatOfCompacted(
 			ctx,
 			c.checkpointCli.GetCatalog().GetUsageMemo().(*logtail.TNUsageMemo),
@@ -1260,11 +1261,11 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 }
 
 func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
-	c.StartMutationTask("gc-check")
+	c.StartMutationTask("gc-do-check")
 	defer c.StopMutationTask()
 
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
-	compacted := c.checkpointCli.GetCompacted()
+	cpt := c.checkpointCli.GetCompacted()
 	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
 	// no scan watermark, GC has not yet run
 	var scanWaterMark *checkpoint.CheckpointEntry
@@ -1285,9 +1286,9 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		logutil.Warnf("MaxCompared is nil, use maxGlobalCkp %v", gCkp.String())
 	}
 
-	for i, ckp := range debugCandidates {
+	for i, checkpoint := range debugCandidates {
 		maxEnd := scanWaterMark.GetEnd()
-		ckpEnd := ckp.GetEnd()
+		ckpEnd := checkpoint.GetEnd()
 		if ckpEnd.Equal(&maxEnd) {
 			debugCandidates = debugCandidates[:i+1]
 			break
@@ -1323,8 +1324,8 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		// TODO
 		return err
 	}
-
-	snapshots, err := c.GetSnapshotsLocked()
+	var snapshots map[uint32]containers.Vector
+	snapshots, err = c.GetSnapshotsLocked()
 	if err != nil {
 		logutil.Error(
 			"GC-GET-SNAPSHOTS-ERROR",
@@ -1334,8 +1335,8 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		return err
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-
-	pitr, err := c.GetPITRsLocked(c.ctx)
+	var pitr *logtail.PitrInfo
+	pitr, err = c.GetPITRsLocked(c.ctx)
 	if err != nil {
 		logutil.Error(
 			"GC-GET-PITR-ERROR",
@@ -1416,17 +1417,17 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		)
 	}
 
-	if compacted == nil {
+	if cpt == nil {
 		return nil
 	}
-	cend := compacted.GetEnd()
-	dend := debugCandidates[0].GetEnd()
-	if dend.GT(&cend) {
+	cptEnd := cpt.GetEnd()
+	debugEnd := debugCandidates[0].GetEnd()
+	if debugEnd.GT(&cptEnd) {
 		return nil
 	}
-	ickpObjects := make(map[string]*ObjectEntry, 0)
+	ickpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
 	ok := false
-	gcWaterMark := cend
+	gcWaterMark := cptEnd
 	for _, ckp := range gckps {
 		end := ckp.GetEnd()
 		if end.GE(&gcWaterMark) {
@@ -1435,6 +1436,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	}
 	for i, ckp := range debugCandidates {
 		end := ckp.GetEnd()
+		end = end.Next()
 		if end.Equal(&gcWaterMark) {
 			debugCandidates = debugCandidates[:i+1]
 			ok = true
@@ -1444,7 +1446,6 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-
 	for _, ckp := range debugCandidates {
 		ckpReader, err := c.getCkpReader(c.ctx, ckp)
 		if err != nil {
@@ -1452,30 +1453,35 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		}
 		collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects)
 	}
-	cptCkpObjects := make(map[string]*ObjectEntry, 0)
-	ckpReader, err := c.getCkpReader(c.ctx, compacted)
+	cptCkpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
+	ckpReader, err := c.getCkpReader(c.ctx, cpt)
 	if err != nil {
 		return err
 	}
 	collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects)
 
 	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(accoutSnapshots, pitr)
-	for name, entry := range ickpObjects {
-		if cptCkpObjects[name] != nil {
-			continue
-		}
-		if logtail.ObjectIsSnapshotRefers(
-			entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
-		) {
-			logutil.Error(
-				"GC-SNAPSHOT-REFERS-ERROR",
-				zap.String("task", c.TaskNameLocked()),
-				zap.String("name", entry.stats.ObjectName().String()),
-				zap.String("pitr", pList[entry.table].ToString()),
-				zap.String("create-ts", entry.createTS.ToString()),
-				zap.String("drop-ts", entry.dropTS.ToString()),
-			)
-			return moerr.NewInternalError(c.ctx, "snapshot refers")
+	for name, tables := range ickpObjects {
+		for _, entry := range tables {
+			if cptCkpObjects[name] != nil {
+				continue
+			}
+			if logtail.ObjectIsSnapshotRefers(
+				entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
+			) {
+				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cptEnd) || (pList[entry.table] != nil && entry.dropTS.GT(pList[entry.table])) {
+					continue
+				}
+				logutil.Error(
+					"GC-SNAPSHOT-REFERS-ERROR",
+					zap.String("task", c.TaskNameLocked()),
+					zap.String("name", entry.stats.ObjectName().String()),
+					zap.String("pitr", pList[entry.table].ToString()),
+					zap.String("create-ts", entry.createTS.ToString()),
+					zap.String("drop-ts", entry.dropTS.ToString()),
+				)
+				return moerr.NewInternalError(c.ctx, "snapshot refers")
+			}
 		}
 	}
 	return nil

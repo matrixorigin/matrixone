@@ -1266,6 +1266,21 @@ func getCost(start *Expr, end *Expr, step *Expr) (float64, bool) {
 	return ret, true
 }
 
+func transposeTableScanFilters(proc *process.Process, qry *Query, nodeId int32) {
+	node := qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
+		for i, e := range node.FilterList {
+			transposedExpr, err := ConstantTranspose(e, proc)
+			if err == nil && transposedExpr != nil {
+				node.FilterList[i] = transposedExpr
+			}
+		}
+	}
+	for _, childId := range node.Children {
+		transposeTableScanFilters(proc, qry, childId)
+	}
+}
+
 func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32, foldInExpr bool) {
 	node := qry.Nodes[nodeId]
 	if node.NodeType == plan.Node_TABLE_SCAN && len(node.FilterList) > 0 {
@@ -1537,9 +1552,18 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
 		if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
-			node.BuildOnLeft = false
+			node.IsRightJoin = false
 		} else if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
-			node.BuildOnLeft = true
+			node.IsRightJoin = true
+		}
+
+	case plan.Node_DEDUP:
+		if node.OnDuplicateAction != plan.Node_FAIL || node.DedupJoinCtx != nil {
+			node.IsRightJoin = false
+		} else if builder.optimizerHints != nil && builder.optimizerHints.disableRightJoin != 0 {
+			node.IsRightJoin = false
+		} else if rightChild.Stats.Outcnt > 100 && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt {
+			node.IsRightJoin = true
 		}
 	}
 

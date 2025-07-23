@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,61 +27,128 @@ import (
 
 // RenameColumn Can change a column name but not its definition.
 // More convenient than CHANGE to rename a column without changing its definition.
-func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterTableRenameColumnClause, alterCtx *AlterTableContext) error {
-	tableDef := alterPlan.CopyTableDef
+func RenameColumn(
+	ctx CompilerContext,
+	alterPlan *plan.AlterTable,
+	spec *tree.AlterTableRenameColumnClause,
+	alterCtx *AlterTableContext,
+) error {
+
+	oldColName := spec.OldColumnName.ColName()
+	oldCol := FindColumn(alterPlan.CopyTableDef.Cols, oldColName)
+	if oldCol == nil || oldCol.Hidden {
+		return moerr.NewBadFieldError(
+			ctx.GetContext(),
+			spec.OldColumnName.ColNameOrigin(),
+			alterPlan.TableDef.Name,
+		)
+	}
+
+	if err := addRenameContextToAlterCtx(
+		ctx.GetContext(),
+		alterCtx,
+		oldCol,
+		alterPlan.TableDef.Name,
+		alterPlan.CopyTableDef,
+		spec,
+	); err != nil {
+		return err
+	}
+
+	if _, err := updateRenameColumnInTableDef(
+		ctx,
+		oldCol,
+		alterPlan.CopyTableDef,
+		spec,
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func updateRenameColumnInTableDef(
+	ctx CompilerContext,
+	oldCol *ColDef,
+	tableDef *plan.TableDef,
+	spec *tree.AlterTableRenameColumnClause,
+) (sqls []string, err error) {
 
 	// get the old column name
-	oldColName := spec.OldColumnName.ColName()
-	oldColNameOrigin := spec.OldColumnName.ColNameOrigin()
+	oldColName := oldCol.Name
+	oldColNameOrigin := oldCol.OriginName
 
 	// get the new column name
 	newColName := spec.NewColumnName.ColName()
 	newColNameOrigin := spec.NewColumnName.ColNameOrigin()
 
-	// Check whether original column has existed.
-	oldCol := FindColumn(tableDef.Cols, oldColName)
-	if oldCol == nil || oldCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), oldColNameOrigin, alterPlan.TableDef.Name)
-	}
-
 	if oldColNameOrigin == newColNameOrigin {
-		return nil
+		return nil, nil
 	}
 
 	// Check if the new column name is valid and conflicts with internal hidden columns
-	if err := CheckColumnNameValid(ctx.GetContext(), newColName); err != nil {
-		return err
+	if err := checkColumnNameValid(ctx.GetContext(), newColName); err != nil {
+		return nil, err
 	}
 
-	// If you want to rename the original column name to new name, you need to first check if the new name already exists.
-	if newColName != oldColName {
-		if FindColumn(tableDef.Cols, newColName) != nil {
-			return moerr.NewErrDupFieldName(ctx.GetContext(), newColNameOrigin)
-		}
+	// check new name duplicate
+	if FindColumn(tableDef.Cols, newColName) != nil &&
+		!strings.EqualFold(newColName, oldColName) {
+		return nil, moerr.NewErrDupFieldName(ctx.GetContext(), newColNameOrigin)
+	}
 
-		// If the column name of the table changes, it is necessary to check if it is associated
-		// with the index key. If it is an index key column, column name replacement is required.
-		for _, indexInfo := range alterPlan.CopyTableDef.Indexes {
-			for j, partCol := range indexInfo.Parts {
-				partCol = catalog.ResolveAlias(partCol)
-				if partCol == oldColName {
-					indexInfo.Parts[j] = newColName
-					break
-				}
-			}
-		}
-
-		primaryKeyDef := alterPlan.CopyTableDef.Pkey
-		for j, partCol := range primaryKeyDef.Names {
+	// update index key
+	indexAffected := false
+	for _, indexInfo := range tableDef.Indexes {
+		for j, partCol := range indexInfo.Parts {
+			partCol = catalog.ResolveAlias(partCol)
 			if partCol == oldColName {
-				primaryKeyDef.Names[j] = newColName
+				indexInfo.Parts[j] = newColName
+				indexAffected = true
 				break
 			}
 		}
-		// handle cluster by key in modify column
-		handleClusterByKey(ctx.GetContext(), alterPlan, newColName, oldColName)
 	}
 
+	indexFmt := "update `mo_catalog`.`mo_indexes` set column_name = '%s' " +
+		"where table_id = %d and column_name = '%s' ; "
+
+	if indexAffected {
+		sqls = append(sqls, fmt.Sprintf(
+			indexFmt,
+			newColNameOrigin,
+			tableDef.TblId,
+			oldColNameOrigin,
+		))
+	}
+
+	// update primary key
+	primaryKeyDef := tableDef.Pkey
+	primaryKeyAffected := false
+	for j, partCol := range primaryKeyDef.Names {
+		if partCol == oldColName {
+			primaryKeyDef.Names[j] = newColName
+			if len(primaryKeyDef.Names) == 1 {
+				primaryKeyAffected = true
+				primaryKeyDef.PkeyColName = newColName
+			}
+			break
+		}
+	}
+
+	if primaryKeyAffected {
+		sqls = append(sqls, fmt.Sprintf(
+			indexFmt,
+			catalog.CreateAlias(newColName),
+			tableDef.TblId,
+			catalog.CreateAlias(oldColName),
+		))
+	}
+
+	// update clusterby key
+	updateClusterByInTableDef(ctx.GetContext(), tableDef, newColName, oldColName)
+
+	// update column name itself
 	for i, col := range tableDef.Cols {
 		if strings.EqualFold(col.Name, oldColName) {
 			colDef := DeepCopyColDef(col)
@@ -90,9 +159,31 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		}
 	}
 
+	return
+}
+
+func addRenameContextToAlterCtx(
+	_ context.Context,
+	alterCtx *AlterTableContext,
+	oldCol *ColDef,
+	originTblName string,
+	tableDef *plan.TableDef,
+	spec *tree.AlterTableRenameColumnClause) error {
+
+	oldColName := oldCol.Name
+	newColName := spec.NewColumnName.ColName()
+
+	oldColNameOrigin := oldCol.OriginName
+	newColNameOrigin := spec.NewColumnName.ColNameOrigin()
+
+	if oldColNameOrigin == newColNameOrigin {
+		return nil
+	}
+
+	// map the new column name to the old column as its data source
 	delete(alterCtx.alterColMap, oldColName)
 	alterCtx.alterColMap[newColName] = selectExpr{
-		sexprType: columnName,
+		sexprType: exprColumnName,
 		sexprStr:  oldColName,
 	}
 
@@ -101,9 +192,10 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		tmpCol.OriginName = newColNameOrigin
 	}
 
+	// update fk relationships in mo_foreign_keys
 	alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
-		getSqlForRenameColumn(alterPlan.Database,
-			alterPlan.TableDef.Name,
+		getSqlForRenameColumn(tableDef.DbName,
+			originTblName,
 			oldColNameOrigin,
 			newColNameOrigin)...)
 

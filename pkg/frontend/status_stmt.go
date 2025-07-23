@@ -276,6 +276,11 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
 				return execCtx.proc.Base.FileService.Delete(execCtx.reqCtx, path)
 			})
+			if err != nil {
+				return err
+			}
+			err = doDropProcedureWithDB(execCtx.reqCtx, ses, execCtx.stmt)
+
 		case *tree.Load:
 			if st.Local && execCtx.isIssue3482 {
 				isIssue3482 = true

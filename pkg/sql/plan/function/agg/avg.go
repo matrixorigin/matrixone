@@ -128,6 +128,10 @@ func generateAggAvgContext(_ types.Type, _ ...types.Type) aggexec.AggGroupExecCo
 	return &c
 }
 
+func (a *aggAvgContext) Size() int64 {
+	return 8 // int64
+}
+
 func aggAvgInitResult(_ types.Type, _ ...types.Type) float64 {
 	return 0
 }
@@ -180,6 +184,10 @@ func (a *aggAvgDecimalCommonCtx) Unmarshal(bs []byte) {
 func generateAggAvgDecimalCommonContext(_ types.Type, parameters ...types.Type) aggexec.AggCommonExecContext {
 	c := aggAvgDecimalCommonCtx(parameters[0].Scale)
 	return &c
+}
+
+func (a *aggAvgDecimalCommonCtx) Size() int64 {
+	return 4 // int32
 }
 
 func aggAvgOfDecimalInitResult(_ types.Type, _ ...types.Type) types.Decimal128 {
