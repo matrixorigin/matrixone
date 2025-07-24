@@ -58,6 +58,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		"create table %s (c int primary key) partition by list (c) (partition p0 values in (1, 2), partition p1 values in (3, 4))",
 		"create table %s (a int unsigned, c int) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
 		"create table %s (b vecf32(2), c int) partition by hash(c) partitions 2",
+		"create table %s (c datetime) partition by hash(year(c)) partitions 2",
 	}
 	inserts := []string{
 		"insert into %s values(1)",
@@ -67,6 +68,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		"insert into %s values(1), (2), (3), (4)",
 		"insert into %s values(1, 1), (2,2), (3,3), (6,4)",
 		"insert into %s values('[1.1, 2.2]', 1), ('[1.1, 2.2]', 2), ('[1.1, 2.2]', 3)",
+		"insert into %s values('1996-01-01'), ('1997-01-01'), ('1998-01-01'), ('1999-01-01')",
 	}
 	deletes := []string{
 		"delete from %s where c = 1",
@@ -76,12 +78,14 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		"delete from %s where c > 0",
 		"delete from %s where c > 0",
 		"delete from %s where c > 0",
+		"delete from %s where c > '1995-01-01'",
 	}
 
 	partitionCount := []int{
 		2,
 		2,
 		3,
+		2,
 		2,
 		2,
 		2,
@@ -96,6 +100,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		{4, 0},
 		{4, 0},
 		{3, 0},
+		{4, 0},
 	}
 
 	runPartitionClusterTest(
@@ -169,6 +174,118 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 					db,
 					cn,
 					delete,
+				)
+				require.Equal(t, int64(results[idx][1]), fn())
+
+				testutils.ExecSQLWithReadResult(
+					t,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(results[idx][1]), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
+			}
+		},
+	)
+}
+
+func TestUpdateHashBased(t *testing.T) {
+	creates := []string{
+		"create table %s (c int primary key, d int) partition by hash(c) partitions 2",
+	}
+	inserts := []string{
+		"insert into %s values(1, 1), (2, 5), (3,3), (6,4)",
+	}
+	updates := []string{
+		"update %s set d = 2 where c = 2",
+	}
+
+	partitionCount := []int{
+		2,
+	}
+
+	results := [][]int{
+		{4, 4},
+	}
+
+	runPartitionClusterTest(
+		t,
+		func(c embed.Cluster) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			db := testutils.GetDatabaseName(t)
+			testutils.CreateTestDatabase(t, db, cn)
+
+			for idx := range creates {
+				table := fmt.Sprintf("%s_%d", t.Name(), idx)
+				create := fmt.Sprintf(creates[idx], table)
+				insert := fmt.Sprintf(inserts[idx], table)
+				update := fmt.Sprintf(updates[idx], table)
+
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					create,
+				)
+
+				fn := func() int64 {
+					n := int64(0)
+					for i := 0; i < partitionCount[idx]; i++ {
+						testutils.ExecSQLWithReadResult(
+							t,
+							db,
+							cn,
+							func(i int, s string, r executor.Result) {
+								r.ReadRows(
+									func(rows int, cols []*vector.Vector) bool {
+										n += executor.GetFixedRows[int64](cols[0])[0]
+										return true
+									},
+								)
+							},
+							fmt.Sprintf("select count(1) from %s_p%d", table, i),
+						)
+					}
+					return n
+				}
+
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					insert,
+				)
+				require.Equal(t, int64(results[idx][0]), fn())
+
+				testutils.ExecSQLWithReadResult(
+					t,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(results[idx][0]), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
+
+				testutils.ExecSQL(
+					t,
+					db,
+					cn,
+					update,
 				)
 				require.Equal(t, int64(results[idx][1]), fn())
 
