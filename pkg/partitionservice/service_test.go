@@ -139,27 +139,6 @@ func newTestTablePartitionDefine(
 	return def
 }
 
-func newTestTableDefine(
-	id uint64,
-	columns []string,
-	types []types.T,
-) *plan.TableDef {
-	def := &plan.TableDef{
-		TblId: id,
-	}
-
-	for idx, col := range columns {
-		def.Cols = append(
-			def.Cols,
-			&plan.ColDef{
-				Name: col,
-				Typ:  plan.Type{Id: int32(types[idx])},
-			},
-		)
-	}
-	return def
-}
-
 func newTestHashExpr(col string) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{Id: 10},
