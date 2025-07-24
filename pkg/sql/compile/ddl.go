@@ -920,6 +920,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	if c.adjustTableExtraFunc != nil {
+		if err := c.adjustTableExtraFunc(extra); err != nil {
+			return err
+		}
+	}
+
 	dbName := c.db
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()

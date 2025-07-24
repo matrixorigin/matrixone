@@ -169,6 +169,11 @@ func (s *Service) getMetadata(
 			option,
 			def,
 		)
+	case *tree.KeyType:
+		return s.getMetadataByKeyType(
+			option,
+			def,
+		)
 	case *tree.RangeType:
 		return s.getMetadataByRangeType(
 			option,

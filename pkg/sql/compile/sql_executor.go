@@ -366,6 +366,8 @@ func (exec *txnExecutor) Exec(
 		receiveAt,
 	)
 	c.SetOriginSQL(sql)
+	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
+
 	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -320,4 +321,18 @@ func (opts Options) WithForceRebuildPlan() Options {
 
 func (opts Options) ForceRebuildPlan() bool {
 	return opts.forceRebuildPlan
+}
+
+func (opts Options) WithAdjustTableExtraFunc(
+	fn func(*api.SchemaExtra) error,
+) Options {
+	opts.adjustTableExtraFunc = fn
+	return opts
+}
+
+func (opts Options) AdjustTableExtraFunc() func(*api.SchemaExtra) error {
+	if opts.adjustTableExtraFunc == nil {
+		return func(*api.SchemaExtra) error { return nil }
+	}
+	return opts.adjustTableExtraFunc
 }

@@ -23,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -231,7 +233,14 @@ func (s *Storage) Create(
 
 	opts := executor.Options{}.
 		WithTxn(txnOp).
-		WithAccountID(accountID)
+		WithAccountID(accountID).
+		WithAdjustTableExtraFunc(
+			func(extra *api.SchemaExtra) error {
+				extra.ParentTableID = def.TblId
+				extra.FeatureFlag |= features.Partition
+				return nil
+			},
+		)
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	}
