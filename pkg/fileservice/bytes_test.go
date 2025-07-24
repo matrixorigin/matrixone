@@ -100,4 +100,6 @@ func TestBytesConcurrent(t *testing.T) {
 
 	bs.Release()
 
+	// double free
+	assert.Panics(t, func() { bs.Release() }, "double free")
 }
