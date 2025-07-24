@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -198,6 +199,21 @@ func (e *CheckpointBasedGCJob) Result() (*vector.Vector, []objectio.ObjectStats)
 	return e.result.vecToGC, e.result.filesNotGC
 }
 
+func dataProcess(b *bloomfilter.BloomFilter, vec *vector.Vector, pool *mpool.MPool) error {
+	gcVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+	for i := 0; i < vec.Length(); i++ {
+		stats := objectio.ObjectStats(vec.GetBytesAt(i))
+		if err := vector.AppendBytes(
+			gcVec, []byte(stats.ObjectName().UnsafeString()), false, pool,
+		); err != nil {
+			return err
+		}
+	}
+	b.Add(gcVec)
+	gcVec.Free(pool)
+	return nil
+}
+
 func MakeBloomfilterCoarseFilter(
 	ctx context.Context,
 	rowCount int,
@@ -226,6 +242,7 @@ func MakeBloomfilterCoarseFilter(
 		reader.LoadBatchData,
 		buffer,
 		mp,
+		dataProcess,
 	)
 	if err != nil {
 		return nil, err
