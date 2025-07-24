@@ -901,7 +901,9 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		selectivity_out := andSelectivity(leftStats.Selectivity, rightStats.Selectivity)
 
 		for _, pred := range node.OnList {
-			if pred.Ndv <= 0 {
+			if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+				pred.Ndv = leftStats.Outcnt
+			} else if pred.Ndv <= 0 {
 				pred.Ndv = getExprNdv(pred, builder)
 			}
 		}
@@ -936,11 +938,19 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.BlockNum = leftStats.BlockNum
 
 		case plan.Node_DEDUP:
-			node.Stats.Outcnt = rightStats.Outcnt
-			node.Stats.Cost = leftStats.Cost + rightStats.Cost
-			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
-			node.Stats.Selectivity = selectivity
-			node.Stats.BlockNum = leftStats.BlockNum
+			if !node.IsRightJoin {
+				node.Stats.Outcnt = rightStats.Outcnt
+				node.Stats.Cost = leftStats.Cost + rightStats.Cost
+				node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
+				node.Stats.Selectivity = selectivity
+				node.Stats.BlockNum = leftStats.BlockNum
+			} else {
+				node.Stats.Outcnt = leftStats.Outcnt
+				node.Stats.Cost = leftStats.Cost + rightStats.Cost
+				node.Stats.HashmapStats.HashmapSize = leftStats.Outcnt
+				node.Stats.Selectivity = selectivity
+				node.Stats.BlockNum = rightStats.BlockNum
+			}
 
 		case plan.Node_OUTER:
 			node.Stats.Outcnt = leftStats.Outcnt + rightStats.Outcnt
