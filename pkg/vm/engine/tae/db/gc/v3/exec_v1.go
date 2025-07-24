@@ -257,8 +257,18 @@ func MakeBloomfilterCoarseFilter(
 		dropTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
 		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			if err = vector.AppendBytes(
+				nameVec, []byte(stats.ObjectName().UnsafeString()), false, mp,
+			); err != nil {
+				return err
+			}
+		}
+		defer nameVec.Free(mp)
 		bf.Test(
-			bat.Vecs[0],
+			nameVec,
 			func(exists bool, i int) {
 				if exists {
 					return
