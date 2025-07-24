@@ -171,6 +171,7 @@ func (s *store) newTAEStorage(
 		FlushInterval:          s.cfg.Ckp.FlushInterval.Duration,
 		MetadataCheckInterval:  s.cfg.Ckp.MetadataCheckInterval.Duration,
 		IncrementalInterval:    s.cfg.Ckp.IncrementalInterval.Duration,
+		GlobalVersionInterval:  s.cfg.Ckp.GlobalVersionInterval.Duration,
 		GlobalMinCount:         s.cfg.Ckp.GlobalMinCount,
 		ReservedWALEntryCount:  s.cfg.Ckp.ReservedWALEntryCount,
 		OverallFlushMemControl: s.cfg.Ckp.OverallFlushMemControl,
@@ -178,6 +179,7 @@ func (s *store) newTAEStorage(
 
 	gcCfg := &options.GCCfg{
 		GCTTL:          s.cfg.GCCfg.GCTTL.Duration,
+		GCInMemoryTTL:  s.cfg.GCCfg.GCInMemoryTTL.Duration,
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
 		CheckGC:        s.cfg.GCCfg.CheckGC,

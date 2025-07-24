@@ -45,7 +45,7 @@ type CheckpointCfg struct {
 	GlobalMinCount            int64         `toml:"checkpoint-global-interval"`
 	OverallFlushMemControl    uint64        `toml:"overall-flush-mem-control"`
 	ForceUpdateGlobalInterval bool
-	GlobalVersionInterval     time.Duration
+	GlobalVersionInterval     time.Duration `toml:"global-version-interval"`
 	GCCheckpointInterval      time.Duration
 	DisableGCCheckpoint       bool
 	ReservedWALEntryCount     uint64
@@ -58,6 +58,7 @@ type CheckpointCfg struct {
 
 type GCCfg struct {
 	GCTTL             time.Duration `toml:"gc-ttl"`
+	GCInMemoryTTL     time.Duration `toml:"gc-in-memory-ttl"`
 	ScanGCInterval    time.Duration `toml:"scan-gc-interval"`
 	DisableGC         bool          `toml:"disable-gc"`
 	CheckGC           bool          `toml:"check-gc"`

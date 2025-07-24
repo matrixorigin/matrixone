@@ -684,7 +684,10 @@ func TestIssue19551(t *testing.T) {
 					executor.Options{}.WithDatabase(db),
 				)
 				require.Error(t, err)
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+				require.Truef(
+					t,
+					moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN),
+					fmt.Sprintf("got: %v", err))
 			}()
 
 			go func() {
@@ -716,7 +719,10 @@ func TestIssue19551(t *testing.T) {
 					executor.Options{}.WithDatabase(db),
 				)
 				require.Error(t, err)
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+				require.Truef(
+					t,
+					moerr.IsMoErrCode(err, moerr.ErrTxnClosed),
+					fmt.Sprintf("got: %v", err))
 
 			}()
 
