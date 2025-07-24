@@ -2069,7 +2069,6 @@ func updatePartitionOfPush(
 			t0 = time.Now()
 			//TODO::
 			ckpStart, ckpEnd = parseCkpDuration(tl)
-			logutil.Infof("XXX-1 %s:%s:%s", ckpStart.ToString(), ckpEnd.ToString(), tl.CkpLocation)
 			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 		t0 = time.Now()
