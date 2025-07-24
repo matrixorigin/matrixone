@@ -107,6 +107,21 @@ func TestBasicSimulator(t *testing.T) {
 		player.AddTombstone(tombstone)
 	}
 
+	player.AddTombstoneByDesc(STombstoneDesc{
+		SData: SData{
+			stats: newTestObjectStats(t, 0, 0, 512*K, 300, 0, sid(), 0),
+		},
+		desc: []catalog.LevelDist{
+			{
+				Lv:               0,
+				ObjCnt:           2,
+				ObjCntProportion: 0.5,
+				DelAvg:           0.1,
+				DelVar:           0.001,
+			},
+		},
+	})
+
 	time.Sleep(3 * time.Second)
 	player.Stop()
 	t.Logf("report: %v", player.ReportString())
@@ -219,7 +234,9 @@ func ExtractFromLocalLog(
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			yield(line)
+			if !yield(line) {
+				return
+			}
 		}
 	}, baseTs)
 	return
@@ -240,7 +257,9 @@ func ExtractFromLokiExport(
 	baseTs := beginTime.UTC().UnixNano()
 	sdata, stombstones = addEventByLine(func(yield func(string) bool) {
 		for i := range data {
-			yield(data[i]["line"].(string))
+			if !yield(data[i]["line"].(string)) {
+				return
+			}
 		}
 	}, baseTs)
 	return
@@ -280,7 +299,30 @@ func TestSimulatorOnStatementInfo(t *testing.T) {
 	player.Start()
 	defer player.Stop()
 
-	time.Sleep(20 * time.Second)
+	player.WaitEventSourceExhaustedAndHoldFor(2 * time.Minute)
+	t.Logf("first: %s, last: %s",
+		sdata[0].createTime.ToTimestamp().ToStdTime(),
+		sdata[len(sdata)-1].createTime.ToTimestamp().ToStdTime(),
+	)
+
+	t.Logf("report: %v", player.ReportString())
+}
+
+func TestSimulatorOnTPCC100Stock(t *testing.T) {
+	t.Skip("turn on if experiment is needed")
+	player := NewSimPlayer()
+	player.sexec.SetLogEnabled(true)
+	player.ResetPace(10*time.Millisecond, 3*time.Second)
+
+	filename := "/root/matrixone/zmtest/tpcc100-stock.json"
+	sdata, stombdesc, err := ExtractFromLokiExport(filename, player.sclock.Now())
+	require.NoError(t, err)
+
+	player.SetEventSource(sdata, stombdesc)
+	player.Start()
+	defer player.Stop()
+
+	player.WaitEventSourceExhaustedAndHoldFor(3 * time.Minute)
 	t.Logf("first: %s, last: %s",
 		sdata[0].createTime.ToTimestamp().ToStdTime(),
 		sdata[len(sdata)-1].createTime.ToTimestamp().ToStdTime(),
