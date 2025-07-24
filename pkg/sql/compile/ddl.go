@@ -16,10 +16,22 @@ package compile
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
+
+	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -4116,4 +4128,1065 @@ func CheckSysMoCatalogPitrResult(ctx context.Context, vecs []*vector.Vector, new
 
 func getSqlForCheckPitrExists(pitrName string, accountId uint32) string {
 	return fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d order by pitr_id", pitrName, accountId)
+}
+
+func (s *Scope) CreateCDC(c *Compile) error {
+	ctx := c.proc.Ctx
+	planCDC := s.Plan.GetDdl().GetCreateCdc()
+
+	// 1. Verify and populate creation options
+	opts := &CDCCreateTaskOptions{}
+	if err := opts.ValidateAndFill(ctx, c, planCDC); err != nil {
+		return err
+	}
+
+	// 1.5 IF NOT EXISTS pre-check to avoid inconsistent rows between mo_cdc_task and daemon task
+	if planCDC.GetIfNotExists() {
+		preCheckSQL := cdc.CDCSQLBuilder.GetTaskIdSQL(uint64(opts.UserInfo.AccountId), opts.TaskName)
+		if res, err := c.runSqlWithResult(preCheckSQL, int32(catalog.System_Account)); err == nil {
+			exists := false
+			if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
+				exists = true
+			}
+			res.Close()
+			if exists {
+				return nil
+			}
+		}
+	}
+
+	// 2. Build task details
+	details, err := opts.BuildTaskDetails()
+	if err != nil {
+		return err
+	}
+
+	// 3. Obtain task service
+	taskService := c.proc.GetTaskService()
+	if taskService == nil {
+		return moerr.NewInternalErrorf(ctx, "taskService is nil")
+	}
+
+	// 4. Create a task job function
+	createTaskJob := func(
+		ctx context.Context,
+		tx taskservice.SqlExecutor,
+	) (ret int, err error) {
+		// Ensure ParameterUnit is available in ctx for helpers using config.GetParameterUnit(ctx)
+		if ctx.Value(config.ParameterUnitKey) == nil {
+			if v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables("parameter-unit"); ok {
+				if pu, ok2 := v.(*config.ParameterUnit); ok2 && pu != nil {
+					ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+				}
+			}
+		}
+
+		var (
+			insertSql    string
+			rowsAffected int64
+		)
+
+		// Generate SQL for inserting tasks
+		if insertSql, err = opts.ToInsertTaskSQL(ctx, tx); err != nil {
+			return 0, err
+		}
+
+		// Execute SQL and obtain the number of affected rows
+		if rowsAffected, err = ExecuteAndGetRowsAffected(ctx, tx, insertSql); err != nil {
+			return 0, err
+		}
+
+		return int(rowsAffected), nil
+	}
+
+	// 5. Add CDC task
+	_, err = taskService.AddCDCTask(
+		ctx, opts.BuildTaskMetadata(), details, createTaskJob,
+	)
+
+	return err
+}
+
+func getUUIDFromServiceIdentifier(id string) string {
+	if len(id) <= 19 {
+		return id
+	}
+	return id[19:]
+}
+
+func (s *Scope) DropCDC(c *Compile) error {
+	planCDC := s.Plan.GetDdl().GetDropCdc()
+	var (
+		targetTaskStatus task.TaskStatus
+		// task name may be empty
+		taskName  string
+		accountId = planCDC.AccountId
+		conds     = make([]taskservice.Condition, 0)
+	)
+
+	targetTaskStatus = task.TaskStatus_CancelRequested
+	conds = append(
+		conds,
+		taskservice.WithAccountID(taskservice.EQ, accountId),
+		taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
+	)
+	if !planCDC.All {
+		taskName = planCDC.TaskName
+		conds = append(
+			conds,
+			taskservice.WithTaskName(taskservice.EQ, taskName),
+		)
+	}
+	return doUpdateCDCTask(
+		c.proc,
+		targetTaskStatus,
+		uint64(accountId),
+		taskName,
+		conds...,
+	)
+}
+
+func doUpdateCDCTask(
+	proc *process.Process,
+	targetTaskStatus task.TaskStatus,
+	accountId uint64,
+	taskName string,
+	conds ...taskservice.Condition,
+) (err error) {
+	ts := proc.GetTaskService()
+	if ts == nil {
+		return nil
+	}
+	_, err = ts.UpdateCDCTask(proc.Ctx,
+		targetTaskStatus,
+		func(
+			ctx context.Context,
+			targetStatus task.TaskStatus,
+			keys map[taskservice.CDCTaskKey]struct{},
+			tx taskservice.SqlExecutor,
+		) (int, error) {
+			return onPreUpdateCDCTasks(
+				ctx,
+				targetStatus,
+				keys,
+				tx,
+				accountId,
+				taskName,
+			)
+		},
+		conds...,
+	)
+	return
+}
+
+func onPreUpdateCDCTasks(
+	ctx context.Context,
+	targetTaskStatus task.TaskStatus,
+	keys map[taskservice.CDCTaskKey]struct{},
+	tx taskservice.SqlExecutor,
+	accountId uint64,
+	taskName string,
+) (affectedCdcRow int, err error) {
+	var cnt int64
+
+	// Get task keys count
+	if cnt, err = getTaskKeysCount(ctx, tx, accountId, taskName, keys); err != nil {
+		return
+	}
+	affectedCdcRow = int(cnt)
+
+	// Cancel cdc task
+	if targetTaskStatus == task.TaskStatus_CancelRequested {
+		// Delete mo_cdc_task
+		if cnt, err = ExecuteAndGetRowsAffected(ctx, tx, cdc.CDCSQLBuilder.DeleteTaskSQL(accountId, taskName)); err != nil {
+			return
+		}
+		affectedCdcRow += int(cnt)
+
+		// Delete mo_cdc_watermark
+		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+			return
+		}
+		affectedCdcRow += int(cnt)
+		return
+	}
+
+	// Step2: update or cancel cdc task
+	var targetCDCStatus string
+	if targetTaskStatus == task.TaskStatus_PauseRequested {
+		targetCDCStatus = cdc.CDCState_Paused
+	} else {
+		targetCDCStatus = cdc.CDCState_Running
+	}
+
+	if cnt, err = ExecuteAndGetRowsAffected(ctx, tx, cdc.CDCSQLBuilder.UpdateTaskStateSQL(accountId, taskName), targetCDCStatus); err != nil {
+		return
+	}
+
+	affectedCdcRow += int(cnt)
+
+	// Restart cdc task
+	if targetTaskStatus == task.TaskStatus_RestartRequested {
+		if cnt, err = deleteManyWatermark(ctx, tx, keys); err != nil {
+			return
+		}
+		affectedCdcRow += int(cnt)
+	}
+	return
+}
+
+// getTaskKeysCount gets the count of task keys and populates the keys map
+func getTaskKeysCount(
+	ctx context.Context,
+	tx taskservice.SqlExecutor,
+	accountId uint64,
+	taskName string,
+	keys map[taskservice.CDCTaskKey]struct{},
+) (cnt int64, err error) {
+	var (
+		rows *sql.Rows
+	)
+
+	querySQL := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
+	if rows, err = tx.QueryContext(ctx, querySQL); err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var taskId string
+		if err = rows.Scan(&taskId); err != nil {
+			return
+		}
+		key := taskservice.CDCTaskKey{
+			AccountId: accountId,
+			TaskId:    taskId,
+		}
+		keys[key] = struct{}{}
+		cnt++
+	}
+
+	if cnt == 0 && taskName != "" {
+		err = moerr.NewInternalErrorf(
+			ctx,
+			"no cdc task found, accountId: %d, taskName: %s",
+			accountId,
+			taskName,
+		)
+	}
+	return
+}
+
+// deleteManyWatermark deletes multiple watermark records
+func deleteManyWatermark(
+	ctx context.Context,
+	tx taskservice.SqlExecutor,
+	keys map[taskservice.CDCTaskKey]struct{},
+) (deletedCnt int64, err error) {
+	var (
+		cnt int64
+	)
+
+	for key := range keys {
+		sql := cdc.CDCSQLBuilder.DeleteWatermarkSQL(
+			key.AccountId,
+			key.TaskId,
+		)
+		if cnt, err = ExecuteAndGetRowsAffected(ctx, tx, sql); err != nil {
+			return
+		}
+		deletedCnt += cnt
+	}
+	return
+}
+
+const (
+	defaultConnectorTaskMaxRetryTimes = 10
+	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
+)
+
+func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
+	return task.TaskMetadata{
+		ID:       opts.TaskId,
+		Executor: task.TaskCode_InitCdc,
+		Options: task.TaskOptions{
+			MaxRetryTimes: defaultConnectorTaskMaxRetryTimes,
+			RetryInterval: defaultConnectorTaskRetryInterval,
+			DelayDuration: 0,
+			Concurrency:   0,
+		},
+	}
+}
+
+func ExecuteAndGetRowsAffected(
+	ctx context.Context,
+	tx taskservice.SqlExecutor,
+	query string,
+	args ...interface{},
+) (int64, error) {
+	exec, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := exec.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
+}
+
+func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
+	details = &task.Details{
+		AccountID: opts.UserInfo.AccountId,
+		Account:   opts.UserInfo.AccountName,
+		Username:  opts.UserInfo.UserName,
+		Details: &task.Details_CreateCdc{
+			CreateCdc: &task.CreateCdcDetails{
+				TaskName: opts.TaskName,
+				TaskId:   opts.TaskId,
+				Accounts: []*task.Account{
+					{
+						Id:   uint64(opts.UserInfo.AccountId),
+						Name: opts.UserInfo.AccountName,
+					},
+				},
+			},
+		},
+	}
+	return
+}
+
+var initAesKeyBySqlExecutor = func(
+	ctx context.Context,
+	executor taskservice.SqlExecutor,
+	accountId uint32,
+) (err error) {
+	if len(cdc.AesKey) > 0 {
+		return nil
+	}
+
+	var (
+		encryptedKey string
+		cnt          int64
+	)
+	querySql := cdc.CDCSQLBuilder.GetDataKeySQL(uint64(accountId), cdc.InitKeyId)
+
+	if cnt, err = ForeachQueriedRow(
+		ctx,
+		executor,
+		querySql,
+		func(ctx context.Context, rows *sql.Rows) (bool, error) {
+			if cnt > 0 {
+				return false, nil
+			}
+			if err2 := rows.Scan(&encryptedKey); err2 != nil {
+				return false, err2
+			}
+			cnt++
+			return true, nil
+		},
+	); err != nil {
+		return
+	} else if cnt == 0 {
+		return moerr.NewInternalError(ctx, "no data key")
+	}
+
+	cdc.AesKey, err = cdc.AesCFBDecodeWithKey(
+		ctx,
+		encryptedKey,
+		[]byte(config.GetParameterUnit(ctx).SV.KeyEncryptionKey),
+	)
+	logutil.Infof("DEBUG-1: %v:%v", encryptedKey, err)
+	return
+}
+
+var ForeachQueriedRow = func(
+	ctx context.Context,
+	tx taskservice.SqlExecutor,
+	query string,
+	onEachRow func(context.Context, *sql.Rows) (bool, error),
+) (cnt int64, err error) {
+	var (
+		ok   bool
+		rows *sql.Rows
+	)
+	if rows, err = tx.QueryContext(ctx, query); err != nil {
+		return
+	}
+	if rows.Err() != nil {
+		err = rows.Err()
+		return
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	for rows.Next() {
+		if ok, err = onEachRow(ctx, rows); err != nil {
+			return
+		}
+		if ok {
+			cnt++
+		}
+	}
+	return
+}
+
+func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
+	ctx context.Context,
+	tx taskservice.SqlExecutor,
+) (sql string, err error) {
+	var encodedSinkPwd string
+	if !opts.UseConsole {
+		if err = initAesKeyBySqlExecutor(
+			ctx, tx, catalog.System_Account,
+		); err != nil {
+			return
+		}
+		if encodedSinkPwd, err = opts.SinkUriInfo.GetEncodedPassword(); err != nil {
+			return
+		}
+	}
+
+	sql = cdc.CDCSQLBuilder.InsertTaskSQL(
+		uint64(opts.UserInfo.AccountId),
+		opts.TaskId,
+		opts.TaskName,
+		opts.SrcUri,
+		"",
+		opts.SinkUri,
+		opts.SinkType,
+		encodedSinkPwd,
+		"",
+		"",
+		"",
+		opts.PitrTables,
+		opts.Exclude,
+		"",
+		cdc.CDCState_Common,
+		cdc.CDCState_Common,
+		opts.StartTs,
+		opts.EndTs,
+		opts.ConfigFile,
+		time.Now().UTC(),
+		cdc.CDCState_Running,
+		0,
+		opts.NoFull,
+		"",
+		opts.ExtraOpts,
+	)
+	return
+}
+
+type CDCUserInfo struct {
+	UserName    string
+	AccountId   uint32
+	AccountName string
+}
+
+type CDCCreateTaskOptions struct {
+	TaskName     string
+	TaskId       string
+	UserInfo     *CDCUserInfo
+	Exclude      string
+	StartTs      string
+	EndTs        string
+	MaxSqlLength int64
+	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri       string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo   cdc.UriInfo
+	SinkUri      string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo  cdc.UriInfo
+	ExtraOpts    string // json encoded extra opts: map[string]any
+	SinkType     string
+	NoFull       bool
+	ConfigFile   string
+
+	// control options
+	UseConsole bool
+}
+
+func (opts *CDCCreateTaskOptions) ValidateAndFill(
+	ctx context.Context,
+	c *Compile,
+	planCDC *plan.CreateCDC,
+) (err error) {
+	taskId := cdc.NewTaskId()
+	opts.TaskName = planCDC.TaskName
+	opts.TaskId = taskId.String()
+	opts.UserInfo = &CDCUserInfo{
+		UserName:    planCDC.UserName,
+		AccountId:   planCDC.AccountId,
+		AccountName: planCDC.AccountName,
+	}
+
+	tmpOpts := make(map[string]string, len(planCDC.Option)/2)
+	for i := 0; i < len(planCDC.Option)-1; i += 2 {
+		key := planCDC.Option[i]
+		value := planCDC.Option[i+1]
+		tmpOpts[key] = value
+	}
+
+	// extract source uri and check connection
+	// target field: SrcUri
+	{
+		if opts.SrcUri, opts.SrcUriInfo, err = cdc.ExtractUriInfo(
+			ctx, planCDC.SourceUri, cdc.CDCSourceUriPrefix,
+		); err != nil {
+			return
+		}
+		if _, err = cdc.OpenDbConn(
+			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
+		); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to source, please check the connection, err: %v", err)
+			return
+		}
+	}
+
+	// 1. Converts sink type to lowercase
+	// 2. Enables console sink if configured and requested
+	// 3. For non-console sinks, validates that only mysql or matrixone sinks are used
+	// 4. Returns error for unsupported sink types
+	// target field: SinkType, UseConsole
+	{
+		opts.SinkType = strings.ToLower(planCDC.SinkType)
+		if cdc.EnableConsoleSink && opts.SinkType == cdc.CDCSinkType_Console {
+			opts.UseConsole = true
+		}
+		if !opts.UseConsole && opts.SinkType != cdc.CDCSinkType_MySQL && opts.SinkType != cdc.CDCSinkType_MO {
+			err = moerr.NewInternalErrorf(ctx, "unsupported sink type: %s", planCDC.SinkType)
+			return
+		}
+
+		if opts.SinkUri, opts.SinkUriInfo, err = cdc.ExtractUriInfo(
+			ctx, planCDC.SinkUri, cdc.CDCSinkUriPrefix,
+		); err != nil {
+			return
+		}
+		if _, err = cdc.OpenDbConn(
+			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
+		); err != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+			return
+		}
+	}
+
+	var (
+		startTs, endTs time.Time
+		extraOpts      = make(map[string]any)
+		level          string
+	)
+
+	for _, key := range cdc.CDCRequestOptions {
+		value := tmpOpts[key]
+		switch key {
+		case cdc.CDCRequestOptions_NoFull:
+			opts.NoFull, _ = strconv.ParseBool(value)
+		case cdc.CDCRequestOptions_Level:
+			if err = opts.handleLevel(ctx, c, value, planCDC.Tables); err != nil {
+				return
+			}
+			level = value
+		case cdc.CDCRequestOptions_Exclude:
+			if _, err = regexp.Compile(value); err != nil {
+				err = moerr.NewInternalErrorf(ctx, "invalid exclude: %s, err: %v", value, err)
+				return
+			}
+			opts.Exclude = strings.ReplaceAll(value, "\\", "\\\\")
+		case cdc.CDCRequestOptions_StartTs:
+			if value != "" {
+				if startTs, err = CDCStrToTime(value, c.proc.GetSessionInfo().TimeZone); err != nil {
+					err = moerr.NewInternalErrorf(ctx, "invalid startTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					return
+				}
+				opts.StartTs = startTs.Format(time.RFC3339)
+			}
+		case cdc.CDCRequestOptions_EndTs:
+			if value != "" {
+				if endTs, err = CDCStrToTime(value, c.proc.GetSessionInfo().TimeZone); err != nil {
+					err = moerr.NewInternalErrorf(ctx, "invalid endTs: %s, supported timestamp format: `%s`, or `%s`", value, time.DateTime, time.RFC3339)
+					return
+				}
+				opts.EndTs = endTs.Format(time.RFC3339)
+			}
+		case cdc.CDCRequestOptions_MaxSqlLength:
+			if value != "" {
+				var maxSqlLength int64
+				if maxSqlLength, err = strconv.ParseInt(value, 10, 64); err != nil {
+					err = moerr.NewInternalErrorf(ctx, "invalid maxSqlLength: %s", value)
+					return
+				}
+				extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = maxSqlLength
+			}
+		case cdc.CDCRequestOptions_InitSnapshotSplitTxn:
+			if value == "false" {
+				extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = false
+			}
+		case cdc.CDCRequestOptions_SendSqlTimeout:
+			if value != "" {
+				if _, err = time.ParseDuration(value); err != nil {
+					err = moerr.NewInternalErrorf(ctx, "invalid sendSqlTimeout: %s", value)
+					return
+				}
+				extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout] = value
+			}
+		case cdc.CDCRequestOptions_ConfigFile:
+			if value != "" {
+				opts.ConfigFile = value
+			}
+		case cdc.CDCRequestOptions_Frequency:
+			extraOpts[cdc.CDCTaskExtraOptions_Frequency] = ""
+			if value != "" {
+				if err = opts.handleFrequency(ctx, c, level, value, planCDC.Tables); err != nil {
+					return
+				}
+			}
+			extraOpts[cdc.CDCTaskExtraOptions_Frequency] = value
+		}
+	}
+
+	if !startTs.IsZero() && !endTs.IsZero() && !endTs.After(startTs) {
+		err = moerr.NewInternalErrorf(ctx, "startTs: %s should be less than endTs: %s", startTs.Format(time.RFC3339), endTs.Format(time.RFC3339))
+		return
+	}
+
+	// fill default value for additional opts
+	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn]; !ok {
+		extraOpts[cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn] = cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn
+	}
+	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout]; !ok {
+		extraOpts[cdc.CDCTaskExtraOptions_SendSqlTimeout] = cdc.CDCDefaultSendSqlTimeout
+	}
+	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
+		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
+	}
+
+	var extraOptsBytes []byte
+	if extraOptsBytes, err = json.Marshal(extraOpts); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "failed to marshal extra opts: %v", err)
+		return
+	}
+	opts.ExtraOpts = string(extraOptsBytes)
+
+	return
+}
+
+func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
+	if tsStr == "" {
+		return
+	}
+
+	if tz != nil {
+		if ts, err = time.ParseInLocation(
+			time.DateTime, tsStr, tz,
+		); err == nil {
+			return
+		}
+	}
+
+	ts, err = time.Parse(time.RFC3339, tsStr)
+	return
+}
+
+func (opts *CDCCreateTaskOptions) handleLevel(
+	ctx context.Context,
+	c *Compile,
+	level string,
+	tables string,
+) (err error) {
+	if level != cdc.CDCPitrGranularity_Account && level != cdc.CDCPitrGranularity_DB && level != cdc.CDCPitrGranularity_Table {
+		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
+		return
+	}
+	var patterTupples *cdc.PatternTuples
+	if patterTupples, err = CDCParsePitrGranularity(
+		ctx, level, tables,
+	); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
+		return
+	}
+
+	// ensure PITR checks run with the target tenant account id
+	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
+	if err = c.checkPitrGranularity(ctx, patterTupples); err != nil {
+		return
+	}
+
+	opts.PitrTables, err = cdc.JsonEncode(patterTupples)
+	return
+}
+
+// only accept positive integers that end with m or h
+func isValidFrequency(freq string) bool {
+	if !strings.HasSuffix(freq, "m") && !strings.HasSuffix(freq, "h") {
+		return false
+	}
+
+	numPart := strings.TrimSuffix(strings.TrimSuffix(freq, "m"), "h")
+
+	matched, _ := regexp.MatchString(`^[1-9]\d*$`, numPart)
+	if !matched {
+		return false
+	}
+
+	num, err := strconv.Atoi(numPart)
+	if err != nil {
+		return false
+	}
+
+	if num < 0 {
+		return false
+	}
+
+	if num > 10000000 {
+		return false
+	}
+
+	return true
+}
+
+// call isValidFrequency before calling this function
+func transformIntoHours(freq string) int64 {
+	if strings.HasSuffix(freq, "h") {
+		hoursStr := strings.TrimSuffix(freq, "h")
+		hours, _ := strconv.Atoi(hoursStr)
+		return int64(hours)
+	}
+
+	if strings.HasSuffix(freq, "m") {
+		minStr := strings.TrimSuffix(freq, "m")
+		minutes, _ := strconv.Atoi(minStr)
+
+		hours := int(math.Ceil(float64(minutes) / 60.0))
+
+		return int64(hours)
+	}
+
+	return 0
+}
+
+func (c *Compile) checkPitrGranularity(
+	ctx context.Context,
+	pts *cdc.PatternTuples,
+	minLength ...int64,
+) error {
+	var minPitrLen int64 = 2
+	if len(minLength) > 1 {
+		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
+	}
+	if len(minLength) > 0 {
+		minPitrLen = max(minLength[0]+1, minPitrLen)
+	}
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+
+	sqlCluster := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='cluster' and account_id = %d`,
+		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
+	if res, err := c.runSqlWithResult(sqlCluster, int32(catalog.System_Account)); err == nil {
+		if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
+			val := vector.MustFixedColNoTypeCheck[int64](res.Batches[0].Vecs[0])[0]
+			unit := strings.ToLower(res.Batches[0].Vecs[1].GetStringAt(0))
+			if toHours(val, unit) >= minPitrLen {
+				res.Close()
+				return nil
+			}
+		}
+		res.Close()
+	}
+
+	for _, pt := range pts.Pts {
+		// normalize names to lowercase to match stored mo_pitr values
+		dbNameLower := strings.ToLower(pt.Source.Database)
+		tblNameLower := strings.ToLower(pt.Source.Table)
+		isAccountPattern := pt.Source.Database == cdc.CDCPitrGranularity_All && pt.Source.Table == cdc.CDCPitrGranularity_All
+		// helper to run query and evaluate requirement
+		checkQuery := func(q string) (bool, error) {
+			res, err := c.runSqlWithResult(q, int32(catalog.System_Account))
+			if err != nil {
+				return false, err
+			}
+			defer res.Close()
+			if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
+				val := vector.MustFixedColNoTypeCheck[int64](res.Batches[0].Vecs[0])[0]
+				unit := strings.ToLower(res.Batches[0].Vecs[1].GetStringAt(0))
+				return toHours(val, unit) >= minPitrLen, nil
+			}
+			return false, nil
+		}
+
+		checkDBByName := func(nameLower string) (bool, error) {
+			qDB := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s' and account_id = %d`,
+				catalog.MO_CATALOG, catalog.MO_PITR, nameLower, accountId)
+			if ok, err := checkQuery(qDB); err != nil {
+				return false, err
+			} else if ok {
+				return true, nil
+			}
+			qDB2 := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='database' and lower(database_name) = '%s'`,
+				catalog.MO_CATALOG, catalog.MO_PITR, nameLower)
+			return checkQuery(qDB2)
+		}
+
+		// 1) account level always checked first for any pattern
+		qAcc := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='account' and account_id = %d`,
+			catalog.MO_CATALOG, catalog.MO_PITR, accountId)
+		if ok, err := checkQuery(qAcc); err != nil {
+			return err
+		} else if ok {
+			continue
+		}
+
+		// determine if db/table
+		isDB := pt.Source.Table == cdc.CDCPitrGranularity_All
+		// Special handling: account-level pattern ("*.*"). If account-level is not configured,
+		// allow a database-level PITR of the current database to satisfy the requirement.
+		if isAccountPattern {
+			if c.db != "" {
+				if ok, err := checkDBByName(strings.ToLower(c.db)); err != nil {
+					return err
+				} else if ok {
+					continue
+				}
+			}
+		}
+		// 2) db level if applicable
+		if isDB || !isDB { // both db and table pattern can be satisfied by db-level PITR
+			if ok, err := checkDBByName(dbNameLower); err != nil {
+				return err
+			} else if ok {
+				continue
+			}
+		}
+
+		// 3) table level only for table pattern
+		if !isDB {
+			qTbl := fmt.Sprintf(`select pitr_length,pitr_unit from %s.%s where level='table' and lower(database_name)='%s' and lower(table_name)='%s' and account_id = %d`,
+				catalog.MO_CATALOG, catalog.MO_PITR, dbNameLower, tblNameLower, accountId)
+			if ok, err := checkQuery(qTbl); err != nil {
+				return err
+			} else if ok {
+				continue
+			}
+		}
+
+		return moerr.NewInternalErrorf(ctx,
+			"PITR config of %s.%s insufficient (<%dh)", pt.Source.Database, pt.Source.Table, minPitrLen)
+	}
+	return nil
+}
+
+func toHours(val int64, unit string) int64 {
+	switch unit {
+	case "h":
+		return val
+	case "d":
+		return val * 24
+	case "mo":
+		return val * 24 * 30
+	case "y":
+		return val * 24 * 365
+	default:
+		return val
+	}
+}
+func (opts *CDCCreateTaskOptions) handleFrequency(
+	ctx context.Context,
+	c *Compile,
+	level, frequency, tables string,
+) (err error) {
+	if level != cdc.CDCPitrGranularity_Account && level != cdc.CDCPitrGranularity_DB && level != cdc.CDCPitrGranularity_Table {
+		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
+		return
+	}
+	if !isValidFrequency(frequency) {
+		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
+	}
+
+	normalized := transformIntoHours(frequency)
+	var patterTupples *cdc.PatternTuples
+	if patterTupples, err = CDCParsePitrGranularity(
+		ctx, level, tables,
+	); err != nil {
+		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
+		return
+	}
+
+	if err = c.checkPitrGranularity(ctx, patterTupples, normalized); err != nil {
+		return err
+	}
+	return nil
+}
+
+func CDCParsePitrGranularity(
+	ctx context.Context,
+	level string,
+	tables string,
+) (pts *cdc.PatternTuples, err error) {
+	pts = &cdc.PatternTuples{}
+
+	if level == cdc.CDCPitrGranularity_Account {
+		pts.Append(&cdc.PatternTuple{
+			Source: cdc.PatternTable{
+				Database: cdc.CDCPitrGranularity_All,
+				Table:    cdc.CDCPitrGranularity_All,
+			},
+			Sink: cdc.PatternTable{
+				Database: cdc.CDCPitrGranularity_All,
+				Table:    cdc.CDCPitrGranularity_All,
+			},
+		})
+		return
+	}
+
+	// split tables by ',' => table pair
+	var pt *cdc.PatternTuple
+	tablePairs := strings.Split(strings.TrimSpace(tables), ",")
+	dup := make(map[string]struct{})
+	for _, pair := range tablePairs {
+		if pt, err = CDCParseGranularityTuple(
+			ctx, level, pair, dup,
+		); err != nil {
+			return
+		}
+		pts.Append(pt)
+	}
+	return
+}
+
+func CDCParseGranularityTuple(
+	ctx context.Context,
+	level string,
+	pattern string,
+	dup map[string]struct{},
+) (pt *cdc.PatternTuple, err error) {
+	splitRes := strings.Split(strings.TrimSpace(pattern), ":")
+	if len(splitRes) > 2 {
+		err = moerr.NewInternalErrorf(
+			ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern,
+		)
+		return
+	}
+
+	pt = &cdc.PatternTuple{OriginString: pattern}
+
+	// handle source part
+	if pt.Source.Database, pt.Source.Table, err = CDCParseTableInfo(
+		ctx, splitRes[0], level,
+	); err != nil {
+		return
+	}
+	key := cdc.GenDbTblKey(pt.Source.Database, pt.Source.Table)
+	if _, ok := dup[key]; ok {
+		err = moerr.NewInternalErrorf(
+			ctx, "one db/table: %s can't be used as multi sources in a cdc task", key,
+		)
+		return
+	}
+	dup[key] = struct{}{}
+
+	// handle sink part
+	if len(splitRes) > 1 {
+		if pt.Sink.Database, pt.Sink.Table, err = CDCParseTableInfo(
+			ctx, splitRes[1], level,
+		); err != nil {
+			return
+		}
+	} else {
+		// if not specify sink, then sink = source
+		pt.Sink.Database = pt.Source.Database
+		pt.Sink.Table = pt.Source.Table
+	}
+	return
+}
+
+func CDCParseTableInfo(
+	ctx context.Context,
+	input string,
+	level string,
+) (db string, table string, err error) {
+	parts := strings.Split(strings.TrimSpace(input), ".")
+	if level == cdc.CDCPitrGranularity_DB && len(parts) != 1 {
+		err = moerr.NewInternalErrorf(ctx, "invalid databases format: %s", input)
+		return
+	} else if level == cdc.CDCPitrGranularity_Table && len(parts) != 2 {
+		err = moerr.NewInternalErrorf(ctx, "invalid tables format: %s", input)
+		return
+	}
+
+	db = strings.TrimSpace(parts[0])
+	if !dbNameIsLegal(db) {
+		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
+		return
+	}
+
+	if level == cdc.CDCPitrGranularity_Table {
+		table = strings.TrimSpace(parts[1])
+		if !tableNameIsLegal(table) {
+			err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
+			return
+		}
+	} else {
+		table = cdc.CDCPitrGranularity_All
+	}
+	return
+}
+
+func dbNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
+	if hasSpecialChars(name) {
+		return false
+	}
+	if name == cdc.CDCPitrGranularity_All {
+		return true
+	}
+
+	createDBSqls := []string{
+		"create database " + name,
+		"create database `" + name + "`",
+	}
+	return isLegal(name, createDBSqls)
+}
+
+func tableNameIsLegal(name string) bool {
+	name = strings.TrimSpace(name)
+	if hasSpecialChars(name) {
+		return false
+	}
+	if name == cdc.CDCPitrGranularity_All {
+		return true
+	}
+
+	createTableSqls := []string{
+		"create table " + name + "(a int)",
+		"create table `" + name + "`(a int)",
+	}
+	return isLegal(name, createTableSqls)
+}
+
+func hasSpecialChars(s string) bool {
+	return strings.ContainsAny(s, ",.:`")
+}
+
+func isLegal(name string, sqls []string) bool {
+	name = strings.TrimSpace(name)
+	if len(name) == 0 || len(sqls) == 0 {
+		return false
+	}
+	for _, sql := range sqls {
+		if len(sql) == 0 {
+			return false
+		}
+	}
+	yes := false
+	for _, sql := range sqls {
+		_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+		if err != nil {
+			continue
+		}
+		yes = true
+		break
+	}
+	return yes
 }

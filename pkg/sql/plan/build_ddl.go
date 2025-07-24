@@ -4754,3 +4754,52 @@ func buildDropPitr(stmt *tree.DropPitr, ctx CompilerContext) (*Plan, error) {
 		},
 	}, nil
 }
+
+func buildCreateCDC(stmt *tree.CreateCDC, ctx CompilerContext) (*Plan, error) {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_CDC,
+				Definition: &plan.DataDefinition_CreateCdc{
+					CreateCdc: &plan.CreateCDC{
+						IfNotExists: stmt.IfNotExists,
+						TaskName:    string(stmt.TaskName),
+						SourceUri:   stmt.SourceUri,
+						SinkType:    stmt.SinkType,
+						SinkUri:     stmt.SinkUri,
+						Tables:      stmt.Tables,
+						Option:      stmt.Option,
+						UserName:    ctx.GetUserName(),
+						AccountName: ctx.GetAccountName(),
+						AccountId:   accountId,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropCDC(stmt *tree.DropCDC, ctx CompilerContext) (*Plan, error) {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_CDC,
+				Definition: &plan.DataDefinition_DropCdc{
+					DropCdc: &plan.DropCDC{
+						AccountId: accountId,
+						All:       stmt.Option.All,
+						TaskName:  string(stmt.Option.TaskName),
+					},
+				},
+			},
+		},
+	}, nil
+}

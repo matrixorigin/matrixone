@@ -16,6 +16,7 @@ package ddl
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -153,6 +154,106 @@ func TestPitrCases(t *testing.T) {
 			}
 			require.Equal(t, rowCount, 0)
 			res.Close()
+		},
+	)
+}
+
+func TestCDCCases(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+			defer cancel()
+
+			// ensure task service is ready before CDC operations (best-effort)
+			if w, ok := any(c).(interface {
+				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+			}); ok {
+				ctxWait, cancelWait := context.WithTimeout(context.Background(), time.Second*60)
+				w.WaitCNStoreTaskServiceCreatedIndexed(ctxWait, 0)
+				cancelWait()
+			}
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			exec := testutils.GetSQLExecutor(cn1)
+
+			db := testutils.GetDatabaseName(t)
+			table := "table01"
+			cdcTaskDB := "cdc_task_db"
+			cdcTaskTbl := "cdc_task_tbl"
+			cdcTaskAcc := "cdc_task_acc"
+			port := fmt.Sprintf("%d", c.ID()+199)
+
+			conn := "mysql://dump:#admin:111@127.0.0.1:" + port
+
+			mustExec := func(sql string, opts executor.Options) {
+				res, err := exec.Exec(ctx, sql, opts)
+				require.NoError(t, err, "sql: %s", sql)
+				res.Close()
+			}
+			rows := func(sql string, opts executor.Options) int {
+				res, err := exec.Exec(ctx, sql, opts)
+				require.NoError(t, err, "sql: %s", sql)
+				cnt := 0
+				for _, b := range res.Batches {
+					cnt += b.RowCount()
+				}
+				res.Close()
+				return cnt
+			}
+			rowExists := func(sql string, opts executor.Options) bool { return rows(sql, opts) > 0 }
+
+			// setup schema
+			mustExec("create database "+db, executor.Options{})
+			mustExec("create table "+table+" (col1 int)", executor.Options{}.WithDatabase(db))
+
+			// ensure PITR for CDC precondition
+			mustExec("create pitr if not exists pitr_db for database "+db+" range 2 'h' internal", executor.Options{}.WithDatabase(db))
+
+			// helper: verify mo_catalog.mo_cdc_task by task_name
+			verifyTaskPresent := func(taskName string, expect bool) {
+				s := "select task_name from mo_catalog.mo_cdc_task where task_name='" + taskName + "'"
+				ok := rowExists(s, executor.Options{})
+				if expect {
+					require.True(t, ok, "expected task %s present", taskName)
+				} else {
+					require.False(t, ok, "expected task %s absent", taskName)
+				}
+			}
+
+			// Case 1: database-level CDC
+			mustExec("create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskDB, true)
+
+			// Case 2: table-level CDC
+			mustExec("create cdc "+cdcTaskTbl+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {'Level'='table'} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskTbl, true)
+
+			// Case 3: account-level CDC (all)
+			mustExec("create cdc "+cdcTaskAcc+" '"+conn+"' 'matrixone' '"+conn+"' '*.*' {'Level'='account'} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskAcc, true)
+
+			// Case 4: if not exists should pass when exists
+			mustExec("create cdc if not exists "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
+
+			// Case 5: duplicate create should error
+			_, err = exec.Exec(ctx, "create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Validation selects for presence
+			require.Greater(t, rows("select * from mo_catalog.mo_cdc_task", executor.Options{}), 0)
+
+			// Drop specific task and validate absence
+			mustExec("drop cdc task "+cdcTaskTbl+" internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskTbl, false)
+
+			// Drop all and validate empty
+			mustExec("drop cdc all internal", executor.Options{}.WithDatabase(db))
+			require.Equal(t, rows("select * from mo_catalog.mo_cdc_task", executor.Options{}), 0)
+
+			// cleanup PITR
+			mustExec("drop pitr pitr_db internal", executor.Options{}.WithDatabase(db))
 		},
 	)
 }

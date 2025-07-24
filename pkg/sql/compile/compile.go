@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -398,6 +399,8 @@ func (c *Compile) run(s *Scope) error {
 		}
 	case CreatePitr:
 		return s.CreatePitr(c)
+	case CreateCDC:
+		return s.CreateCDC(c)
 	case CreateView:
 		return s.CreateView(c)
 	case AlterView:
@@ -410,6 +413,8 @@ func (c *Compile) run(s *Scope) error {
 		return s.DropTable(c)
 	case DropPitr:
 		return s.DropPitr(c)
+	case DropCDC:
+		return s.DropCDC(c)
 	case DropSequence:
 		return s.DropSequence(c)
 	case CreateSequence:
@@ -648,6 +653,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 				newScope(CreatePitr).
 					withPlan(pn),
 			}, nil
+		case plan.DataDefinition_CREATE_CDC:
+			return []*Scope{
+				newScope(CreateCDC).
+					withPlan(pn),
+			}, nil
 		case plan.DataDefinition_CREATE_TABLE:
 			return []*Scope{
 				newScope(CreateTable).
@@ -681,6 +691,11 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 		case plan.DataDefinition_DROP_PITR:
 			return []*Scope{
 				newScope(DropPitr).
+					withPlan(pn),
+			}, nil
+		case plan.DataDefinition_DROP_CDC:
+			return []*Scope{
+				newScope(DropCDC).
 					withPlan(pn),
 			}, nil
 		case plan.DataDefinition_DROP_SEQUENCE:
@@ -4776,6 +4791,14 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
 	ctx := c.proc.Ctx
+	// Ensure ParameterUnit is available in ctx for downstream helpers which call config.GetParameterUnit(ctx)
+	if ctx.Value(config.ParameterUnitKey) == nil {
+		if v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables("parameter-unit"); ok {
+			if pu, ok2 := v.(*config.ParameterUnit); ok2 && pu != nil {
+				ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+			}
+		}
+	}
 	if accountId >= 0 {
 		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
 	}

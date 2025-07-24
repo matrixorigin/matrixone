@@ -240,6 +240,8 @@ func (svbt SystemVariableBoolType) Convert(value interface{}) (interface{}, erro
 		return cv2(v)
 	case string:
 		return cv3(v)
+	case nil:
+		return int8(1), nil
 	}
 	return nil, errorConvertToBoolFailed
 }
@@ -1029,6 +1031,9 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
+	if sv.mp == nil {
+		sv.mp = make(map[string]interface{})
+	}
 	sv.mp[name] = value
 }
 

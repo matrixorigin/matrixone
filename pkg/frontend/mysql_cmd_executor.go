@@ -2231,16 +2231,23 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
-	var v interface{}
-	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
-	if err != nil {
-		v = int64(1)
+	v, err := execCtx.ses.GetSessionSysVar("lower_case_table_names")
+	var lctn int64 = 1 // default
+	if err == nil {
+		switch vv := v.(type) {
+		case int64:
+			lctn = vv
+		case int32:
+			lctn = int64(vv)
+		case int:
+			lctn = int64(vv)
+		case string:
+			if n, e := strconv.ParseInt(vv, 10, 64); e == nil {
+				lctn = n
+			}
+		}
 	}
-	stmts, err = p.Parse(execCtx.reqCtx, execCtx.input.getSql(), v.(int64))
-	if err != nil {
-		return nil, err
-	}
-	return
+	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
 }
 
 func incTransactionCounter(tenant string) {
