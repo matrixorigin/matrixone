@@ -399,28 +399,31 @@ func (s *Storage) createPartitionTable(
 			)
 			values
 			(
-				%d,
-				'%s', 
-				%d, 
-				'%s', 
-				%d, 
-				'%s',
-				'%s'
+				?,
+				?, 
+				?, 
+				?, 
+				?, 
+				?,
+				?
 			)`,
 			catalog.MO_CATALOG,
 			catalog.MOPartitionTables,
-			partition.PartitionID,
-			partition.PartitionTableName,
-			metadata.TableID,
-			partition.Name,
-			partition.Position,
-			partition.ExprStr,
-			escapeExpr,
 		)
 
 		res, err := txn.Exec(
 			sql,
-			executor.StatementOption{},
+			executor.StatementOption{}.WithParams(
+				[]string{
+					fmt.Sprintf("%d", partition.PartitionID),
+					partition.PartitionTableName,
+					fmt.Sprintf("%d", metadata.TableID),
+					partition.Name,
+					fmt.Sprintf("%d", partition.Position),
+					partition.ExprStr,
+					escapeExpr,
+				},
+			),
 		)
 		if err != nil {
 			return err
