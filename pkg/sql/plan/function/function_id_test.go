@@ -394,7 +394,10 @@ var predefinedFunids = map[int]int{
 	TS_TO_TIME: 343,
 	STRCMP:     344,
 
-	FUNCTION_END_NUMBER: 345,
+	STARLARK:     345,
+	TRY_STARLARK: 346,
+
+	FUNCTION_END_NUMBER: 347,
 }
 
 func Test_funids(t *testing.T) {

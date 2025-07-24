@@ -44,7 +44,6 @@ type evalVector struct {
 type container struct {
 	state int
 	itr   hashmap.Iterator
-	rbat  *batch.Batch
 
 	exprExecs []colexec.ExpressionExecutor
 
@@ -135,7 +134,6 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr.cleanHashMap()
 	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
-	ctr.cleanBatch(proc)
 }
 
 func (rightDedupJoin *RightDedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -152,12 +150,6 @@ func (ctr *container) cleanExprExecutor() {
 	for i := range ctr.exprExecs {
 		ctr.exprExecs[i].Free()
 		ctr.exprExecs[i] = nil
-	}
-}
-
-func (ctr *container) cleanBatch(proc *process.Process) {
-	if ctr.rbat != nil {
-		ctr.rbat.Clean(proc.Mp())
 	}
 }
 

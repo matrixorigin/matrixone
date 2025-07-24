@@ -5,7 +5,7 @@ insert into db1.t1 values (1), (2), (3);
 create snapshot sn1 for account acc1;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-sn1    2024-05-13 13:38:02.617258    account    acc1        
+sn1    2025-07-19 05:52:25.090505    account    acc1        
 drop database db1;
 create database view_test1;
 create table view_test1.t1 (a int);
