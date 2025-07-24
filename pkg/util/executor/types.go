@@ -71,14 +71,14 @@ type Options struct {
 
 // StatementOption statement execute option.
 type StatementOption struct {
-	waitPolicy       lock.WaitPolicy
-	accountId        uint32
-	roleId           uint32
-	userId           uint32
-	disableLog       bool
-	ignoreForeignKey bool
-	params           []string
-	skipPkDedupTbl   string
+	waitPolicy        lock.WaitPolicy
+	accountId         uint32
+	roleId            uint32
+	userId            uint32
+	disableLog        bool
+	ignoreForeignKey  bool
+	params            []string
+	alterCopyDedupOpt *plan.AlterCopyDedupOpt
 }
 
 // Result exec sql result
