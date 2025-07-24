@@ -29,7 +29,7 @@ func (s *Service) getMetadataByListType(
 	method := option.PartBy.PType.(*tree.ListType)
 
 	var columns *tree.UnresolvedName
-	var validTypeFunc func(t plan.Type) bool
+	//var validTypeFunc func(t plan.Type) bool
 	desc := ""
 	if method.Expr != nil {
 		//columns, ok = method.Expr.(*tree.UnresolvedName)
@@ -40,9 +40,9 @@ func (s *Service) getMetadataByListType(
 		//	return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in LIST partition")
 		//}
 
-		validTypeFunc = func(t plan.Type) bool {
-			return true
-		}
+		//validTypeFunc = func(t plan.Type) bool {
+		//	return true
+		//}
 
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
@@ -57,16 +57,22 @@ func (s *Service) getMetadataByListType(
 		}
 
 		columns = method.ColumnList[0]
-		validTypeFunc = func(t plan.Type) bool {
-			return true
-		}
+		//validTypeFunc = func(t plan.Type) bool {
+		//	return true
+		//}
+
+		ctx := tree.NewFmtCtx(
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithEscapeSingleQuoteString(),
+		)
+		columns.Format(ctx)
+		desc = ctx.String()
 	}
 
 	return s.getManualPartitions(
 		option,
 		def,
-		columns,
-		validTypeFunc,
 		desc,
 		partition.PartitionMethod_List,
 		func(p *tree.Partition) string {

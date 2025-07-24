@@ -17,11 +17,9 @@ package partitionservice
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -222,29 +220,27 @@ func (s *Service) GetStorage() PartitionStorage {
 func (s *Service) getManualPartitions(
 	option *tree.PartitionOption,
 	def *plan.TableDef,
-	columns *tree.UnresolvedName,
-	validTypeFunc func(plan.Type) bool,
 	partitionDesc string,
 	method partition.PartitionMethod,
 	applyPartitionComment func(*tree.Partition) string,
 ) (partition.PartitionMetadata, error) {
-	validColumns, err := validColumns(
-		columns,
-		def,
-		validTypeFunc,
-	)
-	if err != nil {
-		return partition.PartitionMetadata{}, err
-	}
-
-	if len(partitionDesc) == 0 {
-		for i, col := range validColumns {
-			if i > 0 {
-				partitionDesc += ", "
-			}
-			partitionDesc += col
-		}
-	}
+	//validColumns, err := validColumns(
+	//	columns,
+	//	def,
+	//	validTypeFunc,
+	//)
+	//if err != nil {
+	//	return partition.PartitionMetadata{}, err
+	//}
+	//
+	//if len(partitionDesc) == 0 {
+	//	for i, col := range validColumns {
+	//		if i > 0 {
+	//			partitionDesc += ", "
+	//		}
+	//		partitionDesc += col
+	//	}
+	//}
 
 	metadata := partition.PartitionMetadata{
 		TableID:      def.TblId,
@@ -252,7 +248,7 @@ func (s *Service) getManualPartitions(
 		DatabaseName: def.DbName,
 		Method:       method,
 		Description:  partitionDesc,
-		Columns:      validColumns,
+		Columns:      []string{partitionDesc},
 	}
 
 	for i, p := range option.Partitions {
@@ -270,39 +266,39 @@ func (s *Service) getManualPartitions(
 	return metadata, nil
 }
 
-func validColumns(
-	columns *tree.UnresolvedName,
-	tableDefine *plan.TableDef,
-	validType func(plan.Type) bool,
-) ([]string, error) {
-	validColumns := make([]string, 0, columns.NumParts)
-	for i := 0; i < columns.NumParts; i++ {
-		v := columns.CStrParts[i]
-		col := v.Compare()
-		has := false
-		for _, c := range tableDefine.GetCols() {
-			if !strings.EqualFold(c.Name, col) {
-				continue
-			}
-
-			has = true
-			if !validType(c.Typ) {
-				return nil, moerr.NewNotSupportedNoCtx(
-					fmt.Sprintf(
-						"column %s type %s is not supported",
-						col,
-						types.T(c.Typ.Id).String()),
-				)
-			}
-			break
-		}
-		if !has {
-			return nil, moerr.NewErrWrongColumnName(moerr.Context(), v.Origin())
-		}
-		validColumns = append(validColumns, col)
-	}
-	return validColumns, nil
-}
+//func validColumns(
+//	columns *tree.UnresolvedName,
+//	tableDefine *plan.TableDef,
+//	validType func(plan.Type) bool,
+//) ([]string, error) {
+//	validColumns := make([]string, 0, columns.NumParts)
+//	for i := 0; i < columns.NumParts; i++ {
+//		v := columns.CStrParts[i]
+//		col := v.Compare()
+//		has := false
+//		for _, c := range tableDefine.GetCols() {
+//			if !strings.EqualFold(c.Name, col) {
+//				continue
+//			}
+//
+//			has = true
+//			if !validType(c.Typ) {
+//				return nil, moerr.NewNotSupportedNoCtx(
+//					fmt.Sprintf(
+//						"column %s type %s is not supported",
+//						col,
+//						types.T(c.Typ.Id).String()),
+//				)
+//			}
+//			break
+//		}
+//		if !has {
+//			return nil, moerr.NewErrWrongColumnName(moerr.Context(), v.Origin())
+//		}
+//		validColumns = append(validColumns, col)
+//	}
+//	return validColumns, nil
+//}
 
 type metadataCache struct {
 	metadata partition.PartitionMetadata

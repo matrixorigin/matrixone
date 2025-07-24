@@ -71,6 +71,8 @@ func TestCreateHash(t *testing.T) {
 }
 
 func TestGetMetadataByHashType(t *testing.T) {
+	num := uint64(2)
+	columns := []string{"c1"}
 	runTestPartitionServiceTest(
 		func(
 			ctx context.Context,
@@ -78,29 +80,29 @@ func TestGetMetadataByHashType(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
+			def := newTestTablePartitionDefine(1, columns, []types.T{types.T_date}, num, partition.PartitionMethod_Hash)
 			stmt := newTestHashOption(t, "c1", 1)
 
 			_, err := s.getMetadataByHashType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 
-			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_int32})
+			def = newTestTablePartitionDefine(1, columns, []types.T{types.T_int32}, num, partition.PartitionMethod_Hash)
 			method := stmt.PartitionOption.PartBy.PType.(*tree.HashType)
 			stmt.PartitionOption.PartBy.Num = 0
 			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 			stmt.PartitionOption.PartBy.Num = 1
 
 			columns, _ := method.Expr.(*tree.UnresolvedName)
 			columns.NumParts = 0
 			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 
 			columns.NumParts = 1
 			stmt.PartitionOption.PartBy.Num = 1
 			method.Expr = tree.NewMaxValue()
 			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 		},
 	)
 }

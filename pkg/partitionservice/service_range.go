@@ -29,7 +29,6 @@ func (s *Service) getMetadataByRangeType(
 	method := option.PartBy.PType.(*tree.RangeType)
 
 	var columns *tree.UnresolvedName
-	var validTypeFunc func(t plan.Type) bool
 	desc := ""
 	if method.Expr != nil {
 		//columns, ok = method.Expr.(*tree.UnresolvedName)
@@ -40,9 +39,9 @@ func (s *Service) getMetadataByRangeType(
 		//	return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in RANGE partition")
 		//}
 
-		validTypeFunc = func(t plan.Type) bool {
-			return true
-		}
+		//validTypeFunc = func(t plan.Type) bool {
+		//	return true
+		//}
 
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
@@ -57,16 +56,21 @@ func (s *Service) getMetadataByRangeType(
 		}
 
 		columns = method.ColumnList[0]
-		validTypeFunc = func(t plan.Type) bool {
-			return true
-		}
+		//validTypeFunc = func(t plan.Type) bool {
+		//	return true
+		//}
+		ctx := tree.NewFmtCtx(
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithEscapeSingleQuoteString(),
+		)
+		columns.Format(ctx)
+		desc = ctx.String()
 	}
 
 	return s.getManualPartitions(
 		option,
 		def,
-		columns,
-		validTypeFunc,
 		desc,
 		partition.PartitionMethod_Range,
 		func(p *tree.Partition) string {
