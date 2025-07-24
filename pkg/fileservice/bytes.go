@@ -33,6 +33,9 @@ func (b *Bytes) Size() int64 {
 }
 
 func (b *Bytes) Bytes() []byte {
+	if b.refs.Load() <= 0 {
+		return nil
+	}
 	return b.bytes
 }
 

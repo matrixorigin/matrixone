@@ -15,7 +15,9 @@
 package fileservice
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/stretchr/testify/assert"
@@ -97,4 +99,31 @@ func TestBytesError(t *testing.T) {
 		bs.Retain() // refs = 1
 		assert.Panics(t, func() { bs.Release() }, "deallocate nil pointer")
 	})
+}
+
+func TestBytesConcurrent(t *testing.T) {
+	bs := &Bytes{
+		bytes:       []byte("123"),
+		deallocator: nil,
+	}
+	bs.refs.Store(1)
+	nthread := 5
+	var wg sync.WaitGroup
+	for i := 0; i < nthread; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			bs.Retain()
+
+			time.Sleep(1 * time.Millisecond)
+
+			bs.Release()
+		}(i)
+	}
+
+	wg.Wait()
+
+	bs.Release()
+
 }
