@@ -51,16 +51,12 @@ func (b *Bytes) Retain() {
 func (b *Bytes) Release() {
 	n := b.refs.Add(-1)
 	if n == 0 {
-		if b.bytes == nil {
-			panic("Bytes.Release: deallocate nil pointer error")
-		}
-
-		if b.deallocator != nil {
-			b.deallocator.Deallocate(malloc.NoHints)
-		}
-
 		// set bytes to nil
 		b.bytes = nil
+		if b.deallocator != nil {
+			b.deallocator.Deallocate(malloc.NoHints)
+			b.deallocator = nil
+		}
 	} else if n < 0 {
 		panic("Bytes.Release: double free")
 	}

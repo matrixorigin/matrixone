@@ -57,27 +57,6 @@ func TestBytesError(t *testing.T) {
 		assert.Panics(t, func() { bs.Release() }, "double free")
 	})
 
-	t.Run("Bytes without refs", func(t *testing.T) {
-		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
-		assert.Nil(t, err)
-		bs := &Bytes{
-			bytes:       bytes,
-			deallocator: deallocator,
-		}
-		bs.refs.Store(1)
-
-		// deallocate memory
-		bs.Release()
-
-		// nil pointer
-		ptr := bs.Bytes()
-		assert.Nil(t, ptr)
-
-		// increment deallocated bytes and try to deallocate again
-		bs.Retain() // refs = 1
-		assert.Panics(t, func() { bs.Release() }, "deallocate nil pointer")
-	})
-
 	t.Run("Bytes nil deallocator", func(t *testing.T) {
 		bs := &Bytes{
 			bytes:       []byte("123"),
@@ -93,11 +72,6 @@ func TestBytesError(t *testing.T) {
 		assert.Nil(t, ptr)
 
 		assert.Panics(t, func() { bs.Release() }, "double free")
-
-		// increment deallocated bytes and try to deallocate again
-		bs.Retain() // refs = 0
-		bs.Retain() // refs = 1
-		assert.Panics(t, func() { bs.Release() }, "deallocate nil pointer")
 	})
 }
 
