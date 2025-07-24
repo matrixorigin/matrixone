@@ -224,6 +224,8 @@ func TestCount(t *testing.T) {
 		m.Mp(), types.T_int64.ToType(),
 		[]int64{1, 2, 3}, []int{0}, 2, false,
 		[]int64{1, 2, 3}, nil, 3, false)
+
+	a.Free()
 }
 
 func TestMedian(t *testing.T) {

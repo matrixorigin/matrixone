@@ -17,12 +17,13 @@ package cdc
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"go.uber.org/zap"
 
@@ -310,7 +311,7 @@ func (s *TableDetector) scanTable() error {
 	result, err := s.exec.Exec(
 		ctx,
 		CDCSQLBuilder.CollectTableInfoSQL(accountIds, dbNames, tableNames),
-		executor.Options{},
+		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	)
 	if err != nil {
 		return err
