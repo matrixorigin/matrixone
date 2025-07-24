@@ -571,6 +571,10 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 				node.Stats.HashmapStats.Shuffle = false
 			}
 		}
+
+		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+			node.Stats.HashmapStats.Shuffle = false
+		}
 	}
 }
 
