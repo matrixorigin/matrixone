@@ -57,7 +57,7 @@ drop procedure if exists test_repeat;
 create procedure test_repeat() 'begin declare p1 int default 10; declare v1 int default 5; repeat set v1 = v1 + 1; until v1 > p1 end repeat; select v1; end';
 call test_repeat();
 v1
-11
+6
 drop procedure test_repeat;
 drop procedure if exists test_loop;
 create procedure test_loop() 'begin declare p1 int default 5; label1: loop set p1 = p1 + 1; if p1 < 10 THEN iterate label1; end if; leave label1; end loop label1; select p1; end'
