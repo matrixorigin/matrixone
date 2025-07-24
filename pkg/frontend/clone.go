@@ -347,11 +347,14 @@ func handleCloneDatabase(
 }
 
 func tryToIncreaseTxnPhysicalTS(
-	ctx context.Context,
-	txnOp client.TxnOperator,
+	ctx context.Context, txnOp client.TxnOperator,
 ) (updatedPhysical int64, err error) {
 
 	curTxnPhysicalTS := txnOp.SnapshotTS().PhysicalTime
+
+	if ctx.Value(defines.TenantIDKey{}) == nil {
+		return curTxnPhysicalTS, nil
+	}
 
 	// a slight increase added to the physical to make sure
 	// the updated ts is greater than the old txn timestamp (physical + logic)
