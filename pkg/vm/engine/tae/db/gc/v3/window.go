@@ -166,20 +166,6 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	}
 	w.files = filesNotGC
 	sourcer = w.MakeFilesReader(ctx, fs)
-	process := func(b *bloomfilter.BloomFilter, vec *vector.Vector, pool *mpool.MPool) error {
-		gcVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
-		for i := 0; i < vec.Length(); i++ {
-			stats := objectio.ObjectStats(vec.GetBytesAt(i))
-			if err = vector.AppendBytes(
-				gcVec, []byte(stats.ObjectName().UnsafeString()), false, pool,
-			); err != nil {
-				return err
-			}
-		}
-		b.Add(gcVec)
-		gcVec.Free(pool)
-		return nil
-	}
 	bf, err = BuildBloomfilter(
 		ctx,
 		Default_Coarse_EstimateRows,
@@ -188,7 +174,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		sourcer.Read,
 		buffer,
 		w.mp,
-		process,
+		dataProcess,
 	)
 	if err != nil {
 		return nil, "", err
