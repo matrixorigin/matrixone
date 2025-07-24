@@ -4,6 +4,16 @@ use procedure_test;
 
 create table t(i int primary key, j int);
 
+create or replace procedure sp_selvar(in varname varchar) language 'starlark'
+$$
+rs1, err = mo.sql("select 1")
+rs2, err2 = mo.sql("select 2")
+mo.setvar(varname, rs1[0][0] + rs2[0][0])
+$$;
+
+call sp_selvar('foo');
+select @foo;
+
 create or replace procedure sp_ins(in x int) language 'starlark'
 $$
 s = "insert into t values ({}, {})".format(x, x)
@@ -26,8 +36,8 @@ def tx(y):
     mo.sql(insB)
 
 tx(x)
-res = mo.sql("select sum(i) from t")
-out_x = int(res[0][0])
+res, err = mo.sql("select sum(i) from t")
+out_x = int(res[0][0]) if err is None else -1
 $$
 ;
 -- @bvt:issue
