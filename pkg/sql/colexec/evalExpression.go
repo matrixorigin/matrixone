@@ -417,6 +417,10 @@ type ListExpressionExecutor struct {
 }
 
 func (expr *ListExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	if len(batches) > 0 && batches[0] == batch.EmptyForConstFoldBatch {
+		return vector.NewConstNull(expr.typ, 1, proc.Mp()), nil
+	}
+
 	if expr.resultVector == nil {
 		expr.resultVector = vector.NewVec(expr.typ)
 	} else {
@@ -679,6 +683,10 @@ func (expr *FunctionExpressionExecutor) IsColumnExpr() bool {
 }
 
 func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	if len(batches) > 0 && batches[0] == batch.EmptyForConstFoldBatch {
+		return vector.NewConstNull(expr.typ, 1, expr.mp), nil
+	}
+
 	relIndex := expr.relIndex
 	// XXX it's a bad hack here. root cause is pipeline set a wrong relation index here.
 	if len(batches) == 1 {

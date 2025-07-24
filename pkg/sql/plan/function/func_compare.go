@@ -16,7 +16,6 @@ package function
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -71,6 +70,7 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
 	case types.T_enum:
+	case types.T_tuple:
 	default:
 		return false
 	}
