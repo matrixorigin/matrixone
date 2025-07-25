@@ -8286,8 +8286,11 @@ func Test_CheckpointChaos3(t *testing.T) {
 	assert.NoError(t, err)
 
 	objectio.NotifyInjected(t.Name())
+	logutil.Info("XXX-DEBUG-22256-rmFN-1-start")
 	rmFn1()
+	logutil.Info("XXX-DEBUG-22256-rmFN-2-start")
 	rmFn2()
+	logutil.Info("XXX-DEBUG-22256-rmFN-2-done")
 
 	<-doneC
 
