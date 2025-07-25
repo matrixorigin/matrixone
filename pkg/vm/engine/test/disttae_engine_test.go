@@ -1613,7 +1613,7 @@ func Test_SubUnsubTable(t *testing.T) {
 	require.NotNil(t, disttaeEngine.SubscribeTable(ctx, rel.GetDBID(ctx), inValidTableID, databaseName, inValidTableName, false))
 }
 
-func TestDelete(t *testing.T) {
+func TestDeleteTupleInTupleList(t *testing.T) {
 	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
 	defer p.Close()
 
@@ -1624,7 +1624,7 @@ func TestDelete(t *testing.T) {
 		dbName = "db"
 		tName  = "t"
 	)
-	schema := catalog2.MockSchemaAll2(10, []int{1, 2})
+	schema := catalog2.MockSchemaAll2(20, []int{1, 2})
 	schema.Name = tName
 	txnop := p.StartCNTxn()
 	_, _ = p.CreateDBAndTable(txnop, dbName, schema)
