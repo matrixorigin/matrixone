@@ -316,7 +316,7 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
 		ctx1, cancel1 := context.WithTimeoutCause(ctx, 10*time.Second, moerr.CauseRetention)
 		result, err := s.sqlExecutor.Exec(ctx1, "select account_id from mo_catalog.mo_account;",
-			executor.Options{}.WithWaitCommittedLogApplied())
+			executor.Options{}.WithWaitCommittedLogApplied().WithStatementOption(executor.StatementOption{}.WithDisableLog()))
 		cancel1()
 		if err != nil {
 			return moerr.AttachCause(ctx1, err)

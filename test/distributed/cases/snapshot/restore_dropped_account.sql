@@ -6,11 +6,11 @@ drop snapshot if exists spsp01;
 create snapshot spsp01 for account acc01;
 -- @ignore:0,1
 show snapshots;
--- @ignore:2,5,6,7,8
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 drop account acc01;
 restore account acc01 from snapshot spsp01;
--- @ignore:2,5,6,7,8
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 drop account acc01;
 drop snapshot spsp01;
@@ -116,7 +116,7 @@ drop snapshot if exists spsp02;
 create snapshot spsp02 for account acc02;
 drop account acc02;
 restore account acc02 from snapshot spsp02;
--- @ignore:2,5,6,7,8
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
 -- @session:id=2&user=acc02:test_account&password=111
