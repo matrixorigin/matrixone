@@ -2431,7 +2431,11 @@ func constructTableClone(
 		}
 	}
 
-	if ret, err = c.runSqlWithResult(sql, int32(account)); err != nil {
+	if ret, err = c.runSqlWithResultAndOptions(
+		sql,
+		int32(account),
+		executor.StatementOption{}.WithDisableLog(),
+	); err != nil {
 		return nil, err
 	}
 

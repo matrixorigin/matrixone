@@ -130,25 +130,40 @@ func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 		enforceFlushToS3:    update.delegated,
 	}
 
+	faultInjected := false
+
 	mainIdx := 0
 	for i, updateCtx := range update.MultiUpdateCtx {
 		if update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType == UpdateMainTable {
 			mainIdx = i
 		}
+
+		if !faultInjected {
+			faultInjected, _ = objectio.LogCNFlushSmallObjsInjected(
+				updateCtx.TableDef.DbName, updateCtx.TableDef.Name,
+			)
+		}
+
 		appendCfgToWriter(writer, updateCtx.TableDef)
 	}
+
 	writer.updateCtxs = update.MultiUpdateCtx
+
+	threshold := InsertWriteS3Threshold
+	if faultInjected {
+		threshold = colexec.FaultInjectedS3Threshold
+	}
 
 	upCtx := writer.updateCtxs[mainIdx]
 	if len(upCtx.DeleteCols) > 0 && len(upCtx.InsertCols) > 0 {
 		//update
 		writer.action = actionUpdate
-		writer.flushThreshold = InsertWriteS3Threshold
+		writer.flushThreshold = threshold
 		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
 	} else if len(upCtx.InsertCols) > 0 {
 		//insert
 		writer.action = actionInsert
-		writer.flushThreshold = InsertWriteS3Threshold
+		writer.flushThreshold = threshold
 		writer.checkSizeCols = append(writer.checkSizeCols, upCtx.InsertCols...)
 	} else {
 		//delete
