@@ -360,11 +360,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				if err != nil {
 					return nil, err
 				}
-
-				col := rfSpec.Expr.GetCol()
-				if len(col.Name) == 0 {
-					col.Name = node.TableDef.Cols[col.ColPos].Name
-				}
 			}
 		}
 

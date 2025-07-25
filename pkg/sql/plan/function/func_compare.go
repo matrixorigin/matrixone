@@ -70,7 +70,6 @@ func equalAndNotEqualOperatorSupports(typ1, typ2 types.Type) bool {
 	case types.T_Rowid:
 	case types.T_array_float32, types.T_array_float64:
 	case types.T_enum:
-	case types.T_tuple:
 	default:
 		return false
 	}
