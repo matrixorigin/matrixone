@@ -181,12 +181,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
 				newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
 				err = replaceFuncId(builder.GetContext(), newDefExpr)
-
-				if col.Typ.Id == int32(types.T_enum) {
-					newDefExpr, err = funcCastForEnumType(builder.GetContext(), newDefExpr, col.Typ)
-					if err != nil {
-						return 0, err
-					}
+				if err != nil {
+					return 0, err
 				}
 
 				updateExprs[col.Name] = newDefExpr
