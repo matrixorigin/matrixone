@@ -17,7 +17,6 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -228,12 +227,6 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 
 	if checkFK && (len(tableDef.Fkeys) > 0 || len(tableDef.RefChildTbls) > 0) {
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "foreign key constraint")
-	}
-
-	for _, col := range tableDef.Cols {
-		if types.T(col.Typ.Id).IsArrayRelate() {
-			return moerr.NewUnsupportedDML(ctx.GetContext(), "vector column")
-		}
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
