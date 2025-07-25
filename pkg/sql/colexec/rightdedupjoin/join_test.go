@@ -215,7 +215,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) joinTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithMPool("", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	_, cancel := context.WithCancel(context.Background())
 	//args := make([]*plan.Expr, 0, 2)
