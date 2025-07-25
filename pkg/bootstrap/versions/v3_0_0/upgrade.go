@@ -63,7 +63,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 	var (
 		err    error
 		goon   bool
-		logger = logutil.Error
+		logger func(msg string, fields ...zap.Field)
 	)
 
 	for _, upgEntry := range tenantUpgEntries {
@@ -92,7 +92,6 @@ func (v *versionHandle) HandleTenantUpgrade(
 		if goon {
 			continue
 		}
-
 		return err
 	}
 

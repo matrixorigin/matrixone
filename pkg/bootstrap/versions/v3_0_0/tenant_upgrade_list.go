@@ -31,14 +31,7 @@ var drop_mo_retention = versions.UpgradeEntry{
 	UpgType:   versions.DROP_TABLE,
 	UpgSql:    fmt.Sprintf("drop table if exists %s.%s", catalog.MO_CATALOG, "mo_retention"),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		//if accountId == catalog.System_Account {
-		//	return true, nil
-		//}
-
 		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, "mo_retention")
-		if err != nil {
-			return false, err
-		}
-		return !exist, nil
+		return !exist, err
 	},
 }
