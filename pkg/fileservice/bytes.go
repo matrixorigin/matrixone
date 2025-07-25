@@ -62,9 +62,9 @@ func (b *Bytes) Release() {
 	}
 }
 
-func NewBytes(size int) *Bytes {
+func NewBytes(data []byte) *Bytes {
 	bytes := &Bytes{
-		bytes: make([]byte, size),
+		bytes: data,
 	}
 	bytes.refs.Store(1)
 	return bytes

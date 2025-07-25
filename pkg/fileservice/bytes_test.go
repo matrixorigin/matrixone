@@ -71,8 +71,7 @@ func TestBytesError(t *testing.T) {
 
 	t.Run("Bytes nil deallocator", func(t *testing.T) {
 		data := []byte("123")
-		bs := NewBytes(len(data))
-		copy(bs.bytes, data)
+		bs := NewBytes(data)
 
 		// deallocate memory
 		bs.Release()
@@ -83,8 +82,7 @@ func TestBytesError(t *testing.T) {
 
 func TestBytesConcurrent(t *testing.T) {
 	data := []byte("123")
-	bs := NewBytes(len(data))
-	copy(bs.bytes, data)
+	bs := NewBytes(data)
 	nthread := 5
 	var wg sync.WaitGroup
 	for i := 0; i < nthread; i++ {
