@@ -968,7 +968,6 @@ var (
 		"mo_subs":                     0,
 		"mo_shards":                   0,
 		"mo_shards_metadata":          0,
-		catalog.MO_RETENTION:          0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
@@ -998,7 +997,6 @@ var (
 		MoCatalogMoMysqlCompatibilityModeDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
-		MoCatalogMoRetentionDDL,
 		MoCatalogMoSubsDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
@@ -1040,7 +1038,6 @@ var (
 	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
-	dropMoRetention                 = `drop table if exists mo_catalog.mo_retention;`
 
 	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -3888,12 +3885,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoTablePartitions)
 		// drop mo_catalog.mo_table_partitions under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
-		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
-		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
 		if rtnErr != nil {
 			return rtnErr
 		}

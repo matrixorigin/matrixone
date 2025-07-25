@@ -1268,7 +1268,7 @@ message CreateTable {
 	// fks forward reference to me
 	repeated ForeignKeyInfo fksReferToMe = 13;
 
-	int64 retention_deadline = 14;
+	reserved 14;
 	string RawSQL            = 15;
 }
 

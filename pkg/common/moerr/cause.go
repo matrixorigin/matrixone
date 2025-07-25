@@ -46,8 +46,6 @@ var (
 	CauseHeartbeat          = NewInternalError(context.Background(), "cn service heartbeat")
 	CauseCanClaimDaemonTask = NewInternalError(context.Background(), "canClaimDaemonTask")
 	CauseMergeObject        = NewInternalError(context.Background(), "merge object")
-	CauseRetention          = NewInternalError(context.Background(), "retention")
-	CauseRetention2         = NewInternalError(context.Background(), "retention 2")
 	//pkg/common/morpc
 	CauseDeadlineContextCodec = NewInternalError(context.Background(), "morpc deadlineContextCodec")
 	CausePingPongMain         = NewInternalError(context.Background(), "morpc ping pong main")

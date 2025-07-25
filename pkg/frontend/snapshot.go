@@ -122,8 +122,6 @@ var (
 
 		catalog.MO_SNAPSHOTS: 1,
 		catalog.MO_PITR:      1,
-
-		catalog.MO_RETENTION: 0,
 	}
 )
 
