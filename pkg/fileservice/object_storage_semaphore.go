@@ -107,3 +107,9 @@ func (o *objectStorageSemaphore) Write(ctx context.Context, key string, r io.Rea
 	defer o.release()
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }
+
+func (o *objectStorageSemaphore) NewWriter(ctx context.Context, key string) (w io.WriteCloser, err error) {
+	o.acquire()
+	defer o.release()
+	return o.upstream.NewWriter(ctx, key)
+}

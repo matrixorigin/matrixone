@@ -274,3 +274,37 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 
 	return nil
 }
+
+func (d *diskObjectStorage) NewWriter(ctx context.Context, key string) (ret io.WriteCloser, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	tempFile, err := os.CreateTemp(d.path, "*.mofstemp")
+	if err != nil {
+		return nil, err
+	}
+
+	return &writeCloser{
+		w: tempFile,
+		closeFunc: func() error {
+			if err := tempFile.Close(); err != nil {
+				return err
+			}
+
+			path := filepath.Join(d.path, key)
+			err = os.MkdirAll(filepath.Dir(path), 0755)
+			if err != nil {
+				if !os.IsExist(err) {
+					return err
+				}
+			}
+
+			if err := os.Rename(tempFile.Name(), path); err != nil {
+				return err
+			}
+
+			return nil
+		},
+	}, nil
+}

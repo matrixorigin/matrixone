@@ -64,6 +64,12 @@ type FileService interface {
 	// PrefetchFile prefetches a file
 	PrefetchFile(ctx context.Context, filePath string) error
 
+	// NewReader creates an io.ReadCloser for reading the content of the file
+	NewReader(ctx context.Context, filePath string) (io.ReadCloser, error)
+
+	// NewWriter creates an io.WriteCloser for writing to the file
+	NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error)
+
 	// Cost returns the cost attr of the file service
 	Cost() *CostAttr
 

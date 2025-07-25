@@ -979,3 +979,39 @@ func (s *S3FS) Cost() *CostAttr {
 		List: CostHigh,
 	}
 }
+
+func (s *S3FS) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+
+	key := s.pathToKey(path.File)
+	return s.storage.Read(ctx, key, nil, nil)
+}
+
+func (s *S3FS) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// check existence
+	path, err := ParsePathAtService(filePath, s.name)
+	if err != nil {
+		return nil, err
+	}
+	key := s.pathToKey(path.File)
+	exists, err := s.storage.Exists(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, moerr.NewFileAlreadyExistsNoCtx(filePath)
+	}
+
+	return s.storage.NewWriter(ctx, key)
+}

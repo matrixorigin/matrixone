@@ -1020,6 +1020,27 @@ func testFileService(
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
+	t.Run("NewReader and NewWriter", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		fs := newFS(fsName)
+		defer fs.Close(ctx)
+
+		w, err := fs.NewWriter(ctx, "foo")
+		assert.Nil(t, err)
+		assert.NotNil(t, w)
+		_, err = w.Write([]byte("foobarbaz"))
+		assert.Nil(t, err)
+		assert.Nil(t, w.Close())
+
+		r, err := fs.NewReader(ctx, "foo")
+		assert.Nil(t, err)
+		data, err := io.ReadAll(r)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("foobarbaz"), data)
+		assert.Nil(t, r.Close())
+	})
+
 }
 
 type errReader struct{}

@@ -277,6 +277,38 @@ func (a *AliyunSDK) Write(
 	return
 }
 
+func (a *AliyunSDK) NewWriter(
+	ctx context.Context,
+	key string,
+) (
+	ret io.WriteCloser,
+	err error,
+) {
+	defer catch(&err)
+
+	r, w := io.Pipe()
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- a.putObject(
+			context.WithoutCancel(ctx),
+			key,
+			r,
+			nil,
+			nil,
+		)
+	}()
+
+	return &writeCloser{
+		w: w,
+		closeFunc: func() error {
+			if err := w.Close(); err != nil {
+				return err
+			}
+			return <-errChan
+		},
+	}, nil
+}
+
 func (a *AliyunSDK) Read(
 	ctx context.Context,
 	key string,

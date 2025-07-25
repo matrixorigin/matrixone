@@ -78,6 +78,13 @@ func (o *objectStorageHTTPTrace) Write(ctx context.Context, key string, r io.Rea
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }
 
+func (o *objectStorageHTTPTrace) NewWriter(ctx context.Context, key string) (w io.WriteCloser, err error) {
+	traceInfo := o.newTraceInfo()
+	defer o.closeTraceInfo(traceInfo)
+	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	return o.upstream.NewWriter(ctx, key)
+}
+
 func (o *objectStorageHTTPTrace) newTraceInfo() *traceInfo {
 	return reuse.Alloc[traceInfo](nil)
 }

@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"fmt"
+	"io"
 	"iter"
 	"path"
 	"strings"
@@ -129,6 +130,23 @@ func (s *subPathFS) StatFile(ctx context.Context, filePath string) (*DirEntry, e
 		return nil, err
 	}
 	return s.upstream.StatFile(ctx, p)
+}
+
+func (s *subPathFS) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return s.upstream.NewWriter(ctx, p)
+}
+
+// NewReader implements FileService.
+func (s *subPathFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return s.upstream.NewReader(ctx, p)
 }
 
 func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
