@@ -14,6 +14,31 @@
 
 package v3_0_0
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+)
 
-var tenantUpgEntries = []versions.UpgradeEntry{}
+var tenantUpgEntries = []versions.UpgradeEntry{
+	drop_mo_retention,
+}
+
+var drop_mo_retention = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: "mo_retention",
+	UpgType:   versions.DROP_TABLE,
+	UpgSql:    fmt.Sprintf("drop table if exists %s.%s", catalog.MO_CATALOG, "mo_retention"),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		//if accountId == catalog.System_Account {
+		//	return true, nil
+		//}
+
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, "mo_retention")
+		if err != nil {
+			return false, err
+		}
+		return !exist, nil
+	},
+}

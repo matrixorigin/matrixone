@@ -727,8 +727,6 @@ create account prepare_account_01 ADMIN_NAME admin IDENTIFIED BY '111111';
 create role prepare_role1;
 grant create database on account * to prepare_role1;
 create user prepare_user1 identified by '123456' default role prepare_role1;
-select mo_ctl('cn', 'task', ':retention');
-internal error: do not have privilege to execute the statement
 drop user prepare_user1;
 drop role prepare_role1;
 drop account prepare_account_01;
