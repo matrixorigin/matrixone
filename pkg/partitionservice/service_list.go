@@ -16,7 +16,6 @@ package partitionservice
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -30,22 +29,8 @@ func (s *Service) getMetadataByListType(
 	method := option.PartBy.PType.(*tree.ListType)
 
 	var columns *tree.UnresolvedName
-	var ok bool
-	var validTypeFunc func(t plan.Type) bool
 	desc := ""
 	if method.Expr != nil {
-		columns, ok = method.Expr.(*tree.UnresolvedName)
-		if !ok {
-			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
-		}
-		if columns.NumParts != 1 {
-			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in LIST partition")
-		}
-
-		validTypeFunc = func(t plan.Type) bool {
-			return types.T(t.Id).IsInteger()
-		}
-
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
 			tree.WithQuoteIdentifier(),
@@ -59,18 +44,19 @@ func (s *Service) getMetadataByListType(
 		}
 
 		columns = method.ColumnList[0]
-		validTypeFunc = func(t plan.Type) bool {
-			return types.T(t.Id) == types.T_date ||
-				types.T(t.Id) == types.T_datetime ||
-				types.T(t.Id).IsMySQLString()
-		}
+
+		ctx := tree.NewFmtCtx(
+			dialect.MYSQL,
+			tree.WithQuoteIdentifier(),
+			tree.WithEscapeSingleQuoteString(),
+		)
+		columns.Format(ctx)
+		desc = ctx.String()
 	}
 
 	return s.getManualPartitions(
 		option,
 		def,
-		columns,
-		validTypeFunc,
 		desc,
 		partition.PartitionMethod_List,
 		func(p *tree.Partition) string {
