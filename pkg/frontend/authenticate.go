@@ -931,6 +931,7 @@ var (
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_MERGE_SETTINGS:     0,
+		catalog.MO_INTRA_SYSTEM_CHANGE_PROPAGATION_LOG: 0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -974,6 +975,7 @@ var (
 		catalog.MO_TABLE_STATS:        0,
 		catalog.MO_ACCOUNT_LOCK:       0,
 		catalog.MO_MERGE_SETTINGS:     0,
+		catalog.MO_INTRA_SYSTEM_CHANGE_PROPAGATION_LOG: 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1015,6 +1017,7 @@ var (
 		MoCatalogMoAccountLockDDL,
 		MoCatalogMergeSettingsDDL,
 		MoCatalogMergeSettingsInitData,
+		MoCatalogMoISCPLogDDL,
 	}
 
 	//drop tables for the tenant
@@ -7764,6 +7767,9 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
+			return true
+		}
+		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INTRA_SYSTEM_CHANGE_PROPAGATION_LOG)) {
 			return true
 		}
 		return false

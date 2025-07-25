@@ -1,0 +1,307 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package iscp
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
+)
+
+func ExecWithResult(
+	ctx context.Context,
+	sql string,
+	cnUUID string,
+	txn client.TxnOperator,
+) (executor.Result, error) {
+	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(txn)
+
+	return exec.Exec(ctx, sql, opts)
+}
+
+// return true if create, return false if task already exists, return error when error
+func RegisterJob(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	pitr_name string,
+	sinkerinfo_json *ConsumerInfo,
+) (ok bool, err error) {
+	return ok, retry(
+		func() error {
+			ok, err = registerJob(ctx, cnUUID, txn, pitr_name, sinkerinfo_json)
+			return err
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func registerJob(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	pitr_name string,
+	sinkerinfo_json *ConsumerInfo,
+) (ok bool, err error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	defer cancel()
+	var tenantId uint32
+	var tableID uint64
+	var dropped bool
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"ISCP-Task RegisterJob",
+			zap.Uint32("tenantID", tenantId),
+			zap.Uint64("tableID", tableID),
+			zap.String("jobName", sinkerinfo_json.JobName),
+			zap.Bool("create new", ok),
+			zap.Bool("dropped", dropped),
+			zap.Error(err),
+		)
+	}()
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return false, err
+	}
+	consumerInfoJson, err := sinkerinfo_json.Marshal()
+	if err != nil {
+		return false, err
+	}
+	tableID, err = getTableID(
+		ctxWithSysAccount,
+		cnUUID,
+		txn,
+		tenantId,
+		sinkerinfo_json.DbName,
+		sinkerinfo_json.TableName,
+	)
+	if err != nil {
+		return false, err
+	}
+	exist, dropped, err := queryIndexLog(
+		ctxWithSysAccount,
+		cnUUID,
+		txn,
+		tenantId,
+		tableID,
+		sinkerinfo_json.JobName,
+	)
+	if err != nil {
+		return false, err
+	}
+	if exist && !dropped {
+		return false, nil
+	}
+	jobConfig := NewJobConfig(IOET_JobConfig_Default)
+	jobConfigStr, err := jobConfig.Marshal()
+	if err != nil {
+		return false, err
+	}
+	ok = true
+	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogInsertSQL(
+		tenantId,
+		tableID,
+		sinkerinfo_json.JobName,
+		string(jobConfigStr),
+		"",
+		"",
+		string(consumerInfoJson),
+	)
+	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	if err != nil {
+		return false, err
+	}
+	return
+}
+
+// return true if delete success, return false if no task found, return error when delete failed.
+func UnregisterJob(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	consumerInfo *ConsumerInfo,
+) (ok bool, err error) {
+	return ok, retry(
+		func() error {
+			ok, err = unregisterJob(ctx, cnUUID, txn, consumerInfo)
+			return err
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func unregisterJob(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	consumerInfo *ConsumerInfo,
+) (ok bool, err error) {
+	var tenantId uint32
+	var tableID uint64
+	var dropped bool
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"ISCP-Task UnregisterJob",
+			zap.Uint32("tenantID", tenantId),
+			zap.Uint64("tableID", tableID),
+			zap.String("jobName", consumerInfo.JobName),
+			zap.Bool("delete", ok),
+			zap.Bool("dropped", dropped),
+			zap.Error(err),
+		)
+	}()
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return false, err
+	}
+	tableID, err = getTableID(
+		ctx,
+		cnUUID,
+		txn,
+		tenantId,
+		consumerInfo.DbName,
+		consumerInfo.TableName,
+	)
+	if err != nil {
+		return false, err
+	}
+	exist, dropped, err := queryIndexLog(
+		ctx,
+		cnUUID,
+		txn,
+		tenantId,
+		tableID,
+		consumerInfo.JobName,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !exist || dropped {
+		return false, nil
+	}
+	ok = true
+	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogUpdateDropAtSQL(
+		tenantId,
+		tableID,
+		consumerInfo.JobName,
+	)
+	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func getTableID(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	tenantId uint32,
+	dbName string,
+	tableName string,
+) (tableID uint64, err error) {
+	tableIDSql := cdc.CDCSQLBuilder.GetTableIDSQL(
+		tenantId,
+		dbName,
+		tableName,
+	)
+	result, err := ExecWithResult(ctx, tableIDSql, cnUUID, txn)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows != 1 {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid rows %d", rows))
+			return false
+		}
+		for i := 0; i < rows; i++ {
+			tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
+		}
+		return true
+	})
+	if err != nil {
+		return 0, err
+	}
+	if tableID == 0 {
+		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
+	}
+	return
+}
+
+func queryIndexLog(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	tenantId uint32,
+	tableID uint64,
+	jobName string,
+) (exist, dropped bool, err error) {
+	selectSql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogSelectByTableSQL(
+		tenantId,
+		tableID,
+		jobName,
+	)
+	result, err := ExecWithResult(ctx, selectSql, cnUUID, txn)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows > 1 {
+			panic(fmt.Sprintf("invalid rows %d", rows))
+		}
+		if rows != 0 {
+			exist = true
+		}
+		if !cols[0].IsNull(0) {
+			dropped = true
+		}
+		return true
+	})
+	return
+}
