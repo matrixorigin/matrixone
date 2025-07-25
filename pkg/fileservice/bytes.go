@@ -34,7 +34,7 @@ func (b *Bytes) Size() int64 {
 
 func (b *Bytes) Bytes() []byte {
 	if b.refs.Load() <= 0 {
-		return nil
+		panic("Bytes.Bytes: memory was already deallocated.")
 	}
 	return b.bytes
 }
@@ -60,6 +60,14 @@ func (b *Bytes) Release() {
 	} else if n < 0 {
 		panic("Bytes.Release: double free")
 	}
+}
+
+func NewBytes(size int) *Bytes {
+	bytes := &Bytes{
+		bytes: make([]byte, size),
+	}
+	bytes.refs.Store(1)
+	return bytes
 }
 
 type bytesAllocator struct {

@@ -37,7 +37,7 @@ func TestBytes(t *testing.T) {
 }
 
 func TestBytesError(t *testing.T) {
-	t.Run("Bytes double free", func(t *testing.T) {
+	t.Run("Bytes get invalid memory", func(t *testing.T) {
 		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
 		assert.Nil(t, err)
 		bs := &Bytes{
@@ -50,37 +50,41 @@ func TestBytesError(t *testing.T) {
 		bs.Release()
 
 		// nil pointer
-		ptr := bs.Bytes()
-		assert.Nil(t, ptr)
-
-		// double free
-		assert.Panics(t, func() { bs.Release() }, "double free")
+		assert.Panics(t, func() { bs.Bytes() }, "get invalid memory")
 	})
 
-	t.Run("Bytes nil deallocator", func(t *testing.T) {
+	t.Run("Bytes double free", func(t *testing.T) {
+		bytes, deallocator, err := ioAllocator().Allocate(42, malloc.NoHints)
+		assert.Nil(t, err)
 		bs := &Bytes{
-			bytes:       []byte("123"),
-			deallocator: nil,
+			bytes:       bytes,
+			deallocator: deallocator,
 		}
 		bs.refs.Store(1)
 
 		// deallocate memory
 		bs.Release()
 
-		// nil pointer
-		ptr := bs.Bytes()
-		assert.Nil(t, ptr)
+		// double free
+		assert.Panics(t, func() { bs.Release() }, "double free")
+	})
+
+	t.Run("Bytes nil deallocator", func(t *testing.T) {
+		data := []byte("123")
+		bs := NewBytes(len(data))
+		copy(bs.bytes, data)
+
+		// deallocate memory
+		bs.Release()
 
 		assert.Panics(t, func() { bs.Release() }, "double free")
 	})
 }
 
 func TestBytesConcurrent(t *testing.T) {
-	bs := &Bytes{
-		bytes:       []byte("123"),
-		deallocator: nil,
-	}
-	bs.refs.Store(1)
+	data := []byte("123")
+	bs := NewBytes(len(data))
+	copy(bs.bytes, data)
 	nthread := 5
 	var wg sync.WaitGroup
 	for i := 0; i < nthread; i++ {
