@@ -41,6 +41,7 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForColRefList(node.DedupJoinCtx.OldColList, 2, colRefCnt)
+		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, colRefCnt)
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -181,9 +182,6 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
-	if parentType == plan.Node_PRE_INSERT || parentType == plan.Node_MULTI_UPDATE || parentType == plan.Node_LOCK_OP {
-		return false
-	}
 
 	for _, e := range node.ProjectList {
 		if !exprCanRemoveProject(e) {
@@ -243,6 +241,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 
 	if node.DedupJoinCtx != nil {
 		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
+		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap)
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -319,7 +318,7 @@ func (builder *QueryBuilder) swapJoinChildren(nodeID int32) {
 		builder.swapJoinChildren(child)
 	}
 
-	if node.BuildOnLeft {
+	if node.IsRightJoin {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 		if node.JoinType == plan.Node_LEFT {
 			node.JoinType = plan.Node_RIGHT
@@ -467,6 +466,7 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, 2, tagCnt)
+		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, tagCnt)
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -510,6 +510,7 @@ END:
 
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, -2, tagCnt)
+		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, -2, tagCnt)
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -1010,7 +1011,7 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 					force = true
 				}
 			case plan.Node_SEMI, plan.Node_ANTI:
-				if node.BuildOnLeft && !node.Stats.HashmapStats.Shuffle {
+				if node.IsRightJoin && !node.Stats.HashmapStats.Shuffle {
 					force = true
 				}
 			case plan.Node_INDEX:
