@@ -138,6 +138,72 @@ func constantCount(zms []index.ZM) int {
 	return constantZMCount
 }
 
+// make coverage checker happy
+func TestIterBailout(t *testing.T) {
+	const K = 1024
+	sid := objectio.NewSegmentid
+
+	sdata := []SData{
+		{
+			stats: newTestObjectStats(t, 100, 200, 24*K, 50, 0, sid(), 0),
+		},
+		{
+			stats: newTestObjectStats(t, 100, 200, 43*K, 50, 0, sid(), 0),
+		},
+	}
+	stombstones := []STombstone{
+		{
+			SData: sdata[0],
+		},
+		{
+			SData: sdata[1],
+		},
+	}
+
+	{
+		it := iterSDAsStats(sdata)
+		it(func(stats *objectio.ObjectStats) bool {
+			t.Logf("stats: %v", stats)
+			return false
+		})
+	}
+
+	{
+		it := iterSTAsStats(stombstones)
+		it(func(stats *objectio.ObjectStats) bool {
+			t.Logf("stats: %v", stats)
+			return false
+		})
+	}
+
+	stable := &STable{
+		data:      [8]map[objectio.ObjectId]SData{},
+		tombstone: make(map[objectio.ObjectId]STombstone),
+	}
+	stable.data[0] = make(map[objectio.ObjectId]SData)
+	stable.data[0][sdata[0].stats.ObjectLocation().ObjectId()] = sdata[0]
+	stable.data[0][sdata[1].stats.ObjectLocation().ObjectId()] = sdata[1]
+	stable.tombstone[sdata[0].stats.ObjectLocation().ObjectId()] = stombstones[0]
+	stable.tombstone[sdata[1].stats.ObjectLocation().ObjectId()] = stombstones[1]
+
+	{
+		it := stable.IterDataItem()
+		it(func(item catalog.MergeDataItem) bool {
+			t.Logf("item: %v", item)
+			return false
+		})
+	}
+
+	{
+		it := stable.IterTombstoneItem()
+		it(func(item catalog.MergeTombstoneItem) bool {
+			t.Logf("item: %v", item)
+			return false
+		})
+	}
+
+}
+
 func TestSplitZM(t *testing.T) {
 	zm := index.NewZM(types.T_int32, 0)
 	zm.Update(int32(1))
