@@ -1125,3 +1125,169 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	_ = schema.Finalize(false)
 	return schema
 }
+
+func MockSchemaAll2(colCnt int, pkIdxs []int, from ...int) *Schema {
+	schema := NewEmptySchema(time.Now().String())
+	prefix := "mock_"
+	start := 0
+	if len(from) > 0 {
+		start = from[0]
+	}
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
+	pkColNames := []string{}
+	pkColIdxs := []int{}
+	for _, idx := range pkIdxs {
+		if idx >= start && idx < colCnt {
+			pkColIdxs = append(pkColIdxs, idx)
+		}
+	}
+
+	var compPkeyColDef *plan.ColDef
+	if len(pkColIdxs) > 1 {
+		compPkeyName := "__mo_cpkey"
+		compPkeyType := types.T_varchar.ToType()
+		compPkeyType.Width = 128
+
+		colDef := plan.ColDef{
+			Name:    compPkeyName,
+			Hidden:  true,
+			Primary: true,
+		}
+		compPkeyColDef = &colDef
+	}
+
+	for i := 0; i < colCnt; i++ {
+		if i < start {
+			continue
+		}
+		name := fmt.Sprintf("%s%d", prefix, i)
+
+		var typ types.Type
+		switch i % 20 {
+		case 0:
+			typ = types.T_int8.ToType()
+			typ.Width = 8
+		case 1:
+			typ = types.T_int16.ToType()
+			typ.Width = 16
+		case 2:
+			typ = types.T_int32.ToType()
+			typ.Width = 32
+		case 3:
+			typ = types.T_int64.ToType()
+			typ.Width = 64
+		case 4:
+			typ = types.T_uint8.ToType()
+			typ.Width = 8
+		case 5:
+			typ = types.T_uint16.ToType()
+			typ.Width = 16
+		case 6:
+			typ = types.T_uint32.ToType()
+			typ.Width = 32
+		case 7:
+			typ = types.T_uint64.ToType()
+			typ.Width = 64
+		case 8:
+			typ = types.T_float32.ToType()
+			typ.Width = 32
+		case 9:
+			typ = types.T_float64.ToType()
+			typ.Width = 64
+		case 10:
+			typ = types.T_date.ToType()
+			typ.Width = 32
+		case 11:
+			typ = types.T_datetime.ToType()
+			typ.Width = 64
+		case 12:
+			typ = types.T_varchar.ToType()
+			typ.Width = 100
+		case 13:
+			typ = types.T_char.ToType()
+			typ.Width = 100
+		case 14:
+			typ = types.T_timestamp.ToType()
+			typ.Width = 64
+		case 15:
+			typ = types.T_decimal64.ToType()
+			typ.Width = 64
+		case 16:
+			typ = types.T_decimal128.ToType()
+			typ.Width = 128
+		case 17:
+			typ = types.T_bool.ToType()
+			typ.Width = 8
+		case 18:
+			typ = types.T_array_float32.ToType()
+			typ.Width = 100
+		case 19:
+			typ = types.T_array_float64.ToType()
+			typ.Width = 100
+		}
+		isPK := false
+		for _, pkIdx := range pkColIdxs {
+			if i == pkIdx {
+				isPK = true
+				pkColNames = []string{name}
+				break
+			}
+		}
+		if isPK {
+			if len(pkColIdxs) > 1 {
+				_ = schema.AppendCol(name, typ)
+				schema.ColDefs[len(schema.ColDefs)-1].NullAbility = false
+			} else {
+				_ = schema.AppendPKCol(name, typ, 0)
+			}
+		} else {
+			_ = schema.AppendCol(name, typ)
+			schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
+		}
+	}
+	if len(pkColIdxs) > 1 {
+		compColDef := &ColDef{
+			Name:        compPkeyColDef.Name,
+			Type:        types.T_varchar.ToType(),
+			Hidden:      true,
+			Primary:     true,
+			SortKey:     true,
+			SortIdx:     0,
+			NullAbility: false,
+		}
+		if err := schema.AppendColDef(compColDef); err != nil {
+			panic(err)
+		}
+	}
+
+	if len(pkColNames) > 0 {
+		pkDef := &plan.PrimaryKeyDef{
+			Names: pkColNames,
+		}
+
+		if compPkeyColDef != nil {
+			pkDef.CompPkeyCol = compPkeyColDef
+			pkDef.PkeyColName = compPkeyColDef.Name
+		} else if len(pkColNames) == 1 {
+			pkDef.PkeyColName = pkColNames[0]
+		}
+
+		pkConstraint := &engine.PrimaryKeyDef{
+			Pkey: pkDef,
+		}
+		constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
+	} else {
+		schema.AppendFakePKCol()
+		schema.ColDefs[len(schema.ColDefs)-1].NullAbility = true
+	}
+
+	schema.Extra.BlockMaxRows = 1000
+	schema.Extra.ObjectMaxBlocks = 10
+	schema.Constraint, _ = constraintDef.MarshalBinary()
+	_ = schema.Finalize(false)
+	return schema
+}
