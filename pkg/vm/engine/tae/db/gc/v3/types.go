@@ -133,7 +133,7 @@ var (
 
 type Cleaner interface {
 	Replay(context.Context) error
-	Process(context.Context) error
+	Process(context.Context, func(*checkpoint.CheckpointEntry) bool) error
 	TryGC(context.Context) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error

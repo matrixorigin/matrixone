@@ -27,4 +27,6 @@ const (
 
 	StopGC  = "stop_gc"
 	StartGC = "start_gc"
+
+	ForceGC = "force_gc"
 )

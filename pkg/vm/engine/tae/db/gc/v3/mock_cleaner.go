@@ -65,7 +65,7 @@ func (c *MockCleaner) Replay(ctx context.Context) error {
 	return nil
 }
 
-func (c *MockCleaner) Process(ctx context.Context) error {
+func (c *MockCleaner) Process(ctx context.Context, _ func(*checkpoint.CheckpointEntry) bool) error {
 	if c.processFunc != nil {
 		return c.processFunc(ctx)
 	}
