@@ -462,11 +462,16 @@ func Test_getUnCompressReader(t *testing.T) {
 }
 
 func TestReadDirSymlink(t *testing.T) {
-	root := t.TempDir()
 	ctx := context.Background()
 
+	root, err := os.MkdirTemp("", "*")
+	assert.Nil(t, err)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(root)
+	})
+
 	evChan := make(chan notify.EventInfo, 1024)
-	err := notify.Watch(filepath.Join(root, "..."), evChan, notify.All)
+	err = notify.Watch(filepath.Join(root, "..."), evChan, notify.All)
 	assert.Nil(t, err)
 	defer notify.Stop(evChan)
 
