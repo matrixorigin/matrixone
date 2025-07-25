@@ -224,24 +224,6 @@ func (s *Service) getManualPartitions(
 	method partition.PartitionMethod,
 	applyPartitionComment func(*tree.Partition) string,
 ) (partition.PartitionMetadata, error) {
-	//validColumns, err := validColumns(
-	//	columns,
-	//	def,
-	//	validTypeFunc,
-	//)
-	//if err != nil {
-	//	return partition.PartitionMetadata{}, err
-	//}
-	//
-	//if len(partitionDesc) == 0 {
-	//	for i, col := range validColumns {
-	//		if i > 0 {
-	//			partitionDesc += ", "
-	//		}
-	//		partitionDesc += col
-	//	}
-	//}
-
 	metadata := partition.PartitionMetadata{
 		TableID:      def.TblId,
 		TableName:    def.Name,
@@ -265,40 +247,6 @@ func (s *Service) getManualPartitions(
 	}
 	return metadata, nil
 }
-
-//func validColumns(
-//	columns *tree.UnresolvedName,
-//	tableDefine *plan.TableDef,
-//	validType func(plan.Type) bool,
-//) ([]string, error) {
-//	validColumns := make([]string, 0, columns.NumParts)
-//	for i := 0; i < columns.NumParts; i++ {
-//		v := columns.CStrParts[i]
-//		col := v.Compare()
-//		has := false
-//		for _, c := range tableDefine.GetCols() {
-//			if !strings.EqualFold(c.Name, col) {
-//				continue
-//			}
-//
-//			has = true
-//			if !validType(c.Typ) {
-//				return nil, moerr.NewNotSupportedNoCtx(
-//					fmt.Sprintf(
-//						"column %s type %s is not supported",
-//						col,
-//						types.T(c.Typ.Id).String()),
-//				)
-//			}
-//			break
-//		}
-//		if !has {
-//			return nil, moerr.NewErrWrongColumnName(moerr.Context(), v.Origin())
-//		}
-//		validColumns = append(validColumns, col)
-//	}
-//	return validColumns, nil
-//}
 
 type metadataCache struct {
 	metadata partition.PartitionMetadata

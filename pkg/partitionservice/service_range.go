@@ -31,18 +31,6 @@ func (s *Service) getMetadataByRangeType(
 	var columns *tree.UnresolvedName
 	desc := ""
 	if method.Expr != nil {
-		//columns, ok = method.Expr.(*tree.UnresolvedName)
-		//if !ok {
-		//	return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
-		//}
-		//if columns.NumParts != 1 {
-		//	return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in RANGE partition")
-		//}
-
-		//validTypeFunc = func(t plan.Type) bool {
-		//	return true
-		//}
-
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
 			tree.WithQuoteIdentifier(),
@@ -56,9 +44,6 @@ func (s *Service) getMetadataByRangeType(
 		}
 
 		columns = method.ColumnList[0]
-		//validTypeFunc = func(t plan.Type) bool {
-		//	return true
-		//}
 		ctx := tree.NewFmtCtx(
 			dialect.MYSQL,
 			tree.WithQuoteIdentifier(),

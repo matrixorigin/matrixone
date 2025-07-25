@@ -27,27 +27,6 @@ func (s *Service) getMetadataByHashType(
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
 	method := option.PartBy.PType.(*tree.HashType)
-	//if option.PartBy.Num <= 0 {
-	//	return partition.PartitionMetadata{}, moerr.NewInvalidInputNoCtx("partition number is invalid")
-	//}
-	//
-	//columns, ok := method.Expr.(*tree.UnresolvedName)
-	//if !ok {
-	//	return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("column expression is not supported")
-	//}
-	//if columns.NumParts != 1 {
-	//	return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in HASH partition")
-	//}
-	//validColumns, err := validColumns(
-	//	columns,
-	//	def,
-	//	func(t plan.Type) bool {
-	//		return types.T(t.Id).IsInteger()
-	//	},
-	//)
-	//if err != nil {
-	//	return partition.PartitionMetadata{}, err
-	//}
 
 	ctx := tree.NewFmtCtx(
 		dialect.MYSQL,
