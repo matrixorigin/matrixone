@@ -176,6 +176,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 			updateExprs[colDef.Name] = updateExpr
 		}
+
+		for _, col := range tableDef.Cols {
+			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
+				newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
+				err = replaceFuncId(builder.GetContext(), newDefExpr)
+
+				if col.Typ.Id == int32(types.T_enum) {
+					newDefExpr, err = funcCastForEnumType(builder.GetContext(), newDefExpr, col.Typ)
+					if err != nil {
+						return 0, err
+					}
+				}
+
+				updateExprs[col.Name] = newDefExpr
+			}
+		}
 	}
 
 	for _, part := range tableDef.Pkey.Names {
