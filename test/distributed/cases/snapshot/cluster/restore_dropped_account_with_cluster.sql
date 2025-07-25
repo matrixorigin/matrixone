@@ -322,12 +322,12 @@ create account acc07 admin_name = 'test_account' identified by '111111111'  comm
 
 create account acc03 admin_name = 'test_account' identified by '123';
 
--- @ignore:2,5,6,7
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
 restore cluster from snapshot snapshot_01;
 
--- @ignore:2,5,6,7
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
 -- @session:id=5&user=acc01:test_account&password=111

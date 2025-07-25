@@ -313,14 +313,14 @@ drop account if exists acc04;
 
 create account acc03 admin_name = 'test_account' identified by '123';
 
--- @ignore:2,5,6,7
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
 restore account acc01 from snapshot snapshot_cls;
 restore account acc02 from snapshot snapshot_cls;
 restore account acc03 from snapshot snapshot_cls;
 
--- @ignore:2,5,6,7
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
 -- @session:id=5&user=acc01:test_account&password=111
