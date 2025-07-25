@@ -20,14 +20,26 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestQueue(t *testing.T) {
-	queue := NewQueue[int]()
-	for i := 0; i < maxQueuePartCapacity*1024; i++ {
-		queue.enqueue(i, 8)
-	}
-	for i := 0; i < maxQueuePartCapacity*1024; i++ {
-		n, ok := queue.dequeue()
-		assert.True(t, ok)
-		assert.Equal(t, i, n)
-	}
+func TestShardMap(t *testing.T) {
+
+	m := NewShardMap[int, string](ShardInt[int])
+	ok := m.Set(1, "1", func(v string) {
+	})
+	assert.Equal(t, ok, true)
+	ok = m.Set(1, "1", func(v string) {
+	})
+	assert.Equal(t, ok, false)
+
+	v, ok := m.Get(1, func(v string) {
+	})
+	assert.Equal(t, ok, true)
+	assert.Equal(t, v, "1")
+
+	_, ok = m.GetAndDelete(0, func(v string) {
+	})
+	assert.Equal(t, ok, false)
+
+	_, ok = m.GetAndDelete(1, func(v string) {
+	})
+	assert.Equal(t, ok, true)
 }

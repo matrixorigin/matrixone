@@ -22,6 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
+var _ fscache.Data = new(Bytes)
+var _ fscache.SelfMaintainMemObj = new(Bytes)
+
 type Bytes struct {
 	bytes       []byte
 	deallocator malloc.Deallocator

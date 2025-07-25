@@ -12,22 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build s3fifomultimutex
+// +build s3fifomultimutex
+
 package fifocache
 
-import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-)
-
-func TestQueue(t *testing.T) {
-	queue := NewQueue[int]()
-	for i := 0; i < maxQueuePartCapacity*1024; i++ {
-		queue.enqueue(i, 8)
-	}
-	for i := 0; i < maxQueuePartCapacity*1024; i++ {
-		n, ok := queue.dequeue()
-		assert.True(t, ok)
-		assert.Equal(t, i, n)
-	}
-}
+const SingleMutexFlag = false
