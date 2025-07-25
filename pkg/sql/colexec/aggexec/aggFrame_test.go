@@ -213,7 +213,7 @@ func hackAggMemoryManager() hackManager {
 func TestCount(t *testing.T) {
 	m := hackAggMemoryManager()
 	info := singleAggInfo{
-		aggID:    aggIdOfCountColumn,
+		aggID:    AggIdOfCountColumn,
 		distinct: false,
 		retType:  types.T_int64.ToType(),
 	}
@@ -490,7 +490,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "count_star",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeCount(mg, true, aggIdOfCountStar, false, types.T_int64.ToType()), nil
+				return makeCount(mg, true, AggIdOfCountStar, false, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -505,7 +505,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "count_column",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeCount(mg, false, aggIdOfCountColumn, false, types.T_int64.ToType()), nil
+				return makeCount(mg, false, AggIdOfCountColumn, false, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -520,7 +520,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "count_column_distinct",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeCount(mg, false, aggIdOfCountColumn, true, types.T_int64.ToType()), nil
+				return makeCount(mg, false, AggIdOfCountColumn, true, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -536,7 +536,7 @@ func TestAggExecSize(t *testing.T) {
 			name: "median",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
 				info := singleAggInfo{
-					aggID:     aggIdOfMedian,
+					aggID:     AggIdOfMedian,
 					distinct:  false,
 					argType:   types.T_int64.ToType(),
 					retType:   MedianReturnType([]types.Type{types.T_int64.ToType()}),
@@ -557,7 +557,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "group_concat",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeGroupConcat(mg, aggIdOfGroupConcat, false, []types.Type{types.T_varchar.ToType()}, getCroupConcatRet(types.T_varchar.ToType()), ","), nil
+				return makeGroupConcat(mg, AggIdOfGroupConcat, false, []types.Type{types.T_varchar.ToType()}, getCroupConcatRet(types.T_varchar.ToType()), ","), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -572,7 +572,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "approx_count",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeApproxCount(mg, aggIdOfApproxCount, types.T_int64.ToType()), nil
+				return makeApproxCount(mg, AggIdOfApproxCount, types.T_int64.ToType()), nil
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {
@@ -587,7 +587,7 @@ func TestAggExecSize(t *testing.T) {
 		{
 			name: "window_rank",
 			factory: func(mg AggMemoryManager) (AggFuncExec, error) {
-				return makeWindowExec(mg, winIdOfRank, false)
+				return makeWindowExec(mg, WinIdOfRank, false)
 			},
 			groupCount: 10,
 			fillFunc: func(t *testing.T, agg AggFuncExec, mp *mpool.MPool, groupCount int) bool {

@@ -15,8 +15,13 @@
 package aggexec
 
 import (
+	"bytes"
+	io "io"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -168,4 +173,62 @@ func (d *distinctHash) Size() int64 {
 	size += int64(cap(d.bs))
 	size += int64(cap(d.bs1))
 	return size
+}
+
+func (d *distinctHash) marshal() ([]byte, error) {
+	if len(d.maps) == 0 {
+		return nil, nil
+	}
+
+	var buf bytes.Buffer
+	n := uint64(len(d.maps))
+	if _, err := buf.Write(types.EncodeUint64(&n)); err != nil {
+		return nil, err
+	}
+
+	for _, m := range d.maps {
+		data, err := m.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		l := uint64(len(data))
+		if _, err := buf.Write(types.EncodeUint64(&l)); err != nil {
+			return nil, err
+		}
+		if _, err := buf.Write(data); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+func (d *distinctHash) unmarshal(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	buf := bytes.NewBuffer(data)
+
+	var n uint64
+	if _, err := buf.Read(types.EncodeUint64(&n)); err != nil {
+		return err
+	}
+
+	d.maps = make([]*hashmap.StrHashMap, n)
+	d.itrs = make([]hashmap.Iterator, n)
+	for i := uint64(0); i < n; i++ {
+		var l uint64
+		if _, err := buf.Read(types.EncodeUint64(&l)); err != nil {
+			return err
+		}
+		mapData := make([]byte, l)
+		if _, err := io.ReadFull(buf, mapData); err != nil {
+			return err
+		}
+		d.maps[i] = &hashmap.StrHashMap{}
+		if err := d.maps[i].UnmarshalBinary(mapData, hashtable.DefaultAllocator()); err != nil {
+			return err
+		}
+		d.itrs[i] = d.maps[i].NewIterator()
+	}
+	return nil
 }

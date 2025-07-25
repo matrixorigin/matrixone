@@ -51,10 +51,26 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 		Empties: em,
 		Groups:  nil,
 	}
+	if exec.IsDistinct() {
+		data, err := exec.distinctHash.marshal()
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > 0 {
+			encoded.Groups = [][]byte{data}
+		}
+	}
 	return encoded.Marshal()
 }
 
-func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
+func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+	if exec.IsDistinct() {
+		if len(groups) > 0 {
+			if err := exec.distinctHash.unmarshal(groups[0]); err != nil {
+				return err
+			}
+		}
+	}
 	return exec.ret.unmarshalFromBytes(result, empties)
 }
 
