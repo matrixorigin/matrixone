@@ -71,14 +71,6 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 		return true
 	}
 
-	if v := builder.compCtx.GetContext().Value(defines.SkipPkDedup{}); v != nil {
-		if v.(string) == tableDef.Name {
-			logutil.Info("skip pk dedup",
-				zap.String("tableDef", tableDef.Name))
-			return true
-		}
-	}
-
 	return catalog.IsSecondaryIndexTable(tableDef.Name)
 }
 
@@ -275,7 +267,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 		}
 	} else {
-		if pkName != catalog.FakePrimaryKeyColName {
+		var skipPkDedup bool
+		var skipUniqueIdxDedup map[string]bool
+		if v := builder.compCtx.GetContext().Value(defines.AlterCopyDedupOpt{}); v != nil {
+			dedupOpt := v.(*plan.AlterCopyDedupOpt)
+			if dedupOpt.TargetTableName == tableDef.Name {
+				logutil.Info("alter copy dedup exec",
+					zap.String("tableDef", tableDef.Name),
+					zap.Any("dedupOpt", dedupOpt))
+				skipPkDedup = dedupOpt.SkipPkDedup
+				skipUniqueIdxDedup = dedupOpt.SkipUniqueIdxDedup
+			}
+		}
+
+		if pkName != catalog.FakePrimaryKeyColName && !skipPkDedup {
 			builder.addNameByColRef(scanTag, tableDef)
 
 			scanNodeID := builder.appendNode(&plan.Node{
@@ -362,6 +367,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		for i, idxDef := range tableDef.Indexes {
 			if skipUniqueIdx[i] {
+				continue
+			}
+
+			if skipUniqueIdxDedup != nil && skipUniqueIdxDedup[idxDef.IndexName] {
 				continue
 			}
 

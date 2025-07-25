@@ -525,7 +525,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		}
 		logStr += col.GetName()
 	}
-	logutil.Infof("cols in GetColumMetadataScanInfo: %s, result len: %d", logStr, len(infoList))
 
 	return infoList, nil
 }

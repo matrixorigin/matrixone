@@ -2350,7 +2350,7 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
-			if node.JoinType == plan.Node_DEDUP {
+			if node.JoinType == plan.Node_DEDUP && node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash {
 				logutil.Infof("not support shuffle v2 for dedup join now")
 			} else {
 				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
