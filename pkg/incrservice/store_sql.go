@@ -38,7 +38,7 @@ var (
 )
 
 func (c AutoColumn) getInsertSQL() string {
-	return fmt.Sprintf(`insert into %s(table_id, col_name, col_index, offset, step) 
+	return fmt.Sprintf(`insert into %s(table_id, col_name, col_index, offset, step)
 		values(%d, '%s', %d, %d, %d)`,
 		incrTableName,
 		c.TableID,
@@ -110,6 +110,7 @@ func (s *sqlStore) Allocate(
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog()).
 		WithWaitCommittedLogApplied() // make sure the update is visible to the subsequence txn, wait log tail applied
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
@@ -132,7 +133,7 @@ func (s *sqlStore) Allocate(
 			func(te executor.TxnExecutor) error {
 				txnOp = te.Txn()
 				start := time.Now()
-				res, err := te.Exec(fetchSQL, executor.StatementOption{})
+				res, err := te.Exec(fetchSQL, executor.StatementOption{}.WithDisableLog())
 				if err != nil {
 					return err
 				}
@@ -162,7 +163,7 @@ func (s *sqlStore) Allocate(
 				}
 
 				next = getNext(current, count, int(step))
-				sql := fmt.Sprintf(`update %s set offset = %d 
+				sql := fmt.Sprintf(`update %s set offset = %d
 				where table_id = %d and col_name = '%s' and offset = %d`,
 					incrTableName,
 					next,
@@ -170,7 +171,7 @@ func (s *sqlStore) Allocate(
 					colName,
 					current)
 				start = time.Now()
-				res, err = te.Exec(sql, executor.StatementOption{})
+				res, err = te.Exec(sql, executor.StatementOption{}.WithDisableLog())
 				if err != nil {
 					return err
 				}
@@ -245,7 +246,8 @@ func (s *sqlStore) UpdateMinValue(
 		opts = opts.
 			WithWaitCommittedLogApplied().
 			WithEnableTrace().
-			WithDisableWaitPaused()
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	} else {
 		opts = opts.WithDisableIncrStatement()
 	}
@@ -270,7 +272,8 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 		WithDatabase(database).
 		WithEnableTrace().
 		WithDisableWaitPaused().
-		WithWaitCommittedLogApplied()
+		WithWaitCommittedLogApplied().
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 
 	return s.exec.ExecTxn(ctx,
 		func(txn executor.TxnExecutor) error {
@@ -299,7 +302,7 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 				ctx,
 				fmt.Sprintf("delete from %s where table_id = %d",
 					incrTableName, tableID),
-				opts)
+				opts.WithStatementOption(executor.StatementOption{}))
 			res.Close()
 			return err
 		},
@@ -315,7 +318,8 @@ func (s *sqlStore) GetColumns(
 		tableID)
 	opts := executor.Options{}.
 		WithDatabase(database).
-		WithTxn(txnOp)
+		WithTxn(txnOp).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
 
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()

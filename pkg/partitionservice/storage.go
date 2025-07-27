@@ -16,8 +16,8 @@ package partitionservice
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -181,8 +181,12 @@ func (s *Storage) GetMetadata(
 				) bool {
 					found = true
 					for i := 0; i < rows; i++ {
+						bs, err := base64.StdEncoding.DecodeString(executor.GetStringRows(cols[5])[i])
+						if err != nil {
+							panic(err)
+						}
 						expr := &plan.Expr{}
-						err := expr.Unmarshal([]byte(executor.GetStringRows(cols[5])[i]))
+						err = expr.Unmarshal(bs)
 						if err != nil {
 							panic(err)
 						}
@@ -380,8 +384,7 @@ func (s *Storage) createPartitionTable(
 	if err != nil {
 		return err
 	}
-	re := regexp.MustCompile(`\\([^'"\\0bnrtZ%_])`)
-	escapeExpr := re.ReplaceAllString(string(bs), "\\\\$1")
+	escapeExpr := base64.StdEncoding.EncodeToString(bs)
 
 	// add partition metadata to mo_catalog.mo_partitions
 	addPartitionMetadata := func() error {

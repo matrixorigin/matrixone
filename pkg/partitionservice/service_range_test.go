@@ -77,24 +77,24 @@ func TestGetMetadataByRangeType(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
+			def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_varchar}, 2, partition.PartitionMethod_Range)
 			stmt := newTestRangeOption(t, "c1", 1)
 
 			_, err := s.getMetadataByRangeType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 
-			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_int32})
+			def = newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_int32}, 2, partition.PartitionMethod_Range)
 			method := stmt.PartitionOption.PartBy.PType.(*tree.RangeType)
 
 			columns, _ := method.Expr.(*tree.UnresolvedName)
 			columns.NumParts = 0
 			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 			columns.NumParts = 1
 
 			method.Expr = tree.NewMaxValue()
 			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 		},
 	)
 }
@@ -107,13 +107,13 @@ func TestGetMetadataByRangeColumnsType(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
+			def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_varchar}, 2, partition.PartitionMethod_Range)
 			stmt := newTestRangeColumnsOption(t, "c1", 2)
 
 			_, err := s.getMetadataByRangeType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 
-			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
+			def = newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_date}, 2, partition.PartitionMethod_Range)
 			method := stmt.PartitionOption.PartBy.PType.(*tree.RangeType)
 
 			method.ColumnList = nil

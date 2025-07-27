@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -165,13 +166,13 @@ func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
 	return opts
 }
 
-func (opts StatementOption) WithSkipPkDedup(tbl string) StatementOption {
-	opts.skipPkDedupTbl = tbl
+func (opts StatementOption) WithAlterCopyDedupOpt(dedupOpt *plan.AlterCopyDedupOpt) StatementOption {
+	opts.alterCopyDedupOpt = dedupOpt
 	return opts
 }
 
-func (opts StatementOption) SkipPkDedupTbl() string {
-	return opts.skipPkDedupTbl
+func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyDedupOpt {
+	return opts.alterCopyDedupOpt
 }
 
 func (opts StatementOption) AccountID() uint32 {

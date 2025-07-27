@@ -269,10 +269,9 @@ func (exec *txnExecutor) Exec(
 			true)
 	}
 
-	if v := statementOption.SkipPkDedupTbl(); v != "" {
+	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
-			defines.SkipPkDedup{},
-			v)
+			defines.AlterCopyDedupOpt{}, v)
 	}
 
 	receiveAt := time.Now()

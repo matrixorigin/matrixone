@@ -19,12 +19,15 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 func getOpAndToAccountId(
@@ -182,6 +185,8 @@ func handleCloneDatabase(
 		sortedFkTbls  []string
 		fkTableMap    map[string]*tableInfo
 		snapCondition string
+
+		snapshotTS int64
 	)
 
 	bh = ses.GetBackgroundExec(reqCtx)
@@ -235,14 +240,36 @@ func handleCloneDatabase(
 		return err
 	}
 
+	// consider the following example:
+	// (within a session)
+	//   ...
+	// insert into t1 values (1) ---> commit ts (P2-L3)
+	// insert into t1 values (2) ---> commit ts (P2-L3)
+	// create table t2 clone t1 ---> the read snapshot ts is P2.
+	//
+	// limited by the format for the snapshot read TS, the logic TS is truncated,
+	// so in this example, the clone cannot read the newly inserted data.
+	//
+	// so we try to increase the txn physical ts here to make sure the snapshot TS
+	// the clone will get is greater than P2.
+	if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
+		reqCtx, ses.proc.GetTxnOperator(),
+	); err != nil {
+		return err
+	}
+
 	ctx2 = defines.AttachAccountId(reqCtx, toAccountId)
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
 		sql := fmt.Sprintf(
-			"create table `%s`.`%s` clone `%s`.`%s`", dstDb, dstTbl, srcDb, srcTbl)
+			"create table `%s`.`%s` clone `%s`.`%s`",
+			dstDb, dstTbl, srcDb, srcTbl,
+		)
 
 		if snapCondition != "" {
 			sql = sql + " " + snapCondition
+		} else {
+			sql = sql + fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
 		}
 
 		if err = bh.ExecRestore(ctx2, sql, opAccountId, toAccountId); err != nil {
@@ -317,4 +344,34 @@ func handleCloneDatabase(
 	}
 
 	return nil
+}
+
+func tryToIncreaseTxnPhysicalTS(
+	ctx context.Context, txnOp client.TxnOperator,
+) (updatedPhysical int64, err error) {
+
+	curTxnPhysicalTS := txnOp.SnapshotTS().PhysicalTime
+
+	if ctx.Value(defines.TenantIDKey{}) == nil {
+		return curTxnPhysicalTS, nil
+	}
+
+	// a slight increase added to the physical to make sure
+	// the updated ts is greater than the old txn timestamp (physical + logic)
+	curTxnPhysicalTS += int64(time.Microsecond)
+	if err = txnOp.UpdateSnapshot(ctx, timestamp.Timestamp{
+		PhysicalTime: curTxnPhysicalTS,
+	}); err != nil {
+		return
+	}
+
+	updatedPhysical = txnOp.SnapshotTS().PhysicalTime
+	if updatedPhysical <= curTxnPhysicalTS {
+		return 0, moerr.NewInternalErrorNoCtxf("try to update the snapshot ts failed in clone database")
+	}
+
+	// return a nanosecond precision
+	updatedPhysical -= int64(time.Nanosecond)
+
+	return updatedPhysical, nil
 }

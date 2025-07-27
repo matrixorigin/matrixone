@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -434,8 +435,13 @@ func (c *PushClient) toSubscribeTable(
 			//if table has been subscribed, return the ps.
 			ps, _, state = c.isSubscribed(dbID, tableID)
 			if ps != nil {
-				logutil.Infof("%s subscribe tbl[db: %d, tbl: %d, %s] succeed",
-					logTag, dbID, tableID, tableName)
+				logutil.Info(
+					fmt.Sprintf("%s-subscribe-ok", logTag),
+					zap.Uint64("table-id", tableID),
+					zap.String("table-name", tableName),
+					zap.Uint64("db-id", dbID),
+					zap.String("ps", fmt.Sprintf("%p", ps)),
+				)
 				return
 			}
 
@@ -494,7 +500,11 @@ func (c *PushClient) subscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Infof("%s send subscribe tbl[db: %d, tbl: %d] request succeed", logTag, tblId.DbId, tblId.TbId)
+		logutil.Info(
+			fmt.Sprintf("%s-send-subscribe-ok", logTag),
+			zap.Uint64("table-id", tblId.TbId),
+			zap.Uint64("db-id", tblId.DbId),
+		)
 		return nil
 	}
 }
@@ -1032,7 +1042,6 @@ func (c *PushClient) doGCPartitionState(ctx context.Context, e *Engine) {
 	}
 	e.Unlock()
 	ts := types.BuildTS(time.Now().UTC().UnixNano()-gcPartitionStateTimer.Nanoseconds()*5, 0)
-	logutil.Infof("%s GC partition_state %v", logTag, ts.ToString())
 	for ids, part := range parts {
 		part.Truncate(ctx, ids, ts)
 	}
