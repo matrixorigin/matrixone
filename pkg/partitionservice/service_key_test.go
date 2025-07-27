@@ -77,26 +77,16 @@ func TestGetMetadataByKeyType(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
+			def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_int32}, 1, partition.PartitionMethod_Key)
 			stmt := newTestKeyOption(t, "c1", 1)
-
-			_, err := s.getMetadataByKeyType(stmt.PartitionOption, def)
-			require.Error(t, err)
-
-			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_int32})
 			method := stmt.PartitionOption.PartBy.PType.(*tree.KeyType)
-			stmt.PartitionOption.PartBy.Num = 0
-			_, err = s.getMetadataByKeyType(stmt.PartitionOption, def)
-			require.Error(t, err)
-			stmt.PartitionOption.PartBy.Num = 1
 
 			columns := method.ColumnList
 			method.ColumnList = nil
-			_, err = s.getMetadataByKeyType(stmt.PartitionOption, def)
+			_, err := s.getMetadataByKeyType(stmt.PartitionOption, def)
 			require.Error(t, err)
 
 			method.ColumnList = append(columns, columns[0])
-			stmt.PartitionOption.PartBy.Num = 1
 			_, err = s.getMetadataByKeyType(stmt.PartitionOption, def)
 			require.Error(t, err)
 		},

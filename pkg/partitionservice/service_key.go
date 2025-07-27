@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -28,9 +29,6 @@ func (s *Service) getMetadataByKeyType(
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
 	method := option.PartBy.PType.(*tree.KeyType)
-	if option.PartBy.Num <= 0 {
-		return partition.PartitionMetadata{}, moerr.NewInvalidInputNoCtx("partition number is invalid")
-	}
 
 	if len(method.ColumnList) == 0 {
 		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("none-column is not supported in KEY partition")
@@ -40,16 +38,12 @@ func (s *Service) getMetadataByKeyType(
 		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in KEY partition")
 	}
 
-	validColumns, err := validColumns(
-		method.ColumnList[0],
-		def,
-		func(t plan.Type) bool {
-			return true
-		},
+	ctx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithEscapeSingleQuoteString(),
 	)
-	if err != nil {
-		return partition.PartitionMetadata{}, err
-	}
+	method.ColumnList[0].Format(ctx)
 
 	pm := partition.PartitionMethod_Hash
 	if method.Linear {
@@ -61,8 +55,8 @@ func (s *Service) getMetadataByKeyType(
 		TableName:    def.Name,
 		DatabaseName: def.DbName,
 		Method:       pm,
-		Description:  fmt.Sprintf("`%s`", validColumns[0]),
-		Columns:      validColumns,
+		Description:  ctx.String(),
+		Columns:      []string{ctx.String()},
 	}
 
 	for i := uint64(0); i < option.PartBy.Num; i++ {
