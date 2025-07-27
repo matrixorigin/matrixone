@@ -937,6 +937,8 @@ var (
 		catalog.MOUpgradeTable:       {},
 		catalog.MOUpgradeTenantTable: {},
 		catalog.MO_PITR:              {},
+		catalog.MOPartitionMetadata:  {},
+		catalog.MOPartitionTables:    {},
 	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
