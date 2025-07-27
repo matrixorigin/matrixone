@@ -324,7 +324,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
 			}
 		} else {
-			panic(astExpr.String())
 			err = moerr.NewInvalidInputf(localErrCtx, "column %s does not exist", name)
 		}
 	} else {
@@ -416,7 +415,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 	if parent == nil {
 		if err != nil {
-			panic(err)
 			errutil.ReportError(b.GetContext(), err)
 		}
 		return
