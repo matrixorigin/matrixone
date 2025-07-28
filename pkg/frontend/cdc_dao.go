@@ -199,7 +199,9 @@ func (t *CDCDao) ShowTasks(
 		return
 	}
 
+	logutil.Infof("XXX-DEBUG-21848-show-task-result length %d", len(execResultSet))
 	for _, result := range execResultSet {
+		logutil.Infof("XXX-DEBUG-21848-show-task-result row count %d", result.GetRowCount())
 		for rowIdx, rowCnt := uint64(0), result.GetRowCount(); rowIdx < rowCnt; rowIdx++ {
 			for colIdx, colName := range queryAttrs {
 				switch colName {
