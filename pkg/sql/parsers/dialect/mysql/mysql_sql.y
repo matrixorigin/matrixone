@@ -145,7 +145,6 @@ import (
 
     partitionOption *tree.PartitionOption
     clusterByOption *tree.ClusterByOption
-    retentionOption *tree.RetentionOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
     frameClause *tree.FrameClause
@@ -8908,15 +8907,6 @@ table_option:
     {
         var Preperties = $3
         $$ = tree.NewTableOptionProperties(Preperties)
-    }
-|   WITH RETENTION PERIOD INTEGRAL time_unit
-    {
-        var retentionPeriod = uint64($4.(int64))
-        var retentionUnit = strings.ToLower($5)
-        $$ = tree.NewRetentionOption(
-             retentionPeriod,
-             retentionUnit,
-        )
     }
 
 properties_list:

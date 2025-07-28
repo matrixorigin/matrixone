@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -312,68 +311,6 @@ func (s *service) registerExecutorsLocked() {
 			return moerr.AttachCause(ctx, err)
 		},
 	)
-
-	s.task.runner.RegisterExecutor(task.TaskCode_Retention, func(ctx context.Context, task task.Task) error {
-		ctx1, cancel1 := context.WithTimeoutCause(ctx, 10*time.Second, moerr.CauseRetention)
-		result, err := s.sqlExecutor.Exec(ctx1, "select account_id from mo_catalog.mo_account;",
-			executor.Options{}.WithWaitCommittedLogApplied().WithStatementOption(executor.StatementOption{}.WithDisableLog()))
-		cancel1()
-		if err != nil {
-			return moerr.AttachCause(ctx1, err)
-		}
-		accounts := make([]int32, 0)
-		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-			if len(cols) != 1 {
-				return false
-			}
-			for i := range cols[0].Length() {
-				accounts = append(accounts, vector.GetFixedAtNoTypeCheck[int32](cols[0], i))
-			}
-			return true
-		})
-
-		for _, accountID := range accounts {
-			ctx2, cancel2 := context.WithTimeoutCause(ctx, 15*time.Second, moerr.CauseRetention2)
-			err = s.sqlExecutor.ExecTxn(ctx2, func(txn executor.TxnExecutor) error {
-				results, err := txn.Exec("select database_name, table_name, retention_deadline from mo_catalog.mo_retention", executor.StatementOption{})
-				if err != nil {
-					return moerr.AttachCause(ctx2, err)
-				}
-
-				results.ReadRows(func(rows int, cols []*vector.Vector) bool {
-					if len(cols) != 3 {
-						return false
-					}
-
-					for i := range cols[0].Length() {
-						ddl := vector.GetFixedAtNoTypeCheck[uint64](cols[2], i)
-						if time.Unix(int64(ddl), 0).After(time.Now()) {
-							continue
-						}
-						dbName := cols[0].GetStringAt(i)
-						tableName := cols[1].GetStringAt(i)
-						_, err = txn.Exec(fmt.Sprintf(
-							"delete from mo_catalog.mo_retention where database_name='%s' and table_name='%s'",
-							dbName, tableName), executor.StatementOption{})
-						if err != nil {
-							return false
-						}
-						_, err = txn.Exec(fmt.Sprintf("drop table %s.%s", dbName, tableName), executor.StatementOption{})
-						if err != nil {
-							return false
-						}
-					}
-					return true
-				})
-				return nil
-			}, executor.Options{}.WithAccountID(uint32(accountID)).WithDisableTrace())
-			cancel2()
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 
 	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
 		frontend.CDCTaskExecutorFactory(
