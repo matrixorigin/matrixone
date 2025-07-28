@@ -199,29 +199,33 @@ func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
+	var item *_CacheItem[K, V]
+	defer func() {
+		// item ok, increase count
+		if item != nil {
+			item.inc()
+		}
+	}()
+
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
-	var item *_CacheItem[K, V]
+	defer shard.Unlock()
+
 	item, ok = shard.values[key]
 	if !ok {
 		// not exist
-		shard.Unlock()
 		return
 	}
 
 	// ghost item
 	if !item.valueOK {
 		ok = false
-		shard.Unlock()
-		item.inc()
 		return
 	}
 
 	if c.postGet != nil {
 		c.postGet(ctx, item.key, item.value, item.size)
 	}
-	shard.Unlock()
-	item.inc()
 	return item.value, true
 }
 
