@@ -1654,6 +1654,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 				logutil.Info(logHeader,
 					zap.String("source", "table stats executor"),
 					zap.String("state", "waiting mo stats cron task init"))
+				continue
 			}
 
 			if d.checkMoveOnTask() {
