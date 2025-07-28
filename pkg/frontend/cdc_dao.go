@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -180,6 +182,8 @@ func (t *CDCDao) ShowTasks(
 	}()
 
 	snapTS = txnOp.SnapshotTS().ToStdTime().In(time.Local).String()
+	startTS := types.TimestampToTS(txnOp.SnapshotTS())
+	logutil.Infof("XXX-DEBUG-21848-show-task-snap-ts: %s", startTS.ToString())
 	sql := cdc.CDCSQLBuilder.ShowTaskSQL(
 		uint64(t.ses.GetTenantInfo().GetTenantID()),
 		req.Option.All,
