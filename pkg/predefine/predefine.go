@@ -70,16 +70,7 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 	}
 	cronTasks = append(cronTasks, task2)
 
-	task3, err := createCronTask(
-		task.TaskMetadata{
-			ID:       "retention",
-			Executor: task.TaskCode_Retention,
-			Options:  task.TaskOptions{Concurrency: 1},
-		}, export.MergeTaskCronExprEvery15Min)
-	if err != nil {
-		return "", err
-	}
-	cronTasks = append(cronTasks, task3)
+	// task3 is deleted already
 
 	task4, err := createCronTask(
 		task.TaskMetadata{
