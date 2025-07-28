@@ -224,3 +224,16 @@ execute s1 using @a;
 execute s1 using @a;
 execute s1 using @a;
 execute s1 using @a;
+drop table if exists users;
+create table users (id int primary key auto_increment, counter int, create_at datetime default current_timestamp, update_at datetime default current_timestamp on update current_timestamp);
+insert into users (id, counter) values ('112',1);
+select id, counter, create_at = update_at from users;
+id    counter    create_at = update_at
+112    1    true
+select sleep(1);
+sleep(1)
+0
+insert into users (id, counter) values ('112',2) on duplicate key update counter=counter+values(counter), create_at=current_timestamp();
+select id, counter, create_at = update_at from users;
+id    counter    create_at = update_at
+112    3    true
