@@ -16,8 +16,9 @@ package mysql
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -2743,11 +2744,11 @@ var (
 		},
 		{
 			input:  "create procedure test1 (in param1 int) 'test test'",
-			output: "create procedure test1 (in param1 int) 'test test'",
+			output: "create procedure test1 (in param1 int) language 'sql' 'test test'",
 		},
 		{
 			input:  "create procedure test2 (param1 int, inout param2 char(5)) 'test test'",
-			output: "create procedure test2 (in param1 int, inout param2 char(5)) 'test test'",
+			output: "create procedure test2 (in param1 int, inout param2 char(5)) language 'sql' 'test test'",
 		},
 		{
 			input:  "drop procedure test1",

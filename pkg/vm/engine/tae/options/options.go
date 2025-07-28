@@ -193,6 +193,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CheckpointCfg.GlobalVersionInterval <= 0 {
 		o.CheckpointCfg.GlobalVersionInterval = DefaultGlobalVersionInterval
 	}
+
 	if o.CheckpointCfg.GCCheckpointInterval <= 0 {
 		o.CheckpointCfg.GCCheckpointInterval = DefaultGCCheckpointInterval
 	}
@@ -221,6 +222,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.GCCfg.GCTTL <= 0 {
 		o.GCCfg.GCTTL = DefaultGCTTL
+	}
+
+	if o.GCCfg.GCInMemoryTTL <= 0 {
+		o.GCCfg.GCInMemoryTTL = DefaultGCInMemoryTTL
 	}
 
 	if o.GCCfg.ScanGCInterval <= 0 {

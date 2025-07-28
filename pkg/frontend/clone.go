@@ -17,13 +17,14 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"regexp"
-	"strings"
 )
 
 func getOpAndToAccountId(

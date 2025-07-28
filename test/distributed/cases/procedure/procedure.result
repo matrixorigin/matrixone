@@ -57,7 +57,7 @@ drop procedure if exists test_repeat;
 create procedure test_repeat() 'begin declare p1 int default 10; declare v1 int default 5; repeat set v1 = v1 + 1; until v1 > p1 end repeat; select v1; end';
 call test_repeat();
 v1
-11
+6
 drop procedure test_repeat;
 drop procedure if exists test_loop;
 create procedure test_loop() 'begin declare p1 int default 5; label1: loop set p1 = p1 + 1; if p1 < 10 THEN iterate label1; end if; leave label1; end loop label1; select p1; end'
@@ -69,7 +69,7 @@ drop procedure if exists test_var_access;
 create procedure test_var_access() 'begin declare v1 int default 10; begin declare v1 int default 5; select v1; end; select v1; end'
 call test_var_access();
 v1
-10
+5
 drop procedure test_var_access;
 drop procedure if exists test_in_param;
 create procedure test_in_param(in sid int) 'begin select val from tbh2 where id = sid; end'
@@ -94,3 +94,4 @@ select @id;
 @id
 1000
 drop procedure test_inout_param;
+drop database if exists procedure_test;

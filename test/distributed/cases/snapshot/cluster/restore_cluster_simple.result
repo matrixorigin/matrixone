@@ -498,7 +498,7 @@ SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME   
 create snapshot cluster_sp for cluster;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-cluster_sp    2024-06-27 09:29:30.514199    cluster            
+cluster_sp    2025-07-19 05:48:42.971832    cluster            
 drop database if exists snapshot_read;
 drop database if exists test_snapshot_restore;
 drop database if exists snapshot_read_1;

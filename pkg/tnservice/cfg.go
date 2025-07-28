@@ -118,6 +118,7 @@ type Config struct {
 		ScanInterval           toml.Duration `toml:"scan-interval"`
 		MinCount               int64         `toml:"min-count"`
 		IncrementalInterval    toml.Duration `toml:"incremental-interval"`
+		GlobalVersionInterval  toml.Duration `toml:"global-version-interval"`
 		GlobalMinCount         int64         `toml:"global-min-count"`
 		ReservedWALEntryCount  uint64        `toml:"reserved-WAL-entry-count"`
 		OverallFlushMemControl uint64        `toml:"overall-flush-mem-control"`
@@ -126,6 +127,7 @@ type Config struct {
 
 	GCCfg struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
+		GCInMemoryTTL  toml.Duration `toml:"gc-in-memory-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
 		CheckGC        bool          `toml:"check-gc"`

@@ -280,6 +280,15 @@ func (opts Options) Streaming() (chan Result, chan error, bool) {
 	return opts.stream_chan, opts.error_chan, opts.streaming
 }
 
+func (opts Options) WithResolveVariableFunc(fn func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) Options {
+	opts.resolveVariableFunc = fn
+	return opts
+}
+
+func (opts Options) ResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return opts.resolveVariableFunc
+}
+
 func (opts StatementOption) HasParams() bool {
 	return len(opts.params) > 0
 }

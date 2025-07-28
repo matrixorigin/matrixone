@@ -45,7 +45,7 @@ insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30)
 create snapshot spsp01 for database sp_test;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp01    2024-12-30 09:07:07.965094    database    acc01    sp_test    
+spsp01    2025-07-19 05:50:18.827527    database    acc01    sp_test    
 drop database sp_test;
 restore account acc01 database sp_test from snapshot spsp01;
 show databases;
@@ -117,6 +117,7 @@ drop database if exists sp_test01;
 create database sp_test01;
 use sp_test01;
 drop table if exists partition01;
+
 create table partition01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -131,24 +132,30 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
+
 insert into partition01 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
 (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
+
 drop snapshot if exists spsp02;
 create snapshot spsp02 for database sp_test01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp02    2024-12-30 09:07:08.558079    database    acc01    sp_test01    
+spsp02    2025-07-19 05:50:18.974025    database    acc01    sp_test01    
 delete from partition01 where birth_date = '1980-12-17';
+
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 restore account acc01 database sp_test01 from snapshot spsp02 ;
+
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
 9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
 drop table partition01;
+
 restore account acc01 database sp_test01 table partition01 from snapshot spsp02;
+
 select * from partition01;
 emp_no    birth_date    first_name    last_name    gender    hire_date
 9001    1980-12-17    SMITH    CLERK    F    2008-12-17
@@ -163,7 +170,7 @@ drop snapshot if exists `SELECT`;
 create snapshot `SELECT` for database sp_test02;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-select    2024-12-30 09:07:09.16114    database    acc01    sp_test02    
+select    2025-07-19 05:50:19.015594    database    acc01    sp_test02    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
 select    database    acc01    sp_test02    
@@ -177,7 +184,7 @@ drop snapshot if exists AUTO_INCREMENT;
 create snapshot AUTO_INCREMENT for database sp_test03;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-auto_increment    2024-12-30 09:07:09.391949    database    acc01    sp_test03    
+auto_increment    2025-07-19 05:50:19.063947    database    acc01    sp_test03    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots;
 sname    level    account_name    database_name    table_name
 auto_increment    database    acc01    sp_test03    
@@ -230,8 +237,8 @@ create snapshot spsp02 for database db02;
 create snapshot spsp03 for table db02 table01;
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp03    2024-12-30 09:07:10.373757    table    acc01    db02    table01
-spsp02    2024-12-30 09:07:10.339901    database    acc01    db02    
+spsp03    2025-07-19 05:50:19.253887    table    acc01    db02    table01
+spsp02    2025-07-19 05:50:19.247249    database    acc01    db02    
 select sname, level, account_name, database_name, table_name from mo_catalog.mo_snapshots where level = 'database';
 sname    level    account_name    database_name    table_name
 spsp02    database    acc01    db02    
@@ -287,8 +294,8 @@ col1    col2    col3    col4
 2    37829901k3d    2    2
 select * from aff01;
 col1    col2    col3
-1    6    6
 2    6    3
+1    6    6
 drop table aff01;
 drop table pri01;
 restore account acc01 database db06 table aff01 from snapshot spsp06;
@@ -300,8 +307,8 @@ aff01
 pri01
 select * from aff01;
 col1    col2    col3
-1    6    6
 2    6    3
+1    6    6
 select * from pri01;
 col1    col2    col3    col4
 1    sfhuwe    1    1
@@ -358,19 +365,19 @@ system_metrics
 select * from db07.fulltext01;
 lastname    firstname    gender    departmentname    age
 Gilbert    Kevin    M    Tool Design    33
-Tamburello    Andrea    F    Marketing    45
 Johnson    David    M    Engineering    66
-Sharma    Bradley    M    Production    27
 Rapier    Abigail    F    Human Resources    38
+Sharma    Bradley    M    Production    27
+Tamburello    Andrea    F    Marketing    45
 drop database db07;
 restore account acc01 database db07 table fulltext01 from snapshot spsp08;
 select * from db07.fulltext01;
 lastname    firstname    gender    departmentname    age
 Gilbert    Kevin    M    Tool Design    33
-Tamburello    Andrea    F    Marketing    45
 Johnson    David    M    Engineering    66
-Sharma    Bradley    M    Production    27
 Rapier    Abigail    F    Human Resources    38
+Sharma    Bradley    M    Production    27
+Tamburello    Andrea    F    Marketing    45
 select count(*) from db07.fulltext01;
 count(*)
 5
@@ -407,9 +414,9 @@ pri01    CREATE TABLE `pri01` (\n  `col1` int DEFAULT NULL,\n  `col2` text DEFAU
 insert into pri01 values(234, 'db');
 select * from pri01;
 col1    col2
+234    db
 1    database
 234    database management
-234    db
 drop database db08;
 drop snapshot spsp09;
 drop database if exists db10;
@@ -423,14 +430,14 @@ col1    load_file(col2)
 1    1000-01-01,0001-01-01,1970-01-01 00:00:01,0\n9999-12-31,9999-12-31,2038-01-19,1\n
 select * from test01;
 col1    col2
-1    file:///Users/ariznawl/matrixone/test/distributed/resources/load_data/time_date_1.csv
+1    file:///Users/fengttt/m/matrixone/test/distributed/resources/load_data/time_date_1.csv
 drop snapshot if exists spsp10;
 create snapshot spsp10 for database db10;
 drop table test01;
 restore account acc01 database db10 table test01 from snapshot spsp10;
 select * from db10.test01;
 col1    col2
-1    file:///Users/ariznawl/matrixone/test/distributed/resources/load_data/time_date_1.csv
+1    file:///Users/fengttt/m/matrixone/test/distributed/resources/load_data/time_date_1.csv
 drop database db10;
 drop snapshot spsp10;
 drop account acc01;
