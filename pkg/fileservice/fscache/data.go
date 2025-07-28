@@ -14,6 +14,13 @@
 
 package fscache
 
+// Self maintain memory obj must implement Retain and Release function so that
+// cache will call Retain/Release to increment/decrement the reference counter
+type SelfMaintainMemObj interface {
+	Retain()
+	Release()
+}
+
 type Data interface {
 	Bytes() []byte
 	Slice(length int) Data

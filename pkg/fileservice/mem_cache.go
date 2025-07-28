@@ -52,9 +52,6 @@ func NewMemCache(
 		LogEvent(ctx, str_memory_cache_post_set_begin)
 		defer LogEvent(ctx, str_memory_cache_post_set_end)
 
-		// retain
-		value.Retain()
-
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
 		inuseBytes.Add(float64(size))
@@ -76,9 +73,6 @@ func NewMemCache(
 		LogEvent(ctx, str_memory_cache_post_get_begin)
 		defer LogEvent(ctx, str_memory_cache_post_get_end)
 
-		// retain
-		value.Retain()
-
 		// callbacks
 		if callbacks != nil {
 			LogEvent(ctx, str_memory_cache_callbacks_begin)
@@ -93,9 +87,6 @@ func NewMemCache(
 		// events
 		LogEvent(ctx, str_memory_cache_post_evict_begin)
 		defer LogEvent(ctx, str_memory_cache_post_evict_end)
-
-		// relaese
-		value.Release()
 
 		// metrics
 		LogEvent(ctx, str_update_metrics_begin)
@@ -209,6 +200,7 @@ func (m *MemCache) Update(
 		}
 
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
+		// NOTE: data existed in hashtable will skip setting this cache data.  At a result, reference counter does not increment
 		m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
 	}

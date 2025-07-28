@@ -14,16 +14,26 @@
 
 package fifocache
 
-import "sync"
+import (
+	"sync"
+)
+
+type QueueItem[T any] struct {
+	v    T
+	size int64
+}
 
 type Queue[T any] struct {
+	mu       sync.Mutex // Mutex to protect queue operations
 	head     *queuePart[T]
 	tail     *queuePart[T]
 	partPool sync.Pool
+	size     int
+	used     int64
 }
 
 type queuePart[T any] struct {
-	values []T
+	values []QueueItem[T]
 	begin  int
 	next   *queuePart[T]
 }
@@ -35,7 +45,7 @@ func NewQueue[T any]() *Queue[T] {
 		partPool: sync.Pool{
 			New: func() any {
 				return &queuePart[T]{
-					values: make([]T, 0, maxQueuePartCapacity),
+					values: make([]QueueItem[T], 0, maxQueuePartCapacity),
 				}
 			},
 		},
@@ -46,9 +56,9 @@ func NewQueue[T any]() *Queue[T] {
 	return queue
 }
 
+// empty is an internal helper, assumes lock is held
 func (p *Queue[T]) empty() bool {
-	return p.head == p.tail &&
-		p.head.begin == len(p.head.values)
+	return p.head == p.tail && len(p.head.values) == p.head.begin
 }
 
 func (p *queuePart[T]) reset() {
@@ -57,7 +67,12 @@ func (p *queuePart[T]) reset() {
 	p.next = nil
 }
 
-func (p *Queue[T]) enqueue(v T) {
+func (p *Queue[T]) enqueue(v T, dsize int64) {
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
+
 	if len(p.head.values) >= maxQueuePartCapacity {
 		// extend
 		newPart := p.partPool.Get().(*queuePart[T])
@@ -65,10 +80,17 @@ func (p *Queue[T]) enqueue(v T) {
 		p.head.next = newPart
 		p.head = newPart
 	}
-	p.head.values = append(p.head.values, v)
+	p.head.values = append(p.head.values, QueueItem[T]{v: v, size: dsize})
+	p.size++
+	p.used += dsize
 }
 
 func (p *Queue[T]) dequeue() (ret T, ok bool) {
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
+
 	if p.empty() {
 		return
 	}
@@ -76,17 +98,39 @@ func (p *Queue[T]) dequeue() (ret T, ok bool) {
 	if p.tail.begin >= len(p.tail.values) {
 		// shrink
 		if p.tail.next == nil {
-			panic("impossible")
+			// This should ideally not happen if empty() check passes,
+			// but adding a safeguard.
+			// Consider logging an error here if it does.
+			return
 		}
 		part := p.tail
 		p.tail = p.tail.next
-		p.partPool.Put(part)
+		p.partPool.Put(part) // Return the old part to the pool
 	}
 
-	ret = p.tail.values[p.tail.begin]
-	var zero T
+	retitem := p.tail.values[p.tail.begin]
+	ret = retitem.v
+	var zero QueueItem[T]
 	p.tail.values[p.tail.begin] = zero
 	p.tail.begin++
+	p.size--
 	ok = true
+	p.used -= retitem.size
 	return
+}
+
+func (p *Queue[T]) Len() int {
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
+	return p.size
+}
+
+func (p *Queue[T]) Used() int64 {
+	if !SingleMutexFlag {
+		p.mu.Lock()         // Acquire lock
+		defer p.mu.Unlock() // Ensure lock is released
+	}
+	return p.used
 }

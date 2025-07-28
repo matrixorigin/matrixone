@@ -16,73 +16,191 @@ package fifocache
 
 import (
 	"context"
-	"runtime"
 	"sync"
 	"sync/atomic"
-
-	"golang.org/x/sys/cpu"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
-const numShards = 256
-
-// Cache implements an in-memory cache with FIFO-based eviction
-// it's mostly like the S3-fifo, only without the ghost queue part
+// Cache implements an in-memory cache with S3-FIFO-based eviction
+// All postfn is very critical.  They will increment and decrement the reference counter of the cache data and deallocate the memory when reference counter is 0.
+// Make sure the postfn is protected by mutex from shardmap.
 type Cache[K comparable, V any] struct {
-	capacity     fscache.CapacityFunc
-	capacity1    fscache.CapacityFunc
-	keyShardFunc func(K) uint64
+	capacity fscache.CapacityFunc
+	capSmall fscache.CapacityFunc
 
 	postSet   func(ctx context.Context, key K, value V, size int64)
 	postGet   func(ctx context.Context, key K, value V, size int64)
 	postEvict func(ctx context.Context, key K, value V, size int64)
 
-	shards [numShards]struct {
-		sync.Mutex
-		values map[K]*_CacheItem[K, V]
-		_      cpu.CacheLinePad
-	}
+	mutex sync.Mutex
+	htab  CacheMap[K, *_CacheItem[K, V]]
 
-	itemQueue chan *_CacheItem[K, V]
-
-	queueLock sync.RWMutex
-	used1     int64
-	queue1    Queue[*_CacheItem[K, V]]
-	used2     int64
-	queue2    Queue[*_CacheItem[K, V]]
-
-	capacityCut atomic.Int64
+	small Queue[*_CacheItem[K, V]]
+	main  Queue[*_CacheItem[K, V]]
 }
 
 type _CacheItem[K comparable, V any] struct {
 	key   K
 	value V
 	size  int64
-	count atomic.Int32
+
+	// mutex protect the deleted, freq and postFn
+	mu         sync.Mutex   // only used when SingleMutexFlag = false
+	freq       int32        // same as atomicFreq but only used when SingleMytexFlag = true
+	atomicFreq atomic.Int32 // same as freq but only used when SingleMytexFlag = false
+	deleted    bool         // flag indicate item is already deleted by either hashtable or evict
 }
 
-func (c *_CacheItem[K, V]) inc() {
-	for {
-		cur := c.count.Load()
-		if cur >= 3 {
-			return
+// Thread-safe
+func (c *_CacheItem[K, V]) Inc() {
+	max_freq := int32(3)
+	if !SingleMutexFlag {
+		// multi mutex
+		for {
+			freq := c.atomicFreq.Load()
+			if freq >= max_freq {
+				return
+			}
+
+			if c.atomicFreq.CompareAndSwap(freq, freq+1) {
+				return
+			}
 		}
-		if c.count.CompareAndSwap(cur, cur+1) {
-			return
+
+	} else {
+		// single mutex
+		if c.freq < max_freq {
+			c.freq += 1
 		}
 	}
 }
 
-func (c *_CacheItem[K, V]) dec() {
-	for {
-		cur := c.count.Load()
-		if cur <= 0 {
-			return
+// Thread-safe
+func (c *_CacheItem[K, V]) Dec() {
+	min_freq := int32(0)
+	if !SingleMutexFlag {
+		// multi mutex
+		for {
+			freq := c.atomicFreq.Load()
+			if freq <= min_freq {
+				return
+			}
+			if c.atomicFreq.CompareAndSwap(freq, freq-1) {
+				return
+			}
 		}
-		if c.count.CompareAndSwap(cur, cur-1) {
-			return
+	} else {
+		// single mutex
+		if c.freq > min_freq {
+			c.freq -= 1
 		}
+	}
+}
+
+// Thread-safe
+func (c *_CacheItem[K, V]) GetFreq() int32 {
+	if !SingleMutexFlag {
+		return c.atomicFreq.Load()
+	}
+	return c.freq
+}
+
+// Thread-safe
+func (c *_CacheItem[K, V]) IsDeleted() bool {
+	if !SingleMutexFlag {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
+	return c.deleted
+}
+
+// Thread-safe
+// first MarkAsDeleted will decrement the ref counter and call postfn and set deleted = true.
+// After first call, MarkAsDeleted will do nothing.
+func (c *_CacheItem[K, V]) MarkAsDeleted(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
+	if !SingleMutexFlag {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
+
+	// check item is already deleted
+	if c.deleted {
+		// exit and return false which means no need to deallocate the memory
+		return false
+	}
+
+	// set deleted = true
+	c.deleted = true
+
+	// call postEvict before decrement the ref counter
+	if fn != nil {
+		fn(ctx, c.key, c.value, c.size)
+	}
+
+	// decrement the ref counter
+	c.releaseValue()
+	return true
+}
+
+// Thread-safe
+func (c *_CacheItem[K, V]) PostFn(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) {
+	if fn != nil {
+		if !SingleMutexFlag {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+		}
+		fn(ctx, c.key, c.value, c.size)
+	}
+}
+
+// Thread-safe
+func (c *_CacheItem[K, V]) Retain(ctx context.Context, fn func(ctx context.Context, key K, value V, size int64)) bool {
+	if !SingleMutexFlag {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
+
+	// first check item is already deleted
+	if c.deleted {
+		return false
+	}
+
+	// if not deleted, increment ref counter to occupy the memory
+	c.retainValue()
+
+	// value is safe to be accessed now and call postfn
+	if fn != nil {
+		fn(ctx, c.key, c.value, c.size)
+	}
+
+	return true
+}
+
+func (c *_CacheItem[K, V]) Size() int64 {
+	if !SingleMutexFlag {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+	}
+	return c.size
+}
+
+// INTERNAL: non-thread safe.
+// if deleted = true, item value is already released by this Cache and is NOT valid to use it inside the Cache.
+// if deleted = false, increment the reference counter of the value and it is safe to use now.
+func (c *_CacheItem[K, V]) retainValue() {
+	cdata, ok := any(c.value).(fscache.SelfMaintainMemObj)
+	if ok {
+		cdata.Retain()
+	}
+}
+
+// INTERNAL: non-thread safe.
+// decrement the reference counter
+func (c *_CacheItem[K, V]) releaseValue() {
+	cdata, ok := any(c.value).(fscache.SelfMaintainMemObj)
+	if ok {
+		cdata.Release()
 	}
 }
 
@@ -93,161 +211,109 @@ func New[K comparable, V any](
 	postGet func(ctx context.Context, key K, value V, size int64),
 	postEvict func(ctx context.Context, key K, value V, size int64),
 ) *Cache[K, V] {
+
 	ret := &Cache[K, V]{
 		capacity: capacity,
-		capacity1: func() int64 {
-			return capacity() / 10
+		capSmall: func() int64 {
+			cs := capacity() / 10
+			if cs == 0 {
+				cs = 1
+			}
+			return cs
 		},
-		itemQueue:    make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
-		queue1:       *NewQueue[*_CacheItem[K, V]](),
-		queue2:       *NewQueue[*_CacheItem[K, V]](),
-		keyShardFunc: keyShardFunc,
-		postSet:      postSet,
-		postGet:      postGet,
-		postEvict:    postEvict,
-	}
-	for i := range ret.shards {
-		ret.shards[i].values = make(map[K]*_CacheItem[K, V], 1024)
+		small:     *NewQueue[*_CacheItem[K, V]](),
+		main:      *NewQueue[*_CacheItem[K, V]](),
+		postSet:   postSet,
+		postGet:   postGet,
+		postEvict: postEvict,
+		htab:      NewCacheMap[K, *_CacheItem[K, V]](keyShardFunc),
 	}
 	return ret
 }
 
-func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_CacheItem[K, V] {
-	shard := &c.shards[c.keyShardFunc(key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-	_, ok := shard.values[key]
-	if ok {
-		// existed
-		return nil
-	}
-
+func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
 	item := &_CacheItem[K, V]{
 		key:   key,
 		value: value,
 		size:  size,
 	}
-	shard.values[key] = item
-	if c.postSet != nil {
-		c.postSet(ctx, key, value, size)
+
+	// FSCACHEDATA RETAIN
+	// increment the ref counter first no matter what to make sure the memory is occupied before hashtable.Set
+	// we don't need mutex here since item is still local
+	item.Retain(ctx, c.postSet)
+
+	ok := c.htab.Set(key, item, nil)
+	if !ok {
+		// existed
+		// FSCACHEDATA RELEASE
+		// decrement the ref counter if not set to release the resource
+		// still okay without mutex since item is not in hashtable
+		item.MarkAsDeleted(ctx, c.postEvict)
+		return
 	}
 
-	return item
-}
-
-func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
-	if item := c.set(ctx, key, value, size); item != nil {
-		c.enqueue(item)
-		c.Evict(ctx, nil, 0)
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
 	}
-}
 
-func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
-	if !c.queueLock.TryLock() {
-		// try put itemQueue
-		select {
-		case c.itemQueue <- item:
-			// let the queueLock holder do the job
-			return
-		default:
-			// block until get lock
-			c.queueLock.Lock()
-			defer c.queueLock.Unlock()
-		}
-	} else {
-		defer c.queueLock.Unlock()
-	}
+	// evict
+	c.evictAll(ctx, nil, 0)
 
 	// enqueue
-	c.queue1.enqueue(item)
-	c.used1 += item.size
+	c.small.enqueue(item, item.Size())
 
-	// help enqueue
-	for {
-		select {
-		case item := <-c.itemQueue:
-			c.queue1.enqueue(item)
-			c.used1 += item.size
-		default:
-			return
-		}
-	}
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
-	shard := &c.shards[c.keyShardFunc(key)%numShards]
-	shard.Lock()
 	var item *_CacheItem[K, V]
-	item, ok = shard.values[key]
+
+	item, ok = c.htab.Get(key, nil)
 	if !ok {
-		shard.Unlock()
 		return
 	}
-	if c.postGet != nil {
-		c.postGet(ctx, item.key, item.value, item.size)
+
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
 	}
-	shard.Unlock()
-	item.inc()
+
+	// FSCACHEDATA RETAIN
+	ok = item.Retain(ctx, c.postGet)
+	if !ok {
+		return item.value, false
+	}
+
+	// increment
+	item.Inc()
+
 	return item.value, true
 }
 
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
-	shard := &c.shards[c.keyShardFunc(key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-	item, ok := shard.values[key]
+	item, ok := c.htab.GetAndDelete(key, nil)
 	if !ok {
+		// key not found
 		return
 	}
-	delete(shard.values, key)
-	// key deleted, call postEvict
-	if c.postEvict != nil {
-		c.postEvict(ctx, item.key, item.value, item.size)
+
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
 	}
-	// queues will be update in evict
+	// call Bytes.Release() to decrement the ref counter and protected by shardmap mutex.
+	// item.deleted makes sure postEvict only call once.
+	item.MarkAsDeleted(ctx, c.postEvict)
+
 }
 
 func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut int64) {
-	if done == nil {
-		// can be async
-		if c.queueLock.TryLock() {
-			defer c.queueLock.Unlock()
-		} else {
-			if capacityCut > 0 {
-				// let the holder do more evict
-				c.capacityCut.Add(capacityCut)
-			}
-			return
-		}
-
-	} else {
-		if cap(done) < 1 {
-			panic("should be buffered chan")
-		}
-		c.queueLock.Lock()
-		defer c.queueLock.Unlock()
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
 	}
-
-	var target int64
-	for {
-		globalCapacityCut := c.capacityCut.Swap(0)
-		target = c.capacity() - capacityCut - globalCapacityCut
-		if target < 0 {
-			target = 0
-		}
-		if c.used1+c.used2 <= target {
-			break
-		}
-		target1 := c.capacity1() - capacityCut - globalCapacityCut
-		if target1 < 0 {
-			target1 = 0
-		}
-		if c.used1 > target1 {
-			c.evict1(ctx)
-		} else {
-			c.evict2(ctx)
-		}
-	}
+	target := c.evictAll(ctx, done, capacityCut)
 	if done != nil {
 		done <- target
 	}
@@ -255,67 +321,99 @@ func (c *Cache[K, V]) Evict(ctx context.Context, done chan int64, capacityCut in
 
 // ForceEvict evicts n bytes despite capacity
 func (c *Cache[K, V]) ForceEvict(ctx context.Context, n int64) {
-	capacityCut := c.capacity() - c.used() + n
-	c.Evict(ctx, nil, capacityCut)
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
+	}
+	capacityCut := c.capacity() - c.small.Used() + c.main.Used() + n
+	c.evictAll(ctx, nil, capacityCut)
 }
 
-func (c *Cache[K, V]) used() int64 {
-	c.queueLock.RLock()
-	defer c.queueLock.RUnlock()
-	return c.used1 + c.used2
+func (c *Cache[K, V]) Used() int64 {
+	if SingleMutexFlag {
+		c.mutex.Lock()
+		defer c.mutex.Unlock()
+	}
+	return c.small.Used() + c.main.Used()
 }
 
-func (c *Cache[K, V]) evict1(ctx context.Context) {
-	// queue 1
-	for {
-		item, ok := c.queue1.dequeue()
+func (c *Cache[K, V]) evictAll(ctx context.Context, done chan int64, capacityCut int64) int64 {
+	var target int64
+	target = c.capacity() - capacityCut - 1
+	if target <= 0 {
+		target = 0
+	}
+	targetSmall := c.capSmall() - capacityCut - 1
+	if targetSmall <= 0 {
+		targetSmall = 0
+	}
+
+	usedsmall := c.small.Used()
+	usedmain := c.main.Used()
+
+	for usedmain+usedsmall > target {
+		if usedsmall > targetSmall {
+			c.evictSmall(ctx)
+		} else {
+			c.evictMain(ctx)
+		}
+		usedsmall = c.small.Used()
+		usedmain = c.main.Used()
+	}
+
+	return target + 1
+}
+
+func (c *Cache[K, V]) evictSmall(ctx context.Context) {
+	// small fifo
+	for c.small.Used() > 0 {
+		item, ok := c.small.dequeue()
 		if !ok {
 			// queue empty
 			return
 		}
-		if item.count.Load() > 1 {
-			// put queue2
-			c.queue2.enqueue(item)
-			c.used1 -= item.size
-			c.used2 += item.size
+
+		deleted := item.IsDeleted()
+		if deleted {
+			return
+		}
+
+		if item.GetFreq() > 1 {
+			// put main
+			c.main.enqueue(item, item.Size())
 		} else {
 			// evict
-			c.deleteItem(ctx, item)
-			c.used1 -= item.size
+			c.htab.Remove(item.key)
+			// mark item as deleted and item should not be accessed again
+			item.MarkAsDeleted(ctx, c.postEvict)
 			return
 		}
 	}
 }
 
-func (c *Cache[K, V]) deleteItem(ctx context.Context, item *_CacheItem[K, V]) {
-	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-	if _, ok := shard.values[item.key]; ok {
-		delete(shard.values, item.key)
-		// key deleted, call postEvict
-		if c.postEvict != nil {
-			c.postEvict(ctx, item.key, item.value, item.size)
-		}
-	}
-}
-
-func (c *Cache[K, V]) evict2(ctx context.Context) {
-	// queue 2
-	for {
-		item, ok := c.queue2.dequeue()
+func (c *Cache[K, V]) evictMain(ctx context.Context) {
+	// main fifo
+	for c.main.Used() > 0 {
+		item, ok := c.main.dequeue()
 		if !ok {
 			// empty queue
-			break
+			return
 		}
-		if item.count.Load() > 0 {
+
+		deleted := item.IsDeleted()
+		if deleted {
+			return
+		}
+
+		if item.GetFreq() > 0 {
 			// re-enqueue
-			c.queue2.enqueue(item)
-			item.dec()
+			item.Dec()
+			c.main.enqueue(item, item.size)
 		} else {
 			// evict
-			c.deleteItem(ctx, item)
-			c.used2 -= item.size
+			c.htab.Remove(item.key)
+			// mark item as deleted and item should not be accessed again
+			item.MarkAsDeleted(ctx, c.postEvict)
 			return
 		}
 	}
