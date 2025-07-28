@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"slices"
 	"strconv"
 	"strings"
@@ -571,7 +574,22 @@ func (h *Handle) HandleDiskCleaner(
 		err = h.db.Controller.SwitchTxnMode(ctx, 4, "")
 		return
 	case cmd_util.ForceGC:
-		minTS := types.StringToTS(value)
+		selector := clusterservice.NewSelectAll()
+		client := h.client
+		minTS := types.MaxTs()
+		clusterservice.GetMOCluster(client.ServiceID()).GetCNService(
+			selector,
+			func(cn metadata.CNService) bool {
+				req := client.NewRequest(querypb.CmdMethod_MinTimestamp)
+
+				resp2, err := client.SendMessage(ctx, cn.QueryAddress, req)
+				err = moerr.AttachCause(ctx, err)
+				ts := types.StringToTS(resp2.MinTimestampResponse.MinTimestamp)
+				if minTS.LT(&ts) {
+					minTS = ts
+				}
+				return false
+			})
 		histroyRetention := time.Now().UTC().UnixNano() - minTS.Physical()
 		err = h.db.ForceGlobalCheckpoint(ctx, minTS, time.Duration(histroyRetention))
 		if err != nil {

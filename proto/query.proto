@@ -100,6 +100,7 @@ enum CmdMethod {
   FaultInject = 32;
   CtlMoTableStats = 33;
   WorkspaceThreshold = 34;
+  MinTimestamp = 35;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -302,6 +303,7 @@ message Response {
   FaultInjectResponse FaultInjectResponse = 35;
   CtlMoTableStatsResponse CtlMoTableStatsResponse = 36 [ (gogoproto.nullable) = false ];
   WorkspaceThresholdResponse WorkspaceThresholdResponse = 37;
+  MinTimestampResponse MinTimestampResponse = 38;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -651,4 +653,8 @@ message WorkspaceThresholdRequest {
 message WorkspaceThresholdResponse {
   uint64 CommitThreshold = 1;
   uint64 WriteThreshold = 2;
+}
+
+message MinTimestampResponse {
+    string MinTimestamp = 1;
 }

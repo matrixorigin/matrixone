@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"os"
 	"reflect"
 	"regexp"
@@ -69,6 +70,8 @@ type Handle struct {
 	//GCJob   *tasks.CancelableJob
 
 	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
+
+	client client.QueryClient
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -108,7 +111,7 @@ func openTAE(ctx context.Context, targetDir string, opt *options.Options) (tae *
 	return
 }
 
-func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handle {
+func NewTAEHandle(ctx context.Context, path string, client client.QueryClient, opt *options.Options) *Handle {
 	if path == "" {
 		path = "./store"
 	}
@@ -118,7 +121,8 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 	}
 
 	h := &Handle{
-		db: tae,
+		db:     tae,
+		client: client,
 	}
 
 	h.txnCtxs = common.NewMap[string, *txnContext](runtime.GOMAXPROCS(0))

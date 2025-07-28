@@ -228,7 +228,6 @@ func (s *store) newTAEStorage(
 		SID:                  s.cfg.UUID,
 		EnableApplyTableData: s.cfg.Txn.DebugMode,
 	}
-
 	return taestorage.NewTAEStorage(
 		ctx,
 		s.cfg.Txn.Storage.dataDir,
@@ -238,5 +237,6 @@ func (s *store) newTAEStorage(
 		logtailServerAddr,
 		logtailServerCfg,
 		txnServer,
+		s.queryClient,
 	)
 }
