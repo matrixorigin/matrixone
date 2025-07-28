@@ -1599,9 +1599,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			partitionIn = true
 			name = "in"
 		}
-    
-    // When the leftside is also tuple.  e.g. where (a, b) in ((1, 2), (3, 4), ...)
-    if leftList, ok := args[0].Expr.(*plan.Expr_List); ok {
+
+		// When the leftside is also tuple.  e.g. where (a, b) in ((1, 2), (3, 4), ...)
+		if leftList, ok := args[0].Expr.(*plan.Expr_List); ok {
 			if rightList := args[1].GetList(); rightList != nil {
 				return handleTupleIn(ctx, name, leftList, rightList)
 			}
