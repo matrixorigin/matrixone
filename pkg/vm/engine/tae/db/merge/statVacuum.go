@@ -276,7 +276,7 @@ func (s *VacuumStats) String() string {
 		s.DelVacuumPercent*100, s.DataVacuumScoreToCompact)
 	for i, l := 0, s.TopHollow.Len(); i < l; i++ {
 		item := heap.Pop(&s.TopHollow).(mItem)
-		ret += fmt.Sprintf("\n\t TopHollow[%d]: %s, %s, %v, %d", i,
+		ret += fmt.Sprintf("\n\t TopHollow[%d]: %s, %s, lv%v, %d", i,
 			item.obj.ObjectShortName().ShortString(),
 			common.HumanReadableBytes(int(item.obj.OriginSize())),
 			item.obj.GetLevel(),
@@ -339,7 +339,7 @@ func CalculateVacuumStats(ctx context.Context,
 		// For VacuumPercent
 		bufferBatch        any
 		bufferBatchCleanup func()
-		objDelCounter      map[types.Objectid]int
+		objDelCounter      = make(map[types.Objectid]int)
 		each               = func(rowid types.Rowid, _ bool, _ int) error {
 			objDelCounter[*rowid.BorrowObjectID()]++
 			return nil
@@ -373,7 +373,6 @@ func CalculateVacuumStats(ctx context.Context,
 		if bufferBatch == nil {
 			bufferBatch, bufferBatchCleanup = item.MakeBufferBatch()
 			defer bufferBatchCleanup()
-			objDelCounter = make(map[types.Objectid]int)
 		}
 		if err := item.ForeachRowid(ctx, bufferBatch, each); err != nil {
 			return nil, err

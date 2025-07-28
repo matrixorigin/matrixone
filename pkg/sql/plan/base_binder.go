@@ -805,9 +805,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{newExpr}, depth)
 
 	case tree.IN:
-		switch astExpr.Right.(type) {
+		switch r := astExpr.Right.(type) {
 		case *tree.Tuple:
 			op = "in"
+			if r.Partition {
+				op = "partition_in"
+			}
 
 		default:
 			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
@@ -1590,9 +1593,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
-	case "in", "not_in":
-		// When the leftside is also tuple.  e.g. where (a, b) in ((1, 2), (3, 4), ...)
-		if leftList, ok := args[0].Expr.(*plan.Expr_List); ok {
+	case "in", "not_in", "partition_in":
+		var partitionIn bool
+		if name == "partition_in" {
+			partitionIn = true
+			name = "in"
+		}
+    
+    // When the leftside is also tuple.  e.g. where (a, b) in ((1, 2), (3, 4), ...)
+    if leftList, ok := args[0].Expr.(*plan.Expr_List); ok {
 			if rightList := args[1].GetList(); rightList != nil {
 				return handleTupleIn(ctx, name, leftList, rightList)
 			}
@@ -1605,7 +1614,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List {
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
 						return nil, err
@@ -1618,7 +1627,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			var newExpr *plan.Expr
 
-			if len(inExprList) > 1 {
+			if len(inExprList) > 1 || partitionIn {
 				leftType := makeTypeByPlan2Expr(args[0])
 				argsType := []types.Type{leftType, leftType}
 				fGet, err := function.GetFunctionByName(ctx, name, argsType)
