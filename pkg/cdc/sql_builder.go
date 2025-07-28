@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const (
@@ -212,6 +213,60 @@ const (
 		"%s" +
 		" AND relkind = '%s' " +
 		" AND reldatabase NOT IN (%s)"
+	CDCInsertMOIntraSystemChangePropagationLogSqlTemplate = `REPLACE INTO mo_catalog.mo_intra_system_change_propagation_log (` +
+		`account_id,` +
+		`table_id,` +
+		`job_name,` +
+		`job_config,` +
+		`column_names,` +
+		`last_sync_txn_ts,` +
+		`err_code,` +
+		`error_msg,` +
+		`info,` +
+		`consumer_config,` +
+		`drop_at` +
+		`) VALUES (` +
+		`%d,` + // account_id
+		`%d,` + // table_id
+		`'%s',` + // job_name
+		`'%s',` + // job_config
+		`'%s',` + // column_names
+		`'%s',` + // last_sync_txn_ts
+		`%d,` + // err_code
+		`'%s',` + // error_msg
+		`'%s',` + // info
+		`'%s',` + // consumer_config
+		`null` + // drop_at
+		`)`
+	CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate = `UPDATE mo_catalog.mo_intra_system_change_propagation_log SET ` +
+		`err_code = %d,` +
+		`error_msg = '%s',` +
+		`last_sync_txn_ts = '%s'` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'`
+	CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_intra_system_change_propagation_log SET ` +
+		`drop_at = now()` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'`
+	CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate = `DELETE FROM mo_catalog.mo_intra_system_change_propagation_log WHERE ` +
+		`drop_at < '%s'`
+	CDCSelectMOIntraSystemChangePropagationLogSqlTemplate        = `SELECT * from mo_catalog.mo_intra_system_change_propagation_log`
+	CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate = `SELECT drop_at from mo_catalog.mo_intra_system_change_propagation_log WHERE ` +
+		`account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'`
+	CDCGetTableIDTemplate = "SELECT " +
+		"rel_id, " +
+		"reldatabase_id " +
+		"FROM `mo_catalog`.`mo_tables` " +
+		"WHERE " +
+		" account_id = %d " +
+		" AND reldatabase = '%s' " +
+		" AND relname = '%s' "
 )
 
 const (
@@ -235,7 +290,16 @@ const (
 	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
 
-	CDCSqlTemplateCount = 19
+	CDCInsertMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 19
+	CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 20
+	CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate_Idx  = 21
+	CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 22
+	CDCSelectMOIntraSystemChangePropagationLogSqlTemplate_Idx        = 23
+	CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate_Idx = 24
+
+	CDCGetTableIDTemplate_Idx = 25
+
+	CDCSqlTemplateCount = 26
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -328,6 +392,42 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"account_id",
 		},
 	},
+
+	CDCInsertMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCInsertMOIntraSystemChangePropagationLogSqlTemplate,
+	},
+	CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate,
+	},
+	CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate_Idx: {
+		SQL: CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate,
+	},
+	CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate,
+	},
+	CDCSelectMOIntraSystemChangePropagationLogSqlTemplate_Idx: {
+		SQL: CDCSelectMOIntraSystemChangePropagationLogSqlTemplate,
+		OutputAttrs: []string{
+			"account_id",
+			"table_id",
+			"db_id",
+			"job_name",
+			"job_config",
+			"column_names",
+			"last_sync_txn_ts",
+			"err_code",
+			"error_msg",
+			"info",
+			"drop_at",
+			"consumer_config",
+		},
+	},
+	CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate_Idx: {
+		SQL: CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate,
+		OutputAttrs: []string{
+			"drop_at",
+		},
+	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {
 		SQL: CDCGetWatermarkWhereSqlTemplate,
 	},
@@ -336,6 +436,13 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
 		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
+	},
+	CDCGetTableIDTemplate_Idx: {
+		SQL: CDCGetTableIDTemplate,
+		OutputAttrs: []string{
+			"rel_id",
+			"reldatabase_id",
+		},
 	},
 }
 
@@ -658,6 +765,90 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 }
 
 // ------------------------------------------------------------------------------------------------
+// Intra-System Change Propagation Log SQL
+// ------------------------------------------------------------------------------------------------
+
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogInsertSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobConfig string,
+	columnNames string,
+	info string,
+	consumerConfig string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCInsertMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+		jobConfig,
+		columnNames,
+		types.TS{}.ToString(),
+		0,
+		"",
+		info,
+		consumerConfig,
+	)
+}
+
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogUpdateResultSQL(
+	accountID uint32,
+	tableID uint64,
+	indexName string,
+	newWatermark types.TS,
+	errorCode int,
+	errorMsg string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL,
+		errorCode,
+		errorMsg,
+		newWatermark.ToString(),
+		accountID,
+		tableID,
+		indexName,
+	)
+}
+
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogUpdateDropAtSQL(
+	accountID uint32,
+	tableID uint64,
+	indexName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOIntraSystemChangePropagationLogDropAtSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		indexName,
+	)
+}
+
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogGCSQL(t time.Time) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCDeleteMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL,
+		t.Format(time.DateTime),
+	)
+}
+
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogSelectSQL() string {
+	return CDCSQLTemplates[CDCSelectMOIntraSystemChangePropagationLogSqlTemplate_Idx].SQL
+}
+
+func (b cdcSQLBuilder) IntraSystemChangePropagationLogSelectByTableSQL(
+	accountID uint32,
+	tableID uint64,
+	indexName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCSelectMOIntraSystemChangePropagationLogByTableSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		indexName,
+	)
+}
+
+// ------------------------------------------------------------------------------------------------
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
 func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, tableNames string) string {
@@ -678,5 +869,18 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
+	)
+}
+
+func (b cdcSQLBuilder) GetTableIDSQL(
+	accountID uint32,
+	dbName string,
+	tableName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTableIDTemplate_Idx].SQL,
+		accountID,
+		dbName,
+		tableName,
 	)
 }

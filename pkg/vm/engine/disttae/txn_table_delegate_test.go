@@ -36,6 +36,7 @@ func TestTxnTableDelegate_CollectChanges(t *testing.T) {
 			context.Background(),
 			types.TS{},
 			types.TS{},
+			false,
 			&mpool.MPool{},
 		)
 	})

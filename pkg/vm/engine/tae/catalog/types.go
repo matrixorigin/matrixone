@@ -68,7 +68,10 @@ func GetTombstoneSchema(objectSchema *Schema) *Schema {
 			}
 		}
 	}
-	schema.Finalize(false)
+	err := schema.Finalize(false)
+	if err != nil {
+		panic(err)
+	}
 	return schema
 }
 

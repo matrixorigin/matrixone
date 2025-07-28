@@ -64,9 +64,18 @@
 | 1000 | 2 | IOET_WALRecord |
 | 3000 | 3, 4 | IOET_WALTxnEntry |
 
-## MatrxOne 2.2 (TBD)
+## MatrixOne 2.2
 
 
 | Type | Version | Name |
 | ---- | ------- | ---- |
 | 3000 | 5 | IOET_WALTxnEntry |
+
+## MatrixOne 3.0
+
+| Type | Version | Name |
+| ---- | ------- | ---- |
+| 4000 | 1 | IOET_JobConfig_Default |
+| 4001 | 1 | IOET_JobConfig_AlwaysUpdate |
+| 4002 | 1 | IOET_JobConfig_Timed |
+| 5000 | 1 | IOET_ConsumerConfig |

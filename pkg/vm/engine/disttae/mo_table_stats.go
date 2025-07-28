@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
@@ -1084,7 +1085,7 @@ func (d *dynamicCtx) forceUpdateQuery(
 		if err = getChangedTableList(
 			ctx, d.de.service, d.de,
 			accs, dbs, tbls,
-			oldTS, &pairs, &to, cmd_util.CheckChanged); err != nil {
+			oldTS, &pairs, &to, cmd_util.CheckChanged, nil); err != nil {
 			return
 		}
 
@@ -1700,7 +1701,7 @@ func (d *dynamicCtx) prepare(
 		ctx, service, eng, nil, nil, nil,
 		[]timestamp.Timestamp{from.ToTimestamp(), to.ToTimestamp()},
 		&d.tableStock.tbls,
-		&d.tableStock.specialTo, cmd_util.CollectChanged)
+		&d.tableStock.specialTo, cmd_util.CollectChanged, nil)
 
 	return err
 }
@@ -2790,6 +2791,44 @@ func correctAccountForCatalogTables(
 	return nil
 }
 
+func GetChangedTableList(
+	ctx context.Context,
+	service string,
+	eng engine.Engine,
+	accs []uint64,
+	dbs []uint64,
+	tbls []uint64,
+	ts []timestamp.Timestamp,
+	to *types.TS,
+	typ cmd_util.ChangedListType,
+	forEachTable func(
+		accountID int64,
+		databaseID int64,
+		tableID int64,
+		tableName string,
+		dbName string,
+		relKind string,
+		pkSequence int,
+		snapshot types.TS,
+	),
+	handleFn func(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.GetChangedTableListReq,
+		resp *cmd_util.GetChangedTableListResp,
+	) (func(), error),
+) (err error) {
+	pairs := make([]tablePair, 0, len(accs))
+	err = getChangedTableList(ctx, service, eng, accs, dbs, tbls, ts, &pairs, to, typ, handleFn)
+	if err != nil {
+		return
+	}
+	for _, tbl := range pairs {
+		forEachTable(tbl.acc, tbl.db, tbl.tbl, tbl.tblName, tbl.dbName, tbl.relKind, tbl.pkSequence, tbl.snapshot)
+	}
+	return
+}
+
 func getChangedTableList(
 	ctx context.Context,
 	service string,
@@ -2801,6 +2840,12 @@ func getChangedTableList(
 	pairs *[]tablePair,
 	to *types.TS,
 	typ cmd_util.ChangedListType,
+	handleFn func(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.GetChangedTableListReq,
+		resp *cmd_util.GetChangedTableListResp,
+	) (func(), error),
 ) (err error) {
 
 	req := &cmd_util.GetChangedTableListReq{
@@ -2879,13 +2924,20 @@ func getChangedTableList(
 
 	var resp *cmd_util.GetChangedTableListResp
 
-	handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
-	ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
-	if err != nil {
-		return err
+	if handleFn != nil {
+		resp = &cmd_util.GetChangedTableListResp{}
+		payload(0, "", proc)
+		handleFn(ctx, txn.TxnMeta{}, req, resp)
+	} else {
+
+		handler := ctl.GetTNHandlerFunc(api.OpCode_OpGetChangedTableList, whichTN, payload, responseUnmarshaler)
+		ret, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+		if err != nil {
+			return err
+		}
+		resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 	}
 
-	resp = ret.Data.([]any)[0].(*cmd_util.GetChangedTableListResp)
 	//if resp.Newest == nil {
 	//	*to = types.BuildTS(time.Now().UnixNano(), 0)
 	//} else {
