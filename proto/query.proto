@@ -656,5 +656,6 @@ message WorkspaceThresholdResponse {
 }
 
 message MinTimestampResponse {
-    string MinTimestamp = 1;
+  // LatestCommitTS update latest commit ts.
+  timestamp.Timestamp MinTimestamp = 1 [(gogoproto.nullable) = false];
 }

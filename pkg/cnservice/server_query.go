@@ -245,8 +245,8 @@ func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp
 }
 
 func (s *service) handleGetMinTimestamp(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
-	ts := s._txnClient.MinTimestamp()
-	resp.MinTimestampResponse.MinTimestamp = ts.String()
+	resp.MinTimestampResponse = new(query.MinTimestampResponse)
+	resp.MinTimestampResponse.MinTimestamp = s._txnClient.MinTimestamp()
 	return nil
 }
 

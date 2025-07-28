@@ -577,19 +577,28 @@ func (h *Handle) HandleDiskCleaner(
 		selector := clusterservice.NewSelectAll()
 		client := h.client
 		minTS := types.MaxTs()
+		var reqError error
 		clusterservice.GetMOCluster(client.ServiceID()).GetCNService(
 			selector,
 			func(cn metadata.CNService) bool {
-				req := client.NewRequest(querypb.CmdMethod_MinTimestamp)
+				mintsReq := client.NewRequest(querypb.CmdMethod_MinTimestamp)
 
-				resp2, err := client.SendMessage(ctx, cn.QueryAddress, req)
-				err = moerr.AttachCause(ctx, err)
-				ts := types.StringToTS(resp2.MinTimestampResponse.MinTimestamp)
-				if minTS.LT(&ts) {
+				mintsResp, mintsErr := client.SendMessage(ctx, cn.QueryAddress, mintsReq)
+				if mintsErr != nil {
+					reqError = mintsErr
+					return false
+				}
+				ts := types.BuildTS(mintsResp.MinTimestampResponse.MinTimestamp.PhysicalTime,
+					mintsResp.MinTimestampResponse.MinTimestamp.LogicalTime)
+				if !ts.IsEmpty() && minTS.LT(&ts) {
 					minTS = ts
 				}
 				return false
 			})
+		if reqError != nil {
+			err = reqError
+			return
+		}
 		histroyRetention := time.Now().UTC().UnixNano() - minTS.Physical()
 		err = h.db.ForceGlobalCheckpoint(ctx, minTS, time.Duration(histroyRetention))
 		if err != nil {
