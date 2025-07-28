@@ -39,7 +39,8 @@ import (
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold uint64 = 128 * mpool.MB
+	WriteS3Threshold         uint64 = 128 * mpool.MB
+	FaultInjectedS3Threshold uint64 = 512 * mpool.KB
 )
 
 type CNS3Writer struct {
@@ -151,12 +152,20 @@ func NewCNS3DataWriter(
 
 	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
 
+	threshold := WriteS3Threshold
+	if faultInjected, _ := objectio.LogCNFlushSmallObjsInjected(
+		tableDef.DbName, tableDef.Name,
+	); faultInjected {
+		threshold = FaultInjectedS3Threshold
+	}
+
 	writer.sinker = ioutil.NewSinker(
 		sortKeyIdx, attrs, attrTypes,
 		factor, mp, fs,
 		ioutil.WithTailSizeCap(0),
-		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
-		ioutil.WithOffHeap())
+		ioutil.WithMemorySizeThreshold(int(threshold)),
+		ioutil.WithOffHeap(),
+	)
 
 	writer.ResetBlockInfoBat()
 

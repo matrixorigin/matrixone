@@ -133,8 +133,8 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 	opt := executor.StatementOption{}
-	if qry.SkipPkDedup {
-		opt = opt.WithSkipPkDedup(qry.CopyTableDef.Name)
+	if qry.DedupOpt.SkipPkDedup || len(qry.DedupOpt.SkipUniqueIdxDedup) > 0 {
+		opt = opt.WithAlterCopyDedupOpt(qry.DedupOpt)
 	}
 	// 4. copy the original table data to the temporary replica table
 	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)

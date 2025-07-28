@@ -230,7 +230,7 @@ type SourceScanResKey struct{}
 
 type IgnoreForeignKey struct{}
 
-type SkipPkDedup struct{}
+type AlterCopyDedupOpt struct{}
 
 // Determine if now is a bg sql.
 type BgKey struct{}
