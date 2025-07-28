@@ -71,6 +71,17 @@ DELETE a1, a2 FROM t1 AS a1 INNER JOIN t2 AS a2 WHERE a1.a = a2.b;
 select * from t1;
 
 drop table if exists t1;
+create table t1 (a int, b float, c varchar);
+insert into t1 values(1, 1.5, 'a');
+insert into t1 values(1, 1.5, 'b');
+delete from t1 where (a, b) in ((1, 1.5));
+select * from t1;
+insert into t1 values(2, 2.5, 'a');
+insert into t1 values(2, 2.5, 'b');
+delete from t1 where (a, b) in ((2.0, 2.5), (2.1, 2.5));
+select * from t1;
+
+drop table if exists t1;
 create table t1 (a char(20));
 insert into t1 values (null), (null), ('hello');
 delete from t1 where a is null;
