@@ -140,7 +140,7 @@ func (s *service) RefreshStatementFilters() error {
 			res, err := txn.Exec(
 				fmt.Sprintf("select method, value from %s",
 					TraceStatementFilterTable),
-				executor.StatementOption{})
+				executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return err
 			}

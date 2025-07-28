@@ -1481,19 +1481,63 @@ func Pi(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.P
 	})
 }
 
-func DisableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	fault.Disable()
+func DisableFaultInjection(
+	_ []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+
+	var (
+		err      error
+		finalVal bool
+	)
+
+	// this call may come from UT
+	if proc.GetSessionInfo() == nil || proc.GetSessionInfo().SqlHelper == nil {
+		fault.Disable()
+		finalVal = true
+	} else {
+		sql := "select fault_inject('all.','disable_fault_injection','');"
+
+		if finalVal, err = doFaultPoint(proc, sql); err != nil {
+			return err
+		}
+	}
 
 	return opNoneParamToFixed[bool](result, proc, length, func() bool {
-		return true
+		return finalVal
 	})
 }
 
-func EnableFaultInjection(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	fault.Enable()
+func EnableFaultInjection(
+	_ []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+
+	var (
+		err      error
+		finalVal bool
+	)
+
+	// this call may come from UT
+	if proc.GetSessionInfo() == nil || proc.GetSessionInfo().SqlHelper == nil {
+		fault.Enable()
+		finalVal = true
+	} else {
+		sql := "select fault_inject('all.','enable_fault_injection','');"
+
+		if finalVal, err = doFaultPoint(proc, sql); err != nil {
+			return err
+		}
+	}
 
 	return opNoneParamToFixed[bool](result, proc, length, func() bool {
-		return true
+		return finalVal
 	})
 }
 

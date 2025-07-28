@@ -59,7 +59,7 @@ func handleEnableFaultInjection() string {
 	if Enable() {
 		previousStatus = "disabled"
 	}
-	return fmt.Sprintf("Fault injection enabled. Previous status: %s", previousStatus)
+	return fmt.Sprintf("OK, Fault injection enabled. Previous status: %s", previousStatus)
 }
 
 func handleDisableFaultInjection() string {
@@ -67,7 +67,7 @@ func handleDisableFaultInjection() string {
 	if Disable() {
 		previousStatus = "enabled"
 	}
-	return fmt.Sprintf("Fault injection disabled. Previous status: %s", previousStatus)
+	return fmt.Sprintf("OK, Fault injection disabled. Previous status: %s", previousStatus)
 }
 
 func handleStatusFaultPoint() string {
@@ -91,10 +91,10 @@ func handleRemoveFaultPoint(ctx context.Context, parameter string) string {
 }
 
 func handleAddFaultPoint(ctx context.Context, parameter string) string {
-	// parameter like "name.freq.action.iarg.sarg.constant"
-	parameters := strings.Split(parameter, ".")
+	// parameter like "name#freq#action#iarg#sarg#constant"
+	parameters := strings.Split(parameter, "#")
 	if len(parameters) != 6 {
-		return "Invalid argument! Expected format: name.freq.action.iarg.sarg.constant"
+		return "Invalid argument! Expected format: name#freq#action#iarg#sarg#constant"
 	}
 
 	name := parameters[0]

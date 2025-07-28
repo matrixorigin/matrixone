@@ -1258,7 +1258,8 @@ func NewBitCastExpr(e Expr, t ResolvableTypeReference) *BitCastExpr {
 // the parenthesized list of expressions.
 type Tuple struct {
 	exprImpl
-	Exprs Exprs
+	Partition bool
+	Exprs     Exprs
 }
 
 func (node *Tuple) Format(ctx *FmtCtx) {

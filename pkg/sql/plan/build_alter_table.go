@@ -52,6 +52,33 @@ func skipPkDedup(old, new *TableDef) bool {
 	return slices.Equal(oldPk.Names, newPk.Names)
 }
 
+func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
+	var skip map[string]bool
+
+	// In spite of the O(n^2) complexity,
+	// it's rare for a table to have enough indexes to cause
+	// meaningful performance degradation.
+	for _, idx := range new.Indexes {
+		if !idx.Unique {
+			continue
+		}
+		for _, oldidx := range old.Indexes {
+			if !oldidx.Unique {
+				continue
+			}
+			if oldidx.IndexName == idx.IndexName &&
+				slices.Equal(idx.Parts, oldidx.Parts) {
+				if skip == nil {
+					skip = make(map[string]bool)
+				}
+				skip[idx.IndexName] = true
+				break
+			}
+		}
+	}
+	return skip
+}
+
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
@@ -158,11 +185,17 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
 
-	alterTablePlan.SkipPkDedup = skipPkDedup(tableDef, copyTableDef)
-	logutil.Info("skip pk dedup",
+	dedupOpt := &plan.AlterCopyDedupOpt{
+		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef),
+		TargetTableName:    copyTableDef.Name,
+		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef),
+	}
+
+	alterTablePlan.DedupOpt = dedupOpt
+	logutil.Info("alter copy dedup opt",
 		zap.Any("originPk", tableDef.Pkey),
 		zap.Any("copyPk", copyTableDef.Pkey),
-		zap.Bool("skipPkDedup", alterTablePlan.SkipPkDedup))
+		zap.Any("dedupOpt", dedupOpt))
 
 	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx)
 	if err != nil {
