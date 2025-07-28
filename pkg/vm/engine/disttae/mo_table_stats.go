@@ -483,7 +483,8 @@ func initMoTableStatsConfig(
 
 			defer func() {
 				logutil.Info(logHeader,
-					zap.Duration("cn service starting takes", moServerStarted.Sub(start)),
+					zap.String("source", "wait the mo service started"),
+					zap.Duration("duration", moServerStarted.Sub(start)),
 				)
 			}()
 
@@ -1652,7 +1653,7 @@ func (d *dynamicCtx) tableStatsExecutor(
 			if !d.moStatsCronTaskInit.Load() {
 				logutil.Info(logHeader,
 					zap.String("source", "table stats executor"),
-					zap.String("wait mo stats cron task check done", ""))
+					zap.String("state", "waiting mo stats cron task init"))
 			}
 
 			if d.checkMoveOnTask() {
