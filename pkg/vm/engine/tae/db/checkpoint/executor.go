@@ -52,9 +52,7 @@ func (job *checkpointJob) RunGCKP(ctx context.Context) (err error) {
 	// one to ensure it has entered `RunGCKP`
 	objectio.WaitInjected(objectio.FJ_GCKPWait1)
 	// two to block the execution till being notified
-	logutil.Info("XXX-DEBUG-22256-wait-injected-start")
 	objectio.WaitInjected(objectio.FJ_GCKPWait1)
-	logutil.Info("XXX-DEBUG-22256-wait-injected-done")
 
 	_, err = job.doGlobalCheckpoint(
 		job.gckpCtx.end,
