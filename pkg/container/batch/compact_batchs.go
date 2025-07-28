@@ -119,7 +119,7 @@ func (bats *CompactBatchs) Extend(mpool *mpool.MPool, inBatch *Batch) error {
 		return nil
 	}
 
-	copyBat, err = inBatch.Dup(mpool)
+	copyBat, err = inBatch.Clone(mpool, true)
 	if err != nil {
 		return err
 	}
