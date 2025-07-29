@@ -122,8 +122,6 @@ var (
 
 		catalog.MO_SNAPSHOTS: 1,
 		catalog.MO_PITR:      1,
-
-		catalog.MO_RETENTION: 0,
 	}
 )
 
@@ -228,6 +226,17 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	}
 	snapshotId = newUUid.String()
 
+	var (
+		snapshotTS int64
+	)
+
+	// refer to the `handleCloneDatabase`
+	if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
+		ctx, ses.proc.GetTxnOperator(),
+	); err != nil {
+		return err
+	}
+
 	// 3. get database name , table name  and objId according to the snapshot level
 	switch snapshotLevel {
 	case tree.SNAPSHOTLEVELCLUSTER:
@@ -235,7 +244,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			ctx,
 			snapshotId,
 			snapshotName,
-			time.Now().UTC().UnixNano(),
+			snapshotTS,
 			snapshotLevel.String(),
 			"",
 			"",
@@ -296,7 +305,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			ctx,
 			snapshotId,
 			snapshotName,
-			time.Now().UTC().UnixNano(),
+			snapshotTS,
 			snapshotLevel.String(),
 			snapshotForAccount,
 			"",
@@ -350,7 +359,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			ctx,
 			snapshotId,
 			snapshotName,
-			time.Now().UTC().UnixNano(),
+			snapshotTS,
 			snapshotLevel.String(),
 			currentAccount,
 			databaseName,
@@ -414,7 +423,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			ctx,
 			snapshotId,
 			snapshotName,
-			time.Now().UTC().UnixNano(),
+			snapshotTS,
 			snapshotLevel.String(),
 			currentAccount,
 			databaseName,

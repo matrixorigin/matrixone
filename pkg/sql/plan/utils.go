@@ -2792,7 +2792,9 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			if err != nil {
 				return err
 			}
-			vec.InplaceSortAndCompact()
+			if !vec.IsConstNull() {
+				vec.InplaceSortAndCompact()
+			}
 			data, err = vec.MarshalBinary()
 			if err != nil {
 				return err

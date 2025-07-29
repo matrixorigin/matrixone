@@ -44,6 +44,8 @@ var seed = maphash.MakeSeed()
 func shardCacheKey(key fscache.CacheKey) uint64 {
 	var hasher maphash.Hash
 	hasher.SetSeed(seed)
+	// Offset and Path is good enough to distribute keys to shards.
+	// TestShardCacheKey will fail if shardCacheKey is not good enough
 	hasher.Write(util.UnsafeToBytes(&key.Offset))
 	hasher.WriteString(key.Path)
 	return hasher.Sum64()
@@ -80,10 +82,7 @@ func (d *DataCache) deletePath(ctx context.Context, shardIndex int, path string)
 	for key, item := range shard.values {
 		if key.Path == path {
 			delete(shard.values, key)
-			// key deleted, call postEvict
-			if d.fifo.postEvict != nil {
-				d.fifo.postEvict(ctx, item.key, item.value, item.size)
-			}
+			d.fifo.purgeItemValue(ctx, item)
 		}
 	}
 }

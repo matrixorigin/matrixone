@@ -258,32 +258,32 @@ drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(1, 1, NULL);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
-invalid input: generate_series int32 step can't be NULL
+invalid input: the value of generate_series step can't be NULL
 drop table t1;
 create table t1(a int, b int, c int);
 insert into t1 values(1, NULL, 1);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
-invalid input: generate_series int32 end can't be NULL
+invalid input: the value of generate_series end can't be NULL
 drop table t1;
 create table t1(a int, b int, c int);
 insert into t1 values(NULL, 1, 1);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
-invalid input: generate_series int32 start can't be NULL
+invalid input: the value of generate_series start can't be NULL
 drop table t1;
 create table t1(a bigint, b bigint, c bigint);
 insert into t1 values(1, 1, NULL);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
-invalid input: generate_series int64 step can't be NULL
+invalid input: the value of generate_series step can't be NULL
 drop table t1;
 create table t1(a bigint, b bigint, c bigint);
 insert into t1 values(1, NULL, 1);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
-invalid input: generate_series int64 end can't be NULL
+invalid input: the value of generate_series end can't be NULL
 drop table t1;
 create table t1(a bigint, b bigint, c bigint);
 insert into t1 values(NULL, 1, 1);
 select * from t1 cross apply generate_series(t1.a,t1.b,t1.c)g;
-invalid input: generate_series int64 start can't be NULL
+invalid input: the value of generate_series start can't be NULL
 drop table t1;
 create table t1(a datetime,b datetime,c varchar);
 insert into t1 values('2020-02-28 00:00:00','2021-03-01 00:01:00', NULL);

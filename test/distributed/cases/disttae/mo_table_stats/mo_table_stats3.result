@@ -26,7 +26,6 @@ mo_cdc_task    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-1
 mo_cdc_watermark    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-17 13:23:44    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_data_key    Tae    Dynamic    1    0    1218    0    0    NULL    0    2025-07-17 13:23:44    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_merge_settings    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-17 13:23:44    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
-mo_retention    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-17 13:23:44    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_role    Tae    Dynamic    2    0    789    0    0    NULL    0    2025-07-17 13:23:44    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_role_grant    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-17 13:23:44    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_role_privs    Tae    Dynamic    35    0    7160    0    0    NULL    0    2025-07-17 13:23:44    NULL    NULL    utf8mb4_bin    NULL            0    moadmin

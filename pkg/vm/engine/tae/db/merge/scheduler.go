@@ -744,7 +744,7 @@ func (a *MergeScheduler) handleMainLoop() {
 	// fallback to check the status of the priority queue
 	heartbeat := a.clock.NewTicker(time.Second * 10)
 
-	vacuumCheckTicker := a.clock.NewTicker(time.Hour * 3)
+	vacuumCheckTicker := a.clock.NewTicker(time.Hour * 1)
 
 	stopCh := *a.stopCh.Load()
 
