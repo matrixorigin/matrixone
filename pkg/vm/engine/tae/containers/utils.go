@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -32,6 +34,190 @@ type IBatchBuffer interface {
 	Fetch() *batch.Batch
 	Putback(*batch.Batch, *mpool.MPool)
 	Close(*mpool.MPool)
+	Usage() (int, int)
+}
+
+type GeneralBatchBuffer struct {
+	sync.Mutex
+	offHeap          bool
+	sizeCap          int
+	currSize         int
+	highWater        int
+	maxOneFixedSize  int
+	maxOneVarlen     int
+	fixedSizeVectors []*vector.Vector
+	varlenVectors    []*vector.Vector
+}
+
+func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
+	bb.Lock()
+	defer bb.Unlock()
+	bat := batch.NewWithSchema(bb.offHeap, attrs, types)
+
+	// if no vectors in buffer, return a new batch
+	if len(bb.fixedSizeVectors) == 0 && len(bb.varlenVectors) == 0 {
+		return bat
+	}
+
+	var (
+		notReused roaring.Bitmap
+	)
+
+	// if there are vectors in buffer, try to fetch from buffer
+	for i, typ := range types {
+		if typ.IsVarlen() {
+			if len(bb.varlenVectors) == 0 {
+				notReused.Add(uint32(i))
+				continue
+			}
+			vec := bb.varlenVectors[len(bb.varlenVectors)-1]
+			vec.ResetWithNewType(&typ)
+			bat.Vecs[i] = vec
+			bb.varlenVectors = bb.varlenVectors[:len(bb.varlenVectors)-1]
+		} else {
+			if len(bb.fixedSizeVectors) == 0 {
+				notReused.Add(uint32(i))
+				continue
+			}
+			bat.Vecs[i] = bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1]
+			bb.fixedSizeVectors = bb.fixedSizeVectors[:len(bb.fixedSizeVectors)-1]
+		}
+	}
+
+	if !notReused.IsEmpty() && (len(bb.fixedSizeVectors)+len(bb.varlenVectors) > 0) {
+		for i, typ := range types {
+			// if the vector is reused, skip
+			if !notReused.Contains(uint32(i)) {
+				continue
+			}
+
+			var vec *vector.Vector
+			if len(bb.fixedSizeVectors) > 0 {
+				vec = bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1]
+				bb.fixedSizeVectors = bb.fixedSizeVectors[:len(bb.fixedSizeVectors)-1]
+			} else if len(bb.varlenVectors) > 0 {
+				vec = bb.varlenVectors[len(bb.varlenVectors)-1]
+				bb.varlenVectors = bb.varlenVectors[:len(bb.varlenVectors)-1]
+			} else {
+				break
+			}
+
+			vec.ResetWithNewType(&typ)
+			bat.Vecs[i] = vec
+
+			// if the vector is reused, remove it from notReused
+			notReused.Remove(uint32(i))
+
+			// if there are no vectors in buffer or all vectors are reused, break
+			if len(bb.fixedSizeVectors)+len(bb.varlenVectors) == 0 || notReused.IsEmpty() {
+				break
+			}
+		}
+	}
+
+	return bat
+}
+
+func (bb *GeneralBatchBuffer) Fetch(mp *mpool.MPool) *batch.Batch {
+	panic("not supported")
+}
+
+func (bb *GeneralBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
+	bb.Lock()
+	defer bb.Unlock()
+	if bat == nil || bat.Vecs == nil {
+		return
+	}
+
+	// varlen vector reuse is more important than fixed size vector
+	for i, vec := range bat.Vecs {
+		if !vec.GetType().IsVarlen() {
+			continue
+		}
+		bat.Vecs[i] = nil
+		vec.CleanOnlyData()
+
+		// check onevec cap size
+		if vec.Allocated() > bb.maxOneVarlen {
+			vec.Free(mp)
+			continue
+		}
+		if bb.currSize+vec.Allocated() > bb.sizeCap {
+			vec.Free(mp)
+			continue
+		}
+		bb.varlenVectors = append(bb.varlenVectors, vec)
+		bb.currSize += vec.Allocated()
+	}
+
+	for i, vec := range bat.Vecs {
+		if vec.GetType().IsVarlen() {
+			continue
+		}
+		bat.Vecs[i] = nil
+		vec.CleanOnlyData()
+		if vec.Allocated() > bb.maxOneFixedSize {
+			vec.Free(mp)
+			continue
+		}
+		if bb.currSize+vec.Allocated() > bb.sizeCap {
+			vec.Free(mp)
+			continue
+		}
+		bb.fixedSizeVectors = append(bb.fixedSizeVectors, vec)
+		bb.currSize += vec.Allocated()
+	}
+
+	bat.Clean(mp)
+	if bb.currSize > bb.highWater {
+		bb.highWater = bb.currSize
+	}
+}
+
+func (bb *GeneralBatchBuffer) Usage() (int, int) {
+	bb.Lock()
+	defer bb.Unlock()
+	return bb.currSize, bb.highWater
+}
+
+func (bb *GeneralBatchBuffer) Close(mp *mpool.MPool) {
+	bb.Lock()
+	defer bb.Unlock()
+	for i, vec := range bb.fixedSizeVectors {
+		bb.fixedSizeVectors[i] = nil
+		vec.Free(mp)
+	}
+	for i, vec := range bb.varlenVectors {
+		bb.varlenVectors[i] = nil
+		vec.Free(mp)
+	}
+	bb.fixedSizeVectors = nil
+	bb.varlenVectors = nil
+}
+
+func NewGeneralBatchBuffer(
+	sizeCap int,
+	offHeap bool,
+	maxOneFixedSize int,
+	maxOneVarlen int,
+) *GeneralBatchBuffer {
+	if sizeCap <= 0 {
+		sizeCap = mpool.MB * 32
+	}
+	if maxOneFixedSize <= 0 {
+		maxOneFixedSize = mpool.MB
+	}
+	if maxOneVarlen <= 0 {
+		maxOneVarlen = mpool.MB * 4
+	}
+	return &GeneralBatchBuffer{
+		sizeCap:          sizeCap,
+		offHeap:          offHeap,
+		maxOneFixedSize:  maxOneFixedSize,
+		maxOneVarlen:     maxOneVarlen,
+		fixedSizeVectors: make([]*vector.Vector, 0),
+		varlenVectors:    make([]*vector.Vector, 0),
+	}
 }
 
 type OneSchemaBatchBuffer struct {
