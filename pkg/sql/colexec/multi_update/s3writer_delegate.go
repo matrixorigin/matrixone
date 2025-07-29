@@ -97,9 +97,6 @@ type s3WriterDelegate struct {
 	insertBlockInfo     []*batch.Batch
 	insertBlockRowCount []uint64
 
-	deleteBuf []*batch.Batch
-	insertBuf []*batch.Batch
-
 	outputBat *batch.Batch
 
 	batchSize      uint64
@@ -121,8 +118,6 @@ func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 		schemaVersions: make([]uint32, 0, tableCount),
 		isClusterBys:   make([]bool, 0, tableCount),
 
-		deleteBuf:           make([]*batch.Batch, tableCount),
-		insertBuf:           make([]*batch.Batch, tableCount),
 		deleteBlockInfo:     make([]*deleteBlockInfo, tableCount),
 		insertBlockInfo:     make([]*batch.Batch, tableCount),
 		insertBlockRowCount: make([]uint64, tableCount),
@@ -632,16 +627,7 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 			delete(data, k)
 		}
 	}
-	for i := range writer.insertBuf {
-		if writer.insertBuf[i] != nil {
-			writer.insertBuf[i].CleanOnlyData()
-		}
-	}
-	for i := range writer.deleteBuf {
-		if writer.deleteBuf[i] != nil {
-			writer.deleteBuf[i].CleanOnlyData()
-		}
-	}
+
 	if writer.outputBat != nil {
 		writer.outputBat.CleanOnlyData()
 	}
@@ -668,20 +654,6 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 		}
 	}
 	writer.deleteBlockInfo = nil
-
-	for i := range writer.insertBuf {
-		if writer.insertBuf[i] != nil {
-			writer.insertBuf[i].Clean(proc.Mp())
-		}
-	}
-	writer.insertBuf = nil
-
-	for i := range writer.deleteBuf {
-		if writer.deleteBuf[i] != nil {
-			writer.deleteBuf[i].Clean(proc.Mp())
-		}
-	}
-	writer.deleteBuf = nil
 
 	for _, data := range writer.deleteBlockMap {
 		for _, block := range data {
