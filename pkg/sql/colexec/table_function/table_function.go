@@ -146,6 +146,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		if !tblArg.CanOpt {
 			tblArg.ctr.state, err = generateSeriesPrepare(proc, tblArg)
 		}
+	case "generate_random_int64":
+		tblArg.ctr.state, err = generateRandomInt64Prepare(proc, tblArg)
+	case "generate_random_float64":
+		tblArg.ctr.state, err = generateRandomFloat64Prepare(proc, tblArg)
 	case "meta_scan":
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
