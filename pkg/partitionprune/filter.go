@@ -98,6 +98,7 @@ func hashFilterExpr(
 	expr *plan.Expr,
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
+	var err error
 	exprs := make([]*plan.Expr, len(metadata.Partitions))
 	for i, pt := range metadata.Partitions {
 		// Deep copy partition expressions to avoid modifying the original expressions
@@ -158,6 +159,10 @@ func hashFilterExpr(
 			}
 			for i := range exprs {
 				mustReplaceCol(exprs[i], exprImpl.F.Args[1])
+				exprs[i], err = ConvertFoldExprToNormal(exprs[i])
+				if err != nil {
+					return nil, false, err
+				}
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {

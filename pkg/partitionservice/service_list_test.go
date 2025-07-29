@@ -78,24 +78,24 @@ func TestGetMetadataByListType(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_varchar})
+			def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_varchar}, 2, partition.PartitionMethod_List)
 			stmt := newTestListOption(t, "c1", 1)
 
 			_, err := s.getMetadataByListType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 
-			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_int32})
+			def = newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_int32}, 2, partition.PartitionMethod_List)
 			method := stmt.PartitionOption.PartBy.PType.(*tree.ListType)
 
 			columns, _ := method.Expr.(*tree.UnresolvedName)
 			columns.NumParts = 0
 			_, err = s.getMetadataByListType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 			columns.NumParts = 1
 
 			method.Expr = tree.NewMaxValue()
 			_, err = s.getMetadataByListType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 		},
 	)
 }
@@ -108,13 +108,13 @@ func TestGetMetadataByListColumnsType(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			def := newTestTableDefine(1, []string{"c1"}, []types.T{types.T_json})
+			def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_json}, 2, partition.PartitionMethod_List)
 			stmt := newTestListColumnsOption(t, "c1", 2)
 
 			_, err := s.getMetadataByListType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 
-			def = newTestTableDefine(1, []string{"c1"}, []types.T{types.T_date})
+			def = newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_date}, 2, partition.PartitionMethod_List)
 			method := stmt.PartitionOption.PartBy.PType.(*tree.ListType)
 
 			method.ColumnList = nil

@@ -1,21 +1,21 @@
 drop database if exists d1;
 create database d1;
 use d1;
+select enable_fault_injection();
+enable_fault_injection()
+true
 drop table if exists t1;
 drop table if exists t2;
 create table t1(c1 int primary key, c2 int, c3 int, key(c3));
 create table t2(c1 int primary key, c2 int, c3 int);
-insert into t1 select *,*,* from generate_series(3000000) g;
-insert into t2 select *,*,* from generate_series(300000) g;
-select mo_ctl('dn', 'flush', 'd1.t1');
-mo_ctl(dn, flush, d1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select mo_ctl('dn', 'flush', 'd1.t2');
-mo_ctl(dn, flush, d1.t2)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select Sleep(1);
-sleep(1)
-0
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'d1.t1');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, d1.t1)
+true
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'d1.t2');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, d1.t2)
+true
+insert into t1 select *,*,* from generate_series(300000) g;
+insert into t2 select *,*,* from generate_series(30000) g;
 explain select * from t1 where t1.c2 in( select c1 from t2 where t2.c2=1);
 QUERY PLAN
 Project
@@ -86,17 +86,8 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1(c1 int , c2 int , c3 int, primary key (c1,c2));
 create table t2(c1 int , c2 int , c3 int, primary key (c1,c2));
-insert into t1 select result,result%10000,result from generate_series(1,1000000)g;
-insert into t2 select result%10000,result,result from generate_series(1,1000000)g;
-select mo_ctl('dn', 'flush', 'd1.t1');
-mo_ctl(dn, flush, d1.t1)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select mo_ctl('dn', 'flush', 'd1.t2');
-mo_ctl(dn, flush, d1.t2)
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select Sleep(1);
-sleep(1)
-0
+insert into t1 select result,result%10000,result from generate_series(1,100000)g;
+insert into t2 select result%10000,result,result from generate_series(1,100000)g;
 explain select * from t1,t2 where t1.c1=t2.c2 and t2.c3<1000;
 AP QUERY PLAN ON ONE CN(4 core)
 Project
@@ -126,5 +117,8 @@ Project
               Block Filter Cond: (t2.c3 < 5)
 select count(*) from t1,t2 where t1.c2=t2.c1 and t2.c3<5;
 count(*)
-400
+40
 drop database if exists d1;
+select disable_fault_injection();
+disable_fault_injection()
+true

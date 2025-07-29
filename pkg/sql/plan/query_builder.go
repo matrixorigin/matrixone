@@ -299,6 +299,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
+			localToGlobal: make([][2]int32, 0),
 		}
 
 		tag := node.BindingTags[0]
@@ -311,7 +312,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			internalRemapping.addColRef(globalRef)
-
 			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
@@ -322,12 +322,20 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		node.TableDef = newTableDef
 
+		colMap := make(map[[2]int32][2]int32)
+		for global, local := range internalRemapping.globalToLocal {
+			colMap[global] = local
+		}
+		for localIdx, global := range internalRemapping.localToGlobal {
+			colMap[[2]int32{0, int32(localIdx)}] = global
+		}
+
 		remapInfo.tip = "FilterList"
 		remapInfo.interRemapping = internalRemapping
 		for idx, expr := range node.FilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal, &remapInfo)
+			err := builder.remapColRefForExpr(expr, colMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -337,7 +345,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		for idx, expr := range node.BlockFilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal, &remapInfo)
+			err := builder.remapColRefForExpr(expr, colMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -348,11 +356,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if rfSpec.Expr != nil {
 				increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
 				remapInfo.srcExprIdx = idx
-				err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal, &remapInfo)
+				err := builder.remapColRefForExpr(rfSpec.Expr, colMap, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
-
 				col := rfSpec.Expr.GetCol()
 				if len(col.Name) == 0 {
 					col.Name = node.TableDef.Cols[col.ColPos].Name
@@ -4939,6 +4946,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
 	case "generate_series":
 		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, children)
+	case "generate_random_int64":
+		nodeId = builder.buildGenerateRandomInt64(tbl, ctx, exprs, children)
+	case "generate_random_float64":
+		nodeId = builder.buildGenerateRandomFloat64(tbl, ctx, exprs, children)
 	case "meta_scan":
 		nodeId, err = builder.buildMetaScan(tbl, ctx, exprs, children)
 	case "current_account":
