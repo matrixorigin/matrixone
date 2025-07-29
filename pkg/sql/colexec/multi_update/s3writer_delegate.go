@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -295,6 +294,7 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 			0,
 		)
 	)
+	defer batchBuffer.Close(proc.GetMPool())
 	for i, updateCtx := range writer.updateCtxs {
 		// delete s3
 		if len(updateCtx.DeleteCols) > 0 {
@@ -418,7 +418,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ))
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(common.DebugAllocator, fs, tblDef, false, opts...)
+		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, false, opts...)
 	}
 
 	defer func() {
