@@ -229,7 +229,7 @@ func flushTailBatch(
 
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-		if _, err = writer.Sync(newCtx, proc.Mp()); err != nil {
+		if _, err = writer.Sync(newCtx); err != nil {
 			return err
 		}
 

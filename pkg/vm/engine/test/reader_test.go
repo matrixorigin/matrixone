@@ -1393,7 +1393,7 @@ func Test_SimpleReader(t *testing.T) {
 	err = w.Write(proc.Ctx, bat1)
 	require.NoError(t, err)
 
-	stats, err := w.Sync(proc.Ctx, proc.Mp())
+	stats, err := w.Sync(proc.Ctx)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(stats))
 	require.Equal(t, uint32(20), stats[0].Rows())

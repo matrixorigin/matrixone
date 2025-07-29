@@ -189,10 +189,10 @@ func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
 	return nil
 }
 
-func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.ObjectStats, error) {
+func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
 	defer func() {
 		for _, bat := range w.hold {
-			bat.Clean(mp)
+			bat.Clean(w.mp)
 		}
 		w.hold = nil
 	}()

@@ -420,7 +420,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-		if _, err = s3Writer.Sync(newCtx, proc.Mp()); err != nil {
+		if _, err = s3Writer.Sync(newCtx); err != nil {
 			return err
 		}
 
@@ -485,7 +485,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-	if _, err = s3Writer.Sync(newCtx, proc.Mp()); err != nil {
+	if _, err = s3Writer.Sync(newCtx); err != nil {
 		return err
 	}
 

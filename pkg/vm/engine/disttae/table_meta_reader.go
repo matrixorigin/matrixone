@@ -299,7 +299,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 		}
 	}
 
-	if sl, err = s3Writer.Sync(ctx, mp); err != nil {
+	if sl, err = s3Writer.Sync(ctx); err != nil {
 		return zap.Skip(), err
 	}
 
@@ -434,7 +434,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 			}
 		}
 
-		if sl, err = s3Writer.Sync(ctx, mp); err != nil {
+		if sl, err = s3Writer.Sync(ctx); err != nil {
 			return zap.Skip(), err
 		}
 

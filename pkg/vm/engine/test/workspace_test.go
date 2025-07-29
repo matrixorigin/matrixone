@@ -1729,7 +1729,7 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 		err = w.Write(proc.Ctx, tombstoneBat)
 		require.NoError(t, err)
 
-		ss, err := w.Sync(ctx, proc.Mp())
+		ss, err := w.Sync(ctx)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(ss))
 

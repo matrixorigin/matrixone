@@ -281,7 +281,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		if statsList, err = s3writer.Sync(newCtx, proc.Mp()); err != nil {
+		if statsList, err = s3writer.Sync(newCtx); err != nil {
 			return 0, err
 		}
 

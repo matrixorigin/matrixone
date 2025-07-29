@@ -133,7 +133,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 		err = writer.Write(ctx, bat)
 		require.NoError(t, err)
 
-		ss, err := writer.Sync(proc.Ctx, proc.Mp())
+		ss, err := writer.Sync(proc.Ctx)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(ss))
 		require.False(t, ss[0].IsZero())

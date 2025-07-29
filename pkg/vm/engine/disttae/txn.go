@@ -715,7 +715,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			}
 		}
 
-		if stats, err = s3Writer.Sync(txn.proc.Ctx, txn.proc.Mp()); err != nil {
+		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
 			return err
 		}
 
@@ -839,7 +839,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			}
 		}
 
-		if stats, err = s3Writer.Sync(txn.proc.Ctx, txn.proc.Mp()); err != nil {
+		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
 			return err
 		}
 
