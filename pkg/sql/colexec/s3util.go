@@ -52,6 +52,7 @@ type CNS3Writer struct {
 	holdFlushUntilSyncCall bool
 
 	isTombstone bool
+	mp          *mpool.MPool
 }
 
 func (w *CNS3Writer) String() string {
@@ -70,7 +71,9 @@ func NewCNS3TombstoneWriter(
 	fs fileservice.FileService,
 	pkType types.Type) *CNS3Writer {
 
-	writer := &CNS3Writer{}
+	writer := &CNS3Writer{
+		mp: mp,
+	}
 
 	writer.sinker = ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
@@ -146,6 +149,7 @@ func NewCNS3DataWriter(
 
 	writer := &CNS3Writer{
 		holdFlushUntilSyncCall: holdFlushUntilSyncCall,
+		mp:                     mp,
 	}
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
@@ -172,9 +176,9 @@ func NewCNS3DataWriter(
 	return writer
 }
 
-func (w *CNS3Writer) Write(ctx context.Context, mp *mpool.MPool, bat *batch.Batch) error {
+func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
 	if w.holdFlushUntilSyncCall {
-		copied, err := bat.Dup(mp)
+		copied, err := bat.Dup(w.mp)
 		if err != nil {
 			return err
 		}

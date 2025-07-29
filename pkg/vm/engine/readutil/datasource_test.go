@@ -71,7 +71,7 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 
 	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
 
-	err := writer.Write(ctx, proc.Mp(), bat)
+	err := writer.Write(ctx, bat)
 	require.NoError(t, err)
 
 	ss, err := writer.Sync(ctx, proc.Mp())

@@ -132,7 +132,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 			// write to s3.
 			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
-			err = insert.ctr.s3Writer.Write(proc.Ctx, proc.Mp(), input.Batch)
+			err = insert.ctr.s3Writer.Write(proc.Ctx, input.Batch)
 			if err != nil {
 				insert.ctr.state = vm.End
 				return vm.CancelResult, err

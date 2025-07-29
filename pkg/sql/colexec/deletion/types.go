@@ -265,7 +265,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType)
 			}
 
-			if err = s3writer.Write(proc.Ctx, proc.Mp(), bat); err != nil {
+			if err = s3writer.Write(proc.Ctx, bat); err != nil {
 				return 0, err
 			}
 

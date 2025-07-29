@@ -16,8 +16,9 @@ package colexec
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -88,7 +89,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 
 	s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
-	err = s3writer.Write(ctx, proc.Mp(), bat)
+	err = s3writer.Write(ctx, bat)
 	require.NoError(t, err)
 
 	stats, err := s3writer.Sync(ctx, proc.Mp())
@@ -459,7 +460,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		ctx := proc.Ctx
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
-		err = s3writer.Write(ctx, proc.Mp(), bat)
+		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
 
 		_, err = s3writer.Sync(ctx, proc.Mp())
@@ -478,7 +479,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
-		err = s3writer.Write(ctx, proc.Mp(), bat)
+		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
 
 		_, err = s3writer.Sync(ctx, proc.Mp())
@@ -518,7 +519,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		require.NoError(t, err)
 		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 
-		err = s3writer.Write(ctx, proc.Mp(), bat2)
+		err = s3writer.Write(ctx, bat2)
 		require.NoError(t, err)
 
 		_, err = s3writer.Sync(ctx, proc.Mp())

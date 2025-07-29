@@ -1390,7 +1390,7 @@ func Test_SimpleReader(t *testing.T) {
 	w := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
 	defer w.Close(mp)
 
-	err = w.Write(proc.Ctx, proc.Mp(), bat1)
+	err = w.Write(proc.Ctx, bat1)
 	require.NoError(t, err)
 
 	stats, err := w.Sync(proc.Ctx, proc.Mp())

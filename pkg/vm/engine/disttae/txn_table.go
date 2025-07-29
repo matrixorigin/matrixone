@@ -1645,7 +1645,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				return true
 			}
 
-			if err = s3Writer.Write(ctx, proc.Mp(), bat); err != nil {
+			if err = s3Writer.Write(ctx, bat); err != nil {
 				return false
 			}
 

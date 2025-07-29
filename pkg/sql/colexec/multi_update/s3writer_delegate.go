@@ -407,7 +407,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	if sortIndex == -1 {
 		for i := range bats {
 			rowCount += bats[i].RowCount()
-			if err = s3Writer.Write(proc.Ctx, proc.Mp(), bats[i]); err != nil {
+			if err = s3Writer.Write(proc.Ctx, bats[i]); err != nil {
 				return err
 			}
 
@@ -474,7 +474,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	}
 
 	sinker := func(bat *batch.Batch) error {
-		return s3Writer.Write(proc.Ctx, proc.Mp(), bat)
+		return s3Writer.Write(proc.Ctx, bat)
 	}
 
 	err = mergeutil.MergeSortBatches(bats, sortIndex, buf, sinker, proc.GetMPool(), needCleanBatch)

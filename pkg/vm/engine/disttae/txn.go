@@ -710,7 +710,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), fs, tableDef, false)
 
 		for _, bat = range mp[tbKey] {
-			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), bat); err != nil {
+			if err = s3Writer.Write(txn.proc.Ctx, bat); err != nil {
 				return err
 			}
 		}
@@ -834,7 +834,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ))
 
 		for i := 0; i < len(mp[tbKey]); i++ {
-			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), mp[tbKey][i]); err != nil {
+			if err = s3Writer.Write(txn.proc.Ctx, mp[tbKey][i]); err != nil {
 				return err
 			}
 		}
