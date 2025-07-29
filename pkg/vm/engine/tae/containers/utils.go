@@ -151,7 +151,7 @@ func (bb *GeneralBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
 	}
 
 	for i, vec := range bat.Vecs {
-		if vec.GetType().IsVarlen() {
+		if vec == nil {
 			continue
 		}
 		bat.Vecs[i] = nil
