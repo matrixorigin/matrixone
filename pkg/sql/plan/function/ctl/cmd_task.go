@@ -16,7 +16,6 @@ package ctl
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -34,11 +33,9 @@ var (
 	disableTask = "disable"
 	enableTask  = "enable"
 	getUser     = "getuser"
-	retention   = "retention"
 
 	taskMap = map[string]int32{
 		"storageusage": int32(taskpb.TaskCode_MetricStorageUsage),
-		"retention":    int32(taskpb.TaskCode_Retention),
 	}
 )
 
@@ -82,23 +79,6 @@ func handleTask(
 	}
 
 	args := strings.Split(strings.TrimSpace(parameter), ":")
-	if args[0] == retention {
-		if len(args) != 2 {
-			return Result{Method: TaskMethod, Data: "retention task cron expr not specified"}, nil
-		}
-		_, err := proc.GetSessionInfo().SqlHelper.ExecSql(
-			fmt.Sprintf(
-				"update mo_task.sys_cron_task set cron_expr='%s' where task_metadata_id='retention'",
-				args[1]),
-		)
-		if err != nil {
-			return Result{}, err
-		}
-		return Result{
-			Method: TaskMethod,
-			Data:   "OK",
-		}, nil
-	}
 
 	target, taskCode, err := checkRunTaskParameter(args)
 	if err != nil {
