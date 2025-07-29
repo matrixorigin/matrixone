@@ -69,19 +69,26 @@ func (w *CNS3Writer) String() string {
 func NewCNS3TombstoneWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-	pkType types.Type) *CNS3Writer {
+	pkType types.Type,
+	opts ...ioutil.SinkerOption,
+) *CNS3Writer {
 
 	writer := &CNS3Writer{
-		mp: mp,
+		mp:          mp,
+		isTombstone: true,
 	}
+
+	opts = append(opts, ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)))
+	opts = append(opts, ioutil.WithTailSizeCap(0))
 
 	writer.sinker = ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
-		pkType, mp, fs,
-		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
-		ioutil.WithTailSizeCap(0))
+		pkType,
+		mp,
+		fs,
+		opts...,
+	)
 
-	writer.isTombstone = true
 	writer.ResetBlockInfoBat()
 
 	return writer

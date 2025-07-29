@@ -414,6 +414,15 @@ func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
 	}
 }
 
+func (sinker *Sinker) putBackOneInMemory(idx int) {
+	bat := sinker.staged.inMemory[idx]
+	sinker.staged.inMemory[idx] = nil
+	sinker.staged.inMemorySize -= bat.Size()
+	sinker.staged.inMemStats.updateCount(-1)
+	sinker.staged.inMemStats.updateBytes(-bat.Size())
+	sinker.putBackBuffer(bat)
+}
+
 func (sinker *Sinker) popStaged() *batch.Batch {
 	if len(sinker.staged.inMemory) == 0 {
 		return nil
@@ -452,8 +461,10 @@ func (sinker *Sinker) clearInMemoryStaged() {
 
 func (sinker *Sinker) cleanupInMemoryStaged() {
 	for i, bat := range sinker.staged.inMemory {
-		sinker.putBackBuffer(bat)
-		sinker.staged.inMemory[i] = nil
+		if bat != nil {
+			sinker.putBackBuffer(bat)
+			sinker.staged.inMemory[i] = nil
+		}
 	}
 	sinker.staged.inMemory = sinker.staged.inMemory[:0]
 	sinker.staged.inMemorySize = 0
@@ -514,7 +525,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 			buffer,
 			innersinker,
 			sinker.mp,
-			true,
+			sinker.putBackOneInMemory,
 		); err != nil {
 			return err
 		}
