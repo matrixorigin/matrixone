@@ -299,6 +299,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		internalRemapping := &ColRefRemapping{
 			globalToLocal: make(map[[2]int32][2]int32),
+			localToGlobal: make([][2]int32, 0),
 		}
 
 		tag := node.BindingTags[0]
@@ -311,7 +312,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			internalRemapping.addColRef(globalRef)
-
 			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
 		}
 
@@ -322,12 +322,20 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		node.TableDef = newTableDef
 
+		colMap := make(map[[2]int32][2]int32)
+		for global, local := range internalRemapping.globalToLocal {
+			colMap[global] = local
+		}
+		for localIdx, global := range internalRemapping.localToGlobal {
+			colMap[[2]int32{0, int32(localIdx)}] = global
+		}
+
 		remapInfo.tip = "FilterList"
 		remapInfo.interRemapping = internalRemapping
 		for idx, expr := range node.FilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal, &remapInfo)
+			err := builder.remapColRefForExpr(expr, colMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -337,7 +345,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		for idx, expr := range node.BlockFilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
-			err := builder.remapColRefForExpr(expr, internalRemapping.globalToLocal, &remapInfo)
+			err := builder.remapColRefForExpr(expr, colMap, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
@@ -348,11 +356,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if rfSpec.Expr != nil {
 				increaseRefCnt(rfSpec.Expr, -1, colRefCnt)
 				remapInfo.srcExprIdx = idx
-				err := builder.remapColRefForExpr(rfSpec.Expr, internalRemapping.globalToLocal, &remapInfo)
+				err := builder.remapColRefForExpr(rfSpec.Expr, colMap, &remapInfo)
 				if err != nil {
 					return nil, err
 				}
-
 				col := rfSpec.Expr.GetCol()
 				if len(col.Name) == 0 {
 					col.Name = node.TableDef.Cols[col.ColPos].Name
