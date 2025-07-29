@@ -125,7 +125,7 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 	return bat
 }
 
-func (bb *GeneralBatchBuffer) Fetch(mp *mpool.MPool) *batch.Batch {
+func (bb *GeneralBatchBuffer) Fetch() *batch.Batch {
 	panic("not supported")
 }
 
@@ -212,10 +212,10 @@ func NewGeneralBatchBuffer(
 		sizeCap = mpool.MB * 32
 	}
 	if maxOneFixedSize <= 0 {
-		maxOneFixedSize = mpool.MB
+		maxOneFixedSize = mpool.KB * 128
 	}
 	if maxOneVarlen <= 0 {
-		maxOneVarlen = mpool.MB * 4
+		maxOneVarlen = mpool.MB
 	}
 	return &GeneralBatchBuffer{
 		sizeCap:          sizeCap,

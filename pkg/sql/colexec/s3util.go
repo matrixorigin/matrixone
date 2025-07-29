@@ -145,6 +145,7 @@ func NewCNS3DataWriter(
 	fs fileservice.FileService,
 	tableDef *plan.TableDef,
 	holdFlushUntilSyncCall bool,
+	sinkerOpts ...ioutil.SinkerOption,
 ) *CNS3Writer {
 
 	writer := &CNS3Writer{
@@ -163,12 +164,16 @@ func NewCNS3DataWriter(
 		threshold = FaultInjectedS3Threshold
 	}
 
-	writer.sinker = ioutil.NewSinker(
-		sortKeyIdx, attrs, attrTypes,
-		factor, mp, fs,
+	opts := []ioutil.SinkerOption{
 		ioutil.WithTailSizeCap(0),
 		ioutil.WithMemorySizeThreshold(int(threshold)),
 		ioutil.WithOffHeap(),
+	}
+	opts = append(opts, sinkerOpts...)
+	writer.sinker = ioutil.NewSinker(
+		sortKeyIdx, attrs, attrTypes,
+		factor, mp, fs,
+		opts...,
 	)
 
 	writer.ResetBlockInfoBat()

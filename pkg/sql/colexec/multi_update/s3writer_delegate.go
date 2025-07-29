@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -283,7 +285,15 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 }
 
 func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer process.Analyzer) (err error) {
-	var bats []*batch.Batch
+	var (
+		bats        []*batch.Batch
+		batchBuffer = containers.NewGeneralBatchBuffer(
+			0,
+			true,
+			0,
+			0,
+		)
+	)
 	for i, updateCtx := range writer.updateCtxs {
 		// delete s3
 		if len(updateCtx.DeleteCols) > 0 {
@@ -348,7 +358,16 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 				return
 			}
 			err = writer.sortAndSyncOneTable(
-				proc, updateCtx.TableDef, analyzer, i, false, bats, needSortBatch, needCleanBatch)
+				proc,
+				updateCtx.TableDef,
+				analyzer,
+				i,
+				false,
+				bats,
+				needSortBatch,
+				needCleanBatch,
+				ioutil.WithBuffer(batchBuffer, true),
+			)
 			if err != nil {
 				return
 			}
@@ -371,6 +390,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	bats []*batch.Batch,
 	needSortBatch bool,
 	needCleanBatch bool,
+	opts ...ioutil.SinkerOption,
 ) (err error) {
 
 	if len(bats) == 0 {
@@ -397,7 +417,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ))
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, false)
+		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, false, opts...)
 	}
 
 	defer func() {
