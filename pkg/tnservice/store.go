@@ -209,16 +209,15 @@ func NewService(
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
+	if s.queryClient, err = client.NewQueryClient(s.cfg.UUID, s.cfg.RPC); err != nil {
+		return nil, err
+	}
 
 	s.initQueryService(cfg.InStandalone)
 
 	s.initTaskHolder()
 	s.initSqlWriterFactory()
 	s.setupStatusServer()
-	s.queryClient, err = client.NewQueryClient(s.cfg.UUID, s.cfg.RPC)
-	if err != nil {
-		panic(err)
-	}
 	return s, nil
 }
 
