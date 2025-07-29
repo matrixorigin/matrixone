@@ -392,7 +392,7 @@ func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 
 func (sinker *Sinker) fetchBuffer() *batch.Batch {
 	x := sinker.buf.buffers.Len()
-	bat := sinker.buf.buffers.Fetch()
+	bat := sinker.buf.buffers.FetchWithSchema(sinker.schema.attrs, sinker.schema.attrTypes)
 	y := sinker.buf.buffers.Len()
 
 	if x < y {

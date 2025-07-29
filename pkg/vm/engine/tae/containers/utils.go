@@ -35,7 +35,7 @@ type IBatchBuffer interface {
 	Putback(*batch.Batch, *mpool.MPool)
 	Close(*mpool.MPool)
 	Len() int
-	Usage() (int, int)
+	Usage() (int, int, int, int)
 }
 
 type GeneralBatchBuffer struct {
@@ -44,6 +44,8 @@ type GeneralBatchBuffer struct {
 	sizeCap          int
 	currSize         int
 	highWater        int
+	reuseBytes       int
+	reuseCount       int
 	maxOneFixedSize  int
 	maxOneVarlen     int
 	fixedSizeVectors []*vector.Vector
@@ -81,13 +83,19 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 			vec.ResetWithNewType(&typ)
 			bat.Vecs[i] = vec
 			bb.varlenVectors = bb.varlenVectors[:len(bb.varlenVectors)-1]
+			bb.reuseBytes += vec.Allocated()
+			bb.reuseCount++
 		} else {
 			if len(bb.fixedSizeVectors) == 0 {
 				notReused.Add(uint32(i))
 				continue
 			}
-			bat.Vecs[i] = bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1]
+			vec := bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1]
+			vec.ResetWithNewType(&typ)
+			bat.Vecs[i] = vec
 			bb.fixedSizeVectors = bb.fixedSizeVectors[:len(bb.fixedSizeVectors)-1]
+			bb.reuseBytes += vec.Allocated()
+			bb.reuseCount++
 		}
 	}
 
@@ -111,6 +119,8 @@ func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type
 
 			vec.ResetWithNewType(&typ)
 			bat.Vecs[i] = vec
+			bb.reuseBytes += vec.Allocated()
+			bb.reuseCount++
 
 			// if the vector is reused, remove it from notReused
 			notReused.Remove(uint32(i))
@@ -181,10 +191,10 @@ func (bb *GeneralBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
 	}
 }
 
-func (bb *GeneralBatchBuffer) Usage() (int, int) {
+func (bb *GeneralBatchBuffer) Usage() (int, int, int, int) {
 	bb.Lock()
 	defer bb.Unlock()
-	return bb.currSize, bb.highWater
+	return bb.currSize, bb.highWater, bb.reuseBytes, bb.reuseCount
 }
 
 func (bb *GeneralBatchBuffer) Close(mp *mpool.MPool) {
@@ -229,13 +239,15 @@ func NewGeneralBatchBuffer(
 
 type OneSchemaBatchBuffer struct {
 	sync.Mutex
-	offHeap   bool
-	sizeCap   int
-	currSize  int
-	highWater int
-	attrs     []string
-	typs      []types.Type
-	buffer    []*batch.Batch
+	offHeap    bool
+	sizeCap    int
+	currSize   int
+	highWater  int
+	reuseBytes int
+	reuseCount int
+	attrs      []string
+	typs       []types.Type
+	buffer     []*batch.Batch
 }
 
 func NewOneSchemaBatchBuffer(
@@ -283,6 +295,8 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
 	bb.currSize -= bat.Allocated()
+	bb.reuseBytes += bat.Allocated()
+	bb.reuseCount++
 	return bat
 }
 
@@ -295,6 +309,8 @@ func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
 	bb.currSize -= bat.Allocated()
+	bb.reuseBytes += bat.Allocated()
+	bb.reuseCount++
 	return bat
 }
 
@@ -319,10 +335,10 @@ func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
 	}
 }
 
-func (bb *OneSchemaBatchBuffer) Usage() (int, int) {
+func (bb *OneSchemaBatchBuffer) Usage() (int, int, int, int) {
 	bb.Lock()
 	defer bb.Unlock()
-	return bb.currSize, bb.highWater
+	return bb.currSize, bb.highWater, bb.reuseBytes, bb.reuseCount
 }
 
 func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {

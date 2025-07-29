@@ -73,7 +73,7 @@ func TestGeneralBatchBuffer1(t *testing.T) {
 
 	bat1 := buffer.FetchWithSchema(attrs1, typs1)
 	require.NotNil(t, bat1)
-	curr, high := buffer.Usage()
+	curr, high, _, _ := buffer.Usage()
 	require.Equal(t, 0, curr)
 	require.Equal(t, 0, high)
 
@@ -89,7 +89,7 @@ func TestGeneralBatchBuffer1(t *testing.T) {
 	}
 	buffer.Putback(bat1, mp)
 
-	curr, high = buffer.Usage()
+	curr, high, _, _ = buffer.Usage()
 	require.Equal(t, 2048, curr)
 	require.Equal(t, 2048, high)
 
