@@ -30,7 +30,7 @@ func TestOneSchemaBatchBuffer(t *testing.T) {
 	attr := []string{"a", "b", "c"}
 	typs := []types.Type{types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType()}
 
-	buffer := NewOneSchemaBatchBuffer(mpool.GB, attr, typs)
+	buffer := NewOneSchemaBatchBuffer(mpool.GB, attr, typs, false)
 	require.NotNil(t, buffer)
 
 	var bats []*batch.Batch

@@ -34,6 +34,7 @@ type IBatchBuffer interface {
 	Fetch() *batch.Batch
 	Putback(*batch.Batch, *mpool.MPool)
 	Close(*mpool.MPool)
+	Len() int
 	Usage() (int, int)
 }
 
@@ -47,6 +48,12 @@ type GeneralBatchBuffer struct {
 	maxOneVarlen     int
 	fixedSizeVectors []*vector.Vector
 	varlenVectors    []*vector.Vector
+}
+
+func (bb *GeneralBatchBuffer) Len() int {
+	bb.Lock()
+	defer bb.Unlock()
+	return len(bb.fixedSizeVectors) + len(bb.varlenVectors)
 }
 
 func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
@@ -235,6 +242,7 @@ func NewOneSchemaBatchBuffer(
 	sizeCap int,
 	attrs []string,
 	typs []types.Type,
+	offHeap bool,
 ) *OneSchemaBatchBuffer {
 	if sizeCap <= 0 {
 		sizeCap = mpool.MB * 32
@@ -244,13 +252,8 @@ func NewOneSchemaBatchBuffer(
 		buffer:  make([]*batch.Batch, 0),
 		attrs:   attrs,
 		typs:    typs,
+		offHeap: offHeap,
 	}
-}
-
-func (bb *OneSchemaBatchBuffer) SetOffHeap(offHeap bool) {
-	bb.Lock()
-	defer bb.Unlock()
-	bb.offHeap = offHeap
 }
 
 func (bb *OneSchemaBatchBuffer) Len() int {

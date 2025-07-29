@@ -68,7 +68,7 @@ func WithOffHeap() SinkerOption {
 	}
 }
 
-func WithBuffer(buffer *containers.OneSchemaBatchBuffer, isOwner bool) SinkerOption {
+func WithBuffer(buffer containers.IBatchBuffer, isOwner bool) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.buf.isOwner = isOwner
 		sinker.buf.buffers = buffer
@@ -346,7 +346,7 @@ type Sinker struct {
 	buf struct {
 		isOwner  bool
 		bufStats sinkerStats
-		buffers  *containers.OneSchemaBatchBuffer
+		buffers  containers.IBatchBuffer
 	}
 
 	mp *mpool.MPool
@@ -381,8 +381,8 @@ func (sinker *Sinker) fillDefaults() {
 			sinker.config.bufferSizeCap,
 			sinker.schema.attrs,
 			sinker.schema.attrTypes,
+			sinker.config.offHeap,
 		)
-		sinker.buf.buffers.SetOffHeap(sinker.config.offHeap)
 	}
 }
 
