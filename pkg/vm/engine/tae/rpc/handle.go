@@ -696,9 +696,11 @@ func (h *Handle) HandleClose(ctx context.Context) (err error) {
 	//if h.GCJob != nil {
 	//	h.GCJob.Stop()
 	//}
-	err = h.client.Close()
-	if err != nil {
-		return err
+	if h.client != nil {
+		err = h.client.Close()
+		if err != nil {
+			return err
+		}
 	}
 	return h.db.Close()
 }
