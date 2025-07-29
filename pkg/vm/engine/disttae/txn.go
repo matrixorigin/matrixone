@@ -695,7 +695,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close(txn.proc.GetMPool())
+			s3Writer.Close()
 		}
 	}()
 
@@ -720,7 +720,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 
 		fileName = stats[0].ObjectLocation().String()
-		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.GetMPool()); err != nil {
+		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 			return err
 		}
 
@@ -745,7 +745,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return err
 		}
 
-		s3Writer.Close(txn.proc.GetMPool())
+		s3Writer.Close()
 
 		s3Writer = nil
 	}
@@ -818,7 +818,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close(txn.proc.GetMPool())
+			s3Writer.Close()
 		}
 	}()
 
@@ -845,7 +845,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 		fileName = stats[0].ObjectLocation().String()
 
-		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.GetMPool()); err != nil {
+		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 			return err
 		}
 
@@ -870,7 +870,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return err
 		}
 
-		if err = s3Writer.Close(txn.proc.GetMPool()); err != nil {
+		if err = s3Writer.Close(); err != nil {
 			return err
 		}
 	}

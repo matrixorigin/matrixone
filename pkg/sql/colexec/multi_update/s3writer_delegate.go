@@ -401,7 +401,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	}
 
 	defer func() {
-		s3Writer.Close(proc.Mp())
+		s3Writer.Close()
 	}()
 
 	if sortIndex == -1 {
@@ -428,7 +428,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
-		if bat, err = s3Writer.FillBlockInfoBat(proc.Mp()); err != nil {
+		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 			return err
 		}
 
@@ -493,7 +493,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	analyzer.AddFileServiceCacheInfo(crs)
 	analyzer.AddDiskIO(crs)
 
-	if bat, err = s3Writer.FillBlockInfoBat(proc.Mp()); err != nil {
+	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return err
 	}
 

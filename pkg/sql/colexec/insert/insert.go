@@ -237,7 +237,7 @@ func flushTailBatch(
 		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
-		if bat, err = writer.FillBlockInfoBat(proc.Mp()); err != nil {
+		if bat, err = writer.FillBlockInfoBat(); err != nil {
 			return err
 		}
 

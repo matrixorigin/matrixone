@@ -220,7 +220,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 		}
 
 		if s3Writer != nil {
-			s3Writer.Close(mp)
+			s3Writer.Close()
 		}
 	}()
 
@@ -303,7 +303,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 		return zap.Skip(), err
 	}
 
-	if tmpBat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
+	if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return zap.Skip(), err
 	}
 
@@ -357,7 +357,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 		}
 
 		if s3Writer != nil {
-			s3Writer.Close(mp)
+			s3Writer.Close()
 		}
 
 		if iter != nil {
@@ -438,7 +438,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 			return zap.Skip(), err
 		}
 
-		if tmpBat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
+		if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 			return zap.Skip(), err
 		}
 

@@ -214,7 +214,7 @@ func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return w.written, nil
 }
 
-func (w *CNS3Writer) Close(mp *mpool.MPool) error {
+func (w *CNS3Writer) Close() error {
 	if w.sinker != nil {
 		if err := w.sinker.Close(); err != nil {
 			return err
@@ -224,14 +224,14 @@ func (w *CNS3Writer) Close(mp *mpool.MPool) error {
 
 	if len(w.hold) != 0 {
 		for _, bat := range w.hold {
-			bat.Clean(mp)
+			bat.Clean(w.mp)
 		}
 		w.hold = nil
 		w.holdFlushUntilSyncCall = false
 	}
 
 	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(mp)
+		w.blockInfoBat.Clean(w.mp)
 		w.blockInfoBat = nil
 	}
 
@@ -289,11 +289,9 @@ func ExpandObjectStatsToBatch(
 	return nil
 }
 
-func (w *CNS3Writer) FillBlockInfoBat(
-	mp *mpool.MPool,
-) (*batch.Batch, error) {
+func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
 
-	err := ExpandObjectStatsToBatch(mp, w.isTombstone, w.blockInfoBat, true, w.written...)
+	err := ExpandObjectStatsToBatch(w.mp, w.isTombstone, w.blockInfoBat, true, w.written...)
 
 	return w.blockInfoBat, err
 }

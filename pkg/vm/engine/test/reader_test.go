@@ -1388,7 +1388,7 @@ func Test_SimpleReader(t *testing.T) {
 	require.NoError(t, err)
 
 	w := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
-	defer w.Close(mp)
+	defer w.Close()
 
 	err = w.Write(proc.Ctx, bat1)
 	require.NoError(t, err)
