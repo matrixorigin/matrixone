@@ -47,39 +47,40 @@ type generateSeriesArg struct {
 	batch *batch.Batch
 }
 
+func getInt64Value(proc *process.Process, vec *vector.Vector, nth int, nullOK bool, errMsg string) (int64, bool, error) {
+	if vec.GetNulls().Contains(uint64(nth)) {
+		if nullOK {
+			return 0, false, nil
+		} else {
+			return 0, false, moerr.NewInvalidInputf(proc.Ctx, "the value of %s can't be NULL", errMsg)
+		}
+	}
+	if vec.GetType().Oid == types.T_int32 {
+		return int64(vector.GetFixedAtNoTypeCheck[int32](vec, nth)), true, nil
+	} else if vec.GetType().Oid == types.T_int64 {
+		return vector.GetFixedAtNoTypeCheck[int64](vec, nth), true, nil
+	} else {
+		return 0, false, moerr.NewInvalidInputf(proc.Ctx, "the type of %s must be int32 or int64", errMsg)
+	}
+}
+
 func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process, startVec, endVec, stepVec *vector.Vector, nth int) error {
 	if startVec == nil {
 		gs.start = 1
 	} else {
-		if startVec.GetType().Oid == types.T_int32 {
-			if startVec.GetNulls().Contains(uint64(nth)) {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series int32 start can't be NULL")
-			}
-			gs.start = int64(vector.GetFixedAtNoTypeCheck[int32](startVec, nth))
-		} else if startVec.GetType().Oid == types.T_int64 {
-			if startVec.GetNulls().Contains(uint64(nth)) {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series int64 start can't be NULL")
-			}
-			gs.start = vector.GetFixedAtNoTypeCheck[int64](startVec, nth)
-		} else {
-			return moerr.NewInvalidInput(proc.Ctx, "generate_series start must be int32 or int64")
+		start, _, err := getInt64Value(proc, startVec, nth, false, "generate_series start")
+		if err != nil {
+			return err
 		}
+		gs.start = start
 	}
 
 	// end vec is always not null
-	if endVec.GetType().Oid == types.T_int32 {
-		if endVec.GetNulls().Contains(uint64(nth)) {
-			return moerr.NewInvalidInput(proc.Ctx, "generate_series int32 end can't be NULL")
-		}
-		gs.end = int64(vector.GetFixedAtNoTypeCheck[int32](endVec, nth))
-	} else if endVec.GetType().Oid == types.T_int64 {
-		if endVec.GetNulls().Contains(uint64(nth)) {
-			return moerr.NewInvalidInput(proc.Ctx, "generate_series int64 end can't be NULL")
-		}
-		gs.end = vector.GetFixedAtNoTypeCheck[int64](endVec, nth)
-	} else {
-		return moerr.NewInvalidInput(proc.Ctx, "generate_series end must be int32 or int64")
+	end, _, err := getInt64Value(proc, endVec, nth, false, "generate_series end")
+	if err != nil {
+		return err
 	}
+	gs.end = end
 
 	if stepVec == nil {
 		if gs.start < gs.end {
@@ -88,19 +89,11 @@ func initStartAndEndNumNoTypeCheck(gs *genNumState[int64], proc *process.Process
 			gs.step = -1
 		}
 	} else {
-		if stepVec.GetType().Oid == types.T_int32 {
-			if stepVec.GetNulls().Contains(uint64(nth)) {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series int32 step can't be NULL")
-			}
-			gs.step = int64(vector.GetFixedAtNoTypeCheck[int32](stepVec, nth))
-		} else if stepVec.GetType().Oid == types.T_int64 {
-			if stepVec.GetNulls().Contains(uint64(nth)) {
-				return moerr.NewInvalidInput(proc.Ctx, "generate_series int64 step can't be NULL")
-			}
-			gs.step = vector.GetFixedAtNoTypeCheck[int64](stepVec, nth)
-		} else {
-			return moerr.NewInvalidInput(proc.Ctx, "generate_series step must be int32 or int64")
+		step, _, err := getInt64Value(proc, stepVec, nth, false, "generate_series step")
+		if err != nil {
+			return err
 		}
+		gs.step = step
 	}
 	if gs.step == 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "generate_series step cannot be zero")
@@ -201,7 +194,6 @@ func (g *generateSeriesArg) free(tf *TableFunction, proc *process.Process, pipel
 
 func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	var err error
-
 	if tf.CanOpt {
 		if g.batch == nil {
 			g.batch = tf.createResultBatch()
@@ -210,7 +202,6 @@ func (g *generateSeriesArg) start(tf *TableFunction, proc *process.Process, nthR
 		}
 		return err
 	}
-
 	var startVec, endVec, stepVec *vector.Vector
 	// get result type, this should happen in parpare.
 	// no matter how many args, the first arg is always the correct output type.
