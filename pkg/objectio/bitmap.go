@@ -110,13 +110,6 @@ func (r *Bitmap) Add(i uint64) {
 	r.bm.Add(i)
 }
 
-func (r *Bitmap) Remove(i uint64) {
-	if r == nil || r.bm == nil {
-		logutil.Fatal("invalid bitmap")
-	}
-	r.bm.Remove(i)
-}
-
 func (r *Bitmap) PreExtend(nbits int) {
 	if r.bm.Len() >= int64(nbits) {
 		return
