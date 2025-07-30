@@ -32,7 +32,6 @@ delete from t where a = 3;
 select mo_ctl('dn','checkpoint','');
 select * from t;
 select * from t {snapshot = 'snapshot01'};
-drop snapshot snapshot01;
 
 drop table if exists t;
 create table t (a int);
@@ -42,6 +41,8 @@ select mo_ctl('dn','globalcheckpoint','');
 -- @separator:table
 select mo_ctl('dn','checkpoint','');
 select * from t;
+select * from t {snapshot = 'snapshot01'};
+drop snapshot snapshot01;
 
 -- @separator:table
 select mo_ctl('dn','DiskCleaner','stop_gc');
