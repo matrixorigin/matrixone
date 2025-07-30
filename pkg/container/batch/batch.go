@@ -394,19 +394,55 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 	return bat.Vecs[pos]
 }
 
-func (bat *Batch) GetSubBatch(cols []string) *Batch {
-	mp := make(map[string]int)
-	for i, attr := range bat.Attrs {
-		mp[attr] = i
+func (bat *Batch) CloneSelectedColumns(
+	selectCols []int,
+	selectAttrs []string,
+	mp *mpool.MPool,
+) (cloned *Batch, err error) {
+	cloned = NewWithSize(len(selectCols))
+	cloned.Attrs = selectAttrs
+	cloned.offHeap = bat.offHeap
+	var typ types.Type
+	for idx := range selectCols {
+		cloned.Vecs[idx] = vector.NewVec(typ)
 	}
-	var rbat *Batch
-	if bat.offHeap {
-		rbat = NewOffHeapWithSize(len(cols))
-	} else {
-		rbat = NewWithSize(len(cols))
+	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
+		cloned.Clean(mp)
+		cloned = nil
+		return
 	}
+	return
+}
+
+func (bat *Batch) CloneSelectedColumnsTo(
+	selectCols []int,
+	toBat *Batch,
+	mp *mpool.MPool,
+) (err error) {
+	for idx, sourceIdx := range selectCols {
+		toVec := toBat.Vecs[idx]
+		toVec.ResetWithNewType(bat.Vecs[sourceIdx].GetType())
+		if err = toVec.UnionBatch(
+			bat.Vecs[sourceIdx],
+			0,
+			bat.Vecs[sourceIdx].Length(),
+			nil,
+			mp,
+		); err != nil {
+			return
+		}
+		toVec.SetSorted(bat.Vecs[sourceIdx].GetSorted())
+	}
+	toBat.rowCount = bat.rowCount
+	return nil
+}
+
+func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
+	rbat := NewWithSize(len(cols))
+	rbat.Attrs = attrs
+	rbat.offHeap = bat.offHeap
 	for i, col := range cols {
-		rbat.Vecs[i] = bat.Vecs[mp[col]]
+		rbat.Vecs[i] = bat.Vecs[col]
 	}
 	rbat.rowCount = bat.rowCount
 	return rbat

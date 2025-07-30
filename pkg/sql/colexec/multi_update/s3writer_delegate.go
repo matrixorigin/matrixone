@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	InsertWriteS3Threshold uint64 = 128 * mpool.MB
+	InsertWriteS3Threshold uint64 = 64 * mpool.MB
 	DeleteWriteS3Threshold uint64 = 64 * mpool.MB
 
 	TagS3SizeForMOLogger uint64 = 8 * mpool.MB
@@ -343,12 +343,13 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 				if isClusterBy {
 					sortIdx = -1
 				}
-				if bats, err = cloneSomeVecFromCompactBatches(
-					proc, writer.cacheBatches, updateCtx.InsertCols, insertAttrs, sortIdx,
+				if bats, err = cloneSelectedVecsFromCompactBatches(
+					writer.cacheBatches, updateCtx.InsertCols, insertAttrs, sortIdx, proc.Mp(),
 				); err != nil {
 					return
 				}
 			} else {
+				// main table and has sort key
 				if writer.sortIndexes[i] > -1 {
 					sortIdx := updateCtx.InsertCols[writer.sortIndexes[i]]
 					for j := 0; j < writer.cacheBatches.Length(); j++ {
@@ -768,74 +769,60 @@ func appendCfgToWriter(
 	writer.insertBlockRowCount[thisIdx] = 0
 }
 
-// cloneSomeVecFromCompactBatches  copy some vectors to new batch
-// clean these batchs after used
-func cloneSomeVecFromCompactBatches(
-	proc *process.Process,
-	src *batch.CompactBatchs,
-	cols []int,
-	attrs []string,
-	sortIdx int,
-) ([]*batch.Batch, error) {
+// the columns of `sourceBats` include `selectCols`
+// `selectColsCheckNullColIdx` is the sort key index of in `selectCols`. -1 means no sort key
+// Ex.
+// columns of `sourceBats` are [a, b, c, d, e]
+// `selectCols` is [0, 2, 4]
+// `selectColsCheckNullColIdx` is 1
+// then the columns of the new batch are [a, c, e]
+// the new batch is sorted by b
+func cloneSelectedVecsFromCompactBatches(
+	sourceBats *batch.CompactBatchs,
+	selectCols []int,
+	selectAttrs []string,
+	selectColsCheckNullColIdx int,
+	mp *mpool.MPool,
+) (cloned []*batch.Batch, err error) {
 
 	var (
-		err    error
-		newBat *batch.Batch
-		bats   = make([]*batch.Batch, 0, src.Length())
+		tmpBat *batch.Batch
 	)
+	cloned = make([]*batch.Batch, 0, sourceBats.Length())
 
 	defer func() {
 		if err != nil {
-			for _, bat := range bats {
+			for _, bat := range cloned {
 				if bat != nil {
-					bat.Clean(proc.GetMPool())
+					bat.Clean(mp)
 				}
 			}
-			if newBat != nil {
-				newBat.Clean(proc.GetMPool())
+			if tmpBat != nil {
+				tmpBat.Clean(mp)
 			}
 		}
 	}()
 
-	for i := 0; i < src.Length(); i++ {
-		newBat = batch.NewWithSize(len(cols))
-		newBat.Attrs = attrs
-		oldBat := src.Get(i)
-
-		if sortIdx > -1 && oldBat.Vecs[cols[sortIdx]].HasNull() {
-			for newColIdx, oldColIdx := range cols {
-				typ := oldBat.Vecs[oldColIdx].GetType()
-				newBat.Vecs[newColIdx] = vector.NewVec(*typ)
-			}
-
-			sortNulls := oldBat.Vecs[cols[sortIdx]].GetNulls()
-			for j := 0; j < oldBat.RowCount(); j++ {
-				if !sortNulls.Contains(uint64(j)) {
-					for newColIdx, oldColIdx := range cols {
-						if err = newBat.Vecs[newColIdx].UnionOne(oldBat.Vecs[oldColIdx], int64(j), proc.GetMPool()); err != nil {
-							return nil, err
-						}
-					}
-				}
-			}
-		} else {
-			for newColIdx, oldColIdx := range cols {
-				if newBat.Vecs[newColIdx], err = oldBat.Vecs[oldColIdx].Dup(proc.GetMPool()); err != nil {
-					return nil, err
-				}
-			}
+	for i, length := 0, sourceBats.Length(); i < length; i++ {
+		sourceBat := sourceBats.Get(i)
+		tmpBat, err = sourceBat.CloneSelectedColumns(selectCols, selectAttrs, mp)
+		if err != nil {
+			return
 		}
 
-		if newBat.Vecs[0].Length() > 0 {
-			newBat.SetRowCount(newBat.Vecs[0].Length())
-			bats = append(bats, newBat)
-		} else {
-			newBat.Clean(proc.GetMPool())
+		if selectColsCheckNullColIdx > -1 && tmpBat.Vecs[selectColsCheckNullColIdx].HasNull() {
+			sortKeyNulls := tmpBat.Vecs[selectColsCheckNullColIdx].GetNulls().GetBitmap()
+			tmpBat.ShrinkByMask(sortKeyNulls, true, 0)
 		}
-		newBat = nil
+		if tmpBat.RowCount() == 0 {
+			tmpBat.Clean(mp)
+			tmpBat = nil
+			continue
+		}
+		cloned = append(cloned, tmpBat)
 	}
 
-	return bats, nil
+	return cloned, nil
 }
 
 // fetchSomeVecFromCompactBatches fetch some vectors from CompactBatchs
@@ -844,21 +831,13 @@ func fetchSomeVecFromCompactBatches(
 	src *batch.CompactBatchs,
 	cols []int,
 	attrs []string,
-) ([]*batch.Batch, error) {
-	var newBat *batch.Batch
-	retBats := make([]*batch.Batch, src.Length())
-	for i := 0; i < src.Length(); i++ {
-		oldBat := src.Get(i)
-		newBat = batch.NewWithSize(len(cols))
-		newBat.Attrs = attrs
-		for j, idx := range cols {
-			oldVec := oldBat.Vecs[idx]
-			newBat.Vecs[j] = oldVec
-		}
-		newBat.SetRowCount(newBat.Vecs[0].Length())
-		retBats[i] = newBat
+) (retBats []*batch.Batch, err error) {
+
+	for i, length := 0, src.Length(); i < length; i++ {
+		srcBat := src.Get(i)
+		retBats = append(retBats, srcBat.SelectColumns(cols, attrs))
 	}
-	return retBats, nil
+	return
 }
 
 func resetMergeBlockForOldCN(proc *process.Process, bat *batch.Batch) error {
