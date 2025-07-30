@@ -63,3 +63,15 @@ update t1 set name = null where id = "b";
 select * from t1;
 delete from t1 where id = "b";
 select * from t1;
+
+drop table if exists t1;
+create table t1(id int primary key, val int unique);
+insert into t1 select *, * from generate_series(300000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'secondary_index_insert.t1');
+create table t2 like t1;
+insert into t2 select * from t1;
+select count(*) from t2;
+delete from t2;
+insert into t2 select * from t1 limit 100000;
+select count(*) from t2;
