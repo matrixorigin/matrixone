@@ -312,19 +312,31 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 		if len(updateCtx.InsertCols) > 0 {
 			insertAttrs := writer.updateCtxInfos[updateCtx.TableDef.Name].insertAttrs
 			isClusterBy := writer.isClusterBys[i]
+
+			// unique index table and secondary index table need clone
+			// main table do not need clone
 			needClone := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType != UpdateMainTable //uk&sk need clone
+
+			// if the main table has sort key
 			if !needClone && writer.sortIndexes[i] > -1 {
 				sortIdx := updateCtx.InsertCols[writer.sortIndexes[i]]
 				for j := 0; j < writer.cacheBatches.Length(); j++ {
-					needSortBat := writer.cacheBatches.Get(j)
-					if needSortBat.GetVector(int32(sortIdx)).HasNull() {
+					cachedBat := writer.cacheBatches.Get(j)
+					// if the sort key has null, need clone
+					if cachedBat.GetVector(int32(sortIdx)).HasNull() {
 						needClone = true
 						break
 					}
 				}
 			}
 
-			var needCleanBatch bool
+			// needClone = true:
+			// 1. unique index table and secondary index table
+			// 2. main table has sort key and sort key has null
+			// needClone = false:
+			// 1. main table has sort key and sort key has no null
+			// 2. main table has no sort key
+
 			if needClone {
 				// cluster by do not check if sort vector is null
 				sortIdx := writer.sortIndexes[i]
@@ -336,7 +348,6 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 				); err != nil {
 					return
 				}
-				needCleanBatch = true
 			} else {
 				if writer.sortIndexes[i] > -1 {
 					sortIdx := updateCtx.InsertCols[writer.sortIndexes[i]]
@@ -354,9 +365,14 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 				); err != nil {
 					return
 				}
-				needCleanBatch = false
 			}
 
+			// needClone = true means all the batches in `bats` was cloned from `writer.cacheBatches`
+			// so we can clean the batches after use
+			// needClone = false means all the batches in `bats` was sorted from `writer.cacheBatches`
+			// so we can not clean the batches after use. All the batches in `writer.cacheBatches` will
+			// be used in next round and will be cleaned in other place.
+			cleanAfterUse := needClone
 			if err = writer.sortAndSyncOneTable(
 				proc,
 				updateCtx.TableDef,
@@ -364,7 +380,7 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 				i,
 				false,
 				bats,
-				needCleanBatch,
+				cleanAfterUse,
 				ioutil.WithBuffer(batchBuffer, true),
 			); err != nil {
 				return
