@@ -78,6 +78,7 @@ func NewCNS3TombstoneWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	pkType types.Type,
+	memoryThreshold int,
 	opts ...ioutil.SinkerOption,
 ) *CNS3Writer {
 
@@ -85,7 +86,11 @@ func NewCNS3TombstoneWriter(
 		isTombstone: true,
 	}
 
-	opts = append(opts, ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)))
+	if memoryThreshold < 0 {
+		memoryThreshold = WriteS3Threshold
+	}
+
+	opts = append(opts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	opts = append(opts, ioutil.WithTailSizeCap(0))
 
 	writer.sinker = ioutil.NewTombstoneSinker(
@@ -154,10 +159,15 @@ func GetSequmsAttrsSortKeyIdxFromTableDef(
 	return sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey
 }
 
+// `flushOnSync` true means memoryThreshold is math.MaxInt
+// `memoryThreshold`
+// 1. only effect when `flushOnSync` is false
+// 2. < 0 use default threshold
 func NewCNS3DataWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	tableDef *plan.TableDef,
+	memoryThreshold int,
 	flushOnSync bool,
 	sinkerOpts ...ioutil.SinkerOption,
 ) *CNS3Writer {
@@ -167,24 +177,23 @@ func NewCNS3DataWriter(
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
 	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
+	if memoryThreshold < 0 {
+		memoryThreshold = WriteS3Threshold
+	}
 
-	threshold := WriteS3Threshold
 	if faultInjected, _ := objectio.LogCNFlushSmallObjsInjected(
 		tableDef.DbName, tableDef.Name,
 	); faultInjected {
-		threshold = FaultInjectedS3Threshold
+		memoryThreshold = FaultInjectedS3Threshold
 	}
 	if flushOnSync {
 		// do not flush on sync, so the threshold is the max int
-		threshold = math.MaxInt
+		memoryThreshold = math.MaxInt
 	}
 
-	opts := []ioutil.SinkerOption{
-		ioutil.WithTailSizeCap(0),
-		ioutil.WithMemorySizeThreshold(threshold),
-		ioutil.WithOffHeap(),
-	}
-	opts = append(opts, sinkerOpts...)
+	sinkerOpts = append(sinkerOpts, ioutil.WithMemorySizeThreshold(memoryThreshold))
+	sinkerOpts = append(sinkerOpts, ioutil.WithTailSizeCap(0))
+	sinkerOpts = append(sinkerOpts, ioutil.WithOffHeap())
 	writer.sinker = ioutil.NewSinker(
 		sortKeyIdx,
 		attrs,
@@ -192,7 +201,7 @@ func NewCNS3DataWriter(
 		factor,
 		mp,
 		fs,
-		opts...,
+		sinkerOpts...,
 	)
 
 	writer.ResetBlockInfoBat()

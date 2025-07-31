@@ -425,10 +425,10 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), opts...,
+			proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
 		)
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, false, opts...)
+		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
 	}
 
 	defer s3Writer.Close()
