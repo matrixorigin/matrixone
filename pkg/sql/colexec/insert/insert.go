@@ -251,5 +251,5 @@ func flushTailBatch(
 		return nil
 	}
 
-	return writer.OutputRawData(proc, result.Batch)
+	return writer.OutputInMemoryData(result.Batch)
 }
