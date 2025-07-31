@@ -378,12 +378,13 @@ func (op *PartitionMultiUpdate) getPartitionIndex(
 }
 
 func (op *PartitionMultiUpdate) getS3Writer(
+	sid string,
 	id uint64,
 ) (*s3WriterDelegate, error) {
 	var err error
 	w, ok := op.writers[id]
 	if !ok {
-		w, err = newS3Writer(op.raw)
+		w, err = newS3Writer(sid, op.raw)
 		if err != nil {
 			return nil, err
 		}

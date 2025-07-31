@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"sync"
 	"time"
 
@@ -196,11 +197,19 @@ func NewService(
 		panic(err)
 	}
 
+	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
+		"CNFlushS3",
+		1,
+		rscthrottler.WithConstLimit(mpool.MB*300),
+		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+	)
+
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
 	srv.pu.QueryClient = srv.queryClient
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
+	srv.pu.CNMemoryThrottler = srv.CNMemoryThrottler
 
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
@@ -241,7 +250,10 @@ func NewService(
 		panic(err)
 	}
 	srv.pipelines.client = c
+
 	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.PipelineClient, c)
+	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.CNMemoryThrottler, srv.CNMemoryThrottler)
+
 	return srv, nil
 }
 
