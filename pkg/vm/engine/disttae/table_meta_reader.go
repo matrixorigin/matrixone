@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -219,7 +220,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 		}
 
 		if s3Writer != nil {
-			s3Writer.Close(mp)
+			s3Writer.Close()
 		}
 	}()
 
@@ -232,7 +233,7 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 			}
 		}
 
-		return s3Writer.Write(ctx, mp, rowsBatch)
+		return s3Writer.Write(ctx, rowsBatch)
 	}
 
 	iter = r.pState.NewRowsIter(r.snapshot, nil, isTombstone)
@@ -298,11 +299,11 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 		}
 	}
 
-	if sl, err = s3Writer.Sync(ctx, mp); err != nil {
+	if sl, err = s3Writer.Sync(ctx); err != nil {
 		return zap.Skip(), err
 	}
 
-	if tmpBat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
+	if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return zap.Skip(), err
 	}
 
@@ -356,7 +357,7 @@ func (r *TableMetaReader) collectVisibleObjs(
 		}
 
 		if s3Writer != nil {
-			s3Writer.Close(mp)
+			s3Writer.Close()
 		}
 
 		if iter != nil {
@@ -428,16 +429,16 @@ func (r *TableMetaReader) collectVisibleObjs(
 				break
 			}
 
-			if err = s3Writer.Write(ctx, mp, dataBatch); err != nil {
+			if err = s3Writer.Write(ctx, dataBatch); err != nil {
 				return zap.Skip(), err
 			}
 		}
 
-		if sl, err = s3Writer.Sync(ctx, mp); err != nil {
+		if sl, err = s3Writer.Sync(ctx); err != nil {
 			return zap.Skip(), err
 		}
 
-		if tmpBat, err = s3Writer.FillBlockInfoBat(mp); err != nil {
+		if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 			return zap.Skip(), err
 		}
 

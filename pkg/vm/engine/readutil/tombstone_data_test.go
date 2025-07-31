@@ -68,10 +68,10 @@ func TestTombstoneData1(t *testing.T) {
 
 		bat.SetRowCount(bat.Vecs[0].Length())
 
-		err = writer.Write(ctx, proc.Mp(), bat)
+		err = writer.Write(ctx, bat)
 		require.NoError(t, err)
 
-		ss, err := writer.Sync(ctx, proc.Mp())
+		ss, err := writer.Sync(ctx)
 		require.NoError(t, err)
 		require.Equal(t, 1, len(ss))
 		require.False(t, ss[0].IsZero())

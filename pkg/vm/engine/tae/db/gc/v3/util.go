@@ -84,7 +84,7 @@ func TransformToTSList(
 
 func MakeGCWindowBuffer(size int) *containers.OneSchemaBatchBuffer {
 	return containers.NewOneSchemaBatchBuffer(
-		size, ObjectTableAttrs, ObjectTableTypes,
+		size, ObjectTableAttrs, ObjectTableTypes, false,
 	)
 }
 
