@@ -409,6 +409,17 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
+	defer func() {
+		if cleanBatchAfterUse {
+			for i, bat := range bats {
+				if bat != nil {
+					bat.Clean(proc.GetMPool())
+					bats[i] = nil
+				}
+			}
+		}
+	}()
+
 	var (
 		fs           fileservice.FileService
 		blockInfoBat *batch.Batch
