@@ -349,18 +349,6 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 					return
 				}
 			} else {
-				// main table and has sort key
-				if writer.sortIndexes[i] > -1 {
-					sortIdx := updateCtx.InsertCols[writer.sortIndexes[i]]
-					for j := 0; j < writer.cacheBatches.Length(); j++ {
-						needSortBat := writer.cacheBatches.Get(j)
-						if err = colexec.SortByKey(
-							proc, needSortBat, sortIdx, isClusterBy, proc.GetMPool(),
-						); err != nil {
-							return
-						}
-					}
-				}
 				if bats, err = fetchSomeVecFromCompactBatches(
 					writer.cacheBatches, updateCtx.InsertCols, insertAttrs,
 				); err != nil {
