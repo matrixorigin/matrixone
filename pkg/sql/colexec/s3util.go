@@ -345,9 +345,9 @@ func (w *CNS3Writer) ResetBlockInfoBat() {
 
 	if w.blockInfoBat != nil {
 		w.blockInfoBat.CleanOnlyData()
+	} else {
+		w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone, false)
 	}
-
-	w.blockInfoBat = AllocCNS3ResultBat(w.isTombstone, false)
 }
 
 // reference to pkg/sql/colexec/order/order.go logic
