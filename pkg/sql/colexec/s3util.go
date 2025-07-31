@@ -46,10 +46,8 @@ const (
 
 type CNS3Writer struct {
 	sinker       *ioutil.Sinker
-	written      []objectio.ObjectStats
+	isTombstone  bool
 	blockInfoBat *batch.Batch
-
-	isTombstone bool
 }
 
 func (w *CNS3Writer) String() string {
@@ -211,9 +209,8 @@ func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, er
 		return
 	}
 
-	w.written, _ = w.sinker.GetResult()
-
-	return w.written, nil
+	stats, _ = w.sinker.GetResult()
+	return
 }
 
 func (w *CNS3Writer) Close() (err error) {
@@ -230,8 +227,6 @@ func (w *CNS3Writer) Close() (err error) {
 		w.blockInfoBat.Clean(mp)
 		w.blockInfoBat = nil
 	}
-
-	w.written = nil
 
 	return nil
 }
@@ -287,15 +282,21 @@ func ExpandObjectStatsToBatch(
 
 func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
 
-	err := ExpandObjectStatsToBatch(
+	w.ResetBlockInfoBat()
+
+	result, _ := w.sinker.GetResult()
+
+	if err := ExpandObjectStatsToBatch(
 		w.sinker.GetMPool(),
 		w.isTombstone,
 		w.blockInfoBat,
 		true,
-		w.written...,
-	)
+		result...,
+	); err != nil {
+		return nil, err
+	}
 
-	return w.blockInfoBat, err
+	return w.blockInfoBat, nil
 }
 
 func AllocCNS3ResultBat(
