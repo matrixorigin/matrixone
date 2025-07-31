@@ -19,12 +19,12 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"math/rand"
 	"slices"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"

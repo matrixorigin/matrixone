@@ -16,12 +16,12 @@ package config
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
