@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,8 +40,8 @@ import (
 const (
 	// WriteS3Threshold when batches'  size of table reaches this, we will
 	// trigger write s3
-	WriteS3Threshold         uint64 = 128 * mpool.MB
-	FaultInjectedS3Threshold uint64 = 512 * mpool.KB
+	WriteS3Threshold         = 128 * mpool.MB
+	FaultInjectedS3Threshold = 512 * mpool.KB
 )
 
 type CNS3Writer struct {
@@ -151,14 +152,11 @@ func NewCNS3DataWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
 	tableDef *plan.TableDef,
-	holdFlushUntilSyncCall bool,
+	flushOnSync bool,
 	sinkerOpts ...ioutil.SinkerOption,
 ) *CNS3Writer {
 
-	writer := &CNS3Writer{
-		holdFlushUntilSyncCall: holdFlushUntilSyncCall,
-		mp:                     mp,
-	}
+	writer := &CNS3Writer{mp: mp}
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
@@ -170,10 +168,14 @@ func NewCNS3DataWriter(
 	); faultInjected {
 		threshold = FaultInjectedS3Threshold
 	}
+	if flushOnSync {
+		// do not flush on sync, so the threshold is the max int
+		threshold = math.MaxInt
+	}
 
 	opts := []ioutil.SinkerOption{
 		ioutil.WithTailSizeCap(0),
-		ioutil.WithMemorySizeThreshold(int(threshold)),
+		ioutil.WithMemorySizeThreshold(threshold),
 		ioutil.WithOffHeap(),
 	}
 	opts = append(opts, sinkerOpts...)
@@ -189,36 +191,12 @@ func NewCNS3DataWriter(
 }
 
 func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
-	if w.holdFlushUntilSyncCall {
-		copied, err := bat.Dup(w.mp)
-		if err != nil {
-			return err
-		}
-		w.hold = append(w.hold, copied)
-	} else {
-		return w.sinker.Write(ctx, bat)
-	}
-	return nil
+	return w.sinker.Write(ctx, bat)
 }
 
-func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
-	defer func() {
-		for _, bat := range w.hold {
-			bat.Clean(w.mp)
-		}
-		w.hold = nil
-	}()
-
-	if len(w.hold) != 0 {
-		for _, bat := range w.hold {
-			if err := w.sinker.Write(ctx, bat); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if err := w.sinker.Sync(ctx); err != nil {
-		return nil, err
+func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
+	if err = w.sinker.Sync(ctx); err != nil {
+		return
 	}
 
 	w.written, _ = w.sinker.GetResult()
@@ -226,20 +204,12 @@ func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
 	return w.written, nil
 }
 
-func (w *CNS3Writer) Close() error {
+func (w *CNS3Writer) Close() (err error) {
 	if w.sinker != nil {
-		if err := w.sinker.Close(); err != nil {
-			return err
+		if err = w.sinker.Close(); err != nil {
+			return
 		}
 		w.sinker = nil
-	}
-
-	if len(w.hold) != 0 {
-		for _, bat := range w.hold {
-			bat.Clean(w.mp)
-		}
-		w.hold = nil
-		w.holdFlushUntilSyncCall = false
 	}
 
 	if w.blockInfoBat != nil {
