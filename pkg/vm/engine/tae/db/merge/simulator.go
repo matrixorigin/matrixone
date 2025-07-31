@@ -105,23 +105,26 @@ func (c *simRscController) setMemLimit(limit int64) {
 	c.limit.Store(limit)
 }
 
-func (c *simRscController) refresh() {}
+func (c *simRscController) Refresh() {}
 
-func (c *simRscController) printMemUsage() {}
+func (c *simRscController) PrintUsage() {}
 
-func (c *simRscController) reserveResources(estMem int64) {
+func (c *simRscController) Acquire(estMem int64) (int64, bool) {
 	c.reserved += estMem
+	return c.Available() - estMem, true
 }
 
-func (c *simRscController) releaseResources(estMem int64) {
+func (c *simRscController) Release(estMem int64) int64 {
 	c.reserved -= estMem
 	if c.reserved < 0 {
 		c.reserved = 0
 		logutil.Warnf("simRscController: releaseResources: %d", estMem)
 	}
+
+	return c.Available()
 }
 
-func (c *simRscController) availableMem() int64 {
+func (c *simRscController) Available() int64 {
 	avail := c.limit.Load() - c.reserved
 	if avail < 0 {
 		avail = 0
@@ -130,7 +133,7 @@ func (c *simRscController) availableMem() int64 {
 }
 
 func (c *simRscController) resourceAvailable(estMem int64) bool {
-	mem := min(c.availableMem(), constMaxMemCap)
+	mem := min(c.Available(), constMaxMemCap)
 	return estMem <= 2*mem/3
 }
 

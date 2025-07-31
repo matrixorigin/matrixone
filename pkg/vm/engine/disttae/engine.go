@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -126,10 +126,11 @@ func New(
 		RwMutex:       &sync.Mutex{},
 	}
 
+	e.fillDefaults()
+
 	for _, opt := range options {
 		opt(e)
 	}
-	e.fillDefaults()
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
@@ -170,10 +171,12 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
-	if e.config.quota.Load() <= 0 {
-		mem := objectio.TotalMem() / 100 * 5
-		e.config.quota.Store(mem)
-		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
+
+	if e.config.memThrottler == nil {
+		e.config.memThrottler = rscthrottler.NewMemThrottler(
+			"Workspace",
+			5.0/100.0,
+		)
 	}
 
 	logutil.Info(
@@ -181,7 +184,7 @@ func (e *Engine) fillDefaults() {
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
 		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
 		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
-		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
+		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
 		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
 	)
 }
@@ -201,24 +204,18 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	return
 }
 
-func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
-	for {
-		oldRemaining := e.config.quota.Load()
-		if oldRemaining < v {
-			return 0, false
-		}
-		remaining := oldRemaining - v
-		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
-			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
-			return remaining, true
-		}
+func (e *Engine) AcquireQuota(v int64) (int64, bool) {
+	left, ok := e.config.memThrottler.Acquire(v)
+	if ok {
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(left))
 	}
+
+	return left, ok
 }
 
-func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
-	e.config.quota.Add(quota)
-	remaining = e.config.quota.Load()
-	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+func (e *Engine) ReleaseQuota(quota int64) (remaining uint64) {
+	left := e.config.memThrottler.Release(quota)
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(left))
 	return
 }
 

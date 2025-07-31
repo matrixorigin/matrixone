@@ -16,6 +16,7 @@ package config
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -977,6 +978,8 @@ type ParameterUnit struct {
 	HAKeeperClient logservice.CNHAKeeperClient
 
 	TaskService taskservice.TaskService
+
+	CNMemoryThrottler rscthrottler.RSCThrottler
 }
 
 func NewParameterUnit(

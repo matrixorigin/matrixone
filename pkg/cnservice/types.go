@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"runtime"
 	"strings"
 	"sync"
@@ -680,6 +681,8 @@ type service struct {
 		counter atomic.Int64
 		client  cnclient.PipelineClient
 	}
+
+	CNMemoryThrottler rscthrottler.RSCThrottler
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {
