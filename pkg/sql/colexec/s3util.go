@@ -52,6 +52,7 @@ type CNS3Writer struct {
 	holdFlushUntilSyncCall bool
 
 	isTombstone bool
+	mp          *mpool.MPool
 }
 
 func (w *CNS3Writer) String() string {
@@ -68,17 +69,26 @@ func (w *CNS3Writer) String() string {
 func NewCNS3TombstoneWriter(
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-	pkType types.Type) *CNS3Writer {
+	pkType types.Type,
+	opts ...ioutil.SinkerOption,
+) *CNS3Writer {
 
-	writer := &CNS3Writer{}
+	writer := &CNS3Writer{
+		mp:          mp,
+		isTombstone: true,
+	}
+
+	opts = append(opts, ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)))
+	opts = append(opts, ioutil.WithTailSizeCap(0))
 
 	writer.sinker = ioutil.NewTombstoneSinker(
 		objectio.HiddenColumnSelection_None,
-		pkType, mp, fs,
-		ioutil.WithMemorySizeThreshold(int(WriteS3Threshold)),
-		ioutil.WithTailSizeCap(0))
+		pkType,
+		mp,
+		fs,
+		opts...,
+	)
 
-	writer.isTombstone = true
 	writer.ResetBlockInfoBat()
 
 	return writer
@@ -142,10 +152,12 @@ func NewCNS3DataWriter(
 	fs fileservice.FileService,
 	tableDef *plan.TableDef,
 	holdFlushUntilSyncCall bool,
+	sinkerOpts ...ioutil.SinkerOption,
 ) *CNS3Writer {
 
 	writer := &CNS3Writer{
 		holdFlushUntilSyncCall: holdFlushUntilSyncCall,
+		mp:                     mp,
 	}
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
@@ -159,12 +171,16 @@ func NewCNS3DataWriter(
 		threshold = FaultInjectedS3Threshold
 	}
 
-	writer.sinker = ioutil.NewSinker(
-		sortKeyIdx, attrs, attrTypes,
-		factor, mp, fs,
+	opts := []ioutil.SinkerOption{
 		ioutil.WithTailSizeCap(0),
 		ioutil.WithMemorySizeThreshold(int(threshold)),
 		ioutil.WithOffHeap(),
+	}
+	opts = append(opts, sinkerOpts...)
+	writer.sinker = ioutil.NewSinker(
+		sortKeyIdx, attrs, attrTypes,
+		factor, mp, fs,
+		opts...,
 	)
 
 	writer.ResetBlockInfoBat()
@@ -172,9 +188,9 @@ func NewCNS3DataWriter(
 	return writer
 }
 
-func (w *CNS3Writer) Write(ctx context.Context, mp *mpool.MPool, bat *batch.Batch) error {
+func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
 	if w.holdFlushUntilSyncCall {
-		copied, err := bat.Dup(mp)
+		copied, err := bat.Dup(w.mp)
 		if err != nil {
 			return err
 		}
@@ -185,10 +201,10 @@ func (w *CNS3Writer) Write(ctx context.Context, mp *mpool.MPool, bat *batch.Batc
 	return nil
 }
 
-func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.ObjectStats, error) {
+func (w *CNS3Writer) Sync(ctx context.Context) ([]objectio.ObjectStats, error) {
 	defer func() {
 		for _, bat := range w.hold {
-			bat.Clean(mp)
+			bat.Clean(w.mp)
 		}
 		w.hold = nil
 	}()
@@ -210,7 +226,7 @@ func (w *CNS3Writer) Sync(ctx context.Context, mp *mpool.MPool) ([]objectio.Obje
 	return w.written, nil
 }
 
-func (w *CNS3Writer) Close(mp *mpool.MPool) error {
+func (w *CNS3Writer) Close() error {
 	if w.sinker != nil {
 		if err := w.sinker.Close(); err != nil {
 			return err
@@ -220,14 +236,14 @@ func (w *CNS3Writer) Close(mp *mpool.MPool) error {
 
 	if len(w.hold) != 0 {
 		for _, bat := range w.hold {
-			bat.Clean(mp)
+			bat.Clean(w.mp)
 		}
 		w.hold = nil
 		w.holdFlushUntilSyncCall = false
 	}
 
 	if w.blockInfoBat != nil {
-		w.blockInfoBat.Clean(mp)
+		w.blockInfoBat.Clean(w.mp)
 		w.blockInfoBat = nil
 	}
 
@@ -285,11 +301,9 @@ func ExpandObjectStatsToBatch(
 	return nil
 }
 
-func (w *CNS3Writer) FillBlockInfoBat(
-	mp *mpool.MPool,
-) (*batch.Batch, error) {
+func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
 
-	err := ExpandObjectStatsToBatch(mp, w.isTombstone, w.blockInfoBat, true, w.written...)
+	err := ExpandObjectStatsToBatch(w.mp, w.isTombstone, w.blockInfoBat, true, w.written...)
 
 	return w.blockInfoBat, err
 }

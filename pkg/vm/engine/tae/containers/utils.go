@@ -19,12 +19,13 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type IBatchBuffer interface {
@@ -32,23 +33,227 @@ type IBatchBuffer interface {
 	Fetch() *batch.Batch
 	Putback(*batch.Batch, *mpool.MPool)
 	Close(*mpool.MPool)
+	Len() int
+	Usage() (int, int, int, int)
+}
+
+type GeneralBatchBuffer struct {
+	sync.Mutex
+	offHeap          bool
+	sizeCap          int
+	currSize         int
+	highWater        int
+	reuseBytes       int
+	reuseCount       int
+	maxOneFixedSize  int
+	maxOneVarlen     int
+	fixedSizeVectors []*vector.Vector
+	varlenVectors    []*vector.Vector
+}
+
+func (bb *GeneralBatchBuffer) Len() int {
+	bb.Lock()
+	defer bb.Unlock()
+	return len(bb.fixedSizeVectors) + len(bb.varlenVectors)
+}
+
+func (bb *GeneralBatchBuffer) FetchWithSchema(attrs []string, types []types.Type) *batch.Batch {
+	bb.Lock()
+	defer bb.Unlock()
+	bat := batch.NewWithSchema(bb.offHeap, attrs, types)
+
+	// if no vectors in buffer, return a new batch
+	if len(bb.fixedSizeVectors) == 0 && len(bb.varlenVectors) == 0 {
+		return bat
+	}
+
+	var (
+		notReused roaring.Bitmap
+	)
+
+	// if there are vectors in buffer, try to fetch from buffer
+	for i, typ := range types {
+		if typ.IsVarlen() {
+			if len(bb.varlenVectors) == 0 {
+				notReused.Add(uint32(i))
+				continue
+			}
+			vec := bb.varlenVectors[len(bb.varlenVectors)-1]
+			vec.ResetWithNewType(&typ)
+			bat.Vecs[i] = vec
+			bb.varlenVectors = bb.varlenVectors[:len(bb.varlenVectors)-1]
+			bb.reuseBytes += vec.Allocated()
+			bb.reuseCount++
+		} else {
+			if len(bb.fixedSizeVectors) == 0 {
+				notReused.Add(uint32(i))
+				continue
+			}
+			vec := bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1]
+			vec.ResetWithNewType(&typ)
+			bat.Vecs[i] = vec
+			bb.fixedSizeVectors = bb.fixedSizeVectors[:len(bb.fixedSizeVectors)-1]
+			bb.reuseBytes += vec.Allocated()
+			bb.reuseCount++
+		}
+	}
+
+	if !notReused.IsEmpty() && (len(bb.fixedSizeVectors)+len(bb.varlenVectors) > 0) {
+		for i, typ := range types {
+			// if the vector is reused, skip
+			if !notReused.Contains(uint32(i)) {
+				continue
+			}
+
+			var vec *vector.Vector
+			if len(bb.fixedSizeVectors) > 0 {
+				vec = bb.fixedSizeVectors[len(bb.fixedSizeVectors)-1]
+				bb.fixedSizeVectors = bb.fixedSizeVectors[:len(bb.fixedSizeVectors)-1]
+			} else if len(bb.varlenVectors) > 0 {
+				vec = bb.varlenVectors[len(bb.varlenVectors)-1]
+				bb.varlenVectors = bb.varlenVectors[:len(bb.varlenVectors)-1]
+			} else {
+				break
+			}
+
+			vec.ResetWithNewType(&typ)
+			bat.Vecs[i] = vec
+			bb.reuseBytes += vec.Allocated()
+			bb.reuseCount++
+
+			// if the vector is reused, remove it from notReused
+			notReused.Remove(uint32(i))
+
+			// if there are no vectors in buffer or all vectors are reused, break
+			if len(bb.fixedSizeVectors)+len(bb.varlenVectors) == 0 || notReused.IsEmpty() {
+				break
+			}
+		}
+	}
+
+	return bat
+}
+
+func (bb *GeneralBatchBuffer) Fetch() *batch.Batch {
+	panic("not supported")
+}
+
+func (bb *GeneralBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
+	bb.Lock()
+	defer bb.Unlock()
+	if bat == nil || bat.Vecs == nil {
+		return
+	}
+
+	// varlen vector reuse is more important than fixed size vector
+	for i, vec := range bat.Vecs {
+		if !vec.GetType().IsVarlen() {
+			continue
+		}
+		bat.Vecs[i] = nil
+		vec.CleanOnlyData()
+
+		// check onevec cap size
+		if vec.Allocated() > bb.maxOneVarlen {
+			vec.Free(mp)
+			continue
+		}
+		if bb.currSize+vec.Allocated() > bb.sizeCap {
+			vec.Free(mp)
+			continue
+		}
+		bb.varlenVectors = append(bb.varlenVectors, vec)
+		bb.currSize += vec.Allocated()
+	}
+
+	for i, vec := range bat.Vecs {
+		if vec == nil {
+			continue
+		}
+		bat.Vecs[i] = nil
+		vec.CleanOnlyData()
+		if vec.Allocated() > bb.maxOneFixedSize {
+			vec.Free(mp)
+			continue
+		}
+		if bb.currSize+vec.Allocated() > bb.sizeCap {
+			vec.Free(mp)
+			continue
+		}
+		bb.fixedSizeVectors = append(bb.fixedSizeVectors, vec)
+		bb.currSize += vec.Allocated()
+	}
+
+	bat.Clean(mp)
+	if bb.currSize > bb.highWater {
+		bb.highWater = bb.currSize
+	}
+}
+
+func (bb *GeneralBatchBuffer) Usage() (int, int, int, int) {
+	bb.Lock()
+	defer bb.Unlock()
+	return bb.currSize, bb.highWater, bb.reuseBytes, bb.reuseCount
+}
+
+func (bb *GeneralBatchBuffer) Close(mp *mpool.MPool) {
+	bb.Lock()
+	defer bb.Unlock()
+	for i, vec := range bb.fixedSizeVectors {
+		bb.fixedSizeVectors[i] = nil
+		vec.Free(mp)
+	}
+	for i, vec := range bb.varlenVectors {
+		bb.varlenVectors[i] = nil
+		vec.Free(mp)
+	}
+	bb.fixedSizeVectors = nil
+	bb.varlenVectors = nil
+}
+
+func NewGeneralBatchBuffer(
+	sizeCap int,
+	offHeap bool,
+	maxOneFixedSize int,
+	maxOneVarlen int,
+) *GeneralBatchBuffer {
+	if sizeCap <= 0 {
+		sizeCap = mpool.MB * 32
+	}
+	if maxOneFixedSize <= 0 {
+		maxOneFixedSize = mpool.KB * 128
+	}
+	if maxOneVarlen <= 0 {
+		maxOneVarlen = mpool.MB
+	}
+	return &GeneralBatchBuffer{
+		sizeCap:          sizeCap,
+		offHeap:          offHeap,
+		maxOneFixedSize:  maxOneFixedSize,
+		maxOneVarlen:     maxOneVarlen,
+		fixedSizeVectors: make([]*vector.Vector, 0),
+		varlenVectors:    make([]*vector.Vector, 0),
+	}
 }
 
 type OneSchemaBatchBuffer struct {
 	sync.Mutex
-	offHeap   bool
-	sizeCap   int
-	currSize  int
-	highWater int
-	attrs     []string
-	typs      []types.Type
-	buffer    []*batch.Batch
+	offHeap    bool
+	sizeCap    int
+	currSize   int
+	highWater  int
+	reuseBytes int
+	reuseCount int
+	attrs      []string
+	typs       []types.Type
+	buffer     []*batch.Batch
 }
 
 func NewOneSchemaBatchBuffer(
 	sizeCap int,
 	attrs []string,
 	typs []types.Type,
+	offHeap bool,
 ) *OneSchemaBatchBuffer {
 	if sizeCap <= 0 {
 		sizeCap = mpool.MB * 32
@@ -58,13 +263,8 @@ func NewOneSchemaBatchBuffer(
 		buffer:  make([]*batch.Batch, 0),
 		attrs:   attrs,
 		typs:    typs,
+		offHeap: offHeap,
 	}
-}
-
-func (bb *OneSchemaBatchBuffer) SetOffHeap(offHeap bool) {
-	bb.Lock()
-	defer bb.Unlock()
-	bb.offHeap = offHeap
 }
 
 func (bb *OneSchemaBatchBuffer) Len() int {
@@ -94,6 +294,8 @@ func (bb *OneSchemaBatchBuffer) FetchWithSchema(attrs []string, types []types.Ty
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
 	bb.currSize -= bat.Allocated()
+	bb.reuseBytes += bat.Allocated()
+	bb.reuseCount++
 	return bat
 }
 
@@ -106,6 +308,8 @@ func (bb *OneSchemaBatchBuffer) Fetch() *batch.Batch {
 	bat := bb.buffer[len(bb.buffer)-1]
 	bb.buffer = bb.buffer[:len(bb.buffer)-1]
 	bb.currSize -= bat.Allocated()
+	bb.reuseBytes += bat.Allocated()
+	bb.reuseCount++
 	return bat
 }
 
@@ -130,10 +334,10 @@ func (bb *OneSchemaBatchBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
 	}
 }
 
-func (bb *OneSchemaBatchBuffer) Usage() (int, int) {
+func (bb *OneSchemaBatchBuffer) Usage() (int, int, int, int) {
 	bb.Lock()
 	defer bb.Unlock()
-	return bb.currSize, bb.highWater
+	return bb.currSize, bb.highWater, bb.reuseBytes, bb.reuseCount
 }
 
 func (bb *OneSchemaBatchBuffer) Close(mp *mpool.MPool) {
@@ -168,13 +372,13 @@ func ToTNBatch(cnBat *batch.Batch, mp *mpool.MPool) *Batch {
 	return tnBat
 }
 
-func ToTNVector(v *movec.Vector, mp *mpool.MPool) Vector {
+func ToTNVector(v *vector.Vector, mp *mpool.MPool) Vector {
 	vec := MakeVector(*v.GetType(), mp)
 	vec.setDownstreamVector(v)
 	return vec
 }
 
-func CloneVector(src *movec.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, error) {
+func CloneVector(src *vector.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, error) {
 	var vec Vector
 	if vp != nil {
 		vec = vp.GetVector(src.GetType())
@@ -200,55 +404,55 @@ func CloneVector(src *movec.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, er
 // ### Get Functions
 
 // getNonNullValue Please don't merge it with GetValue(). Used in Vector for getting NonNullValue.
-func getNonNullValue(col *movec.Vector, row uint32) any {
+func getNonNullValue(col *vector.Vector, row uint32) any {
 
 	switch col.GetType().Oid {
 	case types.T_bool:
-		return movec.GetFixedAtNoTypeCheck[bool](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[bool](col, int(row))
 	case types.T_bit:
-		return movec.GetFixedAtNoTypeCheck[uint64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_int8:
-		return movec.GetFixedAtNoTypeCheck[int8](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int8](col, int(row))
 	case types.T_int16:
-		return movec.GetFixedAtNoTypeCheck[int16](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int16](col, int(row))
 	case types.T_int32:
-		return movec.GetFixedAtNoTypeCheck[int32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int32](col, int(row))
 	case types.T_int64:
-		return movec.GetFixedAtNoTypeCheck[int64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[int64](col, int(row))
 	case types.T_uint8:
-		return movec.GetFixedAtNoTypeCheck[uint8](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint8](col, int(row))
 	case types.T_uint16:
-		return movec.GetFixedAtNoTypeCheck[uint16](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint16](col, int(row))
 	case types.T_uint32:
-		return movec.GetFixedAtNoTypeCheck[uint32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint32](col, int(row))
 	case types.T_uint64:
-		return movec.GetFixedAtNoTypeCheck[uint64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[uint64](col, int(row))
 	case types.T_decimal64:
-		return movec.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](col, int(row))
 	case types.T_decimal128:
-		return movec.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](col, int(row))
 	case types.T_uuid:
-		return movec.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Uuid](col, int(row))
 	case types.T_float32:
-		return movec.GetFixedAtNoTypeCheck[float32](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[float32](col, int(row))
 	case types.T_float64:
-		return movec.GetFixedAtNoTypeCheck[float64](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[float64](col, int(row))
 	case types.T_date:
-		return movec.GetFixedAtNoTypeCheck[types.Date](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Date](col, int(row))
 	case types.T_time:
-		return movec.GetFixedAtNoTypeCheck[types.Time](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Time](col, int(row))
 	case types.T_datetime:
-		return movec.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Datetime](col, int(row))
 	case types.T_timestamp:
-		return movec.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Timestamp](col, int(row))
 	case types.T_enum:
-		return movec.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Enum](col, int(row))
 	case types.T_TS:
-		return movec.GetFixedAtNoTypeCheck[types.TS](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.TS](col, int(row))
 	case types.T_Rowid:
-		return movec.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Rowid](col, int(row))
 	case types.T_Blockid:
-		return movec.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
+		return vector.GetFixedAtNoTypeCheck[types.Blockid](col, int(row))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		return col.GetBytesAt(int(row))
@@ -261,12 +465,12 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 // ### Update Function
 
 func GenericUpdateFixedValue[T types.FixedSizeT](
-	vec *movec.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
+	vec *vector.Vector, row uint32, v any, isNull bool, _ *mpool.MPool,
 ) {
 	if isNull {
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
-		err := movec.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
+		err := vector.SetFixedAtNoTypeCheck(vec, int(row), v.(T))
 		if err != nil {
 			panic(err)
 		}
@@ -277,12 +481,12 @@ func GenericUpdateFixedValue[T types.FixedSizeT](
 }
 
 func GenericUpdateBytes(
-	vec *movec.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
+	vec *vector.Vector, row uint32, v any, isNull bool, mp *mpool.MPool,
 ) {
 	if isNull {
 		nulls.Add(vec.GetNulls(), uint64(row))
 	} else {
-		err := movec.SetBytesAt(vec, int(row), v.([]byte), mp)
+		err := vector.SetBytesAt(vec, int(row), v.([]byte), mp)
 		if err != nil {
 			panic(err)
 		}
@@ -292,7 +496,7 @@ func GenericUpdateBytes(
 	}
 }
 
-func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool, mp *mpool.MPool) {
+func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool.MPool) {
 	switch col.GetType().Oid {
 	case types.T_bool:
 		GenericUpdateFixedValue[bool](col, row, val, isNull, mp)
@@ -754,7 +958,7 @@ func ForeachVectorWindow(
 }
 
 func ForeachWindowBytes(
-	vec *movec.Vector,
+	vec *vector.Vector,
 	start, length int,
 	op ItOpT[[]byte],
 	sels *nulls.Bitmap,
@@ -792,7 +996,7 @@ func ForeachWindowBytes(
 }
 
 func ForeachWindowFixed[T any](
-	vec *movec.Vector,
+	vec *vector.Vector,
 	start, length int,
 	reverse bool,
 	op ItOpT[T],
@@ -805,7 +1009,7 @@ func ForeachWindowFixed[T any](
 		if vec.IsConstNull() {
 			isnull = true
 		} else {
-			v = movec.GetFixedAtNoTypeCheck[T](vec, 0)
+			v = vector.GetFixedAtNoTypeCheck[T](vec, 0)
 		}
 		if sels.IsEmpty() {
 			if reverse {
@@ -864,7 +1068,7 @@ func ForeachWindowFixed[T any](
 
 		return
 	}
-	slice := movec.MustFixedColWithTypeCheck[T](vec)[start : start+length]
+	slice := vector.MustFixedColWithTypeCheck[T](vec)[start : start+length]
 	if sels.IsEmpty() {
 		if reverse {
 			for i := len(slice) - 1; i >= 0; i-- {
@@ -923,7 +1127,7 @@ func ForeachWindowFixed[T any](
 }
 
 func ForeachWindowVarlen(
-	vec *movec.Vector,
+	vec *vector.Vector,
 	start, length int,
 	reverse bool,
 	op ItOpT[[]byte],
@@ -967,7 +1171,7 @@ func ForeachWindowVarlen(
 		}
 		return
 	}
-	slice, area := movec.MustVarlenaRawData(vec)
+	slice, area := vector.MustVarlenaRawData(vec)
 	slice = slice[start : start+length]
 	if sels.IsEmpty() {
 		if reverse {
@@ -1163,7 +1367,7 @@ func VectorsCopyToBatch(
 	}
 	for i, vec := range vecs {
 		if outputBat.Vecs[i] == nil {
-			outputBat.Vecs[i] = movec.NewVec(*vec.GetType())
+			outputBat.Vecs[i] = vector.NewVec(*vec.GetType())
 		} else {
 			outputBat.Vecs[i].ResetWithNewType(vec.GetType())
 		}
