@@ -244,7 +244,7 @@ func (s *Stopper) Stop() {
 func (s *Stopper) runningTasks() []string {
 	s.tasks.RLock()
 	defer s.tasks.RUnlock()
-	if s.getTaskCount() == 0 {
+	if s.getTaskCountLocked() == 0 {
 		return nil
 	}
 
@@ -320,5 +320,10 @@ func (s *Stopper) allocate() (uint64, context.Context) {
 func (s *Stopper) getTaskCount() int {
 	s.tasks.RLock()
 	defer s.tasks.RUnlock()
+	return len(s.tasks.m)
+}
+
+// getTaskCountLocked returns number of the running task
+func (s *Stopper) getTaskCountLocked() int {
 	return len(s.tasks.m)
 }
