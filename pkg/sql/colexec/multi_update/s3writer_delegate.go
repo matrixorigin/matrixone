@@ -317,32 +317,42 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 			// main table do not need clone
 			needClone := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType != UpdateMainTable //uk&sk need clone
 
-			// if the main table has sort key
-			if !needClone && writer.sortIndexes[i] > -1 {
+			if isClusterBy {
+				needClone = false
+			}
+
+			// for unique index table and secondary index table, if the sort key has no null, do not clone
+			if needClone && writer.sortIndexes[i] > -1 {
+				hasNull := false
 				sortIdx := updateCtx.InsertCols[writer.sortIndexes[i]]
 				for j := 0; j < writer.cacheBatches.Length(); j++ {
 					cachedBat := writer.cacheBatches.Get(j)
 					// if the sort key has null, need clone
 					if cachedBat.GetVector(int32(sortIdx)).HasNull() {
-						needClone = true
+						hasNull = true
 						break
 					}
+				}
+				if !hasNull {
+					needClone = false
 				}
 			}
 
 			// needClone = true:
-			// 1. unique index table and secondary index table
-			// 2. main table has sort key and sort key has null
+			// unique index table and secondary index table with null values
+			// why: the index table should not have null values.
+			// Ex.
+			// create table t1 (a int, b int unique key);
+			// insert into t values (1, 101), (2, null), (3, 303)
+			// The unique index table should be (101, 1), (303, 3)
+			// Since it will shrink the batch, we need to clone the batch.
+			// sortIdx != -1(has sort key) && isClusterBy = false(index table's isClusterBy is always false):
+
 			// needClone = false:
-			// 1. main table has sort key and sort key has no null
-			// 2. main table has no sort key
+			// other scenarios
 
 			if needClone {
-				// cluster by do not check if sort vector is null
 				sortIdx := writer.sortIndexes[i]
-				if isClusterBy {
-					sortIdx = -1
-				}
 				if bats, err = cloneSelectedVecsFromCompactBatches(
 					writer.cacheBatches, updateCtx.InsertCols, insertAttrs, sortIdx, proc.Mp(),
 				); err != nil {
