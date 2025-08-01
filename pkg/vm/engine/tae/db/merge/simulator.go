@@ -132,11 +132,6 @@ func (c *simRscController) Available() int64 {
 	return avail
 }
 
-func (c *simRscController) resourceAvailable(estMem int64) bool {
-	mem := min(c.Available(), constMaxMemCap)
-	return estMem <= 2*mem/3
-}
-
 // endregion: resource controller
 
 // region: executor

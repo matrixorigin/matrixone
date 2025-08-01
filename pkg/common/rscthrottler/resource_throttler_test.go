@@ -76,6 +76,7 @@ func TestBasic(t *testing.T) {
 
 		left, ok = throttler.Acquire(1000)
 		require.False(t, ok)
+		require.Equal(t, total-1000, left)
 
 		throttler.PrintUsage()
 	})
