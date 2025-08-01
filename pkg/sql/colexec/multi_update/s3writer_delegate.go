@@ -17,6 +17,7 @@ package multi_update
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -139,7 +140,7 @@ func newS3Writer(
 	}
 
 	if throttler, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.CNMemoryThrottler); !ok {
-		return nil, fmt.Errorf("can not get global variable %s", runtime.CNMemoryThrottler)
+		return nil, moerr.NewInternalErrorNoCtxf("can not get global variable %s", runtime.CNMemoryThrottler)
 	} else {
 		writer.memController.throttler = throttler.(rscthrottler.RSCThrottler)
 	}
