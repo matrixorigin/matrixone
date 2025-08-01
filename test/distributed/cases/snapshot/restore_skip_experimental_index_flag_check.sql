@@ -60,3 +60,86 @@ drop snapshot snap01;
 -- @session
 
 
+
+-- session
+set experimental_ivf_index=1;
+show variables like "experimental_ivf_index";
+drop database if exists vecdb2;
+create database vecdb2;
+use vecdb2;
+drop table if exists t1;
+create table t1(a int primary key,b vecf32(3), c vecf64(5));
+insert into t1 values(1, "[1,2,3]" , "[1,2,3,4,5");
+insert into t1 values(2, "[1,2,4]", "[1,2,4,4,5]");
+drop snapshot if exists snap02;
+create snapshot snap02 for account sys;
+drop database vecdb2;
+restore account sys from snapshot snap02;
+show variables like "experimental_ivf_index";
+set experimental_ivf_index=0;
+drop database vecdb2;
+drop snapshot snap02;
+
+
+
+
+-- global
+set global experimental_ivf_index=1;
+-- @session:id=2&user=sys:dump&password=111
+show variables like "experimental_ivf_index";
+drop database if exists vecdb2;
+create database vecdb2;
+use vecdb2;
+drop table if exists t1;
+create table t1(a int primary key,b vecf32(3), c vecf64(5));
+insert into t1 values(1, "[1,2,3]" , "[1,2,3,4,5");
+insert into t1 values(2, "[1,2,4]", "[1,2,4,4,5]");
+drop snapshot if exists snap02;
+create snapshot snap02 for account sys;
+drop database vecdb2;
+restore account sys from snapshot snap02;
+show variables like "experimental_ivf_index";
+set experimental_ivf_index=0;
+drop database vecdb2;
+drop snapshot snap02;
+-- @session
+
+
+
+set experimental_hnsw_index=1;
+show variables like "experimental_hnsw_index";
+drop database if exists test03;
+create database test03;
+use test03;
+drop table if exists vector_empty;
+CREATE TABLE vector_empty(a bigint primary key, b vecf32(32), KEY `idxname` USING HNSW(b) M = 48 EF_CONSTRUCTION = 64 EF_SEARCH = 64 OP_TYPE "vector_l2_ops");
+DROP TABLE vector_empty;
+drop snapshot if exists snap03;
+create snapshot snap03 for account sys;
+drop database test03;
+restore account sys from snapshot snap03;
+show variables like "experimental_hnsw_index";
+set experimental_hnsw_index=0;
+drop database test03;
+drop snapshot snap03;
+
+
+
+set global experimental_hnsw_index=1;
+-- @session:id=3&user=sys:dump&password=111
+show variables like "experimental_hnsw_index";
+drop database if exists test03;
+create database test03;
+use test03;
+drop table if exists vector_empty;
+CREATE TABLE vector_empty(a bigint primary key, b vecf32(32), KEY `idxname` USING HNSW(b) M = 48 EF_CONSTRUCTION = 64 EF_SEARCH = 64 OP_TYPE "vector_l2_ops");
+DROP TABLE vector_empty;
+drop snapshot if exists snap03;
+create snapshot snap03 for account sys;
+drop database test03;
+restore account sys from snapshot snap03;
+show variables like "experimental_hnsw_index";
+set experimental_hnsw_index=0;
+drop database test03;
+drop snapshot snap03;
+-- @session
