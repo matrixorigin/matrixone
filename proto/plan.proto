@@ -1199,6 +1199,7 @@ message DataDefinition {
 		DropPitr drop_pitr = 101;
 		CreateCDC create_cdc = 102;
 		DropCDC drop_cdc = 103;
+    CloneTable clone_table = 104;
 	}
 }
 
@@ -1638,4 +1639,15 @@ message DropCDC {
 	string task_name = 2;
 	bool all = 3;
 	uint32 account_id = 4;
+}
+
+message CloneTable {
+  Plan create_table = 1;
+  Snapshot scan_snapshot = 2;
+  TableDef src_table_def = 3;
+  ObjectRef src_obj_def = 4;
+  string dst_database_name = 5;
+  string dst_table_name = 6;
+  bool skip_main_table = 7;
+  repeated string skip_indexes = 8;
 }

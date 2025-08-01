@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
@@ -1020,6 +1021,10 @@ func NewNotLeaseHolder(ctx context.Context, holderId uint64) *Error {
 }
 
 func NewNoSuchTable(ctx context.Context, db, tbl string) *Error {
+	if strings.Contains(tbl, "index") {
+		x := 0
+		x++
+	}
 	return newError(ctx, ErrNoSuchTable, db, tbl)
 }
 
