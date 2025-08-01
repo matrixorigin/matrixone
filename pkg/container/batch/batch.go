@@ -61,7 +61,13 @@ func NewOffHeapWithSize(n int) *Batch {
 }
 
 func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
-	bat := New(attrs)
+	var bat *Batch
+	if offHeap {
+		bat = NewOffHeapWithSize(len(attTypes))
+	} else {
+		bat = NewWithSize(len(attTypes))
+	}
+	bat.Attrs = attrs
 	for i, t := range attTypes {
 		if offHeap {
 			bat.Vecs[i] = vector.NewOffHeapVecWithType(t)
@@ -388,19 +394,55 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 	return bat.Vecs[pos]
 }
 
-func (bat *Batch) GetSubBatch(cols []string) *Batch {
-	mp := make(map[string]int)
-	for i, attr := range bat.Attrs {
-		mp[attr] = i
+func (bat *Batch) CloneSelectedColumns(
+	selectCols []int,
+	selectAttrs []string,
+	mp *mpool.MPool,
+) (cloned *Batch, err error) {
+	cloned = NewWithSize(len(selectCols))
+	cloned.Attrs = selectAttrs
+	cloned.offHeap = bat.offHeap
+	var typ types.Type
+	for idx := range selectCols {
+		cloned.Vecs[idx] = vector.NewVec(typ)
 	}
-	var rbat *Batch
-	if bat.offHeap {
-		rbat = NewOffHeapWithSize(len(cols))
-	} else {
-		rbat = NewWithSize(len(cols))
+	if err = bat.CloneSelectedColumnsTo(selectCols, cloned, mp); err != nil {
+		cloned.Clean(mp)
+		cloned = nil
+		return
 	}
+	return
+}
+
+func (bat *Batch) CloneSelectedColumnsTo(
+	selectCols []int,
+	toBat *Batch,
+	mp *mpool.MPool,
+) (err error) {
+	for idx, sourceIdx := range selectCols {
+		toVec := toBat.Vecs[idx]
+		toVec.ResetWithNewType(bat.Vecs[sourceIdx].GetType())
+		if err = toVec.UnionBatch(
+			bat.Vecs[sourceIdx],
+			0,
+			bat.Vecs[sourceIdx].Length(),
+			nil,
+			mp,
+		); err != nil {
+			return
+		}
+		toVec.SetSorted(bat.Vecs[sourceIdx].GetSorted())
+	}
+	toBat.rowCount = bat.rowCount
+	return nil
+}
+
+func (bat *Batch) SelectColumns(cols []int, attrs []string) *Batch {
+	rbat := NewWithSize(len(cols))
+	rbat.Attrs = attrs
+	rbat.offHeap = bat.offHeap
 	for i, col := range cols {
-		rbat.Vecs[i] = bat.Vecs[mp[col]]
+		rbat.Vecs[i] = bat.Vecs[col]
 	}
 	rbat.rowCount = bat.rowCount
 	return rbat
@@ -471,44 +513,44 @@ func (bat *Batch) String() string {
 	return buf.String()
 }
 
-func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
-	var err error
-
-	rbat := NewWithSize(len(bat.Vecs))
-	rbat.SetAttributes(bat.Attrs)
-	rbat.Recursive = bat.Recursive
-	for j, vec := range bat.Vecs {
-		typ := *bat.GetVector(int32(j)).GetType()
-		var rvec *vector.Vector
-		if offHeap {
-			rvec = vector.NewOffHeapVecWithType(typ)
-		} else {
-			rvec = vector.NewVec(typ)
-		}
-		if err = vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
-			rbat.Clean(mp)
-			return nil, err
-		}
-		rvec.SetSorted(vec.GetSorted())
-		rbat.SetVector(int32(j), rvec)
+func (bat *Batch) GetSchema() (attrs []string, attrTypes []types.Type) {
+	attrs = make([]string, len(bat.Attrs))
+	attrTypes = make([]types.Type, len(bat.Vecs))
+	copy(attrs, bat.Attrs)
+	for i, vec := range bat.Vecs {
+		attrTypes[i] = *vec.GetType()
 	}
-	rbat.rowCount = bat.rowCount
-	rbat.ShuffleIDX = bat.ShuffleIDX
+	return
+}
 
-	//if len(bat.Aggs) > 0 {
-	//	rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
-	//	aggMemoryManager := aggexec.NewSimpleAggMemoryManager(mp)
-	//
-	//	for i, agg := range bat.Aggs {
-	//		rbat.Aggs[i], err = aggexec.CopyAggFuncExec(aggMemoryManager, agg)
-	//		if err != nil {
-	//			rbat.Clean(mp)
-	//			return nil, err
-	//		}
-	//	}
-	//}
+func (bat *Batch) Clone(mp *mpool.MPool, offHeap bool) (*Batch, error) {
+	var (
+		cloned           *Batch
+		attrs, attrTypes = bat.GetSchema()
+	)
+	cloned = NewWithSchema(offHeap, attrs, attrTypes)
+	cloned.Recursive = bat.Recursive
+	err := bat.CloneTo(cloned, mp)
+	if err != nil {
+		return nil, err
+	}
+	return cloned, nil
+}
 
-	return rbat, nil
+func (bat *Batch) CloneTo(toBat *Batch, mp *mpool.MPool) (err error) {
+	for i, srcVec := range bat.Vecs {
+		toVec := toBat.Vecs[i]
+		toVec.ResetWithNewType(srcVec.GetType())
+		if err = toVec.UnionBatch(srcVec, 0, srcVec.Length(), nil, mp); err != nil {
+			toBat.Clean(mp)
+			return
+		}
+		toVec.SetSorted(srcVec.GetSorted())
+	}
+	toBat.rowCount = bat.rowCount
+	toBat.ShuffleIDX = bat.ShuffleIDX
+
+	return
 }
 
 // Dup used to copy a Batch object, this method will create a new batch

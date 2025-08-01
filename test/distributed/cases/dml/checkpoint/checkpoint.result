@@ -55,7 +55,6 @@ a
 3
 4
 5
-drop snapshot snapshot01;
 drop table if exists t;
 create table t (a int);
 insert into t values (1), (2), (3), (4), (5);
@@ -72,6 +71,14 @@ a
 3
 4
 5
+select * from t {snapshot = 'snapshot01'};
+a
+1
+2
+3
+4
+5
+drop snapshot snapshot01;
 select mo_ctl('dn','DiskCleaner','force_gc');
 mo_ctl(dn, DiskCleaner, force_gc)
 {\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n

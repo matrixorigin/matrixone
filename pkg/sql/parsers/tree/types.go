@@ -132,16 +132,6 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 	fs := strings.ToLower(node.FamilyString)
 	ctx.WriteString(fs)
 
-	if node.Unsigned {
-		if fs != "" {
-			ctx.WriteByte(' ')
-		}
-		ctx.WriteString("unsigned")
-	}
-	if node.Zerofill {
-		ctx.WriteString(" zerofill")
-	}
-
 	switch fs {
 	case "set", "enum":
 		if len(node.EnumValues) > 0 {
@@ -208,6 +198,16 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 			}
 			ctx.WriteByte(')')
 		}
+	}
+
+	if node.Unsigned {
+		if fs != "" {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("unsigned")
+	}
+	if node.Zerofill {
+		ctx.WriteString(" zerofill")
 	}
 }
 

@@ -510,6 +510,101 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 	return nil
 }
 
+var _ ReaderWriterFileService = new(LocalETLFS)
+
+func (l *LocalETLFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+
+	_, err = os.Stat(nativePath)
+	if os.IsNotExist(err) {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.Open(nativePath)
+	if os.IsNotExist(err) {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &readCloser{
+		r:         f,
+		closeFunc: f.Close,
+	}, nil
+}
+
+func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	path, err := ParsePathAtService(filePath, l.name)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path.File)
+
+	// check existence
+	_, err = os.Stat(nativePath)
+	if err == nil {
+		// existed
+		return nil, moerr.NewFileAlreadyExistsNoCtx(path.File)
+	}
+
+	f, err := os.CreateTemp(
+		l.rootPath,
+		".tmp.*",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+		}
+	}()
+
+	return &writeCloser{
+		w: f,
+		closeFunc: func() error {
+			// close
+			if err := f.Close(); err != nil {
+				return err
+			}
+			// ensure parent dir
+			parentDir, _ := filepath.Split(nativePath)
+			if err := l.ensureDir(parentDir); err != nil {
+				return err
+			}
+			// move
+			if err := os.Rename(f.Name(), nativePath); err != nil {
+				return err
+			}
+			// sync parent dir
+			if err := l.syncDir(parentDir); err != nil {
+				return err
+			}
+			return nil
+		},
+	}, nil
+}
+
 func (l *LocalETLFS) ensureDir(nativePath string) error {
 	nativePath = filepath.Clean(nativePath)
 	if nativePath == "" {
