@@ -41,6 +41,9 @@ type CheckpointCfg struct {
 
 	// history duration to keep for a global checkpoint
 	GlobalHistoryDuration time.Duration
+
+	// history duration to keep for a table id
+	TableIDHistoryDuration time.Duration
 }
 
 func (cfg CheckpointCfg) String() string {

@@ -116,15 +116,22 @@ func (getter *MetadataEntryGetter) processOneBatch(
 	onEachEntry func(entry *CheckpointEntry),
 	entries *[]*CheckpointEntry,
 ) (err error) {
-	// NOTE:
-	// from v2.0 till now, there is just one checkpint version
-	// if we have more versions in the future, we need to check the version here
+	var version int
+	if len(bat.Vecs) < CheckpointSchemaColumnCountV3 {
+		version = 3
+	} else {
+		version = 4
+	}
 	startCol := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[CheckpointAttr_StartTSIdx])
 	endCol := vector.MustFixedColWithTypeCheck[types.TS](bat.Vecs[CheckpointAttr_EndTSIdx])
 	versionCol := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[CheckpointAttr_VersionIdx])
 	lsnCol := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[CheckpointAttr_CheckpointLSNIdx])
 	trancateLsnCol := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[CheckpointAttr_TruncateLSNIdx])
 	typeCol := vector.MustFixedColWithTypeCheck[int8](bat.Vecs[CheckpointAttr_TypeIdx])
+	var tableIDLocationCol *vector.Vector
+	if version > 3 {
+		tableIDLocationCol = bat.Vecs[CheckpointAttr_TableIDLocationIdx]
+	}
 	for i, length := 0, bat.RowCount(); i < length; i++ {
 		start := startCol[i]
 		end := endCol[i]
@@ -147,6 +154,9 @@ func (getter *MetadataEntryGetter) processOneBatch(
 			cnLocation:    cnLoc.Clone(),
 			tnLocation:    tnLoc.Clone(),
 			doneC:         make(chan struct{}),
+		}
+		if version > 3 {
+			entry.tableIDLocation = objectio.Location(tableIDLocationCol.GetBytesAt(i))
 		}
 		if onEachEntry != nil {
 			onEachEntry(entry)

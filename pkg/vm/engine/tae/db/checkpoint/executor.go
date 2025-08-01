@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -134,6 +135,33 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	entry.SetLocation(location, location)
 
+	ickps := runner.store.GetAllIncrementalCheckpoints()
+	var preICKP *CheckpointEntry
+	for _, ckp := range ickps {
+		if ckp.end.EQ(&entry.start) {
+			preICKP = ckp
+			break
+		}
+	}
+
+	var emptyLocation objectio.Location
+	tableIDLocation, err := logtail.SyncTableIDBatch(
+		job.executor.ctx,
+		entry.start,
+		entry.end,
+		job.executor.cfg.TableIDHistoryDuration,
+		emptyLocation,
+		preICKP.GetTableIDLocation(),
+		common.CheckpointAllocator,
+		runner.rt.Fs,
+	)
+	if err != nil {
+		runner.store.RemoveGCKPIntent()
+		errPhase = "sync-table-id"
+		return
+	}
+	entry.SetTableIDLocation(tableIDLocation)
+
 	files = append(files, location.Name().String())
 	var name string
 	if name, err = runner.saveCheckpoint(entry.start, entry.end); err != nil {
@@ -228,6 +256,41 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		rollback()
 		return
 	}
+
+	ickps := runner.store.GetAllIncrementalCheckpoints()
+	var prevCkp *CheckpointEntry
+	for _, ckp := range ickps {
+		if ckp.end.EQ(&entry.start) {
+			prevCkp = ckp
+			break
+		}
+	}
+	if prevCkp == nil {
+		gckp := runner.store.MaxGlobalCheckpoint()
+		if gckp != nil {
+			prevCkp = gckp
+		}
+	}
+	var preTableIDLocation objectio.Location
+	if prevCkp != nil {
+		preTableIDLocation = prevCkp.GetTableIDLocation()
+	}
+	tableIDLocation, err := logtail.SyncTableIDBatch(
+		job.executor.ctx,
+		entry.start,
+		entry.end,
+		job.executor.cfg.TableIDHistoryDuration,
+		entry.GetLocation(),
+		preTableIDLocation,
+		common.CheckpointAllocator,
+		runner.rt.Fs,
+	)
+	if err != nil {
+		errPhase = "sync-table-id"
+		rollback()
+		return
+	}
+	entry.SetTableIDLocation(tableIDLocation)
 
 	lsn = runner.source.GetMaxLSN(entry.start, entry.end)
 	if lsn == 0 {

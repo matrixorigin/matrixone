@@ -652,3 +652,115 @@ func prepareTNMeta(
 	}
 	return
 }
+
+const (
+	TableIDAttr_TableID = "table_id"
+	TableIDAttr_Start   = "start"
+	TableIDAttr_End     = "end"
+)
+
+var TableIDAttrs = []string{
+	TableIDAttr_TableID,
+	TableIDAttr_Start,
+	TableIDAttr_End,
+}
+
+var TableIDTypes = []types.Type{
+	types.T_uint64.ToType(),
+	types.T_TS.ToType(),
+	types.T_TS.ToType(),
+}
+var TableIDSeqnums = []uint16{0, 1, 2}
+
+func SyncTableIDBatch(
+	ctx context.Context,
+	start, end types.TS,
+	ttl time.Duration,
+	ckpLocation objectio.Location,
+	prevTableIDLocation objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (location objectio.Location, err error) {
+
+	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
+	defer bat.Clean(mp)
+	if !prevTableIDLocation.IsEmpty() {
+		preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
+		var release func()
+		if _, release, err = ioutil.LoadColumnsData(
+			ctx,
+			TableIDSeqnums,
+			TableIDTypes,
+			fs,
+			prevTableIDLocation,
+			preTableIDVecs,
+			mp,
+			0,
+		); err != nil {
+			return
+		}
+		defer release()
+		preTableIDBatch := batch.New(TableIDAttrs)
+		for i, vec := range preTableIDVecs {
+			preTableIDBatch.Vecs[i] = &vec
+		}
+		preTableIDBatch.SetRowCount(preTableIDVecs.Rows())
+
+		minTS := types.BuildTS(end.Physical()-ttl.Nanoseconds(), 0)
+
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[0])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[1])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[2])
+		for i := 0; i < preTableIDBatch.RowCount(); i++ {
+			if ends[i].LT(&minTS) {
+				continue
+			}
+			vector.AppendFixed(bat.Vecs[0], tableIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[1], starts[i], false, mp)
+			vector.AppendFixed(bat.Vecs[2], ends[i], false, mp)
+		}
+	}
+
+	if !ckpLocation.IsEmpty() {
+		ckpMetaVecs := containers.NewVectors(1)
+		var metaRelease func()
+		if _, metaRelease, err = ioutil.LoadColumnsData(
+			ctx,
+			[]uint16{0},
+			[]types.Type{types.T_uint64.ToType()},
+			fs,
+			ckpLocation,
+			ckpMetaVecs,
+			mp,
+			0,
+		); err != nil {
+			return
+		}
+		defer metaRelease()
+		tableIDVec := ckpMetaVecs[0]
+		tables := vector.MustFixedColNoTypeCheck[uint64](&tableIDVec)
+		vector.AppendFixedList(bat.Vecs[0], tables, nil, mp)
+		vector.AppendMultiFixed(bat.Vecs[1], start, false, len(tables), mp)
+		vector.AppendMultiFixed(bat.Vecs[2], end, false, len(tables), mp)
+	}
+
+	bat.SetRowCount(bat.RowCount())
+
+	segmentid := objectio.NewSegmentid()
+	fileNum := uint16(0)
+	name := objectio.BuildObjectName(segmentid, fileNum)
+	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, nil, false)
+	if err != nil {
+		return
+	}
+	if _, err = writer.WriteBatch(bat); err != nil {
+		return
+	}
+	var blks []objectio.BlockObject
+	if blks, _, err = writer.Sync(ctx); err != nil {
+		return
+	}
+	location = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
+
+	return
+}

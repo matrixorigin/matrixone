@@ -114,6 +114,7 @@ const (
 	CheckpointAttr_CheckpointLSN = "checkpoint_lsn"
 	CheckpointAttr_TruncateLSN   = "truncate_lsn"
 	CheckpointAttr_Type          = "type"
+	CheckpointAttr_TableIDLocation = "table_id_location"
 
 	CheckpointAttr_StartTSIdx       = 0
 	CheckpointAttr_EndTSIdx         = 1
@@ -124,9 +125,11 @@ const (
 	CheckpointAttr_CheckpointLSNIdx = 6
 	CheckpointAttr_TruncateLSNIdx   = 7
 	CheckpointAttr_TypeIdx          = 8
+	CheckpointAttr_TableIDLocationIdx = 9
 
 	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
 	CheckpointSchemaColumnCountV2 = 9
+	CheckpointSchemaColumnCountV3 = 10
 )
 
 var (
