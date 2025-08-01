@@ -107,7 +107,9 @@ func MergeCheckpoint(
 			deleteFiles = append(deleteFiles, name)
 		}
 
-		deleteFiles = append(deleteFiles, ckpEntry.GetTableIDLocation().Name().String())
+		if !ckpEntry.GetTableIDLocation().IsEmpty() {
+			deleteFiles = append(deleteFiles, ckpEntry.GetTableIDLocation().Name().String())
+		}
 	}
 	if len(datas) == 0 {
 		return
