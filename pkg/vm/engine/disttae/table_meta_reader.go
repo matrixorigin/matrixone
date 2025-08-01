@@ -227,9 +227,9 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 	writeS3 := func() error {
 		if s3Writer == nil {
 			if isTombstone {
-				s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
+				s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
 			} else {
-				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
+				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
 			}
 		}
 
@@ -391,9 +391,9 @@ func (r *TableMetaReader) collectVisibleObjs(
 
 	if objRelData.DataCnt() > 0 {
 		if isTombstone {
-			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1])
+			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
 		} else {
-			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, false)
+			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
 		}
 
 		source := &LocalDisttaeDataSource{
