@@ -569,6 +569,14 @@ func (sinker *Sinker) getStageFileSinker() FileSinker {
 	return sinker.fSinker.executor
 }
 
+func (sinker *Sinker) GetInMemoryData() []*batch.Batch {
+	return sinker.staged.inMemory
+}
+
+func (sinker *Sinker) GetMPool() *mpool.MPool {
+	return sinker.mp
+}
+
 // Write always copy the data
 func (sinker *Sinker) Write(
 	ctx context.Context,
@@ -673,6 +681,10 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 	// }
 	// sinker.results = append(sinker.results, newPersied...)
 	//return nil
+}
+
+func (sinker *Sinker) GetInMemoryThreshold() int {
+	return sinker.staged.memorySizeThreshold
 }
 
 func (sinker *Sinker) Close() error {
