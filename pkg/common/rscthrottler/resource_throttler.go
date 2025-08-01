@@ -298,7 +298,7 @@ func defaultAcquirePolicy(m *memThrottler, ask int64) (int64, bool) {
 	for {
 		avail := m.Available()
 		if !m.options.allowOutOfMemoryAcquire && avail < ask {
-			return 0, false
+			return avail, false
 		}
 
 		currReserved := m.reserved.Load()
