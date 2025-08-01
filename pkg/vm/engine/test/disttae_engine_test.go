@@ -1281,7 +1281,7 @@ func TestWorkspaceQuota(t *testing.T) {
 	wg.Wait()
 	remaining, _ := e.AcquireQuota(0)
 	require.Equal(t, int(quotaSize), int(remaining))
-	_, acquired := e.AcquireQuota(quotaSize + 1)
+	_, acquired := e.AcquireQuota(int64(quotaSize + 1))
 	require.False(t, acquired)
 }
 

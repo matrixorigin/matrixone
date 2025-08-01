@@ -17,10 +17,10 @@ package multi_update
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -211,19 +210,11 @@ func (writer *s3WriterDelegate) append(
 ) (err error) {
 
 	var (
-		flushed   bool
-		increment uint64
-
+		increment      uint64
 		acquireGranted bool
 	)
 
-	defer func() {
-		if flushed || err != nil {
-			writer.cleanCachedBatches(proc.Mp())
-		}
-	}()
-
-	err = writer.cacheBatches.Extend(common.DebugAllocator, inBatch)
+	err = writer.cacheBatches.Extend(proc.Mp(), inBatch)
 	if err != nil {
 		return
 	}
@@ -234,7 +225,6 @@ func (writer *s3WriterDelegate) append(
 
 	writer.batchSize += increment
 	if writer.batchSize >= writer.flushThreshold {
-		flushed = true
 		err = writer.sortAndSync(proc, analyzer)
 		return err
 	}
@@ -243,7 +233,6 @@ func (writer *s3WriterDelegate) append(
 	// release the pinned batches to avoid oom.
 	if _, acquireGranted =
 		writer.memController.throttler.Acquire(int64(increment)); !acquireGranted {
-		flushed = true
 		err = writer.sortAndSync(proc, analyzer)
 		return err
 	}
@@ -346,6 +335,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 }
 
 func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer process.Analyzer) (err error) {
+
 	var (
 		bats        []*batch.Batch
 		batchBuffer = containers.NewGeneralBatchBuffer(
@@ -355,7 +345,12 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 			0,
 		)
 	)
-	defer batchBuffer.Close(proc.GetMPool())
+
+	defer func() {
+		writer.cleanCachedBatches(proc.Mp())
+		batchBuffer.Close(proc.GetMPool())
+	}()
+
 	for i, updateCtx := range writer.updateCtxs {
 		// delete s3
 		if len(updateCtx.DeleteCols) > 0 {
