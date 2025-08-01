@@ -147,6 +147,7 @@ var (
 		CheckpointAttr_CheckpointLSN,
 		CheckpointAttr_TruncateLSN,
 		CheckpointAttr_Type,
+		CheckpointAttr_TableIDLocation,
 	}
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0),
@@ -158,6 +159,7 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_int8, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 )
 

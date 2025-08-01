@@ -137,8 +137,9 @@ func (job *checkpointJob) doGlobalCheckpoint(
 
 	ickps := runner.store.GetAllIncrementalCheckpoints()
 	var preICKP *CheckpointEntry
+	ickpEnd := entry.end.Prev()
 	for _, ckp := range ickps {
-		if ckp.end.EQ(&entry.start) {
+		if ckp.end.EQ(&ickpEnd) {
 			preICKP = ckp
 			break
 		}

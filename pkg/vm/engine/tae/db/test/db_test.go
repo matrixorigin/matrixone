@@ -12488,3 +12488,132 @@ func TestTNCatalogEventSource(t *testing.T) {
 	require.NotNil(t, bat)
 
 }
+
+func TestCheckpointTableIDBatch(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	options.WithCheckpointGlobalMinCount(2)(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	defer bat.Close()
+	bats := bat.Split(5)
+
+	tae.CreateRelAndAppend(bats[0], true)
+
+	txn, rel := tae.GetRelation()
+	tableID := rel.GetMeta().(*catalog.TableEntry).ID
+	assert.NoError(t, txn.Commit(ctx))
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.AllCheckpointsFinished()
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			return len(tae.BGCheckpointRunner.GetAllCheckpoints()) > 0
+		},
+	)
+
+	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		defer release()
+		assert.Equal(t, 1, bat.RowCount())
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		assert.Equal(t, tableID, tableIDs[0])
+		assert.Equal(t, e.GetStart(), starts[0], "expect %v, get %v", e.GetStart().ToString(), starts[0].ToString())
+		assert.Equal(t, e.GetEnd(), ends[0], "expect %v, get %v", e.GetEnd().ToString(), ends[0].ToString())
+		t.Logf("%s", bat.String())
+	}
+
+	tae.Restart(context.Background())
+	tae.BindSchema(schema)
+
+	t2 := tae.TxnMgr.Now()
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.AllCheckpointsFinished()
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			return len(tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()) > 1
+		},
+	)
+
+	tae.DoAppend(bats[1])
+
+	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+	for _, e := range entries {
+		end := e.GetEnd()
+		if end.LT(&t2) {
+			continue
+		}
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		defer release()
+		assert.Equal(t, 2, bat.RowCount())
+		for j := 0; j < bat.RowCount(); j++ {
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+			assert.Equal(t, tableID, tableIDs[j])
+			assert.Equal(t, e.GetStart(), starts[j])
+			assert.Equal(t, e.GetEnd(), ends[j])
+		}
+		t.Logf("%s", bat.String())
+	}
+
+	testutils.WaitExpect(10000, func() bool {
+		return tae.AllCheckpointsFinished()
+	})
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) > 0
+		},
+	)
+
+	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		defer release()
+		assert.Equal(t, 2, bat.RowCount())
+		for j := 0; j < bat.RowCount(); j++ {
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+			assert.Equal(t, tableID, tableIDs[j])
+			assert.Equal(t, types.TS{}, starts[j])
+			assert.Equal(t, types.MaxTs(), ends[j])
+		}
+		t.Logf("%s", bat.String())
+	}
+	assert.Equal(t, 1, len(entries))
+}

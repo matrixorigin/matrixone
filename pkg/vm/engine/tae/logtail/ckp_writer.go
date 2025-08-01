@@ -764,3 +764,31 @@ func SyncTableIDBatch(
 
 	return
 }
+
+func ReadTableIDBatch(
+	ctx context.Context,
+	location objectio.Location,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (release func(), bat *batch.Batch, err error) {
+
+	preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
+	if _, release, err = ioutil.LoadColumnsData(
+		ctx,
+		TableIDSeqnums,
+		TableIDTypes,
+		fs,
+		location,
+		preTableIDVecs,
+		mp,
+		0,
+	); err != nil {
+		return
+	}
+	bat = batch.New(TableIDAttrs)
+	for i, vec := range preTableIDVecs {
+		bat.Vecs[i] = &vec
+	}
+	bat.SetRowCount(preTableIDVecs.Rows())
+	return
+}
