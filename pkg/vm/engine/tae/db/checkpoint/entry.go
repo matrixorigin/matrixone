@@ -59,14 +59,14 @@ func WithCheckedEntryOption(policyChecked, flushedChecked bool) EntryOption {
 
 type CheckpointEntry struct {
 	sync.RWMutex
-	sid        string
-	start, end types.TS
-	state      State
-	entryType  EntryType
-	cnLocation objectio.Location
-	tnLocation objectio.Location
+	sid             string
+	start, end      types.TS
+	state           State
+	entryType       EntryType
+	cnLocation      objectio.Location
+	tnLocation      objectio.Location
 	tableIDLocation objectio.Location
-	version    uint32
+	version         uint32
 
 	ckpLSN      uint64
 	truncateLSN uint64

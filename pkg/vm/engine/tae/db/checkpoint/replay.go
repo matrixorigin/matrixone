@@ -592,17 +592,17 @@ func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 		ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
 		truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
 		checkpointEntry := &CheckpointEntry{
-			start:       start,
-			end:         end,
-			cnLocation:  cnLoc,
-			tnLocation:  tnLoc,
+			start:           start,
+			end:             end,
+			cnLocation:      cnLoc,
+			tnLocation:      tnLoc,
 			tableIDLocation: tableIDLocation,
-			state:       ST_Finished,
-			entryType:   typ,
-			version:     version,
-			ckpLSN:      ckpLSN,
-			truncateLSN: truncateLSN,
-			doneC:       make(chan struct{}),
+			state:           ST_Finished,
+			entryType:       typ,
+			version:         version,
+			ckpLSN:          ckpLSN,
+			truncateLSN:     truncateLSN,
+			doneC:           make(chan struct{}),
 		}
 		entries[i] = checkpointEntry
 		if typ == ET_Global {

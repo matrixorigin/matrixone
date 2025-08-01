@@ -12550,10 +12550,9 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 	t2 := tae.TxnMgr.Now()
 
 	tae.DoAppend(bats[1])
-	
+
 	err = tae.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Hour)
 	assert.NoError(t, err)
-
 
 	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	for _, e := range entries {
