@@ -21,6 +21,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -135,12 +136,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	unsupportedErrorFmt := "unsupported alter option in copy mode: %s"
 
+	affectedCols := make([]string, 0)
+
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
+				affectedCols = append(affectedCols, optionAdd.Name)
 			default:
 				// column adding is handled in *tree.AlterAddCol
 				// various indexes\fks adding are handled in inplace mode.
@@ -151,8 +155,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
 				err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
+				affectedCols = append(affectedCols, string(option.Name))
 			default:
 				// various indexes\fks dropping are handled in inplace mode.
 				return nil, moerr.NewInvalidInputf(ctx,
@@ -160,12 +166,16 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			}
 		case *tree.AlterAddCol:
 			err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
 			err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
 			err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableRenameColumnClause:
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
+			//affectedCols
 		case *tree.AlterTableAlterColumnClause:
 			err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 		case *tree.AlterTableOrderByColumnClause:
@@ -219,6 +229,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}, nil
 }
 
+var ID atomic.Int64
+
 func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (string, error) {
 	schemaName := alterCtx.schemaName
 	originTableName := alterCtx.originTableName
@@ -251,6 +263,10 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
 		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
 		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
+
+	fmt.Println(ID.Add(1), insertSQL)
+	fmt.Println()
+
 	return insertSQL, nil
 }
 
