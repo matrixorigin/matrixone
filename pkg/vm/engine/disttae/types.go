@@ -173,11 +173,11 @@ func WithWriteWorkspaceThreshold(th uint64) EngineOptions {
 	}
 }
 
-//func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
-//	return func(e *Engine) {
-//		e.config.quota.Store(quota)
-//	}
-//}
+func WithExtraWorkspaceThresholdQuota(quota uint64) EngineOptions {
+	return func(e *Engine) {
+		e.config.quota.Store(quota)
+	}
+}
 
 func WithInsertEntryMaxCount(th int) EngineOptions {
 	return func(e *Engine) {
@@ -227,7 +227,7 @@ type Engine struct {
 		commitWorkspaceThreshold uint64
 		writeWorkspaceThreshold  uint64
 		extraWorkspaceThreshold  uint64
-		//quota                    atomic.Uint64
+		quota                    atomic.Uint64
 
 		memThrottler rscthrottler.RSCThrottler
 

@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -143,6 +143,32 @@ func New(
 		panic(err)
 	}
 
+	if e.config.memThrottler == nil {
+		if e.config.quota.Load() != 0 {
+			e.config.memThrottler = rscthrottler.NewMemThrottler(
+				"Workspace",
+				5.0/100.0,
+				rscthrottler.WithConstLimit(int64(e.config.quota.Load())),
+			)
+		} else {
+			e.config.memThrottler = rscthrottler.NewMemThrottler(
+				"Workspace",
+				5.0/100.0,
+			)
+		}
+
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.memThrottler.Available()))
+	}
+
+	logutil.Info(
+		"INIT-ENGINE-CONFIG",
+		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
+		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
+	)
+
 	return e
 }
 
@@ -170,22 +196,6 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
-
-	if e.config.memThrottler == nil {
-		e.config.memThrottler = rscthrottler.NewMemThrottler(
-			"Workspace",
-			5.0/100.0,
-		)
-	}
-
-	logutil.Info(
-		"INIT-ENGINE-CONFIG",
-		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
-		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
-		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
-		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
-	)
 }
 
 // SetWorkspaceThreshold updates the commit and write workspace thresholds (in MB).
@@ -212,8 +222,8 @@ func (e *Engine) AcquireQuota(v int64) (int64, bool) {
 	return left, ok
 }
 
-func (e *Engine) ReleaseQuota(quota int64) (remaining uint64) {
-	left := e.config.memThrottler.Release(quota)
+func (e *Engine) ReleaseQuota(quota int64) (left uint64) {
+	left = uint64(e.config.memThrottler.Release(quota))
 	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(left))
 	return
 }
