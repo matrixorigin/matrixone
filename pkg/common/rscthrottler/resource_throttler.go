@@ -2,16 +2,23 @@ package rscthrottler
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"go.uber.org/zap"
 	"os"
 	"sync/atomic"
+	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/shirou/gopsutil/v3/process"
+	"go.uber.org/zap"
+)
+
+const (
+	refreshMaxInterval = time.Second * 10
+
+	MemoryThrottlerLogHeader = "MemoryThrottler"
 )
 
 type RSCThrottler interface {
@@ -31,8 +38,12 @@ type memThrottler struct {
 	cgroup atomic.Uint64
 	total  atomic.Uint64
 
+	actualTotalMemory atomic.Uint64
+
 	name      string
 	limitRate float64
+
+	lastRefresh atomic.Int64
 
 	options struct {
 		acquirePolicy func(*memThrottler, int64) (int64, bool)
@@ -45,27 +56,15 @@ type memThrottler struct {
 	}
 }
 
-func (m *memThrottler) setMemLimit(total uint64) (uint64, error) {
-	cgroup, err := memlimit.FromCgroup()
-	if cgroup != 0 && cgroup < total {
-		m.limit.Store(int64(float64(cgroup) * m.limitRate))
-	} else if total != 0 {
-		m.limit.Store(int64(float64(total) * m.limitRate))
-	} else {
-		panic("failed to get system total memory")
-	}
-
-	return cgroup, err
-}
-
 func (m *memThrottler) String() string {
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
 		common.HumanReadableBytes(int(m.Available())),
 		common.HumanReadableBytes(int(m.cgroup.Load())),
+		common.HumanReadableBytes(int(m.rss.Load())),
 		common.HumanReadableBytes(int(m.reserved.Load())),
 		m.pinnedRate(),
 		m.limitRate,
@@ -81,6 +80,15 @@ func (m *memThrottler) pinnedRate() float64 {
 }
 
 func (m *memThrottler) Refresh() {
+	last := m.lastRefresh.Load()
+	now := time.Now().UnixNano()
+
+	if time.Duration(now-last) <= refreshMaxInterval {
+		return
+	}
+
+	m.lastRefresh.Store(now)
+
 	var (
 		err    error
 		cgroup uint64
@@ -91,19 +99,27 @@ func (m *memThrottler) Refresh() {
 
 	defer func() {
 		logutil.Info(
-			"MemoryThrottler-Refresh",
+			fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),
 			zap.String("detail", m.String()),
 			zap.Error(err),
 		)
 	}()
 
-	if m.options.constLimit > 0 {
-		m.limit.Store(m.options.constLimit)
-		return
+	total = objectio.TotalMem()
+	cgroup, err = memlimit.FromCgroup()
+
+	if cgroup != 0 && cgroup < total {
+		m.actualTotalMemory.Store(cgroup)
+	} else if total != 0 {
+		m.actualTotalMemory.Store(total)
+	} else {
+		panic("failed to get system total memory")
 	}
 
-	total = objectio.TotalMem()
-	cgroup, err = m.setMemLimit(total)
+	// if the const limit option is set, we should not change the limit.
+	if m.options.constLimit < 0 {
+		m.limit.Store(int64(float64(m.actualTotalMemory.Load()) * m.limitRate))
+	}
 
 	if m.proc == nil {
 		m.proc, _ = process.NewProcess(int32(os.Getpid()))
@@ -117,8 +133,37 @@ func (m *memThrottler) Refresh() {
 	m.total.Store(total)
 }
 
+/*
+		| -------- actual max memory  -----|
+		|***RSS****|                       |
+									limit
+							|--------------|  case 1
+
+    	        |--------------------------|  case 2
+							limit
+
+ |-----------------------------------------|  case 3
+				   limit
+*/
+
 func (m *memThrottler) Available() int64 {
-	avail := m.limit.Load() - m.rss.Load() - m.reserved.Load()
+	//avail := m.limit.Load() - m.rss.Load() - m.reserved.Load()
+
+	var (
+		avail    int64
+		limit    = m.limit.Load()
+		rss      = m.rss.Load()
+		reserved = m.reserved.Load()
+
+		actualMaxMemory = int64(m.actualTotalMemory.Load())
+	)
+
+	if actualMaxMemory-rss >= limit {
+		avail = limit - reserved
+	} else {
+		avail = actualMaxMemory - rss - reserved
+	}
+
 	if avail < 0 {
 		avail = 0
 	}
@@ -127,7 +172,8 @@ func (m *memThrottler) Available() int64 {
 }
 
 func (m *memThrottler) PrintUsage() {
-	logutil.Info("Throttler-Usage",
+	logutil.Info(
+		fmt.Sprintf("%s-Usage", MemoryThrottlerLogHeader),
 		zap.String("detail", m.String()),
 	)
 }
@@ -136,6 +182,9 @@ func (m *memThrottler) PrintUsage() {
 // it returns (new available, true) if success, or
 // (available, false).
 func (m *memThrottler) Acquire(ask int64) (int64, bool) {
+
+	m.Refresh()
+
 	var (
 		left    int64
 		granted bool
@@ -149,7 +198,7 @@ func (m *memThrottler) Acquire(ask int64) (int64, bool) {
 
 	if !granted {
 		logutil.Info(
-			"Throttler-Acquire",
+			fmt.Sprintf("%s-Acquire", MemoryThrottlerLogHeader),
 			zap.String("err", "out of available"),
 			zap.String("ask", common.HumanReadableBytes(int(ask))),
 			zap.String("detail", m.String()),
@@ -193,6 +242,10 @@ func NewMemThrottler(
 
 	for _, opt := range opts {
 		opt(throttler)
+	}
+
+	if throttler.options.constLimit > 0 {
+		throttler.limit.Store(throttler.options.constLimit)
 	}
 
 	throttler.Refresh()
