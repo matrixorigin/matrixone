@@ -1387,7 +1387,9 @@ func Test_SimpleReader(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.GetFileService(), defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	w := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+	w := colexec.NewCNS3TombstoneWriter(
+		proc.Mp(), fs, types.T_int32.ToType(), -1,
+	)
 	defer w.Close()
 
 	err = w.Write(proc.Ctx, bat1)

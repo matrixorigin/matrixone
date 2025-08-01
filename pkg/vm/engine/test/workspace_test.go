@@ -1723,7 +1723,9 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 	{
 		proc := rel.GetProcess().(*process.Process)
 
-		w := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
+		w := colexec.NewCNS3TombstoneWriter(
+			proc.Mp(), proc.GetFileService(), types.T_int32.ToType(), -1,
+		)
 		require.NoError(t, err)
 
 		err = w.Write(proc.Ctx, tombstoneBat)
