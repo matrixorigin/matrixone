@@ -16,6 +16,7 @@ package logtailreplay
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"go.uber.org/zap"
 )
 
 // a partition corresponds to a dn
@@ -202,14 +204,23 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	state := curState.Copy()
 
 	inst := time.Now()
-	state.truncate(ids, ts)
+	if updated := state.truncate(ids, ts); !updated {
+		return nil
+	}
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
 
-	logutil.Infof("Truncate:table name:%s,tid:%v partition state from %p to %p,startTs:%s, cost:%s",
-		p.TableInfo.Name, p.TableInfo.ID, curState, state, ts.ToString(), time.Since(inst))
+	logutil.Info(
+		"PS-Truncate",
+		zap.String("name", p.TableInfo.Name),
+		zap.Uint64("id", p.TableInfo.ID),
+		zap.String("prev-state", fmt.Sprintf("%p", curState)),
+		zap.String("new-state", fmt.Sprintf("%p", state)),
+		zap.Duration("duration", time.Since(inst)),
+		zap.String("new-start", state.start.ToString()),
+	)
 
 	return nil
 }

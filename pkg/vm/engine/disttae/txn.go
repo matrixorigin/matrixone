@@ -695,7 +695,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close(txn.proc.GetMPool())
+			s3Writer.Close()
 		}
 	}()
 
@@ -710,17 +710,17 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		s3Writer = colexec.NewCNS3DataWriter(txn.proc.GetMPool(), fs, tableDef, false)
 
 		for _, bat = range mp[tbKey] {
-			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), bat); err != nil {
+			if err = s3Writer.Write(txn.proc.Ctx, bat); err != nil {
 				return err
 			}
 		}
 
-		if stats, err = s3Writer.Sync(txn.proc.Ctx, txn.proc.Mp()); err != nil {
+		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
 			return err
 		}
 
 		fileName = stats[0].ObjectLocation().String()
-		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.GetMPool()); err != nil {
+		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 			return err
 		}
 
@@ -745,7 +745,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return err
 		}
 
-		s3Writer.Close(txn.proc.GetMPool())
+		s3Writer.Close()
 
 		s3Writer = nil
 	}
@@ -818,7 +818,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close(txn.proc.GetMPool())
+			s3Writer.Close()
 		}
 	}()
 
@@ -834,18 +834,18 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ))
 
 		for i := 0; i < len(mp[tbKey]); i++ {
-			if err = s3Writer.Write(txn.proc.Ctx, txn.proc.Mp(), mp[tbKey][i]); err != nil {
+			if err = s3Writer.Write(txn.proc.Ctx, mp[tbKey][i]); err != nil {
 				return err
 			}
 		}
 
-		if stats, err = s3Writer.Sync(txn.proc.Ctx, txn.proc.Mp()); err != nil {
+		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
 			return err
 		}
 
 		fileName = stats[0].ObjectLocation().String()
 
-		if bat, err = s3Writer.FillBlockInfoBat(txn.proc.GetMPool()); err != nil {
+		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 			return err
 		}
 
@@ -870,7 +870,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return err
 		}
 
-		if err = s3Writer.Close(txn.proc.GetMPool()); err != nil {
+		if err = s3Writer.Close(); err != nil {
 			return err
 		}
 	}

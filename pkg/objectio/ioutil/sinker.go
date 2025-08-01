@@ -68,7 +68,7 @@ func WithOffHeap() SinkerOption {
 	}
 }
 
-func WithBuffer(buffer *containers.OneSchemaBatchBuffer, isOwner bool) SinkerOption {
+func WithBuffer(buffer containers.IBatchBuffer, isOwner bool) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.buf.isOwner = isOwner
 		sinker.buf.buffers = buffer
@@ -346,7 +346,7 @@ type Sinker struct {
 	buf struct {
 		isOwner  bool
 		bufStats sinkerStats
-		buffers  *containers.OneSchemaBatchBuffer
+		buffers  containers.IBatchBuffer
 	}
 
 	mp *mpool.MPool
@@ -381,8 +381,8 @@ func (sinker *Sinker) fillDefaults() {
 			sinker.config.bufferSizeCap,
 			sinker.schema.attrs,
 			sinker.schema.attrTypes,
+			sinker.config.offHeap,
 		)
-		sinker.buf.buffers.SetOffHeap(sinker.config.offHeap)
 	}
 }
 
@@ -392,7 +392,7 @@ func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 
 func (sinker *Sinker) fetchBuffer() *batch.Batch {
 	x := sinker.buf.buffers.Len()
-	bat := sinker.buf.buffers.Fetch()
+	bat := sinker.buf.buffers.FetchWithSchema(sinker.schema.attrs, sinker.schema.attrTypes)
 	y := sinker.buf.buffers.Len()
 
 	if x < y {
@@ -412,6 +412,15 @@ func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
 		sinker.buf.bufStats.updateCount(1)
 		sinker.buf.bufStats.updateBytes(bat.Size())
 	}
+}
+
+func (sinker *Sinker) putBackOneInMemory(idx int) {
+	bat := sinker.staged.inMemory[idx]
+	sinker.staged.inMemory[idx] = nil
+	sinker.staged.inMemorySize -= bat.Size()
+	sinker.staged.inMemStats.updateCount(-1)
+	sinker.staged.inMemStats.updateBytes(-bat.Size())
+	sinker.putBackBuffer(bat)
 }
 
 func (sinker *Sinker) popStaged() *batch.Batch {
@@ -452,8 +461,10 @@ func (sinker *Sinker) clearInMemoryStaged() {
 
 func (sinker *Sinker) cleanupInMemoryStaged() {
 	for i, bat := range sinker.staged.inMemory {
-		sinker.putBackBuffer(bat)
-		sinker.staged.inMemory[i] = nil
+		if bat != nil {
+			sinker.putBackBuffer(bat)
+			sinker.staged.inMemory[i] = nil
+		}
 	}
 	sinker.staged.inMemory = sinker.staged.inMemory[:0]
 	sinker.staged.inMemorySize = 0
@@ -514,7 +525,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 			buffer,
 			innersinker,
 			sinker.mp,
-			true,
+			sinker.putBackOneInMemory,
 		); err != nil {
 			return err
 		}

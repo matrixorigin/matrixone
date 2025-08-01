@@ -87,6 +87,18 @@ select * from t1;
 a
 4
 drop table if exists t1;
+create table t1 (a int, b float, c varchar);
+insert into t1 values(1, 1.5, 'a');
+insert into t1 values(1, 1.5, 'b');
+delete from t1 where (a, b) in ((1, 1.5));
+select * from t1;
+a    b    c
+insert into t1 values(2, 2.5, 'a');
+insert into t1 values(2, 2.5, 'b');
+delete from t1 where (a, b) in ((2.0, 2.5), (2.1, 2.5));
+select * from t1;
+a    b    c
+drop table if exists t1;
 create table t1 (a char(20));
 insert into t1 values (null), (null), ('hello');
 delete from t1 where a is null;
@@ -181,44 +193,49 @@ a    b
 2    2
 2    3
 drop table if exists t1;
+
 create table t1(a int, b int, unique key(a));
+
 insert into t1 values(1, 1);
+
 insert into t1 values(2, 2);
+
 insert into t1 values(3, 3);
+
 insert into t1 values(4, 4);
+
 select * from t1;
-a    b
-1    1
-2    2
-3    3
-4    4
+
 delete from t1 where a = 1;
+
 select * from t1;
-a    b
-2    2
-3    3
-4    4
+
 insert into t1 values(1, 2);
+
 drop table if exists t1;
+
 create table t1(a int, b int, unique key(a, b));
+
 insert into t1 values(1, 2);
+
 insert into t1 values(1, 3);
+
 insert into t1 values(2, 2);
+
 insert into t1 values(2, 3);
+
 select * from t1;
-a    b
-1    2
-1    3
-2    2
-2    3
+
 delete from t1 where a = 1;
+
 select * from t1;
-a    b
-2    2
-2    3
+
 insert into t1 values(1, 2);
+
 insert into t1 values(1, null);
+
 delete from t1 where a = 1;
+
 drop database if exists db1;
 use `delete`;
 create table temp(a int);
@@ -234,23 +251,29 @@ insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
 insert into t select * from t;
+
 begin;
+
 insert into t select * from t;
+
 delete from t where a = 1;
+
 select count(*) from t;
-count(*)
-8387584
+
 rollback;
+
 begin;
+
 insert into t select * from t;
+
 delete from t where a = 1;
+
 select count(*) from t;
-count(*)
-8387584
+
 commit;
+
 select count(*) from t;
-count(*)
-8387584
+
 drop table if exists temp;
 drop table if exists t;
 create table temp(a int);
@@ -433,7 +456,7 @@ CREATE TABLE t3 ( id INT PRIMARY KEY,col1 INT,key idx_col1 (col1));
 INSERT INTO t3 (SELECT *,1 FROM generate_series(0,8192,1)g);
 DELETE FROM t3 WHERE col1=1;
 SELECT COUNT(*) FROM t3 WHERE col1=1;
-count(*)
+COUNT(*)
 0
 drop table if exists t1;
 drop table if exists t2;

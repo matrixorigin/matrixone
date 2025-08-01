@@ -195,8 +195,90 @@ Project
 drop table t;
 create table t (id int);
 insert into t select result from generate_series(1,100.0) g;
-invalid input: generate_series end must be int32 or int64
+invalid input: the type of generate_series end must be int32 or int64
 insert into t select result from generate_series(1,1e2) g;
 invalid input: generate_series end must be int32 or int64
 insert into t select result from generate_series(1,100, "step") g;
 invalid input: generate_series step must be int32 or int64
+select * from generate_random_int64() t;
+invalid input: random tvf: at least one argument is required
+select * from generate_random_int64(10, 42, 'foo') t;
+invalid input: gen_random method must be one of int64, int64n, float64, exp, normal
+select * from generate_random_int64(10, 42, 'exp') t;
+invalid input: gen_random method exp can't be used to generate int64 random numbers
+select * from generate_random_float64(10, 42, 'int64n') t;
+invalid input: gen_random method int64n can't be used to generate float64 random numbers
+select * from generate_random_float64(10, 42, 'exp', 10) t;
+invalid input: only int64n can have a max value
+select * from generate_random_int64(10, 42) t;
+nth    i64
+1    3440579354231278675
+2    608747136543856411
+3    5571782338101878760
+4    1926012586526624009
+5    404153945743547657
+6    3534334367214237261
+7    7497468244883513247
+8    3545887102062614208
+9    3532963341805492868
+10    5961769557461764184
+select * from generate_random_int64(10, 42, 'int64n', 100) t;
+nth    i64
+1    75
+2    11
+3    60
+4    9
+5    57
+6    61
+7    47
+8    8
+9    68
+10    84
+select * from generate_random_float64(10, 42) t;
+nth    f64
+1    0.3730283610466326
+2    0.06600049679351791
+3    0.604093851558642
+4    0.20881870305465913
+5    0.043818458599374305
+6    0.38319329992238566
+7    0.8128771359243787
+8    0.38444584994446157
+9    0.3830446530497163
+10    0.6463763506057989
+select * from generate_random_float64(10, 42, '') t;
+nth    f64
+1    0.3730283610466326
+2    0.06600049679351791
+3    0.604093851558642
+4    0.20881870305465913
+5    0.043818458599374305
+6    0.38319329992238566
+7    0.8128771359243787
+8    0.38444584994446157
+9    0.3830446530497163
+10    0.6463763506057989
+select * from generate_random_float64(10, 42, 'exp') t;
+nth    f64
+1    0.49573841490239784
+2    0.13054718375896252
+3    0.1532334522090758
+4    0.3384463626094486
+5    0.11596423879404183
+6    1.0556589395524805
+7    0.8590152290261559
+8    0.14863368108076302
+9    1.3978047977724948
+10    1.4262739889914782
+select * from generate_random_float64(10, 42, 'normal') t;
+nth    f64
+1    1.5536305584564762
+2    0.12525608682704692
+3    -0.4943748127704828
+4    1.2440150150762053
+5    0.1319784842710705
+6    1.2063677897017713
+7    -0.6257615850500378
+8    0.6296099782367262
+9    1.565520076524086
+10    -0.834259977430416

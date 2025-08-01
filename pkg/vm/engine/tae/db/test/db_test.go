@@ -8285,11 +8285,20 @@ func Test_CheckpointChaos3(t *testing.T) {
 	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	assert.NoError(t, err)
 
-	objectio.NotifyInjected(t.Name())
+	for {
+		select {
+		case <-doneC:
+			goto endFor
+		default:
+			time.Sleep(time.Millisecond * 100)
+			objectio.NotifyInjected(t.Name())
+		}
+	}
+
+endFor:
+
 	rmFn1()
 	rmFn2()
-
-	<-doneC
 
 	maxGCKP := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.NotNil(t, maxGCKP)

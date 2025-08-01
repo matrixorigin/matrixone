@@ -525,7 +525,6 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		}
 		logStr += col.GetName()
 	}
-	logutil.Infof("cols in GetColumMetadataScanInfo: %s, result len: %d", logStr, len(infoList))
 
 	return infoList, nil
 }
@@ -1604,7 +1603,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 
 	s3Writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, tbl.tableDef, false)
 
-	defer func() { s3Writer.Close(proc.Mp()) }()
+	defer func() { s3Writer.Close() }()
 
 	var (
 		bat      *batch.Batch
@@ -1646,7 +1645,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				return true
 			}
 
-			if err = s3Writer.Write(ctx, proc.Mp(), bat); err != nil {
+			if err = s3Writer.Write(ctx, bat); err != nil {
 				return false
 			}
 
@@ -1659,11 +1658,11 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		return nil, fileName, err
 	}
 
-	if stats, err = s3Writer.Sync(ctx, proc.Mp()); err != nil {
+	if stats, err = s3Writer.Sync(ctx); err != nil {
 		return nil, fileName, err
 	}
 
-	if bat, err = s3Writer.FillBlockInfoBat(proc.Mp()); err != nil {
+	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return nil, fileName, err
 	}
 

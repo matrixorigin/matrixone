@@ -51,7 +51,7 @@ func TestNewSinker(t *testing.T) {
 
 	attrs, typs, seqnums := mockSchema(3, 2)
 
-	buffer := containers.NewOneSchemaBatchBuffer(mpool.GB, attrs, typs)
+	buffer := containers.NewOneSchemaBatchBuffer(mpool.GB, attrs, typs, false)
 
 	factory := NewFSinkerImplFactory(
 		seqnums,

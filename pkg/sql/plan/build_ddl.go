@@ -868,12 +868,6 @@ func buildCreateTable(
 			if opt.Value != 0 {
 				createTable.TableDef.AutoIncrOffset = opt.Value - 1
 			}
-		case *tree.RetentionOption:
-			duration, err := parseDuration(ctx.GetContext(), opt.Period, opt.Unit)
-			if err != nil {
-				return nil, err
-			}
-			createTable.RetentionDeadline = time.Now().Add(duration).Unix()
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,

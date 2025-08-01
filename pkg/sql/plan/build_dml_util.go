@@ -159,12 +159,24 @@ func buildInsertPlans(
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
 
-	if v := ctx.GetContext().Value(defines.SkipPkDedup{}); v != nil {
-		if v.(string) == tableDef.Name {
-			logutil.Info("skip pk dedup",
+	if v := builder.compCtx.GetContext().Value(defines.AlterCopyDedupOpt{}); v != nil {
+		dedupOpt := v.(*plan.AlterCopyDedupOpt)
+		if dedupOpt.TargetTableName == tableDef.Name {
+			logutil.Info("alter copy dedup exec",
 				zap.String("tableDef", tableDef.Name),
-				zap.Bool("originalDedup", ifNeedCheckPkDup))
-			ifNeedCheckPkDup = false
+				zap.Bool("originalDedup", ifNeedCheckPkDup),
+				zap.Any("insertWithoutUniqueKeyMap", insertWithoutUniqueKeyMap),
+				zap.Any("dedupOpt", dedupOpt))
+			if dedupOpt.SkipPkDedup {
+				ifNeedCheckPkDup = false
+			}
+			if insertWithoutUniqueKeyMap == nil {
+				insertWithoutUniqueKeyMap = dedupOpt.SkipUniqueIdxDedup
+			} else {
+				for skipIdxName := range dedupOpt.SkipUniqueIdxDedup {
+					insertWithoutUniqueKeyMap[skipIdxName] = true
+				}
+			}
 		}
 	}
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
@@ -849,6 +861,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 	}
 
 	multiTableIndexes := make(map[string]*MultiTableIndex)
+
 	for idx, indexdef := range tableDef.Indexes {
 		if updateColLength == 0 {
 			if indexdef.GetUnique() && (insertWithoutUniqueKeyMap != nil && insertWithoutUniqueKeyMap[indexdef.IndexName]) {

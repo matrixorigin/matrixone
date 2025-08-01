@@ -185,6 +185,7 @@ func (flow *TransferFlow) fillDefaults() {
 			mpool.MB*8,
 			attrs,
 			attrTypes,
+			false,
 		)
 	}
 	if flow.sinker == nil {

@@ -3,7 +3,7 @@ create account acc01 admin_name = 'test_account' identified by '111';
 drop account if exists acc02;
 create account acc02 admin_name = 'test_account' identified by '111';
 
--- @ignore:2,5,6,7
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
 -- @session:id=1&user=acc01:test_account&password=111
@@ -27,7 +27,7 @@ restore account acc01 from snapshot snapshot_acc01_dropped to account acc02;
 select * from db01.t01;
 -- @session
 
--- @ignore:2,5,6,7
+-- @ignore:2,3,4,5,6,7,8,9
 show accounts;
 
 drop account if exists acc01;

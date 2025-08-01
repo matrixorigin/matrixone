@@ -30,7 +30,7 @@ func TestOneSchemaBatchBuffer(t *testing.T) {
 	attr := []string{"a", "b", "c"}
 	typs := []types.Type{types.T_int16.ToType(), types.T_int32.ToType(), types.T_int64.ToType()}
 
-	buffer := NewOneSchemaBatchBuffer(mpool.GB, attr, typs)
+	buffer := NewOneSchemaBatchBuffer(mpool.GB, attr, typs, false)
 	require.NotNil(t, buffer)
 
 	var bats []*batch.Batch
@@ -59,6 +59,51 @@ func TestOneSchemaBatchBuffer(t *testing.T) {
 		buffer.Putback(bats[i], mp)
 	}
 
+}
+
+func TestGeneralBatchBuffer1(t *testing.T) {
+	mp := mpool.MustNewZero()
+	buffer := NewGeneralBatchBuffer(mpool.KB*2, false, 1024, 4096)
+
+	attrs1 := []string{"a", "b", "c"}
+	typs1 := []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_char.ToType()}
+
+	attrs2 := []string{"a", "b", "c"}
+	typs2 := []types.Type{types.T_int64.ToType(), types.T_char.ToType(), types.T_int64.ToType()}
+
+	bat1 := buffer.FetchWithSchema(attrs1, typs1)
+	require.NotNil(t, bat1)
+	curr, high, _, _ := buffer.Usage()
+	require.Equal(t, 0, curr)
+	require.Equal(t, 0, high)
+
+	// one row size attrs1: 8+8+32=48 bytes
+	varlenVal := []byte("11111111111111111111111111111111") // 32 bytes
+	for i := 0; i < 100; i++ {
+		err := vector.AppendFixed(bat1.Vecs[0], int64(i), false, mp)
+		require.NoError(t, err)
+		err = vector.AppendFixed(bat1.Vecs[1], int64(i), false, mp)
+		require.NoError(t, err)
+		err = vector.AppendBytes(bat1.Vecs[2], varlenVal, false, mp)
+		require.NoError(t, err)
+	}
+	buffer.Putback(bat1, mp)
+
+	curr, high, _, _ = buffer.Usage()
+	require.Equal(t, 2048, curr)
+	require.Equal(t, 2048, high)
+
+	bat2 := buffer.FetchWithSchema(attrs2, typs2)
+
+	require.Equal(t, 1024, bat2.Vecs[0].Allocated())
+	require.Equal(t, 1024, bat2.Vecs[2].Allocated())
+
+	buffer.Putback(bat2, mp)
+	require.Equal(t, 2048, curr)
+	require.Equal(t, 2048, high)
+
+	buffer.Close(mp) // no panic
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func TestVectorsCopyToBatch(t *testing.T) {
