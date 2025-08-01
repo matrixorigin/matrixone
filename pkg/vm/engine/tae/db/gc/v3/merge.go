@@ -152,6 +152,7 @@ func MergeCheckpoint(
 
 	newFiles = append(newFiles, files...)
 	bat := makeBatchFromSchema(checkpoint.CheckpointSchema)
+	var cptLocation objectio.Location
 	bat.GetVectorByName(checkpoint.CheckpointAttr_StartTS).Append(ckpEntries[0].GetStart(), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_EndTS).Append(*end, false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_MetaLocation).Append([]byte(location), false)
@@ -161,6 +162,7 @@ func MergeCheckpoint(
 	bat.GetVectorByName(checkpoint.CheckpointAttr_CheckpointLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_TruncateLSN).Append(uint64(0), false)
 	bat.GetVectorByName(checkpoint.CheckpointAttr_Type).Append(int8(checkpoint.ET_Compacted), false)
+	bat.GetVectorByName(checkpoint.CheckpointAttr_TableIDLocation).Append([]byte(cptLocation), false)
 	defer bat.Close()
 	name := ioutil.EncodeCompactCKPMetadataFullName(ckpEntries[0].GetStart(), *end)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)

@@ -744,7 +744,7 @@ func SyncTableIDBatch(
 		vector.AppendMultiFixed(bat.Vecs[2], end, false, len(tables), mp)
 	}
 
-	bat.SetRowCount(bat.RowCount())
+	bat.SetRowCount(bat.Vecs[0].Length())
 
 	segmentid := objectio.NewSegmentid()
 	fileNum := uint16(0)

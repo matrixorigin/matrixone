@@ -64,4 +64,7 @@ func (cfg *CheckpointCfg) FillDefaults() {
 	if cfg.GlobalHistoryDuration < 0 {
 		cfg.GlobalHistoryDuration = 0
 	}
+	if cfg.TableIDHistoryDuration <= 0 {
+		cfg.TableIDHistoryDuration = time.Hour * 24
+	}
 }

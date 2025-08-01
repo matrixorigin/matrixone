@@ -260,8 +260,9 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 
 	ickps := runner.store.GetAllIncrementalCheckpoints()
 	var prevCkp *CheckpointEntry
+	prevEnd := entry.start.Prev()
 	for _, ckp := range ickps {
-		if ckp.end.EQ(&entry.start) {
+		if ckp.end.EQ(&prevEnd) {
 			prevCkp = ckp
 			break
 		}

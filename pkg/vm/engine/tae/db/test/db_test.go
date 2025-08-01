@@ -12493,8 +12493,7 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
-	opts := config.WithQuickScanAndCKPOpts(nil)
-	options.WithCheckpointGlobalMinCount(2)(opts)
+	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
@@ -12511,59 +12510,52 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(5)
 
-	tae.CreateRelAndAppend(bats[0], true)
+	tae.CreateRelAndAppend2(bats[0], true)
 
 	txn, rel := tae.GetRelation()
 	tableID := rel.GetMeta().(*catalog.TableEntry).ID
 	assert.NoError(t, txn.Commit(ctx))
 
-	testutils.WaitExpect(10000, func() bool {
-		return tae.AllCheckpointsFinished()
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			return len(tae.BGCheckpointRunner.GetAllCheckpoints()) > 0
-		},
-	)
+	tae.ForceCheckpoint()
 
-	entries := tae.BGCheckpointRunner.GetAllCheckpoints()
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	for _, e := range entries {
 		t.Logf("%s", e.String())
 		location := e.GetTableIDLocation()
 		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
 		assert.NoError(t, err)
 		defer release()
-		assert.Equal(t, 1, bat.RowCount())
+		rowCount := 0
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
 		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
 		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
-		assert.Equal(t, tableID, tableIDs[0])
-		assert.Equal(t, e.GetStart(), starts[0], "expect %v, get %v", e.GetStart().ToString(), starts[0].ToString())
-		assert.Equal(t, e.GetEnd(), ends[0], "expect %v, get %v", e.GetEnd().ToString(), ends[0].ToString())
+		for i := 0; i < bat.RowCount(); i++ {
+			if tableIDs[i] != tableID {
+				continue
+			}
+			rowCount++
+			assert.Equal(t, tableID, tableIDs[i])
+			assert.Equal(t, e.GetStart(), starts[i], "expect %v, get %v", e.GetStart().ToString(), starts[i].ToString())
+			assert.Equal(t, e.GetEnd(), ends[i], "expect %v, get %v", e.GetEnd().ToString(), ends[i].ToString())
+		}
+		assert.Equal(t, 1, rowCount)
 		t.Logf("%s", bat.String())
 	}
+	assert.Equal(t, 1, len(entries))
+	ickp1End := entries[0].GetEnd()
 
 	tae.Restart(context.Background())
 	tae.BindSchema(schema)
 
 	t2 := tae.TxnMgr.Now()
 
-	testutils.WaitExpect(10000, func() bool {
-		return tae.AllCheckpointsFinished()
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			return len(tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()) > 1
-		},
-	)
-
 	tae.DoAppend(bats[1])
+	
+	err = tae.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Hour)
+	assert.NoError(t, err)
 
-	entries = tae.BGCheckpointRunner.GetAllCheckpoints()
+
+	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	for _, e := range entries {
 		end := e.GetEnd()
 		if end.LT(&t2) {
@@ -12574,28 +12566,29 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
 		assert.NoError(t, err)
 		defer release()
-		assert.Equal(t, 2, bat.RowCount())
-		for j := 0; j < bat.RowCount(); j++ {
-			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
-			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
-			assert.Equal(t, tableID, tableIDs[j])
-			assert.Equal(t, e.GetStart(), starts[j])
-			assert.Equal(t, e.GetEnd(), ends[j])
+		rowCount := 0
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		for i := 0; i < bat.RowCount(); i++ {
+			if tableIDs[i] != tableID {
+				continue
+			}
+			rowCount++
+			if i == 0 {
+				assert.Equal(t, tableID, tableIDs[i])
+				assert.Equal(t, types.TS{}, starts[i])
+				assert.Equal(t, ickp1End, ends[i])
+			}
+			if i == 1 {
+				assert.Equal(t, tableID, tableIDs[i])
+				assert.Equal(t, e.GetStart(), starts[i])
+				assert.Equal(t, e.GetEnd(), ends[i])
+			}
 		}
+		assert.Equal(t, 2, rowCount)
 		t.Logf("%s", bat.String())
 	}
-
-	testutils.WaitExpect(10000, func() bool {
-		return tae.AllCheckpointsFinished()
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			return len(tae.BGCheckpointRunner.GetAllGlobalCheckpoints()) > 0
-		},
-	)
 
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, e := range entries {
@@ -12604,15 +12597,28 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
 		assert.NoError(t, err)
 		defer release()
-		assert.Equal(t, 2, bat.RowCount())
-		for j := 0; j < bat.RowCount(); j++ {
-			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
-			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
-			assert.Equal(t, tableID, tableIDs[j])
-			assert.Equal(t, types.TS{}, starts[j])
-			assert.Equal(t, types.MaxTs(), ends[j])
+		rowCount := 0
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		ickp2End := e.GetEnd().Prev()
+		for i := 0; i < bat.RowCount(); i++ {
+			if tableIDs[i] != tableID {
+				continue
+			}
+			rowCount++
+			if i == 0 {
+				assert.Equal(t, tableID, tableIDs[i])
+				assert.Equal(t, types.TS{}, starts[i])
+				assert.Equal(t, ickp1End, ends[i])
+			}
+			if i == 1 {
+				assert.Equal(t, tableID, tableIDs[i])
+				assert.Equal(t, e.GetStart(), starts[i])
+				assert.Equal(t, ickp2End, ends[i])
+			}
 		}
+		assert.Equal(t, 2, rowCount)
 		t.Logf("%s", bat.String())
 	}
 	assert.Equal(t, 1, len(entries))
