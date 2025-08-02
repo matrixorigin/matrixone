@@ -264,7 +264,6 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 	for i, rp := range ap.Result {
 		result.Batch.Vecs[i] = bat.Vecs[rp.Pos]
-		bat.Vecs[rp.Pos] = nil
 	}
 
 	return nil
