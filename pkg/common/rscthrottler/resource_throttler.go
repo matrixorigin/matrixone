@@ -16,6 +16,7 @@ package rscthrottler
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sync/atomic"
 	"time"
@@ -127,7 +128,11 @@ func (m *memThrottler) Refresh() {
 	} else if total != 0 {
 		m.actualTotalMemory.Store(total)
 	} else {
-		panic("failed to get system total memory")
+		m.actualTotalMemory.Store(math.MaxInt64)
+		logutil.Info(
+			fmt.Sprintf("%s-Refresh", MemoryThrottlerLogHeader),
+			zap.String("err", "cannot get the total memory, unlimited"),
+		)
 	}
 
 	// if the const limit option is set, we should not change the limit.
