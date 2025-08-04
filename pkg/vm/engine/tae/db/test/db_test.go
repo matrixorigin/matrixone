@@ -12526,17 +12526,19 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		assert.NoError(t, err)
 		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 		for i := 0; i < bat.RowCount(); i++ {
 			if tableIDs[i] != tableID {
 				continue
 			}
 			rowCount++
 			assert.Equal(t, tableID, tableIDs[i])
-			assert.Equal(t, e.GetStart(), starts[i], "expect %v, get %v", e.GetStart().ToString(), starts[i].ToString())
-			assert.Equal(t, e.GetEnd(), ends[i], "expect %v, get %v", e.GetEnd().ToString(), ends[i].ToString())
+			// aobj create ts
+			assert.False(t, starts[i].IsEmpty())
+			// ckp end
+			assert.Equal(t, e.GetEnd(), ends[i])
 		}
 		assert.Equal(t, 1, rowCount)
 		t.Logf("%s", bat.String())
@@ -12566,9 +12568,9 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		assert.NoError(t, err)
 		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 		for i := 0; i < bat.RowCount(); i++ {
 			if tableIDs[i] != tableID {
 				continue
@@ -12576,13 +12578,14 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 			rowCount++
 			if i == 0 {
 				assert.Equal(t, tableID, tableIDs[i])
-				assert.Equal(t, types.TS{}, starts[i])
+				assert.False(t, starts[i].IsEmpty())
 				assert.Equal(t, ickp1End, ends[i])
 			}
 			if i == 1 {
 				assert.Equal(t, tableID, tableIDs[i])
+				// ckp start -> aobj deleteAt
 				assert.Equal(t, e.GetStart(), starts[i])
-				assert.Equal(t, e.GetEnd(), ends[i])
+				assert.False(t, ends[i].IsEmpty())
 			}
 		}
 		assert.Equal(t, 2, rowCount)
@@ -12597,10 +12600,9 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		assert.NoError(t, err)
 		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
-		ickp2End := e.GetEnd().Prev()
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 		for i := 0; i < bat.RowCount(); i++ {
 			if tableIDs[i] != tableID {
 				continue
@@ -12608,13 +12610,13 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 			rowCount++
 			if i == 0 {
 				assert.Equal(t, tableID, tableIDs[i])
-				assert.Equal(t, types.TS{}, starts[i])
+				assert.False(t, starts[i].IsEmpty())
 				assert.Equal(t, ickp1End, ends[i])
 			}
 			if i == 1 {
 				assert.Equal(t, tableID, tableIDs[i])
 				assert.Equal(t, e.GetStart(), starts[i])
-				assert.Equal(t, ickp2End, ends[i])
+				assert.False(t, ends[i].IsEmpty())
 			}
 		}
 		assert.Equal(t, 2, rowCount)
@@ -12637,9 +12639,9 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		assert.NoError(t, err)
 		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 		for i := 0; i < bat.RowCount(); i++ {
 			if tableIDs[i] != tableID {
 				continue
@@ -12647,13 +12649,13 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 			rowCount++
 			if i == 0 {
 				assert.Equal(t, tableID, tableIDs[i])
-				assert.Equal(t, types.TS{}, starts[i])
+				assert.False(t, starts[i].IsEmpty())
 				assert.Equal(t, ickp1End, ends[i])
 			}
 			if i == 1 {
 				assert.Equal(t, tableID, tableIDs[i])
 				assert.Equal(t, e.GetStart(), starts[i])
-				assert.Equal(t, e.GetEnd(), ends[i])
+				assert.False(t, ends[i].IsEmpty())
 			}
 		}
 		assert.Equal(t, 2, rowCount)
