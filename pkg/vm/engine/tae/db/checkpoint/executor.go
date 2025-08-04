@@ -258,19 +258,23 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		return
 	}
 
-	ickps := runner.store.GetAllIncrementalCheckpoints()
+	gckps := runner.store.GetAllGlobalCheckpoints()
 	var prevCkp *CheckpointEntry
-	prevEnd := entry.start.Prev()
-	for _, ckp := range ickps {
-		if ckp.end.EQ(&prevEnd) {
+	for _, ckp := range gckps {
+		if ckp.end.EQ(&entry.start) {
 			prevCkp = ckp
 			break
 		}
 	}
+
 	if prevCkp == nil {
-		gckp := runner.store.MaxGlobalCheckpoint()
-		if gckp != nil {
-			prevCkp = gckp
+		ickps := runner.store.GetAllIncrementalCheckpoints()
+		prevEnd := entry.start.Prev()
+		for _, ckp := range ickps {
+			if ckp.end.EQ(&prevEnd) {
+				prevCkp = ckp
+				break
+			}
 		}
 	}
 	var preTableIDLocation objectio.Location

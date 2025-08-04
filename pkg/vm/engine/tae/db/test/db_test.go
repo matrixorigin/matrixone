@@ -12621,4 +12621,42 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		t.Logf("%s", bat.String())
 	}
 	assert.Equal(t, 1, len(entries))
+
+	t3 := tae.TxnMgr.Now()
+
+	tae.ForceCheckpoint()
+
+	for _, e := range entries {
+		end := e.GetEnd()
+		if end.LT(&t3) {
+			continue
+		}
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		defer release()
+		rowCount := 0
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[0])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		for i := 0; i < bat.RowCount(); i++ {
+			if tableIDs[i] != tableID {
+				continue
+			}
+			rowCount++
+			if i == 0 {
+				assert.Equal(t, tableID, tableIDs[i])
+				assert.Equal(t, types.TS{}, starts[i])
+				assert.Equal(t, ickp1End, ends[i])
+			}
+			if i == 1 {
+				assert.Equal(t, tableID, tableIDs[i])
+				assert.Equal(t, e.GetStart(), starts[i])
+				assert.Equal(t, e.GetEnd(), ends[i])
+			}
+		}
+		assert.Equal(t, 2, rowCount)
+		t.Logf("%s", bat.String())
+	}
 }
