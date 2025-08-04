@@ -220,7 +220,6 @@ func getChangedListFromCheckpoints(
 	isTheTblIWant func(exists []uint64, tblId uint64, ts types.TS) bool,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
 ) (accIds, dbIds, tblIds []uint64, oldest types.TS, err error) {
-	oldest = types.MaxTs()
 
 	var (
 		dbEntry *catalog2.DBEntry
@@ -276,6 +275,12 @@ func getChangedListFromCheckpoints(
 		}
 		if !ckps[i].HasOverlap(from, to) {
 			continue
+		}
+		if ckps[i].IsIncremental() {
+			ckpStart := ckps[i].GetStart()
+			if oldest.GT(&ckpStart) {
+				oldest = ckpStart
+			}
 		}
 		ioutil.Prefetch(
 			h.GetDB().Runtime.SID(),
@@ -351,6 +356,7 @@ func tryGetChangedListFromTableIDBatch(
 	h *Handle,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
 ) (accIds, dbIds, tblIds []uint64, oldest types.TS, ok bool) {
+	oldest = types.MaxTs()
 	if tableIDLocation.IsEmpty() {
 		return
 	}
