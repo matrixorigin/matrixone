@@ -34,7 +34,7 @@ func MergeSortBatches(
 	buffer *batch.Batch,
 	sinker SinkerT,
 	mp *mpool.MPool,
-	cleanBatch bool,
+	putBack func(int),
 ) error {
 	var merge mergeInterface
 	nulls := make([]*nulls.Nulls, len(batches))
@@ -127,10 +127,8 @@ func MergeSortBatches(
 			}
 		}
 		// all data in batches[batchIndex] are used. Clean it.
-		if cleanBatch {
-			if rowIndex+1 == batches[batchIndex].RowCount() {
-				batches[batchIndex].Clean(mp)
-			}
+		if putBack != nil && rowIndex+1 == batches[batchIndex].RowCount() {
+			putBack(batchIndex)
 		}
 		lens++
 		if lens == objectio.BlockMaxRows {

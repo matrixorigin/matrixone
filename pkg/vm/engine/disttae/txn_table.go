@@ -1601,9 +1601,11 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		return nil, "", err
 	}
 
-	s3Writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, tbl.tableDef, false)
+	s3Writer := colexec.NewCNS3DataWriter(
+		proc.Mp(), fs, tbl.tableDef, -1, false,
+	)
 
-	defer func() { s3Writer.Close(proc.Mp()) }()
+	defer func() { s3Writer.Close() }()
 
 	var (
 		bat      *batch.Batch
@@ -1645,7 +1647,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 				return true
 			}
 
-			if err = s3Writer.Write(ctx, proc.Mp(), bat); err != nil {
+			if err = s3Writer.Write(ctx, bat); err != nil {
 				return false
 			}
 
@@ -1658,11 +1660,11 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 		return nil, fileName, err
 	}
 
-	if stats, err = s3Writer.Sync(ctx, proc.Mp()); err != nil {
+	if stats, err = s3Writer.Sync(ctx); err != nil {
 		return nil, fileName, err
 	}
 
-	if bat, err = s3Writer.FillBlockInfoBat(proc.Mp()); err != nil {
+	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return nil, fileName, err
 	}
 

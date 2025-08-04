@@ -64,7 +64,7 @@ func TestMedianAggSize(t *testing.T) {
 	}()
 
 	agg, err := newMedianExecutor(m, singleAggInfo{
-		aggID:     aggIdOfMedian,
+		aggID:     AggIdOfMedian,
 		distinct:  false,
 		argType:   types.T_int64.ToType(),
 		retType:   MedianReturnType([]types.Type{types.T_int64.ToType()}),

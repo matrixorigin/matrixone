@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -142,6 +143,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		mpool.MB*16,
 		attrs,
 		attrTypes,
+		false,
 	)
 	defer buffer.Close(e.mp)
 	transObjects := make(map[string]map[uint64]*ObjectEntry, 100)
