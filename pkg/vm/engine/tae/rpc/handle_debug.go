@@ -219,7 +219,8 @@ func getChangedListFromCheckpoints(
 	h *Handle,
 	isTheTblIWant func(exists []uint64, tblId uint64, ts types.TS) bool,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
-) (accIds, dbIds, tblIds []uint64, err error) {
+) (accIds, dbIds, tblIds []uint64, oldest types.TS, err error) {
+	oldest = types.MaxTs()
 
 	var (
 		dbEntry *catalog2.DBEntry
@@ -254,7 +255,7 @@ func getChangedListFromCheckpoints(
 	}
 
 	tableIDLocation := ckp.GetTableIDLocation()
-	accIds, dbIds, tblIds, ok := tryGetChangedListFromTableIDBatch(
+	accIds, dbIds, tblIds, oldest, ok := tryGetChangedListFromTableIDBatch(
 		ctx, from, to, tableIDLocation, h, isTheTblIWantWithTimeRange,
 	)
 	// for ckp with old version,
@@ -349,7 +350,7 @@ func tryGetChangedListFromTableIDBatch(
 	tableIDLocation objectio.Location,
 	h *Handle,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
-) (accIds, dbIds, tblIds []uint64, ok bool) {
+) (accIds, dbIds, tblIds []uint64, oldest types.TS, ok bool) {
 	if tableIDLocation.IsEmpty() {
 		return
 	}
@@ -381,6 +382,7 @@ func tryGetChangedListFromTableIDBatch(
 		return
 	}
 	ok = true
+	oldest = start
 
 	tblIds = make([]uint64, 0)
 	accIds = make([]uint64, 0)
@@ -547,10 +549,12 @@ func (h *Handle) HandleGetChangedTableList(
 		return false
 	}
 
-	accIds, dbIds, tblIds, err = getChangedListFromCheckpoints(ctx, from, to, h, isTheTblIWant, isTheTblIWantWithTimeRange)
+	accIds, dbIds, tblIds, oldest, err := getChangedListFromCheckpoints(ctx, from, to, h, isTheTblIWant, isTheTblIWantWithTimeRange)
 	if err != nil {
 		return nil, err
 	}
+	oldestTimestamp := oldest.ToTimestamp()
+	resp.Oldest = &oldestTimestamp
 
 	accIds2, dbIds2, tblIds2, err := getChangedListFromDirtyTree(ctx, from, to, h, isTheTblIWant)
 	if err != nil {
