@@ -1487,7 +1487,9 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	return nil
 }
 
-func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
+func (c *checkpointCleaner) Process(
+	inputCtx context.Context,
+	checker func(*checkpoint.CheckpointEntry) bool) (err error) {
 	if !c.GCEnabled() {
 		return
 	}
@@ -1536,7 +1538,7 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	defer memoryBuffer.Close(c.mp)
 
 	var tryGC bool
-	if err, tryGC = c.tryScanLocked(ctx, memoryBuffer); err != nil {
+	if err, tryGC = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil {
 		return
 	}
 	if !tryGC {
@@ -1553,6 +1555,7 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 func (c *checkpointCleaner) tryScanLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
+	checker func(*checkpoint.CheckpointEntry) bool,
 ) (err error, tryGC bool) {
 
 	tryGC = true
@@ -1601,8 +1604,14 @@ func (c *checkpointCleaner) tryScanLocked(
 
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range ckps {
-		if !c.checkExtras(ckp) {
-			continue
+		if checker != nil {
+			if !checker(ckp) {
+				continue
+			}
+		} else {
+			if !c.checkExtras(ckp) {
+				continue
+			}
 		}
 		candidates = append(candidates, ckp)
 	}
