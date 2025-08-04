@@ -380,7 +380,7 @@ func tryGetChangedListFromTableIDBatch(
 	if start.IsEmpty() {
 		panic("logic error")
 	}
-	if start.GT(&from) {
+	if !from.IsEmpty() && start.GT(&from) {
 		return
 	}
 	ok = true

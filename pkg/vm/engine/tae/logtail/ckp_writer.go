@@ -666,6 +666,8 @@ const (
 )
 
 var TableIDAttrs = []string{
+	TableIDAttr_Account,
+	TableIDAttr_DBID,
 	TableIDAttr_TableID,
 	TableIDAttr_ObjectStart,
 	TableIDAttr_ObjectEnd,
@@ -752,11 +754,11 @@ func SyncTableIDBatch(
 				continue
 			}
 			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
-				panic("logic error")
+				continue
 			}
-			vector.AppendFixed(bat.Vecs[0], tableIDs[i], false, mp)
-			vector.AppendFixed(bat.Vecs[1], accountIDs[i], false, mp)
-			vector.AppendFixed(bat.Vecs[2], dbIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[0], accountIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[1], dbIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[2], tableIDs[i], false, mp)
 			vector.AppendFixed(bat.Vecs[3], starts[i], false, mp)
 			vector.AppendFixed(bat.Vecs[4], ends[i], false, mp)
 		}
