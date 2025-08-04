@@ -69,7 +69,9 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 
 	bat.SetRowCount(bat.Vecs[0].Length())
 
-	writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
+	writer := colexec.NewCNS3TombstoneWriter(
+		proc.Mp(), proc.GetFileService(), types.T_int32.ToType(), -1,
+	)
 
 	err := writer.Write(ctx, bat)
 	require.NoError(t, err)

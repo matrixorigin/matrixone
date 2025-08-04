@@ -113,7 +113,7 @@ func TestLocalDatasource_ApplyWorkspaceFlushedS3Deletes(t *testing.T) {
 	int32Type := types.T_int32.ToType()
 	var tombstoneRowIds []types.Rowid
 	for i := 0; i < 3; i++ {
-		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type)
+		writer := colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, int32Type, -1)
 		require.NoError(t, err)
 
 		bat := readutil.NewCNTombstoneBatch(
