@@ -654,29 +654,38 @@ func prepareTNMeta(
 }
 
 const (
-	TableIDAttr_TableID = "table_id"
-	TableIDAttr_Start   = "start"
-	TableIDAttr_End     = "end"
+	TableIDAttr_Account     = "account"
+	TableIDAttr_DBID        = "db_id"
+	TableIDAttr_TableID     = "table_id"
+	TableIDAttr_ObjectStart = "object_start"
+	TableIDAttr_ObjectEnd   = "object_end"
+)
+
+const (
+	CKPTableIDBatch_SpecialTableID = 0
 )
 
 var TableIDAttrs = []string{
 	TableIDAttr_TableID,
-	TableIDAttr_Start,
-	TableIDAttr_End,
+	TableIDAttr_ObjectStart,
+	TableIDAttr_ObjectEnd,
 }
 
 var TableIDTypes = []types.Type{
+	types.T_uint32.ToType(),
+	types.T_uint64.ToType(),
 	types.T_uint64.ToType(),
 	types.T_TS.ToType(),
 	types.T_TS.ToType(),
 }
-var TableIDSeqnums = []uint16{0, 1, 2}
+var TableIDSeqnums = []uint16{0, 1, 2, 3, 4}
 
 func SyncTableIDBatch(
 	ctx context.Context,
 	start, end types.TS,
 	ttl time.Duration,
 	ckpLocation objectio.Location,
+	ckpVersion uint32,
 	prevTableIDLocation objectio.Location,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
@@ -708,40 +717,149 @@ func SyncTableIDBatch(
 
 		minTS := types.BuildTS(end.Physical()-ttl.Nanoseconds(), 0)
 
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[0])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[1])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[2])
+		accountIDs := vector.MustFixedColNoTypeCheck[uint32](preTableIDBatch.Vecs[0])
+		dbIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[1])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[4])
+
+		tableBatchStart := types.MaxTs()
+		tableBatchEnd := types.TS{}
+		for i := 0; i < preTableIDBatch.RowCount(); i++ {
+			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
+				tableBatchStart = starts[i]
+				tableBatchEnd = ends[i]
+				break
+			}
+		}
+
+		if !ckpLocation.IsEmpty() {
+			tableBatchEnd = end
+		}
+
+		if tableBatchStart.LT(&minTS) {
+			tableBatchStart = minTS
+		}
+
+		vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+		vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+		vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+		vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
+		vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
+
 		for i := 0; i < preTableIDBatch.RowCount(); i++ {
 			if ends[i].LT(&minTS) {
 				continue
 			}
+			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
+				panic("logic error")
+			}
 			vector.AppendFixed(bat.Vecs[0], tableIDs[i], false, mp)
-			vector.AppendFixed(bat.Vecs[1], starts[i], false, mp)
-			vector.AppendFixed(bat.Vecs[2], ends[i], false, mp)
+			vector.AppendFixed(bat.Vecs[1], accountIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[2], dbIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[3], starts[i], false, mp)
+			vector.AppendFixed(bat.Vecs[4], ends[i], false, mp)
 		}
 	}
 
 	if !ckpLocation.IsEmpty() {
-		ckpMetaVecs := containers.NewVectors(1)
-		var metaRelease func()
-		if _, metaRelease, err = ioutil.LoadColumnsData(
-			ctx,
-			[]uint16{0},
-			[]types.Type{types.T_uint64.ToType()},
-			fs,
-			ckpLocation,
-			ckpMetaVecs,
-			mp,
-			0,
-		); err != nil {
+		reader := NewCKPReader(ckpVersion, ckpLocation, common.CheckpointAllocator, fs)
+		if err = reader.ReadMeta(ctx); err != nil {
 			return
 		}
-		defer metaRelease()
-		tableIDVec := ckpMetaVecs[0]
-		tables := vector.MustFixedColNoTypeCheck[uint64](&tableIDVec)
-		vector.AppendFixedList(bat.Vecs[0], tables, nil, mp)
-		vector.AppendMultiFixed(bat.Vecs[1], start, false, len(tables), mp)
-		vector.AppendMultiFixed(bat.Vecs[2], end, false, len(tables), mp)
+
+		type tableInfo struct {
+			account uint32
+			dbid    uint64
+			start   types.TS
+			end     types.TS
+		}
+		tableInfofs := make(map[uint64]*tableInfo)
+		reader.ForEachRow(
+			ctx,
+			func(
+				account uint32,
+				dbid uint64,
+				tid uint64,
+				objectType int8,
+				objectStats objectio.ObjectStats,
+				create, delete types.TS,
+				rowID types.Rowid,
+			) error {
+				commitTS := create
+				if !delete.IsEmpty() {
+					commitTS = delete
+				}
+				info, ok := tableInfofs[tid]
+				if !ok {
+					info = &tableInfo{
+						account: account,
+						dbid:    dbid,
+						start:   commitTS,
+						end:     commitTS,
+					}
+					tableInfofs[tid] = info
+				}
+				if objectStats.GetAppendable() {
+					// New data may be inserted into the appendable object (aobj)
+					// at any time between its create and delete timestamps.
+					var aobjStart, aobjEnd types.TS
+					if delete.IsEmpty() {
+						if start.GT(&create) {
+							aobjStart = start
+						} else {
+							aobjStart = create
+						}
+						aobjEnd = end
+					} else {
+						if start.GT(&create) {
+							aobjStart = start
+						} else {
+							aobjStart = create
+						}
+						if end.LT(&delete) {
+							aobjEnd = end
+						} else {
+							aobjEnd = delete
+						}
+					}
+					if info.start.GT(&aobjStart) {
+						info.start = aobjStart
+					}
+					if info.end.LT(&aobjEnd) {
+						info.end = aobjEnd
+					}
+				} else {
+					if info.start.GT(&commitTS) {
+						info.start = commitTS
+					}
+					if info.end.LT(&commitTS) {
+						info.end = commitTS
+					}
+				}
+				return nil
+			},
+		)
+
+		if prevTableIDLocation.IsEmpty() {
+			vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+			vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+			vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+			vector.AppendFixed(bat.Vecs[3], start, false, mp)
+			vector.AppendFixed(bat.Vecs[4], end, false, mp)
+		}
+
+		for tid, info := range tableInfofs {
+			if tid == CKPTableIDBatch_SpecialTableID {
+				panic("logic error")
+			}
+			vector.AppendFixed(bat.Vecs[0], info.account, false, mp)
+			vector.AppendFixed(bat.Vecs[1], info.dbid, false, mp)
+			vector.AppendFixed(bat.Vecs[2], tid, false, mp)
+			vector.AppendFixed(bat.Vecs[3], info.start, false, mp)
+			vector.AppendFixed(bat.Vecs[4], info.end, false, mp)
+		}
+
 	}
 
 	bat.SetRowCount(bat.Vecs[0].Length())
