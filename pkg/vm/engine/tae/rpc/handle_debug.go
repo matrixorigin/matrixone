@@ -234,7 +234,7 @@ func getChangedListFromCheckpoints(
 	var ckp *checkpoint.CheckpointEntry
 	maxICKP := h.GetDB().BGCheckpointRunner.MaxIncrementalCheckpoint()
 	maxGCKP := h.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
-	if maxICKP == nil && maxICKP == nil {
+	if maxICKP == nil && maxGCKP == nil {
 		return
 	}
 	if maxICKP == nil {
