@@ -87,7 +87,7 @@ func TestSetStatsCNCreated(t *testing.T) {
 	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 	require.NoError(t, err)
 
-	s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+	s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 	err = s3writer.Write(ctx, bat)
 	require.NoError(t, err)
@@ -485,7 +485,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 		require.NoError(t, err)
 
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 		s, err := s3writer.Sync(ctx)
 		require.NoError(t, err)
@@ -499,7 +499,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		proc := testutil.NewProc(t)
 		ctx := proc.Ctx
 
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), proc.GetFileService(), types.T_int32.ToType(), -1)
 		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
 
@@ -517,7 +517,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 		require.NoError(t, err)
 
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 		err = s3writer.Write(ctx, bat)
 		require.NoError(t, err)
@@ -557,7 +557,7 @@ func TestS3Writer_SortAndSync(t *testing.T) {
 
 		fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
 		require.NoError(t, err)
-		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType())
+		s3writer := NewCNS3TombstoneWriter(proc.Mp(), fs, types.T_int32.ToType(), -1)
 
 		err = s3writer.Write(ctx, bat2)
 		require.NoError(t, err)
