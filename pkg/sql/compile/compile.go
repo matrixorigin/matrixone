@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -1494,7 +1495,7 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 	if !param.Parallel {
 		return false, false
 	}
-	if param.Local || external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+	if param.Local || crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
 		return false, true
 	}
 	return true, true
