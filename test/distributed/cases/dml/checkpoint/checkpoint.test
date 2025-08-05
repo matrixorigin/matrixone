@@ -45,6 +45,9 @@ select * from t {snapshot = 'snapshot01'};
 drop snapshot snapshot01;
 
 -- @separator:table
+select mo_ctl('dn','DiskCleaner','force_gc');
+
+-- @separator:table
 select mo_ctl('dn','DiskCleaner','stop_gc');
 -- @separator:table
 select mo_ctl('dn','DiskCleaner','start_gc');
