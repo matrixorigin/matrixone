@@ -377,5 +377,5 @@ drop database test06;
 drop snapshot sp07;
 drop account acc01;
 drop account acc02;
-
+drop account acc03;
 
