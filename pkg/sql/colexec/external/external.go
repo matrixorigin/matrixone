@@ -15,13 +15,8 @@
 package external
 
 import (
-	"archive/tar"
 	"bufio"
 	"bytes"
-	"compress/bzip2"
-	"compress/flate"
-	"compress/gzip"
-	"compress/zlib"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,13 +28,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pierrec/lz4/v4"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -52,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
@@ -343,43 +336,21 @@ func FilterFileList(ctx context.Context, node *plan.Node, proc *process.Process,
 }
 
 func readFile(param *ExternalParam, proc *process.Process) (io.ReadCloser, error) {
-	if param.Extern.ScanType == tree.INLINE {
-		return io.NopCloser(bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))), nil
+	var fileOffsets []int64
+	var fileSizeMax int64 = math.MaxInt64
+	if param.Extern.ScanType == tree.INLINE || param.Extern.Local {
+		return crt.GetIOReadCloser(proc, param.Extern, param.Extern.Data, fileOffsets, fileSizeMax)
 	}
-	if param.Extern.Local {
-		return io.NopCloser(proc.GetLoadLocalReader()), nil
-	}
-	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
-	if err != nil {
-		return nil, err
-	}
-	var r io.ReadCloser
-	vec := fileservice.IOVector{
-		FilePath: readPath,
-		Entries: []fileservice.IOEntry{
-			0: {
-				Offset:            param.Extern.FileStartOff,
-				Size:              -1,
-				ReadCloserForRead: &r,
-			},
-		},
-	}
+
+	// adjust read offset for parallel load.
 	if 2*param.Idx >= len(param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset) {
 		return nil, nil
 	}
 	param.FileOffset = param.FileOffsetTotal[param.Fileparam.FileIndex-1].Offset[2*param.Idx : 2*param.Idx+2]
-	if param.Extern.Parallel {
-		vec.Entries[0].Offset = param.FileOffset[0]
-		vec.Entries[0].Size = param.FileOffset[1] - param.FileOffset[0]
-	}
-	if vec.Entries[0].Size == 0 || vec.Entries[0].Offset >= param.FileSize[param.Fileparam.FileIndex-1] {
-		return nil, nil
-	}
-	err = fs.Read(param.Ctx, &vec)
-	if err != nil {
-		return nil, err
-	}
-	return r, nil
+	fileOffsets = param.FileOffset
+	fileSizeMax = param.FileSize[param.Fileparam.FileIndex-1]
+
+	return crt.GetIOReadCloser(proc, param.Extern, param.Fileparam.Filepath, fileOffsets, fileSizeMax)
 }
 
 func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCols []*plan.ColDef) ([]int64, error) {
@@ -734,76 +705,6 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 	return true
 }
 
-func GetCompressType(param *tree.ExternParam, filepath string) string {
-	if param.CompressType != "" && param.CompressType != tree.AUTO {
-		return param.CompressType
-	}
-
-	filepath = strings.ToLower(filepath)
-
-	switch {
-	case strings.HasSuffix(filepath, ".tar.gz") || strings.HasSuffix(filepath, ".tar.gzip"):
-		return tree.TAR_GZ
-	case strings.HasSuffix(filepath, ".tar.bz2") || strings.HasSuffix(filepath, ".tar.bzip2"):
-		return tree.TAR_BZ2
-	case strings.HasSuffix(filepath, ".gz") || strings.HasSuffix(filepath, ".gzip"):
-		return tree.GZIP
-	case strings.HasSuffix(filepath, ".bz2") || strings.HasSuffix(filepath, ".bzip2"):
-		return tree.BZIP2
-	case strings.HasSuffix(filepath, ".lz4"):
-		return tree.LZ4
-	default:
-		return tree.NOCOMPRESS
-	}
-}
-
-func getUnCompressReader(param *tree.ExternParam, filepath string, r io.ReadCloser) (io.ReadCloser, error) {
-	switch strings.ToLower(GetCompressType(param, filepath)) {
-	case tree.NOCOMPRESS:
-		return r, nil
-	case tree.GZIP, tree.GZ:
-		return gzip.NewReader(r)
-	case tree.BZIP2, tree.BZ2:
-		return io.NopCloser(bzip2.NewReader(r)), nil
-	case tree.FLATE:
-		return flate.NewReader(r), nil
-	case tree.ZLIB:
-		return zlib.NewReader(r)
-	case tree.LZ4:
-		return io.NopCloser(lz4.NewReader(r)), nil
-	case tree.LZW:
-		return nil, moerr.NewInternalErrorf(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
-	case tree.TAR_GZ:
-		gzipReader, err := gzip.NewReader(r)
-		if err != nil {
-			return nil, err
-		}
-		return getTarReader(param.Ctx, gzipReader)
-	case tree.TAR_BZ2:
-		return getTarReader(param.Ctx, bzip2.NewReader(r))
-	default:
-		return nil, moerr.NewInternalErrorf(param.Ctx, "the compress type '%s' is not support now", param.CompressType)
-	}
-}
-
-func getTarReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
-	tarReader := tar.NewReader(r)
-	// move to first file
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			return nil, moerr.NewInternalError(ctx, "failed to decompress the file, no available files found")
-		}
-		if err != nil {
-			return nil, err
-		}
-		if !header.FileInfo().IsDir() && !strings.HasPrefix(header.FileInfo().Name(), ".") {
-			break
-		}
-	}
-	return io.NopCloser(tarReader), nil
-}
-
 func makeType(typ *plan.Type, flag bool) types.Type {
 	if flag {
 		return types.New(types.T_varchar, 0, 0)
@@ -861,11 +762,8 @@ func getMOCSVReader(param *ExternalParam, proc *process.Process) (*ParseLineHand
 	if err != nil || param.reader == nil {
 		return nil, err
 	}
-	param.reader, err = getUnCompressReader(param.Extern, param.Fileparam.Filepath, param.reader)
-	if err != nil {
-		if err == io.EOF {
-			return nil, nil
-		}
+	param.reader, err = crt.GetUnCompressReader(proc, param.Extern.CompressType, param.Fileparam.Filepath, param.reader)
+	if err != nil || param.reader == nil {
 		return nil, err
 	}
 

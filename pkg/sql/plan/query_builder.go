@@ -4982,6 +4982,10 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 		nodeId, err = builder.buildIvfCreate(tbl, ctx, exprs, children)
 	case "ivf_search":
 		nodeId, err = builder.buildIvfSearch(tbl, ctx, exprs, children)
+	case "parse_jsonl_data":
+		nodeId, err = builder.buildParseJsonlData(tbl, ctx, exprs, children)
+	case "parse_jsonl_file":
+		nodeId, err = builder.buildParseJsonlFile(tbl, ctx, exprs, children)
 	default:
 		err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 	}
