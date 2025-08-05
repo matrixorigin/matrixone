@@ -359,6 +359,10 @@ func MakeSnapshotAndPitrFineFilter(
 					if !logtail.ObjectIsSnapshotRefers(
 						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
 					) {
+						if iscpTables == nil {
+							bm.Add(uint64(i))
+							continue
+						}
 						if iscpTS, ok := iscpTables[entry.table]; ok {
 							if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
 								if (!entry.dropTS.IsEmpty() && entry.dropTS.LT(&iscpTS)) ||
@@ -384,6 +388,10 @@ func MakeSnapshotAndPitrFineFilter(
 			if !logtail.ObjectIsSnapshotRefers(
 				&stats, pitr, &createTS, &deleteTS, snapshots,
 			) {
+				if iscpTables == nil {
+					bm.Add(uint64(i))
+					continue
+				}
 				if iscpTS, ok := iscpTables[tableID]; ok {
 					if stats.GetCNCreated() || stats.GetAppendable() {
 						if (deleteTS.IsEmpty() && deleteTS.LT(&iscpTS)) ||

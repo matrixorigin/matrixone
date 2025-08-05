@@ -115,6 +115,9 @@ type checkpointCleaner struct {
 		snapshotMeta *logtail.SnapshotMeta
 		replayDone   bool
 	}
+
+	// iscpTablesFunc is an optional function to provide the ISCP tables for testing.
+	iscpTablesFunc func() map[uint64]types.TS
 }
 
 func WithCanGCCacheSize(
@@ -159,6 +162,12 @@ func WithGCCheckpointOption(enable bool) CheckpointCleanerOption {
 func WithCheckOption(enable bool) CheckpointCleanerOption {
 	return func(e *checkpointCleaner) {
 		e.options.checkEnabled.Store(enable)
+	}
+}
+
+func WithISCPTablesFunc(f func() map[uint64]types.TS) CheckpointCleanerOption {
+	return func(c *checkpointCleaner) {
+		c.iscpTablesFunc = f
 	}
 }
 
@@ -1850,8 +1859,8 @@ func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 }
 
 func (c *checkpointCleaner) ISCPTables() map[uint64]types.TS {
-	mock := make(map[uint64]types.TS)
-	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	mock[1] = ts
-	return mock
+	if c.iscpTablesFunc != nil {
+		return c.iscpTablesFunc()
+	}
+	return nil
 }
