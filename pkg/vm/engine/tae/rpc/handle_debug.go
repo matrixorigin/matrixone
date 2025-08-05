@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"slices"
 	"strconv"
 	"strings"
@@ -569,6 +572,46 @@ func (h *Handle) HandleDiskCleaner(
 		return
 	case cmd_util.StartGC:
 		err = h.db.Controller.SwitchTxnMode(ctx, 4, "")
+		return
+	case cmd_util.ForceGC:
+		selector := clusterservice.NewSelectAll()
+		client := h.client
+		maxTS := types.MaxTs()
+		minTS := maxTS
+		var reqError error
+		clusterservice.GetMOCluster(client.ServiceID()).GetCNService(
+			selector,
+			func(cn metadata.CNService) bool {
+				mintsReq := client.NewRequest(querypb.CmdMethod_MinTimestamp)
+				mintsCtx, cancel := context.WithTimeoutCause(ctx, time.Second*10,
+					moerr.NewInternalError(ctx, "Get MinTimestamp"))
+				defer cancel()
+
+				mintsResp, mintsErr := client.SendMessage(mintsCtx, cn.QueryAddress, mintsReq)
+				if mintsErr != nil {
+					reqError = moerr.AttachCause(mintsCtx, mintsErr)
+					return false
+				}
+				ts := types.BuildTS(mintsResp.MinTimestampResponse.MinTimestamp.PhysicalTime,
+					mintsResp.MinTimestampResponse.MinTimestamp.LogicalTime)
+				if !ts.IsEmpty() && ts.LT(&maxTS) && ts.LT(&minTS) {
+					minTS = ts
+				}
+				return false
+			})
+		if reqError != nil {
+			err = reqError
+			return
+		}
+		if minTS.Equal(&maxTS) {
+			return
+		}
+		histroyRetention := time.Now().UTC().UnixNano() - minTS.Physical()
+		err = h.db.ForceGlobalCheckpoint(ctx, minTS, time.Duration(histroyRetention))
+		if err != nil {
+			return
+		}
+		err = h.db.DiskCleaner.ForceGC(ctx, &minTS)
 		return
 	case cmd_util.AddChecker:
 		break
