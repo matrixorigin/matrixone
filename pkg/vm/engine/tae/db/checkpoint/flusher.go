@@ -540,30 +540,64 @@ func (flusher *flushImpl) fireFlushTabletail(
 		return nil
 	}
 
-	// freeze all append
-	scopes := make([]common.ID, 0, len(metas))
-	for _, meta := range metas {
-		if !meta.GetObjectData().PrepareCompact() {
-			logutil.Info("[FlushTabletail] data prepareCompact false", zap.String("table", tableDesc), zap.String("obj", meta.ID().String()))
-			return moerr.GetOkExpectedEOB()
-		}
-		scopes = append(scopes, *meta.AsCommonID())
-	}
-	for _, meta := range tombstoneMetas {
-		if !meta.GetObjectData().PrepareCompact() {
-			logutil.Info("[FlushTabletail] tomb prepareCompact false", zap.String("table", tableDesc), zap.String("obj", meta.ID().String()))
-			return moerr.GetOkExpectedEOB()
-		}
-		scopes = append(scopes, *meta.AsCommonID())
+	if len(metas) == 0 && len(tombstoneMetas) > 0 {
+		metas = append(metas, nil) // make it a non-empty chunk
 	}
 
-	factory := jobs.FlushTableTailTaskFactory(metas, tombstoneMetas, flusher.rt)
-	if _, err := flusher.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.FlushTableTailTask, scopes, factory); err != nil {
-		if err != tasks.ErrScheduleScopeConflict {
-			logutil.Error("[FlushTabletail] Sched Failure", zap.String("table", tableDesc), zap.Error(err))
+	metaChunks := slices.Chunk(metas, 400)
+	firstChunk := true
+
+nextChunk:
+	for chunk := range metaChunks {
+		if len(chunk) == 1 && chunk[0] == nil {
+			chunk = chunk[:0] // remove the placeholder
 		}
-		return moerr.GetOkExpectedEOB()
+		scopes := make([]common.ID, 0, len(chunk))
+		for _, meta := range chunk {
+			if !meta.GetObjectData().PrepareCompact() {
+				logutil.Info("[FlushTabletail] data prepareCompact false",
+					zap.String("table", tableDesc),
+					zap.String("obj", meta.ID().String()),
+				)
+				break nextChunk
+			}
+			scopes = append(scopes, *meta.AsCommonID())
+		}
+		if firstChunk {
+			for _, meta := range tombstoneMetas {
+				if !meta.GetObjectData().PrepareCompact() {
+					logutil.Info("[FlushTabletail] tomb prepareCompact false",
+						zap.String("table", tableDesc),
+						zap.String("obj", meta.ID().String()),
+					)
+					// As we treat tombstone as a monolithic chunk,
+					// skip this fire and wait for the next run if freeze fails.
+					return moerr.GetOkExpectedEOB()
+				}
+				scopes = append(scopes, *meta.AsCommonID())
+			}
+		}
+		var factory tasks.TxnTaskFactory
+		if firstChunk {
+			factory = jobs.FlushTableTailTaskFactory(chunk, tombstoneMetas, flusher.rt)
+			firstChunk = false
+		} else {
+			factory = jobs.FlushTableTailTaskFactory(chunk, nil, flusher.rt)
+		}
+
+		_, err := flusher.rt.Scheduler.ScheduleMultiScopedTxnTask(
+			nil, tasks.FlushTableTailTask, scopes, factory)
+		if err != nil {
+			if err != tasks.ErrScheduleScopeConflict {
+				logutil.Error("[FlushTabletail] Sched Failure",
+					zap.String("table", tableDesc),
+					zap.Error(err),
+				)
+			}
+			return moerr.GetOkExpectedEOB()
+		}
 	}
+
 	return nil
 }
 
