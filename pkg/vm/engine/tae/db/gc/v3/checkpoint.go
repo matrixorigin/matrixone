@@ -1203,6 +1203,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		accountSnapshots,
 		pitrs,
 		c.mutation.snapshotMeta,
+		c.ISCPTables(),
 		memoryBuffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1361,6 +1362,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		accoutSnapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		c.ISCPTables(),
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1383,6 +1385,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		accoutSnapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		c.ISCPTables(),
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1844,4 +1847,11 @@ func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
 	return c.mutation.snapshotMeta.GetTablePK(tid)
+}
+
+func (c *checkpointCleaner) ISCPTables() map[uint64]types.TS {
+	mock := make(map[uint64]types.TS)
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	mock[1] = ts
+	return mock
 }
