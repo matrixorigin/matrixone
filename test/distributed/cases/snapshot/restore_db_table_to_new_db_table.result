@@ -230,3 +230,227 @@ system_metrics
 drop database db01;
 drop database db02;
 drop snapshot sp03;
+drop account if exists test_tenant_1;
+create account test_tenant_1 admin_name 'test_account' identified by '111';
+drop database if exists republication01;
+create database republication01;
+use republication01;
+create publication publication01 database republication01 account test_tenant_1 comment 'republish';
+create table repub01(col1 int);
+insert into repub01 values (1);
+drop database if exists resub01;
+create database resub01 from sys publication publication01;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication01    sys    republication01    *    republish    2025-08-05 17:46:55    resub01    2025-08-05 17:46:55    0
+drop snapshot if exists sp04;
+create snapshot sp04 for account;
+create database test_pub clone republication01 {snapshot = 'sp04'};
+show publications;
+publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+publication01    republication01    *    test_tenant_1    test_tenant_1    2025-08-05 17:46:55    null    republish
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication01    sys    republication01    *    republish    2025-08-05 17:46:55    resub01    2025-08-05 17:46:55    0
+drop database resub01;
+drop publication publication01;
+drop database republication01;
+drop database test_pub;
+drop snapshot sp04;
+drop database if exists republication01;
+create database republication01;
+use republication01;
+create publication publication01 database republication01 account test_tenant_1 comment 'republish';
+create table repub01(col1 int);
+insert into repub01 values (1);
+drop database if exists resub01;
+create database resub01 from sys publication publication01;
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication01    sys    republication01    *    republish    2025-08-05 17:46:56    resub01    2025-08-05 17:46:56    0
+drop snapshot if exists sp05;
+create snapshot sp05 for account;
+create database test_sub clone resub01 {snapshot = 'sp05'};
+show subscriptions all;
+pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
+publication01    sys    republication01    *    republish    2025-08-05 17:46:56    resub01    2025-08-05 17:46:56    0
+drop database test_sub;
+drop database resub01;
+drop snapshot sp05;
+drop publication publication01;
+drop database republication01;
+drop database if exists db02;
+
+create database db02;
+
+use db02;
+
+SET experimental_ivf_index = 1;
+
+create table vector_index_01(a int primary key, b vecf32(128),c int,key c_k(c));
+
+insert into vector_index_01 values(9774 ,"[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]",3),(9775,"[0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]",5),(9776,"[10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]",3);
+
+insert into vector_index_01 values(9777, " [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]",4),(9778,"[41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]",4);
+
+create index idx01 using ivfflat on vector_index_01(b) lists=5 op_type "vector_l2_ops";
+
+create table vector_index_04(a int primary key, b vecf32(3),c vecf32(4));
+
+insert into vector_index_04 values(1,"[56,23,6]","[0.25,0.14,0.88,0.0001]"),(2,"[77,45,3]","[1.25,5.25,8.699,4.25]"),(3,"[8,56,3]","[9.66,5.22,1.22,7.02]");
+
+drop publication if exists pub02;
+
+create publication pub02 database db02 table vector_index_01, vector_index_04 account test_tenant_1;
+
+drop snapshot if exists sp05;
+
+create snapshot sp05 for account;
+
+delete from vector_index_01 where a = 9777;
+
+delete from vector_index_04 where a = 2;
+
+create table test_pub01.pub_table01 clone db02.vector_index_01 {snapshot = 'sp05'};
+
+create table test_pub01.pub_table02 clone db02.vector_index_04 {snapshot = 'sp05'};
+
+show publications;
+
+drop database if exists resub01;
+
+create database resub01 from sys publication publication01;
+
+show subscriptions all;
+
+drop database resub01;
+
+drop publication pub02;
+
+drop database db02;
+
+drop snapshot sp05;
+
+drop account test_tenant_1;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+drop account if exists acc03;
+create account acc03 admin_name = 'test_account' identified by '111';
+drop database if exists test05;
+create database test05;
+use test05;
+drop table if exists rs01;
+create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
+insert into rs01 values (1, null, 'database');
+insert into rs01 values (2, 38291.32132, 'database');
+insert into rs01 values (3, null, 'database management system');
+insert into rs01 values (4, 10, null);
+insert into rs01 values (1, -321.321, null);
+insert into rs01 values (2, -1, null);
+select count(*) from rs01;
+count(*)
+6
+drop snapshot if exists sp07;
+create snapshot sp07 for account;
+delete from rs01 where col1 = 1;
+create database test02 clone test05 {snapshot = 'sp01'} to account acc01;
+internal error: find 0 snapshot records by name(sp01), expect only 1
+create table test02.rs02 clone test05.rs01 {snapshot = 'sp01'} to account acc01;
+internal error: find 0 snapshot records by name(sp01), expect only 1
+create table test03.rs02 clone test05.rs01 {snapshot = 'sp01'} to account acc01;
+
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+use test02;
+Unknown database test02
+select * from rs02;
+No database selected
+select count(*) from rs02;
+No database selected
+use test03;
+
+show tables;
+
+select * from rs02;
+
+drop database test03;
+
+drop database test02;
+Can't drop database 'test02'; database doesn't exist
+drop database test05;
+drop snapshot sp07;
+drop database if exists test06;
+create database test06;
+use test06;
+drop table if exists pri01;
+create table pri01(
+deptno int unsigned comment '部门编号',
+dname varchar(15) comment '部门名称',
+loc varchar(50)  comment '部门所在位置',
+primary key(deptno)
+) comment='部门表';
+insert into pri01 values (10,'ACCOUNTING','NEW YORK');
+insert into pri01 values (20,'RESEARCH','DALLAS');
+insert into pri01 values (30,'SALES','CHICAGO');
+insert into pri01 values (40,'OPERATIONS','BOSTON');
+drop table if exists aff01;
+create table aff01(
+empno int unsigned auto_increment COMMENT '雇员编号',
+ename varchar(15) comment '雇员姓名',
+job varchar(10) comment '雇员职位',
+mgr int unsigned comment '雇员对应的领导的编号',
+hiredate date comment '雇员的雇佣日期',
+sal decimal(7,2) comment '雇员的基本工资',
+comm decimal(7,2) comment '奖金',
+deptno int unsigned comment '所在部门',
+primary key(empno),
+constraint `c1` foreign key (deptno) references pri01 (deptno)
+);
+insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
+drop snapshot if exists sp07;
+create snapshot sp07 for account;
+create database test04 clone test06 {snapshot = 'sp07'} to account acc02;
+
+create table test05.pri01 clone test06.pri01 {snapshot = 'sp07'} to account acc02;
+
+create table test06.aff01 clone test06.aff01 {snapshot = 'sp07'} to account acc02;
+
+use test04;
+
+show tables;
+
+show create table aff01;
+
+show create table pri01;
+
+use test05;
+
+show create table test05;
+
+use test06;
+
+select * from aff01;
+
+show create table aff01;
+
+drop database test04;
+
+drop database test05;
+
+drop database test06;
+
+drop database test06;
+drop snapshot sp07;
+drop account acc01;
+drop account acc02;
