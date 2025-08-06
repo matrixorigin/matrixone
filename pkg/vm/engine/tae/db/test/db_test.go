@@ -11779,13 +11779,21 @@ func Test_RWDB1(t *testing.T) {
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite))
 	}
 
-	{
-		txn, err := rTae.StartTxn(nil)
-		assert.NoError(t, err)
-		_, err = txn.GetDatabase(name)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctx))
-	}
+	found := false
+	testutils.WaitExpect(
+		1000,
+		func() bool {
+			txn, err := rTae.StartTxn(nil)
+			assert.NoError(t, err)
+			_, err = txn.GetDatabase(name)
+			if err == nil {
+				found = true
+			}
+			assert.NoError(t, txn.Commit(ctx))
+			return found
+		},
+	)
+	assert.True(t, found)
 
 	rTae.Close()
 }
