@@ -230,6 +230,18 @@ func TestAppend1(t *testing.T) {
 		assert.Error(t, err)
 		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
 
+		_, err = offlineTxn.GetStore().CreateObject(0, 0, false)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		_, err = offlineTxn.GetStore().CreateNonAppendableObject(0, 0, false, nil)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		err = offlineTxn.GetStore().SoftDeleteObject(false, nil)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
 		database, err := offlineTxn.GetDatabase(testutil.DefaultTestDB)
 		assert.NoError(t, err)
 		dbId := database.GetID()
@@ -241,9 +253,26 @@ func TestAppend1(t *testing.T) {
 		assert.Error(t, err)
 		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
 
+		_, err = database.TruncateByName("")
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+		_, err = database.TruncateByID(0, 0)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
 		relation, err := database.GetRelationByName(schema.Name)
 		assert.NoError(t, err)
 		err = relation.Append(context.Background(), bats[0])
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		_, err = database.CreateRelation(nil)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+		_, err = database.CreateRelationWithID(nil, 0)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+		_, err = database.DropRelationByName("")
 		assert.Error(t, err)
 		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
 
