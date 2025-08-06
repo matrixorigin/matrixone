@@ -226,6 +226,9 @@ func (h *txnRelation) GetValueByFilter(
 }
 
 func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter, col uint16, v any, isNull bool) (err error) {
+	if err := h.Txn.GetStore().WantWrite("UpdateByFilter"); err != nil {
+		return err
+	}
 	id, row, err := h.table.GetByFilter(ctx, filter)
 	if err != nil {
 		return
@@ -269,6 +272,9 @@ func (h *txnRelation) UpdateByFilter(ctx context.Context, filter *handle.Filter,
 }
 
 func (h *txnRelation) DeleteByFilter(ctx context.Context, filter *handle.Filter) (err error) {
+	if err := h.Txn.GetStore().WantWrite("DeleteByFilter"); err != nil {
+		return err
+	}
 	id, row, err := h.GetByFilter(ctx, filter)
 	if err != nil {
 		return
@@ -277,6 +283,9 @@ func (h *txnRelation) DeleteByFilter(ctx context.Context, filter *handle.Filter)
 }
 
 func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector, pkVec containers.Vector, dt handle.DeleteType) (err error) {
+	if err := h.Txn.GetStore().WantWrite("DeleteByPhyAddrKeys"); err != nil {
+		return err
+	}
 	id := h.table.entry.AsCommonID()
 	return h.Txn.GetStore().DeleteByPhyAddrKeys(
 		id,
@@ -288,6 +297,9 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector, pkVec containe
 
 // Only used by test.
 func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
+	if err := h.Txn.GetStore().WantWrite("DeleteByPhyAddrKey"); err != nil {
+		return err
+	}
 	rid := key.(types.Rowid)
 	bid, row := rid.Decode()
 	id := h.table.entry.AsCommonID()
@@ -305,6 +317,9 @@ func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
 }
 
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteType) error {
+	if err := h.Txn.GetStore().WantWrite("RangeDelete"); err != nil {
+		return err
+	}
 	schema := h.table.GetLocalSchema(false)
 	pkDef := schema.GetPrimaryKey()
 	pkVec := h.table.store.rt.VectorPool.Small.GetVector(&pkDef.Type)
@@ -349,9 +364,15 @@ func (h *txnRelation) GetDB() (handle.Database, error) {
 }
 
 func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) (err error) {
+	if err = h.Txn.GetStore().WantWrite("AlterTable"); err != nil {
+		return
+	}
 	return h.table.AlterTable(ctx, req)
 }
 
 func (h *txnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls, deleteStartOffset uint64) error {
+	if err := h.Txn.GetStore().WantWrite("FillInWorkspaceDeletes"); err != nil {
+		return err
+	}
 	return h.table.FillInWorkspaceDeletes(blkID, view, deleteStartOffset)
 }
