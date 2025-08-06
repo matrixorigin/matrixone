@@ -475,18 +475,21 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		}
 
 		if node.IsRightJoin {
-			break
-		}
+			leftChild := builder.qry.Nodes[node.Children[0]]
+			if leftChild.Stats.Outcnt <= 200000 {
+				return
+			}
+		} else {
+			rightChild := builder.qry.Nodes[node.Children[1]]
+			if rightChild.Stats.Outcnt > 320000 {
+				//dedup join always go hash shuffle, optimize this in the future
+				node.Stats.HashmapStats.Shuffle = true
+				node.Stats.HashmapStats.ShuffleColIdx = 0
+				node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+			}
 
-		rightChild := builder.qry.Nodes[node.Children[1]]
-		if rightChild.Stats.Outcnt > 320000 {
-			//dedup join always go hash shuffle, optimize this in the future
-			node.Stats.HashmapStats.Shuffle = true
-			node.Stats.HashmapStats.ShuffleColIdx = 0
-			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+			return
 		}
-
-		return
 
 	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT:
 
@@ -574,6 +577,15 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
 			node.Stats.HashmapStats.Shuffle = false
+		}
+
+		if node.JoinType == plan.Node_DEDUP && node.IsRightJoin && node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+			rightChild := builder.qry.Nodes[node.Children[1]]
+			rightChild.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
+			rightChild.Stats.HashmapStats.ShuffleColIdx = node.Stats.HashmapStats.ShuffleColIdx
+			rightChild.Stats.HashmapStats.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
+			rightChild.Stats.HashmapStats.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
+			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
 		}
 	}
 }
