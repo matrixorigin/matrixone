@@ -3,13 +3,13 @@ create database test01;
 use test01;
 
 drop table if exists rs01;
-create table rs01 (col1 int, col2 decimal(6), col3 varchar(30));
-insert into rs01 values (1, null, 'database');
-insert into rs01 values (2, 38291.32132, 'database');
-insert into rs01 values (3, null, 'database management system');
-insert into rs01 values (4, 10, null);
-insert into rs01 values (1, -321.321, null);
-insert into rs01 values (2, -1, null);
+create table rs01 (col1 int, col2 decimal(6), col3 varchar(30), col4 float default 11);
+insert into rs01 values (1, null, 'database', 29.001);
+insert into rs01 values (2, 38291.32132, 'database', 327.22);
+insert into rs01 values (3, null, 'database management system', 3283);
+insert into rs01 values (4, 10, null, -219823.1);
+insert into rs01 values (1, -321.321, null, 3829);
+insert into rs01 values (2, -1, null, 2819);
 select count(*) from rs01;
 
 drop snapshot if exists sp01;
@@ -101,6 +101,30 @@ drop database test03;
 drop database test05;
 drop database test06;
 drop snapshot sp02;
+
+
+
+
+drop database if exists db03;
+create database db03;
+use db03;
+create table enum01 (col1 enum('red','blue','green'), col2 blob, col3 json);
+insert into enum01 values ('red', 'abcdef', '{"t1":"a"}');
+insert into enum01 values ('blue', 'abcdef', '{"t2":"a"}');
+insert into enum01 values ('green', 'abcdef', '{"t3":"a"}');
+drop snapshot if exists sp03;
+create snapshot sp03 for account sys;
+truncate enum01;
+create database db04 clone db03 {snapshot = 'sp03'};
+use db04;
+select * from enum01;
+insert into enum01 values ('green', 'abcdef', '{"t4":"a"}');
+select count(*) from enum01;
+show create table enum01;
+desc enum01;
+drop snapshot sp03;
+drop database db03;
+drop database db04;
 
 
 
@@ -491,3 +515,104 @@ create snapshot sp10 for account;
 create database test11 clone test10 {snapshot = 'sp10'} to account acc100;
 drop database test10;
 drop snapshot sp10;
+
+
+
+
+-- restore db to db,  there are multiple tables under the database
+set global lower_case_table_names = 1;
+drop database if exists db10;
+create database db10;
+use db10;
+drop table if exists text_01;
+create table text_01(t1 text,t2 text,t3 text);
+insert into text_01 values ('中文123abcd','',NULL);
+insert into text_01 values ('yef&&190',' wwww ',983);
+insert into text_01 select '',null,'中文';
+insert into text_01 select '123','7834','commmmmmment';
+insert into text_01 values ('789',' 23:50:00','20');
+
+drop table if exists text_02;
+create table text_02 (a float not null, primary key(a));
+insert into text_02 values(-3.402823466E+38),(-1.175494351E-38),(0),(1.175494351E-38),(3.402823466E+38);
+
+drop table if exists numtable;
+create table numtable(id int,fl float, dl double);
+insert into numtable values(1,123456,123456);
+insert into numtable values(2,123.456,123.456);
+insert into numtable values(3,1.234567,1.234567);
+insert into numtable values(4,1.234567891,1.234567891);
+insert into numtable values(5,1.2345678912345678912,1.2345678912345678912);
+
+drop table if exists length02;
+create table length02(col1 binary(255));
+insert into length02 values('ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt');
+insert into length02 values('dehwjqbewbvhrbewrhebwjverguyw432843iuhfkuejwnfjewbhvbewh4gh3jbvrew vnbew rjjrewkfrhjewhrefrewfrwrewf432432r32r432r43rewvrewrfewfrewf432f43fewf4324r3r3rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr');
+select * from length02;
+
+drop table if exists T1;
+create table T1 (a smallint unsigned not null, primary key(a));
+insert into T1 values (65535), (0xFFFC), (65534), (65533);
+
+drop table if exists vtab32;
+create table vtab32(id int primary key auto_increment,`vecf32_3` vecf32(3),`vecf32_5` vecf32(5));
+insert into vtab32(vecf32_3,vecf32_5) values(NULL,NULL);
+
+drop table if exists articles;
+drop table if exists authors;
+create table articles (
+                          id int auto_increment primary key,
+                          title varchar(255),
+                          content text,
+                          author_id int,
+                          fulltext(content)
+);
+create table authors (
+                         id int auto_increment primary key,
+                         name varchar(100)
+);
+insert into authors (name) values ('John Doe'), ('Jane Smith'), ('Alice Johnson');
+insert into articles (title, content, author_id) values
+                                                     ('MO全文索引入门', 'MO全文索引是一种强大的工具，可以帮助你快速检索数据库中的文本数据。', 1),
+                                                     ('深入理解全文索引', '全文索引不仅可以提高搜索效率，还可以通过JOIN操作与其他表结合使用。', 2),
+                                                     ('MO性能优化', '本文将探讨如何优化MO数据库的性能，包括索引优化和查询优化。', 3),
+                                                     ('全文索引与JOIN操作', '全文索引可以与JOIN操作结合使用，以实现跨表的全文搜索。', 1);
+drop snapshot if exists sp10;
+create snapshot sp10 for account;
+
+drop table text_01;
+drop table text_02;
+
+drop snapshot if exists sp11;
+create snapshot sp11 for account;
+
+drop database if exists db11;
+create database db11 clone db10 {snapshot = 'sp10'};
+use db11;
+show tables;
+select * from text_01;
+select * from text_02;
+show create table numtable;
+select count(*) from T1;
+select * from T1 order by a desc;
+delete from articles where id = 1;
+select * from authors;
+
+drop database if exists db12;
+create database db12 clone db10 {snapshot = 'sp11'};
+use db12;
+show tables;
+select * from text_01;
+select * from text_02;
+show create table numtable;
+select count(*) from T1;
+select * from T1 order by a desc;
+delete from articles where id = 1;
+select * from authors;
+
+drop database db10;
+drop database db11;
+drop database db12;
+drop snapshot sp10;
+drop snapshot sp11;
+set global lower_case_table_names = 0;
