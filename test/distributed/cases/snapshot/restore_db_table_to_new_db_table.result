@@ -298,16 +298,16 @@ drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-06 15:20:47    resub01    2025-08-06 15:20:47    0
+publication01    sys    republication01    *    republish    2025-08-06 16:53:12    resub01    2025-08-06 16:53:13    0
 drop snapshot if exists sp04;
 create snapshot sp04 for account;
 create database test_pub clone republication01 {snapshot = 'sp04'};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    republication01    *    test_tenant_1    test_tenant_1    2025-08-06 15:20:47    null    republish
+publication01    republication01    *    test_tenant_1    test_tenant_1    2025-08-06 16:53:12    null    republish
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-06 15:20:47    resub01    2025-08-06 15:20:47    0
+publication01    sys    republication01    *    republish    2025-08-06 16:53:12    resub01    2025-08-06 16:53:13    0
 drop database resub01;
 drop publication publication01;
 drop database republication01;
@@ -323,13 +323,13 @@ drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-06 15:20:47    resub01    2025-08-06 15:20:48    0
+publication01    sys    republication01    *    republish    2025-08-06 16:53:14    resub01    2025-08-06 16:53:14    0
 drop snapshot if exists sp05;
 create snapshot sp05 for account;
 create database test_sub clone resub01 {snapshot = 'sp05'};
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-06 15:20:47    resub01    2025-08-06 15:20:48    0
+publication01    sys    republication01    *    republish    2025-08-06 16:53:14    resub01    2025-08-06 16:53:14    0
 drop database test_sub;
 drop database resub01;
 drop snapshot sp05;
@@ -752,3 +752,4 @@ drop database db11;
 drop database db12;
 drop snapshot sp10;
 drop snapshot sp11;
+drop database test03;

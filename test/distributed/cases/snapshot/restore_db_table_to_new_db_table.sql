@@ -614,3 +614,4 @@ drop database db11;
 drop database db12;
 drop snapshot sp10;
 drop snapshot sp11;
+drop database test03;
