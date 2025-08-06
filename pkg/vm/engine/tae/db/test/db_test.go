@@ -12552,6 +12552,7 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 				assert.Nil(t, err)
 			}
 			wg.Wait()
+			db.DiskCleaner.GetCleaner().EnableGC()
 			testutils.WaitExpect(10000, func() bool {
 				if tae.Wal.GetPenddingCnt() != 0 {
 					return false
