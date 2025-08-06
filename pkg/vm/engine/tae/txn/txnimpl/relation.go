@@ -371,8 +371,5 @@ func (h *txnRelation) AlterTable(ctx context.Context, req *apipb.AlterTableReq) 
 }
 
 func (h *txnRelation) FillInWorkspaceDeletes(blkID types.Blockid, view **nulls.Nulls, deleteStartOffset uint64) error {
-	if err := h.Txn.GetStore().WantWrite("FillInWorkspaceDeletes"); err != nil {
-		return err
-	}
 	return h.table.FillInWorkspaceDeletes(blkID, view, deleteStartOffset)
 }

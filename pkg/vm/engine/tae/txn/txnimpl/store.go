@@ -918,10 +918,6 @@ func (store *txnStore) CleanUp() {
 	}
 }
 func (store *txnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
-	if err := store.WantWrite("FillInWorkspaceDeletes"); err != nil {
-		return err
-	}
-
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
