@@ -224,6 +224,53 @@ func TestAppend1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	tae.CheckRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
+	{
+		offlineTxn := tae.DB.TxnMgr.OpenOfflineTxn(tae.DB.TxnMgr.Now())
+		_, err := offlineTxn.DropDatabase(testutil.DefaultTestDB)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		database, err := offlineTxn.GetDatabase(testutil.DefaultTestDB)
+		assert.NoError(t, err)
+		dbId := database.GetID()
+		_, err = offlineTxn.DropDatabaseByID(dbId)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		_, err = offlineTxn.CreateDatabaseWithCtx(context.Background(), "", "", "", 0)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		relation, err := database.GetRelationByName(schema.Name)
+		assert.NoError(t, err)
+		err = relation.Append(context.Background(), bats[0])
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		err = relation.AlterTable(context.Background(), nil)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		err = relation.DeleteByFilter(context.Background(), nil)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+		err = relation.DeleteByPhyAddrKey(nil)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+		err = relation.DeleteByPhyAddrKeys(nil, nil, handle.DT_Normal)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+		_, err = relation.AddPersistedTombstoneFile(nil, objectio.ObjectStats{})
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+		err = relation.AddDataFiles(context.Background(), nil)
+		assert.Error(t, err)
+		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrOfflineTxnWrite), "err: %v", err)
+
+		assert.True(t, offlineTxn.GetStore().IsOffline())
+		assert.True(t, offlineTxn.GetStore().IsReadonly())
+		assert.NoError(t, offlineTxn.Commit(context.Background()))
+	}
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
