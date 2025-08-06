@@ -77,7 +77,7 @@ type MultiUpdate struct {
 
 	Engine engine.Engine
 
-	getS3WriterFunc          func(id uint64) (*s3WriterDelegate, error)
+	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
 	getFlushableS3WriterFunc func() *s3WriterDelegate
 	addAffectedRowsFunc      func(uint64)
 
