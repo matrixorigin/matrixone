@@ -663,6 +663,8 @@ const (
 
 const (
 	CKPTableIDBatch_SpecialTableID = 0
+
+	BatchRowCountThreshold = 8192
 )
 
 var TableIDAttrs = []string{
@@ -686,70 +688,48 @@ func SyncTableIDBatch(
 	ctx context.Context,
 	start, end types.TS,
 	ttl time.Duration,
+	sinkerThreshold int,
 	ckpLocation objectio.Location,
 	ckpVersion uint32,
-	prevTableIDLocation objectio.Location,
+	prevTableIDLocation objectio.LocationSlice,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) (location objectio.Location, err error) {
-
+) (locations objectio.LocationSlice, err error) {
+	dataFactory := ioutil.NewFSinkerImplFactory(
+		TableIDSeqnums,
+		-1,
+		false,
+		false,
+		0,
+	)
+	sinker := ioutil.NewSinker(
+		-1,
+		TableIDAttrs,
+		TableIDTypes,
+		dataFactory,
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(sinkerThreshold),
+	)
 	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
 	defer bat.Clean(mp)
-	if !prevTableIDLocation.IsEmpty() {
-		preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
-		var release func()
-		if _, release, err = ioutil.LoadColumnsData(
-			ctx,
-			TableIDSeqnums,
-			TableIDTypes,
-			fs,
-			prevTableIDLocation,
-			preTableIDVecs,
-			mp,
-			0,
-		); err != nil {
-			return
-		}
-		defer release()
-		preTableIDBatch := batch.New(TableIDAttrs)
-		for i, vec := range preTableIDVecs {
-			preTableIDBatch.Vecs[i] = &vec
-		}
-		preTableIDBatch.SetRowCount(preTableIDVecs.Rows())
 
-		minTS := types.BuildTS(end.Physical()-ttl.Nanoseconds(), 0)
+	tableBatchStart := types.MaxTs()
+	tableBatchEnd := types.TS{}
+	minTS := types.BuildTS(end.Physical()-ttl.Nanoseconds(), 0)
 
+	consumeFn := func(preTableIDBatch *batch.Batch, release func()) {
 		accountIDs := vector.MustFixedColNoTypeCheck[uint32](preTableIDBatch.Vecs[0])
 		dbIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[1])
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[2])
 		starts := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[3])
 		ends := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[4])
 
-		tableBatchStart := types.MaxTs()
-		tableBatchEnd := types.TS{}
 		for i := 0; i < preTableIDBatch.RowCount(); i++ {
 			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
 				tableBatchStart = starts[i]
 				tableBatchEnd = ends[i]
-				break
 			}
-		}
-
-		if !ckpLocation.IsEmpty() {
-			tableBatchEnd = end
-		}
-
-		if tableBatchStart.LT(&minTS) {
-			tableBatchStart = minTS
-		}
-
-		vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
-		vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
-		vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
-		vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
-		vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
-
-		for i := 0; i < preTableIDBatch.RowCount(); i++ {
 			if ends[i].LT(&minTS) {
 				continue
 			}
@@ -761,7 +741,31 @@ func SyncTableIDBatch(
 			vector.AppendFixed(bat.Vecs[2], tableIDs[i], false, mp)
 			vector.AppendFixed(bat.Vecs[3], starts[i], false, mp)
 			vector.AppendFixed(bat.Vecs[4], ends[i], false, mp)
+			bat.SetRowCount(bat.Vecs[0].Length())
+
+			if bat.RowCount() >= BatchRowCountThreshold {
+				sinker.Write(ctx, bat)
+				bat.CleanOnlyData()
+			}
 		}
+	}
+
+	reader, err := NewSyncTableIDReader(prevTableIDLocation, mp, fs)
+	if err != nil {
+		return
+	}
+	for {
+		var release func()
+		var bat *batch.Batch
+		var isEnd bool
+		release, bat, isEnd, err = reader.Read(ctx)
+		if err != nil {
+			return
+		}
+		if isEnd {
+			break
+		}
+		consumeFn(bat, release)
 	}
 
 	if !ckpLocation.IsEmpty() {
@@ -843,14 +847,6 @@ func SyncTableIDBatch(
 			},
 		)
 
-		if prevTableIDLocation.IsEmpty() {
-			vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
-			vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
-			vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
-			vector.AppendFixed(bat.Vecs[3], start, false, mp)
-			vector.AppendFixed(bat.Vecs[4], end, false, mp)
-		}
-
 		for tid, info := range tableInfofs {
 			if tid == CKPTableIDBatch_SpecialTableID {
 				panic("logic error")
@@ -860,55 +856,51 @@ func SyncTableIDBatch(
 			vector.AppendFixed(bat.Vecs[2], tid, false, mp)
 			vector.AppendFixed(bat.Vecs[3], info.start, false, mp)
 			vector.AppendFixed(bat.Vecs[4], info.end, false, mp)
+			if bat.RowCount() >= BatchRowCountThreshold {
+				sinker.Write(ctx, bat)
+				bat.CleanOnlyData()
+			}
 		}
 
 	}
 
+	if !ckpLocation.IsEmpty() {
+		tableBatchEnd = end
+	}
+
+	if tableBatchStart.LT(&minTS) {
+		tableBatchStart = minTS
+	}
+
+	if prevTableIDLocation.Len() == 0 {
+		tableBatchStart = start
+		tableBatchEnd = end
+	}
+
+	vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+	vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
+	vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
+
 	bat.SetRowCount(bat.Vecs[0].Length())
 
-	segmentid := objectio.NewSegmentid()
-	fileNum := uint16(0)
-	name := objectio.BuildObjectName(segmentid, fileNum)
-	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, nil, false)
-	if err != nil {
+	if err = sinker.Write(ctx, bat); err != nil {
 		return
 	}
-	if _, err = writer.WriteBatch(bat); err != nil {
-		return
-	}
-	var blks []objectio.BlockObject
-	if blks, _, err = writer.Sync(ctx); err != nil {
-		return
-	}
-	location = objectio.BuildLocation(name, blks[0].GetExtent(), 0, blks[0].GetID())
 
-	return
-}
-
-func ReadTableIDBatch(
-	ctx context.Context,
-	location objectio.Location,
-	mp *mpool.MPool,
-	fs fileservice.FileService,
-) (release func(), bat *batch.Batch, err error) {
-
-	preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
-	if _, release, err = ioutil.LoadColumnsData(
-		ctx,
-		TableIDSeqnums,
-		TableIDTypes,
-		fs,
-		location,
-		preTableIDVecs,
-		mp,
-		0,
-	); err != nil {
+	if err = sinker.Sync(ctx); err != nil {
 		return
 	}
-	bat = batch.New(TableIDAttrs)
-	for i, vec := range preTableIDVecs {
-		bat.Vecs[i] = &vec
+
+	files, inMems := sinker.GetResult()
+
+	if len(inMems) > 0 {
+		panic("logic error")
 	}
-	bat.SetRowCount(preTableIDVecs.Rows())
+
+	for _, file := range files {
+		locations.Append(file.ObjectLocation())
+	}
 	return
 }

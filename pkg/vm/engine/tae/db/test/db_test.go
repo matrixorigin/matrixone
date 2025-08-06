@@ -12522,26 +12522,33 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 	for _, e := range entries {
 		t.Logf("%s", e.String())
 		location := e.GetTableIDLocation()
-		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
 		assert.NoError(t, err)
-		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
-		for i := 0; i < bat.RowCount(); i++ {
-			if tableIDs[i] != tableID {
-				continue
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
 			}
-			rowCount++
-			assert.Equal(t, tableID, tableIDs[i])
-			// aobj create ts
-			assert.False(t, starts[i].IsEmpty())
-			// ckp end
-			assert.Equal(t, e.GetEnd(), ends[i])
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				assert.Equal(t, tableID, tableIDs[i])
+				// aobj create ts
+				assert.False(t, starts[i].IsEmpty())
+				// ckp end
+				assert.Equal(t, e.GetEnd(), ends[i])
+			}
+			t.Logf("%s", bat.String())
 		}
 		assert.Equal(t, 1, rowCount)
-		t.Logf("%s", bat.String())
 	}
 	assert.Equal(t, 1, len(entries))
 	ickp1End := entries[0].GetEnd()
@@ -12564,63 +12571,83 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		}
 		t.Logf("%s", e.String())
 		location := e.GetTableIDLocation()
-		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
 		assert.NoError(t, err)
-		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
-		for i := 0; i < bat.RowCount(); i++ {
-			if tableIDs[i] != tableID {
-				continue
+		consumeFn := func(bat *batch.Batch, release func()) {
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				if i == 0 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.False(t, starts[i].IsEmpty())
+					assert.Equal(t, ickp1End, ends[i])
+				}
+				if i == 1 {
+					assert.Equal(t, tableID, tableIDs[i])
+					// ckp start -> aobj deleteAt
+					assert.Equal(t, e.GetStart(), starts[i])
+					assert.False(t, ends[i].IsEmpty())
+				}
 			}
-			rowCount++
-			if i == 0 {
-				assert.Equal(t, tableID, tableIDs[i])
-				assert.False(t, starts[i].IsEmpty())
-				assert.Equal(t, ickp1End, ends[i])
+			t.Logf("%s", bat.String())
+		}
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
 			}
-			if i == 1 {
-				assert.Equal(t, tableID, tableIDs[i])
-				// ckp start -> aobj deleteAt
-				assert.Equal(t, e.GetStart(), starts[i])
-				assert.False(t, ends[i].IsEmpty())
-			}
+			consumeFn(bat, release)
 		}
 		assert.Equal(t, 2, rowCount)
-		t.Logf("%s", bat.String())
 	}
 
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	for _, e := range entries {
 		t.Logf("%s", e.String())
 		location := e.GetTableIDLocation()
-		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
 		assert.NoError(t, err)
-		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
-		for i := 0; i < bat.RowCount(); i++ {
-			if tableIDs[i] != tableID {
-				continue
+		consumeFn := func(bat *batch.Batch, release func()) {
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				if i == 0 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.False(t, starts[i].IsEmpty())
+					assert.Equal(t, ickp1End, ends[i])
+				}
+				if i == 1 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.Equal(t, e.GetStart(), starts[i])
+					assert.False(t, ends[i].IsEmpty())
+				}
 			}
-			rowCount++
-			if i == 0 {
-				assert.Equal(t, tableID, tableIDs[i])
-				assert.False(t, starts[i].IsEmpty())
-				assert.Equal(t, ickp1End, ends[i])
+			t.Logf("%s", bat.String())
+		}
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
 			}
-			if i == 1 {
-				assert.Equal(t, tableID, tableIDs[i])
-				assert.Equal(t, e.GetStart(), starts[i])
-				assert.False(t, ends[i].IsEmpty())
-			}
+			consumeFn(bat, release)
 		}
 		assert.Equal(t, 2, rowCount)
-		t.Logf("%s", bat.String())
 	}
 	assert.Equal(t, 1, len(entries))
 
@@ -12635,30 +12662,41 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		}
 		t.Logf("%s", e.String())
 		location := e.GetTableIDLocation()
-		release, bat, err := logtail.ReadTableIDBatch(ctx, location, common.CheckpointAllocator, tae.Opts.Fs)
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
 		assert.NoError(t, err)
-		defer release()
 		rowCount := 0
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
-		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
-		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
-		for i := 0; i < bat.RowCount(); i++ {
-			if tableIDs[i] != tableID {
-				continue
+		consumeFn := func(bat *batch.Batch, release func()) {
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				if i == 0 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.False(t, starts[i].IsEmpty())
+					assert.Equal(t, ickp1End, ends[i])
+				}
+				if i == 1 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.Equal(t, e.GetStart(), starts[i])
+					assert.False(t, ends[i].IsEmpty())
+				}
 			}
-			rowCount++
-			if i == 0 {
-				assert.Equal(t, tableID, tableIDs[i])
-				assert.False(t, starts[i].IsEmpty())
-				assert.Equal(t, ickp1End, ends[i])
-			}
-			if i == 1 {
-				assert.Equal(t, tableID, tableIDs[i])
-				assert.Equal(t, e.GetStart(), starts[i])
-				assert.False(t, ends[i].IsEmpty())
+			t.Logf("%s", bat.String())
+		}
+		for i := 0; i < 2; i++ {
+			for {
+				release, bat, isEnd, err := reader.Read(ctx)
+				assert.NoError(t, err)
+				if isEnd {
+					break
+				}
+				consumeFn(bat, release)
 			}
 		}
 		assert.Equal(t, 2, rowCount)
-		t.Logf("%s", bat.String())
 	}
 }

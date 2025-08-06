@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -352,57 +353,68 @@ func tryGetChangedListFromTableIDBatch(
 	ctx context.Context,
 	from types.TS,
 	to types.TS,
-	tableIDLocation objectio.Location,
+	tableIDLocations objectio.LocationSlice,
 	h *Handle,
 	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
 ) (accIds, dbIds, tblIds []uint64, oldest types.TS, ok bool) {
 	oldest = types.MaxTs()
-	if tableIDLocation.IsEmpty() {
+	if tableIDLocations.Len() == 0 {
 		return
 	}
 
-	release, bat, err := logtail.ReadTableIDBatch(
-		ctx,
-		tableIDLocation,
-		common.CheckpointAllocator,
-		h.GetDB().Runtime.Fs,
-	)
+	reader, err := logtail.NewSyncTableIDReader(tableIDLocations, common.CheckpointAllocator, h.GetDB().Runtime.Fs)
 	if err != nil {
 		return
 	}
-	defer release()
-	accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
-	dbids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
-	tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
-	starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
-	ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
 
-	var start types.TS
-	for i := 0; i < bat.RowCount(); i++ {
-		if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
-			start = starts[i]
+	consumeFn := func(bat *batch.Batch, release func()) {
+
+		defer release()
+		accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
+		dbids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
+		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+
+		var start types.TS
+		for i := 0; i < bat.RowCount(); i++ {
+			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				start = starts[i]
+				break
+			}
+		}
+		if start.GT(&from) {
+			return
+		}
+		ok = true
+		oldest = start
+
+		tblIds = make([]uint64, 0)
+		accIds = make([]uint64, 0)
+		dbIds = make([]uint64, 0)
+		for i := 0; i < bat.RowCount(); i++ {
+			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				continue
+			}
+			if !isTheTblIWantWithTimeRange(tblIds, tids[i], starts[i], ends[i]) {
+				continue
+			}
+			tblIds = append(tblIds, tids[i])
+			accIds = append(accIds, uint64(accounts[i]))
+			dbIds = append(dbIds, dbids[i])
+		}
+
+	}
+
+	for {
+		release, bat, isEnd, err := reader.Read(ctx)
+		if err != nil {
+			return
+		}
+		if isEnd {
 			break
 		}
-	}
-	if start.GT(&from) {
-		return
-	}
-	ok = true
-	oldest = start
-
-	tblIds = make([]uint64, 0)
-	accIds = make([]uint64, 0)
-	dbIds = make([]uint64, 0)
-	for i := 0; i < bat.RowCount(); i++ {
-		if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
-			continue
-		}
-		if !isTheTblIWantWithTimeRange(tblIds, tids[i], starts[i], ends[i]) {
-			continue
-		}
-		tblIds = append(tblIds, tids[i])
-		accIds = append(accIds, uint64(accounts[i]))
-		dbIds = append(dbIds, dbids[i])
+		consumeFn(bat, release)
 	}
 	return
 }

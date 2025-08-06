@@ -157,7 +157,8 @@ func (getter *MetadataEntryGetter) processOneBatch(
 		}
 		if metaVersion > 3 {
 			location := objectio.Location(tableIDLocationCol.GetBytesAt(i))
-			entry.tableIDLocation = location.Clone()
+			entry.tableIDLocation = make([]byte, len(location))
+			copy(entry.tableIDLocation, location)
 		}
 		if onEachEntry != nil {
 			onEachEntry(entry)

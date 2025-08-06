@@ -151,6 +151,7 @@ func (job *checkpointJob) doGlobalCheckpoint(
 		entry.start,
 		entry.end,
 		job.executor.cfg.TableIDHistoryDuration,
+		job.executor.cfg.TableIDSinkerThreshold,
 		emptyLocation,
 		preICKP.GetVersion(),
 		preICKP.GetTableIDLocation(),
@@ -278,7 +279,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 			}
 		}
 	}
-	var preTableIDLocation objectio.Location
+	var preTableIDLocation objectio.LocationSlice
 	if prevCkp != nil {
 		preTableIDLocation = prevCkp.GetTableIDLocation()
 	}
@@ -287,6 +288,7 @@ func (job *checkpointJob) RunICKP(ctx context.Context) (err error) {
 		entry.start,
 		entry.end,
 		job.executor.cfg.TableIDHistoryDuration,
+		job.executor.cfg.TableIDSinkerThreshold,
 		entry.GetLocation(),
 		entry.GetVersion(),
 		preTableIDLocation,

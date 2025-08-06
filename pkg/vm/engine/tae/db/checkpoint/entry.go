@@ -65,7 +65,7 @@ type CheckpointEntry struct {
 	entryType       EntryType
 	cnLocation      objectio.Location
 	tnLocation      objectio.Location
-	tableIDLocation objectio.Location
+	tableIDLocation objectio.LocationSlice
 	version         uint32
 
 	ckpLSN      uint64
@@ -248,7 +248,7 @@ func (e *CheckpointEntry) GetTNLocation() objectio.Location {
 	return e.tnLocation
 }
 
-func (e *CheckpointEntry) GetTableIDLocation() objectio.Location {
+func (e *CheckpointEntry) GetTableIDLocation() objectio.LocationSlice {
 	e.RLock()
 	defer e.RUnlock()
 	return e.tableIDLocation
@@ -322,10 +322,11 @@ func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.tnLocation = tn.Clone()
 }
 
-func (e *CheckpointEntry) SetTableIDLocation(tn objectio.Location) {
+func (e *CheckpointEntry) SetTableIDLocation(locations objectio.LocationSlice) {
 	e.Lock()
 	defer e.Unlock()
-	e.tableIDLocation = tn.Clone()
+	e.tableIDLocation = make(objectio.LocationSlice, len(locations))
+	copy(e.tableIDLocation, locations)
 }
 
 //===============================================================

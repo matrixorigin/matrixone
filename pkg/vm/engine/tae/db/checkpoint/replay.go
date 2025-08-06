@@ -582,9 +582,9 @@ func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 				typ = ET_Incremental
 			}
 		}
-		var tableIDLocation objectio.Location
+		var tableIDLocation objectio.LocationSlice
 		if checkpointVersion > 3 {
-			tableIDLocation = objectio.Location(bat.GetVectorByName(CheckpointAttr_TableIDLocation).Get(i).([]byte))
+			tableIDLocation = objectio.LocationSlice(bat.GetVectorByName(CheckpointAttr_TableIDLocation).Get(i).([]byte))
 		}
 		version := bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
 		tnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))

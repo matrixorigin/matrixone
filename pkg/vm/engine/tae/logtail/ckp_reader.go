@@ -1061,3 +1061,53 @@ func ConsumeCheckpointEntries(
 	}
 	return
 }
+
+type SyncTableIDReader struct {
+	locations objectio.LocationSlice
+	offset    int
+
+	cp *mpool.MPool
+	fs fileservice.FileService
+}
+
+func NewSyncTableIDReader(
+	locations objectio.LocationSlice,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (reader *SyncTableIDReader, err error) {
+	reader = &SyncTableIDReader{
+		locations: locations,
+		offset:    0,
+		cp:        mp,
+		fs:        fs,
+	}
+	return
+}
+
+func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat *batch.Batch, isEnd bool, err error) {
+	if reader.offset >= reader.locations.Len() {
+		isEnd = true
+		return
+	}
+	location := reader.locations.Get(reader.offset)
+	reader.offset++
+	preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
+	if _, release, err = ioutil.LoadColumnsData(
+		ctx,
+		TableIDSeqnums,
+		TableIDTypes,
+		reader.fs,
+		*location,
+		preTableIDVecs,
+		reader.cp,
+		0,
+	); err != nil {
+		return
+	}
+	bat = batch.New(TableIDAttrs)
+	for i, vec := range preTableIDVecs {
+		bat.Vecs[i] = &vec
+	}
+	bat.SetRowCount(preTableIDVecs.Rows())
+	return
+}
