@@ -120,7 +120,7 @@ func (external *External) GetOperatorBase() *vm.OperatorBase {
 }
 
 func init() {
-	reuse.CreatePool[External](
+	reuse.CreatePool(
 		func() *External {
 			return &External{}
 		},
@@ -147,7 +147,7 @@ func (external *External) WithEs(es *ExternalParam) *External {
 
 func (external *External) Release() {
 	if external != nil {
-		reuse.Free[External](external, nil)
+		reuse.Free(external, nil)
 	}
 }
 

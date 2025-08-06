@@ -641,6 +641,14 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 
 var MakePlan2Type = makePlan2Type
 
+func makeSimplePlan2Type(typT types.T) plan.Type {
+	return plan.Type{
+		Id:    int32(typT),
+		Width: 0,
+		Scale: 0,
+	}
+}
+
 func makePlan2Type(typ *types.Type) plan.Type {
 	return plan.Type{
 		Id:    int32(typ.Oid),
