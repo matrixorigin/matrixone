@@ -115,6 +115,9 @@ type checkpointCleaner struct {
 		snapshotMeta *logtail.SnapshotMeta
 		replayDone   bool
 	}
+
+	// iscpTablesFunc is an optional function to provide the ISCP tables for testing.
+	iscpTablesFunc func() map[uint64]types.TS
 }
 
 func WithCanGCCacheSize(
@@ -162,6 +165,12 @@ func WithCheckOption(enable bool) CheckpointCleanerOption {
 	}
 }
 
+func WithISCPTablesFunc(f func() map[uint64]types.TS) CheckpointCleanerOption {
+	return func(c *checkpointCleaner) {
+		c.iscpTablesFunc = f
+	}
+}
+
 type CheckpointCleanerOption func(*checkpointCleaner)
 
 func NewCheckpointCleaner(
@@ -189,6 +198,12 @@ func NewCheckpointCleaner(
 	cleaner.mutation.metaFiles = make(map[string]ioutil.TSRangeFile)
 	cleaner.mutation.snapshotMeta = logtail.NewSnapshotMeta()
 	return cleaner
+}
+
+func (c *checkpointCleaner) UpdateOption(opts ...CheckpointCleanerOption) {
+	for _, opt := range opts {
+		opt(c)
+	}
 }
 
 func (c *checkpointCleaner) Stop() {
@@ -1203,6 +1218,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		accountSnapshots,
 		pitrs,
 		c.mutation.snapshotMeta,
+		c.ISCPTables(),
 		memoryBuffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1361,6 +1377,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		accoutSnapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		c.ISCPTables(),
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1383,6 +1400,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		accoutSnapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		c.ISCPTables(),
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1844,4 +1862,11 @@ func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
 	return c.mutation.snapshotMeta.GetTablePK(tid)
+}
+
+func (c *checkpointCleaner) ISCPTables() map[uint64]types.TS {
+	if c.iscpTablesFunc != nil {
+		return c.iscpTablesFunc()
+	}
+	return nil
 }

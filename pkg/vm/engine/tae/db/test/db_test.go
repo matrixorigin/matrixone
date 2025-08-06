@@ -12572,3 +12572,85 @@ func TestTNCatalogEventSource(t *testing.T) {
 	require.NotNil(t, bat)
 
 }
+
+func TestGCWithCustomISCPTables(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			defer testutils.AfterTest(t)()
+			testutils.EnsureNoLeak(t)
+			ctx := context.Background()
+
+			opts := new(options.Options)
+			opts = config.WithQuickScanAndCKPOpts(opts)
+			options.WithDisableGCCheckpoint()(opts)
+
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+			defer tae.Close()
+			db := tae.DB
+
+			db.MergeScheduler.PauseAll()
+
+			ts := types.BuildTS(time.Now().UnixNano(), 0)
+
+			schema1 := catalog.MockSchemaAll(13, 2)
+			schema1.Extra.BlockMaxRows = 10
+			schema1.Extra.ObjectMaxBlocks = 2
+
+			schema2 := catalog.MockSchemaAll(13, 2)
+			schema2.Extra.BlockMaxRows = 10
+			schema2.Extra.ObjectMaxBlocks = 2
+			var rel handle.Relation
+			{
+				txn, _ := db.StartTxn(nil)
+				database, err := txn.CreateDatabase("db", "", "")
+				assert.Nil(t, err)
+				_, err = database.CreateRelation(schema1)
+				assert.Nil(t, err)
+				rel, err = database.CreateRelation(schema2)
+				assert.Nil(t, err)
+				assert.Nil(t, txn.Commit(context.Background()))
+			}
+			bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
+			defer bat.Close()
+			bats := bat.Split(bat.Length())
+			tableID := rel.ID()
+			myTables := map[uint64]types.TS{tableID: ts}
+			db.DiskCleaner.GetCleaner().UpdateOption(gc.WithISCPTablesFunc(func() map[uint64]types.TS { return myTables }))
+
+			pool, err := ants.NewPool(20)
+			assert.Nil(t, err)
+			defer pool.Release()
+			var wg sync.WaitGroup
+
+			for _, data := range bats {
+				wg.Add(2)
+				err = pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
+				assert.Nil(t, err)
+				err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
+				assert.Nil(t, err)
+			}
+			wg.Wait()
+			testutils.WaitExpect(10000, func() bool {
+				if tae.Wal.GetPenddingCnt() != 0 {
+					return false
+				}
+				ckp := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
+				if ckp == nil {
+					return true
+				}
+				return ckp.IsFinished()
+			})
+			t.Log(tae.Catalog.SimplePPString(common.PPL1))
+			if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+				return
+			}
+			logutil.Infof("start gc")
+			assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+			err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
+			assert.Nil(t, err)
+			testutils.WaitExpect(10000, func() bool {
+				return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
+			})
+		},
+	)
+}

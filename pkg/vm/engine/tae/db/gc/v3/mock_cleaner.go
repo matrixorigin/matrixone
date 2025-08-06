@@ -146,3 +146,7 @@ func (c *MockCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 func (c *MockCleaner) GetTablePK(tableId uint64) string {
 	return ""
 }
+
+func (c *MockCleaner) UpdateOption(_ ...CheckpointCleanerOption) {
+
+}
