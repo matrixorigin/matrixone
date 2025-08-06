@@ -311,6 +311,7 @@ type TxnStore interface {
 	// Offline txn is created when TxnMgr is in Recovery mode
 	// Offline txn is not writable and all offline txns are ReadOnly
 	IsOffline() bool
+	WantWrite(string) error
 	IncreateWriteCnt(string) error
 	ObserveTxn(
 		visitDatabase func(db any),
