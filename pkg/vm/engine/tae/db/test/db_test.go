@@ -12502,16 +12502,10 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 
 			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 			defer tae.Close()
-
 			db := tae.DB
 
 			db.MergeScheduler.PauseAll()
 
-			fault.Enable()
-			defer fault.Disable()
-			rmFn, err := objectio.InjectPrintFlushEntry("")
-			assert.NoError(t, err)
-			defer rmFn()
 			ts := types.BuildTS(time.Now().UnixNano(), 0)
 
 			schema1 := catalog.MockSchemaAll(13, 2)
@@ -12552,7 +12546,6 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 				assert.Nil(t, err)
 			}
 			wg.Wait()
-			db.DiskCleaner.GetCleaner().EnableGC()
 			testutils.WaitExpect(10000, func() bool {
 				if tae.Wal.GetPenddingCnt() != 0 {
 					return false
