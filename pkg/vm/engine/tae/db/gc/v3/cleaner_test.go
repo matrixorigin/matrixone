@@ -172,7 +172,7 @@ func TestForMockCoverage(t *testing.T) {
 	var cleaner MockCleaner
 	ctx := context.Background()
 	require.NoError(t, cleaner.Replay(ctx))
-	require.NoError(t, cleaner.Process(ctx))
+	require.NoError(t, cleaner.Process(ctx, nil))
 	require.NoError(t, cleaner.TryGC(ctx))
 	cleaner.AddChecker(nil, "")
 	require.Nil(t, cleaner.GetChecker(""))
