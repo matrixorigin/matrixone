@@ -12512,6 +12512,7 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 			rmFn, err := objectio.InjectPrintFlushEntry("")
 			assert.NoError(t, err)
 			defer rmFn()
+			ts := types.BuildTS(time.Now().UnixNano(), 0)
 
 			schema1 := catalog.MockSchemaAll(13, 2)
 			schema1.Extra.BlockMaxRows = 10
@@ -12534,6 +12535,9 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 			bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 			defer bat.Close()
 			bats := bat.Split(bat.Length())
+			tableID := rel.ID()
+			myTables := map[uint64]types.TS{tableID: ts}
+			db.DiskCleaner.GetCleaner().UpdateOption(gc.WithISCPTablesFunc(func() map[uint64]types.TS { return myTables }))
 
 			pool, err := ants.NewPool(20)
 			assert.Nil(t, err)
@@ -12548,9 +12552,6 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 				assert.Nil(t, err)
 			}
 			wg.Wait()
-			tableID := rel.ID()
-			ts := types.BuildTS(time.Now().UnixNano(), 0)
-			myTables := map[uint64]types.TS{tableID: ts}
 			testutils.WaitExpect(10000, func() bool {
 				if tae.Wal.GetPenddingCnt() != 0 {
 					return false
@@ -12567,19 +12568,11 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 			}
 			logutil.Infof("start gc")
 			assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-			cleaner := gc.NewCheckpointCleaner(
-				ctx, "", tae.Runtime.Fs, tae.Wal, tae.BGCheckpointRunner,
-				gc.WithISCPTablesFunc(func() map[uint64]types.TS { return myTables }),
-			)
-			manager := gc.NewDiskCleaner(cleaner, true)
-			manager.Start()
-			defer manager.Stop()
-
-			testutils.WaitExpect(10000, func() bool {
-				return tae.AllCheckpointsFinished()
-			})
-			err = manager.GC(context.Background())
+			err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 			assert.Nil(t, err)
+			testutils.WaitExpect(10000, func() bool {
+				return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
+			})
 		},
 	)
 }

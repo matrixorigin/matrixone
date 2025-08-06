@@ -200,6 +200,12 @@ func NewCheckpointCleaner(
 	return cleaner
 }
 
+func (c *checkpointCleaner) UpdateOption(opts ...CheckpointCleanerOption) {
+	for _, opt := range opts {
+		opt(c)
+	}
+}
+
 func (c *checkpointCleaner) Stop() {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
