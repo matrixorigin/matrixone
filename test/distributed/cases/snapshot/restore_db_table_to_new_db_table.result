@@ -32,11 +32,17 @@ system_metrics
 test01
 test02
 use test02;
-select * from test01;
-SQL parser error: table "test01" does not exist
-select count(*) from test01;
-SQL parser error: table "test01" does not exist
-drop snapshot if exists sp01;
+select * from rs01;
+col1    col2    col3
+1    null    database
+2    38291    database
+3    null    database management system
+4    10    null
+1    -321    null
+2    -1    null
+select count(*) from rs01;
+count(*)
+6
 use test01;
 show tables;
 Tables_in_test01
@@ -59,32 +65,21 @@ col1    col2    col3
 drop database test01;
 drop database test02;
 drop snapshot sp01;
-internal error: snapshot sp01 does not exist
 drop database if exists test03;
-[unknown result because it is related to issue#22297]
 create database test03;
-[unknown result because it is related to issue#22297]
 use test03;
-[unknown result because it is related to issue#22297]
 drop table if exists pri01;
-[unknown result because it is related to issue#22297]
 create table pri01(
 deptno int unsigned comment '部门编号',
 dname varchar(15) comment '部门名称',
 loc varchar(50)  comment '部门所在位置',
 primary key(deptno)
 ) comment='部门表';
-[unknown result because it is related to issue#22297]
 insert into pri01 values (10,'ACCOUNTING','NEW YORK');
-[unknown result because it is related to issue#22297]
 insert into pri01 values (20,'RESEARCH','DALLAS');
-[unknown result because it is related to issue#22297]
 insert into pri01 values (30,'SALES','CHICAGO');
-[unknown result because it is related to issue#22297]
 insert into pri01 values (40,'OPERATIONS','BOSTON');
-[unknown result because it is related to issue#22297]
 drop table if exists aff01;
-[unknown result because it is related to issue#22297]
 create table aff01(
 empno int unsigned auto_increment COMMENT '雇员编号',
 ename varchar(15) comment '雇员姓名',
@@ -97,49 +92,77 @@ deptno int unsigned comment '所在部门',
 primary key(empno),
 constraint `c1` foreign key (deptno) references pri01 (deptno)
 );
-[unknown result because it is related to issue#22297]
 insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
-[unknown result because it is related to issue#22297]
 insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
-[unknown result because it is related to issue#22297]
 insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
-[unknown result because it is related to issue#22297]
 insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
-[unknown result because it is related to issue#22297]
 insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
-[unknown result because it is related to issue#22297]
 drop snapshot if exists sp02;
-[unknown result because it is related to issue#22297]
 create snapshot sp02 for account;
-[unknown result because it is related to issue#22297]
 create database test04 clone test03 {snapshot = 'sp02'};
-[unknown result because it is related to issue#22297]
+drop database if exists test05;
+create database test05;
+drop database if exists test06;
+create database test06;
 create table test05.pri01 clone test03.pri01 {snapshot = 'sp02'};
-[unknown result because it is related to issue#22297]
 create table test06.aff01 clone test03.aff01 {snapshot = 'sp02'};
-[unknown result because it is related to issue#22297]
 use test04;
-[unknown result because it is related to issue#22297]
 show tables;
-[unknown result because it is related to issue#22297]
+Tables_in_test04
+aff01
+pri01
 show create table aff01;
-[unknown result because it is related to issue#22297]
+Table    Create Table
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `test03`.`pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show create table pri01;
-[unknown result because it is related to issue#22297]
+Table    Create Table
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
 select * from aff01;
-[unknown result because it is related to issue#22297]
+empno    ename    job    mgr    hiredate    sal    comm    deptno
+7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
+7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
+7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
 select * from pri01;
-[unknown result because it is related to issue#22297]
-drop table aff01;
-[unknown result because it is related to issue#22297]
-drop table pri01;
-[unknown result because it is related to issue#22297]
+deptno    dname    loc
+10    ACCOUNTING    NEW YORK
+20    RESEARCH    DALLAS
+30    SALES    CHICAGO
+40    OPERATIONS    BOSTON
+use test05;
+show tables;
+Tables_in_test05
+pri01
+select * from pri01;
+deptno    dname    loc
+10    ACCOUNTING    NEW YORK
+20    RESEARCH    DALLAS
+30    SALES    CHICAGO
+40    OPERATIONS    BOSTON
+show create table pri01;
+Table    Create Table
+pri01    CREATE TABLE `pri01` (\n  `deptno` int unsigned NOT NULL COMMENT '部门编号',\n  `dname` varchar(15) DEFAULT NULL COMMENT '部门名称',\n  `loc` varchar(50) DEFAULT NULL COMMENT '部门所在位置',\n  PRIMARY KEY (`deptno`)\n) COMMENT='部门表'
+use test06;
+show tables;
+Tables_in_test06
+aff01
+select * from aff01;
+empno    ename    job    mgr    hiredate    sal    comm    deptno
+7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
+7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
+7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
+7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
+7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
+show create table aff01;
+Table    Create Table
+aff01    CREATE TABLE `aff01` (\n  `empno` int unsigned NOT NULL AUTO_INCREMENT COMMENT '雇员编号',\n  `ename` varchar(15) DEFAULT NULL COMMENT '雇员姓名',\n  `job` varchar(10) DEFAULT NULL COMMENT '雇员职位',\n  `mgr` int unsigned DEFAULT NULL COMMENT '雇员对应的领导的编号',\n  `hiredate` date DEFAULT NULL COMMENT '雇员的雇佣日期',\n  `sal` decimal(7,2) DEFAULT NULL COMMENT '雇员的基本工资',\n  `comm` decimal(7,2) DEFAULT NULL COMMENT '奖金',\n  `deptno` int unsigned DEFAULT NULL COMMENT '所在部门',\n  PRIMARY KEY (`empno`),\n  CONSTRAINT `c1` FOREIGN KEY (`deptno`) REFERENCES `test03`.`pri01` (`deptno`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 drop database test04;
-[unknown result because it is related to issue#22297]
 drop database test03;
-[unknown result because it is related to issue#22297]
+internal error: can not drop database. It has been referenced by foreign keys
+drop database test05;
+drop database test06;
 drop snapshot sp02;
-[unknown result because it is related to issue#22297]
 drop database if exists db04;
 create database db04;
 use db04;
@@ -227,6 +250,7 @@ mysql
 restore_db_table_to_new_db_table
 system
 system_metrics
+test03
 drop database db01;
 drop database db02;
 drop snapshot sp03;
@@ -242,16 +266,16 @@ drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-05 17:46:55    resub01    2025-08-05 17:46:55    0
+publication01    sys    republication01    *    republish    2025-08-06 14:23:19    resub01    2025-08-06 14:23:19    0
 drop snapshot if exists sp04;
 create snapshot sp04 for account;
 create database test_pub clone republication01 {snapshot = 'sp04'};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    republication01    *    test_tenant_1    test_tenant_1    2025-08-05 17:46:55    null    republish
+publication01    republication01    *    test_tenant_1    test_tenant_1    2025-08-06 14:23:19    null    republish
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-05 17:46:55    resub01    2025-08-05 17:46:55    0
+publication01    sys    republication01    *    republish    2025-08-06 14:23:19    resub01    2025-08-06 14:23:19    0
 drop database resub01;
 drop publication publication01;
 drop database republication01;
@@ -267,13 +291,13 @@ drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-05 17:46:56    resub01    2025-08-05 17:46:56    0
+publication01    sys    republication01    *    republish    2025-08-06 14:23:19    resub01    2025-08-06 14:23:19    0
 drop snapshot if exists sp05;
 create snapshot sp05 for account;
 create database test_sub clone resub01 {snapshot = 'sp05'};
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-05 17:46:56    resub01    2025-08-05 17:46:56    0
+publication01    sys    republication01    *    republish    2025-08-06 14:23:19    resub01    2025-08-06 14:23:19    0
 drop database test_sub;
 drop database resub01;
 drop snapshot sp05;
@@ -311,7 +335,11 @@ delete from vector_index_01 where a = 9777;
 
 delete from vector_index_04 where a = 2;
 
-create table test_pub01.pub_table01 clone db02.vector_index_01 {snapshot = 'sp05'};
+drop database if exists test_pub01;
+
+create database test_pub01;
+
+create table test_pub01.pub_table01 clone db02.vector_index_01 {snapshot = 'sp05'} to account test_tenant_1;
 
 create table test_pub01.pub_table02 clone db02.vector_index_04 {snapshot = 'sp05'};
 
@@ -355,11 +383,12 @@ count(*)
 drop snapshot if exists sp07;
 create snapshot sp07 for account;
 delete from rs01 where col1 = 1;
-create database test02 clone test05 {snapshot = 'sp01'} to account acc01;
-internal error: find 0 snapshot records by name(sp01), expect only 1
-create table test02.rs02 clone test05.rs01 {snapshot = 'sp01'} to account acc01;
-internal error: find 0 snapshot records by name(sp01), expect only 1
-create table test03.rs02 clone test05.rs01 {snapshot = 'sp01'} to account acc01;
+create database test06 clone test05 {snapshot = 'sp07'} to account acc01;
+drop database if exists test05;
+drop database if exists test03;
+create table test05.rs02 clone test05.rs01 {snapshot = 'sp07'} to account acc01;
+
+create table test03.rs02 clone test05.rs01 {snapshot = 'sp07'} to account acc01;
 
 show databases;
 Database
@@ -368,6 +397,7 @@ mo_catalog
 mysql
 system
 system_metrics
+test06
 use test02;
 Unknown database test02
 select * from rs02;
@@ -447,6 +477,68 @@ show create table aff01;
 drop database test04;
 
 drop database test05;
+drop snapshot sp07;
+drop database if exists test06;
+create database test06;
+use test06;
+drop table if exists pri01;
+create table pri01(
+deptno int unsigned comment '部门编号',
+dname varchar(15) comment '部门名称',
+loc varchar(50)  comment '部门所在位置',
+primary key(deptno)
+) comment='部门表';
+insert into pri01 values (10,'ACCOUNTING','NEW YORK');
+insert into pri01 values (20,'RESEARCH','DALLAS');
+insert into pri01 values (30,'SALES','CHICAGO');
+insert into pri01 values (40,'OPERATIONS','BOSTON');
+drop table if exists aff01;
+create table aff01(
+empno int unsigned auto_increment COMMENT '雇员编号',
+ename varchar(15) comment '雇员姓名',
+job varchar(10) comment '雇员职位',
+mgr int unsigned comment '雇员对应的领导的编号',
+hiredate date comment '雇员的雇佣日期',
+sal decimal(7,2) comment '雇员的基本工资',
+comm decimal(7,2) comment '奖金',
+deptno int unsigned comment '所在部门',
+primary key(empno),
+constraint `c1` foreign key (deptno) references pri01 (deptno)
+);
+insert into aff01 values (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
+insert into aff01 values (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
+insert into aff01 values (7521,'WARD','SALESMAN',7698,'1981-02-22',1250,500,30);
+insert into aff01 values (7566,'JONES','MANAGER',7839,'1981-04-02',2975,NULL,20);
+insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,30);
+drop snapshot if exists sp07;
+create snapshot sp07 for account;
+create database test04 clone test06 {snapshot = 'sp07'} to account acc02;
+
+create table test05.pri01 clone test06.pri01 {snapshot = 'sp07'} to account acc02;
+
+create table test06.aff01 clone test06.aff01 {snapshot = 'sp07'} to account acc02;
+
+use test04;
+
+show tables;
+
+show create table aff01;
+
+show create table pri01;
+
+use test05;
+
+show create table test05;
+
+use test06;
+
+select * from aff01;
+
+show create table aff01;
+
+drop database test04;
+
+drop database test05;
 
 drop database test06;
 
@@ -455,3 +547,102 @@ drop snapshot sp07;
 drop account acc01;
 drop account acc02;
 drop account acc03;
+drop account if exists acc05;
+create account acc05 admin_name = 'test_account' identified by '111';
+drop database if exists test08;
+create database test08;
+use test08;
+drop table if exists t1;
+create table t1 (a timestamp(0) not null, primary key(a));
+insert into t1 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+select * from t1;
+a
+2020-01-01 00:00:00
+2022-01-02 00:00:00
+2022-01-02 00:00:01
+2022-01-02 00:00:02
+drop snapshot if exists sp08;
+create snapshot sp08 for account;
+update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
+select * from t1;
+a
+2020-01-01 00:00:00
+2022-01-02 00:00:00
+2022-01-09 00:00:01
+2022-01-09 00:00:02
+drop database if exists test08;
+create database test08;
+create database test08 clone test08 {snapshot = 'sp08'} to account acc05;
+database test08 already exists
+create database test09 clone test08 {snapshot = 'sp08'} to account acc05;
+drop snapshot sp08;
+use test09;
+select * from t1;
+a
+2020-01-01 00:00:00
+2022-01-02 00:00:00
+2022-01-02 00:00:01
+2022-01-02 00:00:02
+drop database test09;
+drop database test08;
+drop account acc05;
+drop account if exists acc04;
+create account acc04 admin_name = 'test_account' identified by '111';
+drop database if exists test09;
+create database test09;
+use test09;
+drop table if exists t1;
+create table t1(
+a uuid primary key,
+b int,
+c varchar(20),
+d date
+) comment='test uuid parimary key';
+insert into t1 values ("6d1b1f73-2dbf-11ed-940f-000c29847904",12,'SMITH','1980-12-17');
+insert into t1 values ("ad9f809f-2dbd-11ed-940f-000c29847904",34,'ALLEN','1981-02-20');
+drop snapshot if exists sp05;
+create snapshot sp05 for account;
+truncate t1;
+drop database if exists test01;
+create database test01;
+use test01;
+create table t1(col1 int, col2 decimal);
+create table test01.t1 clone test09.t1 {snapshot = 'sp05'} to account acc04;
+table t1 already exists
+create table test01.t2 clone test09.t1 {snapshot = 'sp05'} to account acc04;
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
+system
+system_metrics
+test01
+use test01;
+show tables;
+Tables_in_test01
+t1
+t2
+select * from t1;
+col1    col2
+select * from t2;
+a    b    c    d
+6d1b1f73-2dbf-11ed-940f-000c29847904    12    SMITH    1980-12-17
+ad9f809f-2dbd-11ed-940f-000c29847904    34    ALLEN    1981-02-20
+truncate t2;
+drop database test01;
+drop database test09;
+drop snapshot sp05;
+drop account acc04;
+drop database if exists test10;
+create database test10;
+use test10;
+drop table if exists table10;
+create table table10 (col1 int, col2 datalink);
+insert into table10 values (1, 'file://$resources/load_data/time_date_1.csv');
+drop snapshot if exists sp10;
+create snapshot sp10 for account;
+create database test11 clone test10 {snapshot = 'sp10'} to account acc100;
+internal error: no such account, account name: acc100
+drop database test10;
+drop snapshot sp10;

@@ -21,9 +21,8 @@ create table test01.rs02 clone test01.rs01 {snapshot = 'sp01'};
 create table test01.rs02 clone test01.rs01 {snapshot = 'sp01'};
 show databases;
 use test02;
-select * from test01;
-select count(*) from test01;
-drop snapshot if exists sp01;
+select * from rs01;
+select count(*) from rs01;
 use test01;
 show tables;
 select * from rs01;
@@ -34,7 +33,7 @@ drop snapshot sp01;
 
 
 
--- @bvt:issue#22297
+
 drop database if exists test03;
 create database test03;
 use test03;
@@ -75,6 +74,10 @@ drop snapshot if exists sp02;
 create snapshot sp02 for account;
 
 create database test04 clone test03 {snapshot = 'sp02'};
+drop database if exists test05;
+create database test05;
+drop database if exists test06;
+create database test06;
 create table test05.pri01 clone test03.pri01 {snapshot = 'sp02'};
 create table test06.aff01 clone test03.aff01 {snapshot = 'sp02'};
 use test04;
@@ -83,12 +86,22 @@ show create table aff01;
 show create table pri01;
 select * from aff01;
 select * from pri01;
-drop table aff01;
-drop table pri01;
+use test05;
+show tables;
+select * from pri01;
+show create table pri01;
+use test06;
+show tables;
+select * from aff01;
+show create table aff01;
 drop database test04;
+-- @bvt:issue#22297
 drop database test03;
-drop snapshot sp02;
 -- @bvt:issue
+drop database test05;
+drop database test06;
+drop snapshot sp02;
+
 
 
 
@@ -125,7 +138,7 @@ drop snapshot sp04;
 
 
 
--- abnormal test: clone database which has already exists
+-- abnormal test: clone database which has already exists in current account
 drop database if exists db01;
 create database db01;
 use db01;
@@ -245,7 +258,11 @@ drop snapshot if exists sp05;
 create snapshot sp05 for account;
 delete from vector_index_01 where a = 9777;
 delete from vector_index_04 where a = 2;
-create table test_pub01.pub_table01 clone db02.vector_index_01 {snapshot = 'sp05'};
+-- @session:id=1&user=test_tenant_1:test_account&password=111
+drop database if exists test_pub01;
+create database test_pub01;
+-- @session
+create table test_pub01.pub_table01 clone db02.vector_index_01 {snapshot = 'sp05'} to account test_tenant_1;
 create table test_pub01.pub_table02 clone db02.vector_index_04 {snapshot = 'sp05'};
 -- @ignore:5,6
 show publications;
@@ -290,24 +307,26 @@ drop snapshot if exists sp07;
 create snapshot sp07 for account;
 delete from rs01 where col1 = 1;
 
-create database test02 clone test05 {snapshot = 'sp01'} to account acc01;
-create table test02.rs02 clone test05.rs01 {snapshot = 'sp01'} to account acc01;
+create database test06 clone test05 {snapshot = 'sp07'} to account acc01;
+-- @session:id=2&user=acc01:test_account&password=111
+drop database if exists test05;
+drop database if exists test03;
+-- @session
 -- @bvt:issue#22297
-create table test03.rs02 clone test05.rs01 {snapshot = 'sp01'} to account acc01;
--- @bvt:issue
+create table test05.rs02 clone test05.rs01 {snapshot = 'sp07'} to account acc01;
+create table test03.rs02 clone test05.rs01 {snapshot = 'sp07'} to account acc01;
 -- @session:id=2&user=acc01:test_account&password=111
 show databases;
 use test02;
 select * from rs02;
 select count(*) from rs02;
--- @bvt:issue#22297
 use test03;
 show tables;
 select * from rs02;
 drop database test03;
--- @bvt:issue
-drop database test02;
+drop database test05;
 -- @session
+-- @bvt:issue
 drop database test05;
 drop snapshot sp07;
 
@@ -379,3 +398,96 @@ drop account acc01;
 drop account acc02;
 drop account acc03;
 
+
+
+
+-- abnormal test: restore db to new account, db exists in new account
+drop account if exists acc05;
+create account acc05 admin_name = 'test_account' identified by '111';
+drop database if exists test08;
+create database test08;
+use test08;
+drop table if exists t1;
+create table t1 (a timestamp(0) not null, primary key(a));
+insert into t1 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+select * from t1;
+drop snapshot if exists sp08;
+create snapshot sp08 for account;
+update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
+select * from t1;
+
+-- @session:id=5&user=acc05:test_account&password=111
+drop database if exists test08;
+create database test08;
+-- @session
+create database test08 clone test08 {snapshot = 'sp08'} to account acc05;
+create database test09 clone test08 {snapshot = 'sp08'} to account acc05;
+drop snapshot sp08;
+-- @session:id=5&user=acc05:test_account&password=111
+use test09;
+select * from t1;
+drop database test09;
+-- @session
+drop database test08;
+drop account acc05;
+
+
+
+
+-- abnormal test: restore table to new account, table exists in new account
+drop account if exists acc04;
+create account acc04 admin_name = 'test_account' identified by '111';
+drop database if exists test09;
+create database test09;
+use test09;
+drop table if exists t1;
+create table t1(
+                   a uuid primary key,
+                   b int,
+                   c varchar(20),
+                   d date
+) comment='test uuid parimary key';
+insert into t1 values ("6d1b1f73-2dbf-11ed-940f-000c29847904",12,'SMITH','1980-12-17');
+insert into t1 values ("ad9f809f-2dbd-11ed-940f-000c29847904",34,'ALLEN','1981-02-20');
+drop snapshot if exists sp05;
+create snapshot sp05 for account;
+truncate t1;
+-- @session:id=4&user=acc04:test_account&password=111
+drop database if exists test01;
+create database test01;
+use test01;
+create table t1(col1 int, col2 decimal);
+-- @session
+create table test01.t1 clone test09.t1 {snapshot = 'sp05'} to account acc04;
+create table test01.t2 clone test09.t1 {snapshot = 'sp05'} to account acc04;
+-- @session:id=4&user=acc04:test_account&password=111
+show databases;
+use test01;
+show tables;
+select * from t1;
+select * from t2;
+truncate t2;
+drop database test01;
+-- @session
+drop database test09;
+drop snapshot sp05;
+drop account acc04;
+
+
+
+
+-- restore db/table to account which does not exists
+drop database if exists test10;
+create database test10;
+use test10;
+
+drop table if exists table10;
+create table table10 (col1 int, col2 datalink);
+insert into table10 values (1, 'file://$resources/load_data/time_date_1.csv');
+
+drop snapshot if exists sp10;
+create snapshot sp10 for account;
+
+create database test11 clone test10 {snapshot = 'sp10'} to account acc100;
+drop database test10;
+drop snapshot sp10;
