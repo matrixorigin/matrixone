@@ -26,11 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -56,6 +54,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 const (
@@ -228,6 +228,8 @@ type Engine struct {
 		writeWorkspaceThreshold  uint64
 		extraWorkspaceThreshold  uint64
 		quota                    atomic.Uint64
+
+		memThrottler rscthrottler.RSCThrottler
 
 		cnTransferTxnLifespanThreshold time.Duration
 
