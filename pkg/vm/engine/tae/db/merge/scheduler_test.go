@@ -127,12 +127,6 @@ func TestScheduler(t *testing.T) {
 	time.Sleep(3 * time.Millisecond)
 
 	{
-		// dropped table will be removed from scheduler
-		answer := sched.Query(tables[2])
-		require.Equal(t, answer.NotExists, true)
-	}
-
-	{
 		// switch on/off
 		sched.PauseTable(tables[0])
 		answer := sched.Query(tables[0])
@@ -293,6 +287,12 @@ func TestScheduler(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		require.Equal(t, answer.DataMergeCnt, 1)
+	}
+
+	{
+		// dropped table will be removed from scheduler
+		answer := sched.Query(tables[2])
+		require.Equal(t, answer.NotExists, true)
 	}
 
 }
