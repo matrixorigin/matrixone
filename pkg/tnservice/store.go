@@ -17,6 +17,7 @@ package tnservice
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"sync"
 	"time"
 
@@ -137,6 +138,8 @@ type store struct {
 	config *util.ConfigData
 	// queryService for getting cache info from tnservice
 	queryService queryservice.QueryService
+
+	queryClient client.QueryClient
 }
 
 // NewService create TN Service
@@ -206,13 +209,15 @@ func NewService(
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
+	if s.queryClient, err = client.NewQueryClient(s.cfg.UUID, s.cfg.RPC); err != nil {
+		return nil, err
+	}
 
 	s.initQueryService(cfg.InStandalone)
 
 	s.initTaskHolder()
 	s.initSqlWriterFactory()
 	s.setupStatusServer()
-
 	return s, nil
 }
 

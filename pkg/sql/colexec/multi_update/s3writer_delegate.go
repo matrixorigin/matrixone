@@ -20,7 +20,10 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,9 +108,18 @@ type s3WriterDelegate struct {
 	checkSizeCols    []int
 	buf              bytes.Buffer
 	enforceFlushToS3 bool
+
+	memController struct {
+		grantedSize int64
+		throttler   rscthrottler.RSCThrottler
+	}
 }
 
-func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
+func newS3Writer(
+	sid string,
+	update *MultiUpdate,
+) (*s3WriterDelegate, error) {
+
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3WriterDelegate{
 		cacheBatches:   batch.NewCompactBatchs(objectio.BlockMaxRows),
@@ -124,6 +136,12 @@ func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		isRemote:            update.IsRemote,
 		enforceFlushToS3:    update.delegated,
+	}
+
+	if throttler, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.CNMemoryThrottler); !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("can not get global variable %s", runtime.CNMemoryThrottler)
+	} else {
+		writer.memController.throttler = throttler.(rscthrottler.RSCThrottler)
 	}
 
 	faultInjected := false
@@ -171,18 +189,56 @@ func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 	return writer, nil
 }
 
-func (writer *s3WriterDelegate) append(proc *process.Process, analyzer process.Analyzer, inBatch *batch.Batch) (err error) {
+func (writer *s3WriterDelegate) cleanCachedBatches(mp *mpool.MPool) {
+	bats := writer.cacheBatches.TakeBatchs()
+	for _, bat := range bats {
+		bat.Clean(mp)
+	}
+
+	writer.batchSize = 0
+
+	if writer.memController.grantedSize > 0 {
+		writer.memController.throttler.Release(writer.memController.grantedSize)
+		writer.memController.grantedSize = 0
+	}
+}
+
+func (writer *s3WriterDelegate) append(
+	proc *process.Process,
+	analyzer process.Analyzer,
+	inBatch *batch.Batch,
+) (err error) {
+
+	var (
+		increment      uint64
+		acquireGranted bool
+	)
+
 	err = writer.cacheBatches.Extend(proc.Mp(), inBatch)
 	if err != nil {
 		return
 	}
+
 	for _, idx := range writer.checkSizeCols {
-		writer.batchSize += uint64(inBatch.Vecs[idx].Size())
+		increment += uint64(inBatch.Vecs[idx].Size())
 	}
 
+	writer.batchSize += increment
 	if writer.batchSize >= writer.flushThreshold {
 		err = writer.sortAndSync(proc, analyzer)
+		return err
 	}
+
+	// acquire memory failed, should flush as soon as possible, and then
+	// release the pinned batches to avoid oom.
+	if _, acquireGranted =
+		writer.memController.throttler.Acquire(int64(increment)); !acquireGranted {
+		err = writer.sortAndSync(proc, analyzer)
+		return err
+	}
+
+	writer.memController.grantedSize += int64(increment)
+
 	return
 }
 
@@ -279,6 +335,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 }
 
 func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer process.Analyzer) (err error) {
+
 	var (
 		bats        []*batch.Batch
 		batchBuffer = containers.NewGeneralBatchBuffer(
@@ -288,7 +345,12 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 			0,
 		)
 	)
-	defer batchBuffer.Close(proc.GetMPool())
+
+	defer func() {
+		writer.cleanCachedBatches(proc.Mp())
+		batchBuffer.Close(proc.GetMPool())
+	}()
+
 	for i, updateCtx := range writer.updateCtxs {
 		// delete s3
 		if len(updateCtx.DeleteCols) > 0 {
@@ -387,10 +449,6 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 		}
 	}
 
-	writer.batchSize = 0
-	for _, bat := range writer.cacheBatches.TakeBatchs() {
-		bat.Clean(proc.GetMPool())
-	}
 	return
 }
 
@@ -626,10 +684,8 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 }
 
 func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
-	bats := writer.cacheBatches.TakeBatchs()
-	for _, bat := range bats {
-		bat.Clean(proc.Mp())
-	}
+
+	writer.cleanCachedBatches(proc.Mp())
 
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
@@ -657,16 +713,15 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	if writer.outputBat != nil {
 		writer.outputBat.CleanOnlyData()
 	}
-	writer.batchSize = 0
+
 	writer.buf.Reset()
 	return
 }
 
 func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
-	bats := writer.cacheBatches.TakeBatchs()
-	for _, bat := range bats {
-		bat.Clean(proc.Mp())
-	}
+
+	writer.cleanCachedBatches(proc.Mp())
+
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
 			bat.Clean(proc.Mp())
