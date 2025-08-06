@@ -610,7 +610,6 @@ create database test11 clone test10 {snapshot = 'sp10'} to account acc100;
 internal error: no such account, account name: acc100
 drop database test10;
 drop snapshot sp10;
-set global lower_case_table_names = 1;
 drop database if exists db10;
 create database db10;
 use db10;
@@ -672,21 +671,31 @@ drop snapshot if exists sp11;
 create snapshot sp11 for account;
 drop database if exists db11;
 create database db11 clone db10 {snapshot = 'sp10'};
-no such table db10.t1
 use db11;
-Unknown database db11
 show tables;
-Tables_in_db10
-T1
+Tables_in_db11
 articles
 authors
 length02
 numtable
+t1
+text_01
+text_02
 vtab32
 select * from text_01;
-SQL parser error: table "text_01" does not exist
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
 select * from text_02;
-SQL parser error: table "text_02" does not exist
+a
+-3.4028235E38
+-1.1754944E-38
+0.0
+1.1754944E-38
+3.4028235E38
 show create table numtable;
 Table    Create Table
 numtable    CREATE TABLE `numtable` (\n  `id` int DEFAULT NULL,\n  `fl` float DEFAULT NULL,\n  `dl` double DEFAULT NULL\n)
@@ -707,16 +716,14 @@ id    name
 3    Alice Johnson
 drop database if exists db12;
 create database db12 clone db10 {snapshot = 'sp11'};
-no such table db10.t1
 use db12;
-Unknown database db12
 show tables;
-Tables_in_db10
-T1
+Tables_in_db12
 articles
 authors
 length02
 numtable
+t1
 vtab32
 select * from text_01;
 SQL parser error: table "text_01" does not exist
@@ -742,9 +749,6 @@ id    name
 3    Alice Johnson
 drop database db10;
 drop database db11;
-Can't drop database 'db11'; database doesn't exist
 drop database db12;
-Can't drop database 'db12'; database doesn't exist
 drop snapshot sp10;
 drop snapshot sp11;
-set global lower_case_table_names = 0;

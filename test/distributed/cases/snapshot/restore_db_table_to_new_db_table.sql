@@ -520,7 +520,6 @@ drop snapshot sp10;
 
 
 -- restore db to db,  there are multiple tables under the database
-set global lower_case_table_names = 1;
 drop database if exists db10;
 create database db10;
 use db10;
@@ -615,4 +614,3 @@ drop database db11;
 drop database db12;
 drop snapshot sp10;
 drop snapshot sp11;
-set global lower_case_table_names = 0;
