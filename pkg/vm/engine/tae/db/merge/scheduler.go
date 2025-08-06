@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -77,7 +78,7 @@ type MergeScheduler struct {
 	defaultTrigger *MMsgTaskTrigger
 
 	baseInterval time.Duration
-	rc           rscController
+	rc           rscthrottler.RSCThrottler
 	executor     MergeTaskExecutor
 
 	clock Clock
@@ -90,7 +91,6 @@ func NewMergeScheduler(
 	clock Clock,
 ) *MergeScheduler {
 	sched := &MergeScheduler{
-		rc:           new(resourceController),
 		baseInterval: baseInterval,
 		executor:     executor,
 
@@ -105,6 +105,12 @@ func NewMergeScheduler(
 
 		clock: clock,
 	}
+
+	sched.rc = rscthrottler.NewMemThrottler(
+		"Merge",
+		3.0/4.0,
+		rscthrottler.WithAllowOutOfLimitAcquire(),
+	)
 
 	sched.stopped.Store(true)
 
@@ -122,12 +128,11 @@ func NewMergeScheduler(
 	}
 	cata.SetMergeNotifier(sched)
 
-	sched.rc.refresh()
 	return sched
 
 }
 
-func (a *MergeScheduler) PatchTestRscController(rc rscController) {
+func (a *MergeScheduler) PatchTestRscController(rc rscthrottler.RSCThrottler) {
 	a.rc = rc
 }
 
@@ -766,10 +771,10 @@ func (a *MergeScheduler) handleMainLoop() {
 					// handle msg first, because it can change the priority queue
 					break
 				}
-				if a.rc.availableMem() < 500*common.Const1MBytes {
+				if a.rc.Available() < 500*common.Const1MBytes {
 					logutil.Info("MergeExecutorEvent",
 						zap.String("event", "pause due to OOM alert"),
-						zap.Int64("availableMem", a.rc.availableMem()),
+						zap.Int64("availableMem", a.rc.Available()),
 					)
 					// let's pause for a while to avoid OOM
 					break
@@ -805,8 +810,8 @@ func (a *MergeScheduler) handleMainLoop() {
 		case <-nextReadyAt:
 			// continue the loop
 		case <-heartbeat.Chan():
-			a.rc.printMemUsage()
-			a.rc.refresh()
+			a.rc.PrintUsage()
+			a.rc.Refresh()
 		// continue the loop
 		case <-vacuumCheckTicker.Chan():
 			a.fallbackSchedVacuumCheck()
@@ -1020,7 +1025,7 @@ func (a *MergeScheduler) handleMergeDone(table catalog.MergeTable, esz int) {
 	if supp := a.supps[table.ID()]; supp != nil {
 		supp.DoneTask()
 	}
-	a.rc.releaseResources(int64(esz))
+	a.rc.Release(int64(esz))
 }
 
 // region: schedule
@@ -1091,7 +1096,7 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	for _, task := range tasks {
 		task.doneCB = a.taskObserverFactory(todo.table, task.eSize)
 		if a.executor.ExecuteFor(todo.table, task) {
-			a.rc.reserveResources(int64(task.eSize))
+			a.rc.Acquire(int64(task.eSize))
 			if task.isTombstone {
 				supp.totalTombstoneMergeCnt++
 			} else {
@@ -1211,7 +1216,7 @@ func (p *launchPad) InitWithTrigger(trigger *MMsgTaskTrigger, lastMergeTime time
 
 func (p *launchPad) gatherTombstoneTasks(ctx context.Context,
 	tombstoneOpts *TombstoneOpts,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) {
 	tasks := GatherTombstoneTasks(ctx, IterStats(p.tombstoneStats), tombstoneOpts, p.lastMergeTime)
 	p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(tasks, rc, 1)...)
@@ -1221,7 +1226,7 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 	lnOpts *OverlapOpts,
 	startlv int,
 	endlv int,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) {
 	if startlv < 1 {
 		startlv = 1
@@ -1249,7 +1254,7 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 
 func (p *launchPad) gatherL0Tasks(ctx context.Context,
 	l0Opts *LayerZeroOpts,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) {
 	l0Tasks := GatherLayerZeroMergeTasks(ctx, p.leveledObjects[0], p.lastMergeTime, l0Opts)
 	// logutil.Info("MergeExecutorEvent",
@@ -1265,7 +1270,7 @@ func (p *launchPad) gatherL0Tasks(ctx context.Context,
 func (p *launchPad) gatherByTrigger(ctx context.Context,
 	trigger *MMsgTaskTrigger,
 	lastMergeTime time.Time,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) []mergeTask {
 	p.Reset()
 	p.InitWithTrigger(trigger, lastMergeTime)
@@ -1299,7 +1304,12 @@ func sumOsize(objs []*objectio.ObjectStats) int {
 	return sum
 }
 
-func controlTaskMemInPlace(tasks []mergeTask, rc rscController, deleteLessThan int) []mergeTask {
+func controlTaskMemInPlace(
+	tasks []mergeTask,
+	rc rscthrottler.RSCThrottler,
+	deleteLessThan int,
+) []mergeTask {
+
 	if len(tasks) == 0 {
 		return tasks
 	}
@@ -1307,7 +1317,7 @@ func controlTaskMemInPlace(tasks []mergeTask, rc rscController, deleteLessThan i
 		task := &tasks[i]
 		original := len(task.objs)
 		estSize := mergesort.EstimateMergeSize(IterStats(task.objs))
-		for ; !rc.resourceAvailable(int64(estSize)) && len(task.objs) > 1; estSize = mergesort.EstimateMergeSize(IterStats(task.objs)) {
+		for ; !resourceAvailable(int64(estSize), rc) && len(task.objs) > 1; estSize = mergesort.EstimateMergeSize(IterStats(task.objs)) {
 			task.objs = task.objs[:len(task.objs)/2]
 		}
 		if original-len(task.objs) > 0 {

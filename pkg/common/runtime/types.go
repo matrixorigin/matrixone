@@ -61,6 +61,8 @@ const (
 
 	// TestingContextKey is the key of context for testing
 	TestingContextKey = "testing-context"
+
+	CNMemoryThrottler = "cn-memory-throttler"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
