@@ -1063,8 +1063,9 @@ func ConsumeCheckpointEntries(
 }
 
 type SyncTableIDReader struct {
-	locations objectio.LocationSlice
-	offset    int
+	locations    objectio.LocationSlice
+	blkOffset    int
+	objectOffset int
 
 	cp *mpool.MPool
 	fs fileservice.FileService
@@ -1076,28 +1077,37 @@ func NewSyncTableIDReader(
 	fs fileservice.FileService,
 ) (reader *SyncTableIDReader, err error) {
 	reader = &SyncTableIDReader{
-		locations: locations,
-		offset:    0,
-		cp:        mp,
-		fs:        fs,
+		locations:    locations,
+		blkOffset:    0,
+		objectOffset: 0,
+		cp:           mp,
+		fs:           fs,
 	}
 	return
 }
 
 func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat *batch.Batch, isEnd bool, err error) {
-	if reader.offset >= reader.locations.Len() {
+	if reader.objectOffset >= reader.locations.Len() {
 		isEnd = true
 		return
 	}
-	location := reader.locations.Get(reader.offset)
-	reader.offset++
+	objectLocation := reader.locations.Get(reader.objectOffset)
+	blkLocation := objectLocation.Clone()
+	blkLocation.SetID(uint16(reader.blkOffset))
+
+	reader.blkOffset++
+	if reader.blkOffset == int(objectLocation.ID()) {
+		reader.blkOffset = 0
+		reader.objectOffset++
+	}
+
 	preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
 	if _, release, err = ioutil.LoadColumnsData(
 		ctx,
 		TableIDSeqnums,
 		TableIDTypes,
 		reader.fs,
-		*location,
+		blkLocation,
 		preTableIDVecs,
 		reader.cp,
 		0,

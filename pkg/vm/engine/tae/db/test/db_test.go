@@ -12489,7 +12489,7 @@ func TestTNCatalogEventSource(t *testing.T) {
 
 }
 
-func TestCheckpointTableIDBatch(t *testing.T) {
+func TestCheckpointTableIDBatch1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
@@ -12666,6 +12666,7 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 		assert.NoError(t, err)
 		rowCount := 0
 		consumeFn := func(bat *batch.Batch, release func()) {
+			defer release()
 			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
 			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
 			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
@@ -12687,16 +12688,75 @@ func TestCheckpointTableIDBatch(t *testing.T) {
 			}
 			t.Logf("%s", bat.String())
 		}
-		for i := 0; i < 2; i++ {
-			for {
-				release, bat, isEnd, err := reader.Read(ctx)
-				assert.NoError(t, err)
-				if isEnd {
-					break
-				}
-				consumeFn(bat, release)
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
 			}
+			consumeFn(bat, release)
 		}
 		assert.Equal(t, 2, rowCount)
 	}
+}
+
+func TestCheckpointTableIDBatch2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.CheckpointCfg.TableIDSinkerThreshold = 64
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 50
+	bat := catalog.MockBatch(schema, 2)
+	defer bat.Close()
+	bats := bat.Split(2)
+
+	tae.ForceCheckpoint()
+
+	ickp := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+
+	locations, err := logtail.MockTableIDBatch(
+		ctx,
+		ickp.GetStart(),
+		ickp.GetEnd(),
+		64*2014*2014,
+		100000,
+		common.CheckpointAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	ickp.SetTableIDLocation(locations)
+	for i := 0; i < locations.Len(); i++ {
+		t.Log(locations.Get(i).String())
+	}
+
+	tableCount := 2
+	for i := 0; i < tableCount; i++ {
+		tableSchema := schema.Clone()
+		tableSchema.Name = fmt.Sprintf("table_%d", i)
+		testutil.CreateRelationAndAppend2(t, 0, tae.DB, "db", tableSchema, bats[0], i == 0)
+	}
+
+	tae.ForceCheckpoint()
+
+	ickp = tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+
+	locations = ickp.GetTableIDLocation()
+	reader, err := logtail.NewSyncTableIDReader(locations, common.CheckpointAllocator, tae.Opts.Fs)
+	assert.NoError(t, err)
+	rowCount := 0
+	for {
+		release, bat, isEnd, err := reader.Read(ctx)
+		assert.NoError(t, err)
+		if isEnd {
+			break
+		}
+		rowCount += bat.RowCount()
+		release()
+	}
+	assert.Equal(t, 100000+1+3+2, rowCount) // 100000 mock, 1 special, 3 mo_catalog tables, 2 user tables
 }

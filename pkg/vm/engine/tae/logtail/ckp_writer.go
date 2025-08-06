@@ -900,7 +900,78 @@ func SyncTableIDBatch(
 	}
 
 	for _, file := range files {
-		locations.Append(file.ObjectLocation())
+		location := file.ObjectLocation()
+		location.SetID(uint16(file.BlkCnt()))
+		locations.Append(location)
+	}
+	return
+}
+
+func MockTableIDBatch(
+	ctx context.Context,
+	start, end types.TS,
+	sinkerThreshold int,
+	rowCount int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (locations objectio.LocationSlice, err error) {
+	dataFactory := ioutil.NewFSinkerImplFactory(
+		TableIDSeqnums,
+		-1,
+		false,
+		false,
+		0,
+	)
+	sinker := ioutil.NewSinker(
+		-1,
+		TableIDAttrs,
+		TableIDTypes,
+		dataFactory,
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(sinkerThreshold),
+	)
+	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
+	defer bat.Clean(mp)
+
+	for i := 0; i < rowCount; i++ {
+		vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+		vector.AppendFixed(bat.Vecs[1], uint64(3000), false, mp)
+		vector.AppendFixed(bat.Vecs[2], uint64(1000+i), false, mp)
+		vector.AppendFixed(bat.Vecs[3], start, false, mp)
+		vector.AppendFixed(bat.Vecs[4], end, false, mp)
+		bat.SetRowCount(bat.Vecs[0].Length())
+		if bat.RowCount() >= BatchRowCountThreshold {
+			sinker.Write(ctx, bat)
+			bat.CleanOnlyData()
+		}
+	}
+
+	vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+	vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[3], start, false, mp)
+	vector.AppendFixed(bat.Vecs[4], end, false, mp)
+	bat.SetRowCount(bat.Vecs[0].Length())
+
+	if err = sinker.Write(ctx, bat); err != nil {
+		return
+	}
+
+	if err = sinker.Sync(ctx); err != nil {
+		return
+	}
+
+	files, inMems := sinker.GetResult()
+
+	if len(inMems) > 0 {
+		panic("logic error")
+	}
+
+	for _, file := range files {
+		location := file.ObjectLocation()
+		location.SetID(uint16(file.BlkCnt()))
+		locations.Append(location)
 	}
 	return
 }

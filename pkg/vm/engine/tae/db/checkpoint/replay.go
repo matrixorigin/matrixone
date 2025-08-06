@@ -542,7 +542,7 @@ func MergeCkpMeta(
 		bat.AddVector(colNames[i], vec)
 	}
 	last := bat.Vecs[0].Length() - 1
-	var cptLocation objectio.Location
+	var cptLocation objectio.LocationSlice
 	bat.GetVectorByName(CheckpointAttr_StartTS).Append(startTs, false)
 	bat.GetVectorByName(CheckpointAttr_EndTS).Append(ts, false)
 	bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
