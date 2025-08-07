@@ -1882,26 +1882,6 @@ func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) erro
 	return err
 }
 
-func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
-	cols := []*plan2.ColDef{
-		{
-			Typ:        plan2.Type{Id: int32(types.T_varchar)},
-			Name:       strings.ToLower(explainColName),
-			OriginName: explainColName,
-		},
-	}
-	columns := make([]interface{}, len(cols))
-	var err error = nil
-	for i, col := range cols {
-		c, err := colDef2MysqlColumn(ctx, col)
-		if err != nil {
-			return nil, nil, err
-		}
-		columns[i] = c
-	}
-	return cols, columns, err
-}
-
 func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {
