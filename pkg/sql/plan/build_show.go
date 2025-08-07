@@ -133,7 +133,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		return buildShowCreateView(newStmt, ctx)
 	}
 
-	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false)
+	ddlStr, _, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, false, nil)
 	if err != nil {
 		return nil, err
 	}
