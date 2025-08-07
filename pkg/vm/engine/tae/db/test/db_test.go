@@ -12572,3 +12572,275 @@ func TestTNCatalogEventSource(t *testing.T) {
 	require.NotNil(t, bat)
 
 }
+
+func TestCheckpointTableIDBatch1(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err)
+	defer rmFn()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	defer bat.Close()
+	bats := bat.Split(5)
+
+	tae.CreateRelAndAppend2(bats[0], true)
+
+	txn, rel := tae.GetRelation()
+	tableID := rel.GetMeta().(*catalog.TableEntry).ID
+	assert.NoError(t, txn.Commit(ctx))
+
+	tae.ForceCheckpoint()
+
+	entries := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		rowCount := 0
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
+			}
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				assert.Equal(t, tableID, tableIDs[i])
+				// aobj create ts
+				assert.False(t, starts[i].IsEmpty())
+				// ckp end
+				assert.Equal(t, e.GetEnd(), ends[i])
+			}
+			t.Logf("%s", bat.String())
+		}
+		assert.Equal(t, 1, rowCount)
+	}
+	assert.Equal(t, 1, len(entries))
+	ickp1End := entries[0].GetEnd()
+
+	tae.Restart(context.Background())
+	tae.BindSchema(schema)
+
+	t2 := tae.TxnMgr.Now()
+
+	tae.DoAppend(bats[1])
+
+	err = tae.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Hour)
+	assert.NoError(t, err)
+
+	entries = tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
+	for _, e := range entries {
+		end := e.GetEnd()
+		if end.LT(&t2) {
+			continue
+		}
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		rowCount := 0
+		consumeFn := func(bat *batch.Batch, release func()) {
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				if rowCount == 1 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.False(t, starts[i].IsEmpty())
+					assert.Equal(t, ickp1End, ends[i])
+				}
+				if rowCount == 2 {
+					assert.Equal(t, tableID, tableIDs[i])
+					// ckp start -> aobj deleteAt
+					assert.Equal(t, e.GetStart(), starts[i])
+					assert.False(t, ends[i].IsEmpty())
+				}
+			}
+			t.Logf("%s", bat.String())
+		}
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
+			}
+			consumeFn(bat, release)
+		}
+		assert.Equal(t, 2, rowCount)
+	}
+
+	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	for _, e := range entries {
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		rowCount := 0
+		consumeFn := func(bat *batch.Batch, release func()) {
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				if rowCount == 1 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.False(t, starts[i].IsEmpty())
+					assert.Equal(t, ickp1End, ends[i])
+				}
+				if rowCount == 2 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.False(t, starts[i].IsEmpty())
+					assert.False(t, ends[i].IsEmpty())
+				}
+			}
+			t.Logf("%s", bat.String())
+		}
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
+			}
+			consumeFn(bat, release)
+		}
+		assert.Equal(t, 2, rowCount)
+	}
+	assert.Equal(t, 1, len(entries))
+
+	t3 := tae.TxnMgr.Now()
+
+	tae.ForceCheckpoint()
+
+	for _, e := range entries {
+		end := e.GetEnd()
+		if end.LT(&t3) {
+			continue
+		}
+		t.Logf("%s", e.String())
+		location := e.GetTableIDLocation()
+		reader, err := logtail.NewSyncTableIDReader(location, common.CheckpointAllocator, tae.Opts.Fs)
+		assert.NoError(t, err)
+		rowCount := 0
+		consumeFn := func(bat *batch.Batch, release func()) {
+			defer release()
+			tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+			starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+			ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+			for i := 0; i < bat.RowCount(); i++ {
+				if tableIDs[i] != tableID {
+					continue
+				}
+				rowCount++
+				if rowCount == 1 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.False(t, starts[i].IsEmpty())
+					assert.Equal(t, ickp1End, ends[i])
+				}
+				if rowCount == 2 {
+					assert.Equal(t, tableID, tableIDs[i])
+					assert.Equal(t, e.GetStart(), starts[i])
+					assert.False(t, ends[i].IsEmpty())
+				}
+			}
+			t.Logf("%s", bat.String())
+		}
+		for {
+			release, bat, isEnd, err := reader.Read(ctx)
+			assert.NoError(t, err)
+			if isEnd {
+				break
+			}
+			consumeFn(bat, release)
+		}
+		assert.Equal(t, 2, rowCount)
+	}
+}
+
+func TestCheckpointTableIDBatch2(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.CheckpointCfg.TableIDSinkerThreshold = 64
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.Extra.BlockMaxRows = 50
+	bat := catalog.MockBatch(schema, 2)
+	defer bat.Close()
+	bats := bat.Split(2)
+
+	tae.ForceCheckpoint()
+
+	ickp := tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+
+	locations, err := logtail.MockTableIDBatch(
+		ctx,
+		ickp.GetStart(),
+		ickp.GetEnd(),
+		64*2014*2014,
+		100000,
+		common.CheckpointAllocator,
+		tae.Opts.Fs,
+	)
+	assert.NoError(t, err)
+	ickp.SetTableIDLocation(locations)
+	for i := 0; i < locations.Len(); i++ {
+		t.Log(locations.Get(i).String())
+	}
+
+	tableCount := 2
+	for i := 0; i < tableCount; i++ {
+		tableSchema := schema.Clone()
+		tableSchema.Name = fmt.Sprintf("table_%d", i)
+		testutil.CreateRelationAndAppend2(t, 0, tae.DB, "db", tableSchema, bats[0], i == 0)
+	}
+
+	tae.ForceCheckpoint()
+
+	ickp = tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
+
+	locations = ickp.GetTableIDLocation()
+	reader, err := logtail.NewSyncTableIDReader(locations, common.CheckpointAllocator, tae.Opts.Fs)
+	assert.NoError(t, err)
+	rowCount := 0
+	for {
+		release, bat, isEnd, err := reader.Read(ctx)
+		assert.NoError(t, err)
+		if isEnd {
+			break
+		}
+		rowCount += bat.RowCount()
+		release()
+	}
+	assert.Equal(t, 100000+1+3+2, rowCount) // 100000 mock, 1 special, 3 mo_catalog tables, 2 user tables
+}

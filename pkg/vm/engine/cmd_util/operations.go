@@ -399,6 +399,7 @@ type GetChangedTableListResp struct {
 	DatabaseIds []uint64
 	TableIds    []uint64
 	Extra       []byte
+	Oldest      *timestamp.Timestamp
 }
 
 func (tlreq *GetChangedTableListReq) MarshalBinary() ([]byte, error) { return tlreq.Marshal() }

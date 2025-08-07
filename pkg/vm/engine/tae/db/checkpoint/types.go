@@ -105,28 +105,31 @@ func (os *observers) OnNewCheckpoint(ts types.TS) {
 }
 
 const (
-	CheckpointAttr_StartTS       = "start_ts"
-	CheckpointAttr_EndTS         = "end_ts"
-	CheckpointAttr_MetaLocation  = "meta_location"
-	CheckpointAttr_EntryType     = "entry_type"
-	CheckpointAttr_Version       = "version"
-	CheckpointAttr_AllLocations  = "all_locations"
-	CheckpointAttr_CheckpointLSN = "checkpoint_lsn"
-	CheckpointAttr_TruncateLSN   = "truncate_lsn"
-	CheckpointAttr_Type          = "type"
+	CheckpointAttr_StartTS         = "start_ts"
+	CheckpointAttr_EndTS           = "end_ts"
+	CheckpointAttr_MetaLocation    = "meta_location"
+	CheckpointAttr_EntryType       = "entry_type"
+	CheckpointAttr_Version         = "version"
+	CheckpointAttr_AllLocations    = "all_locations"
+	CheckpointAttr_CheckpointLSN   = "checkpoint_lsn"
+	CheckpointAttr_TruncateLSN     = "truncate_lsn"
+	CheckpointAttr_Type            = "type"
+	CheckpointAttr_TableIDLocation = "table_id_location"
 
-	CheckpointAttr_StartTSIdx       = 0
-	CheckpointAttr_EndTSIdx         = 1
-	CheckpointAttr_MetaLocationIdx  = 2
-	CheckpointAttr_EntryTypeIdx     = 3
-	CheckpointAttr_VersionIdx       = 4
-	CheckpointAttr_AllLocationsIdx  = 5
-	CheckpointAttr_CheckpointLSNIdx = 6
-	CheckpointAttr_TruncateLSNIdx   = 7
-	CheckpointAttr_TypeIdx          = 8
+	CheckpointAttr_StartTSIdx         = 0
+	CheckpointAttr_EndTSIdx           = 1
+	CheckpointAttr_MetaLocationIdx    = 2
+	CheckpointAttr_EntryTypeIdx       = 3
+	CheckpointAttr_VersionIdx         = 4
+	CheckpointAttr_AllLocationsIdx    = 5
+	CheckpointAttr_CheckpointLSNIdx   = 6
+	CheckpointAttr_TruncateLSNIdx     = 7
+	CheckpointAttr_TypeIdx            = 8
+	CheckpointAttr_TableIDLocationIdx = 9
 
 	CheckpointSchemaColumnCountV1 = 5 // start, end, loc, type, ver
 	CheckpointSchemaColumnCountV2 = 9
+	CheckpointSchemaColumnCountV3 = 10
 )
 
 var (
@@ -144,6 +147,7 @@ var (
 		CheckpointAttr_CheckpointLSN,
 		CheckpointAttr_TruncateLSN,
 		CheckpointAttr_Type,
+		CheckpointAttr_TableIDLocation,
 	}
 	CheckpointSchemaTypes = []types.Type{
 		types.New(types.T_TS, 0, 0),
@@ -155,6 +159,7 @@ var (
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_int8, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 )
 

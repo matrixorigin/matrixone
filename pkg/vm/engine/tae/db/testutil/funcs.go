@@ -157,6 +157,7 @@ func CreateDatabase2Ext(ctx context.Context, txn txnif.AsyncTxn, dbName, creates
 		return nil, err
 	}
 	bat := makeRespBatchFromSchema(catalog.SystemDBSchema)
+	defer bat.Close()
 	for _, def := range catalog.SystemDBSchema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -233,6 +234,7 @@ func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database
 	}
 
 	bat := makeRespBatchFromSchema(catalog.SystemTableSchema)
+	defer bat.Close()
 	for _, def := range catalog.SystemTableSchema.ColDefs {
 		if def.IsPhyAddr() {
 			continue
@@ -243,6 +245,7 @@ func CreateRelation2(ctx context.Context, txn txnif.AsyncTxn, db handle.Database
 		return nil, err
 	}
 	colBat := makeRespBatchFromSchema(catalog.SystemColumnSchema)
+	defer colBat.Close()
 	for _, def := range catalog.SystemColumnSchema.ColDefs {
 		if def.IsPhyAddr() {
 			continue

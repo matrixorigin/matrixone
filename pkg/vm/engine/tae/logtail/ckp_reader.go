@@ -1061,3 +1061,63 @@ func ConsumeCheckpointEntries(
 	}
 	return
 }
+
+type SyncTableIDReader struct {
+	locations    objectio.LocationSlice
+	blkOffset    int
+	objectOffset int
+
+	cp *mpool.MPool
+	fs fileservice.FileService
+}
+
+func NewSyncTableIDReader(
+	locations objectio.LocationSlice,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (reader *SyncTableIDReader, err error) {
+	reader = &SyncTableIDReader{
+		locations:    locations,
+		blkOffset:    0,
+		objectOffset: 0,
+		cp:           mp,
+		fs:           fs,
+	}
+	return
+}
+
+func (reader *SyncTableIDReader) Read(ctx context.Context) (release func(), bat *batch.Batch, isEnd bool, err error) {
+	if reader.objectOffset >= reader.locations.Len() {
+		isEnd = true
+		return
+	}
+	objectLocation := reader.locations.Get(reader.objectOffset)
+	blkLocation := objectLocation.Clone()
+	blkLocation.SetID(uint16(reader.blkOffset))
+
+	reader.blkOffset++
+	if reader.blkOffset == int(objectLocation.ID()) {
+		reader.blkOffset = 0
+		reader.objectOffset++
+	}
+
+	preTableIDVecs := containers.NewVectors(len(TableIDAttrs))
+	if _, release, err = ioutil.LoadColumnsData(
+		ctx,
+		TableIDSeqnums,
+		TableIDTypes,
+		reader.fs,
+		blkLocation,
+		preTableIDVecs,
+		reader.cp,
+		0,
+	); err != nil {
+		return
+	}
+	bat = batch.New(TableIDAttrs)
+	for i, vec := range preTableIDVecs {
+		bat.Vecs[i] = &vec
+	}
+	bat.SetRowCount(preTableIDVecs.Rows())
+	return
+}

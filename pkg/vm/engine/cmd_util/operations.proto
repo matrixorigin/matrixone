@@ -193,6 +193,7 @@ message GetChangedTableListResp {
     repeated uint64 DatabaseIds = 3;
     repeated uint64 TableIds = 4;
     bytes Extra = 5;
+    timestamp.Timestamp Oldest = 6;
 }
 
 message FaultInjectReq {
