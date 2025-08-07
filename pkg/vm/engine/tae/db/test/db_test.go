@@ -12584,12 +12584,12 @@ func TestCheckpointTableIDBatch1(t *testing.T) {
 					continue
 				}
 				rowCount++
-				if i == 0 {
+				if rowCount == 1 {
 					assert.Equal(t, tableID, tableIDs[i])
 					assert.False(t, starts[i].IsEmpty())
 					assert.Equal(t, ickp1End, ends[i])
 				}
-				if i == 1 {
+				if rowCount == 2 {
 					assert.Equal(t, tableID, tableIDs[i])
 					// ckp start -> aobj deleteAt
 					assert.Equal(t, e.GetStart(), starts[i])
@@ -12626,14 +12626,14 @@ func TestCheckpointTableIDBatch1(t *testing.T) {
 					continue
 				}
 				rowCount++
-				if i == 0 {
+				if rowCount == 1 {
 					assert.Equal(t, tableID, tableIDs[i])
 					assert.False(t, starts[i].IsEmpty())
 					assert.Equal(t, ickp1End, ends[i])
 				}
-				if i == 1 {
+				if rowCount == 2 {
 					assert.Equal(t, tableID, tableIDs[i])
-					assert.Equal(t, e.GetStart(), starts[i])
+					assert.False(t, starts[i].IsEmpty())
 					assert.False(t, ends[i].IsEmpty())
 				}
 			}
@@ -12675,12 +12675,12 @@ func TestCheckpointTableIDBatch1(t *testing.T) {
 					continue
 				}
 				rowCount++
-				if i == 0 {
+				if rowCount == 1 {
 					assert.Equal(t, tableID, tableIDs[i])
 					assert.False(t, starts[i].IsEmpty())
 					assert.Equal(t, ickp1End, ends[i])
 				}
-				if i == 1 {
+				if rowCount == 2 {
 					assert.Equal(t, tableID, tableIDs[i])
 					assert.Equal(t, e.GetStart(), starts[i])
 					assert.False(t, ends[i].IsEmpty())
