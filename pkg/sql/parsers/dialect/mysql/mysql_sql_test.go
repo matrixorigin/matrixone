@@ -1747,6 +1747,8 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1",
 		}, {
+			input: "prepare stmt_name1 from @user_var_name",
+		}, {
 			input:  "prepare stmt_name1 from 'select * from t1'",
 			output: "prepare stmt_name1 from select * from t1",
 		}, {
