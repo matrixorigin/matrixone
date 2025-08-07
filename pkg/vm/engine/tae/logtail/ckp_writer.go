@@ -711,6 +711,7 @@ func SyncTableIDBatch(
 		fs,
 		ioutil.WithMemorySizeThreshold(sinkerThreshold),
 	)
+	defer sinker.Close()
 	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
 	defer bat.Clean(mp)
 
@@ -931,6 +932,7 @@ func MockTableIDBatch(
 		fs,
 		ioutil.WithMemorySizeThreshold(sinkerThreshold),
 	)
+	defer sinker.Close()
 	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
 	defer bat.Clean(mp)
 
