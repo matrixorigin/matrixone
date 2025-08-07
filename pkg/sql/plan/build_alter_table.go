@@ -179,7 +179,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true)
+	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
 	if err != nil {
 		return nil, err
 	}
