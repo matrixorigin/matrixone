@@ -382,13 +382,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			if skipUniqueIdxDedup != nil && skipUniqueIdxDedup[idxDef.IndexName] {
-				continue
-			}
-
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
 				return 0, err
+			}
+
+			// This optimization skips unnecessary unique index deduplication
+			// during ALTER TABLE COPY operations, but only after index resolution completes
+			// since the copy process depends on the finalized idxTableDefs list
+			if skipUniqueIdxDedup != nil && skipUniqueIdxDedup[idxDef.IndexName] {
+				continue
 			}
 
 			if !idxDef.Unique {

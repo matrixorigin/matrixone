@@ -1122,6 +1122,20 @@ func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt, sq
 	return doPrepareStmt(execCtx, ses.(*Session), st, sql, execCtx.executeParamTypes)
 }
 
+func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*PrepareStmt, error) {
+	wrapper := &tree.PrepareString{
+		Name: st.Name,
+		Sql:  st.Var,
+	}
+	p, err := ses.GetUserDefinedVar(st.Var)
+	if err != nil {
+		return nil, err
+	}
+	wrapper.Sql = p.Value.(string)
+
+	return doPrepareString(ses, execCtx, wrapper)
+}
+
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
 	v, err := ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {

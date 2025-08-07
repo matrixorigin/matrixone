@@ -99,6 +99,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_FaultInject, s.handleFaultInjection, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlMoTableStats, s.handleMoTableStats, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_WorkspaceThreshold, s.handleWorkspaceThresholdRequest, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MinTimestamp, s.handleGetMinTimestamp, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -240,6 +241,12 @@ func (s *service) handleGetTxnInfo(ctx context.Context, req *query.Request, resp
 
 func (s *service) handleSyncCommit(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
 	s._txnClient.SyncLatestCommitTS(req.SycnCommit.LatestCommitTS)
+	return nil
+}
+
+func (s *service) handleGetMinTimestamp(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	resp.MinTimestampResponse = new(query.MinTimestampResponse)
+	resp.MinTimestampResponse.MinTimestamp = s._txnClient.MinTimestamp()
 	return nil
 }
 

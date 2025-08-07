@@ -20,7 +20,10 @@ import (
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,9 +108,18 @@ type s3WriterDelegate struct {
 	checkSizeCols    []int
 	buf              bytes.Buffer
 	enforceFlushToS3 bool
+
+	memController struct {
+		grantedSize int64
+		throttler   rscthrottler.RSCThrottler
+	}
 }
 
-func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
+func newS3Writer(
+	sid string,
+	update *MultiUpdate,
+) (*s3WriterDelegate, error) {
+
 	tableCount := len(update.MultiUpdateCtx)
 	writer := &s3WriterDelegate{
 		cacheBatches:   batch.NewCompactBatchs(objectio.BlockMaxRows),
@@ -124,6 +136,12 @@ func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		isRemote:            update.IsRemote,
 		enforceFlushToS3:    update.delegated,
+	}
+
+	if throttler, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.CNMemoryThrottler); !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("can not get global variable %s", runtime.CNMemoryThrottler)
+	} else {
+		writer.memController.throttler = throttler.(rscthrottler.RSCThrottler)
 	}
 
 	faultInjected := false
@@ -171,18 +189,56 @@ func newS3Writer(update *MultiUpdate) (*s3WriterDelegate, error) {
 	return writer, nil
 }
 
-func (writer *s3WriterDelegate) append(proc *process.Process, analyzer process.Analyzer, inBatch *batch.Batch) (err error) {
+func (writer *s3WriterDelegate) cleanCachedBatches(mp *mpool.MPool) {
+	bats := writer.cacheBatches.TakeBatchs()
+	for _, bat := range bats {
+		bat.Clean(mp)
+	}
+
+	writer.batchSize = 0
+
+	if writer.memController.grantedSize > 0 {
+		writer.memController.throttler.Release(writer.memController.grantedSize)
+		writer.memController.grantedSize = 0
+	}
+}
+
+func (writer *s3WriterDelegate) append(
+	proc *process.Process,
+	analyzer process.Analyzer,
+	inBatch *batch.Batch,
+) (err error) {
+
+	var (
+		increment      uint64
+		acquireGranted bool
+	)
+
 	err = writer.cacheBatches.Extend(proc.Mp(), inBatch)
 	if err != nil {
 		return
 	}
+
 	for _, idx := range writer.checkSizeCols {
-		writer.batchSize += uint64(inBatch.Vecs[idx].Size())
+		increment += uint64(inBatch.Vecs[idx].Size())
 	}
 
+	writer.batchSize += increment
 	if writer.batchSize >= writer.flushThreshold {
 		err = writer.sortAndSync(proc, analyzer)
+		return err
 	}
+
+	// acquire memory failed, should flush as soon as possible, and then
+	// release the pinned batches to avoid oom.
+	if _, acquireGranted =
+		writer.memController.throttler.Acquire(int64(increment)); !acquireGranted {
+		err = writer.sortAndSync(proc, analyzer)
+		return err
+	}
+
+	writer.memController.grantedSize += int64(increment)
+
 	return
 }
 
@@ -279,6 +335,7 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 }
 
 func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer process.Analyzer) (err error) {
+
 	var (
 		bats        []*batch.Batch
 		batchBuffer = containers.NewGeneralBatchBuffer(
@@ -288,7 +345,12 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 			0,
 		)
 	)
-	defer batchBuffer.Close(proc.GetMPool())
+
+	defer func() {
+		writer.cleanCachedBatches(proc.Mp())
+		batchBuffer.Close(proc.GetMPool())
+	}()
+
 	for i, updateCtx := range writer.updateCtxs {
 		// delete s3
 		if len(updateCtx.DeleteCols) > 0 {
@@ -317,50 +379,48 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 			// main table do not need clone
 			needClone := writer.updateCtxInfos[updateCtx.TableDef.Name].tableType != UpdateMainTable //uk&sk need clone
 
-			// if the main table has sort key
-			if !needClone && writer.sortIndexes[i] > -1 {
+			if isClusterBy {
+				needClone = false
+			}
+
+			// for unique index table and secondary index table, if the sort key has no null, do not clone
+			if needClone && writer.sortIndexes[i] > -1 {
+				hasNull := false
 				sortIdx := updateCtx.InsertCols[writer.sortIndexes[i]]
 				for j := 0; j < writer.cacheBatches.Length(); j++ {
 					cachedBat := writer.cacheBatches.Get(j)
 					// if the sort key has null, need clone
 					if cachedBat.GetVector(int32(sortIdx)).HasNull() {
-						needClone = true
+						hasNull = true
 						break
 					}
+				}
+				if !hasNull {
+					needClone = false
 				}
 			}
 
 			// needClone = true:
-			// 1. unique index table and secondary index table
-			// 2. main table has sort key and sort key has null
+			// unique index table and secondary index table with null values
+			// why: the index table should not have null values.
+			// Ex.
+			// create table t1 (a int, b int unique key);
+			// insert into t values (1, 101), (2, null), (3, 303)
+			// The unique index table should be (101, 1), (303, 3)
+			// Since it will shrink the batch, we need to clone the batch.
+			// sortIdx != -1(has sort key) && isClusterBy = false(index table's isClusterBy is always false):
+
 			// needClone = false:
-			// 1. main table has sort key and sort key has no null
-			// 2. main table has no sort key
+			// other scenarios
 
 			if needClone {
-				// cluster by do not check if sort vector is null
 				sortIdx := writer.sortIndexes[i]
-				if isClusterBy {
-					sortIdx = -1
-				}
 				if bats, err = cloneSelectedVecsFromCompactBatches(
 					writer.cacheBatches, updateCtx.InsertCols, insertAttrs, sortIdx, proc.Mp(),
 				); err != nil {
 					return
 				}
 			} else {
-				// main table and has sort key
-				if writer.sortIndexes[i] > -1 {
-					sortIdx := updateCtx.InsertCols[writer.sortIndexes[i]]
-					for j := 0; j < writer.cacheBatches.Length(); j++ {
-						needSortBat := writer.cacheBatches.Get(j)
-						if err = colexec.SortByKey(
-							proc, needSortBat, sortIdx, isClusterBy, proc.GetMPool(),
-						); err != nil {
-							return
-						}
-					}
-				}
 				if bats, err = fetchSomeVecFromCompactBatches(
 					writer.cacheBatches, updateCtx.InsertCols, insertAttrs,
 				); err != nil {
@@ -389,10 +449,6 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 		}
 	}
 
-	writer.batchSize = 0
-	for _, bat := range writer.cacheBatches.TakeBatchs() {
-		bat.Clean(proc.GetMPool())
-	}
 	return
 }
 
@@ -411,6 +467,17 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
+	defer func() {
+		if cleanBatchAfterUse {
+			for i, bat := range bats {
+				if bat != nil {
+					bat.Clean(proc.GetMPool())
+					bats[i] = nil
+				}
+			}
+		}
+	}()
+
 	var (
 		fs           fileservice.FileService
 		blockInfoBat *batch.Batch
@@ -425,10 +492,10 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriter(
-			proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), opts...,
+			proc.Mp(), fs, plan2.ExprType2Type(&pkCol.Typ), -1, opts...,
 		)
 	} else {
-		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, false, opts...)
+		s3Writer = colexec.NewCNS3DataWriter(proc.Mp(), fs, tblDef, -1, false, opts...)
 	}
 
 	defer s3Writer.Close()
@@ -617,10 +684,8 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 }
 
 func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
-	bats := writer.cacheBatches.TakeBatchs()
-	for _, bat := range bats {
-		bat.Clean(proc.Mp())
-	}
+
+	writer.cleanCachedBatches(proc.Mp())
 
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
@@ -648,16 +713,15 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	if writer.outputBat != nil {
 		writer.outputBat.CleanOnlyData()
 	}
-	writer.batchSize = 0
+
 	writer.buf.Reset()
 	return
 }
 
 func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
-	bats := writer.cacheBatches.TakeBatchs()
-	for _, bat := range bats {
-		bat.Clean(proc.Mp())
-	}
+
+	writer.cleanCachedBatches(proc.Mp())
+
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
 			bat.Clean(proc.Mp())

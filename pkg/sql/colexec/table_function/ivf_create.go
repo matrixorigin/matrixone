@@ -85,7 +85,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
-	if clusterer, err = elkans.NewKMeans[T](
+	if clusterer, err = elkans.NewKMeans(
 		data, int(u.idxcfg.Ivfflat.Lists),
 		int(u.tblcfg.KmeansMaxIteration),
 		defaultKmeansDeltaThreshold,
@@ -108,7 +108,7 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	// insert into centroid table
 	values := make([]string, 0, len(centers))
 	for i, c := range centers {
-		s := types.ArrayToString[T](c)
+		s := types.ArrayToString(c)
 		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
 	}
 
@@ -143,9 +143,9 @@ func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 
 	if u.data32 != nil {
-		return clustering[float32](u, tf, proc, u.data32)
+		return clustering(u, tf, proc, u.data32)
 	} else {
-		return clustering[float64](u, tf, proc, u.data64)
+		return clustering(u, tf, proc, u.data64)
 	}
 }
 
