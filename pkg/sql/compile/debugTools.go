@@ -324,19 +324,10 @@ func hanldeTailNodeReceiver(node vm.Operator, mp map[*process.WaitRegister]int, 
 				if i != 0 {
 					remoteChs += ", "
 				}
-				fmt.Fprintf(buffer, "[addr: %s, uuid %s]", reg.NodeAddr, reg.Uuid)
-			}
-			fmt.Fprintf(buffer, " cross-cn receiver info: %s", remoteChs)
-		}
-
-		if len(arg.RemoteRegs) != 0 {
-			remoteChs := ""
-			for i, reg := range arg.RemoteRegs {
-				if i != 0 {
-					remoteChs += ", "
-				}
-				uuidStr := reg.Uuid.String()
-				fmt.Fprintf(buffer, "[addr: %s(%s)]", reg.NodeAddr, uuidStr[len(uuidStr)-6:])
+				remoteChs += fmt.Sprintf(
+					"[addr: %s, uuid: %s]",
+					reg.NodeAddr,
+					reg.Uuid.String())
 			}
 			fmt.Fprintf(buffer, " cross-cn receiver info: %s", remoteChs)
 		}
