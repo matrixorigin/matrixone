@@ -126,3 +126,22 @@ INSERT INTO t15 VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 create unique index idx_1 on t15(col1,col2,col3,col6);
 select * from t15;
 drop table t15;
+
+
+create table aerr (uid varchar(120), email varchar(20), lmethod varchar(100));
+
+insert into aerr values ("user1", 'xx@yeah.net', 'basic'),('user2', 'xx@mo.cn','basic'),('user3', '11@tt.cn', 'basic');
+
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+
+create unique index mail_method_idx on aerr(email,lmethod);
+alter table aerr add primary key (uid);
+
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+
+set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
+prepare err1 from @novar;
+prepare s1 from @idxsql;
+execute s1;
+drop prepare s1;
+drop table aerr;
