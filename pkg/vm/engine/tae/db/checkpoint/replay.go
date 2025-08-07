@@ -542,6 +542,7 @@ func MergeCkpMeta(
 		bat.AddVector(colNames[i], vec)
 	}
 	last := bat.Vecs[0].Length() - 1
+	var cptLocation objectio.LocationSlice
 	bat.GetVectorByName(CheckpointAttr_StartTS).Append(startTs, false)
 	bat.GetVectorByName(CheckpointAttr_EndTS).Append(ts, false)
 	bat.GetVectorByName(CheckpointAttr_MetaLocation).Append([]byte(cnLocation), false)
@@ -551,6 +552,7 @@ func MergeCkpMeta(
 	bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Append(bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_TruncateLSN).Append(bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(last), false)
 	bat.GetVectorByName(CheckpointAttr_Type).Append(int8(ET_Backup), false)
+	bat.GetVectorByName(CheckpointAttr_TableIDLocation).Append([]byte(cptLocation), false)
 	name := ioutil.EncodeCKPMetadataFullName(startTs, ts)
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterCheckpoint, name, fs)
 	if err != nil {
@@ -580,22 +582,27 @@ func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entr
 				typ = ET_Incremental
 			}
 		}
+		var tableIDLocation objectio.LocationSlice
+		if checkpointVersion > 3 {
+			tableIDLocation = objectio.LocationSlice(bat.GetVectorByName(CheckpointAttr_TableIDLocation).Get(i).([]byte))
+		}
 		version := bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
 		tnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
 		var ckpLSN, truncateLSN uint64
 		ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
 		truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
 		checkpointEntry := &CheckpointEntry{
-			start:       start,
-			end:         end,
-			cnLocation:  cnLoc,
-			tnLocation:  tnLoc,
-			state:       ST_Finished,
-			entryType:   typ,
-			version:     version,
-			ckpLSN:      ckpLSN,
-			truncateLSN: truncateLSN,
-			doneC:       make(chan struct{}),
+			start:           start,
+			end:             end,
+			cnLocation:      cnLoc,
+			tnLocation:      tnLoc,
+			tableIDLocation: tableIDLocation,
+			state:           ST_Finished,
+			entryType:       typ,
+			version:         version,
+			ckpLSN:          ckpLSN,
+			truncateLSN:     truncateLSN,
+			doneC:           make(chan struct{}),
 		}
 		entries[i] = checkpointEntry
 		if typ == ET_Global {
