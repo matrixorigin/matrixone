@@ -766,6 +766,7 @@ func SyncTableIDBatch(
 		if isEnd {
 			break
 		}
+		defer release()
 		consumeFn(bat, release)
 	}
 
