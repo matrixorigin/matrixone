@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
@@ -39,6 +40,28 @@ func init() {
 	) //WithEnableChecker()
 }
 
+type CloneLevelCtxKey struct{}
+type CloneLevelType int
+type CloneStmtType int
+
+const (
+	CloneLevelTable CloneLevelType = iota
+	CloneLevelDatabase
+	CloneLevelAccount
+	CloneLevelCluster
+)
+
+const (
+	NoClone CloneStmtType = iota
+	CloneCluster
+	CloneAccount
+	WithinAccCloneDB
+	BetweenAccCloneDB
+	WithinDBCloneTable
+	WithinAccBetweenDBCloneTable
+	BetweenAccCloneTable
+)
+
 type CloneTable struct {
 	statementImpl
 
@@ -52,7 +75,8 @@ type CloneTable struct {
 	ToAccountName Identifier
 	ToAccountId   uint32
 
-	Sql string
+	Sql      string
+	StmtType CloneStmtType
 }
 
 func (node *CloneTable) StmtKind() StmtKind {
@@ -123,3 +147,49 @@ func NewCloneDatabase() *CloneDatabase {
 func (node *CloneDatabase) GetStatementType() string { return "CREATE DATABASE CLONE" }
 
 func (node *CloneDatabase) GetQueryType() string { return QueryTypeOth }
+
+func DecideCloneStmtType(
+	ctx context.Context,
+	stmt *CloneTable,
+	srcDbName string,
+	dstDbName string,
+	toAccount uint32,
+	srcAccount uint32,
+) (cloneType CloneStmtType) {
+
+	if stmt.StmtType != NoClone {
+		return stmt.StmtType
+	}
+
+	var (
+		level = CloneLevelTable
+	)
+
+	if val := ctx.Value(CloneLevelCtxKey{}); val != nil {
+		level = val.(CloneLevelType)
+	}
+
+	switch level {
+	case CloneLevelCluster:
+		return CloneCluster
+	case CloneLevelAccount:
+		return CloneAccount
+	case CloneLevelDatabase:
+		if srcAccount == toAccount {
+			return WithinAccCloneDB
+		}
+		return BetweenAccCloneDB
+
+	case CloneLevelTable:
+		if srcAccount == toAccount {
+			if srcDbName == dstDbName {
+				return WithinDBCloneTable
+			}
+			return WithinAccBetweenDBCloneTable
+		}
+		return BetweenAccCloneTable
+
+	default:
+		return NoClone
+	}
+}
