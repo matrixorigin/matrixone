@@ -111,7 +111,9 @@ func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, va
 		return err
 	}
 
-	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	if len(keys) > 0 {
+		BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	}
 
 	for i := range keys {
 		cell := ht.findCell(&states[i])
@@ -130,7 +132,9 @@ func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]
 		return err
 	}
 
-	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	if len(keys) > 0 {
+		BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	}
 
 	for i := range keys {
 		if zValues[i] == 0 {
@@ -149,7 +153,9 @@ func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]
 }
 
 func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, values []uint64) {
-	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	if len(keys) > 0 {
+		BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	}
 
 	for i := range keys {
 		cell := ht.findCell(&states[i])

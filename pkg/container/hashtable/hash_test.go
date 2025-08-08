@@ -481,3 +481,291 @@ func TestWriteToError(t *testing.T) {
 		require.Equal(t, io.ErrUnexpectedEOF, err)
 	})
 }
+
+func TestInt64HashMap_BatchOperations(t *testing.T) {
+	// Scenario 1: Basic Insertion and Verification
+	t.Run("basic-insert-find", func(t *testing.T) {
+		m := &Int64HashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := []uint64{1, 2, 3, 4, 5}
+		hashes := make([]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertBatch(len(keys), hashes, toUnsafePointer(&keys[0]), values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(len(keys)), m.Cardinality())
+
+		foundValues := make([]uint64, len(keys))
+		m.FindBatch(len(keys), hashes, toUnsafePointer(&keys[0]), foundValues)
+		require.Equal(t, values, foundValues)
+		for _, v := range foundValues {
+			require.NotEqual(t, uint64(0), v)
+		}
+	})
+
+	// Scenario 2: Finding Non-existent Keys
+	t.Run("find-non-existent", func(t *testing.T) {
+		m := &Int64HashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := []uint64{10, 11, 12}
+		hashes := make([]uint64, len(keys))
+		foundValues := make([]uint64, len(keys))
+		m.FindBatch(len(keys), hashes, toUnsafePointer(&keys[0]), foundValues)
+		for _, v := range foundValues {
+			require.Equal(t, uint64(0), v)
+		}
+	})
+
+	// Scenario 3: Handling Duplicate Keys
+	t.Run("handle-duplicates", func(t *testing.T) {
+		m := &Int64HashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := []uint64{100, 101, 100, 102, 101}
+		hashes := make([]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertBatch(len(keys), hashes, toUnsafePointer(&keys[0]), values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(3), m.Cardinality()) // 100, 101, 102 are unique
+
+		foundValues := make([]uint64, len(keys))
+		m.FindBatch(len(keys), hashes, toUnsafePointer(&keys[0]), foundValues)
+		require.Equal(t, values, foundValues)
+		require.Equal(t, foundValues[0], foundValues[2]) // 100
+		require.Equal(t, foundValues[1], foundValues[4]) // 101
+		require.NotEqual(t, foundValues[0], foundValues[1])
+		require.NotEqual(t, foundValues[1], foundValues[2])
+	})
+
+	// Scenario 4: Triggering Hash Map Resize
+	t.Run("trigger-resize", func(t *testing.T) {
+		m := &Int64HashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		numElements := 2000
+		keys := make([]uint64, numElements)
+		for i := 0; i < numElements; i++ {
+			keys[i] = uint64(rand.Int63())
+		}
+		hashes := make([]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertBatch(len(keys), hashes, toUnsafePointer(&keys[0]), values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(numElements), m.Cardinality())
+
+		foundValues := make([]uint64, len(keys))
+		m.FindBatch(len(keys), hashes, toUnsafePointer(&keys[0]), foundValues)
+		require.Equal(t, values, foundValues)
+	})
+
+	// Scenario 5: Empty Batch
+	t.Run("empty-batch", func(t *testing.T) {
+		m := &Int64HashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		err = m.InsertBatch(0, nil, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), m.Cardinality())
+		m.FindBatch(0, nil, nil, nil) // should not panic
+	})
+
+	// Test InsertBatchWithRing
+	t.Run("insert-with-ring", func(t *testing.T) {
+		m := &Int64HashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := []uint64{200, 201, 202, 203, 204}
+		zValues := []int64{1, 0, 1, 0, 1}
+		hashes := make([]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertBatchWithRing(len(keys), zValues, hashes, toUnsafePointer(&keys[0]), values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(3), m.Cardinality())
+
+		foundValues := make([]uint64, len(keys))
+		m.FindBatch(len(keys), hashes, toUnsafePointer(&keys[0]), foundValues)
+
+		require.NotEqual(t, uint64(0), foundValues[0]) // key 200
+		require.Equal(t, uint64(0), foundValues[1])    // key 201
+		require.NotEqual(t, uint64(0), foundValues[2]) // key 202
+		require.Equal(t, uint64(0), foundValues[3])    // key 203
+		require.NotEqual(t, uint64(0), foundValues[4]) // key 204
+	})
+
+	t.Run("insert-with-ring-all-invalid", func(t *testing.T) {
+		m := &Int64HashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := []uint64{300, 301, 302}
+		zValues := []int64{0, 0, 0}
+		hashes := make([]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertBatchWithRing(len(keys), zValues, hashes, toUnsafePointer(&keys[0]), values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), m.Cardinality())
+	})
+}
+
+func TestStringHashMap_BatchOperations(t *testing.T) {
+	// Scenario 1: Basic Insertion and Verification
+	t.Run("basic-insert-find", func(t *testing.T) {
+		m := &StringHashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+		states := make([][3]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertStringBatch(states, keys, values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(len(keys)), m.elemCnt)
+
+		foundValues := make([]uint64, len(keys))
+		m.FindStringBatch(states, keys, foundValues)
+		require.Equal(t, values, foundValues)
+		for _, v := range foundValues {
+			require.NotEqual(t, uint64(0), v)
+		}
+	})
+
+	// Scenario 2: Finding Non-existent Keys
+	t.Run("find-non-existent", func(t *testing.T) {
+		m := &StringHashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := [][]byte{[]byte("x"), []byte("y"), []byte("z")}
+		states := make([][3]uint64, len(keys))
+		foundValues := make([]uint64, len(keys))
+		m.FindStringBatch(states, keys, foundValues)
+		for _, v := range foundValues {
+			require.Equal(t, uint64(0), v)
+		}
+	})
+
+	// Scenario 3: Handling Duplicate Keys
+	t.Run("handle-duplicates", func(t *testing.T) {
+		m := &StringHashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := [][]byte{[]byte("k1"), []byte("k2"), []byte("k1"), []byte("k3"), []byte("k2")}
+		states := make([][3]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertStringBatch(states, keys, values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(3), m.elemCnt) // k1, k2, k3 are unique
+
+		foundValues := make([]uint64, len(keys))
+		m.FindStringBatch(states, keys, foundValues)
+		require.Equal(t, values, foundValues)
+		require.Equal(t, foundValues[0], foundValues[2]) // k1
+		require.Equal(t, foundValues[1], foundValues[4]) // k2
+		require.NotEqual(t, foundValues[0], foundValues[1])
+		require.NotEqual(t, foundValues[1], foundValues[2])
+	})
+
+	// Scenario 4: Triggering Hash Map Resize
+	t.Run("trigger-resize", func(t *testing.T) {
+		m := &StringHashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		numElements := 2000
+		keys := make([][]byte, numElements)
+		for i := 0; i < numElements; i++ {
+			keys[i] = []byte(strconv.Itoa(i))
+		}
+		states := make([][3]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertStringBatch(states, keys, values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(numElements), m.elemCnt)
+
+		foundValues := make([]uint64, len(keys))
+		m.FindStringBatch(states, keys, foundValues)
+		require.Equal(t, values, foundValues)
+	})
+
+	// Scenario 5: Empty Batch
+	t.Run("empty-batch", func(t *testing.T) {
+		m := &StringHashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		err = m.InsertStringBatch(nil, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), m.elemCnt)
+		m.FindStringBatch(nil, nil, nil) // should not panic
+	})
+
+	// Test InsertStringBatchWithRing
+	t.Run("insert-with-ring", func(t *testing.T) {
+		m := &StringHashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := [][]byte{[]byte("s1"), []byte("s2"), []byte("s3"), []byte("s4"), []byte("s5")}
+		zValues := []int64{1, 0, 1, 0, 1}
+		states := make([][3]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertStringBatchWithRing(zValues, states, keys, values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(3), m.elemCnt)
+
+		foundValues := make([]uint64, len(keys))
+		m.FindStringBatch(states, keys, foundValues)
+
+		require.NotEqual(t, uint64(0), foundValues[0]) // s1
+		require.Equal(t, uint64(0), foundValues[1])    // s2
+		require.NotEqual(t, uint64(0), foundValues[2]) // s3
+		require.Equal(t, uint64(0), foundValues[3])    // s4
+		require.NotEqual(t, uint64(0), foundValues[4]) // s5
+	})
+
+	t.Run("insert-with-ring-all-invalid", func(t *testing.T) {
+		m := &StringHashMap{}
+		err := m.Init(nil)
+		require.NoError(t, err)
+		defer m.Free()
+
+		keys := [][]byte{[]byte("s10"), []byte("s11"), []byte("s12")}
+		zValues := []int64{0, 0, 0}
+		states := make([][3]uint64, len(keys))
+		values := make([]uint64, len(keys))
+
+		err = m.InsertStringBatchWithRing(zValues, states, keys, values)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), m.elemCnt)
+	})
+}

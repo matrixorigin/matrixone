@@ -104,11 +104,11 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 		return err
 	}
 
-	if hashes[0] == 0 {
+	if n > 0 && hashes[0] == 0 {
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	for i, hash := range hashes {
+	for i, hash := range hashes[:n] {
 		cell := ht.findCell(hash)
 		if cell.Mapped == 0 {
 			ht.elemCnt++
@@ -125,11 +125,11 @@ func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uin
 		return err
 	}
 
-	if hashes[0] == 0 {
+	if n > 0 && hashes[0] == 0 {
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	for i, hash := range hashes {
+	for i, hash := range hashes[:n] {
 		if zValues[i] == 0 {
 			continue
 		}
@@ -145,11 +145,11 @@ func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uin
 }
 
 func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
-	if hashes[0] == 0 {
+	if n > 0 && hashes[0] == 0 {
 		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
-	for i, hash := range hashes {
+	for i, hash := range hashes[:n] {
 		cell := ht.findCell(hash)
 		values[i] = cell.Mapped
 	}
