@@ -94,6 +94,11 @@ func (hr *ResHashRelated) GetBinaryInsertList(vals []uint64, before uint64) (ins
 		hr.inserted = hr.inserted[:len(vals)]
 	}
 
+	// Protect against nil hash table
+	if hr.Hash == nil {
+		return hr.inserted, 0
+	}
+
 	insertCount = hr.Hash.GroupCount() - before
 
 	last := before
@@ -123,7 +128,22 @@ type GroupResultBuffer struct {
 }
 
 func (buf *GroupResultBuffer) IsEmpty() bool {
-	return cap(buf.ToPopped) == 0
+	// Buffer is considered empty if there are no batches with actual data
+	// or if there are no aggregators
+	if len(buf.ToPopped) == 0 && len(buf.AggList) == 0 {
+		return true
+	}
+
+	// Check if any batch has actual data
+	for _, batch := range buf.ToPopped {
+		if batch != nil && batch.RowCount() > 0 {
+			return false
+		}
+	}
+
+	// If we reach here, all batches are either nil or empty
+	// In the context of spilling, we only spill when we have group data
+	return true
 }
 
 func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFuncExec) {
