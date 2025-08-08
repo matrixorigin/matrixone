@@ -678,6 +678,8 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 			IncrementalInterval:         db.Opts.CheckpointCfg.IncrementalInterval,
 			GlobalMinCount:              db.Opts.CheckpointCfg.GlobalMinCount,
 			GlobalHistoryDuration:       db.Opts.CheckpointCfg.GlobalVersionInterval,
+			TableIDHistoryDuration:      db.Opts.CheckpointCfg.TableIDHistoryDuration,
+			TableIDSinkerThreshold:      db.Opts.CheckpointCfg.TableIDSinkerThreshold,
 		},
 	)
 	db.BGCheckpointRunner.Start()

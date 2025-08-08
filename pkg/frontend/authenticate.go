@@ -5642,7 +5642,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate, *tree.Reset:
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Deallocate, *tree.Reset:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.Execute:

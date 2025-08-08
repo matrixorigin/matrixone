@@ -146,6 +146,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		if !tblArg.CanOpt {
 			tblArg.ctr.state, err = generateSeriesPrepare(proc, tblArg)
 		}
+	case "generate_random_int64":
+		tblArg.ctr.state, err = generateRandomInt64Prepare(proc, tblArg)
+	case "generate_random_float64":
+		tblArg.ctr.state, err = generateRandomFloat64Prepare(proc, tblArg)
 	case "meta_scan":
 		tblArg.ctr.state, err = metaScanPrepare(proc, tblArg)
 	case "current_account":
@@ -178,6 +182,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
 	case "ivf_search":
 		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
+	case "parse_jsonl_data":
+		tblArg.ctr.state, err = parseJsonlDataPrepare(proc, tblArg)
+	case "parse_jsonl_file":
+		tblArg.ctr.state, err = parseJsonlFilePrepare(proc, tblArg)
 	default:
 		tblArg.ctr.state = nil
 		err = moerr.NewNotSupported(proc.Ctx, fmt.Sprintf("table function %s is not supported", tblArg.FuncName))

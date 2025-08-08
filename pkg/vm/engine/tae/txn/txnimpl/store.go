@@ -222,6 +222,13 @@ func (store *txnStore) IsReadonly() bool {
 	return store.writeOps.Load() == 0
 }
 
+func (store *txnStore) WantWrite(caller string) (err error) {
+	if store.IsOffline() {
+		return moerr.NewOfflineTxnWriteNoCtx(caller)
+	}
+	return
+}
+
 func (store *txnStore) IncreateWriteCnt(caller string) (err error) {
 	if store.IsOffline() {
 		return moerr.NewOfflineTxnWriteNoCtx(caller)
@@ -333,7 +340,7 @@ func (store *txnStore) RangeDelete(
 	id *common.ID, start, end uint32,
 	pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
-	if err = store.IncreateWriteCnt("range delete"); err != nil {
+	if err = store.IncreateWriteCnt("RangeDelete"); err != nil {
 		return
 	}
 	db, err := store.getOrSetDB(id.DbID)
@@ -347,7 +354,7 @@ func (store *txnStore) DeleteByPhyAddrKeys(
 	id *common.ID,
 	rowIDVec, pkVec containers.Vector, dt handle.DeleteType,
 ) (err error) {
-	if err = store.IncreateWriteCnt("delete by phy addr"); err != nil {
+	if err = store.IncreateWriteCnt("DeleteByPhyAddrKeys"); err != nil {
 		return
 	}
 	db, err := store.getOrSetDB(id.DbID)
@@ -360,7 +367,7 @@ func (store *txnStore) DeleteByPhyAddrKeys(
 func (store *txnStore) AddPersistedTombstoneFile(
 	id *common.ID, stats objectio.ObjectStats,
 ) (ok bool, err error) {
-	if err = store.IncreateWriteCnt("append persisted tombstone file"); err != nil {
+	if err = store.IncreateWriteCnt("AddPersistedTombstoneFile"); err != nil {
 		return
 	}
 
@@ -453,11 +460,17 @@ func (store *txnStore) GetDatabaseByID(id uint64) (h handle.Database, err error)
 }
 
 func (store *txnStore) CreateDatabase(name, createSql, datTyp string) (h handle.Database, err error) {
+	if err = store.WantWrite("CreateDatabase"); err != nil {
+		return
+	}
 	id := store.catalog.NextDB()
 	return store.CreateDatabaseWithID(context.Background(), name, createSql, datTyp, id)
 }
 
 func (store *txnStore) CreateDatabaseWithID(ctx context.Context, name, createSql, datTyp string, id uint64) (h handle.Database, err error) {
+	if err = store.WantWrite("CreateDatabaseWithID"); err != nil {
+		return
+	}
 	meta, err := store.catalog.CreateDBEntryWithID(name, createSql, datTyp, id, store.txn)
 	if err != nil {
 		return nil, err
@@ -475,6 +488,9 @@ func (store *txnStore) CreateDatabaseWithID(ctx context.Context, name, createSql
 }
 
 func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) {
+	if err = store.WantWrite("DropDatabase"); err != nil {
+		return
+	}
 	hasNewEntry, meta, err := store.catalog.DropDBEntryByName(name, store.txn)
 	if err != nil {
 		return
@@ -560,6 +576,9 @@ func (store *txnStore) DoneWaitEvent(cnt int) {
 	store.wg.Add(-cnt)
 }
 func (store *txnStore) DropDatabaseByID(id uint64) (h handle.Database, err error) {
+	if err = store.WantWrite("DropDatabaseByID"); err != nil {
+		return
+	}
 	hasNewEntry, meta, err := store.catalog.DropDBEntryByID(id, store.txn)
 	if err != nil {
 		return
@@ -578,6 +597,9 @@ func (store *txnStore) DropDatabaseByID(id uint64) (h handle.Database, err error
 }
 
 func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Relation, err error) {
+	if err = store.WantWrite("CreateRelation"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -586,6 +608,9 @@ func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Rel
 }
 
 func (store *txnStore) CreateRelationWithTableId(dbId uint64, tableId uint64, def any) (relation handle.Relation, err error) {
+	if err = store.WantWrite("CreateRelationWithTableId"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -594,6 +619,9 @@ func (store *txnStore) CreateRelationWithTableId(dbId uint64, tableId uint64, de
 }
 
 func (store *txnStore) DropRelationByName(dbId uint64, name string) (relation handle.Relation, err error) {
+	if err = store.WantWrite("DropRelationByName"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return nil, err
@@ -602,6 +630,9 @@ func (store *txnStore) DropRelationByName(dbId uint64, name string) (relation ha
 }
 
 func (store *txnStore) DropRelationByID(dbId uint64, id uint64) (relation handle.Relation, err error) {
+	if err = store.WantWrite("DropRelationByID"); err != nil {
+		return
+	}
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return nil, err
@@ -642,6 +673,9 @@ func (store *txnStore) GetObject(id *common.ID, isTombstone bool) (obj handle.Ob
 }
 
 func (store *txnStore) CreateObject(dbId, tid uint64, isTombstone bool) (obj handle.Object, err error) {
+	if err = store.WantWrite("CreateObject"); err != nil {
+		return
+	}
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -650,6 +684,9 @@ func (store *txnStore) CreateObject(dbId, tid uint64, isTombstone bool) (obj han
 }
 
 func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	if err = store.WantWrite("CreateNonAppendableObject"); err != nil {
+		return
+	}
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -680,6 +717,9 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	return
 }
 func (store *txnStore) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats, isTombstone bool) error {
+	if err := store.WantWrite("UpdateObjectStats"); err != nil {
+		return err
+	}
 	db, err := store.getOrSetDB(id.DbID)
 	if err != nil {
 		return err
@@ -689,6 +729,9 @@ func (store *txnStore) UpdateObjectStats(id *common.ID, stats *objectio.ObjectSt
 }
 
 func (store *txnStore) SoftDeleteObject(isTombstone bool, id *common.ID) (err error) {
+	if err = store.WantWrite("SoftDeleteObject"); err != nil {
+		return
+	}
 	var db *txnDB
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return

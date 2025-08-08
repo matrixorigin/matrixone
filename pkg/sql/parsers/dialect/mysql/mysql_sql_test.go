@@ -1747,6 +1747,8 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1",
 		}, {
+			input: "prepare stmt_name1 from @user_var_name",
+		}, {
 			input:  "prepare stmt_name1 from 'select * from t1'",
 			output: "prepare stmt_name1 from select * from t1",
 		}, {
@@ -3271,6 +3273,9 @@ var (
 		},
 		{
 			input: "alter user u1 lock",
+		},
+		{
+			input: "create table t1 (a bigint(20) unsigned)",
 		},
 	}
 )

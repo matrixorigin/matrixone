@@ -6979,7 +6979,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedDirectlyTypeMatch,
 
-		Overloads: fulltext_expand_overload(types.T_bool),
+		Overloads: fulltext_expand_overload(types.T_float32),
 	},
 	{
 		functionId: FULLTEXT_MATCH_SCORE,
