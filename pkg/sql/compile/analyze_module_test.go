@@ -19,6 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -724,4 +728,120 @@ func Test_UpdatePreparePhyScope(t *testing.T) {
 		[]vm.OpType{vm.TableScan, vm.Projection, vm.Connector})
 	res := UpdatePreparePhyScope(s2, phyScope1)
 	require.Equal(t, false, res)
+}
+
+func TestHandleTailNodeReceiver(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	mp := make(map[*process.WaitRegister]int)
+	reg := process.WaitRegister{}
+	mp[&reg] = 0
+	{
+		buf.Reset()
+		node := &connector.Connector{
+			Reg: &reg,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t, " to MergeReceiver [0]", buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.ShuffleToAllFunc,
+			RemoteRegs: []colexec.ReceiveInfo{
+				{
+					NodeAddr: "127.0.0.1:1234",
+				},
+				{
+					NodeAddr: "127.0.0.1:1235",
+				},
+			},
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" shuffle to all of MergeReceiver [0] cross-cn receiver info: "+
+				"[addr: 127.0.0.1:1234, uuid: 00000000-0000-0000-0000-000000000000], "+
+				"[addr: 127.0.0.1:1235, uuid: 00000000-0000-0000-0000-000000000000]",
+			buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.SendToAllFunc,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" to all of MergeReceiver [0]",
+			buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.SendToAnyLocalFunc,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" to any of MergeReceiver [0]",
+			buf.String())
+	}
+
+	{
+		buf.Reset()
+		node := &dispatch.Dispatch{
+			LocalRegs: []*process.WaitRegister{&reg},
+			FuncId:    dispatch.SendToAnyFunc,
+		}
+		hanldeTailNodeReceiver(node, mp, buf)
+		require.Equal(t,
+			" unknow type dispatch [0]",
+			buf.String())
+	}
+}
+
+func TestShowPipelineTree(t *testing.T) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	mp := make(map[*process.WaitRegister]int)
+	reg := process.WaitRegister{}
+	mp[&reg] = 0
+
+	op := dupOperator(
+		insert.NewPartitionInsert(
+			&insert.Insert{},
+			1,
+		),
+		0,
+		0,
+	)
+
+	op.GetOperatorBase().OpAnalyzer = process.NewAnalyzer(
+		op.GetOperatorBase().Idx,
+		op.GetOperatorBase().IsFirst,
+		op.GetOperatorBase().IsLast,
+		"partition_insert",
+	)
+
+	{
+		buf.Reset()
+		ShowPipelineTree(op, "", true, true, mp, AnalyzeLevel, buf)
+		require.Contains(t, buf.String(), "Pipeline: └── unknown")
+		require.Contains(t, buf.String(), "TimeCost:0ns")
+	}
+
+	{
+		buf.Reset()
+		ShowPipelineTree(op, "", false, true, mp, VerboseLevel, buf)
+		require.Contains(t, buf.String(), "└── unknown")
+	}
+
+	{
+		buf.Reset()
+		ShowPipelineTree(op, "", false, false, mp, VerboseLevel, buf)
+		require.Contains(t, buf.String(), "├── unknown")
+	}
+
 }
