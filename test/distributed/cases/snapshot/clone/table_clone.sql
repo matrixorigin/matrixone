@@ -108,3 +108,4 @@ drop snapshot if exists sp1;
 drop account if exists acc1;
 drop account if exists acc2;
 drop database if exists db1;
+drop database if exists db2;

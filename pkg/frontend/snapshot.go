@@ -557,6 +557,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// restore cluster
 	if stmt.Level == tree.RESTORELEVELCLUSTER {
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelCluster)
+
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
 		if err = restoreToCluster(ctx, ses, bh, snapshotName, snapshot.ts, subDbToRestore); err != nil {
@@ -578,6 +580,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// restore account by cluster level snapshot
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelCluster)
+
 		err = restoreToAccountUsingCluster(ctx, ses, bh, stmt, *snapshot)
 		if err != nil {
 			return stats, err
@@ -612,6 +616,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	switch stmt.Level {
 	case tree.RESTORELEVELACCOUNT:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelAccount)
+
 		if err = restoreToAccount(ctx,
 			ses.GetService(),
 			bh, snapshotName,
@@ -625,6 +631,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return stats, err
 		}
 	case tree.RESTORELEVELDATABASE:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelDatabase)
+
 		if err = restoreToDatabase(ctx,
 			ses.GetService(),
 			bh,
@@ -640,6 +648,8 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return stats, err
 		}
 	case tree.RESTORELEVELTABLE:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelTable)
+
 		if err = restoreToTable(ctx,
 			ses.GetService(),
 			bh,
