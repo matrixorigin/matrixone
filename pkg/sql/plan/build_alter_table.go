@@ -550,7 +550,7 @@ func storageAgnosticType(
 }
 
 func storageAgnosticAttrs(
-	ctx context.Context,
+	_ context.Context,
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
 ) (ok bool, err error) {
