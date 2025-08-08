@@ -432,7 +432,7 @@ func (stats *StatsInfo) AddOutputTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.ExecuteStage.OutputDuration, int64(d))
 }
 
-func (stats *StatsInfo) AddBuidReaderTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddBuildReaderTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
