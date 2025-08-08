@@ -348,8 +348,6 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 				partitionBy += "List "
 			case partition.PartitionMethod_LinearHash:
 				partitionBy += "linear hash"
-			case partition.PartitionMethod_LinearKey:
-				partitionBy += "linear key"
 			}
 
 			cols := "("
