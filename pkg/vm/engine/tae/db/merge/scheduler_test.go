@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -124,12 +125,6 @@ func TestScheduler(t *testing.T) {
 	defer sched.Stop()
 
 	time.Sleep(3 * time.Millisecond)
-
-	{
-		// dropped table will be removed from scheduler
-		answer := sched.Query(tables[2])
-		require.Equal(t, answer.NotExists, true)
-	}
 
 	{
 		// switch on/off
@@ -294,6 +289,12 @@ func TestScheduler(t *testing.T) {
 		require.Equal(t, answer.DataMergeCnt, 1)
 	}
 
+	{
+		// dropped table will be removed from scheduler
+		answer := sched.Query(tables[2])
+		require.Equal(t, answer.NotExists, true)
+	}
+
 }
 
 func TestLaunchPad(t *testing.T) {
@@ -373,9 +374,11 @@ func TestLaunchPad(t *testing.T) {
 	require.Equal(t, 2, len(pad.leveledObjects[1]))
 	require.Equal(t, 3, len(pad.leveledObjects[2]))
 
-	rc := new(resourceController)
-	rc.setMemLimit(100 * common.Const1MBytes)
-	rc.refresh()
+	rc := rscthrottler.NewMemThrottler("TestLaunchPad", 1,
+		rscthrottler.WithAllowOutOfLimitAcquire(),
+		rscthrottler.WithConstLimit(100*common.Const1MBytes),
+	)
+
 	tasks := pad.gatherByTrigger(context.Background(), trigger, time.Now(), rc)
 	require.Equal(t, 1, len(tasks))
 	require.Contains(t, tasks[0].note, "test1")

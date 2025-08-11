@@ -2353,6 +2353,8 @@ func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildSc
 		if len(c.cnList) == 1 {
 			if node.JoinType == plan.Node_DEDUP && node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash {
 				logutil.Infof("not support shuffle v2 for dedup join now")
+			} else if probeScopes[0].NodeInfo.Mcpu != int(left.Stats.Dop) || buildScopes[0].NodeInfo.Mcpu != int(right.Stats.Dop) {
+				logutil.Infof("not support shuffle v2 after merge")
 			} else {
 				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
 			}
@@ -2371,6 +2373,7 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	if len(leftscopes) != len(rightscopes) {
 		panic("wrong scopes for shuffle join!")
 	}
+
 	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.cnList) * int(node.Stats.Dop)
 	for i := range leftscopes {

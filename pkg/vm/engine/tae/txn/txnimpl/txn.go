@@ -59,6 +59,9 @@ func (txn *txnImpl) CreateDatabase(name, createSql, datTyp string) (db handle.Da
 
 func (txn *txnImpl) CreateDatabaseWithCtx(ctx context.Context,
 	name, createSql, datTyp string, id uint64) (db handle.Database, err error) {
+	if err = txn.Store.WantWrite("CreateDatabaseWithCtx"); err != nil {
+		return nil, err
+	}
 	err = txn.bindCtxInfo(ctx)
 	if err != nil {
 		return nil, err

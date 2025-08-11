@@ -21,7 +21,7 @@ import (
 type InuseTrackingAllocator[U Allocator] struct {
 	upstream        U
 	inUse           atomic.Uint64
-	onChange        func(uint64)
+	onChange        func(uint64) error
 	deallocatorPool *ClosureDeallocatorPool[inuseTrackingDeallocatorArgs, *inuseTrackingDeallocatorArgs]
 }
 
@@ -35,7 +35,7 @@ func (inuseTrackingDeallocatorArgs) As(Trait) bool {
 
 func NewInuseTrackingAllocator[U Allocator](
 	upstream U,
-	onChange func(uint64),
+	onChange func(uint64) error,
 ) (ret *InuseTrackingAllocator[U]) {
 	ret = &InuseTrackingAllocator[U]{
 		upstream: upstream,
@@ -44,7 +44,9 @@ func NewInuseTrackingAllocator[U Allocator](
 			func(hints Hints, args *inuseTrackingDeallocatorArgs) {
 				n := ret.inUse.Add(-args.size)
 				if onChange != nil {
-					onChange(n)
+					if err := onChange(n); err != nil {
+						panic(err)
+					}
 				}
 			},
 		),
@@ -62,7 +64,10 @@ func (s *InuseTrackingAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, 
 
 	n := s.inUse.Add(size)
 	if s.onChange != nil {
-		s.onChange(n)
+		if err := s.onChange(n); err != nil {
+			dec.Deallocate(hints)
+			panic(err)
+		}
 	}
 
 	return ptr, ChainDeallocator(

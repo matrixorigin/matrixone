@@ -109,7 +109,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	switch update.Action {
 	case UpdateWriteS3:
 		if update.ctr.s3Writer == nil {
-			writer, err := newS3Writer(update)
+			writer, err := newS3Writer(proc.GetService(), update)
 			if err != nil {
 				return err
 			}
@@ -121,7 +121,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 
 	case UpdateFlushS3Info:
 		//resort updateCtxs
-		writer, err := newS3Writer(update)
+		writer, err := newS3Writer(proc.GetService(), update)
 		if err != nil {
 			return err
 		}
@@ -195,7 +195,7 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			return result, nil
 		}
 
-		w, err := update.getS3WriterFunc(update.mainTable)
+		w, err := update.getS3WriterFunc(proc.GetService(), update.mainTable)
 		if err != nil {
 			return vm.CancelResult, err
 		}
@@ -456,7 +456,7 @@ func (update *MultiUpdate) getInput(
 	return update.input, nil
 }
 
-func (update *MultiUpdate) getS3Writer(id uint64) (*s3WriterDelegate, error) {
+func (update *MultiUpdate) getS3Writer(sid string, id uint64) (*s3WriterDelegate, error) {
 	return update.ctr.s3Writer, nil
 }
 
