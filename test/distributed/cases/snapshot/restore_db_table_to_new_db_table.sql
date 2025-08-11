@@ -298,8 +298,8 @@ select * from pub_table01;
 -- @ignore:5,7
 show subscriptions all;
 drop database resub01;
-drop database test_pub01;
 -- @session
+drop database test_pub01;
 drop publication pub02;
 drop database db02;
 drop snapshot sp05;

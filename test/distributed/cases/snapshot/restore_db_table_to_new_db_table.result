@@ -296,16 +296,16 @@ drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-11 11:41:22    resub01    2025-08-11 11:41:22    0
+publication01    sys    republication01    *    republish    2025-08-11 17:41:30    resub01    2025-08-11 17:41:30    0
 drop snapshot if exists sp04;
 create snapshot sp04 for account;
 create database test_pub clone republication01 {snapshot = 'sp04'};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    republication01    *    test_tenant_1    test_tenant_1    2025-08-11 11:41:22    null    republish
+publication01    republication01    *    test_tenant_1    test_tenant_1    2025-08-11 17:41:30    null    republish
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-11 11:41:22    resub01    2025-08-11 11:41:22    0
+publication01    sys    republication01    *    republish    2025-08-11 17:41:30    resub01    2025-08-11 17:41:30    0
 drop database resub01;
 drop publication publication01;
 drop database republication01;
@@ -321,13 +321,13 @@ drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-11 11:41:22    resub01    2025-08-11 11:41:22    0
+publication01    sys    republication01    *    republish    2025-08-11 17:41:30    resub01    2025-08-11 17:41:30    0
 drop snapshot if exists sp05;
 create snapshot sp05 for account;
 create database test_sub clone resub01 {snapshot = 'sp05'};
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2025-08-11 11:41:22    resub01    2025-08-11 11:41:22    0
+publication01    sys    republication01    *    republish    2025-08-11 17:41:30    resub01    2025-08-11 17:41:30    0
 drop database test_sub;
 drop database resub01;
 drop snapshot sp05;
@@ -357,7 +357,7 @@ create database test_pub01;
 create table test_pub01.pub_table02 clone db02.vector_index_04 {snapshot = 'sp05'};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-pub02    db02    vector_index_01,vector_index_04    test_tenant_1        2025-08-11 11:41:24    null    
+pub02    db02    vector_index_01,vector_index_04    test_tenant_1        2025-08-11 17:41:31    null    
 drop database if exists resub01;
 create database resub01 from sys publication pub02;
 use test_pub01;
@@ -373,7 +373,7 @@ a    b    c
 9778    [41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]    4
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub02    sys    db02    vector_index_01,vector_index_04        2025-08-11 11:41:24    resub01    2025-08-11 11:41:24    0
+pub02    sys    db02    vector_index_01,vector_index_04        2025-08-11 17:41:31    resub01    2025-08-11 17:41:32    0
 drop database resub01;
 drop database test_pub01;
 drop publication pub02;
