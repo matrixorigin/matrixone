@@ -95,11 +95,9 @@ show tables;
 select * from aff01;
 show create table aff01;
 drop database test04;
--- @bvt:issue#22297
-drop database test03;
--- @bvt:issue
 drop database test05;
 drop database test06;
+drop database test03;
 drop snapshot sp02;
 
 
@@ -265,7 +263,6 @@ drop database republication01;
 
 
 -- pub table
--- @bvt:issue#22297
 drop database if exists db02;
 create database db02;
 use db02;
@@ -287,20 +284,25 @@ drop database if exists test_pub01;
 create database test_pub01;
 -- @session
 create table test_pub01.pub_table01 clone db02.vector_index_01 {snapshot = 'sp05'} to account test_tenant_1;
+drop database if exists test_pub01;
+create database test_pub01;
 create table test_pub01.pub_table02 clone db02.vector_index_04 {snapshot = 'sp05'};
 -- @ignore:5,6
 show publications;
 -- @session:id=1&user=test_tenant_1:test_account&password=111
 drop database if exists resub01;
-create database resub01 from sys publication publication01;
+create database resub01 from sys publication pub02;
+use test_pub01;
+show tables;
+select * from pub_table01;
 -- @ignore:5,7
 show subscriptions all;
 drop database resub01;
+drop database test_pub01;
 -- @session
 drop publication pub02;
 drop database db02;
 drop snapshot sp05;
--- @bvt:issue
 drop account test_tenant_1;
 
 
@@ -335,13 +337,14 @@ create database test06 clone test05 {snapshot = 'sp07'} to account acc01;
 -- @session:id=2&user=acc01:test_account&password=111
 drop database if exists test05;
 drop database if exists test03;
+create database test05;
+create database test03;
 -- @session
--- @bvt:issue#22297
 create table test05.rs02 clone test05.rs01 {snapshot = 'sp07'} to account acc01;
 create table test03.rs02 clone test05.rs01 {snapshot = 'sp07'} to account acc01;
 -- @session:id=2&user=acc01:test_account&password=111
 show databases;
-use test02;
+use test05;
 select * from rs02;
 select count(*) from rs02;
 use test03;
@@ -350,7 +353,6 @@ select * from rs02;
 drop database test03;
 drop database test05;
 -- @session
--- @bvt:issue
 drop database test05;
 drop snapshot sp07;
 
@@ -396,8 +398,13 @@ insert into aff01 values (7654,'MARTIN','SALESMAN',7698,'1981-09-28',1250,1400,3
 
 drop snapshot if exists sp07;
 create snapshot sp07 for account;
+-- @session:id=3&user=acc02:test_account&password=111
+drop database if exists test05;
+drop database if exists test06;
+create database test05;
+create database test06;
+-- @session
 
--- @bvt:issue#22297
 create database test04 clone test06 {snapshot = 'sp07'} to account acc02;
 create table test05.pri01 clone test06.pri01 {snapshot = 'sp07'} to account acc02;
 create table test06.aff01 clone test06.aff01 {snapshot = 'sp07'} to account acc02;
@@ -407,7 +414,7 @@ show tables;
 show create table aff01;
 show create table pri01;
 use test05;
-show create table test05;
+show create table pri01;
 use test06;
 select * from aff01;
 show create table aff01;
@@ -415,7 +422,6 @@ drop database test04;
 drop database test05;
 drop database test06;
 -- @session
--- @bvt:issue
 drop database test06;
 drop snapshot sp07;
 drop account acc01;
