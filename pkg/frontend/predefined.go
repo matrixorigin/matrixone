@@ -268,18 +268,16 @@ var (
     			primary key(account_id,task_id,db_name,table_name)
 			)`
 
-	MoCatalogMoISCPLogDDL = `CREATE TABLE mo_catalog.mo_intra_system_change_propagation_log (
+	MoCatalogMoISCPLogDDL = `CREATE TABLE mo_catalog.mo_iscp_log (
 				account_id INT UNSIGNED NOT NULL,
 				table_id BIGINT UNSIGNED NOT NULL,
 				job_name VARCHAR NOT NULL,
-				job_config VARCHAR NOT NULL,
-				column_names VARCHAR NOT NULL,
-				last_sync_txn_ts VARCHAR(32)  NOT NULL,
-				err_code INT NOT NULL,
-				error_msg VARCHAR(255) NOT NULL,
-				info VARCHAR NOT NULL,
-				drop_at DATETIME NULL,
-				consumer_config VARCHAR NULL,
+				job_spec JSON NOT NULL,
+				job_state TINYINT NOT NULL,
+				watermark VARCHAR NOT NULL,
+				job_status JSON NOT NULL,
+				create_at TIMESTAMP NOT NULL,
+				drop_at TIMESTAMP NULL, 
 				primary key(account_id, table_id, job_name)
 			)`
 
