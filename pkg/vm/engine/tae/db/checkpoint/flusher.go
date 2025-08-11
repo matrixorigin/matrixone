@@ -582,6 +582,10 @@ nextChunk:
 			factory = jobs.FlushTableTailTaskFactory(chunk, tombstoneMetas, flusher.rt)
 			firstChunk = false
 		} else {
+			logutil.Info("[FlushTabletail] fire chunk",
+				zap.String("table", tableDesc),
+				zap.Int("chunk-size", len(chunk)),
+			)
 			factory = jobs.FlushTableTailTaskFactory(chunk, nil, flusher.rt)
 		}
 
