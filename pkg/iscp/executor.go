@@ -49,7 +49,7 @@ import (
 )
 
 const (
-	MOIntraSystemChangePropagationLogTableName = catalog.MO_INTRA_SYSTEM_CHANGE_PROPAGATION_LOG
+	MOISCPLogTableName = catalog.MO_ISCP_LOG
 )
 
 const (
@@ -191,7 +191,7 @@ func (exec *ISCPTaskExecutor) setISCPLogTableID(ctx context.Context) (err error)
 	}
 	defer txn.Commit(ctx)
 
-	tableID, err := getTableID(ctx, exec.cnUUID, txn, tenantId, catalog.MO_CATALOG, MOIntraSystemChangePropagationLogTableName)
+	tableID, err := getTableID(ctx, exec.cnUUID, txn, tenantId, catalog.MO_CATALOG, MOISCPLogTableName)
 	if err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (exec *ISCPTaskExecutor) setISCPLogTableID(ctx context.Context) (err error)
 	return nil
 }
 func (exec *ISCPTaskExecutor) subscribeMOISCPLog(ctx context.Context) (err error) {
-	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogSelectSQL()
+	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
 	txn, err := exec.txnFactory()
 	if err != nil {
 		return err
@@ -473,7 +473,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 			zap.Error(err),
 		)
 	}()
-	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogSelectSQL()
+	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
 	txn, err := exec.txnFactory()
 	if err != nil {
 		return
