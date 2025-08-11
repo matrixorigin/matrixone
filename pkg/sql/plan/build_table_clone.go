@@ -15,12 +15,14 @@
 package plan
 
 import (
+	"context"
+	"slices"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"slices"
-	"strings"
 )
 
 func buildCloneTable(
@@ -139,7 +141,7 @@ func buildCloneTable(
 	)
 
 	if err = checkPrivilege(
-		stmt.StmtType, opAccount, srcAccount, dstAccount, srcTblDef, dstTblDef,
+		ctx.GetContext(), stmt, opAccount, srcAccount, dstAccount, srcTblDef, dstTblDef,
 	); err != nil {
 		return nil, err
 	}
@@ -159,7 +161,8 @@ func buildCloneTable(
 }
 
 func checkPrivilege(
-	stmtType tree.CloneStmtType,
+	ctx context.Context,
+	stmt *tree.CloneTable,
 	opAccount uint32,
 	dstAccount uint32,
 	srcAccount uint32,
@@ -168,7 +171,20 @@ func checkPrivilege(
 ) (err error) {
 
 	// 1. only sys can clone from system databases
-	// 2. sys and non-sys both cannot clone to a system database
+	// 2. sys and non-sys both cannot clone to system database
+	// 3. if this is a restore clone stmt, skip this check
+
+	if val := ctx.Value(tree.CloneLevelCtxKey{}); val != nil {
+		switch val.(tree.CloneLevelType) {
+		case tree.RestoreCloneLevelAccount,
+			tree.RestoreCloneLevelCluster,
+			tree.RestoreCloneLevelDatabase,
+			tree.RestoreCloneLevelTable:
+			// skip this check
+			return nil
+		default:
+		}
+	}
 
 	var (
 		typ int
@@ -190,7 +206,7 @@ func checkPrivilege(
 		return moerr.NewInternalErrorNoCtx("cannot clone data into system database")
 	} else if typ == 1 {
 		if opAccount != catalog.System_Account {
-			return moerr.NewInternalErrorNoCtx("non sys-account cannot clone data from system database")
+			return moerr.NewInternalErrorNoCtx("non-sys account cannot clone data from system database")
 		}
 	}
 
