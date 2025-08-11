@@ -652,3 +652,329 @@ func prepareTNMeta(
 	}
 	return
 }
+
+const (
+	TableIDAttr_Account     = "account"
+	TableIDAttr_DBID        = "db_id"
+	TableIDAttr_TableID     = "table_id"
+	TableIDAttr_ObjectStart = "object_start"
+	TableIDAttr_ObjectEnd   = "object_end"
+)
+
+const (
+	CKPTableIDBatch_SpecialTableID = 0
+
+	BatchRowCountThreshold = 8192
+)
+
+var TableIDAttrs = []string{
+	TableIDAttr_Account,
+	TableIDAttr_DBID,
+	TableIDAttr_TableID,
+	TableIDAttr_ObjectStart,
+	TableIDAttr_ObjectEnd,
+}
+
+var TableIDTypes = []types.Type{
+	types.T_uint32.ToType(),
+	types.T_uint64.ToType(),
+	types.T_uint64.ToType(),
+	types.T_TS.ToType(),
+	types.T_TS.ToType(),
+}
+var TableIDSeqnums = []uint16{0, 1, 2, 3, 4}
+
+func SyncTableIDBatch(
+	ctx context.Context,
+	start, end types.TS,
+	ttl time.Duration,
+	sinkerThreshold int,
+	ckpLocation objectio.Location,
+	ckpVersion uint32,
+	prevTableIDLocation objectio.LocationSlice,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (locations objectio.LocationSlice, err error) {
+	dataFactory := ioutil.NewFSinkerImplFactory(
+		TableIDSeqnums,
+		-1,
+		false,
+		false,
+		0,
+	)
+	sinker := ioutil.NewSinker(
+		-1,
+		TableIDAttrs,
+		TableIDTypes,
+		dataFactory,
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(sinkerThreshold),
+	)
+	defer sinker.Close()
+	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
+	defer bat.Clean(mp)
+
+	tableBatchStart := types.MaxTs()
+	tableBatchEnd := types.TS{}
+	minTS := types.BuildTS(end.Physical()-ttl.Nanoseconds(), 0)
+
+	consumeFn := func(preTableIDBatch *batch.Batch, release func()) {
+		accountIDs := vector.MustFixedColNoTypeCheck[uint32](preTableIDBatch.Vecs[0])
+		dbIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[1])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](preTableIDBatch.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](preTableIDBatch.Vecs[4])
+
+		for i := 0; i < preTableIDBatch.RowCount(); i++ {
+			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
+				tableBatchStart = starts[i]
+				tableBatchEnd = ends[i]
+			}
+			if ends[i].LT(&minTS) {
+				continue
+			}
+			if tableIDs[i] == CKPTableIDBatch_SpecialTableID {
+				continue
+			}
+			vector.AppendFixed(bat.Vecs[0], accountIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[1], dbIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[2], tableIDs[i], false, mp)
+			vector.AppendFixed(bat.Vecs[3], starts[i], false, mp)
+			vector.AppendFixed(bat.Vecs[4], ends[i], false, mp)
+			bat.SetRowCount(bat.Vecs[0].Length())
+
+			if bat.RowCount() >= BatchRowCountThreshold {
+				sinker.Write(ctx, bat)
+				bat.CleanOnlyData()
+			}
+		}
+	}
+
+	reader, err := NewSyncTableIDReader(prevTableIDLocation, mp, fs)
+	if err != nil {
+		return
+	}
+	for {
+		var release func()
+		var bat *batch.Batch
+		var isEnd bool
+		release, bat, isEnd, err = reader.Read(ctx)
+		if err != nil {
+			return
+		}
+		if isEnd {
+			break
+		}
+		defer release()
+		consumeFn(bat, release)
+	}
+
+	if !ckpLocation.IsEmpty() {
+		reader := NewCKPReader(ckpVersion, ckpLocation, common.CheckpointAllocator, fs)
+		if err = reader.ReadMeta(ctx); err != nil {
+			return
+		}
+
+		type tableInfo struct {
+			account uint32
+			dbid    uint64
+			start   types.TS
+			end     types.TS
+		}
+		tableInfofs := make(map[uint64]*tableInfo)
+		reader.ForEachRow(
+			ctx,
+			func(
+				account uint32,
+				dbid uint64,
+				tid uint64,
+				objectType int8,
+				objectStats objectio.ObjectStats,
+				create, delete types.TS,
+				rowID types.Rowid,
+			) error {
+				commitTS := create
+				if !delete.IsEmpty() {
+					commitTS = delete
+				}
+				info, ok := tableInfofs[tid]
+				if !ok {
+					info = &tableInfo{
+						account: account,
+						dbid:    dbid,
+						start:   commitTS,
+						end:     commitTS,
+					}
+					tableInfofs[tid] = info
+				}
+				if objectStats.GetAppendable() {
+					// New data may be inserted into the appendable object (aobj)
+					// at any time between its create and delete timestamps.
+					var aobjStart, aobjEnd types.TS
+					if delete.IsEmpty() {
+						if start.GT(&create) {
+							aobjStart = start
+						} else {
+							aobjStart = create
+						}
+						aobjEnd = end
+					} else {
+						if start.GT(&create) {
+							aobjStart = start
+						} else {
+							aobjStart = create
+						}
+						if end.LT(&delete) {
+							aobjEnd = end
+						} else {
+							aobjEnd = delete
+						}
+					}
+					if info.start.GT(&aobjStart) {
+						info.start = aobjStart
+					}
+					if info.end.LT(&aobjEnd) {
+						info.end = aobjEnd
+					}
+				} else {
+					if info.start.GT(&commitTS) {
+						info.start = commitTS
+					}
+					if info.end.LT(&commitTS) {
+						info.end = commitTS
+					}
+				}
+				return nil
+			},
+		)
+
+		for tid, info := range tableInfofs {
+			if tid == CKPTableIDBatch_SpecialTableID {
+				panic("logic error")
+			}
+			vector.AppendFixed(bat.Vecs[0], info.account, false, mp)
+			vector.AppendFixed(bat.Vecs[1], info.dbid, false, mp)
+			vector.AppendFixed(bat.Vecs[2], tid, false, mp)
+			vector.AppendFixed(bat.Vecs[3], info.start, false, mp)
+			vector.AppendFixed(bat.Vecs[4], info.end, false, mp)
+			if bat.RowCount() >= BatchRowCountThreshold {
+				sinker.Write(ctx, bat)
+				bat.CleanOnlyData()
+			}
+		}
+
+	}
+
+	if !ckpLocation.IsEmpty() {
+		tableBatchEnd = end
+	}
+
+	if tableBatchStart.LT(&minTS) {
+		tableBatchStart = minTS
+	}
+
+	if prevTableIDLocation.Len() == 0 {
+		tableBatchStart = start
+		tableBatchEnd = end
+	}
+
+	vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+	vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[3], tableBatchStart, false, mp)
+	vector.AppendFixed(bat.Vecs[4], tableBatchEnd, false, mp)
+
+	bat.SetRowCount(bat.Vecs[0].Length())
+
+	if err = sinker.Write(ctx, bat); err != nil {
+		return
+	}
+
+	if err = sinker.Sync(ctx); err != nil {
+		return
+	}
+
+	files, inMems := sinker.GetResult()
+
+	if len(inMems) > 0 {
+		panic("logic error")
+	}
+
+	for _, file := range files {
+		location := file.ObjectLocation()
+		location.SetID(uint16(file.BlkCnt()))
+		locations.Append(location)
+	}
+	return
+}
+
+func MockTableIDBatch(
+	ctx context.Context,
+	start, end types.TS,
+	sinkerThreshold int,
+	rowCount int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (locations objectio.LocationSlice, err error) {
+	dataFactory := ioutil.NewFSinkerImplFactory(
+		TableIDSeqnums,
+		-1,
+		false,
+		false,
+		0,
+	)
+	sinker := ioutil.NewSinker(
+		-1,
+		TableIDAttrs,
+		TableIDTypes,
+		dataFactory,
+		mp,
+		fs,
+		ioutil.WithMemorySizeThreshold(sinkerThreshold),
+	)
+	defer sinker.Close()
+	bat := batch.NewWithSchema(false, TableIDAttrs, TableIDTypes)
+	defer bat.Clean(mp)
+
+	for i := 0; i < rowCount; i++ {
+		vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+		vector.AppendFixed(bat.Vecs[1], uint64(3000), false, mp)
+		vector.AppendFixed(bat.Vecs[2], uint64(1000+i), false, mp)
+		vector.AppendFixed(bat.Vecs[3], start, false, mp)
+		vector.AppendFixed(bat.Vecs[4], end, false, mp)
+		bat.SetRowCount(bat.Vecs[0].Length())
+		if bat.RowCount() >= BatchRowCountThreshold {
+			sinker.Write(ctx, bat)
+			bat.CleanOnlyData()
+		}
+	}
+
+	vector.AppendFixed(bat.Vecs[0], uint32(0), false, mp)
+	vector.AppendFixed(bat.Vecs[1], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[2], uint64(0), false, mp)
+	vector.AppendFixed(bat.Vecs[3], start, false, mp)
+	vector.AppendFixed(bat.Vecs[4], end, false, mp)
+	bat.SetRowCount(bat.Vecs[0].Length())
+
+	if err = sinker.Write(ctx, bat); err != nil {
+		return
+	}
+
+	if err = sinker.Sync(ctx); err != nil {
+		return
+	}
+
+	files, inMems := sinker.GetResult()
+
+	if len(inMems) > 0 {
+		panic("logic error")
+	}
+
+	for _, file := range files {
+		location := file.ObjectLocation()
+		location.SetID(uint16(file.BlkCnt()))
+		locations.Append(location)
+	}
+	return
+}

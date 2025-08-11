@@ -283,3 +283,10 @@ drop table if exists t1;
 create table t1(a int primary key, b vecf64(10));
 insert into t1 select result, "[0.11,0.22,0.33,0.44,0.55,0.66,0.77,0.88,0.99,0.101]" from generate_series (1, 100000)g;
 select a from t1 where b in ("[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.101]","[1.11,1.22,1.33,1.44,1.55,1.66,1.77,1.88,1.99,1.102]");
+
+drop table if exists test_bigint;
+create table test_bigint (a bigint unsigned);
+insert into test_bigint values (0xFFFFFFFFFFFFFFFD);
+insert into test_bigint values (0xFFFFFFFFFFFFFFFE);
+select * from test_bigint where a -1 > 1;
+select * from test_bigint where a > 1;

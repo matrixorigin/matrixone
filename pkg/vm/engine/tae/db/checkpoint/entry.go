@@ -59,13 +59,14 @@ func WithCheckedEntryOption(policyChecked, flushedChecked bool) EntryOption {
 
 type CheckpointEntry struct {
 	sync.RWMutex
-	sid        string
-	start, end types.TS
-	state      State
-	entryType  EntryType
-	cnLocation objectio.Location
-	tnLocation objectio.Location
-	version    uint32
+	sid             string
+	start, end      types.TS
+	state           State
+	entryType       EntryType
+	cnLocation      objectio.Location
+	tnLocation      objectio.Location
+	tableIDLocation objectio.LocationSlice
+	version         uint32
 
 	ckpLSN      uint64
 	truncateLSN uint64
@@ -247,6 +248,12 @@ func (e *CheckpointEntry) GetTNLocation() objectio.Location {
 	return e.tnLocation
 }
 
+func (e *CheckpointEntry) GetTableIDLocation() objectio.LocationSlice {
+	e.RLock()
+	defer e.RUnlock()
+	return e.tableIDLocation
+}
+
 func (e *CheckpointEntry) GetVersion() uint32 {
 	e.RLock()
 	defer e.RUnlock()
@@ -313,6 +320,13 @@ func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	defer e.Unlock()
 	e.cnLocation = cn.Clone()
 	e.tnLocation = tn.Clone()
+}
+
+func (e *CheckpointEntry) SetTableIDLocation(locations objectio.LocationSlice) {
+	e.Lock()
+	defer e.Unlock()
+	e.tableIDLocation = make(objectio.LocationSlice, len(locations))
+	copy(e.tableIDLocation, locations)
 }
 
 //===============================================================

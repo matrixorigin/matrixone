@@ -159,6 +159,7 @@ func (store *NoopTxnStore) LogTxnState(sync bool) (logEntry entry.Entry, err err
 func (store *NoopTxnStore) IsOffline() bool               { return false }
 func (store *NoopTxnStore) IsReadonly() bool              { return false }
 func (store *NoopTxnStore) IncreateWriteCnt(string) error { return nil }
+func (store *NoopTxnStore) WantWrite(string) error        { return nil }
 
 func (store *NoopTxnStore) HasAnyTableDataChanges() bool       { return false }
 func (store *NoopTxnStore) GetDirty() *model.Tree              { return nil }

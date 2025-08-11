@@ -221,8 +221,10 @@ func loadCheckpointMeta(
 		checkpointVersion = 1
 	} else if vecLen < CheckpointSchemaColumnCountV2 {
 		checkpointVersion = 2
-	} else {
+	} else if vecLen < CheckpointSchemaColumnCountV3 {
 		checkpointVersion = 3
+	} else {
+		checkpointVersion = 4
 	}
 	return ListSnapshotCheckpointWithMeta(bat, checkpointVersion)
 }

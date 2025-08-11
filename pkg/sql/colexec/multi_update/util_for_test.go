@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -180,6 +182,10 @@ func prepareTestCtx(t *testing.T, withFs bool) (context.Context, *gomock.Control
 
 	proc.Base.TxnClient = txnClient
 	proc.Ctx = ctx
+
+	throttler := rscthrottler.NewMemThrottler(t.Name(), 1.0)
+
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.CNMemoryThrottler, throttler)
 
 	return ctx, ctrl, proc
 }
