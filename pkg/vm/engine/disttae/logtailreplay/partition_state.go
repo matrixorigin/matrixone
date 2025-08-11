@@ -942,16 +942,17 @@ func (p *PartitionState) truncateTombstoneObjects(
 	}
 
 	if gcLog.Len() > 0 {
-		logutil.Info("gc tombstone file",
+		logutil.Info(
+			"PS-GC-TombstoneIndex",
 			zap.String("db.tbl", fmt.Sprintf("%d.%d", dbId, tblId)),
 			zap.String("ts", ts.ToString()),
 			zap.String("files", gcLog.String()))
 	}
 }
 
-func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
+func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) (updated bool) {
 	if p.start.GT(&ts) {
-		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.start.ToString(), ts.ToString())
+		updated = true
 		return
 	}
 	p.start = ts
@@ -1002,7 +1003,13 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		}
 	}
 	if gced {
-		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objectsToDelete)
+		logutil.Info(
+			"PS-GC-DataObject",
+			zap.String("ts", ts.ToString()),
+			zap.String("db.tbl", fmt.Sprintf("%d.%d", ids[0], ids[1])),
+			zap.String("files", objectsToDelete),
+			zap.String("ps", fmt.Sprintf("%p", p)),
+		)
 	}
 
 	objectsToDeleteBuilder.Reset()
@@ -1034,8 +1041,16 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	}
 	objsToDelete := objectsToDeleteBuilder.String()
 	if objGced {
-		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objsToDelete)
+		logutil.Info(
+			"PS-GC-NameIndex",
+			zap.String("ts", ts.ToString()),
+			zap.String("db.tbl", fmt.Sprintf("%d.%d", ids[0], ids[1])),
+			zap.String("files", objsToDelete),
+			zap.String("ps", fmt.Sprintf("%p", p)),
+		)
 	}
+	updated = true
+	return
 }
 
 func (p *PartitionState) PKExistInMemBetween(

@@ -701,8 +701,9 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 }
 
 func buildCreateTable(
-	stmt *tree.CreateTable,
 	ctx CompilerContext,
+	stmt *tree.CreateTable,
+	cloneStmt *tree.CloneTable,
 ) (*Plan, error) {
 
 	if stmt.IsAsLike {
@@ -752,12 +753,12 @@ func buildCreateTable(
 			tableDef.DbName = ctx.DefaultDatabase()
 		}
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true)
+		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
-			return buildCreateTable(stmtLike, ctx)
+			return buildCreateTable(ctx, stmtLike, nil)
 		}
 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
@@ -868,12 +869,6 @@ func buildCreateTable(
 			if opt.Value != 0 {
 				createTable.TableDef.AutoIncrOffset = opt.Value - 1
 			}
-		case *tree.RetentionOption:
-			duration, err := parseDuration(ctx.GetContext(), opt.Period, opt.Unit)
-			if err != nil {
-				return nil, err
-			}
-			createTable.RetentionDeadline = time.Now().Add(duration).Unix()
 
 		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,

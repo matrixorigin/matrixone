@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -218,7 +222,8 @@ func getChangedListFromCheckpoints(
 	to types.TS,
 	h *Handle,
 	isTheTblIWant func(exists []uint64, tblId uint64, ts types.TS) bool,
-) (accIds, dbIds, tblIds []uint64, err error) {
+	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
+) (accIds, dbIds, tblIds []uint64, oldest types.TS, err error) {
 
 	var (
 		dbEntry *catalog2.DBEntry
@@ -230,7 +235,41 @@ func getChangedListFromCheckpoints(
 			zap.String("hint", hint))
 	}
 
+	var ckp *checkpoint.CheckpointEntry
+	maxICKP := h.GetDB().BGCheckpointRunner.MaxIncrementalCheckpoint()
+	maxGCKP := h.GetDB().BGCheckpointRunner.MaxGlobalCheckpoint()
+	if maxICKP == nil && maxGCKP == nil {
+		return
+	}
+	if maxICKP == nil {
+		ckp = maxGCKP
+	}
+	if maxGCKP == nil {
+		ckp = maxICKP
+	}
+	if maxICKP != nil && maxGCKP != nil {
+		gckpEnd := maxGCKP.GetEnd()
+		ickpEnd := maxICKP.GetEnd()
+		if ickpEnd.GT(&gckpEnd) {
+			ckp = maxICKP
+		} else {
+			ckp = maxGCKP
+		}
+	}
+
+	tableIDLocation := ckp.GetTableIDLocation()
+	accIds, dbIds, tblIds, oldest, ok := tryGetChangedListFromTableIDBatch(
+		ctx, from, to, tableIDLocation, h, isTheTblIWantWithTimeRange,
+	)
+	// for ckp with old version,
+	// tableIDLocation is empty,
+	// read all incremental checkpoints instead
+	if ok {
+		return
+	}
+
 	ckps := h.GetDB().BGCheckpointRunner.GetAllCheckpoints()
+
 	tblIds = make([]uint64, 0)
 	readers := make([]*logtail.CKPReader, len(ckps))
 	for i := 0; i < len(ckps); i++ {
@@ -240,6 +279,12 @@ func getChangedListFromCheckpoints(
 		}
 		if !ckps[i].HasOverlap(from, to) {
 			continue
+		}
+		if ckps[i].IsIncremental() {
+			ckpStart := ckps[i].GetStart()
+			if oldest.GT(&ckpStart) {
+				oldest = ckpStart
+			}
 		}
 		ioutil.Prefetch(
 			h.GetDB().Runtime.SID(),
@@ -303,6 +348,76 @@ func getChangedListFromCheckpoints(
 				return nil
 			},
 		)
+	}
+	return
+}
+
+func tryGetChangedListFromTableIDBatch(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	tableIDLocations objectio.LocationSlice,
+	h *Handle,
+	isTheTblIWantWithTimeRange func(exists []uint64, tblId uint64, start, end types.TS) bool,
+) (accIds, dbIds, tblIds []uint64, oldest types.TS, ok bool) {
+	oldest = types.MaxTs()
+	if tableIDLocations.Len() == 0 {
+		return
+	}
+
+	reader, err := logtail.NewSyncTableIDReader(tableIDLocations, common.CheckpointAllocator, h.GetDB().Runtime.Fs)
+	if err != nil {
+		return
+	}
+
+	consumeFn := func(bat *batch.Batch, release func()) {
+
+		defer release()
+		accounts := vector.MustFixedColNoTypeCheck[uint32](bat.Vecs[0])
+		dbids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[1])
+		tids := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[2])
+		starts := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[3])
+		ends := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[4])
+
+		var start types.TS
+		for i := 0; i < bat.RowCount(); i++ {
+			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				start = starts[i]
+				break
+			}
+		}
+		if start.GT(&from) {
+			return
+		}
+		ok = true
+		oldest = start
+
+		tblIds = make([]uint64, 0)
+		accIds = make([]uint64, 0)
+		dbIds = make([]uint64, 0)
+		for i := 0; i < bat.RowCount(); i++ {
+			if tids[i] == logtail.CKPTableIDBatch_SpecialTableID {
+				continue
+			}
+			if !isTheTblIWantWithTimeRange(tblIds, tids[i], starts[i], ends[i]) {
+				continue
+			}
+			tblIds = append(tblIds, tids[i])
+			accIds = append(accIds, uint64(accounts[i]))
+			dbIds = append(dbIds, dbids[i])
+		}
+
+	}
+
+	for {
+		release, bat, isEnd, err := reader.Read(ctx)
+		if err != nil {
+			return
+		}
+		if isEnd {
+			break
+		}
+		consumeFn(bat, release)
 	}
 	return
 }
@@ -423,10 +538,44 @@ func (h *Handle) HandleGetChangedTableList(
 		return false
 	}
 
-	accIds, dbIds, tblIds, err = getChangedListFromCheckpoints(ctx, from, to, h, isTheTblIWant)
+	isTheTblIWantWithTimeRange := func(innerExist []uint64, tblId uint64, start, end types.TS) bool {
+		if slices.Index(tblIds, tblId) != -1 || slices.Index(innerExist, tblId) != -1 {
+			// already exist
+			return false
+		}
+
+		if req.Type == cmd_util.CheckChanged {
+			if idx := slices.Index(req.TableIds, tblId); idx == -1 {
+				// not the tbl I want to check
+				return false
+			} else {
+				ts := types.TimestampToTS(*req.TS[idx])
+				if end.LT(&ts) {
+					return false
+				}
+			}
+
+			return true
+
+		} else if req.Type == cmd_util.CollectChanged {
+			if start.GT(&to) {
+				return false
+			}
+			if end.LT(&start) {
+				return false
+			}
+			return true
+		}
+
+		return false
+	}
+
+	accIds, dbIds, tblIds, oldest, err := getChangedListFromCheckpoints(ctx, from, to, h, isTheTblIWant, isTheTblIWantWithTimeRange)
 	if err != nil {
 		return nil, err
 	}
+	oldestTimestamp := oldest.ToTimestamp()
+	resp.Oldest = &oldestTimestamp
 
 	accIds2, dbIds2, tblIds2, err := getChangedListFromDirtyTree(ctx, from, to, h, isTheTblIWant)
 	if err != nil {
@@ -569,6 +718,46 @@ func (h *Handle) HandleDiskCleaner(
 		return
 	case cmd_util.StartGC:
 		err = h.db.Controller.SwitchTxnMode(ctx, 4, "")
+		return
+	case cmd_util.ForceGC:
+		selector := clusterservice.NewSelectAll()
+		client := h.client
+		maxTS := types.MaxTs()
+		minTS := maxTS
+		var reqError error
+		clusterservice.GetMOCluster(client.ServiceID()).GetCNService(
+			selector,
+			func(cn metadata.CNService) bool {
+				mintsReq := client.NewRequest(querypb.CmdMethod_MinTimestamp)
+				mintsCtx, cancel := context.WithTimeoutCause(ctx, time.Second*10,
+					moerr.NewInternalError(ctx, "Get MinTimestamp"))
+				defer cancel()
+
+				mintsResp, mintsErr := client.SendMessage(mintsCtx, cn.QueryAddress, mintsReq)
+				if mintsErr != nil {
+					reqError = moerr.AttachCause(mintsCtx, mintsErr)
+					return false
+				}
+				ts := types.BuildTS(mintsResp.MinTimestampResponse.MinTimestamp.PhysicalTime,
+					mintsResp.MinTimestampResponse.MinTimestamp.LogicalTime)
+				if !ts.IsEmpty() && ts.LT(&maxTS) && ts.LT(&minTS) {
+					minTS = ts
+				}
+				return false
+			})
+		if reqError != nil {
+			err = reqError
+			return
+		}
+		if minTS.Equal(&maxTS) {
+			return
+		}
+		histroyRetention := time.Now().UTC().UnixNano() - minTS.Physical()
+		err = h.db.ForceGlobalCheckpoint(ctx, minTS, time.Duration(histroyRetention))
+		if err != nil {
+			return
+		}
+		err = h.db.DiskCleaner.ForceGC(ctx, &minTS)
 		return
 	case cmd_util.AddChecker:
 		break

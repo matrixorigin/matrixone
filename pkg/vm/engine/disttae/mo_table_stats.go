@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -476,6 +477,18 @@ func initMoTableStatsConfig(
 		}
 
 		go func() {
+			var (
+				start           = time.Now()
+				moServerStarted time.Time
+			)
+
+			defer func() {
+				logutil.Info(logHeader,
+					zap.String("source", "wait the mo service started"),
+					zap.Duration("duration", moServerStarted.Sub(start)),
+				)
+			}()
+
 			newCtx := turn2SysCtx(ctx)
 			ticker := time.NewTicker(time.Second)
 
@@ -488,7 +501,12 @@ func initMoTableStatsConfig(
 						continue
 					}
 
+					if moServerStarted.IsZero() {
+						moServerStarted = time.Now()
+					}
+
 					if eng.dynamicCtx.initCronTask(newCtx) {
+						eng.dynamicCtx.moStatsCronTaskInit.Store(true)
 						return
 					}
 
@@ -607,6 +625,8 @@ type dynamicCtx struct {
 	executorPool sync.Pool
 
 	sqlOpts ie.SessionOverrideOptions
+
+	moStatsCronTaskInit atomic.Bool
 }
 
 func (d *dynamicCtx) LogDynamicCtx() string {
@@ -1630,6 +1650,14 @@ func (d *dynamicCtx) tableStatsExecutor(
 			return
 
 		case <-executeTicker.C:
+
+			if !d.moStatsCronTaskInit.Load() {
+				logutil.Info(logHeader,
+					zap.String("source", "table stats executor"),
+					zap.String("state", "waiting mo stats cron task init"))
+				continue
+			}
+
 			if d.checkMoveOnTask() {
 				continue
 			}

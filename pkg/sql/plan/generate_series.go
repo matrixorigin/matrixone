@@ -21,26 +21,26 @@ import (
 )
 
 var (
-	GSColDefs = [3][]*plan.ColDef{}
+	generateSeriesColDefs = [3][]*plan.ColDef{}
 )
 
 func init() {
 	retTyp := types.T_int64.ToType()
-	GSColDefs[0] = []*plan.ColDef{
+	generateSeriesColDefs[0] = []*plan.ColDef{
 		{
 			Name: "result",
 			Typ:  makePlan2Type(&retTyp),
 		},
 	}
 	retTyp = types.T_datetime.ToType()
-	GSColDefs[1] = []*plan.ColDef{
+	generateSeriesColDefs[1] = []*plan.ColDef{
 		{
 			Name: "result",
 			Typ:  makePlan2Type(&retTyp),
 		},
 	}
 	retTyp = types.T_varchar.ToType()
-	GSColDefs[2] = []*plan.ColDef{
+	generateSeriesColDefs[2] = []*plan.ColDef{
 		{
 			Name: "result",
 			Typ:  makePlan2Type(&retTyp),
@@ -66,7 +66,66 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 			TblFunc: &plan.TableFunction{
 				Name: "generate_series",
 			},
-			Cols: GSColDefs[retsIdx],
+			Cols: generateSeriesColDefs[retsIdx],
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		Children:        children,
+		TblFuncExprList: exprs,
+	}
+	return builder.appendNode(node, ctx)
+}
+
+func (builder *QueryBuilder) buildGenerateRandomInt64(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) int32 {
+	i64Typ := types.T_int64.ToType()
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name: "generate_random_int64",
+			},
+			Cols: []*plan.ColDef{
+				{
+					Name: "nth",
+					Typ:  makePlan2Type(&i64Typ),
+				},
+				{
+					Name: "i64",
+					Typ:  makePlan2Type(&i64Typ),
+				},
+			},
+		},
+		BindingTags:     []int32{builder.genNewTag()},
+		Children:        children,
+		TblFuncExprList: exprs,
+	}
+	return builder.appendNode(node, ctx)
+}
+
+func (builder *QueryBuilder) buildGenerateRandomFloat64(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) int32 {
+	i64Typ := types.T_int64.ToType()
+	f64Typ := types.T_float64.ToType()
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name: "generate_random_float64",
+			},
+			Cols: []*plan.ColDef{
+				{
+					Name: "nth",
+					Typ:  makePlan2Type(&i64Typ),
+				},
+				{
+					Name: "f64",
+					Typ:  makePlan2Type(&f64Typ),
+				},
+			},
 		},
 		BindingTags:     []int32{builder.genNewTag()},
 		Children:        children,

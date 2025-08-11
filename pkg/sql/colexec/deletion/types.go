@@ -250,7 +250,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 		defer func() {
 			if s3writer != nil {
-				s3writer.Close(proc.GetMPool())
+				s3writer.Close()
 			}
 		}()
 
@@ -262,10 +262,10 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 			if s3writer == nil {
 				pkType := *bat.Vecs[1].GetType()
-				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType)
+				s3writer = colexec.NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, -1)
 			}
 
-			if err = s3writer.Write(proc.Ctx, proc.Mp(), bat); err != nil {
+			if err = s3writer.Write(proc.Ctx, bat); err != nil {
 				return 0, err
 			}
 
@@ -281,7 +281,7 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		if statsList, err = s3writer.Sync(newCtx, proc.Mp()); err != nil {
+		if statsList, err = s3writer.Sync(newCtx); err != nil {
 			return 0, err
 		}
 

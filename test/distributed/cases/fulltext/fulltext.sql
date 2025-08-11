@@ -443,4 +443,7 @@ select id from src where match(body) against('肥胖的原因都是因为摄入�
 select id from src where match(body) against('+读书会 +提效 +社群 +案例 +运营' IN BOOLEAN MODE);
 
 select id from src where match(body) against('肥胖的原因都是因为摄入fat多导致的吗' IN NATURAL LANGUAGE MODE);
-
+CREATE TABLE example_table (id INT PRIMARY KEY,english_text TEXT, chinese_text TEXT,json_data JSON);
+INSERT INTO example_table (id, english_text, chinese_text, json_data) VALUES(1, 'Hello, world!', '你好世界', '{"name": "Alice", "age": 30}'),(2, 'This is a test.', '这是一个测试', '{"name": "Bob", "age": 25}'),(3, 'Full-text search is powerful.', '全文搜索很强大', '{"name": "Charlie", "age": 35}');
+CREATE FULLTEXT INDEX idx_english_text ON example_table (english_text);
+(with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) union all (with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) ;

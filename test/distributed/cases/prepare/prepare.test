@@ -560,9 +560,6 @@ create role prepare_role1;
 grant create database on account * to prepare_role1;
 create user prepare_user1 identified by '123456' default role prepare_role1;
 -- @session
--- @session:id=3&user=prepare_account_01:prepare_user1:prepare_role1&password=123456
-select mo_ctl('cn', 'task', ':retention');
--- @session
 
 -- @session:id=4&user=prepare_account_01:admin&password=111111
 drop user prepare_user1;

@@ -240,7 +240,6 @@ mo_merge_settings
 mo_mysql_compatibility_mode
 mo_pitr
 mo_pubs
-mo_retention
 mo_role
 mo_role_grant
 mo_role_privs
@@ -264,7 +263,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-38
+39
 show column_number from mo_database;
 Number of columns in mo_database
 9

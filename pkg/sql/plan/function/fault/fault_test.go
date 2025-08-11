@@ -56,7 +56,7 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 	res = []PodResponse{{
 		PodType:   cn,
 		PodID:     id,
-		ReturnStr: "Fault injection enabled. Previous status: disabled",
+		ReturnStr: "OK, Fault injection enabled. Previous status: disabled",
 	}}
 	ret = CNFaultInject([]string{}, "ENABLE_FAULT_INJECTION", "", proc)
 	require.Equal(t, res, ret)
@@ -76,7 +76,7 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 		PodID:     id,
 		ReturnStr: "OK",
 	}}
-	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test.:::.echo.0..true", proc)
+	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test#:::#echo#0##true", proc)
 	require.Equal(t, res, ret)
 
 	// modify constant fault point
@@ -85,7 +85,7 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 		PodID:    id,
 		ErrorStr: "internal error: failed to add fault point; it may already exist and be constant.",
 	}}
-	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test.:::.echo.0..true", proc)
+	ret = CNFaultInject([]string{}, "ADD_FAULT_POINT", "test#:::#echo#0##true", proc)
 	require.Equal(t, res, ret)
 
 	// list fault point
@@ -124,7 +124,7 @@ func Test_CanHandleFaultInjection(t *testing.T) {
 	res = []PodResponse{{
 		PodType:   cn,
 		PodID:     id,
-		ReturnStr: "Fault injection disabled. Previous status: enabled",
+		ReturnStr: "OK, Fault injection disabled. Previous status: enabled",
 	}}
 	ret = CNFaultInject([]string{}, "DISABLE_FAULT_INJECTION", "", proc)
 	require.Equal(t, res, ret)
@@ -177,12 +177,12 @@ func Test_CanTransferCnFaultInject(t *testing.T) {
 		{
 			PodType:   cn,
 			PodID:     uuids[0],
-			ReturnStr: "Fault injection enabled. Previous status: disabled",
+			ReturnStr: "OK, Fault injection enabled. Previous status: disabled",
 		},
 		{
 			PodType:   cn,
 			PodID:     uuids[1],
-			ReturnStr: "Fault injection enabled. Previous status: enabled",
+			ReturnStr: "OK, Fault injection enabled. Previous status: enabled",
 		},
 	}
 	ret := CNFaultInject([]string{}, "ENABLE_FAULT_INJECTION", "", a1.proc)

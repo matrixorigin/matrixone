@@ -179,6 +179,7 @@ func (p *PartitionBinder) constructListExpression(
 	position int,
 ) (*plan.Expr, error) {
 
+	// expr in (...)
 	valuesIn := option.Partitions[position].Values.(*tree.ValuesIn)
 	expr := tree.NewComparisonExpr(tree.IN, column, tree.NewTuple(valuesIn.ValueList))
 
@@ -197,23 +198,14 @@ func (p *PartitionBinder) constructHashExpression(
 ) (*plan.Expr, error) {
 
 	var expr tree.Expr
-	//if hashType.Linear {
-	//	v := uint64(math.Pow(2, math.Ceil(math.Log2(float64(num)))) - 1)
-	//	name := tree.NewUnresolvedColName("&")
-	//	arg2 := tree.NewNumVal(v, fmt.Sprintf("%d", v), false, tree.P_uint64)
-	//	expr = &tree.FuncExpr{
-	//		Func:  tree.FuncName2ResolvableFunctionReference(name),
-	//		Exprs: tree.Exprs{hashType.Expr, arg2},
-	//	}
-	//} else {
+	// expr % num
 	name := tree.NewUnresolvedColName("%")
 	arg2 := tree.NewNumVal(num, fmt.Sprintf("%d", num), false, tree.P_uint64)
 	expr = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{hashType.Expr, arg2},
 	}
-	//}
-
+	// expr % num = partition
 	name = tree.NewUnresolvedColName("=")
 	arg2 = tree.NewNumVal(position, fmt.Sprintf("%d", position), false, tree.P_uint64)
 	expr = &tree.FuncExpr{
@@ -236,22 +228,12 @@ func (p *PartitionBinder) constructKeyExpression(
 ) (*plan.Expr, error) {
 
 	var expr tree.Expr
-	//if keyType.Linear {
-	//	v := uint64(math.Pow(2, math.Ceil(math.Log2(float64(num)))) - 1)
-	//	name := tree.NewUnresolvedColName("&")
-	//	arg2 := tree.NewNumVal(v, fmt.Sprintf("%d", v), false, tree.P_uint64)
-	//	expr = &tree.FuncExpr{
-	//		Func:  tree.FuncName2ResolvableFunctionReference(name),
-	//		Exprs: tree.Exprs{keyType.ColumnList[0], arg2},
-	//	}
-	//} else {
 	name := tree.NewUnresolvedColName("%")
 	arg2 := tree.NewNumVal(num, fmt.Sprintf("%d", num), false, tree.P_uint64)
 	expr = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
 		Exprs: tree.Exprs{keyType.ColumnList[0], arg2},
 	}
-	// }
 
 	name = tree.NewUnresolvedColName("=")
 	arg2 = tree.NewNumVal(position, fmt.Sprintf("%d", position), false, tree.P_uint64)

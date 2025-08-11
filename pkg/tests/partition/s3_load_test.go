@@ -54,10 +54,13 @@ func TestLoadS3(t *testing.T) {
 
 			n := 100000
 			sql = fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", genLoadFile(t, n), t.Name())
-			testutils.ExecSQL(
+			testutils.ExecSQLWithReadResult(
 				t,
 				db,
 				cn,
+				func(i int, s string, r executor.Result) {
+					require.Equal(t, uint64(n), r.AffectedRows)
+				},
 				sql,
 			)
 
@@ -122,10 +125,13 @@ func TestLoadS3WithIndex(t *testing.T) {
 
 			n := 100000
 			sql = fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", genLoadFile(t, n), t.Name())
-			testutils.ExecSQL(
+			testutils.ExecSQLWithReadResult(
 				t,
 				db,
 				cn,
+				func(i int, s string, r executor.Result) {
+					require.Equal(t, uint64(n), r.AffectedRows)
+				},
 				sql,
 			)
 

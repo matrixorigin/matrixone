@@ -969,7 +969,6 @@ var (
 		"mo_subs":                     0,
 		"mo_shards":                   0,
 		"mo_shards_metadata":          0,
-		catalog.MO_RETENTION:          0,
 		"mo_cdc_task":                 0,
 		"mo_cdc_watermark":            0,
 		catalog.MO_TABLE_STATS:        0,
@@ -1000,7 +999,6 @@ var (
 		MoCatalogMoMysqlCompatibilityModeDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
-		MoCatalogMoRetentionDDL,
 		MoCatalogMoSubsDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
@@ -1043,7 +1041,6 @@ var (
 	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
-	dropMoRetention                 = `drop table if exists mo_catalog.mo_retention;`
 
 	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -3895,12 +3892,6 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			return rtnErr
 		}
 
-		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoRetention)
-		rtnErr = bh.Exec(deleteCtx, dropMoRetention)
-		if rtnErr != nil {
-			return rtnErr
-		}
-
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoForeignKeys)
 		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
@@ -5652,7 +5643,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 		objType = objectTypeNone
 		kind = privilegeKindNone
-	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate, *tree.Reset:
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Deallocate, *tree.Reset:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.Execute:

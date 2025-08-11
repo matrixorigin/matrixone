@@ -61,7 +61,8 @@ select @ioparam;
 
 create or replace procedure sp_quote(in s varchar, out qs varchar) language 'starlark'
 '
-out_qs = mo.quote(s)
+qqs, err = mo.quote(s)
+out_qs = qqs if not err else "error"
 ';
 
 call sp_quote('''', @qs);
@@ -69,14 +70,33 @@ select @qs;
 call sp_quote($$foo'bar''zoo$$, @qs2);
 select @qs2;
 
-create or replace procedure sp_jq(in jq varchar, in data varchar, out jqresult varchar) language 'starlark'
+create or replace procedure sp_jq(in jq varchar, in data varchar, out jqresult varchar, out errstr varchar) language 'starlark'
 '   
-out_jqresult = mo.jq(jq, data)
+res, err = mo.jq(jq, data)
+out_jqresult = "" if err else res
+out_errstr = err 
 ';
 
-call sp_jq('.0 + .1', '[1, 2]', @res);
+call sp_jq('.0 + .1', '[1, 2]', @res, @err);
 select @res;
-call sp_jq('.[0] + .[1]', '[1, 2]', @res);
+select @err;
+call sp_jq('.[0] + .[1]', '[1, 2]', @res, @err);
 select @res;
+select @err;
+call sp_jq('.[0] + .[1]', '1', @res, @err);
+select @res;
+select @err;
+
+create or replace procedure sp_var(in varname varchar) language 'starlark'
+'   
+v, err = mo.getvar(varname)
+mo.setvar(varname, v+v)
+mo.setvar("err" + varname, "error")
+';
+
+set @spvar = 1;
+call sp_var('spvar');
+select @spvar;
+select @errspvar;
 
 drop database if exists procedure_test;

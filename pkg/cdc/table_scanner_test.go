@@ -16,11 +16,12 @@ package cdc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -110,7 +111,7 @@ func TestTableScanner(t *testing.T) {
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
 		CDCSQLBuilder.CollectTableInfoSQL("1", "'db4'", "'tbl4'"),
-		executor.Options{},
+		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	).Return(executor.Result{}, moerr.NewInternalErrorNoCtx("mock error")).AnyTimes()
 
 	err = td.scanTable()

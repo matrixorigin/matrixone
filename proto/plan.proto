@@ -1268,7 +1268,7 @@ message CreateTable {
 	// fks forward reference to me
 	repeated ForeignKeyInfo fksReferToMe = 13;
 
-	int64 retention_deadline = 14;
+	reserved 14;
 	string RawSQL            = 15;
 }
 
@@ -1361,6 +1361,13 @@ message AlterRenameColumn {
 	int32 sequence_num = 3;
 }
 
+
+message AlterCopyDedupOpt {
+	map<string, bool> skip_unique_idx_dedup = 1;
+	bool skip_pk_dedup = 2;
+	string target_table_name = 3;
+}
+
 message AlterTable {
 	enum AlgorithmType {
 		DEFAULT = 0;
@@ -1402,7 +1409,7 @@ message AlterTable {
 	// into mo_foreign_keys
 	repeated string updateFkSqls = 11;
 	string RawSQL            = 12;
-	bool skip_pk_dedup 	     = 13;
+	AlterCopyDedupOpt dedup_opt = 13;
 }
 
 message DropTable {

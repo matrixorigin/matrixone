@@ -1,12 +1,14 @@
 drop database if exists testdb;
 create database testdb;
 use testdb;
-
+select enable_fault_injection();
+enable_fault_injection()
+true
 create table t1(a int, b int, index(b));
-insert into t1 select *, * from generate_series(1, 8192000)g;
-select mo_ctl("dn", "flush", "testdb.t1");
-mo_ctl(dn, flush, )
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t1');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, testdb.t1)
+true
+insert into t1 select *, * from generate_series(1, 40960)g;
 select a from t1 where b = 1;
 a
 1
@@ -22,11 +24,10 @@ a
 3
 drop table t1;
 create table t2(a varchar, b varchar, index(b));
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t2');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, tesdb.t2)
+true
 insert into t2 values('1','2'),('3','4'),('5','6'),('7','8'),('a','b'),('c','d'),('e','f'),('g','h');
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
-insert into t2 select * from t2;
 insert into t2 select * from t2;
 insert into t2 select * from t2;
 insert into t2 select * from t2;
@@ -42,10 +43,7 @@ insert into t2 select * from t2;
 insert into t2 select * from t2;
 select count(*) from t2;
 count(*)
-1048576
-select mo_ctl("dn", "flush", "testdb.t2");
-mo_ctl(dn, flush, )
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+65536
 select distinct a from t2 where b = '2';
 distinct a
 1
@@ -61,10 +59,10 @@ distinct a
 5
 drop table t2;
 create table t3 (a float, b float, index(b));
-insert into t3 select *, * from generate_series(1, 8192000)g;
-select mo_ctl("dn", "flush", "testdb.t3");
-mo_ctl(dn, flush, )
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t3');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, testdb.t1)
+true
+insert into t3 select *, * from generate_series(1, 40960)g;
 select a from t3 where b = 1;
 a
 1
@@ -80,10 +78,10 @@ a
 3
 drop table t3;
 create table t4(a int primary key, b int);
-insert into t4 select *, * from generate_series(1, 8192000)g;
-select mo_ctl("dn", "flush", "testdb.t4");
-mo_ctl(dn, flush, )
-{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'testdb.t4');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, testdb.t4)
+true
+insert into t4 select *, * from generate_series(1, 40960)g;
 select b from t4 where a < 3;
 b
 1
@@ -130,3 +128,6 @@ b
 2
 drop table t4;
 drop database testdb;
+select disable_fault_injection();
+disable_fault_injection()
+true

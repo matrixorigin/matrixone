@@ -69,8 +69,7 @@ option (gogoproto.protosizer_all) = true;
    ConnectorKafkaSink = 4;
    // MergeObject is for the merge object task.
    MergeObject = 5;
-   // Retention is for table retention
-   Retention = 6;
+   reserved 6;
    // Init cdc task
    InitCdc = 7;
    // MO Table Stats Task
@@ -176,7 +175,7 @@ option (gogoproto.protosizer_all) = true;
 enum TaskType {
   Unknown = 0 [(gogoproto.enumvalue_customname) = "TypeUnknown"];
   KafkaSinkConnector = 1 [(gogoproto.enumvalue_customname) = "TypeKafkaSinkConnector"];
-  RetentionType = 2 [(gogoproto.enumvalue_customname) = "TypeRetention"];
+  reserved 2;
   CreateCdc = 3 [(gogoproto.enumvalue_customname) = "CreateCdc"];
   ISCP = 4 [(gogoproto.enumvalue_customname) = "ISCP"];
 }
@@ -215,9 +214,9 @@ message Details {
   string Account = 3;
   string Username = 4;
   string Error = 5;
+  reserved 11;
   oneof Details {
     ConnectorDetails Connector = 10;
-    RetentionDetails Retention = 11;
     CreateCdcDetails CreateCdc = 12;
     ISCPDetails ISCP = 13;
   }

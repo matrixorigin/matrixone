@@ -126,11 +126,11 @@ func (exec *singleWindowExec) SetExtraInformation(partialResult any, groupIndex 
 
 func (exec *singleWindowExec) Flush() ([]*vector.Vector, error) {
 	switch exec.singleAggInfo.aggID {
-	case winIdOfRank:
+	case WinIdOfRank:
 		return exec.flushRank()
-	case winIdOfDenseRank:
+	case WinIdOfDenseRank:
 		return exec.flushDenseRank()
-	case winIdOfRowNumber:
+	case WinIdOfRowNumber:
 		return exec.flushRowNumber()
 	}
 	return nil, moerr.NewInternalErrorNoCtx("invalid window function")

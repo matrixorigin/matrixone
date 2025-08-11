@@ -19,7 +19,6 @@ mo_locks    v
 mo_merge_settings    r
 mo_mysql_compatibility_mode    r
 mo_pubs    r
-mo_retention    r
 mo_role    r
 mo_role_grant    r
 mo_role_privs    r

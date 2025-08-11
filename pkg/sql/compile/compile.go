@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/crt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -1494,7 +1495,7 @@ func (c *Compile) getReadWriteParallelFlag(param *tree.ExternParam, fileList []s
 	if !param.Parallel {
 		return false, false
 	}
-	if param.Local || external.GetCompressType(param, fileList[0]) != tree.NOCOMPRESS {
+	if param.Local || crt.GetCompressType(param.CompressType, fileList[0]) != tree.NOCOMPRESS {
 		return false, true
 	}
 	return true, true
@@ -2350,8 +2351,10 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
 		if len(c.cnList) == 1 {
-			if node.JoinType == plan.Node_DEDUP {
+			if node.JoinType == plan.Node_DEDUP && node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash {
 				logutil.Infof("not support shuffle v2 for dedup join now")
+			} else if probeScopes[0].NodeInfo.Mcpu != int(left.Stats.Dop) || buildScopes[0].NodeInfo.Mcpu != int(right.Stats.Dop) {
+				logutil.Infof("not support shuffle v2 after merge")
 			} else {
 				return c.compileShuffleJoinV2(node, left, right, probeScopes, buildScopes)
 			}
@@ -2370,6 +2373,7 @@ func (c *Compile) compileShuffleJoinV2(node, left, right *plan.Node, leftscopes,
 	if len(leftscopes) != len(rightscopes) {
 		panic("wrong scopes for shuffle join!")
 	}
+
 	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
 	bucketNum := len(c.cnList) * int(node.Stats.Dop)
 	for i := range leftscopes {

@@ -160,8 +160,6 @@ const (
 	MO_PITR_STATUS        = "pitr_status"
 	MO_PITR_CHANGED_TIME  = "pitr_status_changed_time"
 
-	MO_RETENTION = "mo_retention"
-
 	MO_CDC_TASK      = "mo_cdc_task"
 	MO_CDC_WATERMARK = "mo_cdc_watermark"
 

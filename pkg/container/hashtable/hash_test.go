@@ -15,8 +15,8 @@
 package hashtable
 
 import (
+	"bytes"
 	"fmt"
-	"io"
 	"math/rand"
 	"reflect"
 	"strconv"
@@ -325,7 +325,7 @@ func TestStringHashMap_MarshalUnmarshal_SingleElement(t *testing.T) {
 	require.NoError(t, err)
 	defer originalMap.Free()
 
-	key := []byte("test_string_key")
+	key := bytes.Repeat([]byte("abc"), 32)
 	keys := [][]byte{key}
 	states := make([][3]uint64, 1)
 	values := make([]uint64, 1)
@@ -361,7 +361,7 @@ func TestStringHashMap_MarshalUnmarshal_MultipleElementsNoResize(t *testing.T) {
 	originalMappedValues := make(map[string]uint64)
 
 	for i := 0; i < numElements; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i))
+		key := bytes.Repeat(fmt.Appendf(nil, "key_%d", i), 32)
 		originalKeys[i] = key
 		states := make([][3]uint64, 1)
 		values := make([]uint64, 1)
@@ -438,23 +438,27 @@ func TestWriteToError(t *testing.T) {
 		require.NoError(t, m.Init(nil))
 		defer m.Free()
 
-		w := &errorAfterNWriter{
-			N: -1,
-		}
+		// Test error on empty map
+		w := &errorAfterNWriter{N: 4} // Not enough for elemCnt
 		_, err := m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 0
+		require.Error(t, err)
+
+		// Add an element
+		key := uint64(1)
+		hashes := make([]uint64, 1)
+		values := make([]uint64, 1)
+		err = m.InsertBatch(1, hashes, toUnsafePointer(&key), values)
+		require.NoError(t, err)
+
+		// Test error after writing elemCnt
+		w = &errorAfterNWriter{N: 8} // Enough for elemCnt, but not for the first cell's key
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 8
+		require.Error(t, err)
+
+		// Test error after writing elemCnt and key
+		w = &errorAfterNWriter{N: 16} // Enough for elemCnt and key, but not for mapped value
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 16
-		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 24
-		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
+		require.Error(t, err)
 	})
 
 	t.Run("string", func(t *testing.T) {
@@ -462,22 +466,36 @@ func TestWriteToError(t *testing.T) {
 		require.NoError(t, m.Init(nil))
 		defer m.Free()
 
-		w := &errorAfterNWriter{
-			N: -1,
-		}
+		// Test error on empty map
+		w := &errorAfterNWriter{N: 4} // Not enough for elemCnt
 		_, err := m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 0
+		require.Error(t, err)
+
+		// Add an element
+		keys := [][]byte{
+			bytes.Repeat([]byte("a"), 32),
+		}
+		states := make([][3]uint64, 1)
+		values := make([]uint64, 1)
+		err = m.InsertStringBatch(states, keys, values)
+		require.NoError(t, err)
+
+		// Test error after writing elemCnt
+		w = &errorAfterNWriter{N: 8} // Enough for elemCnt, but not for HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 8
+		require.Error(t, err)
+
+		// Test error after writing part of the cell
+		w = &errorAfterNWriter{N: 8 + 8} // Enough for elemCnt and HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 16
+		require.Error(t, err)
+
+		w = &errorAfterNWriter{N: 8 + 16} // Enough for elemCnt and HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
-		w.N = 24
+		require.Error(t, err)
+
+		w = &errorAfterNWriter{N: 8 + 24} // Enough for elemCnt and HashState
 		_, err = m.WriteTo(w)
-		require.Equal(t, io.ErrUnexpectedEOF, err)
+		require.Error(t, err)
 	})
 }

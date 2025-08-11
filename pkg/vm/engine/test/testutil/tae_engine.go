@@ -167,7 +167,7 @@ func NewTestTAEEngine(
 }
 
 func InitTxnHandle(ctx context.Context, taeDir string, opts *options.Options) *rpc.Handle {
-	handle := rpc.NewTAEHandle(ctx, taeDir, opts)
+	handle := rpc.NewTAEHandle(ctx, taeDir, nil, opts)
 	handle.GetDB().DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			minTS := handle.GetDB().TxnMgr.MinTSForTest()
