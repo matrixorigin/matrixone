@@ -16,16 +16,39 @@ package frontend
 
 import (
 	"bufio"
+	"context"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 )
+
+func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
+	cols := []*plan2.ColDef{
+		{
+			Typ:        plan2.Type{Id: int32(types.T_varchar)},
+			Name:       strings.ToLower(explainColName),
+			OriginName: explainColName,
+		},
+	}
+	columns := make([]interface{}, len(cols))
+	var err error = nil
+	for i, col := range cols {
+		c, err := colDef2MysqlColumn(ctx, col)
+		if err != nil {
+			return nil, nil, err
+		}
+		columns[i] = c
+	}
+	return cols, columns, err
+}
 
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
@@ -70,15 +93,23 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
-	case *tree.ExplainAnalyze:
-		queryPlan := execCtx.cw.Plan()
-		txnHaveDDL := false
+	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+		query := execCtx.cw.Plan().GetQuery()
+		var reqCtx = execCtx.reqCtx
+		var txnHaveDDL bool
 		ws := ses.proc.GetTxnOperator().GetWorkspace()
 		if ws != nil {
 			txnHaveDDL = ws.GetHaveDDL()
 		}
-		explainColName := plan2.GetPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
-		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
+
+		var explainColName string
+		if _, ok := statement.(*tree.ExplainAnalyze); ok {
+			explainColName = plan2.GetPlanTitle(query, txnHaveDDL)
+		} else {
+			explainColName = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+		}
+
+		colDefs, columns, err = GetExplainColumn(reqCtx, explainColName)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from ExplainColumns handler",
@@ -86,47 +117,9 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 
-		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
-
-		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
-		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)
-		err = execCtx.resper.RespPreMeta(execCtx, columns)
-		if err != nil {
-			return
+		ses.rs = &plan.ResultColDef{
+			ResultCols: colDefs,
 		}
-
-		ses.EnterFPrint(FPResultRowStmtExplainAnalyze2)
-		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze2)
-		runBegin := time.Now()
-		/*
-			Step 1: Start
-		*/
-		if _, err = execCtx.runner.Run(0); err != nil {
-			return
-		}
-
-		// only log if run time is longer than 1s
-		if time.Since(runBegin) > time.Second {
-			ses.Infof(execCtx.reqCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
-		}
-		//----------------------------------------------------------------------------------------------------------------------
-	case *tree.ExplainPhyPlan:
-		queryPlan := execCtx.cw.Plan()
-		txnHaveDDL := false
-		ws := ses.proc.GetTxnOperator().GetWorkspace()
-		if ws != nil {
-			txnHaveDDL = ws.GetHaveDDL()
-		}
-		explainColName := plan2.GetPhyPlanTitle(queryPlan.GetQuery(), txnHaveDDL)
-		colDefs, columns, err = GetExplainColumns(execCtx.reqCtx, explainColName)
-		if err != nil {
-			ses.Error(execCtx.reqCtx,
-				"Failed to get columns from ExplainColumns handler",
-				zap.Error(err))
-			return
-		}
-
-		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
 		ses.EnterFPrint(FPResultRowStmtExplainAnalyze1)
 		defer ses.ExitFPrint(FPResultRowStmtExplainAnalyze1)

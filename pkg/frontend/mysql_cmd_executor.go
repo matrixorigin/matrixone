@@ -1122,6 +1122,20 @@ func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt, sq
 	return doPrepareStmt(execCtx, ses.(*Session), st, sql, execCtx.executeParamTypes)
 }
 
+func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*PrepareStmt, error) {
+	wrapper := &tree.PrepareString{
+		Name: st.Name,
+		Sql:  st.Var,
+	}
+	p, err := ses.GetUserDefinedVar(st.Var)
+	if err != nil {
+		return nil, err
+	}
+	wrapper.Sql = p.Value.(string)
+
+	return doPrepareString(ses, execCtx, wrapper)
+}
+
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
 	v, err := ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
@@ -1866,26 +1880,6 @@ func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
 func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) error {
 	var err error
 	return err
-}
-
-func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
-	cols := []*plan2.ColDef{
-		{
-			Typ:        plan2.Type{Id: int32(types.T_varchar)},
-			Name:       strings.ToLower(explainColName),
-			OriginName: explainColName,
-		},
-	}
-	columns := make([]interface{}, len(cols))
-	var err error = nil
-	for i, col := range cols {
-		c, err := colDef2MysqlColumn(ctx, col)
-		if err != nil {
-			return nil, nil, err
-		}
-		columns[i] = c
-	}
-	return cols, columns, err
 }
 
 func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {

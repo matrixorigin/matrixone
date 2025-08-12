@@ -27,14 +27,11 @@ func buildCloneTable(
 
 	var (
 		err error
-
-		id int32
+		id  int32
 
 		srcTblDef *TableDef
-
-		srcObj *ObjectRef
-
-		query *Query
+		srcObj    *ObjectRef
+		query     *Query
 
 		createTablePlan *Plan
 
@@ -110,7 +107,35 @@ func buildCloneTable(
 	builder.qry.Nodes[0].Stats.ForceOneCN = true
 	builder.skipStats = true
 
-	if createTablePlan, err = buildCreateTable(&stmt.CreateTable, ctx); err != nil {
+	var (
+		opAccount  uint32
+		dstAccount uint32
+		srcAccount uint32
+	)
+
+	if opAccount, err = ctx.GetAccountId(); err != nil {
+		return nil, err
+	}
+
+	dstAccount = opAccount
+	srcAccount = opAccount
+
+	if stmt.IsRestoreByTS {
+		dstAccount = stmt.ToAccountId
+		srcAccount = stmt.FromAccount
+	}
+
+	if bindCtx.snapshot != nil && bindCtx.snapshot.Tenant != nil {
+		srcAccount = bindCtx.snapshot.Tenant.TenantID
+	}
+
+	stmt.StmtType = tree.DecideCloneStmtType(
+		ctx.GetContext(), stmt,
+		srcTblDef.DbName, dstTblDef.DbName,
+		dstAccount, srcAccount,
+	)
+
+	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt); err != nil {
 		return nil, err
 	}
 

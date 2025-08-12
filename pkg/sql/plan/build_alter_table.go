@@ -179,7 +179,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true)
+	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +550,7 @@ func storageAgnosticType(
 }
 
 func storageAgnosticAttrs(
-	ctx context.Context,
+	_ context.Context,
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
 ) (ok bool, err error) {
