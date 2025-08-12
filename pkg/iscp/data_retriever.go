@@ -79,8 +79,11 @@ const (
 )
 
 type DataRetrieverImpl struct {
-	*Iteration
 	offset int
+	accountID uint32
+	tableID uint64
+	jobName string
+	status *JobStatus
 
 	typ int8
 	insertDataCh chan *ISCPData
@@ -92,14 +95,18 @@ type DataRetrieverImpl struct {
 }
 
 func NewDataRetriever(
-	offset int,
-	iteration *Iteration,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	status *JobStatus,
 	dataType int8,
 ) *DataRetrieverImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DataRetrieverImpl{
-		offset:       offset,
-		Iteration:    iteration,
+		accountID:    accountID,
+		tableID:      tableID,
+		jobName:      jobName,
+		status:       status,
 		insertDataCh: make(chan *ISCPData, 1),
 		typ:          dataType,
 		ctx:          ctx,
@@ -116,15 +123,15 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 	if r.typ == ISCPDataType_Snapshot {
 		return nil
 	}
-	statusJson, err := MarshalJobStatus(r.status[r.offset])
+	statusJson, err := MarshalJobStatus(r.status)
 	if err != nil {
 		return err
 	}
 	updateWatermarkSQL := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
 		r.accountID,
-		r.rel.GetTableID(context.Background()),
-		r.jobNames[r.offset],
-		r.status[r.offset].To,
+		r.tableID,
+		r.jobName,
+		r.status.To,
 		statusJson,
 		ISCPJobState_Completed,
 	)

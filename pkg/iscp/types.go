@@ -84,23 +84,6 @@ type DataRetriever interface {
   Receives batch               Receives batch   Receives batch
 
 */
-type Iteration struct {
-	accountID uint32
-	rel       engine.Relation
-
-	cnUUID string
-	cnEngine engine.Engine
-	cnTxnClient client.TxnClient
-
-	txnReader client.TxnOperator
-
-	packer *types.Packer
-	mp     *mpool.MPool
-
-	jobNames []string
-	jobSpecs []*JobSpec
-	status   []*JobStatus
-}
 
 type IterationContext struct {
 	accountID uint32

@@ -19,47 +19,43 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
 
-func (iter *Iteration) GetFrom() types.TS {
-	return iter.status[0].From
-}
-func (iter *Iteration) GetTo() types.TS {
-	return iter.status[0].To
-}
-
-func NewIteration(
+func ExecuteIteration(
 	ctx context.Context,
 	cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
-	accountID uint32,
-	dbName string,
-	tableName string,
-	jobNames []string,
-	fromTS, toTS types.TS,
+	iterCtx *IterationContext,
 	mp *mpool.MPool,
-) (iter *Iteration, err error) {
+) (err error) {
+	packer := types.NewPacker()
+	defer packer.Close()
 
 	rel, txnOp, err := GetRelation(
 		ctx,
 		cnEngine,
 		cnTxnClient,
-		accountID,
-		dbName,
-		tableName,
+		iterCtx.accountID,
+		iterCtx.tableID,
 	)
+	tableDef := rel.CopyTableDef(ctx)
+	dbName := tableDef.DbName
+	tableName := tableDef.Name
 	if err != nil {
 		return
 	}
@@ -67,35 +63,238 @@ func NewIteration(
 		ctx,
 		cnUUID,
 		txnOp,
-		accountID,
-		rel.GetTableID(ctx),
-		jobNames,
+		iterCtx.accountID,
+		iterCtx.tableID,
+		iterCtx.jobNames,
 	)
 
-	if fromTS.IsEmpty() {
-		toTS = types.TimestampToTS(txnOp.SnapshotTS())
+	if iterCtx.fromTS.IsEmpty() {
+		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
 	}
-	iter = &Iteration{
-		accountID:   accountID,
-		rel:         rel,
-		txnReader:   txnOp,
-		jobNames:    jobNames,
-		jobSpecs:    jobSpecs,
-		cnUUID:      cnUUID,
-		cnEngine:    cnEngine,
-		cnTxnClient: cnTxnClient,
-		packer:      types.NewPacker(),
-		mp:          mp,
-	}
-	iter.status = make([]*JobStatus, len(jobSpecs))
+	statuses := make([]*JobStatus, len(jobSpecs))
 	startAt := types.BuildTS(time.Now().UnixNano(), 0)
 	for i := range jobSpecs {
-		iter.status[i] = &JobStatus{
-			From: fromTS,
-			To:   toTS,
+		statuses[i] = &JobStatus{
+			From: iterCtx.fromTS,
+			To:   iterCtx.toTS,
 		}
-		iter.status[i].StartAt = startAt
+		statuses[i].StartAt = startAt
 	}
+
+	changes, err := CollectChanges(ctx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+	}
+	if err != nil {
+		return
+	}
+	defer changes.Close()
+
+	consumers := make([]Consumer, len(jobSpecs))
+	for i := range jobSpecs {
+		jobID := JobID{
+			JobName:   iterCtx.jobNames[i],
+			DBName:    dbName,
+			TableName: tableName,
+		}
+		consumers[i], err = NewConsumer(cnUUID, rel.CopyTableDef(ctx), jobID, &jobSpecs[i].ConsumerInfo)
+		if err != nil {
+			return
+		}
+	}
+
+	insTSColIdx := len(tableDef.Cols) - 1
+	insCompositedPkColIdx := len(tableDef.Cols) - 2
+	delTSColIdx := 1
+	delCompositedPkColIdx := 0
+	if len(tableDef.Pkey.Names) == 1 {
+		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
+	}
+	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
+		if atomicBatch == nil {
+			atomicBatch = NewAtomicBatch(mp)
+		}
+		return atomicBatch
+	}
+
+	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
+	typ := ISCPDataType_Tail
+	if iterCtx.fromTS.IsEmpty() {
+		typ = ISCPDataType_Snapshot
+	}
+	waitGroups := make([]sync.WaitGroup, len(consumers))
+	for i := range consumers {
+		if consumers[i] == nil {
+			continue
+		}
+		dataRetrievers[i] = NewDataRetriever(
+			iterCtx.accountID,
+			iterCtx.tableID,
+			iterCtx.jobNames[i],
+			statuses[i],
+			typ,
+		)
+		defer dataRetrievers[i].Close()
+	}
+
+	err = FlushJobStatusOnIterationState(
+		ctx,
+		cnUUID,
+		cnEngine,
+		cnTxnClient,
+		iterCtx.accountID,
+		iterCtx.tableID,
+		iterCtx.jobNames,
+		statuses,
+		ISCPJobState_Running,
+	)
+	if err != nil {
+		return
+	}
+
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	changeHandelWg := sync.WaitGroup{}
+	go func() {
+		defer cancel()
+		defer changeHandelWg.Done()
+		changeHandelWg.Add(1)
+		for {
+			select {
+			case <-ctxWithCancel.Done():
+				return
+			default:
+			}
+			var data *ISCPData
+			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
+				err = moerr.NewInternalErrorNoCtx(msg)
+			}
+			if err != nil {
+				jobNames := ""
+				for _, jobName := range iterCtx.jobNames {
+					jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
+				}
+				logutil.Error(
+					"ISCP-Task sink iteration failed",
+					zap.Uint32("tenantID", iterCtx.accountID),
+					zap.Uint64("tableID", iterCtx.tableID),
+					zap.String("jobName", jobNames),
+					zap.Error(err),
+					zap.String("from", iterCtx.fromTS.ToString()),
+					zap.String("to", iterCtx.toTS.ToString()),
+				)
+				data = NewISCPData(true, nil, nil, err)
+			} else {
+				// both nil denote no more data (end of this tail)
+				if insertData == nil && deleteData == nil {
+					data = NewISCPData(true, nil, nil, err)
+				} else {
+					var insertAtmBatch *AtomicBatch
+					var deleteAtmBatch *AtomicBatch
+					switch currentHint {
+					case engine.ChangesHandle_Snapshot:
+						if typ != ISCPDataType_Snapshot {
+							panic("logic error")
+						}
+						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						data = NewISCPData(false, insertAtmBatch, nil, nil)
+					case engine.ChangesHandle_Tail_wip:
+						panic("logic error")
+					case engine.ChangesHandle_Tail_done:
+						if typ != ISCPDataType_Tail {
+							panic("logic error")
+						}
+						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
+						deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
+						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+						data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
+
+					}
+				}
+			}
+
+			noMoreData := data.noMoreData
+			data.Set(len(consumers))
+			for i := range consumers {
+				dataRetrievers[i].SetNextBatch(data)
+			}
+
+			if noMoreData {
+				return
+			}
+		}
+	}()
+
+	for i, consumerEntry := range consumers {
+		if dataRetrievers[i] == nil {
+			continue
+		}
+		waitGroups[i].Add(1)
+		go func(i int) {
+			defer waitGroups[i].Done()
+			err := consumerEntry.Consume(context.Background(), dataRetrievers[i])
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task sink consume failed",
+					zap.Uint32("tenantID", iterCtx.accountID),
+					zap.Uint64("tableID", iterCtx.tableID),
+					zap.String("jobName", iterCtx.jobNames[i]),
+					zap.Error(err),
+					zap.String("from", iterCtx.fromTS.ToString()),
+					zap.String("to", iterCtx.toTS.ToString()),
+				)
+				dataRetrievers[i].SetError(err)
+				statuses[i].SetError(err)
+			}
+		}(i)
+	}
+	for i := range waitGroups {
+		waitGroups[i].Wait()
+	}
+
+	cancel()
+	changeHandelWg.Wait()
+	for i, status := range statuses {
+		if status.ErrorCode != 0 {
+			state := ISCPJobState_Completed
+			if status.PermanentlyFailed() {
+				state = ISCPJobState_Error
+			}
+			for {
+				err = FlushJobStatusOnIterationState(
+					ctx,
+					cnUUID,
+					cnEngine,
+					cnTxnClient,
+					iterCtx.accountID,
+					iterCtx.tableID,
+					[]string{iterCtx.jobNames[i]},
+					[]*JobStatus{status},
+					state,
+				)
+				if err == nil {
+					break
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func FlushJobStatusOnIterationState(
+	ctx context.Context,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	accountID uint32,
+	tableID uint64,
+	jobNames []string,
+	jobStatuses []*JobStatus,
+	state int8,
+) (err error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
 	createByOpt := client.WithTxnCreateBy(
 		0,
@@ -112,23 +311,32 @@ func NewIteration(
 		} else {
 			err = txnWriter.Commit(ctx)
 		}
+		if err != nil {
+			logutil.Error(
+				"ISCP-Task flush job status failed",
+				zap.Uint32("tenantID", accountID),
+				zap.Uint64("tableID", tableID),
+				zap.Strings("jobNames", jobNames),
+				zap.Error(err),
+			)
+		}
 	}()
-	for i := range jobSpecs {
+	for i := range jobNames {
 		err = FlushStatus(
 			ctx,
 			cnUUID,
 			txnWriter,
 			accountID,
-			rel.GetTableID(ctx),
+			tableID,
 			jobNames[i],
-			iter.status[i],
-			ISCPJobState_Running,
+			jobStatuses[i],
+			state,
 		)
 		if err != nil {
-			return nil, err
+			return
 		}
 	}
-	return iter, nil
+	return
 }
 
 func FlushStatus(
@@ -203,8 +411,7 @@ func GetRelation(
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	accountID uint32,
-	dbName string,
-	tableName string,
+	tableID uint64,
 ) (rel engine.Relation, txn client.TxnOperator, err error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -227,75 +434,10 @@ func GetRelation(
 	if err != nil {
 		return
 	}
-	var db engine.Database
-	if db, err = cnEngine.Database(ctx, dbName, txnOp); err != nil {
-		return
-	}
-
-	if rel, err = db.Relation(ctx, tableName, nil); err != nil {
+	if _, _, rel, err = cdc.GetRelationById(ctx, cnEngine, txnOp, tableID); err != nil {
 		return
 	}
 	return
-}
-
-func (iter *Iteration) Run() {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, iter.accountID)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
-	defer func() {
-		iter.packer.Close()
-		end := types.BuildTS(time.Now().UnixNano(), 0)
-		for i, status := range iter.status {
-			if status.ErrorCode != 0 {
-				nowTs := iter.cnEngine.LatestLogtailAppliedTime()
-				createByOpt := client.WithTxnCreateBy(
-					0,
-					"",
-					"iscp iteration",
-					0)
-				txnOp, err := iter.cnTxnClient.New(ctx, nowTs, createByOpt)
-				if err != nil {
-					return
-				}
-				err = iter.cnEngine.New(ctx, txnOp)
-				if err != nil {
-					return
-				}
-				iter.status[i].EndAt = end
-				state := ISCPJobState_Completed
-				if iter.status[i].PermanentlyFailed() {
-					state = ISCPJobState_Error
-				}
-				err = FlushStatus(
-					ctx,
-					iter.cnUUID,
-					txnOp,
-					iter.accountID,
-					iter.rel.GetTableID(ctx),
-					iter.jobNames[i],
-					iter.status[i],
-					state,
-				)
-				if err == nil {
-					err = txnOp.Commit(ctx)
-				} else {
-					err = errors.Join(err, txnOp.Rollback(ctx))
-				}
-				logutil.Error(
-					"ISCP-Task iteration failed",
-					zap.Uint32("tenantID", iter.accountID),
-					zap.Uint64("tableID", iter.rel.GetTableID(ctx)),
-					zap.String("jobName", iter.jobNames[i]),
-					zap.Any("status", status),
-					zap.Error(err),
-				)
-			}
-		}
-	}()
-	CollectChangesForIteration(
-		ctx,
-		iter,
-	)
 }
 
 // TODO
