@@ -668,6 +668,7 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 
 	for _, tables := range objects {
 		if len(tables) > 1 {
+			shard := false
 			for tid, entry := range tables {
 				accountID, ok := snapshotMeta.GetAccountId(tid)
 				if !ok {
@@ -681,12 +682,18 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 						TotalCnt:  1,
 						TotalSize: uint64(entry.stats.Size()),
 					}
+					shard = true
 					continue
+				}
+				if !shard {
+					detals[accountID].ShardSize += uint64(entry.stats.Size())
+					shard = true
 				}
 				detals[accountID].ShardCnt++
 				detals[accountID].TotalCnt++
 				detals[accountID].TotalSize += uint64(entry.stats.Size())
 			}
+
 			continue
 		}
 		if snapshotMeta == nil {
