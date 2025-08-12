@@ -180,7 +180,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 				buildStart := time.Now()
 				readers, err := s.buildReaders(c)
-				stats.AddBuidReaderTimeConsumption(time.Since(buildStart))
+				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 				if err != nil {
 					return err
 				}
@@ -522,7 +522,7 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	buildStart := time.Now()
 	defer func() {
-		stats.AddBuidReaderTimeConsumption(time.Since(buildStart))
+		stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
 	}()
 	readers, err := s.buildReaders(c)
 	if err != nil {
@@ -534,10 +534,6 @@ func buildScanParallelRun(s *Scope, c *Compile) (*Scope, error) {
 		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s, nil
 	}
-
-	//if len(s.DataSource.OrderBy) > 0 {
-	//	return nil, moerr.NewInternalError(c.proc.Ctx, "ordered scan must run in only one parallel.")
-	//}
 
 	ms, ss := newParallelScope(s)
 	for i := range ss {
