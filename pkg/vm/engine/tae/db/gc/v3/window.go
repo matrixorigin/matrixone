@@ -699,7 +699,7 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 				logutil.Error("GetAccountId is error")
 				continue
 			}
-			if detals[accountID] != nil {
+			if detals[accountID] == nil {
 				detals[accountID] = &TableStats{
 					TotalCnt:  1,
 					TotalSize: uint64(entry.stats.Size()),
