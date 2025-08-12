@@ -711,6 +711,13 @@ func (h *Handle) HandleDiskCleaner(
 	op := req.Op
 	key := req.Key
 	value := req.Value
+	defer func() {
+		if err != nil {
+			resp.ReturnStr += err.Error()
+		} else if resp.ReturnStr == "" {
+			resp.ReturnStr += "OK"
+		}
+	}()
 	switch op {
 	case cmd_util.RemoveChecker:
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
