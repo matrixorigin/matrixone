@@ -20,8 +20,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -38,28 +36,28 @@ type DataRetrieverConsumer interface {
 func CollectChangesForIteration(
 	ctx context.Context,
 	iter *Iteration,
-	rel engine.Relation,
-	fromTs types.TS,
-	toTs types.TS,
-	consumers []*JobEntry,
-	initSnapshotSplitTxn bool,
-	packer *types.Packer,
-	mp *mpool.MPool,
-) (errs []error) {
-	errs = make([]error, len(consumers))
-	changes, err := CollectChanges(ctx, rel, fromTs, toTs, mp)
+) {
+	changes, err := CollectChanges(ctx, iter.rel, iter.GetFrom(), iter.GetTo(), iter.mp)
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
-		for i := range consumers {
-			errs[i] = err
+		for _, status := range iter.status {
+			status.SetError(err)
 		}
 		return
 	}
 	defer changes.Close()
 
-	tableDef := rel.CopyTableDef(ctx)
+	consumers := make([]Consumer, len(iter.jobSpecs))
+	for i := range iter.jobNames {
+		consumers[i], err = NewConsumer(iter.cnUUID, iter.rel.CopyTableDef(ctx), &iter.jobSpecs[i].ConsumerInfo)
+		if err != nil {
+			iter.status[i].SetError(err)
+		}
+	}
+
+	tableDef := iter.rel.CopyTableDef(ctx)
 	insTSColIdx := len(tableDef.Cols) - 1
 	insCompositedPkColIdx := len(tableDef.Cols) - 2
 	delTSColIdx := 1
@@ -70,19 +68,23 @@ func CollectChangesForIteration(
 
 	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
 		if atomicBatch == nil {
-			atomicBatch = NewAtomicBatch(mp)
+			atomicBatch = NewAtomicBatch(iter.mp)
 		}
 		return atomicBatch
 	}
 
 	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
 	typ := ISCPDataType_Tail
-	if fromTs.IsEmpty() {
+	from := iter.GetFrom()
+	if from.IsEmpty() {
 		typ = ISCPDataType_Snapshot
 	}
 	waitGroups := make([]sync.WaitGroup, len(consumers))
-	for i, consumer := range consumers {
-		dataRetrievers[i] = NewDataRetriever(consumer, iter, typ)
+	for i := range consumers {
+		if consumers[i] == nil {
+			continue
+		}
+		dataRetrievers[i] = NewDataRetriever(i, iter, typ)
 	}
 
 	ctxWithCancel, cancel := context.WithCancel(ctx)
@@ -98,23 +100,23 @@ func CollectChangesForIteration(
 			default:
 			}
 			var data *ISCPData
-			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, mp)
+			insertData, deleteData, currentHint, err := changes.Next(ctxWithCancel, iter.mp)
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "changesNext" {
 				err = moerr.NewInternalErrorNoCtx(msg)
 			}
 			if err != nil {
 				jobNames := ""
-				for _, sinker := range iter.jobs {
-					jobNames = fmt.Sprintf("%s%s, ", jobNames, sinker.jobName)
+				for _, jobName := range iter.jobNames {
+					jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
 				}
 				logutil.Error(
 					"ISCP-Task sink iteration failed",
-					zap.Uint32("tenantID", iter.table.accountID),
-					zap.Uint64("tableID", iter.table.tableID),
+					zap.Uint32("tenantID", iter.accountID),
+					zap.Uint64("tableID", iter.rel.GetTableID(ctx)),
 					zap.String("jobName", jobNames),
 					zap.Error(err),
-					zap.String("from", iter.from.ToString()),
-					zap.String("to", iter.to.ToString()),
+					zap.String("from", iter.GetFrom().ToString()),
+					zap.String("to", iter.GetTo().ToString()),
 				)
 				data = NewISCPData(true, nil, nil, err)
 			} else {
@@ -130,7 +132,7 @@ func CollectChangesForIteration(
 							panic("logic error")
 						}
 						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						insertAtmBatch.Append(iter.packer, insertData, insTSColIdx, insCompositedPkColIdx)
 						data = NewISCPData(false, insertAtmBatch, nil, nil)
 					case engine.ChangesHandle_Tail_wip:
 						panic("logic error")
@@ -140,8 +142,8 @@ func CollectChangesForIteration(
 						}
 						insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
 						deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-						insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-						deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+						insertAtmBatch.Append(iter.packer, insertData, insTSColIdx, insCompositedPkColIdx)
+						deleteAtmBatch.Append(iter.packer, deleteData, delTSColIdx, delCompositedPkColIdx)
 						data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
 
 					}
@@ -167,19 +169,19 @@ func CollectChangesForIteration(
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
-			err := consumerEntry.consumer.Consume(context.Background(), dataRetrievers[i])
+			err := consumerEntry.Consume(context.Background(), dataRetrievers[i])
 			if err != nil {
 				logutil.Error(
 					"ISCP-Task sink consume failed",
-					zap.Uint32("tenantID", iter.table.accountID),
-					zap.Uint64("tableID", iter.table.tableID),
-					zap.String("jobName", iter.jobs[i].jobName),
+					zap.Uint32("tenantID", iter.accountID),
+					zap.Uint64("tableID", iter.rel.GetTableID(ctx)),
+					zap.String("jobName", iter.jobNames[i]),
 					zap.Error(err),
-					zap.String("from", iter.from.ToString()),
-					zap.String("to", iter.to.ToString()),
+					zap.String("from", iter.GetFrom().ToString()),
+					zap.String("to", iter.GetTo().ToString()),
 				)
 				dataRetrievers[i].SetError(err)
-				errs[i] = err
+				iter.status[i].SetError(err)
 			}
 		}(i)
 	}

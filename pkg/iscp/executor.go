@@ -320,7 +320,6 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 	}()
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
-	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
 	gcTrigger := time.NewTicker(exec.option.GCInterval)
 	for {
 		select {
@@ -350,24 +349,24 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 			// update watermark for clean tables
 			for _, iter := range iterations {
 				maxTS := types.MaxTs()
-				if iter.to.EQ(&maxTS) {
-					iter.to = toTS
+				if iter.toTS.EQ(&maxTS) {
+					iter.toTS = toTS
 				}
-				_, ok := tables[iter.table.tableID]
+				_, ok := tables[iter.tableID]
 				if ok {
-					iter.Init()
 					exec.worker.Submit(iter)
 				} else {
-					iter.table.UpdateWatermark(iter)
+					table, ok := exec.getTable(iter.accountID, iter.tableID)
+					if !ok {
+						logutil.Error(
+							"ISCP-Task get table failed",
+							zap.Uint32("accountID", iter.accountID),
+							zap.Uint64("tableID", iter.tableID),
+						)
+						continue
+					}
+					table.UpdateWatermark(iter)
 				}
-			}
-		case <-flushWatermarkTrigger.C:
-			err := exec.FlushWatermarkForAllTables()
-			if err != nil {
-				logutil.Error(
-					"ISCP-Task flush watermark failed",
-					zap.Error(err),
-				)
 			}
 		case <-gcTrigger.C:
 			err := exec.GC(exec.option.GCTTL)
@@ -655,10 +654,10 @@ func (exec *ISCPTaskExecutor) getTableByID(ctx context.Context, tableID uint64) 
 	}
 	return
 }
-func (exec *ISCPTaskExecutor) getCandidateTables() ([]*Iteration, []*TableEntry, []types.TS) {
+func (exec *ISCPTaskExecutor) getCandidateTables() ([]*IterationContext, []*TableEntry, []types.TS) {
 	tables := make([]*TableEntry, 0)
 	fromTSs := make([]types.TS, 0)
-	iterations := make([]*Iteration, 0)
+	iterations := make([]*IterationContext, 0)
 	items := exec.getAllTables()
 	for _, t := range items {
 		if t.IsEmpty() {
@@ -720,53 +719,6 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	return
 }
 
-func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables() error {
-	tables := exec.getAllTables()
-	if len(tables) == 0 {
-		return nil
-	}
-	deleteSqlWriter := &bytes.Buffer{}
-	insertSqlWriter := &bytes.Buffer{}
-	deleteSqlWriter.WriteString("DELETE FROM mo_catalog.mo_intra_system_change_propagation_log WHERE")
-	insertSqlWriter.WriteString("INSERT INTO mo_catalog.mo_intra_system_change_propagation_log " +
-		"(account_id,table_id,column_names,job_name,job_config,last_sync_txn_ts,err_code,error_msg,info,consumer_config,drop_at) VALUES")
-	for i, table := range tables {
-		err := table.fillInISCPLogUpdateSQL(i == 0, insertSqlWriter, deleteSqlWriter)
-		if err != nil {
-			return err
-		}
-	}
-	deleteSql := deleteSqlWriter.String()
-	insertSql := insertSqlWriter.String()
-	txn, err := exec.txnFactory()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
-	defer cancel()
-	defer func() {
-		if err != nil {
-			err2 := txn.Rollback(ctx)
-			if err2 != nil {
-				logutil.Errorf("flush watermark for all tables rollback failed, err: %v", err2)
-			}
-		} else {
-			err = txn.Commit(ctx)
-		}
-	}()
-	if _, err = ExecWithResult(ctx, deleteSql, exec.cnUUID, txn); err != nil {
-		return err
-	}
-	if _, err = ExecWithResult(ctx, insertSql, exec.cnUUID, txn); err != nil {
-		return err
-	}
-	logutil.Info(
-		"ISCP-Task flush watermark",
-		zap.Any("table count", len(tables)),
-	)
-	return nil
-}
-
 func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	txn, err := exec.txnFactory()
 	if err != nil {
@@ -776,7 +728,7 @@ func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	defer cancel()
 	defer txn.Commit(ctx)
 	gcTime := time.Now().Add(-cleanupThreshold)
-	iscpLogGCSql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogGCSQL(gcTime)
+	iscpLogGCSql := cdc.CDCSQLBuilder.ISCPLogGCSQL(gcTime)
 	if _, err = ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn); err != nil {
 		return err
 	}

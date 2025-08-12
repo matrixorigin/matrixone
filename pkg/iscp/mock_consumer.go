@@ -43,11 +43,12 @@ const (
 func NewConsumer(
 	cnUUID string,
 	tableDef *plan.TableDef,
+	jobID JobID,
 	info *ConsumerInfo,
 ) (Consumer, error) {
 
 	if info.ConsumerType == int8(ConsumerType_CNConsumer) {
-		return NewInteralSqlConsumer(cnUUID, tableDef, info)
+		return NewInteralSqlConsumer(cnUUID, tableDef, jobID, info)
 	}
 	panic("todo")
 
@@ -108,11 +109,12 @@ type interalSqlConsumer struct {
 func NewInteralSqlConsumer(
 	cnUUID string,
 	tableDef *plan.TableDef,
+	jobID JobID,
 	info *ConsumerInfo,
 ) (Consumer, error) {
 	s := &interalSqlConsumer{
 		tableInfo: tableDef,
-		jobName:   info.JobName,
+		jobName:   jobID.JobName,
 	}
 	s.maxAllowedPacket = uint64(1024 * 1024)
 	logutil.Infof("iscp mysqlSinker(%v) maxAllowedPacket = %d", tableDef.Name, s.maxAllowedPacket)
@@ -125,7 +127,7 @@ func NewInteralSqlConsumer(
 
 	exec := v.(executor.SQLExecutor)
 	s.internalSqlExecutor = exec
-	s.targetTableName = fmt.Sprintf("test_table_%d_%v", tableDef.TblId, info.JobName)
+	s.targetTableName = fmt.Sprintf("test_table_%d_%v", tableDef.TblId, jobID.JobName)
 	logutil.Infof("iscp %v->%vs", tableDef.Name, s.targetTableName)
 	err := s.createTargetTable(context.Background())
 	if err != nil {

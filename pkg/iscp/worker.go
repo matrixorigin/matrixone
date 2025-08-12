@@ -15,11 +15,13 @@
 package iscp
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
 type Worker interface {
-	Submit(iteration *Iteration) error
+	Submit(iteration *IterationContext) error
 	Stop()
 }
 
@@ -34,14 +36,28 @@ func NewWorker() Worker {
 	return worker
 }
 
-func (w *worker) Submit(iteration *Iteration) error {
+func (w *worker) Submit(iteration *IterationContext) error {
 	_, err := w.queue.Enqueue(iteration)
 	return err
 }
 
 func (w *worker) onItem(items ...any) {
 	for _, item := range items {
-		item.(*Iteration).Run()
+		iterCtx := item.(*IterationContext)
+		iter, err := NewIteration(
+			context.Background(),
+			iterCtx.cnUUID,
+			iterCtx.cnEngine,
+			iterCtx.cnTxnClient,
+			iterCtx.accountID,
+			iterCtx.dbName,
+			iterCtx.tableName,
+			iterCtx.jobNames,
+			iterCtx.fromTS,
+			iterCtx.toTS,
+			iterCtx.mp,
+		)
+		iter.Run()
 	}
 }
 

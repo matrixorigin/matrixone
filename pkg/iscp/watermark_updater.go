@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -30,6 +31,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
+
+func MarshalJobSpec(jobSpec *JobSpec) (string, error) {
+	jsonBytes, err := json.Marshal(jobSpec)
+	if err != nil {
+		return "", err
+	}
+	return string(jsonBytes), nil
+}
+
+func UnmarshalJobSpec(jsonStr string) (*JobSpec, error) {
+	var jobSpec JobSpec
+	err := json.Unmarshal([]byte(jsonStr), &jobSpec)
+	if err != nil {
+		return nil, err
+	}
+	return &jobSpec, nil
+}
 
 func ExecWithResult(
 	ctx context.Context,
@@ -58,11 +76,12 @@ func RegisterJob(
 	cnUUID string,
 	txn client.TxnOperator,
 	pitr_name string,
-	sinkerinfo_json *ConsumerInfo,
+	jobSpec *JobSpec,
+	jobID *JobID,
 ) (ok bool, err error) {
 	return ok, retry(
 		func() error {
-			ok, err = registerJob(ctx, cnUUID, txn, pitr_name, sinkerinfo_json)
+			ok, err = registerJob(ctx, cnUUID, txn, pitr_name, jobSpec, jobID)
 			return err
 		},
 		DefaultRetryTimes,
@@ -74,7 +93,8 @@ func registerJob(
 	cnUUID string,
 	txn client.TxnOperator,
 	pitr_name string,
-	sinkerinfo_json *ConsumerInfo,
+	jobSpec *JobSpec,
+	jobID *JobID,
 ) (ok bool, err error) {
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
@@ -93,7 +113,7 @@ func registerJob(
 			"ISCP-Task RegisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
-			zap.String("jobName", sinkerinfo_json.JobName),
+			zap.String("jobName", jobID.JobName),
 			zap.Bool("create new", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -102,17 +122,13 @@ func registerJob(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return false, err
 	}
-	consumerInfoJson, err := sinkerinfo_json.Marshal()
-	if err != nil {
-		return false, err
-	}
 	tableID, err = getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
 		tenantId,
-		sinkerinfo_json.DbName,
-		sinkerinfo_json.TableName,
+		jobID.DBName,
+		jobID.TableName,
 	)
 	if err != nil {
 		return false, err
@@ -123,7 +139,7 @@ func registerJob(
 		txn,
 		tenantId,
 		tableID,
-		sinkerinfo_json.JobName,
+		jobID.JobName,
 	)
 	if err != nil {
 		return false, err
@@ -131,20 +147,16 @@ func registerJob(
 	if exist && !dropped {
 		return false, nil
 	}
-	jobConfig := NewJobConfig(IOET_JobConfig_Default)
-	jobConfigStr, err := jobConfig.Marshal()
+	jobSpecJson, err := MarshalJobSpec(jobSpec)
 	if err != nil {
 		return false, err
 	}
-	ok = true
-	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogInsertSQL(
+	sql := cdc.CDCSQLBuilder.ISCPLogInsertSQL(
 		tenantId,
 		tableID,
-		sinkerinfo_json.JobName,
-		string(jobConfigStr),
-		"",
-		"",
-		string(consumerInfoJson),
+		jobID.JobName,
+		jobSpecJson,
+		ISCPJobState_Completed,
 	)
 	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
@@ -158,11 +170,11 @@ func UnregisterJob(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
-	consumerInfo *ConsumerInfo,
+	jobID *JobID,
 ) (ok bool, err error) {
 	return ok, retry(
 		func() error {
-			ok, err = unregisterJob(ctx, cnUUID, txn, consumerInfo)
+			ok, err = unregisterJob(ctx, cnUUID, txn, jobID)
 			return err
 		},
 		DefaultRetryTimes,
@@ -173,7 +185,7 @@ func unregisterJob(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
-	consumerInfo *ConsumerInfo,
+	jobID *JobID,
 ) (ok bool, err error) {
 	var tenantId uint32
 	var tableID uint64
@@ -189,7 +201,7 @@ func unregisterJob(
 			"ISCP-Task UnregisterJob",
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
-			zap.String("jobName", consumerInfo.JobName),
+			zap.String("jobName", jobID.JobName),
 			zap.Bool("delete", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -203,8 +215,8 @@ func unregisterJob(
 		cnUUID,
 		txn,
 		tenantId,
-		consumerInfo.DbName,
-		consumerInfo.TableName,
+		jobID.DBName,
+		jobID.TableName,
 	)
 	if err != nil {
 		return false, err
@@ -215,7 +227,7 @@ func unregisterJob(
 		txn,
 		tenantId,
 		tableID,
-		consumerInfo.JobName,
+		jobID.JobName,
 	)
 	if err != nil {
 		return false, err
@@ -224,10 +236,10 @@ func unregisterJob(
 		return false, nil
 	}
 	ok = true
-	sql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogUpdateDropAtSQL(
+	sql := cdc.CDCSQLBuilder.ISCPLogUpdateDropAtSQL(
 		tenantId,
 		tableID,
-		consumerInfo.JobName,
+		jobID.JobName,
 	)
 	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
@@ -281,7 +293,7 @@ func queryIndexLog(
 	tableID uint64,
 	jobName string,
 ) (exist, dropped bool, err error) {
-	selectSql := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogSelectByTableSQL(
+	selectSql := cdc.CDCSQLBuilder.ISCPLogSelectByTableSQL(
 		tenantId,
 		tableID,
 		jobName,

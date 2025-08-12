@@ -103,7 +103,7 @@ func (t *TableEntry) DeleteSinker(
 	return false, moerr.NewInternalErrorNoCtx("sinker not found")
 }
 
-func (t *TableEntry) getCandidate() (iter []*Iteration, minFromTS types.TS) {
+func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.TS) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	candidates := make([]*JobEntry, 0, len(t.jobs))
@@ -153,8 +153,8 @@ func toErrorCode(err error) int {
 	return 0
 }
 
-func (t *TableEntry) UpdateWatermark(iter *Iteration) {
-	if iter.from.GE(&iter.to) {
+func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
+	if iter.fromTS.GE(&iter.toTS) {
 		return
 	}
 	t.mu.Lock()

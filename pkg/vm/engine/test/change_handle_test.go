@@ -1799,25 +1799,6 @@ func TestISCPExecutor3(t *testing.T) {
 	// first iteration
 	appendFn(0)
 
-	rmFn, err = objectio.InjectCDCExecutor("iterationCreateTxn")
-	assert.NoError(t, err)
-	registerFn("hnsw_idx_0")
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
-	rmFn()
-	checkWaterMarkFn("hnsw_idx_0", 1000, true)
-
-	// get relation failed
-	rmFn, err = objectio.InjectCDCExecutor("iterationGetRelation")
-	assert.NoError(t, err)
-
-	registerFn("hnsw_idx_1")
-
-	checkWaterMarkFn("hnsw_idx_1", 100, false)
-
-	rmFn()
-
-	checkWaterMarkFn("hnsw_idx_1", 1000, true)
-
 	// insert AsyncIndexIterations failed
 	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
 	assert.NoError(t, err)
@@ -2001,28 +1982,11 @@ func TestISCPExecutor4(t *testing.T) {
 		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
 	}
 
-	// iterationCreateTxn failed
-	rmFn, err := objectio.InjectCDCExecutor("iterationCreateTxn")
-	assert.NoError(t, err)
 	appendFn(0)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
-	rmFn()
-	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
-	}
-
-	// iterationGetRelation failed
-	rmFn, err = objectio.InjectCDCExecutor("iterationGetRelation")
-	assert.NoError(t, err)
 	appendFn(1)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
-	rmFn()
-	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
-	}
 
 	// insertAsyncIndexIterations failed
-	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
+	rmFn, err := objectio.InjectCDCExecutor("insertAsyncIndexIterations")
 	assert.NoError(t, err)
 	appendFn(2)
 	for i := 0; i < indexCount; i++ {

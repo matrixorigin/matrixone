@@ -22,81 +22,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
-const (
-	IOET_JobConfig_Default uint16 = 4000 + iota
-	IOET_JobConfig_AlwaysUpdate
-	IOET_JobConfig_Timed
 
-	IOET_JobConfig_Default_V1      uint16 = 1
-	IOET_JobConfig_AlwaysUpdate_V1 uint16 = 1
-	IOET_JobConfig_Timed_V1        uint16 = 1
+func (triggerSpec *TriggerSpec) Marshal() ([]byte, error) {
 
-	IOET_JobConfig_Default_CurrVer      uint16 = 1
-	IOET_JobConfig_AlwaysUpdate_CurrVer uint16 = 1
-	IOET_JobConfig_Timed_CurrVer        uint16 = 1
-)
-
-func init() {
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_JobConfig_Default,
-			Version: IOET_JobConfig_Default_V1,
-		},
-		nil,
-		func(b []byte) (any, error) {
-			jobConfig := NewJobConfig(IOET_JobConfig_Default)
-			return jobConfig, nil
-		},
-	)
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_JobConfig_AlwaysUpdate,
-			Version: IOET_JobConfig_AlwaysUpdate_V1,
-		},
-		nil,
-		func(b []byte) (any, error) {
-			jobConfig := NewJobConfig(IOET_JobConfig_AlwaysUpdate)
-			return jobConfig, nil
-		},
-	)
-	objectio.RegisterIOEnrtyCodec(
-		objectio.IOEntryHeader{
-			Type:    IOET_JobConfig_Timed,
-			Version: IOET_JobConfig_Timed_V1,
-		},
-		nil,
-		func(b []byte) (any, error) {
-			jobConfig := NewJobConfig(IOET_JobConfig_Timed)
-			err := jobConfig.Unmarshal(b)
-			return jobConfig, err
-		},
-	)
 }
+func (triggerSpec *TriggerSpec) Unmarshal([]byte) error {
 
-func UnmarshalJobConfig(data []byte) (JobConfig, error) {
-	head := objectio.DecodeIOEntryHeader(data)
-	codec := objectio.GetIOEntryCodec(*head)
-	jobConfig, err := codec.Decode(data[4:])
-	if err != nil {
-		return nil, err
-	}
-	return jobConfig.(JobConfig), nil
 }
+func (triggerSpec *TriggerSpec) GetType() uint16 {
 
-func NewJobConfig(jobType uint16, args ...any) JobConfig {
-	switch jobType {
-	case IOET_JobConfig_Default:
-		return &DefaultJobConfig{}
-	case IOET_JobConfig_AlwaysUpdate:
-		return &AlwaysUpdateJobConfig{}
-	case IOET_JobConfig_Timed:
-		return &TimedJobConfig{
-			UpdateInterval: args[0].(int64),
-			ShareIteration: args[1].(bool),
-		}
-	default:
-		panic(fmt.Sprintf("invalid job type: %d", jobType))
-	}
+}
+func (triggerSpec *TriggerSpec) Check(
+	otherConsumers []*JobEntry,
+	consumer *JobEntry,
+	now types.TS,
+) (
+	ok bool, from, to types.TS, shareIteration bool,
+) {
 }
 
 // DefaultJobConfig is the default implementation of JobConfig.

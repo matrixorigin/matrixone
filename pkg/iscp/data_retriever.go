@@ -17,19 +17,27 @@ package iscp
 import (
 	"context"
 	"sync"
-	"sync/atomic"
+	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-type ISCPData struct {
-	refcnt atomic.Int32
+func MarshalJobStatus(status *JobStatus) (string, error) {
+	jsonBytes, err := json.Marshal(status)
+	if err != nil {
+		return "", err
+	}
+	return string(jsonBytes), nil
+}
 
-	insertBatch *AtomicBatch
-	deleteBatch *AtomicBatch
-	noMoreData  bool
-	err         error
+func UnmarshalJobStatus(jsonStr string) (*JobStatus, error) {
+	var status JobStatus
+	err := json.Unmarshal([]byte(jsonStr), &status)
+	if err != nil {
+		return nil, err
+	}
+	return &status, nil
 }
 
 func NewISCPData(
@@ -71,10 +79,10 @@ const (
 )
 
 type DataRetrieverImpl struct {
-	*JobEntry
 	*Iteration
-	typ int8
+	offset int
 
+	typ int8
 	insertDataCh chan *ISCPData
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -84,13 +92,13 @@ type DataRetrieverImpl struct {
 }
 
 func NewDataRetriever(
-	consumer *JobEntry,
+	offset int,
 	iteration *Iteration,
 	dataType int8,
 ) *DataRetrieverImpl {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DataRetrieverImpl{
-		JobEntry:     consumer,
+		offset:       offset,
 		Iteration:    iteration,
 		insertDataCh: make(chan *ISCPData, 1),
 		typ:          dataType,
@@ -108,15 +116,19 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 	if r.typ == ISCPDataType_Snapshot {
 		return nil
 	}
-	updateWatermarkSQL := cdc.CDCSQLBuilder.IntraSystemChangePropagationLogUpdateResultSQL(
-		r.tableInfo.accountID,
-		r.tableInfo.tableID,
-		r.jobName,
-		r.to,
-		0,
-		"",
+	statusJson, err := MarshalJobStatus(r.status[r.offset])
+	if err != nil {
+		return err
+	}
+	updateWatermarkSQL := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
+		r.accountID,
+		r.rel.GetTableID(context.Background()),
+		r.jobNames[r.offset],
+		r.status[r.offset].To,
+		statusJson,
+		ISCPJobState_Completed,
 	)
-	_, err := exec.Exec(updateWatermarkSQL, opts)
+	_, err = exec.Exec(updateWatermarkSQL, opts)
 	return err
 }
 

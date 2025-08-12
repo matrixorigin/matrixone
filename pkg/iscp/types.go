@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -47,20 +46,20 @@ const (
 	ConsumerType_CustomizedStart = 1000
 )
 
+const (
+	ISCPJobState_Invalid int8 = iota
+	ISCPJobState_Pending
+	ISCPJobState_Running
+	ISCPJobState_Completed
+	ISCPJobState_Error
+	ISCPJobState_Canceled
+)
+
 type DataRetriever interface {
 	Next() (iscpData *ISCPData)
 	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
 	GetDataType() int8
 }
-
-type JobState int8
-
-const (
-	JobState_Invalid JobState = iota
-	JobState_Init
-	JobState_Running
-	JobState_Finished
-)
 
 // In an iteration, the table's data is propagated downstream.
 // A newly created job will immediately trigger an iteration.
@@ -86,13 +85,48 @@ const (
 
 */
 type Iteration struct {
-	table   *TableEntry
-	jobs    []*JobEntry
-	from    types.TS
-	to      types.TS
-	err     []error
-	startAt time.Time
-	endAt   time.Time
+	accountID uint32
+	rel       engine.Relation
+
+	cnUUID string
+	cnEngine engine.Engine
+	cnTxnClient client.TxnClient
+
+	txnReader client.TxnOperator
+
+	packer *types.Packer
+	mp     *mpool.MPool
+
+	jobNames []string
+	jobSpecs []*JobSpec
+	status   []*JobStatus
+}
+
+type IterationContext struct {
+	accountID uint32
+	tableID uint64
+	jobNames []string
+	fromTS types.TS
+	toTS types.TS
+}
+
+type ISCPData struct {
+	refcnt atomic.Int32
+
+	insertBatch *AtomicBatch
+	deleteBatch *AtomicBatch
+	noMoreData  bool
+	err         error
+}
+
+type JobStatus struct {
+	TaskID    uint64
+	From      types.TS
+	To        types.TS
+	StartAt   types.TS
+	EndAt     types.TS
+	ErrorCode int
+	ErrorMsg  string
 }
 
 // Intra-System Change Propagation Task Executor
@@ -127,16 +161,13 @@ type ISCPTaskExecutor struct {
 
 // Intra-System Change Propagation Job Entry
 type JobEntry struct {
-	tableInfo    *TableEntry
-	jobName      string
-	inited       atomic.Bool
-	consumer     Consumer
-	consumerType int8
-	watermark    types.TS
-	err          error
-	consumerInfo *ConsumerInfo
-	jobConfig    JobConfig
-	state        JobState
+	tableInfo *TableEntry
+	jobName   string
+
+	inited    atomic.Bool
+	watermark types.TS
+	err       error
+	state     JobState
 }
 
 // Intra-System Change Propagation Table Entry
@@ -152,24 +183,30 @@ type TableEntry struct {
 	mu        sync.RWMutex
 }
 
-type ConsumerInfo struct {
-	ConsumerType int8
-	TableName    string
-	DbName       string
-	JobName      string
+type JobID struct {
+	DBName    string
+	TableName string
+	JobName   string
 }
 
-type JobConfig interface {
-	Marshal() ([]byte, error)
-	Unmarshal([]byte) error
-	GetType() uint16
-	Check(
-		otherConsumers []*JobEntry,
-		consumer *JobEntry,
-		now types.TS,
-	) (
-		ok bool, from, to types.TS, shareIteration bool,
-	)
+type JobSpec struct {
+	ConsumerInfo
+	TriggerSpec
+}
+
+type Schedule struct {
+	Cron  string
+	Share bool
+}
+
+type TriggerSpec struct {
+	JobType int8
+	Schedule
+}
+
+type ConsumerInfo struct {
+	ConsumerType int8
+	Columns      []string
 }
 
 type Consumer interface {
