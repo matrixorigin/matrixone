@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -622,13 +621,7 @@ type TableStats struct {
 }
 
 func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMeta, mp *mpool.MPool) (map[uint32]*TableStats, error) {
-	attrs, attrTypes := ckputil.DataScan_TableIDAtrrs, ckputil.DataScan_TableIDTypes
-	buffer := containers.NewOneSchemaBatchBuffer(
-		mpool.MB*16,
-		attrs,
-		attrTypes,
-		false,
-	)
+	buffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer buffer.Close(mp)
 	bat := buffer.Fetch()
 	defer buffer.Putback(bat, mp)
