@@ -242,6 +242,12 @@ const (
 		` account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'`
+	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`job_spec = '%s'` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'`
 	CDCUpdateMOISCPLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`drop_at = now()` +
 		`WHERE` +
@@ -292,10 +298,11 @@ const (
 	CDCDeleteMOISCPLogSqlTemplate_Idx        = 22
 	CDCSelectMOISCPLogSqlTemplate_Idx        = 23
 	CDCSelectMOISCPLogByTableSqlTemplate_Idx = 24
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx = 25
 
-	CDCGetTableIDTemplate_Idx = 25
+	CDCGetTableIDTemplate_Idx = 26
 
-	CDCSqlTemplateCount = 26
+	CDCSqlTemplateCount = 27
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -394,6 +401,9 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCUpdateMOISCPLogSqlTemplate_Idx: {
 		SQL: CDCUpdateMOISCPLogSqlTemplate,
+	},
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogJobSpecSqlTemplate,
 	},
 	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx: {
 		SQL: CDCUpdateMOISCPLogDropAtSqlTemplate,
@@ -812,6 +822,22 @@ func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(
 		indexName,
 	)
 }
+
+func (b cdcSQLBuilder) ISCPLogUpdateJobSpecSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobSpec string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+		jobSpec,
+	)
+}
+
 
 func (b cdcSQLBuilder) ISCPLogGCSQL(t time.Time) string {
 	return fmt.Sprintf(

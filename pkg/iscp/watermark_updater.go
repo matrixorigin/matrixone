@@ -181,6 +181,74 @@ func UnregisterJob(
 	)
 }
 
+func UpdateJobSpec(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	jobID *JobID,
+	jobSpec *JobSpec,
+) (err error) {
+	return retry(
+		func() error {
+			return updateJobSpec(ctx, cnUUID, txn, jobID, jobSpec)
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func updateJobSpec(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	jobID *JobID,
+	jobSpec *JobSpec,
+) (err error) {
+	var tenantId uint32
+	var tableID uint64
+	var jobSpecJson string
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"ISCP-Task UnregisterJob",
+			zap.Uint32("tenantID", tenantId),
+			zap.Uint64("tableID", tableID),
+			zap.String("jobName", jobID.JobName),
+			zap.String("jobSpec", jobSpecJson),
+			zap.Error(err),
+		)
+	}()
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
+	jobSpecJson, err = MarshalJobSpec(jobSpec)
+	if err != nil {
+		return err
+	}
+	tableID, err = getTableID(
+		ctx,
+		cnUUID,
+		txn,
+		tenantId,
+		jobID.DBName,
+		jobID.TableName,
+	)
+	if err != nil {
+		return
+	}
+	sql := cdc.CDCSQLBuilder.ISCPLogUpdateJobSpecSQL(
+		tenantId,
+		tableID,
+		jobID.JobName,
+		jobSpecJson,
+	)
+	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	return
+}
 func unregisterJob(
 	ctx context.Context,
 	cnUUID string,

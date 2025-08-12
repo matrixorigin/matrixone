@@ -354,9 +354,12 @@ func FlushStatus(
 	watermark types.TS,
 	state int8,
 ) (err error) {
-	statusJson, err := MarshalJobStatus(jobStatus)
-	if err != nil {
-		return
+	var statusJson string
+	if jobStatus != nil {
+		statusJson, err = MarshalJobStatus(jobStatus)
+		if err != nil {
+			return
+		}
 	}
 	sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
 		tenantId,

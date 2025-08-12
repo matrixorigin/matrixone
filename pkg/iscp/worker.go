@@ -49,6 +49,19 @@ func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClie
 }
 
 func (w *worker) Submit(iteration *IterationContext) error {
+	status := make([]*JobStatus, len(iteration.jobNames))
+	FlushJobStatusOnIterationState(
+		context.Background(),
+		w.cnUUID,
+		w.cnEngine,
+		w.cnTxnClient,
+		iteration.accountID,
+		iteration.tableID,
+		iteration.jobNames,
+		status,
+		iteration.fromTS,
+		ISCPJobState_Pending,
+	)
 	_, err := w.queue.Enqueue(iteration)
 	return err
 }
