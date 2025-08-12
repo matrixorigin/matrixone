@@ -557,7 +557,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// restore cluster
 	if stmt.Level == tree.RESTORELEVELCLUSTER {
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelCluster)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 
 		// restore cluster
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
@@ -580,7 +580,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// restore account by cluster level snapshot
 	if snapshot.level == tree.RESTORELEVELCLUSTER.String() && len(srcAccountName) != 0 {
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelCluster)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 
 		err = restoreToAccountUsingCluster(ctx, ses, bh, stmt, *snapshot)
 		if err != nil {
@@ -616,7 +616,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	switch stmt.Level {
 	case tree.RESTORELEVELACCOUNT:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelAccount)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 
 		if err = restoreToAccount(ctx,
 			ses.GetService(),
@@ -631,7 +631,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return stats, err
 		}
 	case tree.RESTORELEVELDATABASE:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelDatabase)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
 		if err = restoreToDatabase(ctx,
 			ses.GetService(),
@@ -648,7 +648,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return stats, err
 		}
 	case tree.RESTORELEVELTABLE:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelTable)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable)
 
 		if err = restoreToTable(ctx,
 			ses.GetService(),

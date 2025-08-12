@@ -41,14 +41,19 @@ func init() {
 }
 
 type CloneLevelCtxKey struct{}
-type CloneLevelType int
+type CloneLevelType uint64
 type CloneStmtType int
 
 const (
-	CloneLevelTable CloneLevelType = iota
-	CloneLevelDatabase
-	CloneLevelAccount
-	CloneLevelCluster
+	NormalCloneLevelTable CloneLevelType = 1 << iota
+	NormalCloneLevelDatabase
+	NormalCloneLevelAccount
+	NormalCloneLevelCluster
+
+	RestoreCloneLevelTable
+	RestoreCloneLevelDatabase
+	RestoreCloneLevelAccount
+	RestoreCloneLevelCluster
 )
 
 const (
@@ -162,7 +167,7 @@ func DecideCloneStmtType(
 	}
 
 	var (
-		level = CloneLevelTable
+		level = NormalCloneLevelTable
 	)
 
 	if val := ctx.Value(CloneLevelCtxKey{}); val != nil {
@@ -170,17 +175,17 @@ func DecideCloneStmtType(
 	}
 
 	switch level {
-	case CloneLevelCluster:
+	case NormalCloneLevelCluster, RestoreCloneLevelCluster:
 		return CloneCluster
-	case CloneLevelAccount:
+	case NormalCloneLevelAccount, RestoreCloneLevelAccount:
 		return CloneAccount
-	case CloneLevelDatabase:
+	case NormalCloneLevelDatabase, RestoreCloneLevelDatabase:
 		if srcAccount == toAccount {
 			return WithinAccCloneDB
 		}
 		return BetweenAccCloneDB
 
-	case CloneLevelTable:
+	case NormalCloneLevelTable, RestoreCloneLevelTable:
 		if srcAccount == toAccount {
 			if srcDbName == dstDbName {
 				return WithinDBCloneTable
