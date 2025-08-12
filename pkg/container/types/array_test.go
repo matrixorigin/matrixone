@@ -82,13 +82,13 @@ func TestArrayToBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.argsF32 != nil {
-				if got := ArrayToBytes[float32](tt.argsF32); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToBytes(tt.argsF32); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToBytes() = %v, want %v", got, tt.want)
 				}
 			}
 
 			if tt.argsF64 != nil {
-				if got := ArrayToBytes[float64](tt.argsF64); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToBytes(tt.argsF64); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToBytes() = %v, want %v", got, tt.want)
 				}
 			}
@@ -141,13 +141,13 @@ func TestArrayToString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.argsF32 != nil {
-				if got := ArrayToString[float32](tt.argsF32); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToString(tt.argsF32); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToString() = %v, want %v", got, tt.want)
 				}
 			}
 
 			if tt.argsF64 != nil {
-				if got := ArrayToString[float64](tt.argsF64); !reflect.DeepEqual(got, tt.want) {
+				if got := ArrayToString(tt.argsF64); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArrayToString() = %v, want %v", got, tt.want)
 				}
 			}
@@ -177,13 +177,13 @@ func TestArraysToString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.argsF32 != nil {
-				if got := ArraysToString[float32](tt.argsF32, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
+				if got := ArraysToString(tt.argsF32, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArraysToString() = %v, want %v", got, tt.want)
 				}
 			}
 
 			if tt.argsF64 != nil {
-				if got := ArraysToString[float64](tt.argsF64, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
+				if got := ArraysToString(tt.argsF64, DefaultArraysToStringSep); !reflect.DeepEqual(got, tt.want) {
 					t.Errorf("ArraysToString() = %v, want %v", got, tt.want)
 				}
 			}

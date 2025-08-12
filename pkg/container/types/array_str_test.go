@@ -55,7 +55,7 @@ func Benchmark_unsafeStringAt(b *testing.B) {
 	for i := 0; i < dim; i++ {
 		arr[i] = math.MaxFloat32
 	}
-	str := ArrayToString[float32](arr)
+	str := ArrayToString(arr)
 
 	b.Run("stringAt-RuneCast", func(b *testing.B) {
 		var idx int
@@ -93,7 +93,7 @@ func BenchmarkStringToArray(b *testing.B) {
 	for i := 0; i < dim; i++ {
 		arr[i] = math.MaxFloat32
 	}
-	str := ArrayToString[float32](arr)
+	str := ArrayToString(arr)
 
 	b.Run("StringToArray-Trim_Split", func(b *testing.B) {
 		b.ResetTimer()
