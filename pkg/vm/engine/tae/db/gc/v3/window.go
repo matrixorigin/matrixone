@@ -690,6 +690,9 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 			}
 			continue
 		}
+		if snapshotMeta == nil {
+			continue
+		}
 		accountID, ok := snapshotMeta.GetAccountId(tables[0].table)
 		if !ok {
 			logutil.Error("GetAccountId is error")
