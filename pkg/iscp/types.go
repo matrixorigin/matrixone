@@ -87,10 +87,10 @@ type DataRetriever interface {
 
 type IterationContext struct {
 	accountID uint32
-	tableID uint64
-	jobNames []string
-	fromTS types.TS
-	toTS types.TS
+	tableID   uint64
+	jobNames  []string
+	fromTS    types.TS
+	toTS      types.TS
 }
 
 type ISCPData struct {
@@ -122,7 +122,9 @@ type ISCPTaskExecutor struct {
 	cnUUID         string
 	txnFactory     func() (client.TxnOperator, error)
 	txnEngine      engine.Engine
+	cnTxnClient    client.TxnClient
 	iscpLogTableID uint64
+	iscpLogWm      types.TS
 
 	rpcHandleFn func(
 		ctx context.Context,
@@ -146,11 +148,11 @@ type ISCPTaskExecutor struct {
 type JobEntry struct {
 	tableInfo *TableEntry
 	jobName   string
+	jobSpec   *JobSpec
 
 	inited    atomic.Bool
 	watermark types.TS
-	err       error
-	state     JobState
+	state     int8
 }
 
 // Intra-System Change Propagation Table Entry
@@ -162,7 +164,7 @@ type TableEntry struct {
 	tableID   uint64
 	tableName string
 	dbName    string
-	jobs      []*JobEntry
+	jobs      map[string]*JobEntry
 	mu        sync.RWMutex
 }
 

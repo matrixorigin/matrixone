@@ -146,6 +146,7 @@ func ExecuteIteration(
 		iterCtx.tableID,
 		iterCtx.jobNames,
 		statuses,
+		iterCtx.fromTS,
 		ISCPJobState_Running,
 	)
 	if err != nil {
@@ -272,6 +273,7 @@ func ExecuteIteration(
 					iterCtx.tableID,
 					[]string{iterCtx.jobNames[i]},
 					[]*JobStatus{status},
+					iterCtx.fromTS,
 					state,
 				)
 				if err == nil {
@@ -293,6 +295,7 @@ func FlushJobStatusOnIterationState(
 	tableID uint64,
 	jobNames []string,
 	jobStatuses []*JobStatus,
+	watermark types.TS,
 	state int8,
 ) (err error) {
 	nowTs := cnEngine.LatestLogtailAppliedTime()
@@ -330,6 +333,7 @@ func FlushJobStatusOnIterationState(
 			tableID,
 			jobNames[i],
 			jobStatuses[i],
+			watermark,
 			state,
 		)
 		if err != nil {
@@ -347,6 +351,7 @@ func FlushStatus(
 	tableID uint64,
 	jobName string,
 	jobStatus *JobStatus,
+	watermark types.TS,
 	state int8,
 ) (err error) {
 	statusJson, err := MarshalJobStatus(jobStatus)
@@ -357,7 +362,7 @@ func FlushStatus(
 		tenantId,
 		tableID,
 		jobName,
-		jobStatus.To,
+		watermark,
 		statusJson,
 		state,
 	)

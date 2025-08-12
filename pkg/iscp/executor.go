@@ -15,7 +15,6 @@
 package iscp
 
 import (
-	"bytes"
 	"context"
 
 	"sync"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -44,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/tidwall/btree"
 )
 
@@ -155,16 +153,17 @@ func NewISCPTaskExecutor(
 		txnFactory = GetTxnFactory(ctx, txnEngine, cnTxnClient)
 	}
 	exec = &ISCPTaskExecutor{
-		ctx:        ctx,
-		packer:     types.NewPacker(),
-		tables:     btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true}),
-		cnUUID:     cdUUID,
-		txnFactory: txnFactory,
-		txnEngine:  txnEngine,
-		wg:         sync.WaitGroup{},
-		tableMu:    sync.RWMutex{},
-		option:     option,
-		mp:         mp,
+		ctx:         ctx,
+		packer:      types.NewPacker(),
+		tables:      btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true}),
+		cnUUID:      cdUUID,
+		txnFactory:  txnFactory,
+		txnEngine:   txnEngine,
+		cnTxnClient: cnTxnClient,
+		wg:          sync.WaitGroup{},
+		tableMu:     sync.RWMutex{},
+		option:      option,
+		mp:          mp,
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -172,11 +171,6 @@ func NewISCPTaskExecutor(
 	if err != nil {
 		return nil, err
 	}
-	err = exec.subscribeMOISCPLog(ctx)
-	if err != nil {
-		return nil, err
-	}
-	logtailreplay.RegisterRowsInsertHook(exec.onISCPLogInsert)
 	return exec, nil
 }
 
@@ -283,7 +277,7 @@ func (exec *ISCPTaskExecutor) initStateLocked() {
 		"ISCP-Task Start",
 	)
 	ctx, cancel := context.WithCancel(context.Background())
-	worker := NewWorker()
+	worker := NewWorker(exec.cnUUID, exec.txnEngine, exec.cnTxnClient, exec.mp)
 	exec.worker = worker
 	exec.ctx = ctx
 	exec.cancel = cancel
@@ -328,6 +322,20 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 		case <-exec.ctx.Done():
 			return
 		case <-syncTaskTrigger.C:
+			// apply iscp log
+			from := exec.iscpLogWm
+			to := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
+			err := exec.applyISCPLog(exec.ctx, from, to)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task apply iscp log failed",
+					zap.String("from", from.ToString()),
+					zap.String("to", to.ToString()),
+					zap.Error(err),
+				)
+				continue
+			}
+			exec.iscpLogWm = to
 			// get candidate iterations and tables
 			iterations, candidateTables, fromTSs := exec.getCandidateTables()
 			if len(iterations) == 0 {
@@ -390,70 +398,62 @@ func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, 
 	return
 }
 
-func (exec *ISCPTaskExecutor) onISCPLogInsert(ctx context.Context, input *api.Batch, tableID uint64) {
-	if tableID != exec.iscpLogTableID {
+func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.TS) (err error) {
+	rel, txn, err := exec.getTableByID(ctx, exec.iscpLogTableID)
+	if err != nil {
 		return
 	}
-	// first 2 columns are rowID and commitTS
-	accountIDVector, err := vector.ProtoVectorToVector(input.Vecs[2])
+	defer txn.Commit(ctx)
+	changes, err := CollectChanges(ctx, rel, from, to, exec.mp)
 	if err != nil {
-		panic(err)
+		return
 	}
-	accountIDs := vector.MustFixedColWithTypeCheck[uint32](accountIDVector)
-	tableIDVector, err := vector.ProtoVectorToVector(input.Vecs[3])
-	if err != nil {
-		panic(err)
-	}
-	tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
-	jobNameVector, err := vector.ProtoVectorToVector(input.Vecs[4])
-	if err != nil {
-		panic(err)
-	}
-	watermarkVector, err := vector.ProtoVectorToVector(input.Vecs[7])
-	if err != nil {
-		panic(err)
-	}
-	errorCodeVector, err := vector.ProtoVectorToVector(input.Vecs[8])
-	if err != nil {
-		panic(err)
-	}
-	errorCodes := vector.MustFixedColWithTypeCheck[int32](errorCodeVector)
-	consumerInfoVector, err := vector.ProtoVectorToVector(input.Vecs[12])
-	if err != nil {
-		panic(err)
-	}
-	dropAtVector, err := vector.ProtoVectorToVector(input.Vecs[11])
-	if err != nil {
-		panic(err)
-	}
-	jobConfigVector, err := vector.ProtoVectorToVector(input.Vecs[5])
-	if err != nil {
-		panic(err)
-	}
-	for i, tid := range tableIDs {
-		watermarkStr := watermarkVector.GetStringAt(i)
-		watermark := types.StringToTS(watermarkStr)
-		if watermark.IsEmpty() && errorCodes[i] == 0 && dropAtVector.IsNull(uint64(i)) {
-			consumerInfoStr := consumerInfoVector.GetStringAt(i)
-			jobConfigStr := jobConfigVector.GetStringAt(i)
-			go retry(
-				func() error {
-					return exec.addJob(accountIDs[i], tid, watermarkStr, int(errorCodes[i]), consumerInfoStr, jobConfigStr)
-				},
-				exec.option.RetryTimes,
-			)
+	defer changes.Close()
+
+	for {
+		var insertData, deleteData *batch.Batch
+		insertData, deleteData, _, err = changes.Next(ctx, exec.mp)
+		if insertData == nil && deleteData == nil {
+			break
 		}
-		if !dropAtVector.IsNull(uint64(i)) {
-			jobName := jobNameVector.GetStringAt(i)
-			go retry(
-				func() error {
-					return exec.deleteJob(accountIDs[i], tid, jobName)
-				},
-				exec.option.RetryTimes,
-			)
+		accountIDVector := insertData.Vecs[0]
+		accountIDs := vector.MustFixedColWithTypeCheck[uint32](accountIDVector)
+		tableIDVector := insertData.Vecs[1]
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
+		jobNameVector := insertData.Vecs[2]
+		jobSpecVector := insertData.Vecs[3]
+		jobStateVector := insertData.Vecs[4]
+		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
+		watermarkVector := insertData.Vecs[5]
+		dropAtVector := insertData.Vecs[8]
+		for i := 0; i < insertData.RowCount(); i++ {
+
+			if dropAtVector.IsNull(uint64(i)) {
+				retry(
+					func() error {
+						return exec.addOrUpdateJob(
+							accountIDs[i],
+							tableIDs[i],
+							jobNameVector.GetStringAt(i),
+							states[i],
+							watermarkVector.GetStringAt(i),
+							jobSpecVector.GetStringAt(i),
+						)
+					},
+					exec.option.RetryTimes,
+				)
+			} else {
+				retry(
+					func() error {
+						return exec.deleteJob(accountIDs[i], tableIDs[i], jobNameVector.GetStringAt(i))
+					},
+					exec.option.RetryTimes,
+				)
+			}
 		}
 	}
 
+	return
 }
 
 func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
@@ -487,30 +487,30 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 	}
 	defer result.Close()
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		accountIDs := vector.MustFixedColNoTypeCheck[uint32](cols[0])
-		tableIDs := vector.MustFixedColNoTypeCheck[uint64](cols[1])
+		accountIDVector := cols[0]
+		accountIDs := vector.MustFixedColWithTypeCheck[uint32](accountIDVector)
+		tableIDVector := cols[1]
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
+		jobNameVector := cols[2]
+		jobSpecVector := cols[3]
+		jobStateVector := cols[4]
+		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
 		watermarkVector := cols[5]
-		errorCodes := vector.MustFixedColNoTypeCheck[int32](cols[6])
-		consumerInfoVector := cols[10]
-		dropAtVector := cols[9]
-		jobConfigVector := cols[3]
+		dropAtVector := cols[8]
 		for i := 0; i < rows; i++ {
 			if !dropAtVector.IsNull(uint64(i)) {
 				continue
 			}
 			jobCount++
-			watermarkStr := watermarkVector.GetStringAt(i)
-			consumerInfoStr := consumerInfoVector.GetStringAt(i)
-			jobConfigStr := jobConfigVector.GetStringAt(i)
 			retry(
 				func() error {
-					return exec.addJob(
+					return exec.addOrUpdateJob(
 						accountIDs[i],
 						tableIDs[i],
-						watermarkStr,
-						int(errorCodes[i]),
-						consumerInfoStr,
-						jobConfigStr,
+						jobNameVector.GetStringAt(i),
+						states[i],
+						watermarkVector.GetStringAt(i),
+						jobSpecVector.GetStringAt(i),
 					)
 				},
 				exec.option.RetryTimes,
@@ -518,17 +518,18 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 		}
 		return true
 	})
+	exec.iscpLogWm = types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
 }
 
-func (exec *ISCPTaskExecutor) addJob(
+func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	accountID uint32,
 	tableID uint64,
+	jobName string,
+	state int8,
 	watermarkStr string,
-	errorCode int,
-	consumerInfoStr string,
-	jobConfigStr string,
+	jobSpecStr string,
 ) (err error) {
-	var jobName string
+	var newCreate bool
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -542,34 +543,29 @@ func (exec *ISCPTaskExecutor) addJob(
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobName),
 			zap.String("watermark", watermarkStr),
-			zap.Int("errorCode", errorCode),
+			zap.Bool("newcreate", newCreate),
 			zap.Error(err),
 		)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
-	consumerInfo, err := UnmarshalConsumerConfig([]byte(consumerInfoStr))
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "addJob" {
-		err = moerr.NewInternalErrorNoCtx(msg)
-	}
-	if err != nil {
-		return
-	}
-	jobName = consumerInfo.JobName
-	rel, err := exec.getTableByID(ctx, tableID)
-	if err != nil {
-		return
-	}
-	jobConfig, err := UnmarshalJobConfig([]byte(jobConfigStr))
+	jobSpec, err := UnmarshalJobSpec(jobSpecStr)
 	if err != nil {
 		return
 	}
 	watermark := types.StringToTS(watermarkStr)
-	tableDef := rel.GetTableDef(ctx)
 	var table *TableEntry
-	table, ok := exec.getTable(accountID, tableDef.TblId)
+	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
+		var rel engine.Relation
+		var txn client.TxnOperator
+		rel, txn, err = exec.getTableByID(ctx, tableID)
+		if err != nil {
+			return
+		}
+		defer txn.Commit(ctx)
+		tableDef := rel.GetTableDef(ctx)
 		table = NewTableEntry(
 			exec,
 			accountID,
@@ -581,13 +577,7 @@ func (exec *ISCPTaskExecutor) addJob(
 		)
 		exec.setTable(table)
 	}
-	if errorCode != 0 {
-		panic("logic error") // TODO: convert error
-	}
-	ok, err = table.AddSinker(consumerInfo, jobConfig, watermark, nil)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("sinker already exists")
-	}
+	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec, watermark, state)
 	return
 }
 
@@ -643,8 +633,8 @@ func (exec *ISCPTaskExecutor) getRelation(
 	}
 	return
 }
-func (exec *ISCPTaskExecutor) getTableByID(ctx context.Context, tableID uint64) (table engine.Relation, err error) {
-	txn, err := exec.txnFactory()
+func (exec *ISCPTaskExecutor) getTableByID(ctx context.Context, tableID uint64) (table engine.Relation, txn client.TxnOperator, err error) {
+	txn, err = exec.txnFactory()
 	if err != nil {
 		return
 	}

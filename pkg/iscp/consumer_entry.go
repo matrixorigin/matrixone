@@ -26,13 +26,11 @@ const (
 )
 
 func NewJobEntry(
-	cnUUID string,
-	tableDef *plan.TableDef,
-	tableInfo *TableEntry,
 	jobName string,
+	jobSpec *JobSpec,
 	watermark types.TS,
-	iterationErr error,
-) (*JobEntry, error) {
+	state int8,
+) (*JobEntry) {
 	jobEntry := &JobEntry{
 		tableInfo:    tableInfo,
 		jobName:      jobName,
@@ -41,7 +39,7 @@ func NewJobEntry(
 		state:        ISCPJobState_Completed,
 	}
 	jobEntry.init()
-	return jobEntry, nil
+	return jobEntry
 }
 
 func (jobEntry *JobEntry) init() {

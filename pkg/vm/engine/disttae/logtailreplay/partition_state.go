@@ -41,18 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type RowsInsertHook func(ctx context.Context, input *api.Batch, tableID uint64)
-
-var rowsInsertHooks []RowsInsertHook
-
-func init() {
-	rowsInsertHooks = make([]RowsInsertHook, 0)
-}
-
-func RegisterRowsInsertHook(hooks ...RowsInsertHook) {
-	rowsInsertHooks = append(rowsInsertHooks, hooks...)
-}
-
 const (
 	IndexScaleZero        = 0
 	IndexScaleOne         = 1
@@ -374,9 +362,6 @@ func (p *PartitionState) HandleLogtailEntry(
 				p.LogEntry(entry, "INJECT-TRACE-PS-MEM-INS")
 			}
 			p.HandleRowsInsert(ctx, entry.Bat, primarySeqnum, packer, pool)
-			for _, hook := range rowsInsertHooks {
-				hook(ctx, entry.Bat, p.tid)
-			}
 		}
 
 	case api.Entry_Delete:

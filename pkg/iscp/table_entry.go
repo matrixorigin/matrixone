@@ -50,25 +50,26 @@ func NewTableEntry(
 		mu:        sync.RWMutex{},
 	}
 }
-func (t *TableEntry) AddSinker(
-	sinkConfig *ConsumerInfo,
-	jobConfig JobConfig,
+func (t *TableEntry) AddOrUpdateSinker(
+	jobName string,
+	jobSpec *JobSpec,
 	watermark types.TS,
-	iterationErr error,
-) (ok bool, err error) {
+	state int8,
+) (newCreate bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, sinker := range t.jobs {
-		if sinker.jobName == sinkConfig.JobName {
-			return false, nil
-		}
+	jobEntry, ok := t.jobs[jobName]
+	if !ok {
+		newCreate = true
+		jobEntry = NewJobEntry(jobName, jobSpec, watermark, state)
+		t.jobs[jobName] = jobEntry
+		jobEntry.init()
+		return
 	}
-	sinkerEntry, err := NewJobEntry(t.exec.cnUUID, t.tableDef, t, sinkConfig, jobConfig, watermark, iterationErr)
-	if err != nil {
-		return false, err
-	}
-	t.jobs = append(t.jobs, sinkerEntry)
-	return true, nil
+	jobEntry.watermark = watermark
+	jobEntry.state = state
+	jobEntry.jobSpec = jobSpec
+	return
 }
 
 // for UT
