@@ -774,8 +774,8 @@ func (h *Handle) HandleDiskCleaner(
 			return
 		}
 		for accountID, stats := range tables {
-			resp.ReturnStr += fmt.Sprintf("acount: %v {shardCnt: %d, shardSize: %d, totalCnt: %d, totalSize: %d} \n\n",
-				accountID, stats.ShardCnt, stats.ShardSize, stats.TotalCnt, stats.TotalSize)
+			resp.ReturnStr += fmt.Sprintf("acount: %v {sharedCnt: %d, sharedSize: %d, totalCnt: %d, totalSize: %d} \n\n",
+				accountID, stats.SharedCnt, stats.SharedSize, stats.TotalCnt, stats.TotalSize)
 		}
 		return
 	case cmd_util.AddChecker:

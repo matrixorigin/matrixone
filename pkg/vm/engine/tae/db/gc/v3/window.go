@@ -614,10 +614,10 @@ func (w *GCWindow) String(objects map[string]*ObjectEntry) string {
 }
 
 type TableStats struct {
-	ShardCnt  uint64
-	ShardSize uint64
-	TotalCnt  uint64
-	TotalSize uint64
+	SharedCnt  uint64
+	SharedSize uint64
+	TotalCnt   uint64
+	TotalSize  uint64
 }
 
 func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMeta, mp *mpool.MPool) (map[uint32]*TableStats, error) {
@@ -627,7 +627,7 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 	defer buffer.Putback(bat, mp)
 	sourcer := w.MakeFilesReader(ctx, w.fs)
 
-	detals := make(map[uint32]*TableStats)
+	details := make(map[uint32]*TableStats)
 	objects := make(map[string]map[uint64]*ObjectEntry)
 	for {
 		bat.CleanOnlyData()
@@ -675,23 +675,23 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 					logutil.Error("GetAccountId is error")
 					continue
 				}
-				if detals[accountID] == nil {
-					detals[accountID] = &TableStats{
-						ShardCnt:  1,
-						ShardSize: uint64(entry.stats.Size()),
-						TotalCnt:  1,
-						TotalSize: uint64(entry.stats.Size()),
+				if details[accountID] == nil {
+					details[accountID] = &TableStats{
+						SharedCnt:  1,
+						SharedSize: uint64(entry.stats.Size()),
+						TotalCnt:   1,
+						TotalSize:  uint64(entry.stats.Size()),
 					}
 					shard = true
 					continue
 				}
 				if !shard {
-					detals[accountID].ShardSize += uint64(entry.stats.Size())
+					details[accountID].SharedSize += uint64(entry.stats.Size())
 					shard = true
 				}
-				detals[accountID].ShardCnt++
-				detals[accountID].TotalCnt++
-				detals[accountID].TotalSize += uint64(entry.stats.Size())
+				details[accountID].SharedCnt++
+				details[accountID].TotalCnt++
+				details[accountID].TotalSize += uint64(entry.stats.Size())
 			}
 
 			continue
@@ -705,16 +705,16 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 				logutil.Error("GetAccountId is error")
 				continue
 			}
-			if detals[accountID] == nil {
-				detals[accountID] = &TableStats{
+			if details[accountID] == nil {
+				details[accountID] = &TableStats{
 					TotalCnt:  1,
 					TotalSize: uint64(entry.stats.Size()),
 				}
 				continue
 			}
-			detals[accountID].TotalCnt++
-			detals[accountID].TotalSize += uint64(entry.stats.Size())
+			details[accountID].TotalCnt++
+			details[accountID].TotalSize += uint64(entry.stats.Size())
 		}
 	}
-	return detals, nil
+	return details, nil
 }
