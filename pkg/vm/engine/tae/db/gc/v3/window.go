@@ -693,20 +693,22 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 		if snapshotMeta == nil {
 			continue
 		}
-		accountID, ok := snapshotMeta.GetAccountId(tables[0].table)
-		if !ok {
-			logutil.Error("GetAccountId is error")
-			continue
-		}
-		if detals[accountID] != nil {
-			detals[accountID] = &TableStats{
-				TotalCnt:  1,
-				TotalSize: uint64(tables[0].stats.Size()),
+		for tid, entry := range tables {
+			accountID, ok := snapshotMeta.GetAccountId(tid)
+			if !ok {
+				logutil.Error("GetAccountId is error")
+				continue
 			}
-			continue
+			if detals[accountID] != nil {
+				detals[accountID] = &TableStats{
+					TotalCnt:  1,
+					TotalSize: uint64(entry.stats.Size()),
+				}
+				continue
+			}
+			detals[accountID].TotalCnt++
+			detals[accountID].TotalSize += uint64(entry.stats.Size())
 		}
-		detals[accountID].TotalCnt++
-		detals[accountID].TotalSize += uint64(tables[0].stats.Size())
 	}
 	return detals, nil
 }
