@@ -153,6 +153,7 @@ type JobEntry struct {
 
 	inited    atomic.Bool
 	watermark types.TS
+	persistedWatermark types.TS
 	state     int8
 }
 

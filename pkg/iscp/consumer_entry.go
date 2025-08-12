@@ -15,9 +15,16 @@
 package iscp
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 const (
@@ -42,6 +49,13 @@ func NewJobEntry(
 	return jobEntry
 }
 
+func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8) {
+	jobEntry.jobSpec = &jobSpec.TriggerSpec
+	jobEntry.persistedWatermark = watermark
+	jobEntry.watermark = watermark
+	jobEntry.state = state
+}
+
 func (jobEntry *JobEntry) init() {
 	if jobEntry.watermark.IsEmpty() {
 		// in the 1st iteration, toTS is determined by txn.SnapshotTS()
@@ -62,7 +76,10 @@ func (jobEntry *JobEntry) IsInitedAndFinished() bool {
 	return jobEntry.inited.Load() && jobEntry.state == ISCPJobState_Completed
 }
 
-func (jobEntry *JobEntry) UpdateWatermark(from, to types.TS) {
+func (jobEntry *JobEntry) UpdateWatermark(
+	from, to types.TS,
+	watermarkFlushThreshold time.Duration,
+) {
 	if from.GE(&to) {
 		return
 	}
@@ -70,6 +87,57 @@ func (jobEntry *JobEntry) UpdateWatermark(from, to types.TS) {
 		panic("logic error")
 	}
 	jobEntry.watermark = to
+
+	if jobEntry.persistedWatermark.Physical()-jobEntry.watermark.Physical() > watermarkFlushThreshold.Nanoseconds() {
+		ctx := context.Background()
+		sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
+			jobEntry.tableInfo.accountID,
+			jobEntry.tableInfo.tableID,
+			jobEntry.jobName,
+			jobEntry.watermark,
+			"",
+			ISCPJobState_Completed,
+		)
+		nowTs := jobEntry.tableInfo.exec.txnEngine.LatestLogtailAppliedTime()
+		createByOpt := client.WithTxnCreateBy(
+			0,
+			"",
+			"iscp iteration",
+			0)
+		txnWriter, err := jobEntry.tableInfo.exec.cnTxnClient.New(
+			ctx,
+			nowTs,
+			createByOpt,
+		)
+		if err != nil {
+			return
+		}
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, txnWriter.Rollback(ctx))
+			} else {
+				err = txnWriter.Commit(ctx)
+			}
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task flush watermark failed",
+					zap.Uint32("tenantID", jobEntry.tableInfo.accountID),
+					zap.Uint64("tableID", jobEntry.tableInfo.tableID),
+					zap.Strings("jobNames", []string{jobEntry.jobName}),
+					zap.Error(err),
+				)
+			}
+		}()
+		_, err = ExecWithResult(
+			ctx,
+			sql,
+			jobEntry.tableInfo.exec.cnUUID,
+			txnWriter,
+		)
+		if err != nil {
+			return
+		}
+	}
 }
 
 func (jobEntry *JobEntry) StringLocked() string {

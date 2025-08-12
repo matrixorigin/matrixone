@@ -68,9 +68,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	if !watermark.IsEmpty() {
 		jobEntry.inited.Store(true)
 	}
-	jobEntry.watermark = watermark
-	jobEntry.state = state
-	jobEntry.jobSpec = &jobSpec.TriggerSpec
+	jobEntry.update(jobSpec, watermark, state)
 	return
 }
 
@@ -156,7 +154,7 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 	defer t.mu.Unlock()
 	for _, jobName := range iter.jobNames {
 		jobEntry := t.jobs[jobName]
-		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS)
+		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
 	}
 }
 
