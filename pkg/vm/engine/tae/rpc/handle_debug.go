@@ -774,7 +774,7 @@ func (h *Handle) HandleDiskCleaner(
 			return
 		}
 		for accountID, stats := range tables {
-			resp.ReturnStr += fmt.Sprintf("acount: %v {shardCnt: %d, shardSize: %d, totalCnt: %d, totalSize: %d} \\n",
+			resp.ReturnStr += fmt.Sprintf("acount: %v {shardCnt: %d, shardSize: %d, totalCnt: %d, totalSize: %d} \n\n",
 				accountID, stats.ShardCnt, stats.ShardSize, stats.TotalCnt, stats.TotalSize)
 		}
 		return
