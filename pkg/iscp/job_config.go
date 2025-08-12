@@ -21,7 +21,8 @@ import (
 )
 
 const (
-	TriggerType_Default uint16 = iota
+	TriggerType_Invalid uint16 = iota
+	TriggerType_Default
 	TriggerType_AlwaysUpdate
 	TriggerType_Timed
 )

@@ -225,6 +225,9 @@ func updateJobSpec(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
+	if jobSpec.TriggerSpec.JobType == 0 {
+		jobSpec.TriggerSpec.JobType = TriggerType_Default
+	}
 	jobSpecJson, err = MarshalJobSpec(jobSpec)
 	if err != nil {
 		return err

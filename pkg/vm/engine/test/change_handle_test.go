@@ -1422,11 +1422,15 @@ func TestISCPExecutor1(t *testing.T) {
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
 		ctx, "", txn, "pitr",
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
 		},
 	)
 	assert.True(t, ok)
@@ -1470,13 +1474,16 @@ func TestISCPExecutor1(t *testing.T) {
 	// unregister cdc job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
-	ok, err = iscp.UnregisterJob(ctx, "", txn,
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_IndexSync),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
-		})
+	ok, err = iscp.UnregisterJob(
+		ctx,
+		"",
+		txn,
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
@@ -1559,12 +1566,12 @@ func TestISCPExecutor2(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.UnregisterJob(ctx, "", txn,
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_IndexSync),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
-		})
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+	)
 	assert.False(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
@@ -1574,11 +1581,15 @@ func TestISCPExecutor2(t *testing.T) {
 	require.NoError(t, err)
 	ok, err = iscp.RegisterJob(
 		ctx, "", txn, "pitr",
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
 		},
 	)
 	assert.True(t, ok)
@@ -1589,12 +1600,17 @@ func TestISCPExecutor2(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err = iscp.RegisterJob(ctx, "", txn, "pitr",
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
-		})
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+	)
 	assert.False(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
@@ -1603,12 +1619,12 @@ func TestISCPExecutor2(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err = iscp.UnregisterJob(ctx, "", txn,
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_IndexSync),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
-		})
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
@@ -1617,12 +1633,12 @@ func TestISCPExecutor2(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err = iscp.UnregisterJob(ctx, "", txn,
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_IndexSync),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
-		})
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+	)
 	assert.False(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
@@ -1631,12 +1647,17 @@ func TestISCPExecutor2(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err = iscp.RegisterJob(ctx, "", txn, "pitr",
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
-		})
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
@@ -1724,11 +1745,15 @@ func TestISCPExecutor3(t *testing.T) {
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
 			ctx, "", txn, "pitr",
-			&iscp.ConsumerInfo{
-				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-				DbName:       "srcdb",
-				TableName:    "src_table",
-				JobName:      indexName,
+			&iscp.JobSpec{
+				ConsumerInfo: iscp.ConsumerInfo{
+					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+				},
+			},
+			&iscp.JobID{
+				JobName:   indexName,
+				DBName:    "srcdb",
+				TableName: "src_table",
 			},
 		)
 		assert.True(t, ok)
@@ -1740,12 +1765,12 @@ func TestISCPExecutor3(t *testing.T) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.UnregisterJob(ctx, "", txn,
-			&iscp.ConsumerInfo{
-				ConsumerType: int8(iscp.ConsumerType_IndexSync),
-				DbName:       "srcdb",
-				TableName:    "src_table",
-				JobName:      indexName,
-			})
+			&iscp.JobID{
+				JobName:   indexName,
+				DBName:    "srcdb",
+				TableName: "src_table",
+			},
+		)
 		assert.True(t, ok)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(ctxWithTimeout))
@@ -1933,16 +1958,20 @@ func TestISCPExecutor4(t *testing.T) {
 	fault.Enable()
 	defer fault.Disable()
 
-	registerFn := func(indexName string) {
+	registerFn := func(jobName string) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
 			ctx, "", txn, "pitr",
-			&iscp.ConsumerInfo{
-				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-				DbName:       "srcdb",
-				TableName:    "src_table",
-				JobName:      indexName,
+			&iscp.JobSpec{
+				ConsumerInfo: iscp.ConsumerInfo{
+					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+				},
+			},
+			&iscp.JobID{
+				JobName:   jobName,
+				DBName:    "srcdb",
+				TableName: "src_table",
 			},
 		)
 		assert.True(t, ok)
@@ -2126,11 +2155,15 @@ func TestISCPExecutor5(t *testing.T) {
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
 			ctx, "", txn, "pitr",
-			&iscp.ConsumerInfo{
-				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-				DbName:       dbName,
-				TableName:    tableName,
-				JobName:      indexName,
+			&iscp.JobSpec{
+				ConsumerInfo: iscp.ConsumerInfo{
+					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+				},
+			},
+			&iscp.JobID{
+				JobName:   indexName,
+				DBName:    dbName,
+				TableName: tableName,
 			},
 		)
 		assert.True(t, ok)
@@ -2257,11 +2290,15 @@ func TestISCPExecutor6(t *testing.T) {
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
 		ctxAccountID2, "", txn, "pitr",
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "idx",
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
 		},
 	)
 	assert.True(t, ok)
@@ -2359,11 +2396,15 @@ func TestISCPExecutor7(t *testing.T) {
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
 		ctx, "", txn, "pitr",
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
 		},
 	)
 	assert.True(t, ok)
@@ -2382,8 +2423,6 @@ func TestISCPExecutor7(t *testing.T) {
 	assert.True(t, ok)
 	assert.True(t, ts.GE(&now))
 
-	err = cdcExecutor.FlushWatermarkForAllTables()
-	require.NoError(t, err)
 }
 
 // test delete
@@ -2464,11 +2503,15 @@ func TestISCPExecutor8(t *testing.T) {
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
 		ctx, "", txn, "pitr",
-		&iscp.ConsumerInfo{
-			ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			DbName:       "srcdb",
-			TableName:    "src_table",
-			JobName:      "hnsw_idx",
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
 		},
 	)
 	assert.True(t, ok)
