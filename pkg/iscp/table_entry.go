@@ -15,7 +15,6 @@
 package iscp
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 
@@ -42,7 +41,7 @@ func NewTableEntry(
 		exec:      exec,
 		accountID: accountID,
 		tableDef:  tableDef,
-		jobs:      make([]*JobEntry, 0),
+		jobs:      make(map[string]*JobEntry),
 		dbID:      dbID,
 		tableID:   tableID,
 		dbName:    dbName,
@@ -61,14 +60,17 @@ func (t *TableEntry) AddOrUpdateSinker(
 	jobEntry, ok := t.jobs[jobName]
 	if !ok {
 		newCreate = true
-		jobEntry = NewJobEntry(jobName, jobSpec, watermark, state)
+		jobEntry = NewJobEntry(t, jobName, jobSpec, watermark, state)
 		t.jobs[jobName] = jobEntry
 		jobEntry.init()
 		return
 	}
+	if !watermark.IsEmpty() {
+		jobEntry.inited.Store(true)
+	}
 	jobEntry.watermark = watermark
 	jobEntry.state = state
-	jobEntry.jobSpec = jobSpec
+	jobEntry.jobSpec = &jobSpec.TriggerSpec
 	return
 }
 
@@ -95,13 +97,12 @@ func (t *TableEntry) DeleteSinker(
 ) (isEmpty bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for i, sinker := range t.jobs {
-		if sinker.jobName == jobName {
-			t.jobs = append(t.jobs[:i], t.jobs[i+1:]...)
-			return len(t.jobs) == 0, nil
-		}
+	_, ok := t.jobs[jobName]
+	if !ok {
+		return false, moerr.NewInternalErrorNoCtx("sinker not found")
 	}
-	return false, moerr.NewInternalErrorNoCtx("sinker not found")
+	delete(t.jobs, jobName)
+	return len(t.jobs) == 0, nil
 }
 
 func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.TS) {
@@ -114,29 +115,30 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		}
 		candidates = append(candidates, sinker)
 	}
-	iterations := make([]*Iteration, 0, len(candidates))
+	iterations := make([]*IterationContext, 0, len(candidates))
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
-		ok, from, to, share := sinker.jobConfig.Check(candidates, sinker, types.MaxTs())
+		ok, from, to, share := sinker.jobSpec.Check(candidates, sinker, types.MaxTs())
 		if !ok {
 			continue
 		}
 		foundIteration := false
 		if share {
 			for _, iter := range iterations {
-				if iter.from.EQ(&from) && iter.to.EQ(&to) {
-					iter.jobs = append(iter.jobs, sinker)
+				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
+					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					foundIteration = true
 					break
 				}
 			}
 		}
 		if !foundIteration {
-			iterations = append(iterations, &Iteration{
-				table: t,
-				jobs:  []*JobEntry{sinker},
-				from:  from,
-				to:    to,
+			iterations = append(iterations, &IterationContext{
+				tableID:   t.tableID,
+				accountID: t.accountID,
+				jobNames:  []string{sinker.jobName},
+				fromTS:    from,
+				toTS:      to,
 			})
 			if from.LT(&minFromTS) {
 				minFromTS = from
@@ -146,42 +148,16 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 	return iterations, minFromTS
 }
 
-// TODO
-func toErrorCode(err error) int {
-	if err != nil {
-		return 1
-	}
-	return 0
-}
-
 func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 	if iter.fromTS.GE(&iter.toTS) {
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, sinker := range iter.jobs {
-		sinker.UpdateWatermark(iter.from, iter.to)
+	for _, jobName := range iter.jobNames {
+		jobEntry := t.jobs[jobName]
+		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS)
 	}
-}
-
-func (t *TableEntry) fillInISCPLogUpdateSQL(firstTable bool, insertWriter, deleteWriter *bytes.Buffer) (err error) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	for i, sinker := range t.jobs {
-		if sinker.watermark.IsEmpty() {
-			continue
-		}
-		err = sinker.fillInAsyncIndexLogInsertSQL(i == 0 && firstTable, insertWriter)
-		if err != nil {
-			return err
-		}
-		err = sinker.fillInAsyncIndexLogDeleteSQL(i == 0 && firstTable, deleteWriter)
-		if err != nil {
-			return err
-		}
-	}
-	return
 }
 
 func (t *TableEntry) String() string {

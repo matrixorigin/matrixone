@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -26,17 +25,18 @@ const (
 )
 
 func NewJobEntry(
+	tableInfo *TableEntry,
 	jobName string,
 	jobSpec *JobSpec,
 	watermark types.TS,
 	state int8,
-) (*JobEntry) {
+) *JobEntry {
 	jobEntry := &JobEntry{
-		tableInfo:    tableInfo,
-		jobName:      jobName,
-		watermark:    watermark,
-		err:          iterationErr,
-		state:        ISCPJobState_Completed,
+		tableInfo: tableInfo,
+		jobName:   jobName,
+		jobSpec:   &jobSpec.TriggerSpec,
+		watermark: watermark,
+		state:     state,
 	}
 	jobEntry.init()
 	return jobEntry
@@ -47,10 +47,10 @@ func (jobEntry *JobEntry) init() {
 		// in the 1st iteration, toTS is determined by txn.SnapshotTS()
 		iterCtx := &IterationContext{
 			accountID: jobEntry.tableInfo.accountID,
-			tableID: jobEntry.tableInfo.tableID,
-			jobNames: []string{jobEntry.jobName},
-			toTS:     types.TS{},
-			fromTS:   types.TS{},
+			tableID:   jobEntry.tableInfo.tableID,
+			jobNames:  []string{jobEntry.jobName},
+			toTS:      types.TS{},
+			fromTS:    types.TS{},
 		}
 		jobEntry.tableInfo.exec.worker.Submit(iterCtx)
 	} else {
@@ -59,7 +59,7 @@ func (jobEntry *JobEntry) init() {
 }
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {
-	return jobEntry.inited.Load() && !jobEntry.PermanentError() && jobEntry.state == ISCPJobState_Completed
+	return jobEntry.inited.Load() && jobEntry.state == ISCPJobState_Completed
 }
 
 func (jobEntry *JobEntry) UpdateWatermark(from, to types.TS) {
@@ -70,11 +70,6 @@ func (jobEntry *JobEntry) UpdateWatermark(from, to types.TS) {
 		panic("logic error")
 	}
 	jobEntry.watermark = to
-}
-
-// TODO
-func (jobEntry *JobEntry) PermanentError() bool {
-	return toErrorCode(jobEntry.err) > PermanentErrorThreshold
 }
 
 func (jobEntry *JobEntry) StringLocked() string {
@@ -98,8 +93,7 @@ func (jobEntry *JobEntry) StringLocked() string {
 		jobEntry.jobName,
 		initStr,
 		jobEntry.watermark.ToString(),
-		jobEntry.err,
+		jobEntry.jobSpec,
 		stateStr,
 	)
 }
-

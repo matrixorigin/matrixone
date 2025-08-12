@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -148,7 +149,7 @@ type ISCPTaskExecutor struct {
 type JobEntry struct {
 	tableInfo *TableEntry
 	jobName   string
-	jobSpec   *JobSpec
+	jobSpec   *TriggerSpec
 
 	inited    atomic.Bool
 	watermark types.TS
@@ -175,17 +176,18 @@ type JobID struct {
 }
 
 type JobSpec struct {
+	Priority int8
 	ConsumerInfo
 	TriggerSpec
 }
 
 type Schedule struct {
-	Cron  string
-	Share bool
+	Interval time.Duration
+	Share    bool
 }
 
 type TriggerSpec struct {
-	JobType int8
+	JobType uint16
 	Schedule
 }
 

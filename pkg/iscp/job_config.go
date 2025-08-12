@@ -15,23 +15,22 @@
 package iscp
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
+const (
+	TriggerType_Default uint16 = iota
+	TriggerType_AlwaysUpdate
+	TriggerType_Timed
+)
 
-func (triggerSpec *TriggerSpec) Marshal() ([]byte, error) {
-
-}
-func (triggerSpec *TriggerSpec) Unmarshal([]byte) error {
-
-}
 func (triggerSpec *TriggerSpec) GetType() uint16 {
+	return triggerSpec.JobType
 
 }
+func (triggerSpec *TriggerSpec) Init() {}
 func (triggerSpec *TriggerSpec) Check(
 	otherConsumers []*JobEntry,
 	consumer *JobEntry,
@@ -39,36 +38,23 @@ func (triggerSpec *TriggerSpec) Check(
 ) (
 	ok bool, from, to types.TS, shareIteration bool,
 ) {
+	switch triggerSpec.JobType {
+	case TriggerType_Default:
+		return checkDefaultJobConfig(otherConsumers, consumer, now)
+	case TriggerType_AlwaysUpdate:
+		return checkAlwaysUpdateJobConfig(otherConsumers, consumer, now)
+	case TriggerType_Timed:
+		return checkTimedJobConfig(&triggerSpec.Schedule, otherConsumers, consumer, now)
+	default:
+		panic(fmt.Sprintf("invalid trigger type: %d", triggerSpec.JobType))
+	}
 }
 
 // DefaultJobConfig is the default implementation of JobConfig.
-type DefaultJobConfig struct{}
-
-func (c *DefaultJobConfig) Marshal() (buf []byte, err error) {
-	var w bytes.Buffer
-	t := c.GetType()
-	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
-		return nil, err
-	}
-	ver := IOET_JobConfig_Default_CurrVer
-	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
-		return nil, err
-	}
-	return w.Bytes(), nil
-}
-
-func (c *DefaultJobConfig) Unmarshal(data []byte) error {
-	return nil
-}
-
-func (c *DefaultJobConfig) GetType() uint16 {
-	return IOET_JobConfig_Default
-}
-
 // For the default job type, only other default jobs are considered.
 // If the current job's watermark lags behind any other default job on the same table, update it.
 // If there are no lagging jobs on the same table, all jobs update.
-func (c *DefaultJobConfig) Check(
+func checkDefaultJobConfig(
 	otherConsumers []*JobEntry,
 	consumer *JobEntry,
 	now types.TS,
@@ -77,7 +63,7 @@ func (c *DefaultJobConfig) Check(
 ) {
 	defaultConsumers := make([]*JobEntry, 0)
 	for _, c := range otherConsumers {
-		if c.jobConfig.GetType() == IOET_JobConfig_Default {
+		if c.jobSpec.GetType() == TriggerType_Default {
 			defaultConsumers = append(defaultConsumers, c)
 		}
 	}
@@ -103,32 +89,9 @@ func (c *DefaultJobConfig) Check(
 	}
 }
 
-type AlwaysUpdateJobConfig struct{}
-
-func (c *AlwaysUpdateJobConfig) Marshal() (buf []byte, err error) {
-	var w bytes.Buffer
-	t := c.GetType()
-	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
-		return nil, err
-	}
-	ver := IOET_JobConfig_AlwaysUpdate_CurrVer
-	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
-		return nil, err
-	}
-	return w.Bytes(), nil
-}
-
-func (c *AlwaysUpdateJobConfig) Unmarshal(data []byte) error {
-	return nil
-}
-
-func (c *AlwaysUpdateJobConfig) GetType() uint16 {
-	return IOET_JobConfig_AlwaysUpdate
-}
-
 // Always update the watermark for each job.
 // Each job has its own iteration.
-func (c *AlwaysUpdateJobConfig) Check(
+func checkAlwaysUpdateJobConfig(
 	otherConsumers []*JobEntry,
 	consumer *JobEntry,
 	now types.TS,
@@ -140,52 +103,10 @@ func (c *AlwaysUpdateJobConfig) Check(
 
 // TimedJobConfig is a job configuration that only updates when the time difference
 // between now and watermark exceeds a specified duration.
-type TimedJobConfig struct {
-	// Duration in nanoseconds that must pass before an update is triggered
-	UpdateInterval int64
-	// Whether to share iteration with other jobs of the same type
-	ShareIteration bool
-}
-
-func (c *TimedJobConfig) Marshal() (buf []byte, err error) {
-	var w bytes.Buffer
-	t := c.GetType()
-	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
-		return nil, err
-	}
-	ver := IOET_JobConfig_Timed_CurrVer
-	if _, err = w.Write(types.EncodeUint16(&ver)); err != nil {
-		return nil, err
-	}
-	interval := c.UpdateInterval
-	if _, err = w.Write(types.EncodeInt64(&interval)); err != nil {
-		return nil, err
-	}
-	share := c.ShareIteration
-	if _, err = w.Write(types.EncodeBool(&share)); err != nil {
-		return nil, err
-	}
-	return w.Bytes(), nil
-}
-
-func (c *TimedJobConfig) Unmarshal(data []byte) (err error) {
-	r := bytes.NewBuffer(data)
-	if _, err = r.Read(types.EncodeInt64(&c.UpdateInterval)); err != nil {
-		return err
-	}
-	if _, err = r.Read(types.EncodeBool(&c.ShareIteration)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *TimedJobConfig) GetType() uint16 {
-	return IOET_JobConfig_Timed
-}
-
 // Check if the time difference between now and watermark exceeds the update interval.
 // If ShareIteration is true, all timed jobs with the same configuration will share iteration.
-func (c *TimedJobConfig) Check(
+func checkTimedJobConfig(
+	schedule *Schedule,
 	otherConsumers []*JobEntry,
 	consumer *JobEntry,
 	now types.TS,
@@ -196,20 +117,16 @@ func (c *TimedJobConfig) Check(
 	timeDiff := now.Physical() - consumer.watermark.Physical()
 
 	// Only update if the time difference exceeds the update interval
-	if timeDiff < c.UpdateInterval {
+	if timeDiff < schedule.Interval.Nanoseconds() {
 		return false, types.TS{}, types.TS{}, false
 	}
 
 	// If sharing iteration, find other timed jobs with the same configuration
-	if c.ShareIteration {
+	if schedule.Share {
 		timedConsumers := make([]*JobEntry, 0)
 		for _, other := range otherConsumers {
-			if other.jobConfig.GetType() == IOET_JobConfig_Timed {
-				if timedConfig, ok := other.jobConfig.(*TimedJobConfig); ok {
-					if timedConfig.UpdateInterval == c.UpdateInterval {
-						timedConsumers = append(timedConsumers, other)
-					}
-				}
+			if other.jobSpec.GetType() == TriggerType_Timed && other.jobSpec.Interval == schedule.Interval {
+				timedConsumers = append(timedConsumers, other)
 			}
 		}
 
