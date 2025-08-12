@@ -409,6 +409,15 @@ func ConstructCreateTableSQL(
 				partition.PartitionMethod_Key,
 				partition.PartitionMethod_LinearKey:
 				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
+			default:
+				partitionBy += " ("
+				for i, p := range meta.Partitions {
+					if i > 0 {
+						partitionBy += ", "
+					}
+					partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
+				}
+				partitionBy += ")"
 			}
 
 			createStr += partitionBy

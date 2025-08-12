@@ -63,6 +63,7 @@ PARTITION p2 VALUES LESS THAN (2001),
 PARTITION p3 VALUES LESS THAN MAXVALUE
 );
 show create table tp14;
+-- @bvt:issue#16438
 CREATE TABLE tp15 (
 a INT NOT NULL,
 b INT NOT NULL
@@ -74,6 +75,7 @@ PARTITION p2 VALUES LESS THAN (50,20),
 PARTITION p3 VALUES LESS THAN (65,30)
 );
 show create table tp15;
+-- @bvt:issue
 CREATE TABLE tp16 (
 id   INT PRIMARY KEY,
 name VARCHAR(35),
@@ -98,6 +100,7 @@ PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 );
 show create table tp17;
+-- @bvt:issue#16438
 CREATE TABLE tp18 (
 a INT NULL,
 b INT NULL
@@ -109,6 +112,7 @@ PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
 PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 );
 show create table tp18;
+-- @bvt:issue
 
 CREATE TABLE tp19 (
 col1 INT NOT NULL,
@@ -131,23 +135,35 @@ PARTITIONS 4;
 show create table tp20;
 
 drop table tp1;
+-- @bvt:issue#16438
 drop table tp2;
+-- @bvt:issue
 drop table tp3;
+-- @bvt:issue#16438
 drop table tp4;
+-- @bvt:issue
 drop table tp5;
 drop table tp6;
 drop table tp7;
+-- @bvt:issue#16438
 drop table tp8;
+-- @bvt:issue
 drop table tp9;
+-- @bvt:issue#16438
 drop table tp10;
+-- @bvt:issue
 drop table tp11;
 drop table tp12;
 drop table tp13;
 drop table tp14;
+-- @bvt:issue#16438
 drop table tp15;
+-- @bvt:issue
 drop table tp16;
 drop table tp17;
+-- @bvt:issue#16438
 drop table tp18;
+-- @bvt:issue
 drop table tp19;
 drop table tp20;
 drop database if exists test;

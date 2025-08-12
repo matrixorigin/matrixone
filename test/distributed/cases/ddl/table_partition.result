@@ -63,7 +63,7 @@ PARTITION p3 VALUES LESS THAN (21)
 );
 show create table tp13;
 Table    Create Table
-tp13    CREATE TABLE `tp13` (\n  `id` int NOT NULL,\n  `fname` varchar(30) DEFAULT NULL,\n  `lname` varchar(30) DEFAULT NULL,\n  `hired` date NOT NULL DEFAULT '1970-01-01',\n  `separated` date NOT NULL DEFAULT '9999-12-31',\n  `job_code` int NOT NULL,\n  `store_id` int NOT NULL,\n  PRIMARY KEY (`id`)\n) partition by range(id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))
+tp13    CREATE TABLE `tp13` (\n  `id` int NOT NULL,\n  `fname` varchar(30) DEFAULT NULL,\n  `lname` varchar(30) DEFAULT NULL,\n  `hired` date NOT NULL DEFAULT '1970-01-01',\n  `separated` date NOT NULL DEFAULT '9999-12-31',\n  `job_code` int NOT NULL,\n  `store_id` int NOT NULL,\n  PRIMARY KEY (`id`)\n) partition by range (`id`) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))
 CREATE TABLE tp14 (
 id INT NOT NULL,
 fname VARCHAR(30),
@@ -81,7 +81,7 @@ PARTITION p3 VALUES LESS THAN MAXVALUE
 );
 show create table tp14;
 Table    Create Table
-tp14    CREATE TABLE `tp14` (\n  `id` int NOT NULL,\n  `fname` varchar(30) DEFAULT NULL,\n  `lname` varchar(30) DEFAULT NULL,\n  `hired` date NOT NULL DEFAULT '1970-01-01',\n  `separated` date NOT NULL DEFAULT '9999-12-31',\n  `job_code` int DEFAULT NULL,\n  `store_id` int DEFAULT NULL\n) partition by range(YEAR(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))
+tp14    CREATE TABLE `tp14` (\n  `id` int NOT NULL,\n  `fname` varchar(30) DEFAULT NULL,\n  `lname` varchar(30) DEFAULT NULL,\n  `hired` date NOT NULL DEFAULT '1970-01-01',\n  `separated` date NOT NULL DEFAULT '9999-12-31',\n  `job_code` int DEFAULT NULL,\n  `store_id` int DEFAULT NULL\n) partition by range (YEAR(`separated`)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))
 CREATE TABLE tp15 (
 a INT NOT NULL,
 b INT NOT NULL
@@ -108,7 +108,7 @@ PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 );
 show create table tp16;
 Table    Create Table
-tp16    CREATE TABLE `tp16` (\n  `id` int NOT NULL,\n  `name` varchar(35) DEFAULT NULL,\n  `age` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))
+tp16    CREATE TABLE `tp16` (\n  `id` int NOT NULL,\n  `name` varchar(35) DEFAULT NULL,\n  `age` int unsigned DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) partition by list (`id`) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))
 CREATE TABLE tp17 (
 id   INT,
 name VARCHAR(35),
@@ -122,7 +122,7 @@ PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 );
 show create table tp17;
 Table    Create Table
-tp17    CREATE TABLE `tp17` (\n  `id` int DEFAULT NULL,\n  `name` varchar(35) DEFAULT NULL,\n  `age` int unsigned DEFAULT NULL\n) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))
+tp17    CREATE TABLE `tp17` (\n  `id` int DEFAULT NULL,\n  `name` varchar(35) DEFAULT NULL,\n  `age` int unsigned DEFAULT NULL\n) partition by list (`id`) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))
 CREATE TABLE tp18 (
 a INT NULL,
 b INT NULL
@@ -146,7 +146,7 @@ PARTITION BY KEY(col3)
 PARTITIONS 4;
 show create table tp19;
 Table    Create Table
-tp19    CREATE TABLE `tp19` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` int NOT NULL,\n  `col4` int NOT NULL,\n  UNIQUE KEY `col3` (`col3`)\n) partition by key algorithm = 2 (col3) partitions 4
+tp19    CREATE TABLE `tp19` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` int NOT NULL,\n  `col4` int NOT NULL,\n  UNIQUE KEY `col3` (`col3`)\n) partition by key algorithm = 2 (`col3`) partitions 4
 CREATE TABLE tp20 (
 col1 INT NOT NULL,
 col2 DATE NOT NULL,
@@ -157,7 +157,7 @@ PARTITION BY HASH(col3)
 PARTITIONS 4;
 show create table tp20;
 Table    Create Table
-tp20    CREATE TABLE `tp20` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` int NOT NULL,\n  `col4` int NOT NULL,\n  UNIQUE KEY `col3` (`col3`)\n) partition by hash (col3) partitions 4
+tp20    CREATE TABLE `tp20` (\n  `col1` int NOT NULL,\n  `col2` date NOT NULL,\n  `col3` int NOT NULL,\n  `col4` int NOT NULL,\n  UNIQUE KEY `col3` (`col3`)\n) partition by hash (`col3`) partitions 4
 drop table tp1;
 drop table tp2;
 drop table tp3;
@@ -213,7 +213,7 @@ PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB) */
 /*!40101 SET character_set_client = @saved_cs_client */;
 show create table test01;
 Table    Create Table
-test01    CREATE TABLE `test01` (\n  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',\n  `pk_id` bigint NOT NULL COMMENT 'pk_id',\n  `config_id` bigint NOT NULL COMMENT 'config_id',\n  `trace_id` varchar(255) NOT NULL,\n  `type` varchar(8) NOT NULL COMMENT 'message_type',\n  `data` varchar(1024) NOT NULL,\n  `times` tinyint NOT NULL,\n  `status` tinyint NOT NULL,\n  `push_time` varchar(255) NOT NULL,\n  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`,`create_time`),\n  UNIQUE KEY `trace_id` (`trace_id`,`create_time`)\n) COMMENT='trace id' partition by range columns (create_time) (partition p20240115 values less than ('2024-01-15 00:00:00') engine = innodb, partition p20240116 values less than ('2024-01-16 00:00:00') engine = innodb, partition p20240117 values less than ('2024-01-17 00:00:00') engine = innodb, partition p20240118 values less than ('2024-01-18 00:00:00') engine = innodb, partition p20240119 values less than ('2024-01-19 00:00:00') engine = innodb, partition p20240120 values less than ('2024-01-20 00:00:00') engine = innodb, partition p20240121 values less than ('2024-01-21 00:00:00') engine = innodb, partition p20240122 values less than ('2024-01-22 00:00:00') engine = innodb, partition p20240123 values less than ('2024-01-23 00:00:00') engine = innodb, partition p20240124 values less than ('2024-01-24 00:00:00') engine = innodb, partition p20240125 values less than ('2024-01-25 00:00:00') engine = innodb)
+test01    CREATE TABLE `test01` (\n  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',\n  `pk_id` bigint NOT NULL COMMENT 'pk_id',\n  `config_id` bigint NOT NULL COMMENT 'config_id',\n  `trace_id` varchar(255) NOT NULL,\n  `type` varchar(8) NOT NULL COMMENT 'message_type',\n  `data` varchar(1024) NOT NULL,\n  `times` tinyint NOT NULL,\n  `status` tinyint NOT NULL,\n  `push_time` varchar(255) NOT NULL,\n  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`,`create_time`),\n  UNIQUE KEY `trace_id` (`trace_id`,`create_time`)\n) COMMENT='trace id' partition by range columns (`create_time`) (partition p20240115 values less than ('2024-01-15 00:00:00') engine = innodb, partition p20240116 values less than ('2024-01-16 00:00:00') engine = innodb, partition p20240117 values less than ('2024-01-17 00:00:00') engine = innodb, partition p20240118 values less than ('2024-01-18 00:00:00') engine = innodb, partition p20240119 values less than ('2024-01-19 00:00:00') engine = innodb, partition p20240120 values less than ('2024-01-20 00:00:00') engine = innodb, partition p20240121 values less than ('2024-01-21 00:00:00') engine = innodb, partition p20240122 values less than ('2024-01-22 00:00:00') engine = innodb, partition p20240123 values less than ('2024-01-23 00:00:00') engine = innodb, partition p20240124 values less than ('2024-01-24 00:00:00') engine = innodb, partition p20240125 values less than ('2024-01-25 00:00:00') engine = innodb)
 drop table test01;
 /*!40101 SET @saved_cs_client = @@character_set_client */;
 /*!50503 SET character_set_client = utf8mb4 */;
@@ -247,6 +247,6 @@ PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB);
 /*!40101 SET character_set_client = @saved_cs_client */;
 show create table test02;
 Table    Create Table
-test02    CREATE TABLE `test02` (\n  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',\n  `pk_id` bigint NOT NULL COMMENT 'pk_id',\n  `config_id` bigint NOT NULL COMMENT 'config_id',\n  `trace_id` varchar(255) NOT NULL,\n  `type` varchar(8) NOT NULL COMMENT 'message_type',\n  `data` varchar(1024) NOT NULL,\n  `times` tinyint NOT NULL,\n  `status` tinyint NOT NULL,\n  `push_time` varchar(255) NOT NULL,\n  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`,`create_time`),\n  UNIQUE KEY `trace_id` (`trace_id`,`create_time`)\n) COMMENT='trace id' partition by range columns (create_time) (partition p20240115 values less than ('2024-01-15 00:00:00') engine = innodb, partition p20240116 values less than ('2024-01-16 00:00:00') engine = innodb, partition p20240117 values less than ('2024-01-17 00:00:00') engine = innodb, partition p20240118 values less than ('2024-01-18 00:00:00') engine = innodb, partition p20240119 values less than ('2024-01-19 00:00:00') engine = innodb, partition p20240120 values less than ('2024-01-20 00:00:00') engine = innodb, partition p20240121 values less than ('2024-01-21 00:00:00') engine = innodb, partition p20240122 values less than ('2024-01-22 00:00:00') engine = innodb, partition p20240123 values less than ('2024-01-23 00:00:00') engine = innodb, partition p20240124 values less than ('2024-01-24 00:00:00') engine = innodb, partition p20240125 values less than ('2024-01-25 00:00:00') engine = innodb)
+test02    CREATE TABLE `test02` (\n  `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',\n  `pk_id` bigint NOT NULL COMMENT 'pk_id',\n  `config_id` bigint NOT NULL COMMENT 'config_id',\n  `trace_id` varchar(255) NOT NULL,\n  `type` varchar(8) NOT NULL COMMENT 'message_type',\n  `data` varchar(1024) NOT NULL,\n  `times` tinyint NOT NULL,\n  `status` tinyint NOT NULL,\n  `push_time` varchar(255) NOT NULL,\n  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP(),\n  PRIMARY KEY (`id`,`create_time`),\n  UNIQUE KEY `trace_id` (`trace_id`,`create_time`)\n) COMMENT='trace id' partition by range columns (`create_time`) (partition p20240115 values less than ('2024-01-15 00:00:00') engine = innodb, partition p20240116 values less than ('2024-01-16 00:00:00') engine = innodb, partition p20240117 values less than ('2024-01-17 00:00:00') engine = innodb, partition p20240118 values less than ('2024-01-18 00:00:00') engine = innodb, partition p20240119 values less than ('2024-01-19 00:00:00') engine = innodb, partition p20240120 values less than ('2024-01-20 00:00:00') engine = innodb, partition p20240121 values less than ('2024-01-21 00:00:00') engine = innodb, partition p20240122 values less than ('2024-01-22 00:00:00') engine = innodb, partition p20240123 values less than ('2024-01-23 00:00:00') engine = innodb, partition p20240124 values less than ('2024-01-24 00:00:00') engine = innodb, partition p20240125 values less than ('2024-01-25 00:00:00') engine = innodb)
 drop table test02;
 drop database test;
