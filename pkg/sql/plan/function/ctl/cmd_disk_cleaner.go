@@ -42,6 +42,11 @@ func IsValidArg(parameter string, proc *process.Process) (*cmd_util.DiskCleaner,
 			Op:  op,
 			Key: cmd_util.ForceGC,
 		}, nil
+	case cmd_util.GCDetails:
+		return &cmd_util.DiskCleaner{
+			Op:  op,
+			Key: cmd_util.GCDetails,
+		}, nil
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "handleDiskCleaner: invalid operation!")
 	}

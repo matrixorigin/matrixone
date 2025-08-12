@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"slices"
 	"strconv"
 	"strings"
@@ -705,7 +706,7 @@ func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.DiskCleaner,
-	resp *api.SyncLogTailResp,
+	resp *api.TNStringResponse,
 ) (cb func(), err error) {
 	op := req.Op
 	key := req.Key
@@ -758,6 +759,17 @@ func (h *Handle) HandleDiskCleaner(
 			return
 		}
 		err = h.db.DiskCleaner.ForceGC(ctx, &minTS)
+		return
+	case cmd_util.GCDetails:
+		var tables map[uint32]*gc.TableStats
+		tables, err = h.db.DiskCleaner.GetDetails(ctx)
+		if err != nil {
+			return
+		}
+		for accountID, stats := range tables {
+			resp.ReturnStr += fmt.Sprintf("acount: %v {shardCnt: %d, shardSize: %d, totalCnt: %d, totalSize: %d}\n",
+				accountID, stats.ShardCnt, stats.ShardSize, stats.TotalCnt, stats.TotalSize)
+		}
 		return
 	case cmd_util.AddChecker:
 		break

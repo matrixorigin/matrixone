@@ -1070,7 +1070,6 @@ func (c *checkpointCleaner) tryGCLocked(
 			zap.String("checkpoint", maxGlobalCKP.String()),
 		)
 	}
-
 	return
 }
 
@@ -1844,4 +1843,9 @@ func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
 	return c.mutation.snapshotMeta.GetTablePK(tid)
+}
+
+func (c *checkpointCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
+	scan := c.GetScannedWindow()
+	return scan.Details(ctx, c.mutation.snapshotMeta, c.mp)
 }

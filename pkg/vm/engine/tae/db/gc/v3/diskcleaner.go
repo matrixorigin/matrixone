@@ -412,6 +412,10 @@ func (cleaner *DiskCleaner) CancelRunning(cause error) {
 	}
 }
 
+func (cleaner *DiskCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
+	return cleaner.cleaner.GetDetails(ctx)
+}
+
 func (cleaner *DiskCleaner) Start() {
 	cleaner.onceStart.Do(func() {
 		cleaner.processQueue.Start()

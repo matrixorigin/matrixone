@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -611,4 +612,105 @@ func (w *GCWindow) String(objects map[string]*ObjectEntry) string {
 	}
 	_, _ = buf.WriteString("]\n")
 	return buf.String()
+}
+
+type TableStats struct {
+	ShardCnt  uint64
+	ShardSize uint64
+	TotalCnt  uint64
+	TotalSize uint64
+}
+
+func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMeta, mp *mpool.MPool) (map[uint32]*TableStats, error) {
+	attrs, attrTypes := ckputil.DataScan_TableIDAtrrs, ckputil.DataScan_TableIDTypes
+	buffer := containers.NewOneSchemaBatchBuffer(
+		mpool.MB*16,
+		attrs,
+		attrTypes,
+		false,
+	)
+	defer buffer.Close(mp)
+	bat := buffer.Fetch()
+	defer buffer.Putback(bat, mp)
+	sourcer := w.MakeFilesReader(ctx, w.fs)
+
+	detals := make(map[uint32]*TableStats)
+	objects := make(map[string]map[uint64]*ObjectEntry)
+	for {
+		bat.CleanOnlyData()
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
+		done, err := sourcer.Read(ctx, bat.Attrs, nil, mp, bat)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			break
+		}
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		dropTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			name := stats.ObjectName().UnsafeString()
+			if objects[name] == nil {
+				objects[name] = make(map[uint64]*ObjectEntry)
+			}
+			object := &ObjectEntry{
+				stats:    &stats,
+				createTS: createTSs[i],
+				dropTS:   dropTSs[i],
+				db:       dbs[i],
+				table:    tableIDs[i],
+			}
+			objects[name][tableIDs[i]] = object
+		}
+		defer nameVec.Free(mp)
+	}
+
+	for _, tables := range objects {
+		if len(tables) > 1 {
+			for tid, entry := range tables {
+				accountID, ok := snapshotMeta.GetAccountId(tid)
+				if !ok {
+					logutil.Error("GetAccountId is error")
+					continue
+				}
+				if detals[accountID] != nil {
+					detals[accountID] = &TableStats{
+						ShardCnt:  1,
+						ShardSize: uint64(entry.stats.Size()),
+						TotalCnt:  1,
+						TotalSize: uint64(entry.stats.Size()),
+					}
+					continue
+				}
+				detals[accountID].ShardCnt++
+				detals[accountID].ShardSize += uint64(entry.stats.Size())
+				detals[accountID].TotalCnt++
+				detals[accountID].TotalSize += uint64(entry.stats.Size())
+			}
+			continue
+		}
+		accountID, ok := snapshotMeta.GetAccountId(tables[0].table)
+		if !ok {
+			logutil.Error("GetAccountId is error")
+			continue
+		}
+		if detals[accountID] != nil {
+			detals[accountID] = &TableStats{
+				TotalCnt:  1,
+				TotalSize: uint64(tables[0].stats.Size()),
+			}
+			continue
+		}
+		detals[accountID].TotalCnt++
+		detals[accountID].TotalSize += uint64(tables[0].stats.Size())
+	}
+	return detals, nil
 }
