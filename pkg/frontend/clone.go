@@ -85,7 +85,9 @@ func handleCloneTableAcrossAccounts(
 		fromAccountId uint32
 	)
 
-	reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.CloneLevelTable)
+	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
+		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
+	}
 
 	bh = ses.GetBackgroundExec(reqCtx)
 	if err = bh.Exec(reqCtx, "begin"); err != nil {
@@ -191,7 +193,9 @@ func handleCloneDatabase(
 		snapshotTS int64
 	)
 
-	reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.CloneLevelDatabase)
+	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
+		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelDatabase)
+	}
 
 	bh = ses.GetBackgroundExec(reqCtx)
 	if err = bh.Exec(reqCtx, "begin"); err != nil {

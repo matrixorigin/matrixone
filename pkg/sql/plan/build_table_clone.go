@@ -15,6 +15,11 @@
 package plan
 
 import (
+	"context"
+	"slices"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -135,6 +140,12 @@ func buildCloneTable(
 		dstAccount, srcAccount,
 	)
 
+	if err = checkPrivilege(
+		ctx.GetContext(), stmt, opAccount, srcAccount, dstAccount, srcTblDef, dstTblDef,
+	); err != nil {
+		return nil, err
+	}
+
 	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt); err != nil {
 		return nil, err
 	}
@@ -147,4 +158,57 @@ func buildCloneTable(
 	createTablePlan.Plan.(*plan.Plan_Ddl).Ddl.DdlType = plan.DataDefinition_CREATE_TABLE_WITH_CLONE
 
 	return createTablePlan, nil
+}
+
+func checkPrivilege(
+	ctx context.Context,
+	stmt *tree.CloneTable,
+	opAccount uint32,
+	dstAccount uint32,
+	srcAccount uint32,
+	srcTblDef *TableDef,
+	dstTblDef *TableDef,
+) (err error) {
+
+	// 1. only sys can clone from system databases
+	// 2. sys and non-sys both cannot clone to system database
+	// 3. if this is a restore clone stmt, skip this check
+
+	if val := ctx.Value(tree.CloneLevelCtxKey{}); val != nil {
+		switch val.(tree.CloneLevelType) {
+		case tree.RestoreCloneLevelAccount,
+			tree.RestoreCloneLevelCluster,
+			tree.RestoreCloneLevelDatabase,
+			tree.RestoreCloneLevelTable:
+			// skip this check
+			return nil
+		default:
+		}
+	}
+
+	var (
+		typ int
+	)
+
+	if slices.Index(
+		catalog.SystemDatabases, strings.ToLower(srcTblDef.DbName),
+	) != -1 {
+		// clone from system databases
+		typ = 1
+	} else if slices.Index(
+		catalog.SystemDatabases, strings.ToLower(dstTblDef.DbName),
+	) != -1 {
+		// clone to a system database
+		typ = 2
+	}
+
+	if typ == 2 {
+		return moerr.NewInternalErrorNoCtx("cannot clone data into system database")
+	} else if typ == 1 {
+		if opAccount != catalog.System_Account {
+			return moerr.NewInternalErrorNoCtx("non-sys account cannot clone data from system database")
+		}
+	}
+
+	return nil
 }
