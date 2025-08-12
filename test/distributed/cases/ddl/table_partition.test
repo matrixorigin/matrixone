@@ -1,25 +1,32 @@
--- @skip:issue#16438
-
 CREATE TABLE tp1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;
 show create table tp1;
+-- @bvt:issue#16438
 CREATE TABLE tp2 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3);
 show create table tp2;
+-- @bvt:issue
+
 CREATE TABLE tp3 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY(col3) PARTITIONS 5;
 show create table tp3;
+-- @bvt:issue#16438
 CREATE TABLE tp4 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 1 (col3);
 show create table tp4;
+-- @bvt:issue
 CREATE TABLE tp5 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY ALGORITHM = 1 (col3) PARTITIONS 5;
 show create table tp5;
 CREATE TABLE tp6 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4;
 show create table tp6;
 CREATE TABLE tp7 (col1 INT NOT NULL PRIMARY KEY, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL) PARTITION BY KEY(col1) PARTITIONS 4;
 show create table tp7;
+-- @bvt:issue#16438
 CREATE TABLE tp8 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1);
 show create table tp8;
+-- @bvt:issue
 CREATE TABLE tp9 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;
 show create table tp9;
+-- @bvt:issue#16438
 CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));
 show create table tp10;
+-- @bvt:issue
 CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;
 show create table tp11;
 CREATE TABLE tp12 (col1 INT NOT NULL PRIMARY KEY, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL) PARTITION BY HASH(col1) PARTITIONS 4;

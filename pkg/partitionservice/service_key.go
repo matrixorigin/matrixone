@@ -34,20 +34,20 @@ func (s *Service) getMetadataByKeyType(
 		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("none-column is not supported in KEY partition")
 	}
 
-	if len(method.ColumnList) > 1 {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in KEY partition")
-	}
+	// if len(method.ColumnList) > 1 {
+	// 	return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in KEY partition")
+	// }
 
 	ctx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),
 		tree.WithEscapeSingleQuoteString(),
 	)
-	method.ColumnList[0].Format(ctx)
+	method.Format(ctx)
 
-	pm := partition.PartitionMethod_Hash
+	pm := partition.PartitionMethod_Key
 	if method.Linear {
-		pm = partition.PartitionMethod_LinearHash
+		pm = partition.PartitionMethod_LinearKey
 	}
 
 	metadata := partition.PartitionMetadata{

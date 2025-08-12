@@ -16,6 +16,7 @@ package partitionservice
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -33,7 +34,7 @@ func (s *Service) getMetadataByHashType(
 		tree.WithQuoteIdentifier(),
 		tree.WithEscapeSingleQuoteString(),
 	)
-	method.Expr.Format(ctx)
+	method.Format(ctx)
 
 	pm := partition.PartitionMethod_Hash
 	if method.Linear {

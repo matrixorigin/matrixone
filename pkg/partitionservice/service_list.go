@@ -15,7 +15,6 @@
 package partitionservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -28,31 +27,14 @@ func (s *Service) getMetadataByListType(
 ) (partition.PartitionMetadata, error) {
 	method := option.PartBy.PType.(*tree.ListType)
 
-	var columns *tree.UnresolvedName
-	desc := ""
-	if method.Expr != nil {
-		ctx := tree.NewFmtCtx(
-			dialect.MYSQL,
-			tree.WithQuoteIdentifier(),
-			tree.WithEscapeSingleQuoteString(),
-		)
-		method.Expr.Format(ctx)
-		desc = ctx.String()
-	} else {
-		if len(method.ColumnList) != 1 {
-			return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in LIST partition")
-		}
+	ctx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithEscapeSingleQuoteString(),
+	)
 
-		columns = method.ColumnList[0]
-
-		ctx := tree.NewFmtCtx(
-			dialect.MYSQL,
-			tree.WithQuoteIdentifier(),
-			tree.WithEscapeSingleQuoteString(),
-		)
-		columns.Format(ctx)
-		desc = ctx.String()
-	}
+	method.Format(ctx)
+	desc := ctx.String()
 
 	return s.getManualPartitions(
 		option,
