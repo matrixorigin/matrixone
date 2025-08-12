@@ -684,7 +684,6 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 					continue
 				}
 				detals[accountID].ShardCnt++
-				detals[accountID].ShardSize += uint64(entry.stats.Size())
 				detals[accountID].TotalCnt++
 				detals[accountID].TotalSize += uint64(entry.stats.Size())
 			}
