@@ -1594,7 +1594,14 @@ func getRefAction(typ tree.ReferenceOptionType) plan.ForeignKeyDef_RefAction {
 //	cluster by (word)
 //
 // )
-func buildFullTextIndexTable(createTable *plan.CreateTable, indexInfos []*tree.FullTextIndex, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) error {
+func buildFullTextIndexTable(
+	createTable *plan.CreateTable,
+	indexInfos []*tree.FullTextIndex,
+	colMap map[string]*ColDef,
+	existedIndexes []*plan.IndexDef,
+	pkeyName string,
+	ctx CompilerContext,
+) error {
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
 	}
@@ -2624,7 +2631,13 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 //	primary key (index_id, chunk_id)
 // )
 
-func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildHnswSecondaryIndexDef(
+	ctx CompilerContext,
+	indexInfo *tree.Index,
+	colMap map[string]*ColDef,
+	existedIndexes []*plan.IndexDef,
+	pkeyName string,
+) ([]*plan.IndexDef, []*TableDef, error) {
 
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
@@ -2777,8 +2790,13 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 		}
 
 		// 1.b indexDef1 init
-		indexDefs[1], err = CreateIndexDef(indexInfo, indexTableName, catalog.Hnsw_TblType_Storage, indexParts, false)
-		if err != nil {
+		if indexDefs[1], err = CreateIndexDef(
+			indexInfo,
+			indexTableName,
+			catalog.Hnsw_TblType_Storage,
+			indexParts,
+			false,
+		); err != nil {
 			return nil, nil, err
 		}
 
@@ -2867,9 +2885,12 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 	return indexDefs, tableDefs, nil
 }
 
-func CreateIndexDef(indexInfo *tree.Index,
+func CreateIndexDef(
+	indexInfo *tree.Index,
 	indexTableName, indexAlgoTableType string,
-	indexParts []string, isUnique bool) (*plan.IndexDef, error) {
+	indexParts []string,
+	isUnique bool,
+) (*plan.IndexDef, error) {
 
 	//TODO: later use this function for RegularSecondaryIndex and UniqueIndex.
 

@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // ------------------------[IndexFullTextParserType] ------------------------
@@ -90,6 +92,21 @@ func (t IndexParamAlgoType) IsValid() bool {
 	return t > IndexParamAlgoType_Invalid
 }
 
+func StringToIndexParamAlgoType(s string) IndexParamAlgoType {
+	s = strings.ToLower(s)
+	switch s {
+	case "vector_l2_ops":
+		return IndexParamAlgoType_L2Distance
+	case "vector_ip_ops":
+		return IndexParamAlgoType_InnerProduct
+	case "vector_cosine_ops":
+		return IndexParamAlgoType_CosineDistance
+	case "vector_l1_ops":
+		return IndexParamAlgoType_L1Distance
+	}
+	return IndexParamAlgoType_Invalid
+}
+
 // ------------------------[IndexParamQuantizationType] ------------------------
 type IndexParamQuantizationType uint16
 
@@ -123,6 +140,25 @@ func (t IndexParamQuantizationType) String() string {
 
 func (t IndexParamQuantizationType) IsValid() bool {
 	return t >= IndexParamQuantizationType_Invalid
+}
+
+func StringToIndexParamQuantizationType(s string) IndexParamQuantizationType {
+	s = strings.ToLower(s)
+	switch s {
+	case "F32":
+		return IndexParamQuantizationType_F32
+	case "BF16":
+		return IndexParamQuantizationType_BF16
+	case "F16":
+		return IndexParamQuantizationType_F16
+	case "F64":
+		return IndexParamQuantizationType_F64
+	case "I8":
+		return IndexParamQuantizationType_I8
+	case "B1":
+		return IndexParamQuantizationType_B1
+	}
+	return IndexParamQuantizationType_Invalid
 }
 
 // ------------------------[IndexParamType] ------------------------
@@ -251,7 +287,9 @@ const (
 	IndexParams_HNSWV1_EfSearchLen       = 8 // int64
 	IndexParams_HNSWV1_QuantizationOff   = IndexParams_HNSWV1_EfSearchOff + IndexParams_HNSWV1_EfSearchLen
 	IndexParams_HNSWV1_QuantizationLen   = 2 // uint16
-	IndexParams_HNSWV1_Size              = IndexParams_HNSWV1_QuantizationOff + IndexParams_HNSWV1_QuantizationLen
+	IndexParams_HNSWV1_AlgoOff           = IndexParams_HNSWV1_QuantizationOff + IndexParams_HNSWV1_QuantizationLen
+	IndexParams_HNSWV1_AlgoLen           = 2 // uint16
+	IndexParams_HNSWV1_Size              = IndexParams_HNSWV1_AlgoOff + IndexParams_HNSWV1_AlgoLen
 )
 
 func BuildIndexParamsHNSWV1(
@@ -259,6 +297,7 @@ func BuildIndexParamsHNSWV1(
 	efConstruction int64,
 	efSearch int64,
 	quantization IndexParamQuantizationType,
+	algo IndexParamAlgoType,
 ) IndexParams {
 	buf := make([]byte, IndexParams_HNSWV1_Size)
 	copy(buf, IndexParamMagicNumberBuf)
@@ -268,6 +307,7 @@ func BuildIndexParamsHNSWV1(
 	copy(buf[IndexParams_HNSWV1_EfConstructionOff:], types.EncodeFixed(efConstruction))
 	copy(buf[IndexParams_HNSWV1_EfSearchOff:], types.EncodeFixed(efSearch))
 	copy(buf[IndexParams_HNSWV1_QuantizationOff:], types.EncodeFixed(uint16(quantization)))
+	copy(buf[IndexParams_HNSWV1_AlgoOff:], types.EncodeFixed(uint16(algo)))
 	return buf
 }
 
@@ -297,6 +337,13 @@ func (params IndexParams) HNSWQuantization() IndexParamQuantizationType {
 		return IndexParamQuantizationType_Invalid
 	}
 	return IndexParamQuantizationType(types.DecodeFixed[uint16](params[IndexParams_HNSWV1_QuantizationOff:]))
+}
+
+func (params IndexParams) HNSWAlgo() IndexParamAlgoType {
+	if len(params) < IndexParams_HNSWV1_AlgoOff {
+		return IndexParamAlgoType_Invalid
+	}
+	return IndexParamAlgoType(types.DecodeFixed[uint16](params[IndexParams_HNSWV1_AlgoOff:]))
 }
 
 // ------------------------[IndexParams] ------------------------
@@ -363,4 +410,91 @@ func (params IndexParams) Version() uint16 {
 	}
 	version := types.DecodeFixed[uint16](params[IndexParams_VersionOff:])
 	return version
+}
+
+// ------------------------[Utils] ------------------------
+
+func AstTreeToIndexParams(
+	astTree any,
+) (params IndexParams, err error) {
+
+	// fulltext index:
+	// TODO: why fulltext index is not a tree.Index?
+	if fulltext, ok := astTree.(*tree.FullTextIndex); ok {
+		if fulltext.IndexOption == nil {
+			return
+		}
+		parserType := StringToIndexFullTextParserType(fulltext.IndexOption.ParserName)
+		if !parserType.IsValid() {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", fulltext.IndexOption.ParserName))
+			return
+		}
+		params = BuildIndexParamsFullTextV1(parserType)
+		return
+	}
+	index, ok := astTree.(*tree.Index)
+	if !ok {
+		err = moerr.NewInternalErrorNoCtxf(
+			"invalid ast tree: %v", astTree,
+		)
+		return
+	}
+	switch index.KeyType {
+	case tree.INDEX_TYPE_IVFFLAT:
+		algoList := index.IndexOption.AlgoParamList
+		if algoList == 0 {
+			algoList = 1
+		}
+		algo := StringToIndexParamAlgoType(index.IndexOption.AlgoParamVectorOpType)
+		if !algo.IsValid() {
+			if len(index.IndexOption.AlgoParamVectorOpType) > 0 {
+				err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid algo_param_vector_op_type: %s", index.IndexOption.AlgoParamVectorOpType))
+				return
+			}
+			algo = IndexParamAlgoType_L2Distance // Set default algo
+		}
+		params = BuildIndexParamsIVFFLATV1(algoList, algo)
+	case tree.INDEX_TYPE_HNSW:
+		if index.IndexOption.HnswM < 0 {
+			err = moerr.NewInternalErrorNoCtx("invalid M. hnsw.M must be > 0")
+			return
+		}
+		if index.IndexOption.HnswEfConstruction < 0 {
+			err = moerr.NewInternalErrorNoCtx("invalid ef_construction. hnsw.ef_construction must be > 0")
+			return
+		}
+		if index.IndexOption.HnswEfSearch < 0 {
+			err = moerr.NewInternalErrorNoCtx("invalid ef_search. hnsw.ef_search must be > 0")
+			return
+		}
+		quantization := StringToIndexParamQuantizationType(index.IndexOption.HnswQuantization)
+		if !quantization.IsValid() {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw quantization: %s",
+				index.IndexOption.HnswQuantization,
+			)
+			return
+		}
+		algo := StringToIndexParamAlgoType(index.IndexOption.AlgoParamVectorOpType)
+		if !algo.IsValid() {
+			if len(index.IndexOption.AlgoParamVectorOpType) > 0 {
+				err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid algo_param_vector_op_type: %s", index.IndexOption.AlgoParamVectorOpType))
+				return
+			}
+			algo = IndexParamAlgoType_L2Distance // Set default algo
+		}
+		params = BuildIndexParamsHNSWV1(
+			index.IndexOption.HnswM,
+			index.IndexOption.HnswEfConstruction,
+			index.IndexOption.HnswEfSearch,
+			quantization,
+			algo,
+		)
+	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
+		// do nothing
+	case tree.INDEX_TYPE_MASTER, tree.INDEX_TYPE_FULLTEXT:
+		// do nothing
+	}
+
+	return
 }

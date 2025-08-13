@@ -120,18 +120,28 @@ func TestIndexParams_HNSWV1(t *testing.T) {
 		100000000,
 	}
 
+	var algos = []IndexParamAlgoType{
+		IndexParamAlgoType_L2Distance,
+		IndexParamAlgoType_InnerProduct,
+		IndexParamAlgoType_CosineDistance,
+		IndexParamAlgoType_L1Distance,
+		IndexParamAlgoType_Invalid,
+	}
+
 	for i, m := range ms {
 		params := BuildIndexParamsHNSWV1(
 			m,
 			efConstructions[i],
 			efSearches[i],
 			qs[i],
+			algos[i],
 		)
 		require.Equal(t, IndexParamType_HNSWV1, params.Type())
 		require.Equal(t, m, params.HNSWM())
 		require.Equal(t, efConstructions[i], params.HNSWEfConstruction())
 		require.Equal(t, efSearches[i], params.HNSWEfSearch())
 		require.Equal(t, qs[i], params.HNSWQuantization())
+		require.Equal(t, algos[i], params.HNSWAlgo())
 		t.Logf("params: %s", params.String())
 	}
 }
