@@ -16,8 +16,8 @@ package iscp
 
 import (
 	"context"
-	"sync"
 	"encoding/json"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"

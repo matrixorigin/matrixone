@@ -360,7 +360,13 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				if iter.toTS.EQ(&maxTS) {
 					iter.toTS = toTS
 				}
-				_, ok := tables[iter.tableID]
+				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
+				var ok bool
+				if iter.fromTS.IsEmpty() {
+					ok = true
+				} else {
+					_, ok = tables[iter.tableID]
+				}
 				if ok {
 					err := exec.worker.Submit(iter)
 					if err != nil {
@@ -662,6 +668,12 @@ func (exec *ISCPTaskExecutor) getTableByID(ctx context.Context, tableID uint64) 
 	}
 	return
 }
+
+// getCandidateTables returns all candidate IterationContexts, their corresponding TableEntries, and the minimal fromTS for each table.
+// Only IterationContexts with non-empty fromTS are included (i.e., initialized iterations are excluded and do not require table change checks).
+//   - iterations: all candidate IterationContexts (including initialized iterations)
+//   - tables: the TableEntry for each iteration
+//   - fromTSs: the minimal fromTS in each table's iterations (not including initialized iterations)
 func (exec *ISCPTaskExecutor) getCandidateTables() ([]*IterationContext, []*TableEntry, []types.TS) {
 	tables := make([]*TableEntry, 0)
 	fromTSs := make([]types.TS, 0)
