@@ -831,6 +831,25 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		clusterByDef.CompCbkeyCol = plan2.GetColDefFromTable(cols, clusterByDef.Name)
 	}
 
+	for _, index := range indexes {
+		if index.IndexAlgo != "" {
+			params, err := catalog.IndexAlgoJsonParamStringToIndexParams(
+				index.IndexAlgo, index.IndexAlgoParams,
+			)
+			if err != nil {
+				logutil.Fatal(
+					"invalid-algo-param",
+					zap.String("table", tblItem.Name),
+					zap.String("index", index.IndexName),
+					zap.String("algo", index.IndexAlgo),
+					zap.String("params", index.IndexAlgoParams),
+					zap.Error(err),
+				)
+			}
+			index.IndexAlgoParams = string(params)
+		}
+	}
+
 	return &plan.TableDef{
 		TblId:         tblItem.Id,
 		Name:          tblItem.Name,

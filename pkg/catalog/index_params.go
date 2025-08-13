@@ -170,7 +170,7 @@ const (
 	IndexParamType_Invalid IndexParamType = iota
 	IndexParamType_FullText
 	IndexParamType_IVFFLAT
-	IndexParamType_HNSWV1
+	IndexParamType_HNSW
 )
 
 func (t IndexParamType) String() string {
@@ -179,14 +179,14 @@ func (t IndexParamType) String() string {
 		return "fulltext"
 	case IndexParamType_IVFFLAT:
 		return "ivfflat"
-	case IndexParamType_HNSWV1:
-		return "hnswv1"
+	case IndexParamType_HNSW:
+		return "hnsw"
 	}
 	return "invalid"
 }
 
 func (t IndexParamType) IsValid() bool {
-	return t > IndexParamType_Invalid && t <= IndexParamType_HNSWV1
+	return t > IndexParamType_Invalid && t <= IndexParamType_HNSW
 }
 
 const (
@@ -202,7 +202,7 @@ func init() {
 	IndexParamMagicNumberBuf = types.EncodeFixed(uint16(IndexParamMagicNumber))
 	IndexParamTypeFullTextBuf = types.EncodeFixed(uint16(IndexParamType_FullText))
 	IndexParamTypeIVFFLATBuf = types.EncodeFixed(uint16(IndexParamType_IVFFLAT))
-	IndexParamTypeHNSWV1Buf = types.EncodeFixed(uint16(IndexParamType_HNSWV1))
+	IndexParamTypeHNSWV1Buf = types.EncodeFixed(uint16(IndexParamType_HNSW))
 }
 
 type IndexParams []byte
@@ -379,7 +379,7 @@ func (params IndexParams) String() string {
 			list,
 			algo.String(),
 		)
-	case IndexParamType_HNSWV1:
+	case IndexParamType_HNSW:
 		m := types.DecodeFixed[int64](params[IndexParams_HNSWV1_MOff:])
 		efConstruction := types.DecodeFixed[int64](params[IndexParams_HNSWV1_EfConstructionOff:])
 		efSearch := types.DecodeFixed[int64](params[IndexParams_HNSWV1_EfSearchOff:])
@@ -396,6 +396,41 @@ func (params IndexParams) String() string {
 	default:
 		return fmt.Sprintf("invalid index params type: %s", paramType.String())
 	}
+}
+
+func (params IndexParams) ToJsonParamString() string {
+	if params.IsEmpty() {
+		return ""
+	}
+	res := make(map[string]string)
+	switch params.Type() {
+	case IndexParamType_FullText:
+		res[IndexAlgoParamParserName] = params.ParserType().String()
+	case IndexParamType_IVFFLAT:
+		res[IndexAlgoParamLists] = strconv.FormatInt(params.IVFFLATList(), 10)
+		res[IndexAlgoParamOpType] = params.IVFFLATAlgo().String()
+	case IndexParamType_HNSW:
+		if params.HNSWM() > 0 {
+			res[HnswM] = strconv.FormatInt(params.HNSWM(), 10)
+		}
+		if params.HNSWEfConstruction() > 0 {
+			res[HnswEfConstruction] = strconv.FormatInt(params.HNSWEfConstruction(), 10)
+		}
+		if params.HNSWEfSearch() > 0 {
+			res[HnswEfSearch] = strconv.FormatInt(params.HNSWEfSearch(), 10)
+		}
+		if params.HNSWQuantization().IsValid() {
+			res[HnswQuantization] = params.HNSWQuantization().String()
+		}
+		res[IndexAlgoParamOpType] = params.HNSWAlgo().String()
+	default:
+		return ""
+	}
+	jsonStr, err := json.Marshal(res)
+	if err != nil {
+		return ""
+	}
+	return string(jsonStr)
 }
 
 func (params IndexParams) IsEmpty() bool {
@@ -510,7 +545,13 @@ func IndexAlgoJsonParamStringToIndexParams(
 	algo string,
 	algoJsonParam string,
 ) (params IndexParams, err error) {
-	if len(algoJsonParam) == 0 && algo == "" {
+	if len(algoJsonParam) == 0 {
+		if algo == "" || algo == "fulltext" {
+			return
+		}
+		err = moerr.NewInternalErrorNoCtxf(
+			"invalid algo: %s, algoJsonParam: %s", algo, algoJsonParam,
+		)
 		return
 	}
 	var jsonMap map[string]string

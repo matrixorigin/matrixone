@@ -118,12 +118,15 @@ func TestIndexParams_HNSWV1(t *testing.T) {
 		1000000,
 		10000000,
 		100000000,
+		1000000000,
 	}
 
 	var algos = []IndexParamAlgoType{
 		IndexParamAlgoType_L2Distance,
 		IndexParamAlgoType_InnerProduct,
+		IndexParamAlgoType_InnerProduct,
 		IndexParamAlgoType_CosineDistance,
+		IndexParamAlgoType_L1Distance,
 		IndexParamAlgoType_L1Distance,
 		IndexParamAlgoType_Invalid,
 	}
@@ -136,7 +139,7 @@ func TestIndexParams_HNSWV1(t *testing.T) {
 			efSearches[i],
 			qs[i],
 		)
-		require.Equal(t, IndexParamType_HNSWV1, params.Type())
+		require.Equal(t, IndexParamType_HNSW, params.Type())
 		require.Equal(t, m, params.HNSWM())
 		require.Equal(t, efConstructions[i], params.HNSWEfConstruction())
 		require.Equal(t, efSearches[i], params.HNSWEfSearch())
@@ -147,10 +150,10 @@ func TestIndexParams_HNSWV1(t *testing.T) {
 }
 
 func TestIndexParams_AlgoJsonParamStringToIndexParams_FullText(t *testing.T) {
-	// 1. invalid algo, empty json param --> empty params, no error
+	// 1. invalid algo, empty json param --> empty params, error
 	params, err := IndexAlgoJsonParamStringToIndexParams("invalid", "")
-	require.NoError(t, err)
-	require.Falsef(t, params.Type().IsValid(), "params: %s", params.String())
+	require.Error(t, err)
+	require.Truef(t, params.IsEmpty(), "params: %s", params.String())
 
 	// 2. invalid algo, non-empty json param --> error
 	_, err = IndexAlgoJsonParamStringToIndexParams("invalid", `{"m": "100"}`)
@@ -174,6 +177,12 @@ func TestIndexParams_AlgoJsonParamStringToIndexParams_FullText(t *testing.T) {
 	require.NoError(t, err)
 	require.Falsef(t, params.IsEmpty(), "params: %s", params.String())
 	require.Equal(t, IndexFullTextParserType_Ngram, params.ParserType())
+
+	retString := params.ToJsonParamString()
+	t.Logf("retString: %s", retString)
+	params2, err := IndexAlgoJsonParamStringToIndexParams("fulltext", retString)
+	require.NoError(t, err)
+	require.Equal(t, params.String(), params2.String())
 
 	// 7. fulltext, non-empty json param, valid parser name --> no error
 	params, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser": "default"}`)
@@ -209,11 +218,23 @@ func TestIndexParams_AlgoJsonParamStringToIndexParams_IVFFLAT(t *testing.T) {
 	require.Equal(t, IndexParamAlgoType_CosineDistance, params.IVFFLATAlgo())
 	require.Equal(t, int64(100), params.IVFFLATList())
 
+	retString := params.ToJsonParamString()
+	t.Logf("retString: %s", retString)
+	params2, err := IndexAlgoJsonParamStringToIndexParams("ivfflat", retString)
+	require.NoError(t, err)
+	require.Equal(t, params.String(), params2.String())
+
 	// 5. ivfflat, non-empty json param, valid list value --> no error
 	params, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "100", "op_type": "vector_l1_ops"}`)
 	require.NoErrorf(t, err, "params: %s", params.String())
 	require.Equal(t, IndexParamAlgoType_L1Distance, params.IVFFLATAlgo())
 	require.Equal(t, int64(100), params.IVFFLATList())
+
+	retString = params.ToJsonParamString()
+	t.Logf("retString: %s", retString)
+	params2, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", retString)
+	require.NoError(t, err)
+	require.Equal(t, params.String(), params2.String())
 
 	// 6. ivfflat, non-empty json param, invalid algo value --> error
 	params, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "100", "op_type": "invalid"}`)
@@ -234,6 +255,12 @@ func TestIndexParams_AlgoJsonParamStringToIndexParams_HNSW(t *testing.T) {
 	require.Equal(t, int64(0), params.HNSWEfConstruction())
 	require.Equal(t, int64(0), params.HNSWEfSearch())
 	require.Equal(t, IndexParamQuantizationType_F32, params.HNSWQuantization())
+
+	retString := params.ToJsonParamString()
+	t.Logf("retString: %s", retString)
+	params2, err := IndexAlgoJsonParamStringToIndexParams("hnsw", retString)
+	require.NoError(t, err)
+	require.Equal(t, params.String(), params2.String())
 
 	// 3. hnsw, non-empty json param, no op_type key --> error
 	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100"}`)
@@ -278,6 +305,12 @@ func TestIndexParams_AlgoJsonParamStringToIndexParams_HNSW(t *testing.T) {
 	require.Equal(t, int64(0), params.HNSWEfConstruction())
 	require.Equal(t, int64(100), params.HNSWEfSearch())
 	require.Equalf(t, IndexParamQuantizationType_F32, params.HNSWQuantization(), "params: %s", params.String())
+
+	retString = params.ToJsonParamString()
+	t.Logf("retString: %s", retString)
+	params2, err = IndexAlgoJsonParamStringToIndexParams("hnsw", retString)
+	require.NoError(t, err)
+	require.Equal(t, params.String(), params2.String())
 
 	// 9. hnsw, non-empty json param, invalid quantization value --> error
 	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_search": "100", "op_type": "vector_l2_ops", "quantization": "invalid"}`)
