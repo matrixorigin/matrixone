@@ -437,6 +437,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		if deleteData != nil {
 			defer deleteData.Clean(exec.mp)
 		}
+		if insertData == nil {
+			continue
+		}
 		accountIDVector := insertData.Vecs[0]
 		accountIDs := vector.MustFixedColWithTypeCheck[uint32](accountIDVector)
 		tableIDVector := insertData.Vecs[1]

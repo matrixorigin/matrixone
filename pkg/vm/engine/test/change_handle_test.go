@@ -1547,13 +1547,15 @@ func TestISCPExecutor2(t *testing.T) {
 	txn.Commit(ctxWithTimeout)
 
 	// init cdc executor
+	opts := GetTestISCPExecutorOption()
+	opts.GCTTL = time.Hour
 	cdcExecutor, err := iscp.NewISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
 		nil,
-		GetTestISCPExecutorOption(),
+		opts,
 		common.DebugAllocator,
 	)
 	require.NoError(t, err)
@@ -1642,6 +1644,16 @@ func TestISCPExecutor2(t *testing.T) {
 	assert.False(t, ok)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
+			return !ok
+		},
+	)
+	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
+	assert.False(t, ok)
 
 	// register job again
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
