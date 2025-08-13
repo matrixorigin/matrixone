@@ -62,11 +62,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 		newCreate = true
 		jobEntry = NewJobEntry(t, jobName, jobSpec, watermark, state)
 		t.jobs[jobName] = jobEntry
-		jobEntry.init()
 		return
-	}
-	if !watermark.IsEmpty() {
-		jobEntry.inited.Store(true)
 	}
 	jobEntry.update(jobSpec, watermark, state)
 	return
@@ -116,6 +112,16 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 	iterations := make([]*IterationContext, 0, len(candidates))
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
+		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
+			iterations = append(iterations, &IterationContext{
+				tableID:   t.tableID,
+				accountID: t.accountID,
+				jobNames:  []string{sinker.jobName},
+				fromTS:    types.TS{},
+				toTS:      types.TS{},
+			})
+			continue
+		}
 		ok, from, to, share := sinker.jobSpec.Check(candidates, sinker, types.MaxTs())
 		if !ok {
 			continue

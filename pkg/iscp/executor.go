@@ -362,7 +362,13 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				}
 				_, ok := tables[iter.tableID]
 				if ok {
-					exec.worker.Submit(iter)
+					err := exec.worker.Submit(iter)
+					if err != nil {
+						logutil.Error(
+							"ISCP-Task submit iteration failed",
+							zap.Error(err),
+						)
+					}
 				} else {
 					table, ok := exec.getTable(iter.accountID, iter.tableID)
 					if !ok {

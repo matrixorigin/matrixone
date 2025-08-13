@@ -151,7 +151,6 @@ type JobEntry struct {
 	jobName   string
 	jobSpec   *TriggerSpec
 
-	inited    atomic.Bool
 	watermark types.TS
 	persistedWatermark types.TS
 	state     int8

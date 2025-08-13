@@ -53,7 +53,7 @@ func (w *worker) Submit(iteration *IterationContext) error {
 	for i := range status {
 		status[i] = &JobStatus{}
 	}
-	FlushJobStatusOnIterationState(
+	err := FlushJobStatusOnIterationState(
 		context.Background(),
 		w.cnUUID,
 		w.cnEngine,
@@ -65,7 +65,10 @@ func (w *worker) Submit(iteration *IterationContext) error {
 		iteration.fromTS,
 		ISCPJobState_Pending,
 	)
-	_, err := w.queue.Enqueue(iteration)
+	if err != nil {
+		panic(err)
+	}
+	_, err = w.queue.Enqueue(iteration)
 	return err
 }
 

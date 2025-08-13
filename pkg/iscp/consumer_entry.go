@@ -45,7 +45,6 @@ func NewJobEntry(
 		watermark: watermark,
 		state:     state,
 	}
-	jobEntry.init()
 	return jobEntry
 }
 
@@ -56,24 +55,8 @@ func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int
 	jobEntry.state = state
 }
 
-func (jobEntry *JobEntry) init() {
-	if jobEntry.watermark.IsEmpty() {
-		// in the 1st iteration, toTS is determined by txn.SnapshotTS()
-		iterCtx := &IterationContext{
-			accountID: jobEntry.tableInfo.accountID,
-			tableID:   jobEntry.tableInfo.tableID,
-			jobNames:  []string{jobEntry.jobName},
-			toTS:      types.TS{},
-			fromTS:    types.TS{},
-		}
-		jobEntry.tableInfo.exec.worker.Submit(iterCtx)
-	} else {
-		jobEntry.inited.Store(true)
-	}
-}
-
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {
-	return jobEntry.inited.Load() && jobEntry.state == ISCPJobState_Completed
+	return jobEntry.state == ISCPJobState_Completed
 }
 
 func (jobEntry *JobEntry) UpdateWatermark(
@@ -141,10 +124,6 @@ func (jobEntry *JobEntry) UpdateWatermark(
 }
 
 func (jobEntry *JobEntry) StringLocked() string {
-	initStr := ""
-	if !jobEntry.inited.Load() {
-		initStr = "-N"
-	}
 	stateStr := "I"
 	switch jobEntry.state {
 	case ISCPJobState_Running:
@@ -157,9 +136,8 @@ func (jobEntry *JobEntry) StringLocked() string {
 		stateStr = "C"
 	}
 	return fmt.Sprintf(
-		"Index[%s%s]%s,%v[%v]",
+		"Index[%s]%s,%v[%v]",
 		jobEntry.jobName,
-		initStr,
 		jobEntry.watermark.ToString(),
 		jobEntry.jobSpec,
 		stateStr,
