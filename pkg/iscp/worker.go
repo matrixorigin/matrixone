@@ -50,6 +50,9 @@ func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClie
 
 func (w *worker) Submit(iteration *IterationContext) error {
 	status := make([]*JobStatus, len(iteration.jobNames))
+	for i := range status {
+		status[i] = &JobStatus{}
+	}
 	FlushJobStatusOnIterationState(
 		context.Background(),
 		w.cnUUID,

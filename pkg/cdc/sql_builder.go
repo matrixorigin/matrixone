@@ -235,7 +235,7 @@ const (
 		`null` + // drop_at
 		`)`
 	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
-		`job_state = '%s',` +
+		`job_state = %d,` +
 		`watermark = '%s',` +
 		`job_status = '%s'` +
 		`WHERE` +
@@ -777,6 +777,7 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 	jobName string,
 	jobSpec string,
 	jobState int8,
+	jobStatus string,
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCInsertMOISCPLogSqlTemplate_Idx].SQL,
@@ -786,8 +787,7 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 		jobSpec,
 		jobState,
 		types.TS{}.ToString(),
-		"",
-		"",
+		jobStatus,
 	)
 }
 

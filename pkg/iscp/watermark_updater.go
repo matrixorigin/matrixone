@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -40,9 +41,10 @@ func MarshalJobSpec(jobSpec *JobSpec) (string, error) {
 	return string(jsonBytes), nil
 }
 
-func UnmarshalJobSpec(jsonStr string) (*JobSpec, error) {
+func UnmarshalJobSpec(jsonByte []byte) (*JobSpec, error) {
+	byteJson := types.DecodeJson(jsonByte)
 	var jobSpec JobSpec
-	err := json.Unmarshal([]byte(jsonStr), &jobSpec)
+	err := json.Unmarshal([]byte(byteJson.String()), &jobSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +122,10 @@ func registerJob(
 		)
 	}()
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
-		return false, err
+		return
+	}
+	if jobSpec.TriggerSpec.JobType == 0 {
+		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
 	tableID, err = getTableID(
 		ctxWithSysAccount,
@@ -131,7 +136,7 @@ func registerJob(
 		jobID.TableName,
 	)
 	if err != nil {
-		return false, err
+		return
 	}
 	exist, dropped, err := queryIndexLog(
 		ctxWithSysAccount,
@@ -142,14 +147,20 @@ func registerJob(
 		jobID.JobName,
 	)
 	if err != nil {
-		return false, err
+		return
 	}
 	if exist && !dropped {
-		return false, nil
+		return
 	}
+	ok = true
 	jobSpecJson, err := MarshalJobSpec(jobSpec)
 	if err != nil {
-		return false, err
+		return
+	}
+	emptyJobStatus := JobStatus{}
+	jobStatusJson, err := json.Marshal(emptyJobStatus)
+	if err != nil {
+		return
 	}
 	sql := cdc.CDCSQLBuilder.ISCPLogInsertSQL(
 		tenantId,
@@ -157,10 +168,11 @@ func registerJob(
 		jobID.JobName,
 		jobSpecJson,
 		ISCPJobState_Completed,
+		string(jobStatusJson),
 	)
 	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
-		return false, err
+		return
 	}
 	return
 }
@@ -230,7 +242,7 @@ func updateJobSpec(
 	}
 	jobSpecJson, err = MarshalJobSpec(jobSpec)
 	if err != nil {
-		return err
+		return
 	}
 	tableID, err = getTableID(
 		ctx,
@@ -279,7 +291,7 @@ func unregisterJob(
 		)
 	}()
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
-		return false, err
+		return
 	}
 	tableID, err = getTableID(
 		ctx,
@@ -290,7 +302,7 @@ func unregisterJob(
 		jobID.TableName,
 	)
 	if err != nil {
-		return false, err
+		return
 	}
 	exist, dropped, err := queryIndexLog(
 		ctx,
@@ -301,10 +313,10 @@ func unregisterJob(
 		jobID.JobName,
 	)
 	if err != nil {
-		return false, err
+		return
 	}
 	if !exist || dropped {
-		return false, nil
+		return
 	}
 	ok = true
 	sql := cdc.CDCSQLBuilder.ISCPLogUpdateDropAtSQL(
@@ -314,9 +326,9 @@ func unregisterJob(
 	)
 	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
-		return false, err
+		return
 	}
-	return true, nil
+	return
 }
 
 func getTableID(

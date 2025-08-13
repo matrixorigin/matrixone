@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -67,6 +68,9 @@ func ExecuteIteration(
 		iterCtx.tableID,
 		iterCtx.jobNames,
 	)
+	if err != nil {
+		return
+	}
 
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
@@ -258,10 +262,14 @@ func ExecuteIteration(
 	cancel()
 	changeHandelWg.Wait()
 	for i, status := range statuses {
-		if status.ErrorCode != 0 {
+		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
 			state := ISCPJobState_Completed
 			if status.PermanentlyFailed() {
 				state = ISCPJobState_Error
+			}
+			watermark := status.From
+			if status.ErrorCode == 0 {
+				watermark = status.To
 			}
 			for {
 				err = FlushJobStatusOnIterationState(
@@ -273,7 +281,7 @@ func ExecuteIteration(
 					iterCtx.tableID,
 					[]string{iterCtx.jobNames[i]},
 					[]*JobStatus{status},
-					iterCtx.fromTS,
+					watermark,
 					state,
 				)
 				if err == nil {
@@ -298,16 +306,11 @@ func FlushJobStatusOnIterationState(
 	watermark types.TS,
 	state int8,
 ) (err error) {
-	nowTs := cnEngine.LatestLogtailAppliedTime()
-	createByOpt := client.WithTxnCreateBy(
-		0,
-		"",
-		"iscp iteration",
-		0)
-	txnWriter, err := cnTxnClient.New(ctx, nowTs, createByOpt)
-	if err != nil {
-		return
-	}
+
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	txnWriter, err := GetTxnOp(ctx, cnEngine, cnTxnClient, "iscp iteration")
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, txnWriter.Rollback(ctx))
@@ -320,6 +323,7 @@ func FlushJobStatusOnIterationState(
 				zap.Uint32("tenantID", accountID),
 				zap.Uint64("tableID", tableID),
 				zap.Strings("jobNames", jobNames),
+				zap.Int8("state", state),
 				zap.Error(err),
 			)
 		}
@@ -354,12 +358,9 @@ func FlushStatus(
 	watermark types.TS,
 	state int8,
 ) (err error) {
-	var statusJson string
-	if jobStatus != nil {
-		statusJson, err = MarshalJobStatus(jobStatus)
-		if err != nil {
-			return
-		}
+	statusJson, err := MarshalJobStatus(jobStatus)
+	if err != nil {
+		return
 	}
 	sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
 		tenantId,
@@ -385,7 +386,7 @@ func GetJobSpecs(
 	jobName []string,
 ) (jobSpec []*JobSpec, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_config FROM mo_catalog.mo_iscp_log WHERE")
+	buf.WriteString("SELECT job_spec FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
@@ -404,7 +405,7 @@ func GetJobSpecs(
 			panic(fmt.Sprintf("invalid rows %d, expected %d", rows, len(jobName)))
 		}
 		for i := 0; i < rows; i++ {
-			jobSpec[i], err = UnmarshalJobSpec(string(vector.MustFixedColWithTypeCheck[[]byte](cols[0])[i]))
+			jobSpec[i], err = UnmarshalJobSpec(cols[0].GetBytesAt(i))
 			if err != nil {
 				return false
 			}
@@ -420,7 +421,7 @@ func GetRelation(
 	cnTxnClient client.TxnClient,
 	accountID uint32,
 	tableID uint64,
-) (rel engine.Relation, txn client.TxnOperator, err error) {
+) (rel engine.Relation, txnOp client.TxnOperator, err error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -434,7 +435,7 @@ func GetRelation(
 		"",
 		"iscp iteration",
 		0)
-	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	txnOp, err = cnTxnClient.New(ctx, nowTs, createByOpt)
 	if err != nil {
 		return
 	}

@@ -399,6 +399,9 @@ func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, 
 }
 
 func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.TS) (err error) {
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	rel, txn, err := exec.getTableByID(ctx, exec.iscpLogTableID)
 	if err != nil {
 		return
@@ -415,6 +418,12 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		insertData, deleteData, _, err = changes.Next(ctx, exec.mp)
 		if insertData == nil && deleteData == nil {
 			break
+		}
+		if insertData != nil {
+			defer insertData.Clean(exec.mp)
+		}
+		if deleteData != nil {
+			defer deleteData.Clean(exec.mp)
 		}
 		accountIDVector := insertData.Vecs[0]
 		accountIDs := vector.MustFixedColWithTypeCheck[uint32](accountIDVector)
@@ -437,7 +446,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 							jobNameVector.GetStringAt(i),
 							states[i],
 							watermarkVector.GetStringAt(i),
-							jobSpecVector.GetStringAt(i),
+							jobSpecVector.GetBytesAt(i),
 						)
 					},
 					exec.option.RetryTimes,
@@ -510,7 +519,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 						jobNameVector.GetStringAt(i),
 						states[i],
 						watermarkVector.GetStringAt(i),
-						jobSpecVector.GetStringAt(i),
+						jobSpecVector.GetBytesAt(i),
 					)
 				},
 				exec.option.RetryTimes,
@@ -527,10 +536,13 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	jobName string,
 	state int8,
 	watermarkStr string,
-	jobSpecStr string,
+	jobSpecStr []byte,
 ) (err error) {
 	var newCreate bool
 	defer func() {
+		if !newCreate && err == nil {
+			return
+		}
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
 			logger = logutil.Error
@@ -538,7 +550,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			logger = logutil.Info
 		}
 		logger(
-			"ISCP-Task add job",
+			"ISCP-Task add or update job",
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobName),
