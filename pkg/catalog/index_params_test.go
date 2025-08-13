@@ -145,3 +145,79 @@ func TestIndexParams_HNSWV1(t *testing.T) {
 		t.Logf("params: %s", params.String())
 	}
 }
+
+func TestIndexParams_AlgoJsonParamStringToIndexParams_FullText(t *testing.T) {
+	// 1. invalid algo, empty json param --> empty params, no error
+	params, err := IndexAlgoJsonParamStringToIndexParams("invalid", "")
+	require.NoError(t, err)
+	require.Falsef(t, params.Type().IsValid(), "params: %s", params.String())
+
+	// 2. invalid algo, non-empty json param --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("invalid", `{"m": "100"}`)
+	require.Error(t, err)
+
+	// 3. fulltext, empty json param --> empty params, no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("fulltext", "")
+	require.NoError(t, err)
+	require.Truef(t, params.IsEmpty(), "params: %s", params.String())
+
+	// 4. fulltext, non-empty json param, no parser name key --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser2": "ngram"}`)
+	require.Error(t, err)
+
+	// 5. fulltext, non-empty json param, invalid parser name --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser": "invalid"}`)
+	require.Error(t, err)
+
+	// 6. fulltext, non-empty json param, valid parser name --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser": "ngram"}`)
+	require.NoError(t, err)
+	require.Falsef(t, params.IsEmpty(), "params: %s", params.String())
+	require.Equal(t, IndexFullTextParserType_Ngram, params.ParserType())
+
+	// 7. fulltext, non-empty json param, valid parser name --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser": "default"}`)
+	require.NoError(t, err)
+	require.Falsef(t, params.IsEmpty(), "params: %s", params.String())
+	require.Equal(t, IndexFullTextParserType_Default, params.ParserType())
+
+	// 8. fulltext, non-empty json param, valid parser name --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser": "json"}`)
+	require.NoError(t, err)
+	require.Falsef(t, params.IsEmpty(), "params: %s", params.String())
+	require.Equal(t, IndexFullTextParserType_JSONValue, params.ParserType())
+}
+
+func TestIndexParams_AlgoJsonParamStringToIndexParams_IVFFLAT(t *testing.T) {
+	// 1. ivfflat, empty json param --> error
+	_, err := IndexAlgoJsonParamStringToIndexParams("ivfflat", "")
+	require.Error(t, err)
+
+	// 2. ivfflat, non-empty json param, no list key or no algo key --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"op_type": "vector_l2_ops"}`)
+	require.Error(t, err)
+	_, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "100"}`)
+	require.Error(t, err)
+
+	// 3. ivfflat, non-empty json param, invalid list value --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "invalid", "op_type": "vector_ip_ops"}`)
+	require.Error(t, err)
+
+	// 4. ivfflat, non-empty json param, valid list value --> no error
+	params, err := IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "100", "op_type": "vector_cosine_ops"}`)
+	require.NoErrorf(t, err, "params: %s", params.String())
+	require.Equal(t, IndexParamAlgoType_CosineDistance, params.IVFFLATAlgo())
+	require.Equal(t, int64(100), params.IVFFLATList())
+
+	// 5. ivfflat, non-empty json param, valid list value --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "100", "op_type": "vector_l1_ops"}`)
+	require.NoErrorf(t, err, "params: %s", params.String())
+	require.Equal(t, IndexParamAlgoType_L1Distance, params.IVFFLATAlgo())
+	require.Equal(t, int64(100), params.IVFFLATList())
+
+	// 6. ivfflat, non-empty json param, invalid algo value --> error
+	params, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "100", "op_type": "invalid"}`)
+	require.Error(t, err)
+	require.Truef(t, params.IsEmpty(), "params: %s", params.String())
+
+}

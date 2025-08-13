@@ -85,6 +85,8 @@ const (
 	HnswEfConstruction   = "ef_construction"
 	HnswQuantization     = "quantization"
 	HnswEfSearch         = "ef_search"
+
+	IndexAlgoParamParserName = "parser"
 )
 
 /* 1. ToString Functions */
@@ -182,7 +184,7 @@ func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error
 		if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
 			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
 		}
-		res["parser"] = parsername
+		res[IndexAlgoParamParserName] = parsername
 	}
 	return res, nil
 }

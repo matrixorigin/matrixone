@@ -15,7 +15,9 @@
 package catalog
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,13 +42,13 @@ func (t IndexFullTextParserType) String() string {
 	case IndexFullTextParserType_Ngram:
 		return "ngram"
 	case IndexFullTextParserType_JSONValue:
-		return "json_value"
+		return "json"
 	}
 	return "invalid"
 }
 
 func (t IndexFullTextParserType) IsValid() bool {
-	return t > IndexFullTextParserType_Invalid && t <= IndexFullTextParserType_JSONValue
+	return t > IndexFullTextParserType_Invalid && t <= IndexFullTextParserType_Default
 }
 
 func StringToIndexFullTextParserType(s string) IndexFullTextParserType {
@@ -56,7 +58,7 @@ func StringToIndexFullTextParserType(s string) IndexFullTextParserType {
 		return IndexFullTextParserType_Default
 	case "ngram":
 		return IndexFullTextParserType_Ngram
-	case "json_value":
+	case "json":
 		return IndexFullTextParserType_JSONValue
 	default:
 		return IndexFullTextParserType_Invalid
@@ -89,7 +91,7 @@ func (t IndexParamAlgoType) String() string {
 }
 
 func (t IndexParamAlgoType) IsValid() bool {
-	return t > IndexParamAlgoType_Invalid
+	return t < IndexParamAlgoType_Invalid
 }
 
 func StringToIndexParamAlgoType(s string) IndexParamAlgoType {
@@ -396,6 +398,10 @@ func (params IndexParams) String() string {
 	}
 }
 
+func (params IndexParams) IsEmpty() bool {
+	return len(params) == 0
+}
+
 func (params IndexParams) Type() IndexParamType {
 	if len(params) < IndexParams_HeaderLen {
 		return IndexParamType_Invalid
@@ -497,5 +503,170 @@ func AstTreeToIndexParams(
 		// do nothing
 	}
 
+	return
+}
+
+func IndexAlgoJsonParamStringToIndexParams(
+	algo string,
+	algoJsonParam string,
+) (params IndexParams, err error) {
+	if len(algoJsonParam) == 0 && algo == "" {
+		return
+	}
+	var jsonMap map[string]string
+	if err = json.Unmarshal([]byte(algoJsonParam), &jsonMap); err != nil {
+		return
+	}
+
+	switch algo {
+	case "hnsw":
+		var (
+			ok                                              bool
+			m, efConstruction, efSearch, quantization, algo string
+			mValue, efConstructionValue, efSearchValue      int64
+			quantizationValue                               IndexParamQuantizationType
+			algoValue                                       IndexParamAlgoType
+		)
+		if m, ok = jsonMap[HnswM]; !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw param: %s",
+				algoJsonParam,
+			)
+			return
+		}
+		mValue, err = strconv.ParseInt(m, 10, 64)
+		if err != nil {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw param: %s",
+				algoJsonParam,
+			)
+			return
+		}
+		if efConstruction, ok = jsonMap[HnswEfConstruction]; !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw param: %s",
+				algoJsonParam,
+			)
+			return
+		}
+		efConstructionValue, err = strconv.ParseInt(efConstruction, 10, 64)
+		if err != nil {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw param: %s",
+				algoJsonParam,
+			)
+			return
+		}
+		if efSearch, ok = jsonMap[HnswEfSearch]; !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw param: %s",
+				algoJsonParam,
+			)
+			return
+		}
+		efSearchValue, err = strconv.ParseInt(efSearch, 10, 64)
+		if err != nil {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw param: %s",
+				algoJsonParam,
+			)
+			return
+		}
+		if quantization, ok = jsonMap[HnswQuantization]; !ok {
+			quantizationValue = IndexParamQuantizationType_F32
+		} else {
+			quantizationValue = StringToIndexParamQuantizationType(quantization)
+			if !quantizationValue.IsValid() {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid hnsw param: %s",
+					algoJsonParam,
+				)
+				return
+			}
+		}
+		if algo, ok = jsonMap[IndexAlgoParamOpType]; !ok {
+			algoValue = IndexParamAlgoType_L2Distance
+		} else {
+			algoValue = StringToIndexParamAlgoType(algo)
+			if !algoValue.IsValid() {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid hnsw param: %s",
+					algoJsonParam,
+				)
+				return
+			}
+		}
+		params = BuildIndexParamsHNSWV1(
+			mValue,
+			efConstructionValue,
+			efSearchValue,
+			quantizationValue,
+			algoValue,
+		)
+	case "ivfflat":
+		var (
+			ok         bool
+			list, algo string
+			listValue  int64
+			algoValue  IndexParamAlgoType
+		)
+		if list, ok = jsonMap[IndexAlgoParamLists]; !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid ivfflat param: %s",
+				algoJsonParam,
+			)
+			return
+		} else {
+			listValue, err = strconv.ParseInt(list, 10, 64)
+			if err != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid ivfflat param: %s",
+					algoJsonParam,
+				)
+				return
+			}
+		}
+		if algo, ok = jsonMap[IndexAlgoParamOpType]; !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid ivfflat param: %s",
+				algoJsonParam,
+			)
+			return
+		} else {
+			algoValue = StringToIndexParamAlgoType(algo)
+			if !algoValue.IsValid() {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid ivfflat param: %s",
+					algoJsonParam,
+				)
+				return
+			}
+		}
+		params = BuildIndexParamsIVFFLATV1(listValue, algoValue)
+	case "fulltext":
+		var parserValue IndexFullTextParserType
+		if parser, ok := jsonMap[IndexAlgoParamParserName]; !ok {
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid fulltext param: %s",
+				algoJsonParam,
+			)
+			return
+		} else {
+			parserValue = StringToIndexFullTextParserType(parser)
+			if !parserValue.IsValid() {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid fulltext param: %s",
+					algoJsonParam,
+				)
+				return
+			}
+		}
+
+		params = BuildIndexParamsFullTextV1(parserValue)
+	default:
+		err = moerr.NewInternalErrorNoCtxf(
+			"invalid algo: %s", algo,
+		)
+	}
 	return
 }
