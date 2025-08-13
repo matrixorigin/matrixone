@@ -469,11 +469,14 @@ func AstTreeToIndexParams(
 		}
 		quantization := StringToIndexParamQuantizationType(index.IndexOption.HnswQuantization)
 		if !quantization.IsValid() {
-			err = moerr.NewInternalErrorNoCtxf(
-				"invalid hnsw quantization: %s",
-				index.IndexOption.HnswQuantization,
-			)
-			return
+			if len(index.IndexOption.HnswQuantization) > 0 {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid hnsw quantization: %s",
+					index.IndexOption.HnswQuantization,
+				)
+				return
+			}
+			quantization = IndexParamQuantizationType_F32 // Set default quantization
 		}
 		algo := StringToIndexParamAlgoType(index.IndexOption.AlgoParamVectorOpType)
 		if !algo.IsValid() {
@@ -490,9 +493,7 @@ func AstTreeToIndexParams(
 			quantization,
 			algo,
 		)
-	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
-		// do nothing
-	case tree.INDEX_TYPE_MASTER, tree.INDEX_TYPE_FULLTEXT:
+	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_MASTER, tree.INDEX_TYPE_FULLTEXT:
 		// do nothing
 	}
 
