@@ -71,4 +71,13 @@ func TestMockEchoModel(t *testing.T) {
 	if reply != "Hello, world! again" {
 		t.Fatal("reply is not correct")
 	}
+
+	embedding, err := client.CreateEmbedding(context.Background(), "Hello, world!")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if embedding[0] != 13 {
+		t.Fatal("embedding is not correct")
+	}
 }

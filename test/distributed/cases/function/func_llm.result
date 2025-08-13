@@ -1,0 +1,66 @@
+select llm_chat('', '', 'echo', '', '[{"role": "user", "content": "hello world"}]');
+llm_chat(, , echo, , [{"role": "user", "content": "hello world"}])
+hello world
+select llm_chat('', '', 'echo', null, '[{"role": "user", "content": "hello world"}]');
+llm_chat(, , echo, null, [{"role": "user", "content": "hello world"}])
+hello world
+select llm_chat('', '', 'echo', null, null);
+llm_chat(, , echo, null, null)
+null
+select llm_chat('', '', 'echo', '', 'hello world');
+invalid character 'h' looking for beginning of value
+select llm_chat('', '', 'echo', null, '{"role": "user", "content": "hello world"}');
+json: cannot unmarshal object into Go value of type []llm.Message
+select llm_chat('', '', '', '');
+invalid argument function llm_chat, bad value [CHAR CHAR CHAR CHAR]
+select llm_chat(null, '', '', '', 'hello world');
+invalid input: llm_chat: server must not be null
+select llm_chat(123, '', '', '', 'hello world');
+invalid input: invalid server: 123
+select llm_chat('', null, 'echo', '', 'hello world');
+invalid input: llm_chat: addr must not be null
+select llm_chat('', '', null, '', 'hello world');
+invalid input: llm_chat: model must not be null
+select llm_chat('', '', 'echo', '', col1) from parse_jsonl_data($$["echo", [{"role":"user", "content":"foo"}]]
+["echo", [{"role":"user", "content":"bar"}]]
+$$, 'ss'
+) t;
+llm_chat(, , echo, , col1)
+foo
+bar
+select llm_chat('', '', col0, '', col1) from parse_jsonl_data($$["echo", "foo"]
+["echo", "bar"]
+$$, 'ss'
+) t;
+invalid input: llm_chat: model must be constant
+select llm_embedding('', '', 'echo', '', 'hello world');
+llm_embedding(, , echo, , hello world)
+[11, 502021950]
+select llm_embedding('', '', 'echo', null, 'hello world');
+llm_embedding(, , echo, null, hello world)
+[11, 502021950]
+select llm_embedding('', '', 'echo', null, null);
+llm_embedding(, , echo, null, null)
+null
+select llm_embedding('', '', '', '');
+invalid argument function llm_embedding, bad value [CHAR CHAR CHAR CHAR]
+select llm_embedding(null, '', '', '', 'hello world');
+invalid input: llm_chat: server must not be null
+select llm_embedding(123, '', '', '', 'hello world');
+invalid input: invalid server: 123
+select llm_embedding('', null, 'echo', '', 'hello world');
+invalid input: llm_chat: addr must not be null
+select llm_embedding('', '', null, '', 'hello world');
+invalid input: llm_chat: model must not be null
+select llm_embedding('', '', 'echo', '', col1) from parse_jsonl_data($$["echo", "foo"]
+["echo", "bar"]
+$$, 'ss'
+) t;
+llm_embedding(, , echo, , col1)
+[5, 238734290]
+[5, 301440220]
+select llm_embedding('', '', col0, '', col1) from parse_jsonl_data($$["echo", "foo"]
+["echo", "bar"]
+$$, 'ss'
+) t;
+invalid input: llm_chat: model must be constant
