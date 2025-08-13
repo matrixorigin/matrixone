@@ -141,23 +141,23 @@ func (t IndexParamQuantizationType) String() string {
 }
 
 func (t IndexParamQuantizationType) IsValid() bool {
-	return t >= IndexParamQuantizationType_Invalid
+	return t < IndexParamQuantizationType_Invalid
 }
 
 func StringToIndexParamQuantizationType(s string) IndexParamQuantizationType {
 	s = strings.ToLower(s)
 	switch s {
-	case "F32":
+	case "f32":
 		return IndexParamQuantizationType_F32
-	case "BF16":
+	case "bf16":
 		return IndexParamQuantizationType_BF16
-	case "F16":
+	case "f16":
 		return IndexParamQuantizationType_F16
-	case "F64":
+	case "f64":
 		return IndexParamQuantizationType_F64
-	case "I8":
+	case "i8":
 		return IndexParamQuantizationType_I8
-	case "B1":
+	case "b1":
 		return IndexParamQuantizationType_B1
 	}
 	return IndexParamQuantizationType_Invalid
@@ -295,11 +295,11 @@ const (
 )
 
 func BuildIndexParamsHNSWV1(
-	m int64,
-	efConstruction int64,
-	efSearch int64,
-	quantization IndexParamQuantizationType,
 	algo IndexParamAlgoType,
+	m int64, // optional
+	efConstruction int64, // optional
+	efSearch int64, // optional
+	quantization IndexParamQuantizationType, // optional
 ) IndexParams {
 	buf := make([]byte, IndexParams_HNSWV1_Size)
 	copy(buf, IndexParamMagicNumberBuf)
@@ -493,11 +493,11 @@ func AstTreeToIndexParams(
 			algo = IndexParamAlgoType_L2Distance // Set default algo
 		}
 		params = BuildIndexParamsHNSWV1(
+			algo,
 			index.IndexOption.HnswM,
 			index.IndexOption.HnswEfConstruction,
 			index.IndexOption.HnswEfSearch,
 			quantization,
-			algo,
 		)
 	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID, tree.INDEX_TYPE_MASTER, tree.INDEX_TYPE_FULLTEXT:
 		// do nothing
@@ -527,56 +527,35 @@ func IndexAlgoJsonParamStringToIndexParams(
 			quantizationValue                               IndexParamQuantizationType
 			algoValue                                       IndexParamAlgoType
 		)
-		if m, ok = jsonMap[HnswM]; !ok {
-			err = moerr.NewInternalErrorNoCtxf(
-				"invalid hnsw param: %s",
-				algoJsonParam,
-			)
-			return
+		if m, ok = jsonMap[HnswM]; ok {
+			if mValue, err = strconv.ParseInt(m, 10, 64); err != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid hnsw param: %s",
+					algoJsonParam,
+				)
+				return
+			}
 		}
-		mValue, err = strconv.ParseInt(m, 10, 64)
-		if err != nil {
-			err = moerr.NewInternalErrorNoCtxf(
-				"invalid hnsw param: %s",
-				algoJsonParam,
-			)
-			return
+		if efConstruction, ok = jsonMap[HnswEfConstruction]; ok {
+			if efConstructionValue, err = strconv.ParseInt(efConstruction, 10, 64); err != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid hnsw param: %s",
+					algoJsonParam,
+				)
+				return
+			}
 		}
-		if efConstruction, ok = jsonMap[HnswEfConstruction]; !ok {
-			err = moerr.NewInternalErrorNoCtxf(
-				"invalid hnsw param: %s",
-				algoJsonParam,
-			)
-			return
+		if efSearch, ok = jsonMap[HnswEfSearch]; ok {
+			if efSearchValue, err = strconv.ParseInt(efSearch, 10, 64); err != nil {
+				err = moerr.NewInternalErrorNoCtxf(
+					"invalid hnsw param: %s",
+					algoJsonParam,
+				)
+				return
+			}
 		}
-		efConstructionValue, err = strconv.ParseInt(efConstruction, 10, 64)
-		if err != nil {
-			err = moerr.NewInternalErrorNoCtxf(
-				"invalid hnsw param: %s",
-				algoJsonParam,
-			)
-			return
-		}
-		if efSearch, ok = jsonMap[HnswEfSearch]; !ok {
-			err = moerr.NewInternalErrorNoCtxf(
-				"invalid hnsw param: %s",
-				algoJsonParam,
-			)
-			return
-		}
-		efSearchValue, err = strconv.ParseInt(efSearch, 10, 64)
-		if err != nil {
-			err = moerr.NewInternalErrorNoCtxf(
-				"invalid hnsw param: %s",
-				algoJsonParam,
-			)
-			return
-		}
-		if quantization, ok = jsonMap[HnswQuantization]; !ok {
-			quantizationValue = IndexParamQuantizationType_F32
-		} else {
-			quantizationValue = StringToIndexParamQuantizationType(quantization)
-			if !quantizationValue.IsValid() {
+		if quantization, ok = jsonMap[HnswQuantization]; ok {
+			if quantizationValue = StringToIndexParamQuantizationType(quantization); !quantizationValue.IsValid() {
 				err = moerr.NewInternalErrorNoCtxf(
 					"invalid hnsw param: %s",
 					algoJsonParam,
@@ -585,7 +564,11 @@ func IndexAlgoJsonParamStringToIndexParams(
 			}
 		}
 		if algo, ok = jsonMap[IndexAlgoParamOpType]; !ok {
-			algoValue = IndexParamAlgoType_L2Distance
+			err = moerr.NewInternalErrorNoCtxf(
+				"invalid hnsw param: %s",
+				algoJsonParam,
+			)
+			return
 		} else {
 			algoValue = StringToIndexParamAlgoType(algo)
 			if !algoValue.IsValid() {
@@ -597,11 +580,11 @@ func IndexAlgoJsonParamStringToIndexParams(
 			}
 		}
 		params = BuildIndexParamsHNSWV1(
+			algoValue,
 			mValue,
 			efConstructionValue,
 			efSearchValue,
 			quantizationValue,
-			algoValue,
 		)
 	case "ivfflat":
 		var (

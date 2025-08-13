@@ -130,11 +130,11 @@ func TestIndexParams_HNSWV1(t *testing.T) {
 
 	for i, m := range ms {
 		params := BuildIndexParamsHNSWV1(
+			algos[i],
 			m,
 			efConstructions[i],
 			efSearches[i],
 			qs[i],
-			algos[i],
 		)
 		require.Equal(t, IndexParamType_HNSWV1, params.Type())
 		require.Equal(t, m, params.HNSWM())
@@ -219,5 +219,79 @@ func TestIndexParams_AlgoJsonParamStringToIndexParams_IVFFLAT(t *testing.T) {
 	params, err = IndexAlgoJsonParamStringToIndexParams("ivfflat", `{"lists": "100", "op_type": "invalid"}`)
 	require.Error(t, err)
 	require.Truef(t, params.IsEmpty(), "params: %s", params.String())
+}
 
+func TestIndexParams_AlgoJsonParamStringToIndexParams_HNSW(t *testing.T) {
+	// 1. hnsw, empty json param --> error
+	_, err := IndexAlgoJsonParamStringToIndexParams("hnsw", "")
+	require.Error(t, err)
+
+	// 2. hnsw, non-empty json param, only op_type key --> no error
+	params, err := IndexAlgoJsonParamStringToIndexParams("hnsw", `{"op_type": "vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Equal(t, IndexParamAlgoType_L2Distance, params.HNSWAlgo())
+	require.Equal(t, int64(0), params.HNSWM())
+	require.Equal(t, int64(0), params.HNSWEfConstruction())
+	require.Equal(t, int64(0), params.HNSWEfSearch())
+	require.Equal(t, IndexParamQuantizationType_F32, params.HNSWQuantization())
+
+	// 3. hnsw, non-empty json param, no op_type key --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100"}`)
+	require.Error(t, err)
+
+	// 4. hnsw, non-empty json param, invalid m value --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "invalid", "op_type": "vector_l2_ops"}`)
+	require.Error(t, err)
+
+	// 5. hnsw, non-empty json param, valid m value --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "op_type": "vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Equal(t, IndexParamAlgoType_L2Distance, params.HNSWAlgo())
+	require.Equal(t, int64(100), params.HNSWM())
+	require.Equal(t, int64(0), params.HNSWEfConstruction())
+	require.Equal(t, int64(0), params.HNSWEfSearch())
+	require.Equal(t, IndexParamQuantizationType_F32, params.HNSWQuantization())
+
+	// 6. hnsw, non-empty json param, valid ef_construction value --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_construction": "100", "op_type": "vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Equal(t, IndexParamAlgoType_L2Distance, params.HNSWAlgo())
+	require.Equal(t, int64(100), params.HNSWM())
+	require.Equal(t, int64(100), params.HNSWEfConstruction())
+	require.Equal(t, int64(0), params.HNSWEfSearch())
+	require.Equal(t, IndexParamQuantizationType_F32, params.HNSWQuantization())
+
+	// 7. hnsw, non-empty json param, valid ef_search value --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_search": "100", "op_type": "vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Equal(t, IndexParamAlgoType_L2Distance, params.HNSWAlgo())
+	require.Equal(t, int64(100), params.HNSWM())
+	require.Equal(t, int64(0), params.HNSWEfConstruction())
+	require.Equal(t, int64(100), params.HNSWEfSearch())
+	require.Equal(t, IndexParamQuantizationType_F32, params.HNSWQuantization())
+
+	// 8. hnsw, non-empty json param, valid quantization value --> no error
+	params, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_search": "100", "op_type": "vector_l2_ops", "quantization": "f32"}`)
+	require.NoError(t, err)
+	require.Equal(t, IndexParamAlgoType_L2Distance, params.HNSWAlgo())
+	require.Equal(t, int64(100), params.HNSWM())
+	require.Equal(t, int64(0), params.HNSWEfConstruction())
+	require.Equal(t, int64(100), params.HNSWEfSearch())
+	require.Equalf(t, IndexParamQuantizationType_F32, params.HNSWQuantization(), "params: %s", params.String())
+
+	// 9. hnsw, non-empty json param, invalid quantization value --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_search": "100", "op_type": "vector_l2_ops", "quantization": "invalid"}`)
+	require.Error(t, err)
+
+	// 10. hnsw, non-empty json param, invalid algo value --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_search": "100", "op_type": "invalid"}`)
+	require.Error(t, err)
+
+	// 11. hnsw, non-empty json param, invalid ef_search value --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_search": "invalid", "op_type": "vector_l2_ops"}`)
+	require.Error(t, err)
+
+	// 12. hnsw, non-empty json param, invalid ef_construction value --> error
+	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_construction": "invalid", "op_type": "vector_l2_ops"}`)
+	require.Error(t, err)
 }
