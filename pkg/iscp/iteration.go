@@ -47,6 +47,9 @@ func ExecuteIteration(
 	packer := types.NewPacker()
 	defer packer.Close()
 
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Hour)
+	defer cancel()
 	rel, txnOp, err := GetRelation(
 		ctx,
 		cnEngine,
@@ -54,12 +57,13 @@ func ExecuteIteration(
 		iterCtx.accountID,
 		iterCtx.tableID,
 	)
-	tableDef := rel.CopyTableDef(ctx)
-	dbName := tableDef.DbName
-	tableName := tableDef.Name
 	if err != nil {
 		return
 	}
+	defer txnOp.Commit(ctx)
+	tableDef := rel.CopyTableDef(ctx)
+	dbName := tableDef.DbName
+	tableName := tableDef.Name
 	jobSpecs, err := GetJobSpecs(
 		ctx,
 		cnUUID,

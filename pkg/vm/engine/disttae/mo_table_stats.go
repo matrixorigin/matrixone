@@ -1102,10 +1102,11 @@ func (d *dynamicCtx) forceUpdateQuery(
 			oldTS[idx] = timestamp.Timestamp{PhysicalTime: stdTime.UnixNano()}
 		}
 
+		minTS := types.TS{}
 		if err = getChangedTableList(
 			ctx, d.de.service, d.de,
 			accs, dbs, tbls,
-			oldTS, &pairs, &to, cmd_util.CheckChanged, nil); err != nil {
+			oldTS, &pairs, &to, &minTS, cmd_util.CheckChanged, nil); err != nil {
 			return
 		}
 
@@ -1725,11 +1726,12 @@ func (d *dynamicCtx) prepare(
 	d.tableStock.specialTo = to
 	d.tableStock.specialFrom = from
 
+	minTS := types.TS{}
 	err = getChangedTableList(
 		ctx, service, eng, nil, nil, nil,
 		[]timestamp.Timestamp{from.ToTimestamp(), to.ToTimestamp()},
 		&d.tableStock.tbls,
-		&d.tableStock.specialTo, cmd_util.CollectChanged, nil)
+		&d.tableStock.specialTo, &minTS, cmd_util.CollectChanged, nil)
 
 	return err
 }
@@ -2828,6 +2830,7 @@ func GetChangedTableList(
 	tbls []uint64,
 	ts []timestamp.Timestamp,
 	to *types.TS,
+	minTS *types.TS,
 	typ cmd_util.ChangedListType,
 	forEachTable func(
 		accountID int64,
@@ -2847,7 +2850,7 @@ func GetChangedTableList(
 	) (func(), error),
 ) (err error) {
 	pairs := make([]tablePair, 0, len(accs))
-	err = getChangedTableList(ctx, service, eng, accs, dbs, tbls, ts, &pairs, to, typ, handleFn)
+	err = getChangedTableList(ctx, service, eng, accs, dbs, tbls, ts, &pairs, to, minTS, typ, handleFn)
 	if err != nil {
 		return
 	}
@@ -2867,6 +2870,7 @@ func getChangedTableList(
 	ts []timestamp.Timestamp,
 	pairs *[]tablePair,
 	to *types.TS,
+	minTS *types.TS,
 	typ cmd_util.ChangedListType,
 	handleFn func(
 		ctx context.Context,
@@ -2972,6 +2976,9 @@ func getChangedTableList(
 	//	*to = types.TimestampToTS(*resp.Newest)
 	//}
 	*to = types.TimestampToTS(txnOperator.SnapshotTS())
+	if resp.Oldest != nil {
+		*minTS = types.TimestampToTS(*resp.Oldest)
+	}
 
 	if err = correctAccountForCatalogTables(ctx, eng.(*Engine), resp); err != nil {
 		return

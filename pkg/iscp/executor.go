@@ -342,16 +342,17 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				continue
 			}
 			// check if there are any dirty tables
-			tables, toTS, err := exec.getDirtyTables(exec.ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
+			tables, toTS, minTS, err := exec.getDirtyTables(exec.ctx, candidateTables, fromTSs, exec.cnUUID, exec.txnEngine)
 			if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "getDirtyTables" {
 				err = moerr.NewInternalErrorNoCtx(msg)
 			}
+			var getDirtyTablesFailed bool
 			if err != nil {
 				logutil.Error(
 					"ISCP-Task get dirty tables failed",
 					zap.Error(err),
 				)
-				continue
+				getDirtyTablesFailed = true
 			}
 			// run iterations with dirty table
 			// update watermark for clean tables
@@ -362,7 +363,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				}
 				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
 				var ok bool
-				if iter.fromTS.IsEmpty() {
+				if iter.fromTS.IsEmpty() || getDirtyTablesFailed || iter.fromTS.LT(&minTS) {
 					ok = true
 				} else {
 					_, ok = tables[iter.tableID]
@@ -701,7 +702,7 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 	fromTSs []types.TS,
 	service string,
 	eng engine.Engine,
-) (tables map[uint64]struct{}, toTS types.TS, err error) {
+) (tables map[uint64]struct{}, toTS types.TS, minTS types.TS, err error) {
 
 	accs := make([]uint64, 0, len(candidateTables))
 	dbs := make([]uint64, 0, len(candidateTables))
@@ -724,6 +725,7 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 		tbls,
 		fromTimestamps,
 		&toTS,
+		&minTS,
 		cmd_util.CheckChanged,
 		func(
 			accountID int64,

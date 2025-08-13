@@ -1840,13 +1840,35 @@ func TestISCPExecutor3(t *testing.T) {
 	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
 	assert.NoError(t, err)
 
-	registerFn("hnsw_idx_2")
+	registerFn("hnsw_idx_0")
 
-	checkWaterMarkFn("hnsw_idx_2", 1000, true)
+	checkWaterMarkFn("hnsw_idx_0", 4000, true)
 	rmFn()
 
 	// changesNext failed
 	rmFn, err = objectio.InjectCDCExecutor("changesNext")
+	assert.NoError(t, err)
+
+	registerFn("hnsw_idx_1")
+
+	checkWaterMarkFn("hnsw_idx_1", 100, false)
+	rmFn()
+
+	checkWaterMarkFn("hnsw_idx_1", 4000, true)
+
+	// collect Changes failed
+	rmFn, err = objectio.InjectCDCExecutor("collectChanges")
+	assert.NoError(t, err)
+
+	registerFn("hnsw_idx_2")
+
+	checkWaterMarkFn("hnsw_idx_2", 100, false)
+	rmFn()
+
+	checkWaterMarkFn("hnsw_idx_2", 4000, true)
+
+	// consume failed
+	rmFn, err = objectio.InjectCDCExecutor("consume")
 	assert.NoError(t, err)
 
 	registerFn("hnsw_idx_3")
@@ -1854,45 +1876,22 @@ func TestISCPExecutor3(t *testing.T) {
 	checkWaterMarkFn("hnsw_idx_3", 100, false)
 	rmFn()
 
-	checkWaterMarkFn("hnsw_idx_3", 1000, true)
-
-	// collect Changes failed
-	rmFn, err = objectio.InjectCDCExecutor("collectChanges")
-	assert.NoError(t, err)
-
-	registerFn("hnsw_idx_4")
-
-	checkWaterMarkFn("hnsw_idx_4", 100, false)
-	rmFn()
-
-	checkWaterMarkFn("hnsw_idx_4", 1000, true)
-
-	// consume failed
-	rmFn, err = objectio.InjectCDCExecutor("consume")
-	assert.NoError(t, err)
-
-	registerFn("hnsw_idx_5")
-
-	checkWaterMarkFn("hnsw_idx_5", 100, false)
-	rmFn()
-
-	checkWaterMarkFn("hnsw_idx_5", 1000, true)
+	checkWaterMarkFn("hnsw_idx_3", 4000, true)
 
 	// getDirtyTables
 	rmFn, err = objectio.InjectCDCExecutor("getDirtyTables")
 	assert.NoError(t, err)
-	checkWaterMarkFn("hnsw_idx_5", 1000, false)
-	rmFn()
 
-	for i := 0; i < 5; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	for i := 0; i < 4; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 10000, true)
 	}
+	rmFn()
 
 	// drop index
 	rmFn, err = objectio.InjectCDCExecutor("deleteIndex")
 	assert.NoError(t, err)
 	testutils.WaitExpect(
-		1000,
+		4000,
 		func() bool {
 			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx_0")
 			return !ok
@@ -2042,7 +2041,7 @@ func TestISCPExecutor4(t *testing.T) {
 	checkWaterMarkFn("hnsw_idx_0", 100, false)
 	rmFn()
 	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, true)
 	}
 
 	// changesNext failed

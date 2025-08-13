@@ -18,9 +18,11 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"go.uber.org/zap"
 )
 
 type Worker interface {
@@ -84,6 +86,11 @@ func (w *worker) onItem(items ...any) {
 				w.cnTxnClient,
 				iterCtx,
 				w.mp,
+			)
+			logutil.Error(
+				"ISCP-Task execute iteration failed",
+				zap.Any("iterCtx", iterCtx.jobNames),
+				zap.Error(err),
 			)
 			if err == nil {
 				break
