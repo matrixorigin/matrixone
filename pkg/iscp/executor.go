@@ -76,7 +76,7 @@ func GetTxnFactory(
 	cnTxnClient client.TxnClient,
 ) func() (client.TxnOperator, error) {
 	return func() (client.TxnOperator, error) {
-		return GetTxnOp(ctx, cnEngine, cnTxnClient, "default iscp executor")
+		return getTxn(ctx, cnEngine, cnTxnClient, "default iscp executor")
 	}
 }
 
@@ -408,7 +408,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	rel, txn, err := exec.getTableByID(ctx, exec.iscpLogTableID)
+	rel, txn, err := getRelation(exec.txnEngine, exec.cnTxnClient, catalog.System_Account, exec.iscpLogTableID)
 	if err != nil {
 		return
 	}
@@ -581,7 +581,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	if !ok {
 		var rel engine.Relation
 		var txn client.TxnOperator
-		rel, txn, err = exec.getTableByID(ctx, tableID)
+		rel, txn, err = getRelation(exec.txnEngine, exec.cnTxnClient, accountID, tableID)
 		if err != nil {
 			return
 		}
@@ -635,18 +635,6 @@ func (exec *ISCPTaskExecutor) deleteJob(
 	}
 	if empty {
 		exec.deleteTableEntry(table)
-	}
-	return
-}
-
-func (exec *ISCPTaskExecutor) getTableByID(ctx context.Context, tableID uint64) (table engine.Relation, txn client.TxnOperator, err error) {
-	txn, err = exec.txnFactory()
-	if err != nil {
-		return
-	}
-	_, _, table, err = cdc.GetRelationById(ctx, exec.txnEngine, txn, tableID)
-	if err != nil {
-		return
 	}
 	return
 }

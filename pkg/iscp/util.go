@@ -38,8 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -365,80 +363,8 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 	return buf
 }
 
-var GetTxnOp = func(
-	ctx context.Context,
-	cnEngine engine.Engine,
-	cnTxnClient client.TxnClient,
-	info string,
-) (client.TxnOperator, error) {
-	nowTs := cnEngine.LatestLogtailAppliedTime()
-	createByOpt := client.WithTxnCreateBy(
-		0,
-		"",
-		info,
-		0)
-	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
-	if err != nil {
-		return nil, err
-	}
-	err = cnEngine.New(ctx, op)
-	if err != nil {
-		return nil, err
-	}
-	return op, nil
-}
-
-var GetTxn = func(
-	ctx context.Context,
-	cnEngine engine.Engine,
-	txnOp client.TxnOperator,
-) error {
-	return cnEngine.New(ctx, txnOp)
-}
-
-var FinishTxnOp = func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
-	//same timeout value as it in frontend
-	ctx2, cancel := context.WithTimeoutCause(ctx, cnEngine.Hints().CommitOrRollbackTimeout, moerr.CauseFinishTxnOp)
-	defer cancel()
-	if inputErr != nil {
-		_ = txnOp.Rollback(ctx2)
-	} else {
-		_ = txnOp.Commit(ctx2)
-	}
-}
-
-var GetRelationById = func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, tableId uint64) (dbName string, tblName string, rel engine.Relation, err error) {
-	return cnEngine.GetRelationById(ctx, txnOp, tableId)
-}
-
-var GetSnapshotTS = func(txnOp client.TxnOperator) timestamp.Timestamp {
-	return txnOp.SnapshotTS()
-}
-
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
-}
-
-var EnterRunSql = func(txnOp client.TxnOperator) {
-	txnOp.EnterRunSql()
-}
-
-var ExitRunSql = func(txnOp client.TxnOperator) {
-	txnOp.ExitRunSql()
-}
-
-var GetTableDef = func(
-	ctx context.Context,
-	txnOp client.TxnOperator,
-	cnEngine engine.Engine,
-	tblId uint64,
-) (*plan.TableDef, error) {
-	_, _, rel, err := cnEngine.GetRelationById(ctx, txnOp, tblId)
-	if err != nil {
-		return nil, err
-	}
-
-	return rel.CopyTableDef(ctx), nil
 }
 
 const (
@@ -555,4 +481,38 @@ func SplitDbTblKey(dbTblKey string) (dbName, tblName string) {
 		return
 	}
 	return s[0], s[1]
+}
+
+func getTxn(
+	ctx context.Context,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	info string,
+) (client.TxnOperator, error) {
+	nowTs := cnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		info,
+		0)
+	op, err := cnTxnClient.New(ctx, nowTs, createByOpt)
+	if err != nil {
+		return nil, err
+	}
+	err = cnEngine.New(ctx, op)
+	if err != nil {
+		return nil, err
+	}
+	return op, nil
+}
+
+var finishTxnOp = func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
+	//same timeout value as it in frontend
+	ctx2, cancel := context.WithTimeoutCause(ctx, cnEngine.Hints().CommitOrRollbackTimeout, moerr.CauseFinishTxnOp)
+	defer cancel()
+	if inputErr != nil {
+		_ = txnOp.Rollback(ctx2)
+	} else {
+		_ = txnOp.Commit(ctx2)
+	}
 }

@@ -57,7 +57,7 @@ func ExecuteIteration(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	rel, txnOp, err := GetRelation(
+	rel, txnOp, err := getRelation(
 		cnEngine,
 		cnTxnClient,
 		iterCtx.accountID,
@@ -324,7 +324,7 @@ func FlushJobStatusOnIterationState(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	txnWriter, err := GetTxnOp(ctx, cnEngine, cnTxnClient, "iscp iteration")
+	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, txnWriter.Rollback(ctx))
@@ -429,7 +429,7 @@ func GetJobSpecs(
 	return
 }
 
-func GetRelation(
+func getRelation(
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	accountID uint32,
