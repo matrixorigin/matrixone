@@ -79,13 +79,13 @@ const (
 )
 
 type DataRetrieverImpl struct {
-	offset int
+	offset    int
 	accountID uint32
-	tableID uint64
-	jobName string
-	status *JobStatus
+	tableID   uint64
+	jobName   string
+	status    *JobStatus
 
-	typ int8
+	typ          int8
 	insertDataCh chan *ISCPData
 	ctx          context.Context
 	cancel       context.CancelFunc

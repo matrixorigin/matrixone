@@ -838,7 +838,6 @@ func (b cdcSQLBuilder) ISCPLogUpdateJobSpecSQL(
 	)
 }
 
-
 func (b cdcSQLBuilder) ISCPLogGCSQL(t time.Time) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCDeleteMOISCPLogSqlTemplate_Idx].SQL,

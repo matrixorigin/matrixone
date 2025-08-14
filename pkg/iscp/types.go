@@ -151,9 +151,9 @@ type JobEntry struct {
 	jobName   string
 	jobSpec   *TriggerSpec
 
-	watermark types.TS
+	watermark          types.TS
 	persistedWatermark types.TS
-	state     int8
+	state              int8
 }
 
 // Intra-System Change Propagation Table Entry
