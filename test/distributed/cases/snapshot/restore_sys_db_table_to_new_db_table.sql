@@ -102,7 +102,7 @@ create database system_new clone system {snapshot = 'sp05'} to account acc03;
 create database mo_task_new clone mo_task {snapshot = 'sp05'} to account acc03;
 create database mo_debug_new clone mo_debug {snapshot = 'sp05'} to account acc03;
 create database system_metrics_new clone system_metrics {snapshot = 'sp05'} to account acc03;
-
+drop snapshot if exists sp05;
 
 
 

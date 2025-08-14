@@ -98,7 +98,7 @@ INSERT INTO t_strcmp_test(s1, s2, expect) VALUES
 
 UPDATE t_strcmp_test
 SET actual = STRCMP(s1, s2);
-SELECT id, s1, s2, expect, actual
+SELECT  s1, s2, expect, actual
 FROM t_strcmp_test
 ORDER BY id;
 drop table t_strcmp_test;

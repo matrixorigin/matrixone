@@ -106,6 +106,7 @@ create database mo_debug_new clone mo_debug {snapshot = 'sp05'} to account acc03
 internal error: non-sys account cannot clone data from system database
 create database system_metrics_new clone system_metrics {snapshot = 'sp05'} to account acc03;
 internal error: non-sys account cannot clone data from system database
+drop snapshot if exists sp05;
 drop account if exists acc04;
 create account acc04 admin_name = 'test_account' identified by '111';
 create user userx identified by '111';

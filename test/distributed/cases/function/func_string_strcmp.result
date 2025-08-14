@@ -132,21 +132,21 @@ INSERT INTO t_strcmp_test(s1, s2, expect) VALUES
 ('数据库', '数锯', -1);
 UPDATE t_strcmp_test
 SET actual = STRCMP(s1, s2);
-SELECT id, s1, s2, expect, actual
+SELECT  s1, s2, expect, actual
 FROM t_strcmp_test
 ORDER BY id;
-id    s1    s2    expect    actual
-12    abc    abc    0    0
-13    MySQL    mysql    0    -1
-14    abc     abc    -1    1
-15    abc     abc    1    1
-16            0    0
-17    null    abc    null    null
-18    abc    null    null    null
-19    123    0123    -1    1
-20    2    10    1    1
-21    数据库    数据    1    1
-22    数据库    数锯    -1    -1
+s1    s2    expect    actual
+abc    abc    0    0
+MySQL    mysql    0    -1
+abc     abc    -1    1
+abc     abc    1    1
+        0    0
+null    abc    null    null
+abc    null    null    null
+123    0123    -1    1
+2    10    1    1
+数据库    数据    1    1
+数据库    数锯    -1    -1
 drop table t_strcmp_test;
 drop table if exists varchar_test;
 create table varchar_test (a varchar(30), b varchar(30));
