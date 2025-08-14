@@ -321,6 +321,7 @@ func doComQueryInBack(
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
+	proc.Base.Lim.SpillThreshold = pu.SV.ProcessLimitationSpillThreshold
 	proc.Base.SessionInfo = process.SessionInfo{
 		User:          backSes.respr.GetStr(USERNAME),
 		Host:          pu.SV.Host,

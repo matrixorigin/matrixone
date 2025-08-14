@@ -98,6 +98,8 @@ type Limitation struct {
 	ReaderSize int64
 	// MaxMessageSize max size for read messages from dn
 	MaxMsgSize uint64
+	// SpillThreshold represents spill threshold in bytes
+	SpillThreshold int64
 }
 
 // SessionInfo session information

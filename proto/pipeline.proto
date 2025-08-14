@@ -610,6 +610,7 @@ message ProcessLimitation {
   int64 batch_size = 3;
   int64 partition_rows = 4;
   int64 reader_size = 5;
+  int64 spill_threshold = 6;
 }
 
 message PrepareParamInfo {

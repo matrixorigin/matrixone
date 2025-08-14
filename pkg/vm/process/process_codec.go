@@ -234,11 +234,12 @@ func (c *codecService) Decode(
 // convert process.Limitation to pipeline.ProcessLimitation
 func convertToPipelineLimitation(lim Limitation) pipeline.ProcessLimitation {
 	return pipeline.ProcessLimitation{
-		Size:          lim.Size,
-		BatchRows:     lim.BatchRows,
-		BatchSize:     lim.BatchSize,
-		PartitionRows: lim.PartitionRows,
-		ReaderSize:    lim.ReaderSize,
+		Size:           lim.Size,
+		BatchRows:      lim.BatchRows,
+		BatchSize:      lim.BatchSize,
+		PartitionRows:  lim.PartitionRows,
+		ReaderSize:     lim.ReaderSize,
+		SpillThreshold: lim.SpillThreshold,
 	}
 }
 
@@ -280,11 +281,12 @@ func ConvertToProcessLimitation(
 	lim pipeline.ProcessLimitation,
 ) Limitation {
 	return Limitation{
-		Size:          lim.Size,
-		BatchRows:     lim.BatchRows,
-		BatchSize:     lim.BatchSize,
-		PartitionRows: lim.PartitionRows,
-		ReaderSize:    lim.ReaderSize,
+		Size:           lim.Size,
+		BatchRows:      lim.BatchRows,
+		BatchSize:      lim.BatchSize,
+		PartitionRows:  lim.PartitionRows,
+		ReaderSize:     lim.ReaderSize,
+		SpillThreshold: lim.SpillThreshold,
 	}
 }
 
