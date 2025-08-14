@@ -69,6 +69,9 @@ var (
 	//process.Limitation.PartitionRows.  10 << 32 = 42949672960
 	defaultProcessLimitationPartitionRows = 42949672960
 
+	//process.Limitation.SpillThreshold.  1G
+	defaultProcessLimitationSpillThreshold = 1 << 30
+
 	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
 
 	defaultVersionComment = "MatrixOne"
@@ -203,6 +206,9 @@ type FrontendParameters struct {
 
 	//process.Limitation.Size. default: 10 << 32 = 42949672960
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
+
+	// process.Limitation.SpillThreshold. default: 0
+	ProcessLimitationSpillThreshold int64 `toml:"processLimitationSpillThreshold"`
 
 	//process.Limitation.BatchRows. default: 10 << 32 = 42949672960
 	ProcessLimitationBatchRows int64 `toml:"processLimitationBatchRows"`
@@ -355,6 +361,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.ProcessLimitationPartitionRows == 0 {
 		fp.ProcessLimitationPartitionRows = int64(toml.ByteSize(defaultProcessLimitationPartitionRows))
+	}
+
+	if fp.ProcessLimitationSpillThreshold == 0 {
+		fp.ProcessLimitationSpillThreshold = int64(toml.ByteSize(defaultProcessLimitationSpillThreshold))
 	}
 
 	if fp.ServerVersionPrefix == "" {

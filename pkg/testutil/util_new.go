@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"encoding/binary"
+	"math"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -102,6 +103,7 @@ func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Pro
 	proc.Base.Lim.BatchRows = 1 << 20
 	proc.Base.Lim.BatchSize = 1 << 20
 	proc.Base.Lim.ReaderSize = 1 << 20
+	proc.Base.Lim.SpillThreshold = math.MaxInt64
 	proc.Base.SessionInfo.TimeZone = time.Local
 
 	return proc
