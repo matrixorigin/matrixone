@@ -19,13 +19,13 @@ strcmp(BINARY(a), BINARY(A))
 select strcmp(65, 97);
 strcmp(65, 97)
 -1
-SELECT STRCMP('apple', 'apple');    -- 返回 0（两字符串相等）
+SELECT STRCMP('apple', 'apple');
 STRCMP(apple, apple)
 0
-SELECT STRCMP('banana', 'apple');   -- 返回 1（'banana' > 'apple'）
+SELECT STRCMP('banana', 'apple');
 STRCMP(banana, apple)
 1
-SELECT STRCMP('apple', 'banana');   -- 返回 -1（'apple' < 'banana'）
+SELECT STRCMP('apple', 'banana');
 STRCMP(apple, banana)
 -1
 SELECT STRCMP('Apple', 'apple');
