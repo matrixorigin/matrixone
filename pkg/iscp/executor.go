@@ -68,18 +68,6 @@ type ISCPExecutorOption struct {
 	RetryTimes             int
 }
 
-type TxnFactory func() (client.TxnOperator, error)
-
-func GetTxnFactory(
-	ctx context.Context,
-	cnEngine engine.Engine,
-	cnTxnClient client.TxnClient,
-) func() (client.TxnOperator, error) {
-	return func() (client.TxnOperator, error) {
-		return getTxn(ctx, cnEngine, cnTxnClient, "default iscp executor")
-	}
-}
-
 func ISCPTaskExecutorFactory(
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
@@ -94,7 +82,6 @@ func ISCPTaskExecutorFactory(
 			txnEngine,
 			cnTxnClient,
 			cdUUID,
-			GetTxnFactory(ctx, txnEngine, cnTxnClient),
 			nil,
 			mp,
 		)
@@ -119,7 +106,6 @@ func NewISCPTaskExecutor(
 	txnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	cdUUID string,
-	txnFactory func() (client.TxnOperator, error),
 	option *ISCPExecutorOption,
 	mp *mpool.MPool,
 ) (exec *ISCPTaskExecutor, err error) {
@@ -149,15 +135,11 @@ func NewISCPTaskExecutor(
 			RetryTimes:             DefaultRetryTimes,
 		}
 	}
-	if txnFactory == nil {
-		txnFactory = GetTxnFactory(ctx, txnEngine, cnTxnClient)
-	}
 	exec = &ISCPTaskExecutor{
 		ctx:         ctx,
 		packer:      types.NewPacker(),
 		tables:      btree.NewBTreeGOptions(tableInfoLess, btree.Options{NoLocks: true}),
 		cnUUID:      cdUUID,
-		txnFactory:  txnFactory,
 		txnEngine:   txnEngine,
 		cnTxnClient: cnTxnClient,
 		wg:          sync.WaitGroup{},
@@ -179,7 +161,7 @@ func (exec *ISCPTaskExecutor) setISCPLogTableID(ctx context.Context) (err error)
 	if err != nil {
 		return err
 	}
-	txn, err := exec.txnFactory()
+	txn, err := getTxn(exec.ctx, exec.txnEngine, exec.cnTxnClient, "setISCPLogTableID")
 	if err != nil {
 		return err
 	}
@@ -267,7 +249,15 @@ func (exec *ISCPTaskExecutor) initStateLocked() {
 	exec.worker = worker
 	exec.ctx = ctx
 	exec.cancel = cancel
-	exec.replay(exec.ctx)
+	err := retry(
+		func() error {
+			return exec.replay(exec.ctx)
+		},
+		exec.option.RetryTimes,
+	)
+	if err != nil {
+		panic(err)
+	}
 	exec.wg.Add(1)
 
 }
@@ -339,7 +329,6 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 					zap.Error(err),
 				)
 				getDirtyTablesFailed = true
-				err = nil
 			}
 			// run iterations with dirty table
 			// update watermark for clean tables
@@ -447,7 +436,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		for i := 0; i < insertData.RowCount(); i++ {
 
 			if dropAtVector.IsNull(uint64(i)) {
-				retry(
+				err = retry(
 					func() error {
 						return exec.addOrUpdateJob(
 							accountIDs[i],
@@ -460,13 +449,19 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 					},
 					exec.option.RetryTimes,
 				)
+				if err != nil {
+					return
+				}
 			} else {
-				retry(
+				err = retry(
 					func() error {
 						return exec.deleteJob(accountIDs[i], tableIDs[i], jobNameVector.GetStringAt(i))
 					},
 					exec.option.RetryTimes,
 				)
+				if err != nil {
+					return
+				}
 			}
 		}
 	}
@@ -474,8 +469,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	return
 }
 
-func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
-	var err error
+func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 	jobCount := 0
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
@@ -491,7 +485,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 		)
 	}()
 	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
-	txn, err := exec.txnFactory()
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp replay")
 	if err != nil {
 		return
 	}
@@ -520,7 +514,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 				continue
 			}
 			jobCount++
-			retry(
+			err = retry(
 				func() error {
 					return exec.addOrUpdateJob(
 						accountIDs[i],
@@ -533,10 +527,14 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) {
 				},
 				exec.option.RetryTimes,
 			)
+			if err != nil {
+				return false
+			}
 		}
 		return true
 	})
-	exec.iscpLogWm = types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
+	exec.iscpLogWm = types.TimestampToTS(txn.SnapshotTS())
+	return
 }
 
 func (exec *ISCPTaskExecutor) addOrUpdateJob(
@@ -711,7 +709,7 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 }
 
 func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
-	txn, err := exec.txnFactory()
+	txn, err := getTxn(exec.ctx, exec.txnEngine, exec.cnTxnClient, "iscp gc")
 	if err != nil {
 		return err
 	}

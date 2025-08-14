@@ -17,8 +17,6 @@ package iscp
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
-	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -121,7 +118,6 @@ type ISCPTaskExecutor struct {
 	packer         *types.Packer
 	mp             *mpool.MPool
 	cnUUID         string
-	txnFactory     func() (client.TxnOperator, error)
 	txnEngine      engine.Engine
 	cnTxnClient    client.TxnClient
 	iscpLogTableID uint64
@@ -271,30 +267,6 @@ func (row AtomicBatchRow) Less(other AtomicBatchRow) bool {
 	return bytes.Compare(row.Pk, other.Pk) < 0
 }
 
-func (bat *AtomicBatch) RowCount() int {
-	c := 0
-	for _, b := range bat.Batches {
-		rows := 0
-		if b != nil && len(b.Vecs) > 0 {
-			rows = b.Vecs[0].Length()
-		}
-		c += rows
-	}
-
-	if c != bat.Rows.Len() {
-		logutil.Errorf("inconsistent row count, sum rows of batches: %d, rows of btree: %d\n", c, bat.Rows.Len())
-	}
-	return c
-}
-
-func (bat *AtomicBatch) Allocated() int {
-	size := 0
-	for _, b := range bat.Batches {
-		size += b.Allocated()
-	}
-	return size
-}
-
 func (bat *AtomicBatch) Append(
 	packer *types.Packer,
 	batch *batch.Batch,
@@ -387,28 +359,4 @@ func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
 
 func (iter *atomicBatchRowIter) Close() {
 	iter.iter.Release()
-}
-
-// JsonEncode encodes the object to json
-func JsonEncode(value any) (string, error) {
-	jbytes, err := json.Marshal(value)
-	if err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(jbytes), nil
-}
-
-// JsonDecode decodes the json bytes to objects
-func JsonDecode(jbytes string, value any) error {
-	jRawBytes, err := hex.DecodeString(jbytes)
-	if err != nil {
-		return err
-	}
-
-	err = json.Unmarshal(jRawBytes, value)
-	if err != nil {
-		return err
-	}
-	return nil
 }

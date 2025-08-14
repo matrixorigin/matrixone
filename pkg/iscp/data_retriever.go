@@ -31,15 +31,6 @@ func MarshalJobStatus(status *JobStatus) (string, error) {
 	return string(jsonBytes), nil
 }
 
-func UnmarshalJobStatus(jsonStr string) (*JobStatus, error) {
-	var status JobStatus
-	err := json.Unmarshal([]byte(jsonStr), &status)
-	if err != nil {
-		return nil, err
-	}
-	return &status, nil
-}
-
 func NewISCPData(
 	noMoreData bool,
 	insertBatch *AtomicBatch,

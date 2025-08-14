@@ -16,13 +16,8 @@ package iscp
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	cryptorand "crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"math"
-	"math/rand"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,7 +25,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -367,120 +361,11 @@ var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }
 
-const (
-	InitKeyId           = "4e3da275-5003-4ca0-8667-5d3cdbecdd35"
-	InsertDataKeyFormat = "replace into mo_catalog.mo_data_key (account_id, key_id, encrypted_key) values (%d, '%s', '%s')"
-)
-
-var AesKey string
-
-func AesCFBEncode(data []byte) (string, error) {
-	return aesCFBEncodeWithKey(data, []byte(AesKey))
-}
-
-func aesCFBEncodeWithKey(data []byte, aesKey []byte) (string, error) {
-	if len(aesKey) == 0 {
-		return "", moerr.NewInternalErrorNoCtx("AesKey is not initialized")
-	}
-
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return "", err
-	}
-
-	encoded := make([]byte, aes.BlockSize+len(data))
-	iv := encoded[:aes.BlockSize]
-	salt := generateSalt(aes.BlockSize)
-	copy(iv, salt)
-	stream := cipher.NewCTR(block, iv)
-	stream.XORKeyStream(encoded[aes.BlockSize:], data)
-	return hex.EncodeToString(encoded), nil
-}
-
-func AesCFBDecode(ctx context.Context, data string) (string, error) {
-	return AesCFBDecodeWithKey(ctx, data, []byte(AesKey))
-}
-
-var AesCFBDecodeWithKey = func(ctx context.Context, data string, aesKey []byte) (string, error) {
-	if len(aesKey) == 0 {
-		return "", moerr.NewInternalErrorNoCtx("AesKey is not initialized")
-	}
-
-	encodedData, err := hex.DecodeString(data)
-	if err != nil {
-		return "", err
-	}
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return "", err
-	}
-	if len(encodedData) < aes.BlockSize {
-		return "", moerr.NewInternalError(ctx, "encoded string is too short")
-	}
-	iv := encodedData[:aes.BlockSize]
-	encodedData = encodedData[aes.BlockSize:]
-	stream := cipher.NewCTR(block, iv)
-	stream.XORKeyStream(encodedData, encodedData)
-	return string(encodedData), nil
-}
-
-func generateSalt(n int) []byte {
-	buf := make([]byte, n)
-	r := rand.New(rand.NewSource(time.Now().UTC().UnixNano()))
-	r.Read(buf)
-	for i := 0; i < n; i++ {
-		buf[i] &= 0x7f
-		if buf[i] == 0 || buf[i] == '$' {
-			buf[i]++
-		}
-	}
-	return buf
-}
-
-var (
-	encrypt        = aesCFBEncodeWithKey
-	cryptoRandRead = cryptorand.Read
-)
-
-func GetInitDataKeySql(kek string) (_ string, err error) {
-	aesKey := make([]byte, 32)
-	if _, err = cryptoRandRead(aesKey); err != nil {
-		return
-	}
-
-	encryptedKey, err := encrypt(aesKey, []byte(kek))
-	if err != nil {
-		return
-	}
-
-	return fmt.Sprintf(InsertDataKeyFormat, catalog.System_Account, InitKeyId, encryptedKey), nil
-}
-
 func batchRowCount(bat *batch.Batch) int {
 	if bat == nil || len(bat.Vecs) == 0 {
 		return 0
 	}
 	return bat.Vecs[0].Length()
-}
-
-// AddSingleQuotesJoin [a, b, c] -> 'a','b','c'
-func AddSingleQuotesJoin(s []string) string {
-	if len(s) == 0 {
-		return ""
-	}
-	return "'" + strings.Join(s, "','") + "'"
-}
-
-func GenDbTblKey(dbName, tblName string) string {
-	return dbName + "." + tblName
-}
-
-func SplitDbTblKey(dbTblKey string) (dbName, tblName string) {
-	s := strings.Split(dbTblKey, ".")
-	if len(s) != 2 {
-		return
-	}
-	return s[0], s[1]
 }
 
 func getTxn(

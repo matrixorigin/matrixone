@@ -1393,15 +1393,11 @@ func TestISCPExecutor1(t *testing.T) {
 	txn.Commit(ctxWithTimeout)
 
 	// init cdc executor
-	txnFactory := func() (client.TxnOperator, error) {
-		return disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
-	}
 	cdcExecutor, err := iscp.NewISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		txnFactory,
 		&iscp.ISCPExecutorOption{
 			GCInterval:             time.Hour,
 			GCTTL:                  time.Hour,
@@ -1554,7 +1550,6 @@ func TestISCPExecutor2(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		nil,
 		opts,
 		common.DebugAllocator,
 	)
@@ -1733,7 +1728,6 @@ func TestISCPExecutor3(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		nil,
 		&iscp.ISCPExecutorOption{
 			SyncTaskInterval:       time.Millisecond * 10,
 			FlushWatermarkInterval: time.Hour,
@@ -1950,7 +1944,6 @@ func TestISCPExecutor4(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		nil,
 		&iscp.ISCPExecutorOption{
 			SyncTaskInterval:       time.Millisecond * 10,
 			FlushWatermarkInterval: time.Hour,
@@ -2145,7 +2138,6 @@ func TestISCPExecutor5(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		nil,
 		&iscp.ISCPExecutorOption{
 			SyncTaskInterval:       time.Millisecond * 10,
 			FlushWatermarkInterval: time.Hour,
@@ -2281,7 +2273,6 @@ func TestISCPExecutor6(t *testing.T) {
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		nil,
 		&iscp.ISCPExecutorOption{
 			SyncTaskInterval:       time.Millisecond * 10,
 			FlushWatermarkInterval: time.Hour,
@@ -2378,15 +2369,11 @@ func TestISCPExecutor7(t *testing.T) {
 	txn.Commit(ctxWithTimeout)
 
 	// init cdc executor
-	txnFactory := func() (client.TxnOperator, error) {
-		return disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
-	}
 	cdcExecutor, err := iscp.NewISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		txnFactory,
 		&iscp.ISCPExecutorOption{
 			GCInterval:             time.Hour,
 			GCTTL:                  time.Hour,
@@ -2485,15 +2472,11 @@ func TestISCPExecutor8(t *testing.T) {
 	txn.Commit(ctxWithTimeout)
 
 	// init cdc executor
-	txnFactory := func() (client.TxnOperator, error) {
-		return disttaeEngine.NewTxnOperator(ctxWithTimeout, disttaeEngine.Engine.LatestLogtailAppliedTime())
-	}
 	cdcExecutor, err := iscp.NewISCPTaskExecutor(
 		ctxWithTimeout,
 		disttaeEngine.Engine,
 		disttaeEngine.GetTxnClient(),
 		"",
-		txnFactory,
 		&iscp.ISCPExecutorOption{
 			GCInterval:             time.Hour,
 			GCTTL:                  time.Hour,
