@@ -103,3 +103,18 @@ func (o *OllamaClient) Chat(ctx context.Context, prompt string) (string, error) 
 	}
 	return o.ChatMsg(ctx, messages)
 }
+
+func (o *OllamaClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	if o.llm == nil {
+		return nil, moerr.NewInvalidInputf(ctx, "ollama client not initialized")
+	}
+
+	ret, err := o.llm.CreateEmbedding(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	if len(ret) == 0 {
+		return nil, moerr.NewInternalError(ctx, "no response from ollama")
+	}
+	return ret[0], nil
+}

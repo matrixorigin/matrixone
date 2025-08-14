@@ -17,6 +17,7 @@ package llm
 import (
 	"context"
 
+	"github.com/cespare/xxhash"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -51,4 +52,11 @@ func (c *MockClient) Chat(ctx context.Context, prompt string) (string, error) {
 		return "", err
 	}
 	return c.ChatMsg(ctx, messages)
+}
+
+func (c *MockClient) CreateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	ret := make([]float32, 2)
+	ret[0] = float32(len(text))
+	ret[1] = float32(xxhash.Sum64([]byte(text))) / 1e10
+	return ret, nil
 }

@@ -40,6 +40,7 @@ type Message struct {
 type LLMClient interface {
 	ChatMsg(ctx context.Context, messages []Message) (string, error)
 	Chat(ctx context.Context, prompt string) (string, error)
+	CreateEmbedding(ctx context.Context, text string) ([]float32, error)
 }
 
 func NewLLMClient(server string, addr string, model string, options string) (LLMClient, error) {
