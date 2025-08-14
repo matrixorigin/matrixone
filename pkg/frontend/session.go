@@ -603,6 +603,7 @@ func NewSession(
 	ses.proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	ses.proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
+	ses.proc.Base.Lim.SpillThreshold = pu.SV.ProcessLimitationSpillThreshold
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
