@@ -299,7 +299,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 			return
 		case <-syncTaskTrigger.C:
 			// apply iscp log
-			from := exec.iscpLogWm
+			from := exec.iscpLogWm.Next()
 			to := types.TimestampToTS(exec.txnEngine.LatestLogtailAppliedTime())
 			err := exec.applyISCPLog(exec.ctx, from, to)
 			if err != nil {
@@ -354,6 +354,10 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 					}
 					err := exec.worker.Submit(iter)
 					if err != nil {
+						for _, jobName := range iter.jobNames {
+							job := table.jobs[jobName]
+							job.state = ISCPJobState_Completed
+						}
 						logutil.Error(
 							"ISCP-Task submit iteration failed",
 							zap.Error(err),
@@ -433,18 +437,45 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
 		watermarkVector := insertData.Vecs[5]
 		dropAtVector := insertData.Vecs[8]
+		commitTSVector := insertData.Vecs[10]
+		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVector)
+		type job struct {
+			ts     types.TS
+			offset int
+		}
+		type jobName struct {
+			accountID uint32
+			tableID   uint64
+			jobName   string
+		}
+		jobMap := make(map[jobName]job)
 		for i := 0; i < insertData.RowCount(); i++ {
-
-			if dropAtVector.IsNull(uint64(i)) {
+			jobName := jobName{
+				accountID: accountIDs[i],
+				tableID:   tableIDs[i],
+				jobName:   jobNameVector.GetStringAt(i),
+			}
+			if job, ok := jobMap[jobName]; ok {
+				if job.ts.GT(&commitTSs[i]) {
+					continue
+				}
+			}
+			jobMap[jobName] = job{
+				ts:     commitTSs[i],
+				offset: i,
+			}
+		}
+		for _, job := range jobMap {
+			if dropAtVector.IsNull(uint64(job.offset)) {
 				err = retry(
 					func() error {
 						return exec.addOrUpdateJob(
-							accountIDs[i],
-							tableIDs[i],
-							jobNameVector.GetStringAt(i),
-							states[i],
-							watermarkVector.GetStringAt(i),
-							jobSpecVector.GetBytesAt(i),
+							accountIDs[job.offset],
+							tableIDs[job.offset],
+							jobNameVector.GetStringAt(job.offset),
+							states[job.offset],
+							watermarkVector.GetStringAt(job.offset),
+							jobSpecVector.GetBytesAt(job.offset),
 						)
 					},
 					exec.option.RetryTimes,
@@ -455,7 +486,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 			} else {
 				err = retry(
 					func() error {
-						return exec.deleteJob(accountIDs[i], tableIDs[i], jobNameVector.GetStringAt(i))
+						return exec.deleteJob(accountIDs[job.offset], tableIDs[job.offset], jobNameVector.GetStringAt(job.offset))
 					},
 					exec.option.RetryTimes,
 				)

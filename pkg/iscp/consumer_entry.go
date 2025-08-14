@@ -49,8 +49,8 @@ func NewJobEntry(
 }
 
 func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8) {
-	if watermark.LE(&jobEntry.watermark) {
-		return
+	if watermark.LT(&jobEntry.watermark) {
+		panic(fmt.Sprintf("watermark %v < %v, current state %d, incoming state %d, job %v", watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.jobName))
 	}
 	jobEntry.jobSpec = &jobSpec.TriggerSpec
 	jobEntry.persistedWatermark = watermark

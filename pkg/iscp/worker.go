@@ -71,14 +71,14 @@ func (w *worker) onItem(items ...any) {
 				iterCtx,
 				w.mp,
 			)
+			if err == nil {
+				break
+			}
 			logutil.Error(
 				"ISCP-Task execute iteration failed",
 				zap.Any("iterCtx", iterCtx.jobNames),
 				zap.Error(err),
 			)
-			if err == nil {
-				break
-			}
 		}
 	}
 }

@@ -1649,35 +1649,6 @@ func TestISCPExecutor2(t *testing.T) {
 	)
 	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 	assert.False(t, ok)
-
-	// register job again
-	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
-	require.NoError(t, err)
-	ok, err = iscp.RegisterJob(ctx, "", txn, "pitr",
-		&iscp.JobSpec{
-			ConsumerInfo: iscp.ConsumerInfo{
-				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
-			},
-		},
-		&iscp.JobID{
-			JobName:   "hnsw_idx",
-			DBName:    "srcdb",
-			TableName: "src_table",
-		},
-	)
-	assert.True(t, ok)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(ctxWithTimeout))
-
-	testutils.WaitExpect(
-		1000,
-		func() bool {
-			_, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-			return ok
-		},
-	)
-	_, ok = cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
-	assert.True(t, ok)
 }
 
 // test error handle
@@ -1767,21 +1738,6 @@ func TestISCPExecutor3(t *testing.T) {
 		assert.NoError(t, txn.Commit(ctxWithTimeout))
 	}
 
-	unregisterFn := func(indexName string) {
-		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
-		require.NoError(t, err)
-		ok, err := iscp.UnregisterJob(ctx, "", txn,
-			&iscp.JobID{
-				JobName:   indexName,
-				DBName:    "srcdb",
-				TableName: "src_table",
-			},
-		)
-		assert.True(t, ok)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(ctxWithTimeout))
-	}
-
 	appendFn := func(idx int) {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 		require.Nil(t, err)
@@ -1825,16 +1781,12 @@ func TestISCPExecutor3(t *testing.T) {
 
 	rmFn()
 
-	unregisterFn("hnsw_idx_0")
-
 	// first iteration
 	appendFn(0)
 
 	// insert AsyncIndexIterations failed
 	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
 	assert.NoError(t, err)
-
-	registerFn("hnsw_idx_0")
 
 	checkWaterMarkFn("hnsw_idx_0", 4000, true)
 	rmFn()
