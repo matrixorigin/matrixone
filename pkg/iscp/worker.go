@@ -55,23 +55,7 @@ func (w *worker) Submit(iteration *IterationContext) error {
 	for i := range status {
 		status[i] = &JobStatus{}
 	}
-	err := FlushJobStatusOnIterationState(
-		context.Background(),
-		w.cnUUID,
-		w.cnEngine,
-		w.cnTxnClient,
-		iteration.accountID,
-		iteration.tableID,
-		iteration.jobNames,
-		status,
-		iteration.fromTS,
-		ISCPJobState_Pending,
-	)
-	// w-w with unregister/register job
-	if err != nil {
-		return err
-	}
-	_, err = w.queue.Enqueue(iteration)
+	_, err := w.queue.Enqueue(iteration)
 	return err
 }
 

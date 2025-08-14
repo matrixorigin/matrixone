@@ -49,6 +49,9 @@ func NewJobEntry(
 }
 
 func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8) {
+	if watermark.LE(&jobEntry.watermark) {
+		return
+	}
 	jobEntry.jobSpec = &jobSpec.TriggerSpec
 	jobEntry.persistedWatermark = watermark
 	jobEntry.watermark = watermark

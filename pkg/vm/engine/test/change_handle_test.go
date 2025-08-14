@@ -2030,7 +2030,7 @@ func TestISCPExecutor4(t *testing.T) {
 	assert.NoError(t, err)
 	appendFn(2)
 	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, true)
 	}
 	rmFn()
 

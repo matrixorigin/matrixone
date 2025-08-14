@@ -368,7 +368,14 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				} else {
 					_, ok = tables[iter.tableID]
 				}
+				table, ok2 := exec.getTable(iter.accountID, iter.tableID)
 				if ok {
+					// The update on mo_iscp_log may not be available in the next applyISCPLog,
+					// so update the in-memory state directly to prevent repeated triggering of the iteration.
+					for _, jobName := range iter.jobNames {
+						job := table.jobs[jobName]
+						job.state = ISCPJobState_Pending
+					}
 					err := exec.worker.Submit(iter)
 					if err != nil {
 						logutil.Error(
@@ -377,8 +384,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 						)
 					}
 				} else {
-					table, ok := exec.getTable(iter.accountID, iter.tableID)
-					if !ok {
+					if !ok2 {
 						logutil.Error(
 							"ISCP-Task get table failed",
 							zap.Uint32("accountID", iter.accountID),
