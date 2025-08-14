@@ -390,14 +390,3 @@ func getTxn(
 	}
 	return op, nil
 }
-
-var finishTxnOp = func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
-	//same timeout value as it in frontend
-	ctx2, cancel := context.WithTimeoutCause(ctx, cnEngine.Hints().CommitOrRollbackTimeout, moerr.CauseFinishTxnOp)
-	defer cancel()
-	if inputErr != nil {
-		_ = txnOp.Rollback(ctx2)
-	} else {
-		_ = txnOp.Commit(ctx2)
-	}
-}
