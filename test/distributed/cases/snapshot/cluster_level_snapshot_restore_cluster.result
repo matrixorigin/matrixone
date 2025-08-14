@@ -444,7 +444,7 @@ insert into t3 values (1,6),(2,6),(3,6);
 show tables;
 Tables_in_mo_catalog
 mo_account
-mo_intra_system_change_propagation_log
+mo_iscp_log
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -558,7 +558,7 @@ a    account_id
 show tables;
 Tables_in_mo_catalog
 mo_account
-mo_intra_system_change_propagation_log
+mo_iscp_log
 mo_cache
 mo_cdc_task
 mo_cdc_watermark

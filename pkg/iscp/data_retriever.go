@@ -79,7 +79,6 @@ const (
 )
 
 type DataRetrieverImpl struct {
-	offset    int
 	accountID uint32
 	tableID   uint64
 	jobName   string

@@ -192,20 +192,6 @@ func (exec *ISCPTaskExecutor) setISCPLogTableID(ctx context.Context) (err error)
 	exec.iscpLogTableID = tableID
 	return nil
 }
-func (exec *ISCPTaskExecutor) subscribeMOISCPLog(ctx context.Context) (err error) {
-	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
-	txn, err := exec.txnFactory()
-	if err != nil {
-		return err
-	}
-	defer txn.Commit(ctx)
-	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
-	if err != nil {
-		return err
-	}
-	defer result.Close()
-	return nil
-}
 
 type RpcHandleFn func(
 	ctx context.Context,
@@ -353,6 +339,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 					zap.Error(err),
 				)
 				getDirtyTablesFailed = true
+				err = nil
 			}
 			// run iterations with dirty table
 			// update watermark for clean tables
@@ -652,21 +639,6 @@ func (exec *ISCPTaskExecutor) deleteJob(
 	return
 }
 
-func (exec *ISCPTaskExecutor) getRelation(
-	ctx context.Context,
-	txnOp client.TxnOperator,
-	dbName, tableName string,
-) (table engine.Relation, err error) {
-	var db engine.Database
-	if db, err = exec.txnEngine.Database(ctx, dbName, txnOp); err != nil {
-		return
-	}
-
-	if table, err = db.Relation(ctx, tableName, nil); err != nil {
-		return
-	}
-	return
-}
 func (exec *ISCPTaskExecutor) getTableByID(ctx context.Context, tableID uint64) (table engine.Relation, txn client.TxnOperator, err error) {
 	txn, err = exec.txnFactory()
 	if err != nil {

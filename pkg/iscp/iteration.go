@@ -36,6 +36,13 @@ import (
 	"go.uber.org/zap"
 )
 
+type DataRetrieverConsumer interface {
+	DataRetriever
+	SetNextBatch(*ISCPData)
+	SetError(error)
+	Close()
+}
+
 func ExecuteIteration(
 	ctx context.Context,
 	cnUUID string,
@@ -51,16 +58,17 @@ func ExecuteIteration(
 	ctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
 	rel, txnOp, err := GetRelation(
-		ctx,
 		cnEngine,
 		cnTxnClient,
 		iterCtx.accountID,
 		iterCtx.tableID,
 	)
+	if txnOp != nil {
+		defer txnOp.Commit(ctx)
+	}
 	if err != nil {
 		return
 	}
-	defer txnOp.Commit(ctx)
 	tableDef := rel.CopyTableDef(ctx)
 	dbName := tableDef.DbName
 	tableName := tableDef.Name
@@ -90,13 +98,15 @@ func ExecuteIteration(
 	}
 
 	changes, err := CollectChanges(ctx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
+	if changes != nil {
+		defer changes.Close()
+	}
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		return
 	}
-	defer changes.Close()
 
 	consumers := make([]Consumer, len(jobSpecs))
 	for i := range jobSpecs {
@@ -420,7 +430,6 @@ func GetJobSpecs(
 }
 
 func GetRelation(
-	ctx context.Context,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	accountID uint32,
