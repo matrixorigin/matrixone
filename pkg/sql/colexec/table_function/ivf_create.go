@@ -17,7 +17,6 @@ package table_function
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -47,16 +46,15 @@ const (
 )
 
 var (
-	ClusterCentersSupportTypes = []types.T{
-		types.T_array_float32, types.T_array_float64,
-	}
-
 	ivf_runSql = sqlexec.RunSql
 )
 
+func IsClusterCentersSupportedType(t types.T) bool {
+	return t == types.T_array_float32 || t == types.T_array_float64
+}
+
 type ivfCreateState struct {
 	inited       bool
-	param        vectorindex.IvfParam
 	tblcfg       vectorindex.IndexTableConfig
 	idxcfg       vectorindex.IndexConfig
 	data32       [][]float32
@@ -190,70 +188,49 @@ func ivfCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
-func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+func (u *ivfCreateState) start(
+	tf *TableFunction,
+	proc *process.Process,
+	nthRow int,
+	analyzer process.Analyzer,
+) (err error) {
 
 	if !u.inited {
-		if len(tf.Params) > 0 {
-			err = json.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
-				return err
-			}
+		if err = InitIVFCfgFromParam(tf.Params, &u.idxcfg); err != nil {
+			return
 		}
-
-		if len(u.param.Lists) > 0 {
-			val, err := strconv.Atoi(u.param.Lists)
-			if err != nil {
-				return err
-			}
-			u.idxcfg.Ivfflat.Lists = uint(val)
-		} else {
-			return moerr.NewInternalError(proc.Ctx, "invalid lists must be > 0")
-		}
-
-		u.idxcfg.Ivfflat.InitType = uint16(kmeans.KmeansPlusPlus)
-		//u.idxcfg.Ivfflat.InitType = uint16(kmeans.Random)
-
-		metrictype, ok := metric.OpTypeToIvfMetric[u.param.OpType]
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "invalid optype")
-		}
-		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
-		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			err = moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			return
 		}
 		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			return
 		}
 		cfgstr := cfgVec.UnsafeGetStringAt(0)
 		if len(cfgstr) == 0 {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+			return
 		}
-		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
-		if err != nil {
-			return err
+		if err = json.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+			return
 		}
 
 		// support both vecf32 and vecf64
 		f32aVec := tf.ctr.argVecs[1]
-		supported := false
-		for _, t := range ClusterCentersSupportTypes {
-			if f32aVec.GetType().Oid == t {
-				supported = true
-				break
-			}
+		if !IsClusterCentersSupportedType(f32aVec.GetType().Oid) {
+			err = moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
+			return
 		}
-		if !supported {
-			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
-		}
-		dimension := f32aVec.GetType().Width
-
 		// dimension
+		dimension := f32aVec.GetType().Width
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
-		u.idxcfg.Type = "ivfflat"
+
+		u.idxcfg.Ivfflat.InitType = uint16(kmeans.KmeansPlusPlus)
+		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
 		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)

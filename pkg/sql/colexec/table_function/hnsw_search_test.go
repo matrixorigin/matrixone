@@ -19,6 +19,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -62,7 +63,9 @@ var (
 	}
 )
 
-func newHnswSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) hnswSearchTestCase {
+func newHnswSearchTestCase(
+	t *testing.T, m *mpool.MPool, attrs []string, param string,
+) (hnswSearchTestCase, error) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
@@ -72,6 +75,13 @@ func newHnswSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 				break
 			}
 		}
+	}
+
+	indexParam, err := catalog.IndexAlgoJsonParamStringToIndexParams(
+		"hnsw", param,
+	)
+	if err != nil {
+		return hnswSearchTestCase{}, err
 	}
 
 	ret := hnswSearchTestCase{
@@ -87,10 +97,10 @@ func newHnswSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 					IsLast:  false,
 				},
 			},
-			Params: []byte(param),
+			Params: []byte(indexParam),
 		},
 	}
-	return ret
+	return ret, nil
 }
 
 type MockSearch struct {
@@ -124,14 +134,15 @@ func TestHnswSearch(t *testing.T) {
 	newHnswAlgo = newMockAlgoFn
 
 	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	ut, err := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	require.NoError(t, err)
 
 	inbat := makeBatchHnswSearch(ut.proc)
 
 	ut.arg.Args = makeConstInputExprsHnswSearch()
 
 	// Prepare
-	err := ut.arg.Prepare(ut.proc)
+	err = ut.arg.Prepare(ut.proc)
 	require.Nil(t, err)
 
 	for i := range ut.arg.ctr.executorsForArgs {
@@ -172,25 +183,8 @@ func TestHnswSearchParamFail(t *testing.T) {
 	newHnswAlgo = newMockAlgoFn
 
 	for _, param := range failedsearchparam {
-		ut := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
-
-		inbat := makeBatchHnswSearch(ut.proc)
-
-		ut.arg.Args = makeConstInputExprsHnswSearch()
-
-		// Prepare
-		err := ut.arg.Prepare(ut.proc)
-		require.Nil(t, err)
-
-		for i := range ut.arg.ctr.executorsForArgs {
-			ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-			require.Nil(t, err)
-		}
-
-		// start
-		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-		require.NotNil(t, err)
-		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
+		_, err := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+		require.Error(t, err)
 	}
 
 	/*
@@ -216,7 +210,8 @@ func TestHnswSearchIndexTableConfigFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 
-	ut := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	ut, err := newHnswSearchTestCase(t, mpool.MustNewZero(), hnswsearchdefaultAttrs, param)
+	require.NoError(t, err)
 	failbatches := makeBatchHnswSearchFail(ut.proc)
 	for _, b := range failbatches {
 
@@ -224,7 +219,7 @@ func TestHnswSearchIndexTableConfigFail(t *testing.T) {
 		ut.arg.Args = b.args
 
 		// Prepare
-		err := ut.arg.Prepare(ut.proc)
+		err = ut.arg.Prepare(ut.proc)
 		require.Nil(t, err)
 
 		for i := range ut.arg.ctr.executorsForArgs {

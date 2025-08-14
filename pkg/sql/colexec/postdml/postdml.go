@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -131,9 +132,17 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 		}
 
 		if postdml.PostDmlCtx.IsInsert {
-			sql := fmt.Sprintf(fulltextInsertSqlFmt, indextbl, sourcetbl, alias,
-				ftctx.AlgoParams, pkcolname, strings.Join(parts, ", "),
-				pkcolname, values)
+			sql := fmt.Sprintf(
+				fulltextInsertSqlFmt,
+				indextbl,
+				sourcetbl,
+				alias,
+				catalog.IndexParamsStrToJsonParamString(ftctx.AlgoParams),
+				pkcolname,
+				strings.Join(parts, ", "),
+				pkcolname,
+				values,
+			)
 			//logutil.Infof("POST INSERT SQL : %s", sql)
 			proc.Base.PostDmlSqlList.Append(sql)
 		}

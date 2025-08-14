@@ -679,30 +679,24 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
 					switch catalog.ToLower(indexAlgo) {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
-						// 1. Get old AlgoParams
-						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
-						if err != nil {
-							return err
-						}
-						// 2.a update AlgoParams for the index to be re-indexed
-						// NOTE: this will throw error if the algo type is not supported for reindex.
-						// So Step 4. will not be executed if error is thrown here.
-						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
-
-						// 2.b generate new AlgoParams string
-						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-						if err != nil {
-							return err
-						}
+						newIndexParams := catalog.BuildIndexParamsIVFFLATV1(
+							tableAlterIndex.IndexAlgoParamList,
+							catalog.StringToIndexParamAlgoType(indexAlgo),
+						)
 
 						// 3.a Update IndexDef and TableDef
-						alterIndex.IndexAlgoParams = newAlgoParams
-						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+						alterIndex.IndexAlgoParams = string(newIndexParams)
+						oTableDef.Indexes[i].IndexAlgoParams = string(newIndexParams)
 
 						// 3.b Update mo_catalog.mo_indexes
-						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						err = c.runSql(updateSql)
-						if err != nil {
+						updateSql := fmt.Sprintf(
+							updateMoIndexesAlgoParams,
+							newIndexParams.ToJsonParamString(),
+							oTableDef.TblId,
+							alterIndex.IndexName,
+						)
+						// PXU TODO: Test
+						if err = c.runSql(updateSql); err != nil {
 							return err
 						}
 

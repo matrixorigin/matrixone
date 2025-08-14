@@ -17,6 +17,7 @@ package table_function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -75,6 +76,11 @@ func newFTTTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) 
 		}
 	}
 
+	indexParam, err := catalog.IndexAlgoJsonParamStringToIndexParams(
+		"fulltext", param,
+	)
+	require.NoErrorf(t, err, "param: %s", param)
+
 	ret := fulltextTokenizeTestCase{
 		proc: proc,
 		arg: &TableFunction{
@@ -88,7 +94,7 @@ func newFTTTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) 
 					IsLast:  false,
 				},
 			},
-			Params: []byte(param),
+			Params: []byte(indexParam),
 		},
 	}
 	return ret

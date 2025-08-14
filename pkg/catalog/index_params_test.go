@@ -191,7 +191,7 @@ func TestIndexParams_AlgoJsonParamStringToIndexParams_FullText(t *testing.T) {
 	require.Equal(t, IndexFullTextParserType_Default, params.ParserType())
 
 	// 8. fulltext, non-empty json param, valid parser name --> no error
-	params, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser": "json"}`)
+	params, err = IndexAlgoJsonParamStringToIndexParams("fulltext", `{"parser": "json_value"}`)
 	require.NoError(t, err)
 	require.Falsef(t, params.IsEmpty(), "params: %s", params.String())
 	require.Equal(t, IndexFullTextParserType_JSONValue, params.ParserType())
@@ -327,4 +327,48 @@ func TestIndexParams_AlgoJsonParamStringToIndexParams_HNSW(t *testing.T) {
 	// 12. hnsw, non-empty json param, invalid ef_construction value --> error
 	_, err = IndexAlgoJsonParamStringToIndexParams("hnsw", `{"m": "100", "ef_construction": "invalid", "op_type": "vector_l2_ops"}`)
 	require.Error(t, err)
+}
+
+func TestIndexParams_ToStringList(t *testing.T) {
+	var params IndexParams
+	res, err := params.ToStringList()
+	require.NoError(t, err)
+	require.Equal(t, "", res)
+
+	params = BuildIndexParamsFullTextV1(
+		IndexFullTextParserType_Ngram,
+	)
+	res, err = params.ToStringList()
+	require.NoError(t, err)
+	require.Equal(t, " PARSER ngram ", res)
+
+	params = BuildIndexParamsIVFFLATV1(
+		10,
+		IndexParamAlgoType_CosineDistance,
+	)
+	res, err = params.ToStringList()
+	require.NoError(t, err)
+	require.Equal(t, " lists = 10  op_type = vector_cosine_ops ", res)
+
+	params = BuildIndexParamsHNSWV1(
+		IndexParamAlgoType_L2Distance,
+		10,
+		0,
+		1000,
+		IndexParamQuantizationType_F32,
+	)
+	res, err = params.ToStringList()
+	require.NoError(t, err)
+	require.Equal(t, " m = 10  ef_search = 1000  quantization = F32  op_type = vector_l2_ops ", res)
+
+	params = BuildIndexParamsHNSWV1(
+		IndexParamAlgoType_InnerProduct,
+		10,
+		100,
+		1000,
+		IndexParamQuantizationType_I8,
+	)
+	res, err = params.ToStringList()
+	require.NoError(t, err)
+	require.Equal(t, " m = 10  ef_construction = 100  ef_search = 1000  quantization = I8  op_type = vector_ip_ops ", res)
 }

@@ -19,6 +19,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,7 +53,12 @@ var (
 	}
 )
 
-func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) hnswCreateTestCase {
+func newHnswCreateTestCase(
+	t *testing.T,
+	m *mpool.MPool,
+	attrs []string,
+	param string,
+) (hnswCreateTestCase, error) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
@@ -62,6 +68,13 @@ func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 				break
 			}
 		}
+	}
+
+	indexParam, err := catalog.IndexAlgoJsonParamStringToIndexParams(
+		"hnsw", param,
+	)
+	if err != nil {
+		return hnswCreateTestCase{}, err
 	}
 
 	ret := hnswCreateTestCase{
@@ -77,10 +90,10 @@ func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 					IsLast:  false,
 				},
 			},
-			Params: []byte(param),
+			Params: []byte(indexParam),
 		},
 	}
-	return ret
+	return ret, nil
 }
 
 func mock_hnsw_runSql(proc *process.Process, sql string) (executor.Result, error) {
@@ -93,14 +106,15 @@ func TestHnswCreate(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 
 	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	ut, err := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	require.NoError(t, err)
 
 	inbat := makeBatchHnswCreate(ut.proc)
 
 	ut.arg.Args = makeConstInputExprsHnswCreate()
 
 	// Prepare
-	err := ut.arg.Prepare(ut.proc)
+	err = ut.arg.Prepare(ut.proc)
 	require.Nil(t, err)
 
 	for i := range ut.arg.ctr.executorsForArgs {
@@ -141,25 +155,10 @@ func TestHnswCreateParamFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 
 	for _, param := range failedparam {
-		ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
-
-		inbat := makeBatchHnswCreate(ut.proc)
-
-		ut.arg.Args = makeConstInputExprsHnswCreate()
-
-		// Prepare
-		err := ut.arg.Prepare(ut.proc)
-		require.Nil(t, err)
-
-		for i := range ut.arg.ctr.executorsForArgs {
-			ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-			require.Nil(t, err)
-		}
-
-		// start
-		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-		require.NotNil(t, err)
-		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
+		_, err := newHnswCreateTestCase(
+			t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param,
+		)
+		require.Error(t, err)
 	}
 
 	/*
@@ -185,7 +184,8 @@ func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	ut, err := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	require.NoError(t, err)
 	failbatches := makeBatchHnswCreateFail(ut.proc)
 	for _, b := range failbatches {
 

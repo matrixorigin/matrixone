@@ -17,9 +17,9 @@ package metric
 import (
 	"math"
 	"reflect"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type MetricType uint16
@@ -45,6 +45,7 @@ const (
 	Metric_CosineDistance
 	Metric_L1Distance
 	Metric_TypeCount
+	Metric_Invalid
 )
 
 var (
@@ -58,28 +59,23 @@ var (
 		DistFn_InnerProduct:   DistIntFn_InnerProduct,
 		DistFn_CosineDistance: DistIntFn_CosineDistance,
 	}
-
-	OpTypeToIvfMetric = map[string]MetricType{
-		OpType_L2Distance:     Metric_L2Distance,
-		OpType_InnerProduct:   Metric_InnerProduct,
-		OpType_CosineDistance: Metric_CosineDistance,
-		OpType_L1Distance:     Metric_L1Distance,
-	}
-
-	OpTypeToUsearchMetric = map[string]usearch.Metric{
-		OpType_L2Distance:     usearch.L2sq,
-		OpType_InnerProduct:   usearch.InnerProduct,
-		OpType_CosineDistance: usearch.Cosine,
-		/*
-			"vector_haversine_ops":  usearch.Haversine,
-			"vector_divergence_ops": usearch.Divergence,
-			"vector_pearson_ops":    usearch.Pearson,
-			"vector_hamming_ops":    usearch.Hamming,
-			"vector_tanimoto_ops":   usearch.Tanimoto,
-			"vector_sorensen_ops":   usearch.Sorensen,
-		*/
-	}
 )
+
+func GetIVFMetricType(opType string) (ret MetricType, ok bool) {
+	opType = strings.ToLower(opType)
+	switch opType {
+	case OpType_L2Distance:
+		return Metric_L2Distance, true
+	case OpType_InnerProduct:
+		return Metric_InnerProduct, true
+	case OpType_CosineDistance:
+		return Metric_CosineDistance, true
+	case OpType_L1Distance:
+		return Metric_L1Distance, true
+	default:
+		return Metric_Invalid, false
+	}
+}
 
 // DistanceFunction is a function that computes the distance between two vectors
 // NOTE: clusterer already ensures that the all the input vectors are of the same length,

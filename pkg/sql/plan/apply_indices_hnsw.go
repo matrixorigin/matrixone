@@ -56,13 +56,16 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 
 	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	params, err := catalog.TryToIndexParams(idxdef.IndexAlgoParams)
 	if err != nil {
 		return false
 	}
+	if !params.HNSWAlgo().IsValid() {
+		return false
+	}
 
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
+	optype := params.HNSWAlgo().String()
+	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
 		return false
 	}
 
@@ -143,13 +146,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	// JOIN between source table and hnsw_search table function
 	var exprs tree.Exprs
 
-	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(params, params, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(tblcfgstr, tblcfgstr, false, tree.P_char))
 
 	fnexpr := value.GetF()
 	f32vec := fnexpr.Args[0].GetLit().GetSval()
 
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
+	valExpr := &tree.CastExpr{Expr: tree.NewNumVal(f32vec, f32vec, false, tree.P_char),
 		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
 			FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 

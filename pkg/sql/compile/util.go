@@ -248,8 +248,12 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "'%s', ", algorithm_table_type)
 
 					//8. algorithm_params
-					var algorithm_params = indexDef.IndexAlgoParams
-					fmt.Fprintf(buffer, "'%s', ", algorithm_params)
+					if len(indexDef.IndexAlgoParams) > 0 {
+						params := catalog.MustIndexParams(indexDef.IndexAlgoParams)
+						fmt.Fprintf(buffer, "'%s', ", params.ToJsonParamString())
+					} else {
+						fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					}
 
 					// 9. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
@@ -506,26 +510,38 @@ func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef
 	return cstrDef
 }
 
-func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) []string {
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-	params := indexDef.IndexAlgoParams
-	tblname := indexDef.IndexTableName
+func genInsertIndexTableSqlForFullTextIndex(
+	originalTableDef *plan.TableDef,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+) []string {
+	var (
+		params    string
+		src_alias = "src"
+		pkColName = src_alias + "." + originalTableDef.Pkey.PkeyColName
+		tblname   = indexDef.IndexTableName
+		parts     = make([]string, 0, len(indexDef.Parts))
+	)
 
-	parts := make([]string, 0, len(indexDef.Parts))
+	if len(indexDef.IndexAlgoParams) > 0 {
+		params = catalog.MustIndexParams(indexDef.IndexAlgoParams).ToJsonParamString()
+	}
+
 	for _, p := range indexDef.Parts {
 		parts = append(parts, src_alias+"."+p)
 	}
 
 	concat := strings.Join(parts, ",")
 
-	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
+	sql := fmt.Sprintf(
+		insertIntoFullTextIndexTableFormat,
 		qryDatabase, tblname,
 		qryDatabase, originalTableDef.Name,
 		src_alias,
 		params,
 		pkColName,
-		concat)
+		concat,
+	)
 
 	return []string{sql}
 }

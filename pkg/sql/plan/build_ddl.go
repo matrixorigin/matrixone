@@ -1684,10 +1684,11 @@ func buildFullTextIndexTable(
 		if indexInfo.IndexOption != nil {
 			if indexInfo.IndexOption.ParserName != "" {
 				indexDef.Option = &plan.IndexOption{ParserName: indexInfo.IndexOption.ParserName, NgramTokenSize: int32(3)}
-				indexDef.IndexAlgoParams, err = catalog.IndexParamsToJsonString(indexInfo)
+				params, err := catalog.AstTreeToIndexParams(indexInfo)
 				if err != nil {
 					return err
 				}
+				indexDef.IndexAlgoParams = string(params)
 			}
 			if indexInfo.IndexOption.Comment != "" {
 				indexDef.Comment = indexInfo.IndexOption.Comment
@@ -1980,7 +1981,14 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 //	primary key __mo_index_idx_col,
 //
 // )
-func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildMasterSecondaryIndexDef(
+	ctx CompilerContext,
+	indexInfo *tree.Index,
+	colMap map[string]*ColDef,
+	pkeyName string,
+) (
+	[]*plan.IndexDef, []*TableDef, error,
+) {
 	// 1. indexDef init
 	indexDef := &plan.IndexDef{}
 	indexDef.Unique = false
@@ -2084,11 +2092,11 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := catalog.AstTreeToIndexParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
-		indexDef.IndexAlgoParams = params
+		indexDef.IndexAlgoParams = string(params)
 	} else {
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
@@ -2267,11 +2275,11 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 	if indexInfo.IndexOption != nil {
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := catalog.AstTreeToIndexParams(indexInfo)
 		if err != nil {
 			return nil, nil, err
 		}
-		indexDef.IndexAlgoParams = params
+		indexDef.IndexAlgoParams = string(params)
 	} else {
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
@@ -2910,11 +2918,11 @@ func CreateIndexDef(
 		indexDef.Comment = indexInfo.IndexOption.Comment
 
 		// Create params JSON string and set it
-		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		params, err := catalog.AstTreeToIndexParams(indexInfo)
 		if err != nil {
 			return nil, err
 		}
-		indexDef.IndexAlgoParams = params
+		indexDef.IndexAlgoParams = string(params)
 	} else {
 		// default indexInfo.IndexOption values
 		switch indexInfo.KeyType {
@@ -2925,11 +2933,7 @@ func CreateIndexDef(
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
 		case catalog.MoIndexIvfFlatAlgo:
-			var err error
-			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
-			if err != nil {
-				return nil, err
-			}
+			indexDef.IndexAlgoParams = string(catalog.DefaultIVFFLATV1Params())
 		case catalog.MoIndexHnswAlgo:
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""

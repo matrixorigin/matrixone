@@ -17,8 +17,8 @@ package table_function
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,14 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type hnswSearchState struct {
 	inited    bool
-	param     vectorindex.HnswParam
 	tblcfg    vectorindex.IndexTableConfig
 	idxcfg    vectorindex.IndexConfig
 	offset    int
@@ -116,84 +115,96 @@ func hnswSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, err
 
 }
 
+func InitHNSWCfgFromParam(
+	buf []byte,
+	cfg *vectorindex.IndexConfig,
+) (err error) {
+	if len(buf) == 0 {
+		return
+	}
+
+	params := catalog.IndexParams(buf)
+	if !params.IsHNSW() {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid hnsw params: %s", params.String(),
+		)
+		return
+	}
+
+	quantization := params.HNSWQuantization()
+	if !quantization.IsValid() {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid hnsw params: %s", params.String(),
+		)
+		return
+	}
+	cfg.Usearch.Quantization = usearch.Quantization(quantization)
+	opType := params.HNSWAlgo()
+	if !opType.IsValid() {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid hnsw params: %s", params.String(),
+		)
+		return
+	}
+	var ok bool
+	cfg.Type = "hnsw"
+	if cfg.Usearch.Metric, ok = catalog.GetUsearchMetricFromIndexParamAlgoType(opType); !ok {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid hnsw params: %s", params.String(),
+		)
+		return
+	}
+	cfg.Usearch.ExpansionAdd = uint(params.HNSWEfConstruction())
+	cfg.Usearch.ExpansionSearch = uint(params.HNSWEfSearch())
+	cfg.Usearch.Connectivity = uint(params.HNSWM())
+
+	return
+}
+
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
-func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+func (u *hnswSearchState) start(
+	tf *TableFunction,
+	proc *process.Process,
+	nthRow int,
+	analyzer process.Analyzer,
+) (err error) {
 
 	if !u.inited {
-		if len(tf.Params) > 0 {
-			err = json.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
-				return err
-			}
-		}
-
-		if len(u.param.Quantization) > 0 {
-			var ok bool
-			u.idxcfg.Usearch.Quantization, ok = vectorindex.QuantizationValid(u.param.Quantization)
-			if !ok {
-				return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
-			}
-		}
-
-		if len(u.param.M) > 0 {
-			val, err := strconv.Atoi(u.param.M)
-			if err != nil {
-				return err
-			}
-			u.idxcfg.Usearch.Connectivity = uint(val)
-		}
-
-		// default L2Sq
-		metrictype, ok := metric.OpTypeToUsearchMetric[u.param.OpType]
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
-		}
-		u.idxcfg.Usearch.Metric = metrictype
-
-		if len(u.param.EfConstruction) > 0 {
-			val, err := strconv.Atoi(u.param.EfConstruction)
-			if err != nil {
-				return err
-			}
-			u.idxcfg.Usearch.ExpansionAdd = uint(val)
-		}
-		// ef_search
-		if len(u.param.EfSearch) > 0 {
-			val, err := strconv.Atoi(u.param.EfSearch)
-			if err != nil {
-				return err
-			}
-			u.idxcfg.Usearch.ExpansionSearch = uint(val)
+		if err = InitHNSWCfgFromParam(tf.Params, &u.idxcfg); err != nil {
+			return
 		}
 
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			err = moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			return
 		}
+
 		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			return
 		}
 		cfgstr := cfgVec.UnsafeGetStringAt(0)
 		if len(cfgstr) == 0 {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+			return
 		}
-		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
-		if err != nil {
-			return err
+		if err = json.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+			return
 		}
 
 		// f32vec
 		f32aVec := tf.ctr.argVecs[1]
 		if f32aVec.GetType().Oid != types.T_array_float32 {
-			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
+			err = moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
+			return
 		}
 		dimension := f32aVec.GetType().Width
 
 		// dimension
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
-		u.idxcfg.Type = "hnsw"
 
 		u.batch = tf.createResultBatch()
 		u.inited = true

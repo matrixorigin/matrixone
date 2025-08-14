@@ -17,8 +17,8 @@ package table_function
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,14 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type ivfSearchState struct {
 	inited    bool
-	param     vectorindex.IvfParam
 	tblcfg    vectorindex.IndexTableConfig
 	idxcfg    vectorindex.IndexConfig
 	offset    int
@@ -131,71 +129,97 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 
 }
 
+func InitIVFCfgFromParam(
+	buf []byte,
+	cfg *vectorindex.IndexConfig,
+) (err error) {
+	if len(buf) == 0 {
+		return
+	}
+
+	params := catalog.IndexParams(buf)
+	if !params.IsIVFFLAT() {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid ivf params: %s", params.String(),
+		)
+		return
+	}
+
+	lists := params.IVFFLATList()
+	if lists < 1 {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid ivf params: %s", params.String(),
+		)
+		return
+	}
+	algo := params.IVFFLATAlgo()
+	if !algo.IsValid() {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid ivf params: %s", params.String(),
+		)
+		return
+	}
+
+	cfg.Type = "ivfflat"
+	cfg.Ivfflat.Lists = uint(lists)
+	cfg.Ivfflat.Metric = uint16(algo)
+	return
+}
+
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
-func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+func (u *ivfSearchState) start(
+	tf *TableFunction,
+	proc *process.Process,
+	nthRow int,
+	analyzer process.Analyzer,
+) (err error) {
 
 	if !u.inited {
-		if len(tf.Params) > 0 {
-			err = json.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
-				return err
-			}
+		if err = InitIVFCfgFromParam(tf.Params, &u.idxcfg); err != nil {
+			return
 		}
-
-		if len(u.param.Lists) > 0 {
-			lists, err := strconv.Atoi(u.param.Lists)
-			if err != nil {
-				return err
-			}
-			u.idxcfg.Ivfflat.Lists = uint(lists)
-		} else {
-			return moerr.NewInternalError(proc.Ctx, "Invalid Lists value")
-		}
-
-		metrictype, ok := metric.OpTypeToIvfMetric[u.param.OpType]
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "invalid optype")
-		}
-		u.idxcfg.Ivfflat.Metric = uint16(metrictype)
 
 		// IndexTableConfig
 		cfgVec := tf.ctr.argVecs[0]
 		if cfgVec.GetType().Oid != types.T_varchar {
-			return moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			err = moerr.NewInvalidInput(proc.Ctx, "First argument (IndexTableConfig must be a string")
+			return
 		}
 		if !cfgVec.IsConst() {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
+			return
 		}
 		cfgstr := cfgVec.UnsafeGetStringAt(0)
 		if len(cfgstr) == 0 {
-			return moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
+			return
 		}
-		err := json.Unmarshal([]byte(cfgstr), &u.tblcfg)
-		if err != nil {
-			return err
+		if err = json.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+			return
 		}
 
 		// f32vec
 		faVec := tf.ctr.argVecs[1]
 		if faVec.GetType().Oid != types.T_array_float32 && faVec.GetType().Oid != types.T_array_float64 {
-			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
+			err = moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
+			return
 		}
 
 		if int32(faVec.GetType().Oid) != u.tblcfg.KeyPartType {
-			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector type not match with source part type")
+			err = moerr.NewInvalidInput(proc.Ctx, "Second argument (vector type not match with source part type")
+			return
 		}
 
 		dimension := faVec.GetType().Width
 
 		// dimension
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
-		u.idxcfg.Type = "ivfflat"
 
 		// get version
-		version, err := getVersion(proc, u.tblcfg)
-		if err != nil {
-			return err
+		var version int64
+		if version, err = getVersion(proc, u.tblcfg); err != nil {
+			return
 		}
 		u.idxcfg.Ivfflat.Version = version                 // version from meta table
 		u.idxcfg.Ivfflat.VectorType = u.tblcfg.KeyPartType // array float32 or array float64

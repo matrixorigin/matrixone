@@ -17,7 +17,6 @@ package productl2
 import (
 	"bytes"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -42,20 +41,20 @@ func (productl2 *Productl2) OpType() vm.OpType {
 	return vm.ProductL2
 }
 
-func (productl2 *Productl2) Prepare(proc *process.Process) error {
+func (productl2 *Productl2) Prepare(proc *process.Process) (err error) {
 	if productl2.OpAnalyzer == nil {
 		productl2.OpAnalyzer = process.NewAnalyzer(productl2.GetIdx(), productl2.IsFirst, productl2.IsLast, "product_l2")
 	} else {
 		productl2.OpAnalyzer.Reset()
 	}
 
-	metrictype, ok := metric.OpTypeToIvfMetric[strings.ToLower(productl2.VectorOpType)]
-	if !ok {
-		return moerr.NewInternalError(proc.Ctx, "ProductL2: vector optype not found")
+	if metrictype, ok := metric.GetIVFMetricType(productl2.VectorOpType); ok {
+		productl2.ctr.metrictype = metrictype
+	} else {
+		err = moerr.NewInvalidInput(proc.Ctx, "ProductL2: vector optype not found")
 	}
-	productl2.ctr.metrictype = metrictype
 
-	return nil
+	return
 }
 
 func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {

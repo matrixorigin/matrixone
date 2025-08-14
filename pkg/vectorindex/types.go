@@ -54,21 +54,6 @@ type IndexTableConfig struct {
 	KmeansMaxIteration int64  `json:"kmeans_max_iteration"`
 }
 
-// HNSW specified parameters
-type HnswParam struct {
-	M              string `json:"m"`
-	EfConstruction string `json:"ef_construction"`
-	Quantization   string `json:"quantization"`
-	OpType         string `json:"op_type"`
-	EfSearch       string `json:"ef_search"`
-}
-
-// IVF specified parameters
-type IvfParam struct {
-	Lists  string `json:"lists"`
-	OpType string `json:"op_type"`
-}
-
 type IvfflatIndexConfig struct {
 	Lists      uint
 	Metric     uint16

@@ -105,16 +105,17 @@ func fulltextIndexTokenizePrepare(proc *process.Process, arg *TableFunction) (tv
 
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
-func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
+func (u *tokenizeState) start(
+	tf *TableFunction,
+	proc *process.Process,
+	nthRow int,
+	analyzer process.Analyzer,
+) (err error) {
 
 	if !u.inited {
-		if len(tf.Params) > 0 {
-			err := json.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
-				return err
-			}
+		if err = InitFulltextCfgFromParam(tf.Params, &u.param); err != nil {
+			return
 		}
-
 		u.batch = tf.createResultBatch()
 		u.doc = Document{Words: make([]FullTextEntry, 0, 512)}
 		u.inited = true
@@ -139,7 +140,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	}
 
 	if isnull {
-		return nil
+		return
 	}
 
 	switch u.param.Parser {
@@ -157,15 +158,14 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			//if tf.ctr.argVecs[i].GetType().Oid == types.T_datalink {
 			if types.T(tf.Args[i].Typ.Id) == types.T_datalink {
 				// datalink
-				dl, err := datalink.NewDatalink(data, proc)
-				if err != nil {
-					return err
+				var dl datalink.Datalink
+				if dl, err = datalink.NewDatalink(data, proc); err != nil {
+					return
 				}
-				b, err := dl.GetPlainText(proc)
-				if err != nil {
-					return err
+				var b []byte
+				if b, err = dl.GetPlainText(proc); err != nil {
+					return
 				}
-
 				c += string(b)
 			} else {
 				c += data
@@ -174,28 +174,28 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 		tok, _ := tokenizer.NewSimpleTokenizer([]byte(c))
 		for t := range tok.Tokenize() {
-
 			slen := t.TokenBytes[0]
 			word := string(t.TokenBytes[1 : slen+1])
-
-			u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: t.BytePos})
+			u.doc.Words = append(u.doc.Words, FullTextEntry{
+				DocId: id,
+				Word:  word,
+				Pos:   t.BytePos,
+			})
 		}
 
 	case "json":
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
-
 			var bj bytejson.ByteJson
 			//if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
 			if types.T(tf.Args[i].Typ.Id) == types.T_json {
-				if err := bj.Unmarshal(c); err != nil {
-					return err
+				if err = bj.Unmarshal(c); err != nil {
+					return
 				}
 			} else {
-
-				if err := json.Unmarshal(c, &bj); err != nil {
-					return err
+				if err = json.Unmarshal(c, &bj); err != nil {
+					return
 				}
 			}
 
@@ -208,7 +208,11 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 				for tt := range tok.Tokenize() {
 					tslen := tt.TokenBytes[0]
 					word := string(tt.TokenBytes[1 : tslen+1])
-					u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: word, Pos: joffset + voffset + tt.BytePos})
+					u.doc.Words = append(u.doc.Words, FullTextEntry{
+						DocId: id,
+						Word:  word,
+						Pos:   joffset + voffset + tt.BytePos,
+					})
 				}
 				voffset += int32(jslen)
 			}
@@ -220,17 +224,15 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		joffset := int32(0)
 		for i := 1; i < vlen; i++ {
 			c := tf.ctr.argVecs[i].GetRawBytesAt(nthRow)
-
 			var bj bytejson.ByteJson
 			//if tf.ctr.argVecs[i].GetType().Oid == types.T_json {
 			if types.T(tf.Args[i].Typ.Id) == types.T_json {
-				if err := bj.Unmarshal(c); err != nil {
-					return err
+				if err = bj.Unmarshal(c); err != nil {
+					return
 				}
 			} else {
-
-				if err := json.Unmarshal(c, &bj); err != nil {
-					return err
+				if err = json.Unmarshal(c, &bj); err != nil {
+					return
 				}
 			}
 
@@ -238,7 +240,11 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 			for t := range bj.TokenizeValue(false) {
 				jslen := t.TokenBytes[0]
 				value := string(t.TokenBytes[1 : jslen+1])
-				u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: value, Pos: joffset + voffset})
+				u.doc.Words = append(u.doc.Words, FullTextEntry{
+					DocId: id,
+					Word:  value,
+					Pos:   joffset + voffset,
+				})
 				voffset += int32(jslen)
 			}
 
@@ -246,12 +252,17 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 		}
 
 	default:
-		return moerr.NewInternalError(proc.Ctx, "Invalid fulltext parser")
+		err = moerr.NewInternalErrorNoCtx("invalid fulltext parser")
+		return
 	}
 
 	if len(u.doc.Words) > 0 {
-		u.doc.Words = append(u.doc.Words, FullTextEntry{DocId: id, Word: fulltext.DOC_LEN_WORD, Pos: int32(len(u.doc.Words))})
+		u.doc.Words = append(u.doc.Words, FullTextEntry{
+			DocId: id,
+			Word:  fulltext.DOC_LEN_WORD,
+			Pos:   int32(len(u.doc.Words)),
+		})
 	}
 
-	return nil
+	return
 }

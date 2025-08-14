@@ -21,9 +21,25 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
+
+func GetUsearchMetricFromIndexParamAlgoType(algo IndexParamAlgoType) (usearch.Metric, bool) {
+	switch algo {
+	case IndexParamAlgoType_L2Distance:
+		return usearch.L2sq, true
+	case IndexParamAlgoType_InnerProduct:
+		return usearch.InnerProduct, true
+	case IndexParamAlgoType_CosineDistance:
+		return usearch.Cosine, true
+	default:
+		return usearch.L2sq, false
+	}
+}
 
 // ------------------------[IndexFullTextParserType] ------------------------
 type IndexFullTextParserType uint16
@@ -31,6 +47,7 @@ type IndexFullTextParserType uint16
 const (
 	IndexFullTextParserType_Invalid IndexFullTextParserType = iota
 	IndexFullTextParserType_Ngram
+	IndexFullTextParserType_JSON
 	IndexFullTextParserType_JSONValue
 	IndexFullTextParserType_Default
 )
@@ -41,8 +58,10 @@ func (t IndexFullTextParserType) String() string {
 		return "default"
 	case IndexFullTextParserType_Ngram:
 		return "ngram"
-	case IndexFullTextParserType_JSONValue:
+	case IndexFullTextParserType_JSON:
 		return "json"
+	case IndexFullTextParserType_JSONValue:
+		return "json_value"
 	}
 	return "invalid"
 }
@@ -59,6 +78,8 @@ func StringToIndexFullTextParserType(s string) IndexFullTextParserType {
 	case "ngram":
 		return IndexFullTextParserType_Ngram
 	case "json":
+		return IndexFullTextParserType_JSON
+	case "json_value":
 		return IndexFullTextParserType_JSONValue
 	default:
 		return IndexFullTextParserType_Invalid
@@ -69,11 +90,11 @@ func StringToIndexFullTextParserType(s string) IndexFullTextParserType {
 type IndexParamAlgoType uint16
 
 const (
-	IndexParamAlgoType_L2Distance IndexParamAlgoType = iota
-	IndexParamAlgoType_InnerProduct
-	IndexParamAlgoType_CosineDistance
-	IndexParamAlgoType_L1Distance
-	IndexParamAlgoType_Invalid
+	IndexParamAlgoType_L2Distance     = IndexParamAlgoType(metric.Metric_L2Distance)
+	IndexParamAlgoType_InnerProduct   = IndexParamAlgoType(metric.Metric_InnerProduct)
+	IndexParamAlgoType_CosineDistance = IndexParamAlgoType(metric.Metric_CosineDistance)
+	IndexParamAlgoType_L1Distance     = IndexParamAlgoType(metric.Metric_L1Distance)
+	IndexParamAlgoType_Invalid        = IndexParamAlgoType(metric.Metric_TypeCount)
 )
 
 func (t IndexParamAlgoType) String() string {
@@ -252,6 +273,10 @@ const (
 	IndexParams_IVFFLATV1_Size    = IndexParams_IVFFLATV1_AlgoOff + IndexParams_IVFFLATV1_AlgoLen
 )
 
+func DefaultIVFFLATV1Params() IndexParams {
+	return BuildIndexParamsIVFFLATV1(1, IndexParamAlgoType_L2Distance)
+}
+
 func BuildIndexParamsIVFFLATV1(
 	list int64,
 	algo IndexParamAlgoType,
@@ -350,6 +375,18 @@ func (params IndexParams) HNSWAlgo() IndexParamAlgoType {
 
 // ------------------------[IndexParams] ------------------------
 
+func (params IndexParams) IsHNSW() bool {
+	return params.Type() == IndexParamType_HNSW
+}
+
+func (params IndexParams) IsIVFFLAT() bool {
+	return params.Type() == IndexParamType_IVFFLAT
+}
+
+func (params IndexParams) IsFullText() bool {
+	return params.Type() == IndexParamType_FullText
+}
+
 func (params IndexParams) String() string {
 	if len(params) < IndexParams_HeaderLen {
 		return "invalid index params"
@@ -431,6 +468,53 @@ func (params IndexParams) ToJsonParamString() string {
 		return ""
 	}
 	return string(jsonStr)
+}
+
+func (params IndexParams) ToStringList() (res string, err error) {
+	if params.IsEmpty() {
+		return
+	}
+	switch params.Type() {
+	case IndexParamType_FullText:
+		res = fmt.Sprintf(
+			" %s %s ",
+			strings.ToUpper(IndexAlgoParamParserName),
+			params.ParserType().String(),
+		)
+	case IndexParamType_IVFFLAT:
+		if !params.IVFFLATAlgo().IsValid() {
+			err = moerr.NewInternalErrorNoCtxf("invalid algo: %s", params.IVFFLATAlgo().String())
+			return
+		}
+		if params.IVFFLATList() > 0 {
+			res += fmt.Sprintf(" %s = %d ", IndexAlgoParamLists, params.IVFFLATList())
+		}
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamOpType, params.IVFFLATAlgo().String())
+	case IndexParamType_HNSW:
+		if !params.HNSWAlgo().IsValid() {
+			err = moerr.NewInternalErrorNoCtxf("invalid algo: %s", params.HNSWAlgo().String())
+			return
+		}
+		if !params.HNSWQuantization().IsValid() {
+			err = moerr.NewInternalErrorNoCtxf("invalid quantization: %s", params.HNSWQuantization().String())
+			return
+		}
+		if params.HNSWM() > 0 {
+			res += fmt.Sprintf(" %s = %d ", HnswM, params.HNSWM())
+		}
+		if params.HNSWEfConstruction() > 0 {
+			res += fmt.Sprintf(" %s = %d ", HnswEfConstruction, params.HNSWEfConstruction())
+		}
+		if params.HNSWEfSearch() > 0 {
+			res += fmt.Sprintf(" %s = %d ", HnswEfSearch, params.HNSWEfSearch())
+		}
+		res += fmt.Sprintf(" %s = %s ", HnswQuantization, params.HNSWQuantization().String())
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamOpType, params.HNSWAlgo().String())
+	default:
+		err = moerr.NewInternalErrorNoCtxf("invalid index params type: %s", params.Type().String())
+		return
+	}
+	return
 }
 
 func (params IndexParams) IsEmpty() bool {
@@ -693,4 +777,39 @@ func IndexAlgoJsonParamStringToIndexParams(
 		)
 	}
 	return
+}
+
+// paramStr is string(IndexParams)
+func IndexParamsStrToJsonParamString(
+	paramStr string,
+) string {
+	if paramStr == "" {
+		return ""
+	}
+	params := IndexParams(util.UnsafeStringToBytes(paramStr))
+	return params.ToJsonParamString()
+}
+
+func TryToIndexParams(s string) (IndexParams, error) {
+	if len(s) <= IndexParams_HeaderLen {
+		return IndexParams{}, moerr.NewInternalErrorNoCtxf(
+			"invalid index params: %s", s,
+		)
+	}
+	buf := util.UnsafeStringToBytes(s)
+	ret := IndexParams(buf)
+	if ret.Type() == IndexParamType_Invalid {
+		return IndexParams{}, moerr.NewInternalErrorNoCtxf(
+			"invalid index params: %s", s,
+		)
+	}
+	return ret, nil
+}
+
+func MustIndexParams(s string) IndexParams {
+	ret, err := TryToIndexParams(s)
+	if err != nil {
+		panic(err)
+	}
+	return ret
 }

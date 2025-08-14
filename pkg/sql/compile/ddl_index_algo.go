@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -228,18 +227,12 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	cfg.DataSize = totalCnt
 
 	// 1.a algo params
-	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	centroidParamsLists, err := strconv.Atoi(params[catalog.IndexAlgoParamLists])
-	if err != nil {
-		return err
-	}
+	params := catalog.MustIndexParams(indexDef.IndexAlgoParams)
+	centroidParamsLists := params.IVFFLATList()
 
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
-	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+	if totalCnt == 0 || totalCnt < centroidParamsLists {
 		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
 			"SELECT "+
 			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
@@ -280,8 +273,6 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	}
 	cfg.KmeansMaxIteration = val.(int64)
 
-	params_str := indexDef.IndexAlgoParams
-
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
 		return err
@@ -289,12 +280,14 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 
 	part := src_alias + "." + indexDef.Parts[0]
 	insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
-	sql := fmt.Sprintf(insertIntoIvfIndexTableFormat,
+	sql := fmt.Sprintf(
+		insertIntoIvfIndexTableFormat,
 		qryDatabase, originalTableDef.Name,
 		src_alias,
-		params_str,
+		params.ToJsonParamString(),
 		string(cfgbytes),
-		part)
+		part,
+	)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
 	if err != nil {
@@ -314,19 +307,25 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	return nil
 }
 
-func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+func (s *Scope) handleIvfIndexEntriesTable(
+	c *Compile,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
 	metadataTableName string,
-	centroidsTableName string) error {
+	centroidsTableName string,
+) (err error) {
 
 	// 1.a algo params
-	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
+	params := catalog.MustIndexParams(indexDef.IndexAlgoParams)
+	if !params.IVFFLATAlgo().IsValid() {
+		err = moerr.NewInternalErrorNoCtxf(
+			"invalid ivf flat algo: %s",
+			params.IVFFLATAlgo().String(),
+		)
+		return
 	}
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("vector optype not found")
-	}
+	optype := params.IVFFLATAlgo().String()
 
 	// 1. Original table's pkey name and value
 	var originalTblPkColsCommaSeperated string
@@ -345,7 +344,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	}
 
 	// 2. insert into entries table
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
+	insertSQL := fmt.Sprintf(
+		"insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
@@ -355,9 +355,10 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	)
 
 	// 3. centroids table with latest version
-	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
-		"`%s`.`%s` where `%s` = "+
-		"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
+	centroidsTableForCurrentVersionSql := fmt.Sprintf(
+		"(select * from "+
+			"`%s`.`%s` where `%s` = "+
+			"(select CAST(%s as BIGINT) from `%s`.`%s` where `%s` = 'version'))  as `%s`",
 		qryDatabase,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -371,10 +372,11 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 	// 4. select * from table and cross join centroids;
 	indexColumnName := indexDef.Parts[0]
-	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
-		"SELECT `%s`, `%s`,  %s, `%s`"+
-		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
-		" using (`%s`, `%s`) ",
+	centroidsCrossL2JoinTbl := fmt.Sprintf(
+		"%s "+
+			"SELECT `%s`, `%s`,  %s, `%s`"+
+			" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
+			" using (`%s`, `%s`) ",
 		insertSQL,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -391,22 +393,15 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		indexColumnName,
 	)
 
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
-	if err != nil {
-		return err
+	if err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start"); err != nil {
+		return
 	}
 
-	err = c.runSql(centroidsCrossL2JoinTbl)
-	if err != nil {
-		return err
+	if err = c.runSql(centroidsCrossL2JoinTbl); err != nil {
+		return
 	}
 
-	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_end")
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_end")
 }
 
 func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {

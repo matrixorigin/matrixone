@@ -56,16 +56,15 @@ func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sor
 
 	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	params, err := catalog.TryToIndexParams(idxdef.IndexAlgoParams)
 	if err != nil {
 		return false
 	}
-
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
+	if !params.IVFFLATAlgo().IsValid() {
 		return false
 	}
 
+	optype := params.IVFFLATAlgo().String()
 	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
 		return false
 	}
