@@ -397,7 +397,10 @@ var predefinedFunids = map[int]int{
 	STARLARK:     345,
 	TRY_STARLARK: 346,
 
-	FUNCTION_END_NUMBER: 347,
+	LLM_CHAT:      347,
+	LLM_EMBEDDING: 348,
+
+	FUNCTION_END_NUMBER: 349,
 }
 
 func Test_funids(t *testing.T) {

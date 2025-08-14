@@ -123,6 +123,15 @@ func TestOllama(t *testing.T) {
 	if err != nil || !strings.Contains(reply, "4") {
 		t.Errorf("wrong reply: %v, %s", err, reply)
 	}
+
+	embedding, err := client.CreateEmbedding(context.Background(), "Hello, world!")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(embedding) < 100 {
+		t.Fatal("embedding is too short")
+	}
 }
 
 func TestMapRole(t *testing.T) {
