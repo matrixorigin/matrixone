@@ -265,7 +265,7 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 			types.T_uint8.ToType(),
 			types.T_uint16.ToType(),
 			types.T_uint32.ToType(),
-			types.T_uint64.ToType(),//i12
+			types.T_uint64.ToType(), //i12
 		},
 		[]string{"id", "name", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10", "i11", "i12"},
 		rowCount,
