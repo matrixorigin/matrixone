@@ -40,7 +40,6 @@ create database replace_db;
 use replace_db;
 replace into `replace`.`names` values (2, "Dylan", 20);
 select name, age from `replace`.`names` where id = 2;
-
 set experimental_ivf_index = 1;
 create table bug_22340 (a int not null auto_increment, a1 int default null, b vecf64(3) DEFAULT NULL COMMENT 'document向量化信息', PRIMARY KEY (`a`), KEY `idx_vec` USING ivfflat (`b`) lists = 1 op_type 'vector_l2_ops');
 REPLACE INTO bug_22340 VALUES (1,100,'[1, 2, 3]'),(2,100,'[1, 2, 3]'),(3,100,'[1, 2, 3]'),(4,100,'[1, 2, 3]'),(5,100,'[1, 2, 3]'),(6,100,'[1, 2, 3]'),(7,100,'[1, 2, 3]'),(8,100,'[1, 2, 3]'),(9,100,'[1, 2, 3]'),(10,100,'[1, 2, 3]');
