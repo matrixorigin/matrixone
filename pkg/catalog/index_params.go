@@ -28,6 +28,13 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+const (
+	IndexParamAlgoName_Hnsw     = "hnsw"
+	IndexParamAlgoName_IvfFlat  = "ivfflat"
+	IndexParamAlgoName_FullText = "fulltext"
+	IndexParamAlgoName_Invalid  = "invalid"
+)
+
 func GetUsearchMetricFromIndexParamAlgoType(algo IndexParamAlgoType) (usearch.Metric, bool) {
 	switch algo {
 	case IndexParamAlgoType_L2Distance:
@@ -197,13 +204,13 @@ const (
 func (t IndexParamType) String() string {
 	switch t {
 	case IndexParamType_FullText:
-		return "fulltext"
+		return IndexParamAlgoName_FullText
 	case IndexParamType_IVFFLAT:
-		return "ivfflat"
+		return IndexParamAlgoName_IvfFlat
 	case IndexParamType_HNSW:
-		return "hnsw"
+		return IndexParamAlgoName_Hnsw
 	}
-	return "invalid"
+	return IndexParamAlgoName_Invalid
 }
 
 func (t IndexParamType) IsValid() bool {
@@ -529,6 +536,10 @@ func (params IndexParams) Type() IndexParamType {
 	return paramType
 }
 
+func (params IndexParams) IsValid() bool {
+	return params.Type() != IndexParamType_Invalid
+}
+
 func (params IndexParams) Version() uint16 {
 	if len(params) < IndexParams_HeaderLen {
 		return 0
@@ -630,7 +641,7 @@ func IndexAlgoJsonParamStringToIndexParams(
 	algoJsonParam string,
 ) (params IndexParams, err error) {
 	if len(algoJsonParam) == 0 {
-		if algo == "" || algo == "fulltext" {
+		if algo == "" || algo == IndexParamAlgoName_FullText {
 			return
 		}
 		err = moerr.NewInternalErrorNoCtxf(
@@ -644,7 +655,7 @@ func IndexAlgoJsonParamStringToIndexParams(
 	}
 
 	switch algo {
-	case "hnsw":
+	case IndexParamAlgoName_Hnsw:
 		var (
 			ok                                              bool
 			m, efConstruction, efSearch, quantization, algo string
@@ -711,7 +722,7 @@ func IndexAlgoJsonParamStringToIndexParams(
 			efSearchValue,
 			quantizationValue,
 		)
-	case "ivfflat":
+	case IndexParamAlgoName_IvfFlat:
 		var (
 			ok         bool
 			list, algo string
@@ -751,7 +762,7 @@ func IndexAlgoJsonParamStringToIndexParams(
 			}
 		}
 		params = BuildIndexParamsIVFFLATV1(listValue, algoValue)
-	case "fulltext":
+	case IndexParamAlgoName_FullText:
 		var parserValue IndexFullTextParserType
 		if parser, ok := jsonMap[IndexAlgoParamParserName]; !ok {
 			err = moerr.NewInternalErrorNoCtxf(
@@ -776,6 +787,22 @@ func IndexAlgoJsonParamStringToIndexParams(
 			"invalid algo: %s", algo,
 		)
 	}
+	return
+}
+
+// the `paramStr` maybe:
+// 1. ""
+// 2. json string
+// 3. string(IndexParams)
+func TryConvertToIndexParams(
+	algo string,
+	paramStr string,
+) (params IndexParams, err error) {
+	params = IndexParams(paramStr)
+	if params.IsEmpty() || params.IsValid() {
+		return
+	}
+	params, err = IndexAlgoJsonParamStringToIndexParams(algo, paramStr)
 	return
 }
 
