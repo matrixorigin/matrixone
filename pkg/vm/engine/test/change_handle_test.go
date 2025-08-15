@@ -2810,5 +2810,5 @@ func TestFlushWatermark(t *testing.T) {
 	}
 	checkWaterMarkFn(4000)
 
-	cdcExecutor.FlushWatermarkForAllTables(time.Millisecond)
+	cdcExecutor.FlushWatermarkForAllTables(0)
 }
