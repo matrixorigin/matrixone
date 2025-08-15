@@ -79,6 +79,7 @@ func ExecuteIteration(
 		iterCtx.accountID,
 		iterCtx.tableID,
 		iterCtx.jobNames,
+		iterCtx.jobIDs,
 	)
 	if err != nil {
 		return
@@ -405,6 +406,7 @@ func GetJobSpecs(
 	tenantId uint32,
 	tableID uint64,
 	jobName []string,
+	jobIDs []uint64,
 ) (jobSpec []*JobSpec, err error) {
 	var buf bytes.Buffer
 	buf.WriteString("SELECT job_spec FROM mo_catalog.mo_iscp_log WHERE")
@@ -412,7 +414,8 @@ func GetJobSpecs(
 		if i > 0 {
 			buf.WriteString(" OR")
 		}
-		buf.WriteString(fmt.Sprintf(" account_id = %d AND table_id = %d AND job_name = '%s'", tenantId, tableID, jobName))
+		buf.WriteString(fmt.Sprintf(" account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d",
+			tenantId, tableID, jobName, jobIDs[i]))
 	}
 	sql := buf.String()
 	execResult, err := ExecWithResult(ctx, sql, cnUUID, txn)

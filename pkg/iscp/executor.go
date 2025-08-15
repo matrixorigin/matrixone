@@ -397,6 +397,22 @@ func (exec *ISCPTaskExecutor) GetWatermark(accountID uint32, srcTableID uint64, 
 	return
 }
 
+// For UT
+func (exec *ISCPTaskExecutor) GetJobType(accountID uint32, srcTableID uint64, jobName string) (jobType uint16, ok bool) {
+	table, ok := exec.getTable(accountID, srcTableID)
+	if !ok {
+		return
+	}
+	table.mu.RLock()
+	defer table.mu.RUnlock()
+	job, ok := table.jobs[jobName]
+	if !ok {
+		return
+	}
+	jobType = job.jobSpec.GetType()
+	return
+}
+
 func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.TS) (err error) {
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
@@ -640,7 +656,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		)
 		exec.setTable(table)
 	}
-	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec,jobID, watermark, state)
+	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state)
 	return
 }
 
