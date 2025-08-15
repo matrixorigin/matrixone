@@ -354,49 +354,31 @@ func (ht *StringHashMap) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += int64(wn)
 
-	if wn, err = w.Write(types.EncodeUint64(&ht.cellCnt)); err != nil {
-		return
-	}
-	n += int64(wn)
-
-	if wn, err = w.Write(types.EncodeUint64(&ht.blockCellCnt)); err != nil {
-		return
-	}
-	n += int64(wn)
-
-	if wn, err = w.Write(types.EncodeUint64(&ht.blockMaxElemCnt)); err != nil {
-		return
-	}
-	n += int64(wn)
-
-	if wn, err = w.Write(types.EncodeUint64(&ht.cellCntMask)); err != nil {
-		return
-	}
-	n += int64(wn)
-
 	// Write active cells
 	if ht.elemCnt > 0 {
-		for _, block := range ht.cells {
-			for i := range block {
-				if block[i].Mapped != 0 {
-					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[0])); err != nil {
-						return
-					}
-					n += int64(wn)
-					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[1])); err != nil {
-						return
-					}
-					n += int64(wn)
-					if wn, err = w.Write(types.EncodeUint64(&block[i].HashState[2])); err != nil {
-						return
-					}
-					n += int64(wn)
-					if wn, err = w.Write(types.EncodeUint64(&block[i].Mapped)); err != nil {
-						return
-					}
-					n += int64(wn)
-				}
+		it := &StringHashMapIterator{}
+		it.Init(ht)
+		for i := uint64(0); i < ht.elemCnt; i++ {
+			cell, errNext := it.Next()
+			if errNext != nil {
+				return n, errNext
 			}
+			if wn, err = w.Write(types.EncodeUint64(&cell.HashState[0])); err != nil {
+				return n, err
+			}
+			n += int64(wn)
+			if wn, err = w.Write(types.EncodeUint64(&cell.HashState[1])); err != nil {
+				return n, err
+			}
+			n += int64(wn)
+			if wn, err = w.Write(types.EncodeUint64(&cell.HashState[2])); err != nil {
+				return n, err
+			}
+			n += int64(wn)
+			if wn, err = w.Write(types.EncodeUint64(&cell.Mapped)); err != nil {
+				return n, err
+			}
+			n += int64(wn)
 		}
 	}
 
@@ -406,44 +388,25 @@ func (ht *StringHashMap) WriteTo(w io.Writer) (n int64, err error) {
 func (ht *StringHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) (n int64, err error) {
 	var rn int
 
-	// Read basic metadata
-	buf := make([]byte, 8*5) // 5 uint64 fields
+	// Read element count
+	buf := make([]byte, 8)
 	if rn, err = io.ReadFull(r, buf); err != nil {
 		return
 	}
 	n += int64(rn)
+	elemCnt := types.DecodeUint64(buf)
 
-	ht.elemCnt = types.DecodeUint64(buf[0:8])
-	ht.cellCnt = types.DecodeUint64(buf[8:16])
-	ht.blockCellCnt = types.DecodeUint64(buf[16:24])
-	ht.blockMaxElemCnt = types.DecodeUint64(buf[24:32])
-	ht.cellCntMask = types.DecodeUint64(buf[32:40])
-
-	if allocator == nil {
-		allocator = DefaultAllocator()
-	}
-	ht.allocator = allocator
-
-	// Initialize blocks
-	if ht.cellCnt > 0 {
-		numBlocks := ht.cellCnt / ht.blockCellCnt
-		if ht.cellCnt%ht.blockCellCnt != 0 {
-			return n, moerr.NewInternalErrorNoCtx("invalid cellCnt and blockCellCnt combination")
-		}
-		ht.rawData = make([][]byte, numBlocks)
-		ht.rawDataDeallocators = make([]malloc.Deallocator, numBlocks)
-		ht.cells = make([][]StringHashMapCell, numBlocks)
-		for i := uint64(0); i < numBlocks; i++ {
-			if err = ht.allocate(int(i), ht.blockCellCnt*strCellSize); err != nil {
-				return
-			}
-		}
+	if err = ht.Init(allocator); err != nil {
+		return
 	}
 
-	// Read and insert active cells
-	if ht.elemCnt > 0 {
+	if elemCnt > 0 {
+		if err = ht.ResizeOnDemand(elemCnt); err != nil {
+			return
+		}
+
 		cellBuf := make([]byte, 32) // HashState + Mapped
-		for i := uint64(0); i < ht.elemCnt; i++ {
+		for range elemCnt {
 			if rn, err = io.ReadFull(r, cellBuf); err != nil {
 				return
 			}
@@ -459,6 +422,7 @@ func (ht *StringHashMap) UnmarshalFrom(r io.Reader, allocator malloc.Allocator) 
 			*newCell = cell
 		}
 	}
+	ht.elemCnt = elemCnt
 
 	return
 }
