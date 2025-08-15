@@ -99,7 +99,7 @@ create publication publication02 database database02;
 -- @ignore:2,3
 show publications;
 
--- @session:id=4&user=test_tenant_1:test_account&password=111
+-- @session:id=6&user=test_tenant_1:test_account&password=111
 drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
 -- @ignore:3,5
