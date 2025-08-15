@@ -2584,7 +2584,8 @@ func TestUpdateJobSpec(t *testing.T) {
 		"",
 		&iscp.ISCPExecutorOption{
 			SyncTaskInterval:       time.Millisecond * 10,
-			FlushWatermarkInterval: time.Hour,
+			FlushWatermarkInterval: time.Millisecond * 10,
+			FlushWatermarkTTL:      time.Hour,
 			GCTTL:                  time.Hour,
 			GCInterval:             time.Hour,
 			RetryTimes:             1,
@@ -2711,4 +2712,103 @@ func TestUpdateJobSpec(t *testing.T) {
 	checkWaterMarkFn(4000)
 
 	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, "job1")
+}
+
+func TestFlushWatermark(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	defer bat.Close()
+
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
+	// init cdc executor
+	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		&iscp.ISCPExecutorOption{
+			SyncTaskInterval:       time.Millisecond * 10,
+			FlushWatermarkInterval: time.Hour,
+			FlushWatermarkTTL:      time.Hour,
+			GCTTL:                  time.Hour,
+			GCInterval:             time.Hour,
+			RetryTimes:             1,
+		},
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+	jobName := "job1"
+	dbName := "srcdb"
+	tableName := "src_table"
+
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := iscp.RegisterJob(
+		ctx, "", txn, "pitr",
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   jobName,
+			DBName:    dbName,
+			TableName: tableName,
+		},
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+	checkWaterMarkFn := func(waitTime int) {
+		now := taeHandler.GetDB().TxnMgr.Now()
+		testutils.WaitExpect(
+			waitTime,
+			func() bool {
+				ts, _ := cdcExecutor.GetWatermark(accountId, tableID, jobName)
+				return ts.GE(&now)
+			},
+		)
+		ts, _ := cdcExecutor.GetWatermark(accountId, tableID, jobName)
+		assert.True(t, ts.GE(&now), jobName)
+	}
+	checkWaterMarkFn(4000)
+
+	cdcExecutor.FlushWatermarkForAllTables(time.Millisecond)
 }

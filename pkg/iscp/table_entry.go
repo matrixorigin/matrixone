@@ -15,12 +15,15 @@
 package iscp
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 func tableInfoLess(a, b *TableEntry) bool {
@@ -169,6 +172,22 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 		jobEntry := t.jobs[jobName]
 		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
 	}
+}
+
+func (t *TableEntry) tryFlushWatermark(
+	ctx context.Context,
+	txn client.TxnOperator,
+	threshold time.Duration,
+) (flushCount int) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, jobEntry := range t.jobs {
+		needFlush, err := jobEntry.tryFlushWatermark(ctx, txn, threshold)
+		if needFlush && err == nil {
+			flushCount++
+		}
+	}
+	return flushCount
 }
 
 func (t *TableEntry) String() string {

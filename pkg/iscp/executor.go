@@ -55,6 +55,7 @@ const (
 	DefaultGCTTL                  = time.Hour
 	DefaultSyncTaskInterval       = time.Second * 10
 	DefaultFlushWatermarkInterval = time.Hour
+	DefaultFlushWatermarkTTL      = time.Hour
 
 	DefaultRetryTimes    = 5
 	DefaultRetryDuration = time.Second
@@ -65,6 +66,7 @@ type ISCPExecutorOption struct {
 	GCTTL                  time.Duration
 	SyncTaskInterval       time.Duration
 	FlushWatermarkInterval time.Duration
+	FlushWatermarkTTL      time.Duration
 	RetryTimes             int
 }
 
@@ -101,6 +103,31 @@ func ISCPTaskExecutorFactory(
 	}
 }
 
+func fillDefaultOption(option *ISCPExecutorOption) *ISCPExecutorOption {
+	if option == nil {
+		option = &ISCPExecutorOption{}
+	}
+	if option.GCInterval == 0 {
+		option.GCInterval = DefaultGCInterval
+	}
+	if option.GCTTL == 0 {
+		option.GCTTL = DefaultGCTTL
+	}
+	if option.SyncTaskInterval == 0 {
+		option.SyncTaskInterval = DefaultSyncTaskInterval
+	}
+	if option.FlushWatermarkInterval == 0 {
+		option.FlushWatermarkInterval = DefaultFlushWatermarkInterval
+	}
+	if option.FlushWatermarkTTL == 0 {
+		option.FlushWatermarkTTL = DefaultFlushWatermarkTTL
+	}
+	if option.RetryTimes == 0 {
+		option.RetryTimes = DefaultRetryTimes
+	}
+	return option
+}
+
 func NewISCPTaskExecutor(
 	ctx context.Context,
 	txnEngine engine.Engine,
@@ -126,15 +153,7 @@ func NewISCPTaskExecutor(
 			zap.Error(err),
 		)
 	}()
-	if option == nil {
-		option = &ISCPExecutorOption{
-			GCInterval:             DefaultGCInterval,
-			GCTTL:                  DefaultGCTTL,
-			SyncTaskInterval:       DefaultSyncTaskInterval,
-			FlushWatermarkInterval: DefaultFlushWatermarkInterval,
-			RetryTimes:             DefaultRetryTimes,
-		}
-	}
+	option = fillDefaultOption(option)
 	exec = &ISCPTaskExecutor{
 		ctx:         ctx,
 		packer:      types.NewPacker(),
@@ -290,6 +309,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 	}()
 	defer exec.wg.Done()
 	syncTaskTrigger := time.NewTicker(exec.option.SyncTaskInterval)
+	flushWatermarkTrigger := time.NewTicker(exec.option.FlushWatermarkInterval)
 	gcTrigger := time.NewTicker(exec.option.GCInterval)
 	for {
 		select {
@@ -374,6 +394,14 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 					}
 					table.UpdateWatermark(iter)
 				}
+			}
+		case <-flushWatermarkTrigger.C:
+			err := exec.FlushWatermarkForAllTables(exec.option.FlushWatermarkTTL)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task flush watermark failed",
+					zap.Error(err),
+				)
 			}
 		case <-gcTrigger.C:
 			err := exec.GC(exec.option.GCTTL)
@@ -766,6 +794,39 @@ func (exec *ISCPTaskExecutor) getDirtyTables(
 		exec.rpcHandleFn,
 	)
 	return
+}
+func (exec *ISCPTaskExecutor) FlushWatermarkForAllTables(ttl time.Duration) error {
+	tables := exec.getAllTables()
+	if len(tables) == 0 {
+		return nil
+	}
+	txn, err := getTxn(exec.ctx, exec.txnEngine, exec.cnTxnClient, "flush watermark for all tables")
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(exec.ctx, time.Minute*5)
+	defer cancel()
+	defer func() {
+		if err != nil {
+			err2 := txn.Rollback(ctx)
+			if err2 != nil {
+				logutil.Errorf("flush watermark for all tables rollback failed, err: %v", err2)
+			}
+		} else {
+			err = txn.Commit(ctx)
+		}
+	}()
+	jobCount := 0
+	for _, table := range tables {
+		flushCount := table.tryFlushWatermark(ctx, txn, ttl)
+		jobCount += flushCount
+	}
+	logutil.Info(
+		"ISCP-Task flush watermark",
+		zap.Any("table count", len(tables)),
+		zap.Int("jobCount", jobCount),
+	)
+	return nil
 }
 
 func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
