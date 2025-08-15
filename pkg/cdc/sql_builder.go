@@ -217,6 +217,7 @@ const (
 		`account_id,` +
 		`table_id,` +
 		`job_name,` +
+		`job_id,` +
 		`job_spec,` +
 		`job_state,` +
 		`watermark,` +
@@ -227,6 +228,7 @@ const (
 		`%d,` + // account_id
 		`%d,` + // table_id
 		`'%s',` + // job_name
+		`%d,` + // job_id
 		`'%s',` + // job_spec
 		`'%d',` + // job_state
 		`'%s',` + // watermark
@@ -241,23 +243,26 @@ const (
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
-		`AND job_name = '%s'`
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
 	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`job_spec = '%s'` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
-		`AND job_name = '%s'`
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
 	CDCUpdateMOISCPLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
 		`drop_at = now()` +
 		`WHERE` +
 		` account_id = %d ` +
 		`AND table_id = %d ` +
-		`AND job_name = '%s'`
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
 	CDCDeleteMOISCPLogSqlTemplate = `DELETE FROM mo_catalog.mo_iscp_log WHERE ` +
 		`drop_at < '%s'`
 	CDCSelectMOISCPLogSqlTemplate        = `SELECT * from mo_catalog.mo_iscp_log`
-	CDCSelectMOISCPLogByTableSqlTemplate = `SELECT drop_at from mo_catalog.mo_iscp_log WHERE ` +
+	CDCSelectMOISCPLogByTableSqlTemplate = `SELECT drop_at, job_id from mo_catalog.mo_iscp_log WHERE ` +
 		`account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'`
@@ -417,6 +422,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"account_id",
 			"table_id",
 			"job_name",
+			"job_id",
 			"job_spec",
 			"job_state",
 			"watermark",
@@ -429,6 +435,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 		SQL: CDCSelectMOISCPLogByTableSqlTemplate,
 		OutputAttrs: []string{
 			"drop_at",
+			"job_id",
 		},
 	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {
@@ -775,6 +782,7 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
+	jobID uint64,
 	jobSpec string,
 	jobState int8,
 	jobStatus string,
@@ -784,6 +792,7 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 		accountID,
 		tableID,
 		jobName,
+		jobID,
 		jobSpec,
 		jobState,
 		types.TS{}.ToString(),
@@ -794,7 +803,8 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 	accountID uint32,
 	tableID uint64,
-	indexName string,
+	jobName string,
+	jobID uint64,
 	newWatermark types.TS,
 	jobStatus string,
 	jobState int8,
@@ -806,20 +816,23 @@ func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
 		jobStatus,
 		accountID,
 		tableID,
-		indexName,
+		jobName,
+		jobID,
 	)
 }
 
 func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(
 	accountID uint32,
 	tableID uint64,
-	indexName string,
+	jobName string,
+	jobID uint64,
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateMOISCPLogDropAtSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		indexName,
+		jobName,
+		jobID,
 	)
 }
 
@@ -827,14 +840,16 @@ func (b cdcSQLBuilder) ISCPLogUpdateJobSpecSQL(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
+	jobID uint64,
 	jobSpec string,
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx].SQL,
+		jobSpec,
 		accountID,
 		tableID,
 		jobName,
-		jobSpec,
+		jobID,
 	)
 }
 
@@ -852,13 +867,13 @@ func (b cdcSQLBuilder) ISCPLogSelectSQL() string {
 func (b cdcSQLBuilder) ISCPLogSelectByTableSQL(
 	accountID uint32,
 	tableID uint64,
-	indexName string,
+	jobName string,
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCSelectMOISCPLogByTableSqlTemplate_Idx].SQL,
 		accountID,
 		tableID,
-		indexName,
+		jobName,
 	)
 }
 
