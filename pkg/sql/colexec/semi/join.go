@@ -77,7 +77,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.state = Probe
 			}
-			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && ap.Cond == nil {
+
+			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && ap.Cond == nil && len(ap.Conditions) == 0 {
 				ctr.skipProbe = true
 			}
 
