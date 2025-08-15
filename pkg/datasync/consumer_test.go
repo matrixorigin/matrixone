@@ -304,7 +304,7 @@ func TestParseCheckpointLocations(t *testing.T) {
 			assert.NotNil(t, ckp)
 			locations, err := c.parseCheckpointLocations(ctx, ckp.Location)
 			assert.NoError(t, err)
-			assert.Equal(t, 35, len(locations))
+			assert.Equal(t, 65, len(locations))
 		})
 	})
 }
