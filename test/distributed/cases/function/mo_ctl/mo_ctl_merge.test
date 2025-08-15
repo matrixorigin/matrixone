@@ -147,3 +147,6 @@ select rows_cnt from metadata_scan('mo_ctl_merge.%!%p3%!%p_table_01', 'col1') g;
 -- @bvt:issue
 
 select mo_ctl('dn', 'inspect', 'merge switch on');
+begin;
+select mo_ctl('cn', 'mergeobjects', 't:mo_ctl_merge.p_table_01');
+commit ;
