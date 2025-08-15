@@ -34,22 +34,41 @@ const (
 	End
 )
 
+type probeState int
+
+const (
+	psNextBatch probeState = iota
+	psSelsForOneRow
+	psBatchRow
+)
+
 type container struct {
 	state int
 
 	itr hashmap.Iterator
 
 	batchRowCount int64
-	lastRow       int
 	inbat         *batch.Batch
 	rbat          *batch.Batch
 
+	// fileds for pagination
+
+	probeState probeState
+
+	// at any time, lastRow is the index of not processed row in inbat
+	lastRow int
+	// process idx for zvs and vs, which returned by hashmap.Iterator.Find()
+	// guarantee: vs[ctr.vsidx] is the result of inbat[ctr.lastRow]
+	vsidx int
+	zvs   []int64
+	vs    []uint64
+	// sels
+	sels []int32
+
 	expr colexec.ExpressionExecutor
 
-	joinBat1 *batch.Batch
+	joinBats []*batch.Batch
 	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
-
-	joinBat2 *batch.Batch
 	cfs2     []func(*vector.Vector, *vector.Vector, int64, int) error
 
 	executor []colexec.ExpressionExecutor
@@ -92,7 +111,7 @@ func (innerJoin *InnerJoin) GetOperatorBase() *vm.OperatorBase {
 }
 
 func init() {
-	reuse.CreatePool[InnerJoin](
+	reuse.CreatePool(
 		func() *InnerJoin {
 			return &InnerJoin{}
 		},
@@ -114,7 +133,7 @@ func NewArgument() *InnerJoin {
 
 func (innerJoin *InnerJoin) Release() {
 	if innerJoin != nil {
-		reuse.Free[InnerJoin](innerJoin, nil)
+		reuse.Free(innerJoin, nil)
 	}
 }
 
@@ -128,6 +147,12 @@ func (innerJoin *InnerJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.lastRow = 0
 	ctr.state = Build
 	ctr.batchRowCount = 0
+
+	ctr.vsidx = 0
+	ctr.sels = nil
+	ctr.vs = nil
+	ctr.zvs = nil
+	ctr.probeState = psNextBatch
 
 	if innerJoin.OpAnalyzer != nil {
 		innerJoin.OpAnalyzer.Alloc(innerJoin.ctr.maxAllocSize)
@@ -166,11 +191,11 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(proc.Mp())
 	}
-	if ctr.joinBat1 != nil {
-		ctr.joinBat1.Clean(proc.Mp())
-	}
-	if ctr.joinBat2 != nil {
-		ctr.joinBat2.Clean(proc.Mp())
+	for i := range ctr.joinBats {
+		if ctr.joinBats[i] != nil {
+			ctr.joinBats[i].Clean(proc.Mp())
+		}
+		ctr.joinBats[i] = nil
 	}
 }
 
