@@ -180,7 +180,9 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			}
 
 			pkCol := bat.GetVector(0)
-			fuzzyFilter.appendPassToRuntimeFilter(pkCol, proc)
+			if err = fuzzyFilter.appendPassToRuntimeFilter(pkCol, proc); err != nil {
+				return result, err
+			}
 
 			err = fuzzyFilter.handleBuild(proc, pkCol)
 			if err != nil {
