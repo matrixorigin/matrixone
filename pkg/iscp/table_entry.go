@@ -52,16 +52,20 @@ func NewTableEntry(
 func (t *TableEntry) AddOrUpdateSinker(
 	jobName string,
 	jobSpec *JobSpec,
+	jobID uint64,
 	watermark types.TS,
 	state int8,
 ) (newCreate bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	jobEntry, ok := t.jobs[jobName]
-	if !ok {
+	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
-		jobEntry = NewJobEntry(t, jobName, jobSpec, watermark, state)
+		jobEntry = NewJobEntry(t, jobName, jobSpec, jobID, watermark, state)
 		t.jobs[jobName] = jobEntry
+		return
+	}
+	if jobEntry.jobID > jobID {
 		return
 	}
 	jobEntry.update(jobSpec, watermark, state)
@@ -117,6 +121,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				tableID:   t.tableID,
 				accountID: t.accountID,
 				jobNames:  []string{sinker.jobName},
+				jobIDs:    []uint64{sinker.jobID},
 				fromTS:    types.TS{},
 				toTS:      types.TS{},
 			})
@@ -131,6 +136,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			for _, iter := range iterations {
 				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
+					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
 					foundIteration = true
 					break
 				}
@@ -141,6 +147,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				tableID:   t.tableID,
 				accountID: t.accountID,
 				jobNames:  []string{sinker.jobName},
+				jobIDs:    []uint64{sinker.jobID},
 				fromTS:    from,
 				toTS:      to,
 			})

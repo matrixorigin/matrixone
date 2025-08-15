@@ -74,6 +74,7 @@ type DataRetrieverImpl struct {
 	tableID   uint64
 	jobName   string
 	status    *JobStatus
+	jobID     uint64
 
 	typ          int8
 	insertDataCh chan *ISCPData
@@ -88,6 +89,7 @@ func NewDataRetriever(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
+	jobID uint64,
 	status *JobStatus,
 	dataType int8,
 ) *DataRetrieverImpl {
@@ -96,6 +98,7 @@ func NewDataRetriever(
 		accountID:    accountID,
 		tableID:      tableID,
 		jobName:      jobName,
+		jobID:        jobID,
 		status:       status,
 		insertDataCh: make(chan *ISCPData, 1),
 		typ:          dataType,
@@ -121,6 +124,7 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 		r.accountID,
 		r.tableID,
 		r.jobName,
+		r.jobID,
 		r.status.To,
 		statusJson,
 		ISCPJobState_Completed,

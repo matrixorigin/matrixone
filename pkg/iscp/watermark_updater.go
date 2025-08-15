@@ -104,6 +104,7 @@ func registerJob(
 	var tenantId uint32
 	var tableID uint64
 	var dropped bool
+	var internalJobID uint64
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -116,6 +117,7 @@ func registerJob(
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobID.JobName),
+			zap.Uint64("jobID", internalJobID),
 			zap.Bool("create new", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -138,7 +140,7 @@ func registerJob(
 	if err != nil {
 		return
 	}
-	exist, dropped, err := queryIndexLog(
+	exist, dropped, prevID, err := queryIndexLog(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -162,10 +164,12 @@ func registerJob(
 	if err != nil {
 		return
 	}
+	internalJobID = prevID + 1
 	sql := cdc.CDCSQLBuilder.ISCPLogInsertSQL(
 		tenantId,
 		tableID,
 		jobID.JobName,
+		internalJobID,
 		jobSpecJson,
 		ISCPJobState_Completed,
 		string(jobStatusJson),
@@ -218,6 +222,7 @@ func updateJobSpec(
 	var tenantId uint32
 	var tableID uint64
 	var jobSpecJson string
+	var internalJobID uint64
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -230,6 +235,7 @@ func updateJobSpec(
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobID.JobName),
+			zap.Uint64("jobID", internalJobID),
 			zap.String("jobSpec", jobSpecJson),
 			zap.Error(err),
 		)
@@ -255,10 +261,26 @@ func updateJobSpec(
 	if err != nil {
 		return
 	}
+	exist, dropped, internalJobID, err := queryIndexLog(
+		ctx,
+		cnUUID,
+		txn,
+		tenantId,
+		tableID,
+		jobID.JobName,
+	)
+	if err != nil {
+		return
+	}
+	if !exist || dropped {
+		err = moerr.NewInternalErrorNoCtx("job not found")
+		return
+	}
 	sql := cdc.CDCSQLBuilder.ISCPLogUpdateJobSpecSQL(
 		tenantId,
 		tableID,
 		jobID.JobName,
+		internalJobID,
 		jobSpecJson,
 	)
 	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
@@ -273,6 +295,7 @@ func unregisterJob(
 	var tenantId uint32
 	var tableID uint64
 	var dropped bool
+	var internalJobID uint64
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
 		if err != nil {
@@ -285,6 +308,7 @@ func unregisterJob(
 			zap.Uint32("tenantID", tenantId),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobID.JobName),
+			zap.Uint64("jobID", internalJobID),
 			zap.Bool("delete", ok),
 			zap.Bool("dropped", dropped),
 			zap.Error(err),
@@ -304,7 +328,7 @@ func unregisterJob(
 	if err != nil {
 		return
 	}
-	exist, dropped, err := queryIndexLog(
+	exist, dropped, internalJobID, err := queryIndexLog(
 		ctx,
 		cnUUID,
 		txn,
@@ -323,6 +347,7 @@ func unregisterJob(
 		tenantId,
 		tableID,
 		jobID.JobName,
+		internalJobID,
 	)
 	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
@@ -375,7 +400,7 @@ func queryIndexLog(
 	tenantId uint32,
 	tableID uint64,
 	jobName string,
-) (exist, dropped bool, err error) {
+) (exist, dropped bool, prevID uint64, err error) {
 	selectSql := cdc.CDCSQLBuilder.ISCPLogSelectByTableSQL(
 		tenantId,
 		tableID,
@@ -387,14 +412,20 @@ func queryIndexLog(
 	}
 	defer result.Close()
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows > 1 {
-			panic(fmt.Sprintf("invalid rows %d", rows))
-		}
 		if rows != 0 {
 			exist = true
 		}
-		if !cols[0].IsNull(0) {
-			dropped = true
+		dropped = true
+		ids := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+		for i := 0; i < rows; i++ {
+			if cols[0].IsNull(0) {
+				dropped = false
+				prevID = ids[i]
+				return false
+			}
+			if ids[i] > prevID {
+				prevID = ids[i]
+			}
 		}
 		return true
 	})

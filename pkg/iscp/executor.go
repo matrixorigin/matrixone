@@ -432,16 +432,19 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		tableIDVector := insertData.Vecs[1]
 		tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
 		jobNameVector := insertData.Vecs[2]
-		jobSpecVector := insertData.Vecs[3]
-		jobStateVector := insertData.Vecs[4]
+		jobIDVector := insertData.Vecs[3]
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](jobIDVector)
+		jobSpecVector := insertData.Vecs[4]
+		jobStateVector := insertData.Vecs[5]
 		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
-		watermarkVector := insertData.Vecs[5]
-		dropAtVector := insertData.Vecs[8]
-		commitTSVector := insertData.Vecs[10]
+		watermarkVector := insertData.Vecs[6]
+		dropAtVector := insertData.Vecs[9]
+		commitTSVector := insertData.Vecs[11]
 		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVector)
 		type job struct {
 			ts     types.TS
 			offset int
+			jobID  uint64
 		}
 		type jobName struct {
 			accountID uint32
@@ -456,11 +459,15 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 				jobName:   jobNameVector.GetStringAt(i),
 			}
 			if job, ok := jobMap[jobName]; ok {
+				if job.jobID > jobIDs[i] {
+					continue
+				}
 				if job.ts.GT(&commitTSs[i]) {
 					continue
 				}
 			}
 			jobMap[jobName] = job{
+				jobID:  jobIDs[i],
 				ts:     commitTSs[i],
 				offset: i,
 			}
@@ -473,6 +480,7 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 							accountIDs[job.offset],
 							tableIDs[job.offset],
 							jobNameVector.GetStringAt(job.offset),
+							jobIDs[job.offset],
 							states[job.offset],
 							watermarkVector.GetStringAt(job.offset),
 							jobSpecVector.GetBytesAt(job.offset),
@@ -535,11 +543,13 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 		tableIDVector := cols[1]
 		tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
 		jobNameVector := cols[2]
-		jobSpecVector := cols[3]
-		jobStateVector := cols[4]
+		jobIDVector := cols[3]
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](jobIDVector)
+		jobSpecVector := cols[4]
+		jobStateVector := cols[5]
 		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
-		watermarkVector := cols[5]
-		dropAtVector := cols[8]
+		watermarkVector := cols[6]
+		dropAtVector := cols[9]
 		for i := 0; i < rows; i++ {
 			if !dropAtVector.IsNull(uint64(i)) {
 				continue
@@ -551,6 +561,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 						accountIDs[i],
 						tableIDs[i],
 						jobNameVector.GetStringAt(i),
+						jobIDs[i],
 						states[i],
 						watermarkVector.GetStringAt(i),
 						jobSpecVector.GetBytesAt(i),
@@ -572,6 +583,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	accountID uint32,
 	tableID uint64,
 	jobName string,
+	jobID uint64,
 	state int8,
 	watermarkStr string,
 	jobSpecStr []byte,
@@ -592,6 +604,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobName),
+			zap.Uint64("jobID", jobID),
 			zap.String("watermark", watermarkStr),
 			zap.Bool("newcreate", newCreate),
 			zap.Error(err),
@@ -627,7 +640,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		)
 		exec.setTable(table)
 	}
-	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec, watermark, state)
+	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec,jobID, watermark, state)
 	return
 }
 

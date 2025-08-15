@@ -35,12 +35,14 @@ func NewJobEntry(
 	tableInfo *TableEntry,
 	jobName string,
 	jobSpec *JobSpec,
+	jobID uint64,
 	watermark types.TS,
 	state int8,
 ) *JobEntry {
 	jobEntry := &JobEntry{
 		tableInfo: tableInfo,
 		jobName:   jobName,
+		jobID:     jobID,
 		jobSpec:   &jobSpec.TriggerSpec,
 		watermark: watermark,
 		state:     state,
@@ -80,6 +82,7 @@ func (jobEntry *JobEntry) UpdateWatermark(
 			jobEntry.tableInfo.accountID,
 			jobEntry.tableInfo.tableID,
 			jobEntry.jobName,
+			jobEntry.jobID,
 			jobEntry.watermark,
 			"",
 			ISCPJobState_Completed,

@@ -87,6 +87,7 @@ type IterationContext struct {
 	accountID uint32
 	tableID   uint64
 	jobNames  []string
+	jobIDs    []uint64
 	fromTS    types.TS
 	toTS      types.TS
 }
@@ -146,6 +147,7 @@ type JobEntry struct {
 	tableInfo *TableEntry
 	jobName   string
 	jobSpec   *TriggerSpec
+	jobID     uint64
 
 	watermark          types.TS
 	persistedWatermark types.TS
