@@ -221,7 +221,22 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 ) *containers.Batch {
 	createDBSql := fmt.Sprintf("create database if not exists %s", databaseName)
 	createTableSql := fmt.Sprintf(
-		"create table %s.%s (id int primary key, name varchar)", databaseName, tableName)
+		`create table %s.%s (
+		id int primary key,
+		name varchar,
+		i1 bool,
+		i2 TINYINT,
+		i3 SMALLINT,
+		i4 INT,
+		i5 BIGINT,
+		i6 FLOAT,
+		i7 DOUBLE,
+		i8 TIMESTAMP,
+		i9 TINYINT UNSIGNED,
+		i10 SMALLINT UNSIGNED,
+		i11 INT UNSIGNED,
+		i12 BIGINT UNSIGNED
+		)`, databaseName, tableName)
 
 	v, ok := moruntime.ServiceRuntime("").
 		GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -236,8 +251,23 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 	assert.NoError(t, err)
 
 	return containers.MockBatchWithAttrs(
-		[]types.Type{types.T_int32.ToType(), types.T_varchar.ToType()},
-		[]string{"id", "name"},
+		[]types.Type{
+			types.T_int32.ToType(),
+			types.T_varchar.ToType(),
+			types.T_bool.ToType(), //i1
+			types.T_int8.ToType(),
+			types.T_int16.ToType(),
+			types.T_int32.ToType(),
+			types.T_int64.ToType(), //i5
+			types.T_float32.ToType(),
+			types.T_float64.ToType(),
+			types.T_timestamp.ToType(),
+			types.T_uint8.ToType(),
+			types.T_uint16.ToType(),
+			types.T_uint32.ToType(),
+			types.T_uint64.ToType(),//i12
+		},
+		[]string{"id", "name", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10", "i11", "i12"},
 		rowCount,
 		0,
 		nil,
