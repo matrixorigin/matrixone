@@ -839,17 +839,23 @@ func buildCreateTable(
 					Value: property.Value,
 				}
 			}
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Properties{
-					Properties: &plan.PropertiesDef{
-						Properties: properties,
+			createTable.TableDef.Defs = append(
+				createTable.TableDef.Defs,
+				&plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_Properties{
+						Properties: &plan.PropertiesDef{
+							Properties: properties,
+						},
 					},
-				},
-			})
+				})
 		// todo confirm: option data store like this?
 		case *tree.TableOptionComment:
 			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "comment for field '%s' is too long", createTable.TableDef.Name)
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					"comment for field '%s' is too long",
+					createTable.TableDef.Name,
+				)
 			}
 
 			properties := []*plan.Property{
@@ -858,13 +864,15 @@ func buildCreateTable(
 					Value: opt.Comment,
 				},
 			}
-			createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-				Def: &plan.TableDef_DefType_Properties{
-					Properties: &plan.PropertiesDef{
-						Properties: properties,
+			createTable.TableDef.Defs = append(
+				createTable.TableDef.Defs,
+				&plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_Properties{
+						Properties: &plan.PropertiesDef{
+							Properties: properties,
+						},
 					},
-				},
-			})
+				})
 		case *tree.TableOptionAutoIncrement:
 			if opt.Value != 0 {
 				createTable.TableDef.AutoIncrOffset = opt.Value - 1
@@ -901,7 +909,11 @@ func buildCreateTable(
 			switch strings.ToLower(stmt.Param.Option[i]) {
 			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id":
 			default:
-				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
+				return nil, moerr.NewBadConfigf(
+					ctx.GetContext(),
+					"the keyword '%s' is not support",
+					strings.ToLower(stmt.Param.Option[i]),
+				)
 			}
 		}
 		if err := InitNullMap(stmt.Param, ctx); err != nil {
@@ -922,12 +934,16 @@ func buildCreateTable(
 			},
 		}
 		createTable.TableDef.TableType = catalog.SystemExternalRel
-		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
+		createTable.TableDef.Defs = append(
+			createTable.TableDef.Defs,
+			&plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: properties,
+					},
 				},
-			}})
+			},
+		)
 	} else {
 		kind := catalog.SystemOrdinaryRel
 		if stmt.IsClusterTable {
@@ -949,12 +965,16 @@ func buildCreateTable(
 				Value: ctx.GetRootSql(),
 			},
 		}
-		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
+		createTable.TableDef.Defs = append(
+			createTable.TableDef.Defs,
+			&plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: properties,
+					},
 				},
-			}})
+			},
+		)
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
@@ -968,22 +988,27 @@ func buildCreateTable(
 			return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
 		}
 
-		nodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			Stats:       nil,
-			ObjRef:      nil,
-			TableDef:    createTable.TableDef,
-			BindingTags: []int32{builder.genNewTag()},
-		}, bindContext)
+		nodeID := builder.appendNode(
+			&plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				Stats:       nil,
+				ObjRef:      nil,
+				TableDef:    createTable.TableDef,
+				BindingTags: []int32{builder.genNewTag()},
+			},
+			bindContext,
+		)
 
-		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
-		if err != nil {
+		if err = builder.addBinding(
+			nodeID, tree.AliasClause{}, bindContext,
+		); err != nil {
 			return nil, err
 		}
 
 		partitionBinder := NewPartitionBinder(builder, bindContext)
-		createTable.TableDef.Partition, err = partitionBinder.buildPartitionDefs(ctx.GetContext(), stmt.PartitionOption)
-		if err != nil {
+		if createTable.TableDef.Partition, err = partitionBinder.buildPartitionDefs(
+			ctx.GetContext(), stmt.PartitionOption,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -1000,7 +1025,12 @@ func buildCreateTable(
 	}, nil
 }
 
-func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
+func buildTableDefs(
+	stmt *tree.CreateTable,
+	ctx CompilerContext,
+	createTable *plan.CreateTable,
+	asSelectCols []*ColDef,
+) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
 	var indexs []string
@@ -1503,20 +1533,23 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	// build index table
 	if len(uniqueIndexInfos) != 0 {
-		err = buildUniqueIndexTable(createTable, uniqueIndexInfos, colMap, pkeyName, ctx)
-		if err != nil {
+		if err = buildUniqueIndexTable(
+			createTable, uniqueIndexInfos, colMap, pkeyName, ctx,
+		); err != nil {
 			return err
 		}
 	}
 	if len(fullTextIndexInfos) != 0 {
-		err = buildFullTextIndexTable(createTable, fullTextIndexInfos, colMap, nil, pkeyName, ctx)
-		if err != nil {
+		if err = buildFullTextIndexTable(
+			createTable, fullTextIndexInfos, colMap, nil, pkeyName, ctx,
+		); err != nil {
 			return err
 		}
 	}
 	if len(secondaryIndexInfos) != 0 {
-		err = buildSecondaryIndexDef(createTable, secondaryIndexInfos, colMap, nil, pkeyName, ctx)
-		if err != nil {
+		if err = buildSecondaryIndexDef(
+			createTable, secondaryIndexInfos, colMap, nil, pkeyName, ctx,
+		); err != nil {
 			return err
 		}
 	}
@@ -1529,7 +1562,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			def.ColId = uint64(i)
 		}
 		for _, selfRefer := range fkDatasOfFKSelfRefer {
-			if err := checkFkColsAreValid(ctx, selfRefer, createTable.TableDef); err != nil {
+			if err := checkFkColsAreValid(
+				ctx, selfRefer, createTable.TableDef,
+			); err != nil {
 				return err
 			}
 		}
@@ -1537,7 +1572,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	skip := IsFkBannedDatabase(createTable.Database)
 	if !skip {
-		fks, err := GetFkReferredTo(ctx, createTable.Database, createTable.TableDef.Name)
+		fks, err := GetFkReferredTo(
+			ctx, createTable.Database, createTable.TableDef.Name,
+		)
 		if err != nil {
 			return err
 		}
@@ -1548,7 +1585,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 		for rkey, fkDefs := range fks {
 			for constraintName, defs := range fkDefs {
-				data, err := buildFkDataOfForwardRefer(ctx, constraintName, defs, createTable)
+				data, err := buildFkDataOfForwardRefer(
+					ctx, constraintName, defs, createTable,
+				)
 				if err != nil {
 					return err
 				}
@@ -1936,30 +1975,53 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 	return nil
 }
 
-func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string, ctx CompilerContext) (err error) {
+func buildSecondaryIndexDef(
+	createTable *plan.CreateTable,
+	indexInfos []*tree.Index,
+	colMap map[string]*ColDef,
+	existedIndexes []*plan.IndexDef,
+	pkeyName string,
+	ctx CompilerContext,
+) (err error) {
 	if len(pkeyName) == 0 {
-		return moerr.NewInternalErrorNoCtx("primary key cannot be empty for secondary index")
+		return moerr.NewInternalErrorNoCtx(
+			"primary key cannot be empty for secondary index",
+		)
 	}
 
 	for _, indexInfo := range indexInfos {
-		err = checkIndexKeypartSupportability(ctx.GetContext(), indexInfo.KeyParts)
-		if err != nil {
+		if err = checkIndexKeypartSupportability(
+			ctx.GetContext(),
+			indexInfo.KeyParts,
+		); err != nil {
 			return err
 		}
 
-		var indexDef []*plan.IndexDef
-		var tableDef []*TableDef
+		var (
+			indexDef []*plan.IndexDef
+			tableDef []*TableDef
+		)
 		switch indexInfo.KeyType {
 		case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
-			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildRegularSecondaryIndexDef(
+				ctx, indexInfo, colMap, pkeyName,
+			)
 		case tree.INDEX_TYPE_IVFFLAT:
-			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
+			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(
+				ctx, indexInfo, colMap, existedIndexes, pkeyName,
+			)
 		case tree.INDEX_TYPE_MASTER:
-			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+			indexDef, tableDef, err = buildMasterSecondaryIndexDef(
+				ctx, indexInfo, colMap, pkeyName,
+			)
 		case tree.INDEX_TYPE_HNSW:
-			indexDef, tableDef, err = buildHnswSecondaryIndexDef(ctx, indexInfo, colMap, existedIndexes, pkeyName)
+			indexDef, tableDef, err = buildHnswSecondaryIndexDef(
+				ctx, indexInfo, colMap, existedIndexes, pkeyName,
+			)
 		default:
-			return moerr.NewInvalidInputNoCtxf("unsupported index type: %s", indexInfo.KeyType.ToString())
+			return moerr.NewInvalidInputNoCtxf(
+				"unsupported index type: %s", indexInfo.KeyType.ToString(),
+			)
 		}
 
 		if err != nil {
@@ -2311,7 +2373,13 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 //	primary key (__mo_index_centriod_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col)
 // )
 
-func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+func buildIvfFlatSecondaryIndexDef(
+	ctx CompilerContext,
+	indexInfo *tree.Index,
+	colMap map[string]*ColDef,
+	existedIndexes []*plan.IndexDef,
+	pkeyName string,
+) ([]*plan.IndexDef, []*TableDef, error) {
 
 	indexParts := make([]string, 1)
 
@@ -2517,8 +2585,13 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 
 		// 3.b indexDefs[2] init
-		indexDefs[2], err = CreateIndexDef(indexInfo, indexTableName, catalog.SystemSI_IVFFLAT_TblType_Entries, indexParts, false)
-		if err != nil {
+		if indexDefs[2], err = CreateIndexDef(
+			indexInfo,
+			indexTableName,
+			catalog.SystemSI_IVFFLAT_TblType_Entries,
+			indexParts,
+			false,
+		); err != nil {
 			return nil, nil, err
 		}
 
@@ -2605,12 +2678,16 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				Value: catalog.SystemSI_IVFFLAT_TblType_Entries,
 			},
 		}
-		tableDefs[2].Defs = append(tableDefs[2].Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Properties{
-				Properties: &plan.PropertiesDef{
-					Properties: properties,
+		tableDefs[2].Defs = append(
+			tableDefs[2].Defs,
+			&plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: &plan.PropertiesDef{
+						Properties: properties,
+					},
 				},
-			}})
+			},
+		)
 	}
 
 	return indexDefs, tableDefs, nil
@@ -3377,19 +3454,39 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 
 	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
 	if uIdx != nil {
-		if err := buildUniqueIndexTable(indexInfo, []*tree.UniqueIndex{uIdx}, colMap, oriPriKeyName, ctx); err != nil {
+		if err := buildUniqueIndexTable(
+			indexInfo,
+			[]*tree.UniqueIndex{uIdx},
+			colMap,
+			oriPriKeyName,
+			ctx,
+		); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true
 	}
 	if ftIdx != nil {
-		if err := buildFullTextIndexTable(indexInfo, []*tree.FullTextIndex{ftIdx}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
+		if err := buildFullTextIndexTable(
+			indexInfo,
+			[]*tree.FullTextIndex{ftIdx},
+			colMap,
+			tableDef.Indexes,
+			oriPriKeyName,
+			ctx,
+		); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true
 	}
 	if sIdx != nil {
-		if err := buildSecondaryIndexDef(indexInfo, []*tree.Index{sIdx}, colMap, tableDef.Indexes, oriPriKeyName, ctx); err != nil {
+		if err := buildSecondaryIndexDef(
+			indexInfo,
+			[]*tree.Index{sIdx},
+			colMap,
+			tableDef.Indexes,
+			oriPriKeyName,
+			ctx,
+		); err != nil {
 			return nil, err
 		}
 		createIndex.TableExist = true

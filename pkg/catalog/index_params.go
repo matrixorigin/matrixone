@@ -477,7 +477,7 @@ func (params IndexParams) ToStringList() (res string, err error) {
 	switch params.Type() {
 	case IndexParamType_FullText:
 		res = fmt.Sprintf(
-			" %s %s ",
+			" %s '%s' ",
 			strings.ToUpper(IndexAlgoParamParserName),
 			params.ParserType().String(),
 		)
@@ -489,7 +489,7 @@ func (params IndexParams) ToStringList() (res string, err error) {
 		if params.IVFFLATList() > 0 {
 			res += fmt.Sprintf(" %s = %d ", IndexAlgoParamLists, params.IVFFLATList())
 		}
-		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamOpType, params.IVFFLATAlgo().String())
+		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, params.IVFFLATAlgo().String())
 	case IndexParamType_HNSW:
 		if !params.HNSWAlgo().IsValid() {
 			err = moerr.NewInternalErrorNoCtxf("invalid algo: %s", params.HNSWAlgo().String())
@@ -508,8 +508,8 @@ func (params IndexParams) ToStringList() (res string, err error) {
 		if params.HNSWEfSearch() > 0 {
 			res += fmt.Sprintf(" %s = %d ", HnswEfSearch, params.HNSWEfSearch())
 		}
-		res += fmt.Sprintf(" %s = %s ", HnswQuantization, params.HNSWQuantization().String())
-		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamOpType, params.HNSWAlgo().String())
+		res += fmt.Sprintf(" %s '%s' ", HnswQuantization, params.HNSWQuantization().String())
+		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, params.HNSWAlgo().String())
 	default:
 		err = moerr.NewInternalErrorNoCtxf("invalid index params type: %s", params.Type().String())
 		return

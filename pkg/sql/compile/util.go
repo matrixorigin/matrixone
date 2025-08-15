@@ -184,9 +184,16 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 }
 
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
-func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef, tableDef *plan.TableDef) (string, error) {
+func genInsertMOIndexesSql(
+	eg engine.Engine,
+	proc *process.Process,
+	databaseId string,
+	tableId uint64,
+	ct *engine.ConstraintDef,
+	tableDef *plan.TableDef,
+) (string, error) {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
-	buffer.WriteString("insert into mo_catalog.mo_indexes values")
+	buffer.WriteString("INSERT INTO `mo_catalog`.`mo_indexes` VALUES")
 
 	getOriginName := func(name string) string {
 		if idx, ok := tableDef.Name2ColIndex[name]; ok {
@@ -200,7 +207,9 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, indexDef := range def.Indexes {
-				ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql)
+				ctx, cancelFunc := context.WithTimeoutCause(
+					proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql,
+				)
 				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				cancelFunc()
 				if err != nil {
@@ -273,7 +282,12 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					// 14. index vec_options
 					if indexDef.Option != nil {
 						if indexDef.Option.ParserName != "" {
-							fmt.Fprintf(buffer, "'parser=%s,ngram_token_size=%d', ", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)
+							fmt.Fprintf(
+								buffer,
+								"'parser=%s,ngram_token_size=%d', ",
+								indexDef.Option.ParserName,
+								indexDef.Option.NgramTokenSize,
+							)
 						}
 					} else {
 						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
@@ -288,7 +302,9 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql2)
+			ctx, cancelFunc := context.WithTimeoutCause(
+				proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql2,
+			)
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			cancelFunc()
 			if err != nil {
@@ -373,7 +389,13 @@ func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseI
 }
 
 // makeInsertMultiIndexSQL :Synchronize the index metadata information of the table to the index metadata table
-func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *process.Process, dbSource engine.Database, relation engine.Relation) (string, error) {
+func makeInsertMultiIndexSQL(
+	eng engine.Engine,
+	ctx context.Context,
+	proc *process.Process,
+	dbSource engine.Database,
+	relation engine.Relation,
+) (string, error) {
 	if dbSource == nil || relation == nil {
 		return "", nil
 	}
@@ -406,11 +428,9 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 		return "", nil
 	}
 
-	insertMoIndexesSql, err := genInsertMOIndexesSql(eg, proc, databaseId, tableId, ct, tableDef)
-	if err != nil {
-		return "", err
-	}
-	return insertMoIndexesSql, nil
+	return genInsertMOIndexesSql(
+		eng, proc, databaseId, tableId, ct, tableDef,
+	)
 }
 
 func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation) error {
@@ -443,7 +463,10 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
 							return err
 						} else if !ok {
-							return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", indexflag))
+							return moerr.NewInternalError(
+								c.proc.Ctx,
+								fmt.Sprintf("%s is not enabled", indexflag),
+							)
 						}
 					}
 				}

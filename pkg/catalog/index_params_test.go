@@ -340,7 +340,7 @@ func TestIndexParams_ToStringList(t *testing.T) {
 	)
 	res, err = params.ToStringList()
 	require.NoError(t, err)
-	require.Equal(t, " PARSER ngram ", res)
+	require.Equal(t, " PARSER 'ngram' ", res)
 
 	params = BuildIndexParamsIVFFLATV1(
 		10,
@@ -348,7 +348,7 @@ func TestIndexParams_ToStringList(t *testing.T) {
 	)
 	res, err = params.ToStringList()
 	require.NoError(t, err)
-	require.Equal(t, " lists = 10  op_type = vector_cosine_ops ", res)
+	require.Equal(t, " lists = 10  op_type 'vector_cosine_ops' ", res)
 
 	params = BuildIndexParamsHNSWV1(
 		IndexParamAlgoType_L2Distance,
@@ -359,7 +359,7 @@ func TestIndexParams_ToStringList(t *testing.T) {
 	)
 	res, err = params.ToStringList()
 	require.NoError(t, err)
-	require.Equal(t, " m = 10  ef_search = 1000  quantization = F32  op_type = vector_l2_ops ", res)
+	require.Equal(t, " m = 10  ef_search = 1000  quantization 'F32'  op_type 'vector_l2_ops' ", res)
 
 	params = BuildIndexParamsHNSWV1(
 		IndexParamAlgoType_InnerProduct,
@@ -370,5 +370,5 @@ func TestIndexParams_ToStringList(t *testing.T) {
 	)
 	res, err = params.ToStringList()
 	require.NoError(t, err)
-	require.Equal(t, " m = 10  ef_construction = 100  ef_search = 1000  quantization = I8  op_type = vector_ip_ops ", res)
+	require.Equal(t, " m = 10  ef_construction = 100  ef_search = 1000  quantization 'I8'  op_type 'vector_ip_ops' ", res)
 }

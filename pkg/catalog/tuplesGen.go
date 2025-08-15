@@ -77,8 +77,12 @@ type Table struct {
 // NOTE: 1. it will modify the input TableDef.
 // 2. it is usually used in creating new table.
 // 3. It will append rowid column as the last column, which is **incorrect** if we want impl alter column gracefully.
-func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
-	tableId, databaseId uint64, defs []engine.TableDef) ([]Column, error) {
+func GenColumnsFromDefs(
+	accountId uint32,
+	tableName, databaseName string,
+	tableId, databaseId uint64,
+	defs []engine.TableDef,
+) (cols []Column, err error) {
 	{
 		mp := make(map[string]int)
 		for i, def := range defs {
@@ -110,7 +114,7 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 		}
 	}
 	var num int32 = 1
-	cols := make([]Column, 0, len(defs))
+	cols = make([]Column, 0, len(defs))
 	for _, def := range defs {
 		attrDef, ok := def.(*engine.AttributeDef)
 		if !ok || attrDef.Attr.Name == Row_ID {
@@ -181,20 +185,22 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 	// add rowid column
 	rowidTyp := types.T_Rowid.ToType()
 	typ, _ := types.Encode(&rowidTyp)
-	cols = append(cols, Column{
-		Typ:          typ,
-		TypLen:       int32(len(typ)),
-		AccountId:    accountId,
-		TableId:      tableId,
-		DatabaseId:   databaseId,
-		Name:         Row_ID,
-		TableName:    tableName,
-		DatabaseName: databaseName,
-		Num:          int32(len(cols) + 1),
-		Seqnum:       uint16(len(cols)),
-		IsHidden:     1,
-		NotNull:      1,
-	})
+	cols = append(
+		cols,
+		Column{
+			Typ:          typ,
+			TypLen:       int32(len(typ)),
+			AccountId:    accountId,
+			TableId:      tableId,
+			DatabaseId:   databaseId,
+			Name:         Row_ID,
+			TableName:    tableName,
+			DatabaseName: databaseName,
+			Num:          int32(len(cols) + 1),
+			Seqnum:       uint16(len(cols)),
+			IsHidden:     1,
+			NotNull:      1,
+		})
 
 	return cols, nil
 }

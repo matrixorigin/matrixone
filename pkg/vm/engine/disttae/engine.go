@@ -17,10 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -254,15 +255,33 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	var packer *types.Packer
 	put := e.packerPool.Get(&packer)
 	defer put.Put()
-	bat, err := catalog.GenCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, typ, txn.proc.Mp(), packer)
+	bat, err := catalog.GenCreateDatabaseTuple(
+		sql,
+		accountId,
+		userId,
+		roleId,
+		name,
+		databaseId,
+		typ,
+		txn.proc.Mp(),
+		packer,
+	)
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
 	note := noteForCreate(uint64(accountId), name)
-	if _, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
+	if _, err = txn.WriteBatch(
+		INSERT,
+		note,
+		catalog.System_Account,
+		catalog.MO_CATALOG_ID,
+		catalog.MO_DATABASE_ID,
+		catalog.MO_CATALOG,
+		catalog.MO_DATABASE,
+		bat,
+		txn.tnStores[0],
+	); err != nil {
 		bat.Clean(txn.proc.Mp())
 		return err
 	}
