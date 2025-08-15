@@ -672,22 +672,22 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 		)
 	}
 
-	logutil.Info("MergeExecutorEvent",
-		zap.String("event", "vacuum check"),
+	logutil.Info(
+		"MergeExecutorEvent-VacuumCheck",
 		zap.String("table", msg.Table.GetNameDesc()),
-		zap.String("tombstoneVacuum", fmt.Sprintf("%.2g", stats.DelVacuumPercent)),
-		zap.String("dataVacuum", fmt.Sprintf("%.2g", stats.DataVacuumPercent)),
-		zap.Duration("maxAge", stats.MaxCreateAgo.Round(time.Second)),
-		zap.Int("compactThreshold", stats.DataVacuumScoreToCompact),
-		zap.Int("compact", len(compactTasks)),
+		zap.String("tombstone", fmt.Sprintf("%.2g", stats.DelVacuumPercent)),
+		zap.String("data", fmt.Sprintf("%.2g", stats.DataVacuumPercent)),
+		zap.Duration("max-age", stats.MaxCreateAgo.Round(time.Second)),
+		zap.Int("compact-threshold", stats.DataVacuumScoreToCompact),
+		zap.Int("compact-tasks", len(compactTasks)),
 	)
 }
 
 func (a *MergeScheduler) ioConfigBootstrap(msg MMsgConfigBootstrap) {
 	bat, release := msg.ReadSettingsBatch()
 	if bat == nil {
-		logutil.Error("MergeExecutorEvent",
-			zap.String("event", "return nil for bootstrap config"),
+		logutil.Error(
+			"MergeExecutorEvent-NilBootstrapConfig",
 		)
 		return
 	}
@@ -698,9 +698,9 @@ func (a *MergeScheduler) ioConfigBootstrap(msg MMsgConfigBootstrap) {
 		count++
 	})
 
-	logutil.Info("MergeExecutorEvent",
-		zap.String("event", "bootstrap config"),
-		zap.Int("batRows", bat.RowCount()),
+	logutil.Info(
+		"MergeExecutorEvent-BootstrapConfig",
+		zap.Int("bat-rows", bat.RowCount()),
 		zap.Int("count", count),
 	)
 }
@@ -747,7 +747,7 @@ func (a *MergeScheduler) handleMainLoop() {
 	never := make(<-chan time.Time)
 
 	// fallback to check the status of the priority queue
-	heartbeat := a.clock.NewTicker(time.Second * 10)
+	heartbeat := a.clock.NewTicker(time.Second * 60)
 
 	vacuumCheckTicker := a.clock.NewTicker(time.Hour * 1)
 
@@ -764,17 +764,17 @@ func (a *MergeScheduler) handleMainLoop() {
 			// handle tasks in the priority queue
 			for a.pq.Len() > 0 {
 				if len(a.msgChan) > 50 {
-					logutil.Info("MergeExecutorEvent",
-						zap.String("event", "handle msg first"),
-						zap.Int("msgLen", len(a.msgChan)),
+					logutil.Info(
+						"MergeExecutorEvent-HandleMsgFirst",
+						zap.Int("msg-len", len(a.msgChan)),
 					)
 					// handle msg first, because it can change the priority queue
 					break
 				}
 				if a.rc.Available() < 500*common.Const1MBytes {
-					logutil.Info("MergeExecutorEvent",
-						zap.String("event", "pause due to OOM alert"),
-						zap.Int64("availableMem", a.rc.Available()),
+					logutil.Info(
+						"MergeExecutorEvent-PauseDueToOOMAlert",
+						zap.Int64("available-mem", a.rc.Available()),
 					)
 					// let's pause for a while to avoid OOM
 					break
@@ -898,8 +898,8 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 			// there is patch already, merge it in place
 			supp.triggers[0] = supp.triggers[0].Merge(msg)
 		}
-		logutil.Info("MergeExecutorEvent",
-			zap.String("event", "patch trigger"),
+		logutil.Info(
+			"MergeExecutorEvent-PatchTrigger",
 			zap.String("table", msg.table.GetNameDesc()),
 			zap.Any("trigger", supp.triggers[0]),
 		)
@@ -914,10 +914,10 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 func (a *MergeScheduler) handleSwitch(msg MMsgSwitch) {
 	if msg.Table == nil {
 		if msg.On {
-			logutil.Info("MergeExecutorEvent", zap.String("event", "resume all"))
+			logutil.Info("MergeExecutorEvent-ResumeAll")
 			a.allPaused = false
 		} else {
-			logutil.Info("MergeExecutorEvent", zap.String("event", "pause all"))
+			logutil.Info("MergeExecutorEvent-PauseAll")
 			a.allPaused = true
 		}
 	} else {
@@ -926,15 +926,15 @@ func (a *MergeScheduler) handleSwitch(msg MMsgSwitch) {
 			return
 		}
 		if msg.On && supp.paused {
-			logutil.Info("MergeExecutorEvent",
-				zap.String("event", "resume table"),
+			logutil.Info(
+				"MergeExecutorEvent-ResumeTable",
 				zap.String("table", msg.Table.GetNameDesc()),
 			)
 			supp.paused = false
 			a.pq.Update(supp.todo, a.clock.Now().Add(time.Second*1))
 		} else if !msg.On && !supp.paused {
-			logutil.Info("MergeExecutorEvent",
-				zap.String("event", "pause table"),
+			logutil.Info(
+				"MergeExecutorEvent-PauseTable",
 				zap.String("table", msg.Table.GetNameDesc()),
 			)
 			supp.paused = true
@@ -998,8 +998,8 @@ func (a *MergeScheduler) handleConfig(msg MMsgConfig) {
 	if msg.Trigger != nil {
 		settings = msg.Trigger.String()
 	}
-	logutil.Info("MergeExecutorEvent",
-		zap.String("event", "set base config"),
+	logutil.Info(
+		"MergeExecutorEvent-SetBaseConfig",
 		zap.String("table", supp.todo.table.GetNameDesc()),
 		zap.String("settings", settings),
 	)
@@ -1035,8 +1035,8 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	if todo.table.HasDropCommitted() {
 		delete(a.supps, todo.table.ID())
 		heap.Pop(&a.pq)
-		logutil.Info("MergeExecutorEvent",
-			zap.String("event", "remove table"),
+		logutil.Info(
+			"MergeExecutorEvent-RemoveTable",
 			zap.String("table", todo.table.GetNameDesc()),
 		)
 		return
@@ -1240,8 +1240,8 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 		}
 		overlapTasks, err := GatherOverlapMergeTasks(ctx, p.leveledObjects[i], lnOpts, int8(i))
 		if err != nil {
-			logutil.Warn("MergeExecutorEvent",
-				zap.String("warn", "GatherOverlapMergeTasks failed"),
+			logutil.Warn(
+				"MergeExecutorEvent-GatherOverlapMergeTasksFailed",
 				zap.String("table", p.table.GetNameDesc()),
 				zap.Error(err),
 			)
