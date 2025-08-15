@@ -88,7 +88,9 @@ func (semiJoin *SemiJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			} else {
 				ctr.state = Probe
 			}
-			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && semiJoin.Cond == nil {
+
+			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() &&
+				semiJoin.Cond == nil && len(semiJoin.Conditions) == 0 {
 				ctr.skipProbe = true
 			}
 
