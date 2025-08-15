@@ -264,12 +264,15 @@ user_grant_9    role_account_priv_8    table    table ownership    d.t
 select * from testdb4.table_1;
 internal error: do not have privilege to execute the statement
 delete from testdb4.table_1;
+internal error: do not have privilege to execute the statement
 insert into testdb5.table_2 values(20,'yeah',10.20);
-internal error: do not have privilege to execute the statement
 update testdb5.table_2 set name='bread' where id=20;
-internal error: do not have privilege to execute the statement
 select * from testdb5.table_2;
-internal error: do not have privilege to execute the statement
+id    name    num
+3    pear    3.8
+4    orange    5.03
+9        8.0
+20    bread    10.2
 create user 'user_grant_10' identified by '123456';
 create role 'role_account_priv_9';
 create table grant_table_10(a int);
@@ -279,11 +282,11 @@ select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catal
 user_name    role_name    obj_type    privilege_name    privilege_level
 user_grant_10    role_account_priv_9    table    table all    d.*
 insert into testdb4.table_1 values (10,'ccc',1.8),(11,'ddd',5.3);
-internal error: do not have privilege to execute the statement
 select * from testdb4.table_1;
-internal error: do not have privilege to execute the statement
+id    name    num
+10    ccc    1.8
+11    ddd    5.3
 update testdb4.table_1 set name='oppo' where id=10;
-internal error: do not have privilege to execute the statement
 delete from testdb4.table_1;
 select * from testdb4.table_1;
 internal error: do not have privilege to execute the statement
@@ -335,7 +338,7 @@ select count(*) from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_r
 count(*)
 99
 create table grant_table_10(a int);
-internal error: do not have privilege to execute the statement
+not connect to a database
 grant create role on account * to r5;
 grant r5 to user1,user2,user3,user4,user5;
 select user_name,role_name,obj_type,privilege_name,privilege_level from mo_catalog.mo_user_grant,mo_catalog.mo_user,mo_catalog.mo_role_privs where mo_user_grant.user_id=mo_user.user_id and mo_role_privs.role_id=mo_user_grant.role_id and role_name in ('r5');
@@ -366,9 +369,10 @@ user5    r5    table    update    *.*
 user5    r5    database    create table    *.*
 user5    r5    account    create role    *
 create role test_role;
-internal error: do not have privilege to execute the statement
+internal error: the role test_role exists
 select count(*) from mo_catalog.mo_role where role_name='test_role';
-internal error: do not have privilege to execute the statement
+count(*)
+1
 create user user11 identified by '12345678';
 grant select ,insert ,update on table *.* to r1,r2 with grant option;
 grant r1,r2 to r6,r7;
