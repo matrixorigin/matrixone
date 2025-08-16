@@ -22,7 +22,9 @@ func TestInuseTrackingAllocator(t *testing.T) {
 	testAllocator(t, func() Allocator {
 		return NewInuseTrackingAllocator(
 			newUpstreamAllocatorForTest(),
-			func(inUse uint64) {},
+			func(inUse uint64) error {
+				return nil
+			},
 		)
 	})
 }
@@ -32,7 +34,9 @@ func BenchmarkInuseTrackingAllocator(b *testing.B) {
 		benchmarkAllocator(b, func() Allocator {
 			return NewInuseTrackingAllocator(
 				newUpstreamAllocatorForTest(),
-				func(inUse uint64) {},
+				func(inUse uint64) error {
+					return nil
+				},
 			)
 		}, n)
 	}
@@ -42,7 +46,9 @@ func FuzzInuseTrackingAllocator(f *testing.F) {
 	fuzzAllocator(f, func() Allocator {
 		return NewInuseTrackingAllocator(
 			newUpstreamAllocatorForTest(),
-			func(inUse uint64) {},
+			func(inUse uint64) error {
+				return nil
+			},
 		)
 	})
 }
