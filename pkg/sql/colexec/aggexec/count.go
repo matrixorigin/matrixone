@@ -39,7 +39,7 @@ func (exec *countColumnExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *countColumnExec) marshal() ([]byte, error) {
+func (exec *countColumnExec) Marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -63,7 +63,7 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *countColumnExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *countColumnExec) Unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	if exec.IsDistinct() {
 		if len(groups) > 0 {
 			if err := exec.distinctHash.unmarshal(groups[0]); err != nil {
@@ -286,7 +286,7 @@ func (exec *countStarExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *countStarExec) marshal() ([]byte, error) {
+func (exec *countStarExec) Marshal() ([]byte, error) {
 	d := exec.singleAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -301,7 +301,7 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *countStarExec) unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
+func (exec *countStarExec) Unmarshal(_ *mpool.MPool, result, empties, _ [][]byte) error {
 	return exec.ret.unmarshalFromBytes(result, empties)
 }
 

@@ -1558,6 +1558,7 @@ func constructGroup(_ context.Context, n, cn *plan.Node, needEval bool, shuffleD
 	arg.GroupingFlag = n.GroupingFlag
 	arg.Exprs = n.GroupBy
 	arg.PreAllocSize = preAllocSize
+	arg.SpillThreshold = proc.GetLim().SpillThreshold
 	return arg
 }
 
