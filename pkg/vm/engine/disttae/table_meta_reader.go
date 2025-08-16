@@ -17,6 +17,8 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -385,17 +387,13 @@ func (r *TableMetaReader) collectVisibleObjs(
 				return zap.Skip(), err
 			}
 		} else {
+			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).
+			// so there may exist rows which commitTS > snapshot, we need to scan all rows to filter them out.
 			objRelData.AppendObj(&obj.ObjectStats)
 		}
 	}
 
-	if objRelData.DataCnt() > 0 {
-		if isTombstone {
-			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
-		} else {
-			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
-		}
-
+	readData := func() (err error) {
 		source := &LocalDisttaeDataSource{
 			table:           r.table,
 			pState:          r.pState,
@@ -422,14 +420,91 @@ func (r *TableMetaReader) collectVisibleObjs(
 		for {
 			stop, err = dataReader.Read(ctx, attrs, nil, mp, dataBatch)
 			if err != nil {
-				return zap.Skip(), err
+				return err
 			}
 
 			if stop {
 				break
 			}
 
-			if err = s3Writer.Write(ctx, dataBatch); err != nil {
+			if dataBatch.RowCount() > 0 {
+				if err = s3Writer.Write(ctx, dataBatch); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	readTombstone := func() (err error) {
+		// all appendable objects are created by TN
+		var (
+			commit    []types.TS
+			release   func()
+			blkInfo   *objectio.BlockInfo
+			blkSlice  objectio.BlockInfoSlice
+			qualified = objectio.GetReusableBitmap()
+
+			bat          = batch.New(objectio.TombstoneAttrs_TN_Created)
+			cacheVectors = containers.NewVectors(len(objectio.TombstoneAttrs_TN_Created))
+		)
+
+		defer func() {
+			if release != nil {
+				release()
+			}
+
+			qualified.Release()
+		}()
+
+		blkSlice = objRelData.GetBlockInfoSlice()
+		for i := 0; i < blkSlice.Len(); i++ {
+			blkInfo = blkSlice.Get(i)
+
+			if _, release, err = ioutil.ReadDeletes(
+				ctx, blkInfo.MetaLocation()[:], r.fs, false, cacheVectors, &colTypes[1],
+			); err != nil {
+				return err
+			}
+
+			commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[2])
+			for j := range commit {
+				if commit[j].LE(&r.snapshot) {
+					qualified.Add(uint64(j))
+				}
+			}
+
+			for j := range cacheVectors {
+				bat.Vecs[j] = &cacheVectors[j]
+			}
+
+			bat.SetRowCount(bat.Vecs[0].Length())
+			bat.ShrinkByMask(qualified.Bitmap(), false, 0)
+
+			if bat.RowCount() > 0 {
+				if err = s3Writer.Write(ctx, bat); err != nil {
+					return err
+				}
+			}
+
+			release()
+			release = nil
+			qualified.Clear()
+		}
+
+		return nil
+	}
+
+	if objRelData.DataCnt() > 0 {
+		if isTombstone {
+			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
+			if err = readTombstone(); err != nil {
+				return zap.Skip(), err
+			}
+		} else {
+			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
+			if err = readData(); err != nil {
 				return zap.Skip(), err
 			}
 		}
