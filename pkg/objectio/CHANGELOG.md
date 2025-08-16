@@ -64,7 +64,7 @@
 | 1000 | 2 | IOET_WALRecord |
 | 3000 | 3, 4 | IOET_WALTxnEntry |
 
-## MatrxOne 2.2 (TBD)
+## MatrixOne 2.2
 
 
 | Type | Version | Name |

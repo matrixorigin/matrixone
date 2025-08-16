@@ -672,3 +672,34 @@ func IsCatalogEqual(t *testing.T, c1, c2 *catalog.Catalog) {
 	assert.NoError(t, err)
 	assert.Equal(t, objCount, objCount2)
 }
+
+func DeleteAll(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string) {
+	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked(false)
+	pkIdx := schema.GetPrimaryKey().Idx
+	rowIDIdx := schema.GetColIdx(catalog.PhyAddrColumnName)
+	it := rel.MakeObjectIt(false)
+	for it.Next() {
+		blk := it.GetObject()
+		defer blk.Close()
+		blkCnt := uint16(blk.BlkCnt())
+		for i := uint16(0); i < blkCnt; i++ {
+			var view *containers.Batch
+			err := blk.HybridScan(context.Background(), &view, i, []int{rowIDIdx, pkIdx}, common.DefaultAllocator)
+			assert.NoError(t, err)
+			defer view.Close()
+			view.Compact()
+			err = rel.DeleteByPhyAddrKeys(view.Vecs[0], view.Vecs[1], handle.DT_Normal)
+			assert.NoError(t, err)
+		}
+	}
+	err := txn.Commit(context.Background())
+	assert.NoError(t, err)
+}
+
+func Append(t *testing.T, accountID uint32, db *db.DB, dbName, tableName string, bat *containers.Batch) {
+	txn, rel := GetRelation(t, accountID, db, dbName, tableName)
+	assert.NoError(t, rel.Append(context.Background(), bat))
+	err := txn.Commit(context.Background())
+	assert.NoError(t, err)
+}

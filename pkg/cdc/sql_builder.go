@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 const (
@@ -212,6 +213,67 @@ const (
 		"%s" +
 		" AND relkind = '%s' " +
 		" AND reldatabase NOT IN (%s)"
+	CDCInsertMOISCPLogSqlTemplate = `REPLACE INTO mo_catalog.mo_iscp_log (` +
+		`account_id,` +
+		`table_id,` +
+		`job_name,` +
+		`job_id,` +
+		`job_spec,` +
+		`job_state,` +
+		`watermark,` +
+		`job_status,` +
+		`create_at,` +
+		`drop_at` +
+		`) VALUES (` +
+		`%d,` + // account_id
+		`%d,` + // table_id
+		`'%s',` + // job_name
+		`%d,` + // job_id
+		`'%s',` + // job_spec
+		`'%d',` + // job_state
+		`'%s',` + // watermark
+		`'%s',` + // job_status
+		`now(),` + // create_at
+		`null` + // drop_at
+		`)`
+	CDCUpdateMOISCPLogSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`job_state = %d,` +
+		`watermark = '%s',` +
+		`job_status = '%s'` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
+	CDCUpdateMOISCPLogJobSpecSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`job_spec = '%s'` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
+	CDCUpdateMOISCPLogDropAtSqlTemplate = `UPDATE mo_catalog.mo_iscp_log SET ` +
+		`drop_at = now()` +
+		`WHERE` +
+		` account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'` +
+		`AND job_id = %d`
+	CDCDeleteMOISCPLogSqlTemplate = `DELETE FROM mo_catalog.mo_iscp_log WHERE ` +
+		`drop_at < '%s'`
+	CDCSelectMOISCPLogSqlTemplate        = `SELECT * from mo_catalog.mo_iscp_log`
+	CDCSelectMOISCPLogByTableSqlTemplate = `SELECT drop_at, job_id from mo_catalog.mo_iscp_log WHERE ` +
+		`account_id = %d ` +
+		`AND table_id = %d ` +
+		`AND job_name = '%s'`
+	CDCGetTableIDTemplate = "SELECT " +
+		"rel_id, " +
+		"reldatabase_id " +
+		"FROM `mo_catalog`.`mo_tables` " +
+		"WHERE " +
+		" account_id = %d " +
+		" AND reldatabase = '%s' " +
+		" AND relname = '%s' "
 )
 
 const (
@@ -235,7 +297,17 @@ const (
 	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
 
-	CDCSqlTemplateCount = 19
+	CDCInsertMOISCPLogSqlTemplate_Idx        = 19
+	CDCUpdateMOISCPLogSqlTemplate_Idx        = 20
+	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx  = 21
+	CDCDeleteMOISCPLogSqlTemplate_Idx        = 22
+	CDCSelectMOISCPLogSqlTemplate_Idx        = 23
+	CDCSelectMOISCPLogByTableSqlTemplate_Idx = 24
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx = 25
+
+	CDCGetTableIDTemplate_Idx = 26
+
+	CDCSqlTemplateCount = 27
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -328,6 +400,44 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"account_id",
 		},
 	},
+
+	CDCInsertMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCInsertMOISCPLogSqlTemplate,
+	},
+	CDCUpdateMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogSqlTemplate,
+	},
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogJobSpecSqlTemplate,
+	},
+	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx: {
+		SQL: CDCUpdateMOISCPLogDropAtSqlTemplate,
+	},
+	CDCDeleteMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCDeleteMOISCPLogSqlTemplate,
+	},
+	CDCSelectMOISCPLogSqlTemplate_Idx: {
+		SQL: CDCSelectMOISCPLogSqlTemplate,
+		OutputAttrs: []string{
+			"account_id",
+			"table_id",
+			"job_name",
+			"job_id",
+			"job_spec",
+			"job_state",
+			"watermark",
+			"job_status",
+			"create_at",
+			"drop_at",
+		},
+	},
+	CDCSelectMOISCPLogByTableSqlTemplate_Idx: {
+		SQL: CDCSelectMOISCPLogByTableSqlTemplate,
+		OutputAttrs: []string{
+			"drop_at",
+			"job_id",
+		},
+	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {
 		SQL: CDCGetWatermarkWhereSqlTemplate,
 	},
@@ -336,6 +446,13 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 	},
 	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx: {
 		SQL: CDCOnDuplicateUpdateWatermarkErrMsgTemplate,
+	},
+	CDCGetTableIDTemplate_Idx: {
+		SQL: CDCGetTableIDTemplate,
+		OutputAttrs: []string{
+			"rel_id",
+			"reldatabase_id",
+		},
 	},
 }
 
@@ -658,6 +775,109 @@ func (b cdcSQLBuilder) OnDuplicateUpdateWatermarkErrMsgSQL(
 }
 
 // ------------------------------------------------------------------------------------------------
+// Intra-System Change Propagation Log SQL
+// ------------------------------------------------------------------------------------------------
+
+func (b cdcSQLBuilder) ISCPLogInsertSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	jobSpec string,
+	jobState int8,
+	jobStatus string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCInsertMOISCPLogSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+		jobSpec,
+		jobState,
+		types.TS{}.ToString(),
+		jobStatus,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogUpdateResultSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	newWatermark types.TS,
+	jobStatus string,
+	jobState int8,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogSqlTemplate_Idx].SQL,
+		jobState,
+		newWatermark.ToString(),
+		jobStatus,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogUpdateDropAtSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogDropAtSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogUpdateJobSpecSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+	jobSpec string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx].SQL,
+		jobSpec,
+		accountID,
+		tableID,
+		jobName,
+		jobID,
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogGCSQL(t time.Time) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCDeleteMOISCPLogSqlTemplate_Idx].SQL,
+		t.Format(time.DateTime),
+	)
+}
+
+func (b cdcSQLBuilder) ISCPLogSelectSQL() string {
+	return CDCSQLTemplates[CDCSelectMOISCPLogSqlTemplate_Idx].SQL
+}
+
+func (b cdcSQLBuilder) ISCPLogSelectByTableSQL(
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCSelectMOISCPLogByTableSqlTemplate_Idx].SQL,
+		accountID,
+		tableID,
+		jobName,
+	)
+}
+
+// ------------------------------------------------------------------------------------------------
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
 func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, tableNames string) string {
@@ -678,5 +898,18 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
+	)
+}
+
+func (b cdcSQLBuilder) GetTableIDSQL(
+	accountID uint32,
+	dbName string,
+	tableName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTableIDTemplate_Idx].SQL,
+		accountID,
+		dbName,
+		tableName,
 	)
 }
