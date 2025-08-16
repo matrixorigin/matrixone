@@ -3137,7 +3137,7 @@ func applyTombstones(
 			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 
 				if _, release, err = ioutil.ReadDeletes(
-					ctx, blk.MetaLoc[:], fs, tombstone.GetCNCreated(), persistedDeletes,
+					ctx, blk.MetaLoc[:], fs, tombstone.GetCNCreated(), persistedDeletes, nil,
 				); err != nil {
 					return false
 				}
