@@ -21,12 +21,12 @@ create table test01.rs02 clone test01.rs01 {snapshot = 'sp01'};
 table rs02 already exists
 show databases;
 Database
+clone_db_table_to_new_db_table
 information_schema
 mo_catalog
 mo_debug
 mo_task
 mysql
-restore_db_table_to_new_db_table
 system
 system_metrics
 test01
@@ -271,6 +271,7 @@ create database db02 clone db01 {snapshot = 'sp03'};
 database db02 already exists
 show databases;
 Database
+clone_db_table_to_new_db_table
 db01
 db02
 information_schema
@@ -278,7 +279,6 @@ mo_catalog
 mo_debug
 mo_task
 mysql
-restore_db_table_to_new_db_table
 system
 system_metrics
 drop database db01;
