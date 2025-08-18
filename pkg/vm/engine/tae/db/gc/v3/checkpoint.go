@@ -1004,6 +1004,10 @@ func (c *checkpointCleaner) TryGC(inputCtx context.Context) (err error) {
 	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
 	defer memoryBuffer.Close(c.mp)
 	err = c.tryGCLocked(ctx, memoryBuffer)
+	cker := &checker{
+		cleaner: c,
+	}
+	cker.Check(ctx, c.mp)
 	return
 }
 
