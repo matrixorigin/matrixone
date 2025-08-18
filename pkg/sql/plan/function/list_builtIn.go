@@ -859,6 +859,46 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `llm_chat`
+	{
+		functionId: LLM_CHAT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInLlmFunction().llmChat
+				},
+			},
+		},
+	},
+
+	// function `llm_embedding`
+	{
+		functionId: LLM_EMBEDDING,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_array_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInLlmFunction().llmEmbedding
+				},
+			},
+		},
+	},
+
 	//function `json_set`
 	{
 		functionId: JSON_SET,

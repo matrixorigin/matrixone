@@ -203,13 +203,22 @@ func (st *parseJsonlState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 			}
 		}
 
-		for col := range st.opts.Cols {
+		for col, att := range st.batch.Attrs {
+			origCol := 0
+			for ; origCol < len(st.opts.Cols); origCol++ {
+				if st.opts.Cols[origCol].Name == att {
+					break
+				}
+			}
+			if origCol == len(st.opts.Cols) {
+				continue
+			}
 			for _, v := range vv {
 				var colv any
 				if col < len(v) {
-					colv = v[col]
+					colv = v[origCol]
 				}
-				err := st.appender[col](proc, st.batch.Vecs[col], colv)
+				err := st.appender[origCol](proc, st.batch.Vecs[col], colv)
 				if err != nil {
 					return vm.CallResult{}, err
 				}
@@ -234,9 +243,18 @@ func (st *parseJsonlState) call(tf *TableFunction, proc *process.Process) (vm.Ca
 			}
 		}
 
-		for col := range st.opts.Cols {
+		for col, att := range st.batch.Attrs {
+			origCol := 0
+			for ; origCol < len(st.opts.Cols); origCol++ {
+				if st.opts.Cols[origCol].Name == att {
+					break
+				}
+			}
+			if origCol == len(st.opts.Cols) {
+				continue
+			}
 			for _, v := range objs {
-				err := st.appender[col](proc, st.batch.Vecs[col], v[st.opts.Cols[col].Name])
+				err := st.appender[origCol](proc, st.batch.Vecs[col], v[st.opts.Cols[origCol].Name])
 				if err != nil {
 					return vm.CallResult{}, err
 				}

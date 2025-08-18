@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/monlp/llm"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	ujson "github.com/matrixorigin/matrixone/pkg/util/json"
@@ -33,6 +34,8 @@ type starlarkInterpreter struct {
 	interp      *Interpreter
 	thread      *starlark.Thread
 	predeclared starlark.StringDict
+
+	llm llm.LLMClient
 }
 
 func convertToStarlarkValue(ctx context.Context, v any) (starlark.Value, error) {
@@ -202,11 +205,13 @@ func (si *starlarkInterpreter) buildModule() starlark.Value {
 	return &starlarkstruct.Module{
 		Name: "mo",
 		Members: starlark.StringDict{
-			"sql":    starlark.NewBuiltin("mo.sql", si.moSql),
-			"jq":     starlark.NewBuiltin("mo.jq", si.moJq),
-			"quote":  starlark.NewBuiltin("mo.quote", si.moQuote),
-			"getvar": starlark.NewBuiltin("mo.getvar", si.moGetVar),
-			"setvar": starlark.NewBuiltin("mo.getvar", si.moSetVar),
+			"sql":         starlark.NewBuiltin("mo.sql", si.moSql),
+			"jq":          starlark.NewBuiltin("mo.jq", si.moJq),
+			"quote":       starlark.NewBuiltin("mo.quote", si.moQuote),
+			"getvar":      starlark.NewBuiltin("mo.getvar", si.moGetVar),
+			"setvar":      starlark.NewBuiltin("mo.getvar", si.moSetVar),
+			"llm_connect": starlark.NewBuiltin("mo.llm_connect", si.moLlmConnect),
+			"llm_chat":    starlark.NewBuiltin("mo.llm_chat", si.moLlmChat),
 		},
 	}
 }
@@ -337,5 +342,68 @@ func (si *starlarkInterpreter) moSetVar(thread *starlark.Thread, b *starlark.Bui
 		ret[1] = starlark.String(err.Error())
 		return starlark.NewList(ret), nil
 	}
+	return starlark.NewList(ret), nil
+}
+
+func (si *starlarkInterpreter) llmGetVar(name, orig string) string {
+	if orig == "" {
+		value, err := si.interp.ses.GetUserDefinedVar(name)
+		if err != nil {
+			return ""
+		}
+		return value.Value.(string)
+	}
+	return orig
+}
+
+func (si *starlarkInterpreter) llmConnect(server, addr, model, options string) (llm.LLMClient, error) {
+	server = si.llmGetVar("llm_server", server)
+	addr = si.llmGetVar("llm_addr", addr)
+	model = si.llmGetVar("llm_model", model)
+	options = si.llmGetVar("llm_options", options)
+	return llm.NewLLMClient(server, addr, model, options)
+}
+
+func (si *starlarkInterpreter) moLlmConnect(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var err error
+	var server, addr, model, options string
+	var ret = []starlark.Value{starlark.None, starlark.None}
+	if err := starlark.UnpackPositionalArgs("llm_connect", args, kwargs, 3, &server, &addr, &model, &options); err != nil {
+		ret[1] = starlark.String(err.Error())
+		return starlark.NewList(ret), nil
+	}
+
+	si.llm, err = si.llmConnect(server, addr, model, options)
+	if err != nil {
+		ret[1] = starlark.String(err.Error())
+		return starlark.NewList(ret), nil
+	}
+	return starlark.NewList(ret), nil
+}
+
+func (si *starlarkInterpreter) moLlmChat(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var err error
+	var prompt string
+	var ret = []starlark.Value{starlark.None, starlark.None}
+	if err := starlark.UnpackPositionalArgs("llm_chat", args, kwargs, 1, &prompt); err != nil {
+		ret[1] = starlark.String(err.Error())
+		return starlark.NewList(ret), nil
+	}
+
+	if si.llm == nil {
+		si.llm, err = si.llmConnect("", "", "", "")
+		if err != nil {
+			ret[1] = starlark.String(err.Error())
+			return starlark.NewList(ret), nil
+		}
+	}
+
+	reply, err := si.llm.Chat(si.interp.ctx, prompt)
+	if err != nil {
+		ret[1] = starlark.String(err.Error())
+		return starlark.NewList(ret), nil
+	}
+
+	ret[0] = starlark.String(reply)
 	return starlark.NewList(ret), nil
 }

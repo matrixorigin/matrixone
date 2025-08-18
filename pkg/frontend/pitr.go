@@ -1113,7 +1113,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	// restore according the restore level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelCluster)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
 		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
 			return
@@ -1129,17 +1129,17 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 		return
 	case tree.RESTORELEVELACCOUNT:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelAccount)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 	case tree.RESTORELEVELDATABASE:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelDatabase)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 	case tree.RESTORELEVELTABLE:
-		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.CloneLevelTable)
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable)
 		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
