@@ -1517,10 +1517,10 @@ func (c *checkpointCleaner) Process(
 	if err != nil {
 		return
 	}
-	cker := &checker{
+	ck := &gcChecker{
 		cleaner: c,
 	}
-	cker.Check(ctx, c.mp)
+	ck.Check(ctx, c.mp)
 	return
 }
 

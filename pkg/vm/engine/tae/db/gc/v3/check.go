@@ -30,11 +30,11 @@ import (
 
 const NotFoundLimit = 10
 
-type checker struct {
+type gcChecker struct {
 	cleaner *checkpointCleaner
 }
 
-func (c *checker) getObjects(ctx context.Context) (map[string]struct{}, error) {
+func (c *gcChecker) getObjects(ctx context.Context) (map[string]struct{}, error) {
 	entries := c.cleaner.fs.List(ctx, "")
 	objects := make(map[string]struct{})
 	for entry, err := range entries {
@@ -49,7 +49,7 @@ func (c *checker) getObjects(ctx context.Context) (map[string]struct{}, error) {
 	return objects, nil
 }
 
-func (c *checker) Check(ctx context.Context, mp *mpool.MPool) error {
+func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	logutil.Info("[Check GC] Starting...")
 	if c.cleaner.fs.Cost().List != fileservice.CostLow {
 		logutil.Info("[Check GC]skip gc check, cost is high")
