@@ -135,6 +135,7 @@ func (update *MultiUpdate) insert_table(
 
 	if updateCtx.TableDef.DbName == "test" {
 		fmt.Println(
+			"insert table",
 			updateCtx.TableDef.Name,
 			inputBatch.Attrs,
 			len(inputBatch.Vecs),

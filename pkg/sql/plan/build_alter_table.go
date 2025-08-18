@@ -55,7 +55,7 @@ func skipPkDedup(old, new *TableDef) bool {
 
 func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	var skip map[string]bool
-
+	fmt.Println("GG2")
 	// In spite of the O(n^2) complexity,
 	// it's rare for a table to have enough indexes to cause
 	// meaningful performance degradation.
@@ -134,9 +134,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		AlgorithmType:  plan.AlterTable_COPY,
 	}
 
-	unsupportedErrorFmt := "unsupported alter option in copy mode: %s"
-
-	affectedCols := make([]string, 0)
+	var (
+		affectedCols        = make([]string, 0)
+		unsupportedErrorFmt = "unsupported alter option in copy mode: %s"
+	)
 
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
@@ -175,11 +176,15 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableRenameColumnClause:
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
-			//affectedCols
+			affectedCols = append(affectedCols, option.OldColumnName.ColName())
 		case *tree.AlterTableAlterColumnClause:
 			err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.ColumnName.String())
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
+			for _, order := range option.AlterOrderByList {
+				affectedCols = append(affectedCols, order.Column.ColName())
+			}
 		default:
 			return nil, moerr.NewInvalidInputf(ctx,
 				unsupportedErrorFmt, formatTreeNode(option))
@@ -194,18 +199,27 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		return nil, err
 	}
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
+	alterTablePlan.AffectedCols = affectedCols
 
-	dedupOpt := &plan.AlterCopyDedupOpt{
+	opt := &plan.AlterCopyOpt{
 		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef),
 		TargetTableName:    copyTableDef.Name,
 		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef),
 	}
 
-	alterTablePlan.DedupOpt = dedupOpt
-	logutil.Info("alter copy dedup opt",
+	opt.SkipIndexesCopy = make(map[string]bool)
+	for _, idxCol := range tableDef.Indexes {
+		if slices.Index(affectedCols, idxCol.IndexName) == -1 {
+			opt.SkipIndexesCopy[idxCol.IndexName] = true
+		}
+	}
+
+	alterTablePlan.Options = opt
+	logutil.Info("alter copy option",
 		zap.Any("originPk", tableDef.Pkey),
 		zap.Any("copyPk", copyTableDef.Pkey),
-		zap.Any("dedupOpt", dedupOpt))
+		zap.Strings("affectedCols", affectedCols),
+		zap.Any("option", opt))
 
 	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx)
 	if err != nil {

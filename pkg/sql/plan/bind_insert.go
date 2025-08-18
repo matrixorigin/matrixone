@@ -279,16 +279,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 		}
 	} else {
-		var skipPkDedup bool
-		var skipUniqueIdxDedup map[string]bool
-		if v := builder.compCtx.GetContext().Value(defines.AlterCopyDedupOpt{}); v != nil {
-			dedupOpt := v.(*plan.AlterCopyDedupOpt)
-			if dedupOpt.TargetTableName == tableDef.Name {
+
+		var (
+			option             *plan.AlterCopyOpt
+			skipPkDedup        bool
+			skipUniqueIdxDedup map[string]bool
+		)
+
+		if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
+			option = v.(*plan.AlterCopyOpt)
+			if option.TargetTableName == tableDef.Name {
 				logutil.Info("alter copy dedup exec",
 					zap.String("tableDef", tableDef.Name),
-					zap.Any("dedupOpt", dedupOpt))
-				skipPkDedup = dedupOpt.SkipPkDedup
-				skipUniqueIdxDedup = dedupOpt.SkipUniqueIdxDedup
+					zap.Any("option", option),
+				)
+				skipPkDedup = option.SkipPkDedup
+				skipUniqueIdxDedup = option.SkipUniqueIdxDedup
 			}
 		}
 
@@ -379,6 +385,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		for i, idxDef := range tableDef.Indexes {
 			if skipUniqueIdx[i] {
+				continue
+			}
+
+			if option != nil && option.SkipIndexesCopy[idxDef.IndexName] {
+				fmt.Println("skip index copy", idxDef.IndexName)
 				continue
 			}
 

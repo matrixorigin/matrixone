@@ -184,7 +184,6 @@ func buildCloneTable(
 						SrcObjDef:       srcObj,
 						DstDatabaseName: dstDatabaseName,
 						DstTableName:    dstTableName,
-						SkipMainTable:   false,
 						CreateTable:     createTablePlan,
 						ScanSnapshot:    bindCtx.snapshot,
 					},
