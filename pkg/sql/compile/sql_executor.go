@@ -366,9 +366,11 @@ func (exec *txnExecutor) Exec(
 	)
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
+	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
+	c.disableRetry = exec.opts.DisableIncrStatement()
 
 	defer c.Release()
-	c.disableRetry = exec.opts.DisableIncrStatement()
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {

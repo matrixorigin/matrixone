@@ -337,3 +337,21 @@ func (opts Options) AdjustTableExtraFunc() func(*api.SchemaExtra) error {
 	}
 	return opts.adjustTableExtraFunc
 }
+
+func (opts StatementOption) DisableDropIncrStatement() bool {
+	return opts.disableDropAutoIncrement
+}
+
+func (opts StatementOption) WithDisableDropIncrStatement() StatementOption {
+	opts.disableDropAutoIncrement = true
+	return opts
+}
+
+func (opts StatementOption) KeepAutoIncrement() uint64 {
+	return opts.keepAutoIncrement
+}
+
+func (opts StatementOption) WithKeepAutoIncrement(keep uint64) StatementOption {
+	opts.keepAutoIncrement = keep
+	return opts
+}

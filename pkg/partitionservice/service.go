@@ -35,6 +35,8 @@ type Service struct {
 
 	mu struct {
 		sync.RWMutex
+		// FIXME: MVCC cache instead. Alter table add/drop partition. Or delete cache if main table has ddl while
+		// log tail applied.
 		tables map[uint64]metadataCache
 	}
 }
