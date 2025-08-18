@@ -977,43 +977,6 @@ func (c *checkpointCleaner) GetPITRsLocked(ctx context.Context) (*logtail.PitrIn
 	return c.mutation.snapshotMeta.GetPITR(ctx, c.sid, ts, c.fs, c.mp)
 }
 
-func (c *checkpointCleaner) TryGC(inputCtx context.Context) (err error) {
-	now := time.Now()
-	c.StartMutationTask("gc-try-gc")
-	defer c.StopMutationTask()
-	defer func() {
-		logutil.Info(
-			"GC-TRACE-TRY-GC",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Duration("duration", time.Since(now)),
-			zap.Error(err),
-		)
-	}()
-	ctx, cancel := context.WithCancelCause(inputCtx)
-	defer cancel(nil)
-	go func() {
-		select {
-		case <-c.ctx.Done():
-			cancel(context.Cause(c.ctx))
-		case <-inputCtx.Done():
-			cancel(context.Cause(inputCtx))
-		case <-ctx.Done():
-		}
-	}()
-
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
-	defer memoryBuffer.Close(c.mp)
-	err = c.tryGCLocked(ctx, memoryBuffer)
-	if err != nil {
-		return
-	}
-	cker := &checker{
-		cleaner: c,
-	}
-	cker.Check(ctx, c.mp)
-	return
-}
-
 // (no incremental checkpoint scan)
 // `tryGCLocked` will update
 // `mutation.scanned` and `mutation.metaFiles` and `mutation.snapshotMeta`
@@ -1551,6 +1514,13 @@ func (c *checkpointCleaner) Process(
 		return
 	}
 	err = c.tryGCLocked(ctx, memoryBuffer)
+	if err != nil {
+		return
+	}
+	cker := &checker{
+		cleaner: c,
+	}
+	cker.Check(ctx, c.mp)
 	return
 }
 
