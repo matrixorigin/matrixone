@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"time"
 )
@@ -206,10 +208,30 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		logutil.Infof("not GC name: %v", name)
 	}
 	// Collect all checkpoint files
-	ckpfiles := c.cleaner.checkpointCli.GetCheckpointMetaFiles()
-	ckpObjectCount := len(ckpfiles) * 2
+	var ckpObjectCount int
+	ckps := c.cleaner.checkpointCli.GetAllCheckpoints()
+	for i, ckp := range ckps {
+		reader := logtail.NewCKPReader(
+			ckps[i].GetVersion(),
+			ckps[i].GetLocation(),
+			common.CheckpointAllocator,
+			c.cleaner.fs,
+		)
+		if err = reader.ReadMeta(ctx); err != nil {
+			return err
+		}
+		rows := uint32(0)
+		delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
+		for _, loc := range reader.GetLocations() {
+			delete(allObjects, loc.Name().UnsafeString())
+			rows += loc.Rows()
+		}
+		count := len(reader.GetLocations()) + 1
+		ckpObjectCount += count
+		logutil.Infof("checkpoint %v, file count: %v, rows: %d", ckp.String(), len(reader.GetLocations())+1, rows)
+	}
 
-	if len(allObjects) > ckpObjectCount+NotFoundLimit {
+	if len(allObjects) > NotFoundLimit {
 		for name := range allObjects {
 			logutil.Infof("[Check GC]not found object %s,", name)
 		}
