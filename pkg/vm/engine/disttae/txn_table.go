@@ -745,9 +745,8 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(
 					rangesParam.BlockFilters, plan2.FormatOption{
-						ExpandVec:       true,
-						ExpandVecMaxLen: 2,
-						MaxDepth:        5,
+						ExpandVec: false,
+						MaxDepth:  5,
 					},
 				)),
 				zap.Uint64("tbl-id", tbl.tableId),
