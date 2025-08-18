@@ -140,6 +140,7 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	}
 	objects2 := make(map[string]*ObjectEntry)
 	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchData)
+	logutil.Infof("object1: %d, object2: %d", len(objects), len(objects2))
 
 	allCount := len(allObjects)
 	for name := range allObjects {
