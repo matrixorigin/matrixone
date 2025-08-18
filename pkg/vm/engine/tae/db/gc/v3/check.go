@@ -105,7 +105,7 @@ func (c *checker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 		return nil
 	}
-	window := c.cleaner.GetScannedWindow()
+	window := c.cleaner.GetScannedWindowLocked()
 	buildObjects(window, objects, window.LoadBatchData)
 
 	scanWM := c.cleaner.GetScanWaterMark()
