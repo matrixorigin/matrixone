@@ -107,6 +107,9 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		return nil
 	}
 	window := c.cleaner.GetScannedWindowLocked()
+	if window == nil {
+		return nil
+	}
 	buildObjects(window, objects, window.LoadBatchData)
 
 	scanWM := c.cleaner.GetScanWaterMark()
