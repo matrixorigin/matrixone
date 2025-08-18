@@ -833,8 +833,9 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 
 	for _, index := range indexes {
 		if index.IndexAlgo != "" {
-			params, err := catalog.IndexAlgoJsonParamStringToIndexParams(
-				index.IndexAlgo, index.IndexAlgoParams,
+			params, err := catalog.TryConvertToIndexParams(
+				index.IndexAlgo,
+				index.IndexAlgoParams,
 			)
 			if err != nil {
 				logutil.Fatal(
