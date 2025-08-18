@@ -1371,10 +1371,11 @@ message AlterRenameColumn {
 }
 
 
-message AlterCopyDedupOpt {
+message AlterCopyOpt {
 	map<string, bool> skip_unique_idx_dedup = 1;
 	bool skip_pk_dedup = 2;
 	string target_table_name = 3;
+	map<string, bool> skip_indexes_copy = 4;
 }
 
 message AlterTable {
@@ -1418,7 +1419,8 @@ message AlterTable {
 	// into mo_foreign_keys
 	repeated string updateFkSqls = 11;
 	string RawSQL            = 12;
-	AlterCopyDedupOpt dedup_opt = 13;
+	AlterCopyOpt Options = 13;
+	repeated string AffectedCols = 14;
 }
 
 message DropTable {
@@ -1625,6 +1627,4 @@ message CloneTable {
 	ObjectRef src_obj_def = 4;
 	string dst_database_name = 5;
 	string dst_table_name = 6;
-	bool skip_main_table = 7;
-	repeated string skip_indexes = 8;
 }

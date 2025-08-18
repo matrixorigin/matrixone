@@ -271,7 +271,7 @@ func (exec *txnExecutor) Exec(
 
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
-			defines.AlterCopyDedupOpt{}, v)
+			defines.AlterCopyOpt{}, v)
 	}
 
 	receiveAt := time.Now()
