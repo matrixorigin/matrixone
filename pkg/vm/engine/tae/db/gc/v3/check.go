@@ -106,11 +106,16 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 		return nil
 	}
-	window := c.cleaner.GetScannedWindowLocked()
-	if window == nil {
+	sancWindow := c.cleaner.GetScannedWindowLocked()
+	if sancWindow == nil {
 		return nil
 	}
-	buildObjects(window, objects, window.LoadBatchData)
+	window := sancWindow.Clone()
+	windowCount := window.files
+	for _, stats := range window.files {
+		objects[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
+	}
+	buildObjects(&window, objects, window.LoadBatchData)
 
 	scanWM := c.cleaner.GetScanWaterMark()
 	maxTS := types.TS{}
@@ -138,7 +143,11 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		unconsumedWindow = nil
 		return err
 	}
+	unconsumedWindowCount := len(unconsumedWindow.files)
 	objects2 := make(map[string]*ObjectEntry)
+	for _, stats := range unconsumedWindow.files {
+		objects2[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
+	}
 	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchData)
 	logutil.Infof("object1: %d, object2: %d, maxTS is %v, num %v", len(objects), len(objects2), maxTS.ToString(), len(candidates))
 
@@ -170,7 +179,6 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 			defer itObject.Release()
 			for ok := itObject.Last(); ok; ok = itObject.Prev() {
 				obj := itObject.Item()
-				logutil.Infof("obj.ObjectName().UnsafeString() is %v", obj.ObjectName().UnsafeString())
 				delete(allObjects, obj.ObjectName().UnsafeString())
 			}
 			itTombstone := table.MakeTombstoneObjectIt()
@@ -178,7 +186,6 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 			for ok := itTombstone.Last(); ok; ok = itTombstone.Prev() {
 				obj := itTombstone.Item()
 				delete(allObjects, obj.ObjectName().UnsafeString())
-				logutil.Infof("itTombstone.ObjectName().UnsafeString() is %v", obj.ObjectName().UnsafeString())
 			}
 
 			itTable.Next()
@@ -202,12 +209,12 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	ckpfiles := c.cleaner.checkpointCli.GetCheckpointMetaFiles()
 	ckpObjectCount := len(ckpfiles) * 2
 
-	if len(allObjects) > ckpObjectCount+NotFoundLimit+len(window.files)+len(unconsumedWindow.files) {
+	if len(allObjects) > ckpObjectCount+NotFoundLimit {
 		for name := range allObjects {
 			logutil.Infof("[Check GC]not found object %s,", name)
 		}
 		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d, unconsumedWindow file: %d",
-			time.Since(now), allCount, len(allObjects)-ckpObjectCount, ckpObjectCount, len(window.files), len(unconsumedWindow.files))
+			time.Since(now), allCount, len(allObjects)-ckpObjectCount, ckpObjectCount, windowCount, unconsumedWindowCount)
 	} else {
 		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d",
 			time.Since(now), allCount, len(allObjects)-ckpObjectCount)
