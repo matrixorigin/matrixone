@@ -193,7 +193,7 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	ckpfiles := c.cleaner.checkpointCli.GetCheckpointMetaFiles()
 	ckpObjectCount := len(ckpfiles) * 2
 
-	if len(allObjects) > ckpObjectCount+NotFoundLimit {
+	if len(allObjects) > ckpObjectCount+NotFoundLimit+len(window.files)+len(unconsumedWindow.files) {
 		for name := range allObjects {
 			logutil.Infof("[Check GC]not found object %s,", name)
 		}
