@@ -50,6 +50,7 @@ func (c *checker) getObjects(ctx context.Context) (map[string]struct{}, error) {
 }
 
 func (c *checker) Check(ctx context.Context, mp *mpool.MPool) error {
+	logutil.Info("[Check GC] Starting...")
 	if c.cleaner.fs.Cost().List != fileservice.CostLow {
 		logutil.Info("[Check GC]skip gc check, cost is high")
 		return nil
