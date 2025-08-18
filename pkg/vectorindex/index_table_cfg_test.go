@@ -171,12 +171,17 @@ func Test_IndexTableCfgV1_BuildIVFIndexTableCfgV1(t *testing.T) {
 		"metadata1",
 		"index1",
 		"pkey1",
-		88,
 		"keypart1",
-		1099,
-		100,
-		"entries1",
-		200,
+		100,        // threadsSearch
+		50,         // threadsBuild
+		1000,       // indexCapacity
+		"entries1", // entriesTable
+		500,        // dataSize
+		200,        // nprobe
+		88,         // pKeyType
+		1099,       // keyPartType
+		100,        // kmeansTrainPercent
+		0,          // kmeansMaxIteration
 	)
 	require.Equal(t, "db1", cfg.DBName())
 	require.Equal(t, "src1", cfg.SrcTable())
@@ -185,10 +190,11 @@ func Test_IndexTableCfgV1_BuildIVFIndexTableCfgV1(t *testing.T) {
 	require.Equal(t, "pkey1", cfg.PKey())
 	require.Equal(t, "keypart1", cfg.KeyPart())
 	require.Equal(t, int64(100), cfg.ThreadsSearch())
-	require.Equal(t, int64(0), cfg.ThreadsBuild())
-	require.Equal(t, int64(0), cfg.IndexCapacity())
+	require.Equal(t, int64(50), cfg.ThreadsBuild())
+	require.Equal(t, int64(1000), cfg.IndexCapacity())
 	require.Equal(t, int16(IndexTableCfg_ExtraCfgType_IVFFLAT), cfg.ExtraCfgType())
 	require.Equal(t, "entries1", cfg.ExtraIVFCfg().EntriesTable())
+	require.Equal(t, int64(500), cfg.ExtraIVFCfg().DataSize())
 	require.Equal(t, uint32(200), cfg.ExtraIVFCfg().Nprobe())
 	require.Equal(t, int32(88), cfg.ExtraIVFCfg().PKeyType())
 	require.Equal(t, int32(1099), cfg.ExtraIVFCfg().KeyPartType())

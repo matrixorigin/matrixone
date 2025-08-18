@@ -149,12 +149,17 @@ func BuildIVFIndexTableCfgV1(
 	metadataTable string,
 	indexTable string,
 	pKey string,
-	pKeyType int32,
 	keyPart string,
-	keyPartType int32,
 	threadsSearch int64,
+	threadsBuild int64,
+	indexCapacity int64,
 	entriesTable string, // ivf related
+	dataSize int64, // ivf related
 	nprobe uint32, // ivf related
+	pKeyType int32, // ivf related
+	keyPartType int32, // ivf related
+	kmeansTrainPercent int64, // ivf related
+	kmeansMaxIteration int64, // ivf related
 ) IndexTableCfg {
 	size1 := CalculateIndexTableCfgV1Size(
 		len(dbName),
@@ -177,20 +182,20 @@ func BuildIVFIndexTableCfgV1(
 	)
 	cfg.SetInt64Values(
 		threadsSearch,
-		0,
-		0,
+		threadsBuild,
+		indexCapacity,
 	)
 	// Set the extra config start offset
 	copy(cfg[IndexTableCfg_V1_ExtraCfgStartOff:], types.EncodeFixed(uint32(size1)))
 
 	ivfCfg := ExtraIVFCfgV1(cfg[size1:])
 	ivfCfg.SetFixedValues(
-		0,
+		dataSize,
 		nprobe,
 		pKeyType,
 		keyPartType,
-		threadsSearch,
-		0,
+		kmeansTrainPercent,
+		kmeansMaxIteration,
 	)
 	ivfCfg.SetEntriesTable(entriesTable)
 	return cfg
@@ -203,6 +208,42 @@ func MakeEmptyIndexTableCfgV1(
 	cfg := IndexTableCfgV1(make([]byte, size))
 	copy(cfg, magicNumberBuf)
 	cfg.SetExtraCfgType(extraCfgType)
+	return cfg
+}
+
+func BuildIndexTableCfgV1(
+	dbName string,
+	srcTable string,
+	metadataTable string,
+	indexTable string,
+	pKey string,
+	keyPart string,
+	threadsSearch int64,
+	threadsBuild int64,
+	indexCapacity int64,
+) IndexTableCfgV1 {
+	size := CalculateIndexTableCfgV1Size(
+		len(dbName),
+		len(srcTable),
+		len(metadataTable),
+		len(indexTable),
+		len(pKey),
+		len(keyPart),
+	)
+	cfg := MakeEmptyIndexTableCfgV1(size, IndexTableCfg_ExtraCfgType_Empty)
+	cfg.SetStringValues(
+		dbName,
+		srcTable,
+		metadataTable,
+		indexTable,
+		pKey,
+		keyPart,
+	)
+	cfg.SetInt64Values(
+		threadsSearch,
+		threadsBuild,
+		indexCapacity,
+	)
 	return cfg
 }
 
