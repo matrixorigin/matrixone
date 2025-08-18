@@ -117,6 +117,11 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	if scanWM != nil {
 		maxTS = scanWM.GetEnd()
 	}
+	// Collect all objects
+	allObjects, err := c.getObjects(ctx)
+	if err != nil {
+		return err
+	}
 
 	candidates := c.cleaner.checkpointCli.ICKPSeekLT(maxTS, 40)
 
@@ -136,11 +141,6 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	objects2 := make(map[string]*ObjectEntry)
 	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchData)
 
-	// Collect all objects
-	allObjects, err := c.getObjects(ctx)
-	if err != nil {
-		return err
-	}
 	allCount := len(allObjects)
 	for name := range allObjects {
 		isfound := false
@@ -188,6 +188,10 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		for name := range objects2 {
 			logutil.Errorf("[Check GC]lost unconsumed object %s,", name)
 		}
+	}
+
+	for name := range allObjects {
+		logutil.Infof("not GC name: %v", name)
 	}
 	// Collect all checkpoint files
 	ckpfiles := c.cleaner.checkpointCli.GetCheckpointMetaFiles()
