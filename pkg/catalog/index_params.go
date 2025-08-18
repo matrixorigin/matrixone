@@ -311,6 +311,10 @@ func (params IndexParams) IVFFLATAlgo() IndexParamAlgoType {
 	return IndexParamAlgoType(types.DecodeFixed[uint16](params[IndexParams_IVFFLATV1_AlgoOff:]))
 }
 
+func (params IndexParams) SetIVFFLATList(list int64) {
+	copy(params[IndexParams_IVFFLATV1_ListOff:], types.EncodeFixed(list))
+}
+
 // ------------------------[HNSW V1 PARAMS] IndexParams------------------------
 const (
 	IndexParams_HNSWV1_MOff              = IndexParams_HeaderLen
@@ -554,6 +558,12 @@ func (params IndexParams) Version() uint16 {
 	}
 	version := types.DecodeFixed[uint16](params[IndexParams_VersionOff:])
 	return version
+}
+
+func (params IndexParams) Clone() IndexParams {
+	retParams := make(IndexParams, len(params))
+	copy(retParams, params)
+	return retParams
 }
 
 // ------------------------[Utils] ------------------------

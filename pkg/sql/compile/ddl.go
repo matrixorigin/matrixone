@@ -679,10 +679,15 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
 					switch catalog.ToLower(indexAlgo) {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
-						newIndexParams := catalog.BuildIndexParamsIVFFLATV1(
-							tableAlterIndex.IndexAlgoParamList,
-							catalog.StringToIndexParamAlgoType(indexAlgo),
+						oldIndexParams, err := catalog.TryConvertToIndexParams(
+							indexAlgo,
+							alterIndex.IndexAlgoParams,
 						)
+						if err != nil || !oldIndexParams.IsIVFFLAT() {
+							return err
+						}
+						newIndexParams := oldIndexParams.Clone()
+						newIndexParams.SetIVFFLATList(tableAlterIndex.IndexAlgoParamList)
 
 						// 3.a Update IndexDef and TableDef
 						alterIndex.IndexAlgoParams = string(newIndexParams)
