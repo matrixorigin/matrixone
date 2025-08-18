@@ -36,3 +36,38 @@ var prettyV = `{
 func TestMustPretty(t *testing.T) {
 	assert.Equal(t, prettyV, string(Pretty(&v{X: 1})))
 }
+
+func TestUnmarshal(t *testing.T) {
+	var v any
+	var va []any
+
+	s := `["a", "b", "c"]`
+	MustUnmarshal([]byte(s), &v)
+	assert.Equal(t, []any{"a", "b", "c"}, v)
+
+	MustUnmarshal([]byte(s), &va)
+	assert.Equal(t, []any{"a", "b", "c"}, va)
+
+	s2 := `"a"`
+	MustUnmarshal([]byte(s2), &v)
+	assert.Equal(t, "a", v)
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Logf("panic: %v", r)
+			}
+		}()
+		MustUnmarshal([]byte(s2), &va)
+	}()
+}
+
+func TestRunJQOnString(t *testing.T) {
+	iv, err := RunJQInt(`.x`, `{"x":1}`)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, iv)
+
+	fv, err := RunJQFloat(`.x`, `{"x":1}`)
+	assert.NoError(t, err)
+	assert.Equal(t, 1.0, fv)
+}

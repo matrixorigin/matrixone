@@ -160,8 +160,6 @@ const (
 	MO_PITR_STATUS        = "pitr_status"
 	MO_PITR_CHANGED_TIME  = "pitr_status_changed_time"
 
-	MO_RETENTION = "mo_retention"
-
 	MO_CDC_TASK      = "mo_cdc_task"
 	MO_CDC_WATERMARK = "mo_cdc_watermark"
 
@@ -172,6 +170,8 @@ const (
 	MO_ACCOUNT_LOCK = "__mo_account_lock"
 
 	MO_MERGE_SETTINGS = "mo_merge_settings"
+
+	MO_STORED_PROCEDURE = "mo_stored_procedure"
 )
 
 func IsSystemTable(id uint64) bool {

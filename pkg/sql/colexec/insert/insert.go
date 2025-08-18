@@ -55,7 +55,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 
 		// If the target is not partition table, you only need to operate the main table
 		s3Writer := colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, insert.InsertCtx.TableDef, insert.isMemoryTable())
+			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, insert.isMemoryTable())
 
 		insert.ctr.s3Writer = s3Writer
 
@@ -132,7 +132,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 
 			// write to s3.
 			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
-			err = insert.ctr.s3Writer.Write(proc.Ctx, proc.Mp(), input.Batch)
+			err = insert.ctr.s3Writer.Write(proc.Ctx, input.Batch)
 			if err != nil {
 				insert.ctr.state = vm.End
 				return vm.CancelResult, err
@@ -229,7 +229,7 @@ func flushTailBatch(
 
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-		if _, err = writer.Sync(newCtx, proc.Mp()); err != nil {
+		if _, err = writer.Sync(newCtx); err != nil {
 			return err
 		}
 
@@ -237,7 +237,7 @@ func flushTailBatch(
 		analyzer.AddFileServiceCacheInfo(crs)
 		analyzer.AddDiskIO(crs)
 
-		if bat, err = writer.FillBlockInfoBat(proc.Mp()); err != nil {
+		if bat, err = writer.FillBlockInfoBat(); err != nil {
 			return err
 		}
 
@@ -251,5 +251,5 @@ func flushTailBatch(
 		return nil
 	}
 
-	return writer.OutputRawData(proc, result.Batch)
+	return writer.OutputInMemoryData(result.Batch)
 }

@@ -359,6 +359,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Cond = t.Cond
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.CanSkipProbe = t.CanSkipProbe
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
@@ -1060,26 +1061,27 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	return arg
 }
 
-func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi.SemiJoin {
-	result := make([]int32, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
+func constructSemi(node, left *plan.Node, typs []types.Type, proc *process.Process) *semi.SemiJoin {
+	result := make([]int32, len(node.ProjectList))
+	for i, expr := range node.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
 			panic(moerr.NewNYIf(proc.GetTopContext(), "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
-	cond, conds := extraJoinConditions(n.OnList)
+	cond, conds := extraJoinConditions(node.OnList)
 	arg := semi.NewArgument()
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
-	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
-	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
-			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
+	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
+	arg.CanSkipProbe = left.NodeType == plan.Node_TABLE_SCAN
+	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
+	for i := range node.SendMsgList {
+		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
+			arg.JoinMapTag = node.SendMsgList[i].MsgTag
 		}
 	}
 	if arg.JoinMapTag <= 0 {
@@ -2431,7 +2433,11 @@ func constructTableClone(
 		}
 	}
 
-	if ret, err = c.runSqlWithResult(sql, int32(account)); err != nil {
+	if ret, err = c.runSqlWithResultAndOptions(
+		sql,
+		int32(account),
+		executor.StatementOption{}.WithDisableLog(),
+	); err != nil {
 		return nil, err
 	}
 

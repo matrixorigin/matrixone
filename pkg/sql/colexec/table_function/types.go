@@ -70,13 +70,12 @@ func NewArgument() *TableFunction {
 
 func (tableFunction *TableFunction) Release() {
 	if tableFunction != nil {
-		reuse.Free[TableFunction](tableFunction, nil)
+		reuse.Free(tableFunction, nil)
 	}
 }
 
 type tvfState interface {
 	reset(tf *TableFunction, proc *process.Process)
-	//start(tf *TableFunction, proc *process.Process, nthRow int) error
 	start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error
 	end(tf *TableFunction, proc *process.Process) error
 	call(tf *TableFunction, proc *process.Process) (vm.CallResult, error)

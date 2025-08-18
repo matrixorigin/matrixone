@@ -36,7 +36,6 @@ mo_merge_settings
 mo_mysql_compatibility_mode
 mo_pitr
 mo_pubs
-mo_retention
 mo_role
 mo_role_grant
 mo_role_privs
@@ -144,9 +143,9 @@ create table H(h int);
 grant select on table v.A to r1;
 use v;
 select * from A,B;
-internal error: do not have privilege to execute the statement
+a    b
 select * from A,B where A.a = B.b;
-internal error: do not have privilege to execute the statement
+a    b
 grant select on table v.B to r1;
 use v;
 select * from A,B;

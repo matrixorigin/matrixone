@@ -17,14 +17,12 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -57,6 +54,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 var _ engine.Engine = new(Engine)
@@ -126,10 +125,11 @@ func New(
 		RwMutex:       &sync.Mutex{},
 	}
 
+	e.fillDefaults()
+
 	for _, opt := range options {
 		opt(e)
 	}
-	e.fillDefaults()
 
 	if err := e.init(ctx); err != nil {
 		panic(err)
@@ -142,6 +142,32 @@ func New(
 	if err != nil {
 		panic(err)
 	}
+
+	if e.config.memThrottler == nil {
+		if e.config.quota.Load() != 0 {
+			e.config.memThrottler = rscthrottler.NewMemThrottler(
+				"Workspace",
+				5.0/100.0,
+				rscthrottler.WithConstLimit(int64(e.config.quota.Load())),
+			)
+		} else {
+			e.config.memThrottler = rscthrottler.NewMemThrottler(
+				"Workspace",
+				5.0/100.0,
+			)
+		}
+
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.memThrottler.Available()))
+	}
+
+	logutil.Info(
+		"INIT-ENGINE-CONFIG",
+		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
+		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
+		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
+		zap.Int64("ExtraWorkspaceThresholdQuota", e.config.memThrottler.Available()),
+		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
+	)
 
 	return e
 }
@@ -170,20 +196,6 @@ func (e *Engine) fillDefaults() {
 	if e.config.cnTransferTxnLifespanThreshold <= 0 {
 		e.config.cnTransferTxnLifespanThreshold = CNTransferTxnLifespanThreshold
 	}
-	if e.config.quota.Load() <= 0 {
-		mem := objectio.TotalMem() / 100 * 5
-		e.config.quota.Store(mem)
-		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(mem))
-	}
-
-	logutil.Info(
-		"INIT-ENGINE-CONFIG",
-		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
-		zap.Uint64("CommitWorkspaceThreshold", e.config.commitWorkspaceThreshold),
-		zap.Uint64("WriteWorkspaceThreshold", e.config.writeWorkspaceThreshold),
-		zap.Uint64("ExtraWorkspaceThresholdQuota", e.config.quota.Load()),
-		zap.Duration("CNTransferTxnLifespanThreshold", e.config.cnTransferTxnLifespanThreshold),
-	)
 }
 
 // SetWorkspaceThreshold updates the commit and write workspace thresholds (in MB).
@@ -201,24 +213,18 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	return
 }
 
-func (e *Engine) AcquireQuota(v uint64) (uint64, bool) {
-	for {
-		oldRemaining := e.config.quota.Load()
-		if oldRemaining < v {
-			return 0, false
-		}
-		remaining := oldRemaining - v
-		if e.config.quota.CompareAndSwap(oldRemaining, remaining) {
-			v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
-			return remaining, true
-		}
+func (e *Engine) AcquireQuota(v int64) (int64, bool) {
+	left, ok := e.config.memThrottler.Acquire(v)
+	if ok {
+		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(left))
 	}
+
+	return left, ok
 }
 
-func (e *Engine) ReleaseQuota(quota uint64) (remaining uint64) {
-	e.config.quota.Add(quota)
-	remaining = e.config.quota.Load()
-	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(remaining))
+func (e *Engine) ReleaseQuota(quota int64) (left uint64) {
+	left = uint64(e.config.memThrottler.Release(quota))
+	v2.TxnExtraWorkspaceQuotaGauge.Set(float64(left))
 	return
 }
 

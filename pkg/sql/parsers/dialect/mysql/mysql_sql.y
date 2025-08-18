@@ -145,7 +145,6 @@ import (
 
     partitionOption *tree.PartitionOption
     clusterByOption *tree.ClusterByOption
-    retentionOption *tree.RetentionOption
     partitionBy *tree.PartitionBy
     windowSpec *tree.WindowSpec
     frameClause *tree.FrameClause
@@ -683,6 +682,7 @@ import (
 %type <sourceOptional> replace_opt
 %type <str> database_or_schema
 %type <indexType> using_opt
+%type <str> opt_lang
 %type <indexCategory> index_prefix
 %type <keyParts> index_column_list index_column_list_opt
 %type <keyPart> index_column
@@ -3046,6 +3046,11 @@ prepare_stmt:
     {
         $$ = tree.NewPrepareString(tree.Identifier($2), $4)
     }
+|   prepare_sym stmt_name FROM user_variable
+    {
+        $$ = tree.NewPrepareVar(tree.Identifier($2), $4)
+    }
+
 
 execute_stmt:
     execute_sym stmt_name
@@ -6489,15 +6494,10 @@ extension_name:
     }
 
 create_procedure_stmt:
-    CREATE PROCEDURE proc_name '(' proc_args_list_opt ')' STRING
+    CREATE replace_opt PROCEDURE proc_name '(' proc_args_list_opt ')' opt_lang STRING
     {
-        var Name = $3
-        var Args = $5
-        var Body = $7
         $$ = tree.NewCreateProcedure(
-            Name,
-            Args,
-            Body,
+            $2, $4, $6, $8, $9,
         )
     }
 
@@ -6557,6 +6557,15 @@ proc_arg_in_out_type:
 |   INOUT
     {
         $$ = tree.TYPE_INOUT
+    }
+
+opt_lang:
+    {
+        $$ = "sql"
+    }
+|   LANGUAGE STRING
+    {   
+        $$ = $2
     }
 
 
@@ -8911,15 +8920,6 @@ table_option:
     {
         var Preperties = $3
         $$ = tree.NewTableOptionProperties(Preperties)
-    }
-|   WITH RETENTION PERIOD INTEGRAL time_unit
-    {
-        var retentionPeriod = uint64($4.(int64))
-        var retentionUnit = strings.ToLower($5)
-        $$ = tree.NewRetentionOption(
-             retentionPeriod,
-             retentionUnit,
-        )
     }
 
 properties_list:

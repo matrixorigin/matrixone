@@ -89,6 +89,13 @@ func execInFrontendInBack(backSes *backSession,
 		if err = handleEmptyStmt(backSes, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CallStmt:
+		// XXXSP
+		// handle call procedure in backend.  This is to support calling procedures
+		// within another procedure.
+		if err = handleCallProcedure(backSes, execCtx, st, true); err != nil {
+			return
+		}
 	default:
 		return moerr.NewInternalErrorf(execCtx.reqCtx, "backExec does not support %s", execCtx.sqlOfStmt)
 	}

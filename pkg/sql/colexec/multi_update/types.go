@@ -77,8 +77,9 @@ type MultiUpdate struct {
 
 	Engine engine.Engine
 
-	getS3WriterFunc          func(id uint64) (*s3WriterDelegate, error)
+	getS3WriterFunc          func(sid string, id uint64) (*s3WriterDelegate, error)
 	getFlushableS3WriterFunc func() *s3WriterDelegate
+	addAffectedRowsFunc      func(uint64)
 
 	vm.OperatorBase
 }
@@ -191,7 +192,7 @@ func (update *MultiUpdate) addInsertAffectRows(tableType UpdateTableType, rowCou
 	}
 	switch update.ctr.action {
 	case actionInsert:
-		update.ctr.affectedRows += rowCount
+		update.addAffectedRowsFunc(rowCount)
 	}
 }
 
@@ -201,8 +202,12 @@ func (update *MultiUpdate) addDeleteAffectRows(tableType UpdateTableType, rowCou
 	}
 	switch update.ctr.action {
 	case actionDelete:
-		update.ctr.affectedRows += rowCount
+		update.addAffectedRowsFunc(rowCount)
 	case actionUpdate:
-		update.ctr.affectedRows += rowCount
+		update.addAffectedRowsFunc(rowCount)
 	}
+}
+
+func (update *MultiUpdate) doAddAffectedRows(affectedRows uint64) {
+	update.ctr.affectedRows += affectedRows
 }

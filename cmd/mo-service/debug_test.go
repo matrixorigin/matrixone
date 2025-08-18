@@ -17,16 +17,15 @@ package main
 import (
 	"context"
 	"io"
-	"iter"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func Test_saveProfile(t *testing.T) {
@@ -68,61 +67,7 @@ func Test_saveProfile4(t *testing.T) {
 	})
 }
 
-var _ fileservice.FileService = &testFS{}
-
-type testFS struct {
-}
-
-func (tfs *testFS) Name() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) Write(ctx context.Context, vector fileservice.IOVector) error {
-	return moerr.NewInternalError(ctx, "return err")
-}
-
-func (tfs *testFS) Read(ctx context.Context, vector *fileservice.IOVector) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) ReadCache(ctx context.Context, vector *fileservice.IOVector) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) List(ctx context.Context, dirPath string) iter.Seq2[*fileservice.DirEntry, error] {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) Delete(ctx context.Context, filePaths ...string) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) StatFile(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) PrefetchFile(ctx context.Context, filePath string) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) Cost() *fileservice.CostAttr {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tfs *testFS) Close(ctx context.Context) {
-	//TODO implement me
-	panic("implement me")
-}
-
 func Test_saveMallocProfile5(t *testing.T) {
-	globalEtlFS = &testFS{}
+	globalEtlFS = testutil.NewFS(t)
 	saveMallocProfile()
 }

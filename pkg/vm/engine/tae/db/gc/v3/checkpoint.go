@@ -1261,7 +1261,7 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 }
 
 func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
-	c.StartMutationTask("gc-check")
+	c.StartMutationTask("gc-do-check")
 	defer c.StopMutationTask()
 
 	debugCandidates := c.checkpointCli.GetAllIncrementalCheckpoints()
@@ -1286,9 +1286,9 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		logutil.Warnf("MaxCompared is nil, use maxGlobalCkp %v", gCkp.String())
 	}
 
-	for i, ckp := range debugCandidates {
+	for i, checkpoint := range debugCandidates {
 		maxEnd := scanWaterMark.GetEnd()
-		ckpEnd := ckp.GetEnd()
+		ckpEnd := checkpoint.GetEnd()
 		if ckpEnd.Equal(&maxEnd) {
 			debugCandidates = debugCandidates[:i+1]
 			break
@@ -1324,8 +1324,8 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		// TODO
 		return err
 	}
-
-	snapshots, err := c.GetSnapshotsLocked()
+	var snapshots map[uint32]containers.Vector
+	snapshots, err = c.GetSnapshotsLocked()
 	if err != nil {
 		logutil.Error(
 			"GC-GET-SNAPSHOTS-ERROR",
@@ -1335,8 +1335,8 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		return err
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-
-	pitr, err := c.GetPITRsLocked(c.ctx)
+	var pitr *logtail.PitrInfo
+	pitr, err = c.GetPITRsLocked(c.ctx)
 	if err != nil {
 		logutil.Error(
 			"GC-GET-PITR-ERROR",
@@ -1469,7 +1469,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 			if logtail.ObjectIsSnapshotRefers(
 				entry.stats, pList[entry.table], &entry.createTS, &entry.dropTS, tList[entry.table],
 			) {
-				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cptEnd) {
+				if entry.dropTS.IsEmpty() || entry.dropTS.LT(&cptEnd) || (pList[entry.table] != nil && entry.dropTS.GT(pList[entry.table])) {
 					continue
 				}
 				logutil.Error(
@@ -1487,7 +1487,9 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	return nil
 }
 
-func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
+func (c *checkpointCleaner) Process(
+	inputCtx context.Context,
+	checker func(*checkpoint.CheckpointEntry) bool) (err error) {
 	if !c.GCEnabled() {
 		return
 	}
@@ -1536,7 +1538,7 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 	defer memoryBuffer.Close(c.mp)
 
 	var tryGC bool
-	if err, tryGC = c.tryScanLocked(ctx, memoryBuffer); err != nil {
+	if err, tryGC = c.tryScanLocked(ctx, memoryBuffer, checker); err != nil {
 		return
 	}
 	if !tryGC {
@@ -1553,6 +1555,7 @@ func (c *checkpointCleaner) Process(inputCtx context.Context) (err error) {
 func (c *checkpointCleaner) tryScanLocked(
 	ctx context.Context,
 	memoryBuffer *containers.OneSchemaBatchBuffer,
+	checker func(*checkpoint.CheckpointEntry) bool,
 ) (err error, tryGC bool) {
 
 	tryGC = true
@@ -1601,8 +1604,14 @@ func (c *checkpointCleaner) tryScanLocked(
 
 	// filter out the incremental checkpoints that do not meet the requirements
 	for _, ckp := range ckps {
-		if !c.checkExtras(ckp) {
-			continue
+		if checker != nil {
+			if !checker(ckp) {
+				continue
+			}
+		} else {
+			if !c.checkExtras(ckp) {
+				continue
+			}
 		}
 		candidates = append(candidates, ckp)
 	}

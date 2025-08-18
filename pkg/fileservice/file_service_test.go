@@ -1020,6 +1020,82 @@ func testFileService(
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 
+	t.Run("NewReader and NewWriter", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		fs := newFS(fsName)
+		defer fs.Close(ctx)
+
+		rwFS, ok := fs.(ReaderWriterFileService)
+		if !ok {
+			return
+		}
+
+		w, err := rwFS.NewWriter(ctx, "foo")
+		assert.Nil(t, err)
+		assert.NotNil(t, w)
+		_, err = w.Write([]byte("foobarbaz"))
+		assert.Nil(t, err)
+		assert.Nil(t, w.Close())
+
+		r, err := rwFS.NewReader(ctx, "foo")
+		assert.Nil(t, err)
+		data, err := io.ReadAll(r)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("foobarbaz"), data)
+		assert.Nil(t, r.Close())
+	})
+
+	t.Run("NewReader and NewWriter error", func(t *testing.T) {
+		fs := newFS(fsName)
+		defer fs.Close(t.Context())
+
+		rwFS, ok := fs.(ReaderWriterFileService)
+		if !ok {
+			return
+		}
+
+		// canceled ctx
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		_, err := rwFS.NewReader(ctx, "foo")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+		_, err = rwFS.NewWriter(ctx, "foo")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+
+		// bad path
+		_, err = rwFS.NewReader(t.Context(), "foo?")
+		if !moerr.IsMoErrCode(err, moerr.ErrInvalidPath) {
+			t.Fatalf("got %v", err)
+		}
+		_, err = rwFS.NewWriter(t.Context(), "foo?")
+		if !moerr.IsMoErrCode(err, moerr.ErrInvalidPath) {
+			t.Fatalf("got %v", err)
+		}
+
+		// file not found
+		_, err = rwFS.NewReader(t.Context(), "foo")
+		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			t.Fatalf("got %v", err)
+		}
+
+		// write existed
+		w, err := rwFS.NewWriter(t.Context(), "foo")
+		assert.Nil(t, err)
+		_, err = w.Write([]byte("foo"))
+		assert.Nil(t, err)
+		assert.Nil(t, w.Close())
+		_, err = rwFS.NewWriter(t.Context(), "foo")
+		if !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
+			t.Fatalf("got %v", err)
+		}
+
+	})
+
 }
 
 type errReader struct{}

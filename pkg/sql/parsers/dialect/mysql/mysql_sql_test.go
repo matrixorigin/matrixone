@@ -16,8 +16,9 @@ package mysql
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -1750,6 +1751,8 @@ var (
 		}, {
 			input: "prepare stmt_name1 from select * from t1",
 		}, {
+			input: "prepare stmt_name1 from @user_var_name",
+		}, {
 			input:  "prepare stmt_name1 from 'select * from t1'",
 			output: "prepare stmt_name1 from select * from t1",
 		}, {
@@ -2747,11 +2750,11 @@ var (
 		},
 		{
 			input:  "create procedure test1 (in param1 int) 'test test'",
-			output: "create procedure test1 (in param1 int) 'test test'",
+			output: "create procedure test1 (in param1 int) language 'sql' 'test test'",
 		},
 		{
 			input:  "create procedure test2 (param1 int, inout param2 char(5)) 'test test'",
-			output: "create procedure test2 (in param1 int, inout param2 char(5)) 'test test'",
+			output: "create procedure test2 (in param1 int, inout param2 char(5)) language 'sql' 'test test'",
 		},
 		{
 			input:  "drop procedure test1",
@@ -3191,18 +3194,6 @@ var (
 			output: "select MATCH (body, title) AGAINST (abc IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) from t1",
 		},
 		{
-			input:  "create table t1 (a int) with retention period 1 day",
-			output: "create table t1 (a int) with retention period 1 day",
-		},
-		{
-			input:  "create table t1 (a int) with retention period 10 week",
-			output: "create table t1 (a int) with retention period 10 week",
-		},
-		{
-			input:  "create table t1 (a int) with retention period 3 second",
-			output: "create table t1 (a int) with retention period 3 second",
-		},
-		{
 			input:  "alter user user1 unlock",
 			output: "alter user user1 unlock",
 		},
@@ -3290,6 +3281,9 @@ var (
 		},
 		{
 			input: "alter user u1 lock",
+		},
+		{
+			input: "create table t1 (a bigint(20) unsigned)",
 		},
 	}
 )
@@ -3498,9 +3492,6 @@ var (
 		},
 		{
 			input: "ALTER TABLE t1 ADD PARTITION (PARTITION p5 VALUES IN (15, 17)",
-		},
-		{
-			input: "create table t (a int) with retention period 2 days",
 		},
 	}
 )

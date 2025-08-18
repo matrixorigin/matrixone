@@ -316,9 +316,14 @@ func splitAndBindCondition(astExpr tree.Expr, expandAlias ExpandAliasMode, ctx *
 		if err != nil {
 			return nil, err
 		}
+		needCast := true
+		fn := expr.GetF()
+		if fn != nil {
+			needCast = fn.Func.ObjName != "fulltext_match"
+		}
 		// expr must be bool type, if not, try to do type convert
 		// but just ignore the subQuery. It will be solved at optimizer.
-		if expr.GetSub() == nil {
+		if expr.GetSub() == nil && needCast {
 			expr, err = makePlan2CastExpr(ctx.binder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 			if err != nil {
 				return nil, err
@@ -2792,7 +2797,9 @@ func EvalFoldExpr(proc *process.Process, expr *Expr, executors *[]colexec.Expres
 			if err != nil {
 				return err
 			}
-			vec.InplaceSortAndCompact()
+			if !vec.IsConstNull() {
+				vec.InplaceSortAndCompact()
+			}
 			data, err = vec.MarshalBinary()
 			if err != nil {
 				return err

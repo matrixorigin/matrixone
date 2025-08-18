@@ -30,6 +30,7 @@ type PartitionMultiUpdate struct {
 	vm.OperatorBase
 
 	raw              *MultiUpdate
+	affectedRows     uint64
 	tableID          uint64
 	meta             partition.PartitionMetadata
 	mainIndexes      []uint64
@@ -110,8 +111,10 @@ func (op *PartitionMultiUpdate) Prepare(
 		return err
 	}
 
+	op.affectedRows = 0
 	op.raw.getS3WriterFunc = op.getS3Writer
 	op.raw.getFlushableS3WriterFunc = op.getFlushableS3Writer
+	op.raw.addAffectedRowsFunc = op.doAddAffectedRows
 	op.writers = make(map[uint64]*s3WriterDelegate, len(op.meta.Partitions))
 
 	op.rawTableIDs = make([]uint64, 0, len(op.raw.MultiUpdateCtx))
@@ -320,7 +323,8 @@ func (op *PartitionMultiUpdate) Free(
 		w.free(proc)
 	}
 
-	*op = PartitionMultiUpdate{}
+	affectedRows := op.affectedRows
+	*op = PartitionMultiUpdate{affectedRows: affectedRows}
 }
 
 func (op *PartitionMultiUpdate) Release() {
@@ -374,12 +378,13 @@ func (op *PartitionMultiUpdate) getPartitionIndex(
 }
 
 func (op *PartitionMultiUpdate) getS3Writer(
+	sid string,
 	id uint64,
 ) (*s3WriterDelegate, error) {
 	var err error
 	w, ok := op.writers[id]
 	if !ok {
-		w, err = newS3Writer(op.raw)
+		w, err = newS3Writer(sid, op.raw)
 		if err != nil {
 			return nil, err
 		}
@@ -395,4 +400,16 @@ func (op *PartitionMultiUpdate) getFlushableS3Writer() *s3WriterDelegate {
 		return w
 	}
 	return nil
+}
+
+func (op *PartitionMultiUpdate) doAddAffectedRows(affectedRows uint64) {
+	op.affectedRows += affectedRows
+}
+
+func (op *PartitionMultiUpdate) GetAffectedRows() uint64 {
+	return op.affectedRows
+}
+
+func (op *PartitionMultiUpdate) SetAffectedRows(affectedRows uint64) {
+	op.affectedRows = affectedRows
 }

@@ -200,13 +200,8 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	if err != nil {
 		return err
 	}
-	// 4. delete retention info
-	err = c.runSql(fmt.Sprintf(deleteMoRetentionWithDatabaseNameFormat, dbName))
-	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-		return nil
-	}
 
-	// 5.update mo_pitr table
+	// 4.update mo_pitr table
 	if !needSkipDbs[dbName] {
 		now := c.proc.GetTxnOperator().SnapshotTS().ToStdTime().UTC().UnixNano()
 		updatePitrSql := fmt.Sprintf("update `%s`.`%s` set `%s` = %d, `%s` = %d where `%s` = %d and `%s` = '%s' and `%s` = %d and `%s` = %s",
@@ -1454,21 +1449,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 			zap.Error(err),
 		)
 		return err
-	}
-
-	if qry.RetentionDeadline != 0 {
-		insertRetention := fmt.Sprintf("insert into `%s`.`%s` values ('%s','%s', %d)",
-			catalog.MO_CATALOG, catalog.MO_RETENTION, dbName, tblName, qry.RetentionDeadline)
-		err = c.runSql(insertRetention)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "create table for RetentionDeadline",
-				zap.String("databaseName", c.db),
-				zap.String("tableName", qry.GetTableDef().GetName()),
-				zap.String("insertRetention sql", insertRetention),
-				zap.Error(err),
-			)
-			return err
-		}
 	}
 
 	ps := c.proc.GetPartitionService()
@@ -2804,23 +2784,8 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	// remove entry in mo_retention if exists
-	// skip tables in mo_catalog.
-	// These tables do not have retention info.
 	if dbName == catalog.MO_CATALOG {
 		return nil
-	}
-	deleteRetentionSQL := fmt.Sprintf(
-		deleteMoRetentionWithDatabaseNameAndTableNameFormat,
-		dbName, tblName,
-	)
-	err = c.runSql(deleteRetentionSQL)
-	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
-		return nil
-	}
-
-	if err != nil {
-		return err
 	}
 
 	accountID, err := defines.GetAccountId(c.proc.Ctx)

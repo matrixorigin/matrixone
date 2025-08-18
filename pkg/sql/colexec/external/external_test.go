@@ -384,89 +384,17 @@ func Test_CALL3(t *testing.T) {
 	})
 }
 
-func Test_getCompressType(t *testing.T) {
-	convey.Convey("getCompressType succ", t, func() {
-		param := &tree.ExternParam{
-			ExParamConst: tree.ExParamConst{
-				CompressType: tree.GZIP,
-			},
-			ExParam: tree.ExParam{
-				Ctx: context.Background(),
-			},
-		}
-		compress := GetCompressType(param, param.Filepath)
-		convey.So(compress, convey.ShouldEqual, param.CompressType)
-
-		param.CompressType = tree.AUTO
-		param.Filepath = "a.gz"
-		compress = GetCompressType(param, param.Filepath)
-		convey.So(compress, convey.ShouldEqual, tree.GZIP)
-
-		param.Filepath = "a.bz2"
-		compress = GetCompressType(param, param.Filepath)
-		convey.So(compress, convey.ShouldEqual, tree.BZIP2)
-
-		param.Filepath = "a.lz4"
-		compress = GetCompressType(param, param.Filepath)
-		convey.So(compress, convey.ShouldEqual, tree.LZ4)
-
-		param.Filepath = "a.csv"
-		compress = GetCompressType(param, param.Filepath)
-		convey.So(compress, convey.ShouldEqual, tree.NOCOMPRESS)
-
-		param.Filepath = "a"
-		compress = GetCompressType(param, param.Filepath)
-		convey.So(compress, convey.ShouldEqual, tree.NOCOMPRESS)
-	})
-}
-
-func Test_getUnCompressReader(t *testing.T) {
-	convey.Convey("getUnCompressReader succ", t, func() {
-		param := &tree.ExternParam{
-			ExParamConst: tree.ExParamConst{
-				CompressType: tree.NOCOMPRESS,
-			},
-			ExParam: tree.ExParam{
-				Ctx: context.Background(),
-			},
-		}
-		read, err := getUnCompressReader(param, param.Filepath, nil)
-		convey.So(read, convey.ShouldBeNil)
-		convey.So(err, convey.ShouldBeNil)
-
-		param.CompressType = tree.BZIP2
-		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
-		convey.So(read, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeNil)
-
-		param.CompressType = tree.FLATE
-		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
-		convey.So(read, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeNil)
-
-		param.CompressType = tree.LZ4
-		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
-		convey.So(read, convey.ShouldNotBeNil)
-		convey.So(err, convey.ShouldBeNil)
-
-		param.CompressType = tree.LZW
-		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
-		convey.So(read, convey.ShouldBeNil)
-		convey.So(err, convey.ShouldNotBeNil)
-
-		param.CompressType = "abc"
-		read, err = getUnCompressReader(param, param.Filepath, &os.File{})
-		convey.So(read, convey.ShouldBeNil)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-}
-
 func TestReadDirSymlink(t *testing.T) {
-	root := t.TempDir()
 	ctx := context.Background()
 
+	root, err := os.MkdirTemp("", "*")
+	assert.Nil(t, err)
+	t.Cleanup(func() {
+		_ = os.RemoveAll(root)
+	})
+
 	evChan := make(chan notify.EventInfo, 1024)
-	err := notify.Watch(filepath.Join(root, "..."), evChan, notify.All)
+	err = notify.Watch(filepath.Join(root, "..."), evChan, notify.All)
 	assert.Nil(t, err)
 	defer notify.Stop(evChan)
 

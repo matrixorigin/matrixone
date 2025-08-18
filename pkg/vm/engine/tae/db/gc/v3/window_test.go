@@ -16,6 +16,10 @@ package gc
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,9 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/require"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 // Constants for test module
@@ -322,7 +323,7 @@ func TestMultiTableGCWithRealCheckpointData(t *testing.T) {
 	dropTS1 := types.BuildTS(20, 0) // Drop timestamp for table1
 
 	// Create batch buffer
-	buffer := containers.NewOneSchemaBatchBuffer(16*mpool.MB, ObjectTableAttrs, ObjectTableTypes)
+	buffer := containers.NewOneSchemaBatchBuffer(16*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
 	defer buffer.Close(mp)
 
 	// Create batch

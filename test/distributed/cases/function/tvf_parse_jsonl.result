@@ -1,0 +1,120 @@
+select * from parse_jsonl_data($$[1, 2, 3]
+["foo", "bar", "zoo"]
+{"foo": 1, "bar": "zoo"}
+$$) t;
+value
+[1, 2, 3]
+["foo", "bar", "zoo"]
+{"foo": 1, "bar": "zoo"}
+select * from parse_jsonl_data($$[1, 2, 3]
+[4, 5, 6]
+[1.1,2.2,3.3]
+$$, 'iii'
+) t;
+col0    col1    col2
+1    2    3
+4    5    6
+1    2    3
+select * from parse_jsonl_data($$[1, 2, 3]
+[4, 5, 6]
+[1.1,2.2,3.3]
+$$, 'fIF'
+) t;
+col0    col1    col2
+1.0    2    3.0
+4.0    5    6.0
+1.1    2    3.3
+select * from parse_jsonl_data($$[1, 2, 3]
+[4, 5, 6]
+[1.1,2.2, {"foo":2,"bar":"zoo"}]
+$$, 'sss'
+) t;
+col0    col1    col2
+1    2    3
+4    5    6
+1.1    2.2    {"bar":"zoo","foo":2}
+select * from parse_jsonl_data($$[1, 2, 3]
+[4, 5, 6]
+[1.1,2.2, {"foo":2,"bar":"zoo"}]
+$$, '{"format":"array", "cols":[{"name":"x", "type":"int32"},{"name":"y","type":"float64"},{"name":"z","type":"string"}]}'
+) t;
+x    y    z
+1    2.0    3
+4    5.0    6
+1    2.2    {"bar":"zoo","foo":2}
+select * from parse_jsonl_data($${"x":1, "z":"zzz", "y":3.14}
+{"x":2, "z":"zzz"}
+{"x":3, "zzz":"z"}
+{"y":2.7183, "zzz":666}
+$$, '{"format":"object", "cols":[{"name":"x", "type":"int32"},{"name":"y","type":"float64"},{"name":"z","type":"string"}]}'
+) t;
+x    y    z
+1    3.14    "zzz"
+2    null    "zzz"
+3    null    null
+null    2.7183    null
+select * from parse_jsonl_data($$[true, 1, "2020-12-30 11:22:33"]
+[false, 2, "2020-12-30 11:22:33"]
+[null, 3, "2020-12-30 11:22:33"]
+$$, 'bit'
+) t;
+col0    col1    col2
+true    1    2020-12-30 11:22:33
+false    2    2020-12-30 11:22:33
+null    3    2020-12-30 11:22:33
+select * from parse_jsonl_data($$[true, 1, "2020-12-30 11:22:33"]
+[false, 2, "2020-12-30 11:22:33"]
+[null, 3, "2020-12-30 11:22:33"]
+$$, 'bIt'
+) t;
+col0    col1    col2
+true    1    2020-12-30 11:22:33
+false    2    2020-12-30 11:22:33
+null    3    2020-12-30 11:22:33
+select * from parse_jsonl_data($$[1, 2, 3]
+[4, 5, 6]
+[1.1,2.2, {"foo":2,"bar":"zoo"}]
+$$, 'six'
+) t;
+invalid input: Invalid character 'x' in options
+select * from parse_jsonl_data($$[1, 2, 3]
+[4, 5, 6]
+[1.1,2.2, {"foo":2,"bar":"zoo"}]
+$$, '{"six'
+) t;
+unexpected end of JSON input
+select * from parse_jsonl_data($$[true, 1, "2020-12-30 11:22:33"]
+false, 2, "2020-12-30 11:22:33"
+[null, 3, "2020-12-30 11:22:33"]
+$$, 'bIt'
+) t;
+json: cannot unmarshal "false" into Go value of type []interface {}
+select * from parse_jsonl_data($$[1, 2, 3]
+[true, 1, "foobar"]
+$$, 'bIt'
+) t;
+invalid input: invalid bool value
+select * from parse_jsonl_data($$[true, 1, "2020-12-30 11:22:33", 42]
+[false, 2, "2020-12-30 11:22:33"]
+[null, 3, "2020-12-30 11:22:33"]
+$$, 'bIt'
+) t;
+invalid input: too many columns in the jsonl file
+select * from parse_jsonl_data($$[true, 1, "2020-12-30 11:22:33"]
+[false, "2020-12-30 11:22:33"]
+[null, 3, "2020-12-30 11:22:33"]
+$$, 'bIt'
+) t;
+invalid input: invalid number value
+select * from parse_jsonl_file('$resources/load_data/jsonline_array.jl') t;
+value
+[true,1,"var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18",121.11,["1",2,null,false,true,{"q":1}],"1qaz",null,null]
+["true","1","var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18","121.11",{"c":1,"b":["a","b",{"q":4}]},"1aza",null,null]
+select * from parse_jsonl_file('$resources/load_data/jsonline_array.jl.gz') t;
+value
+[true,1,"var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18",121.11,["1",2,null,false,true,{"q":1}],"1qaz",null,null]
+["true","1","var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18","121.11",{"c":1,"b":["a","b",{"q":4}]},"1aza",null,null]
+select * from parse_jsonl_file('$resources/load_data/jsonline_array.jl.bz2') t;
+value
+[true,1,"var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18",121.11,["1",2,null,false,true,{"q":1}],"1qaz",null,null]
+["true","1","var","2020-09-07","2020-09-07 00:00:00","2020-09-07 00:00:00","18","121.11",{"c":1,"b":["a","b",{"q":4}]},"1aza",null,null]

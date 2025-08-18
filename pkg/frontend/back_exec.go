@@ -589,7 +589,13 @@ var NewBackgroundExec = func(
 	upstream FeSession,
 	opts ...*BackgroundExecOption,
 ) BackgroundExec {
-	return upstream.InitBackExec(nil, "", fakeDataSetFetcher2, opts...)
+	// XXXSP
+	var txnOp TxnOperator
+	//
+	// We do not compute and pass in txnOp, but when InitBackExec sees nil, it will pass to its upsteam.
+	// txnOp = upstream.GetTxnHandler().GetTxn()
+	//
+	return upstream.InitBackExec(txnOp, "", fakeDataSetFetcher2, opts...)
 }
 
 var NewShareTxnBackgroundExec = func(ctx context.Context, ses FeSession, rawBatch bool) BackgroundExec {
@@ -780,6 +786,10 @@ func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack 
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
 		return be
+	} else if backSes.upstream != nil {
+		// XXXSP
+		// If we have an upstream, use it.
+		return backSes.upstream.InitBackExec(nil, db, callBack, opts...)
 	} else {
 		panic("backSession does not support non-txn-shared backExec recursively")
 	}
@@ -995,7 +1005,17 @@ func (backSes *backSession) GetShareTxnBackgroundExec(ctx context.Context, newRa
 }
 
 func (backSes *backSession) GetUserDefinedVar(name string) (*UserDefinedVar, error) {
-	return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
+	if backSes.upstream == nil {
+		return nil, moerr.NewInternalError(context.Background(), "do not support user defined var in background exec")
+	}
+	return backSes.upstream.GetUserDefinedVar(name)
+}
+
+func (backSes *backSession) SetUserDefinedVar(name string, value interface{}, sql string) error {
+	if backSes.upstream == nil {
+		return moerr.NewInternalError(context.Background(), "do not support set user defined var in background exec")
+	}
+	return backSes.upstream.SetUserDefinedVar(name, value, sql)
 }
 
 func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {

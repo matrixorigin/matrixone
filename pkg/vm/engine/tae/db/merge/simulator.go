@@ -105,36 +105,31 @@ func (c *simRscController) setMemLimit(limit int64) {
 	c.limit.Store(limit)
 }
 
-func (c *simRscController) refresh() {}
+func (c *simRscController) Refresh() {}
 
-func (c *simRscController) printMemUsage() {}
+func (c *simRscController) PrintUsage() {}
 
-func (c *simRscController) reserveResources(estMem int64) {
+func (c *simRscController) Acquire(estMem int64) (int64, bool) {
 	c.reserved += estMem
+	return c.Available() - estMem, true
 }
 
-func (c *simRscController) releaseResources(estMem int64) {
+func (c *simRscController) Release(estMem int64) int64 {
 	c.reserved -= estMem
 	if c.reserved < 0 {
 		c.reserved = 0
 		logutil.Warnf("simRscController: releaseResources: %d", estMem)
 	}
+
+	return c.Available()
 }
 
-func (c *simRscController) availableMem() int64 {
+func (c *simRscController) Available() int64 {
 	avail := c.limit.Load() - c.reserved
 	if avail < 0 {
 		avail = 0
 	}
 	return avail
-}
-
-func (c *simRscController) resourceAvailable(estMem int64) bool {
-	mem := c.availableMem()
-	if mem > constMaxMemCap {
-		mem = constMaxMemCap
-	}
-	return estMem <= 2*mem/3
 }
 
 // endregion: resource controller
@@ -144,7 +139,9 @@ func (c *simRscController) resourceAvailable(estMem int64) bool {
 func iterSDAsStats(objs []SData) iter.Seq[*objectio.ObjectStats] {
 	return func(yield func(*objectio.ObjectStats) bool) {
 		for _, obj := range objs {
-			yield(obj.stats)
+			if !yield(obj.stats) {
+				return
+			}
 		}
 	}
 }
@@ -152,7 +149,9 @@ func iterSDAsStats(objs []SData) iter.Seq[*objectio.ObjectStats] {
 func iterSTAsStats(objs []STombstone) iter.Seq[*objectio.ObjectStats] {
 	return func(yield func(*objectio.ObjectStats) bool) {
 		for _, obj := range objs {
-			yield(obj.stats)
+			if !yield(obj.stats) {
+				return
+			}
 		}
 	}
 }
@@ -649,6 +648,7 @@ func (c *SCatalog) AddTombstoneByDesc(desc STombstoneDesc) {
 	defer c.hero.Unlock()
 	dist := make(map[objectio.ObjectId]int)
 
+	tombstoneTotalRows := int(desc.GetObjectStats().Rows())
 	generatedRowCnt := 0
 	for _, distDesc := range desc.desc {
 		lv := distDesc.Lv
@@ -665,7 +665,7 @@ func (c *SCatalog) AddTombstoneByDesc(desc STombstoneDesc) {
 		avg, variance := distDesc.DelAvg, distDesc.DelVar
 		// Create a slice of selected size with random integers
 		// based on normal distribution with given avg and variance
-		delCounts := make([]int, selected)
+		delCountsProportion := make([]float64, selected)
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 		// Using Box-Muller transform to generate normally distributed values
@@ -674,26 +674,33 @@ func (c *SCatalog) AddTombstoneByDesc(desc STombstoneDesc) {
 			u1 := r.Float64()
 			u2 := r.Float64()
 			z := math.Sqrt(-2.0*math.Log(u1)) * math.Cos(2.0*math.Pi*u2)
-
 			// Scale by standard deviation (sqrt of variance) and add mean
-			val := z*math.Sqrt(variance) + float64(avg)
-
-			// Ensure value is at least 1 (can't have less than 1 deletion)
-			delCounts[i] = int(math.Max(1, math.Floor(val)))
-			generatedRowCnt += delCounts[i]
+			p := z*math.Sqrt(variance) + float64(avg)
+			delCountsProportion[i] = math.Max(0.001, p)
 		}
 
 		var idx int
-		for id := range c.hero.data[lv] {
-			dist[id] = delCounts[idx]
-			idx++
+		// random by map iteration order
+		for id, sdata := range c.hero.data[lv] {
 			if idx >= selected {
 				break
 			}
+			totalRows := sdata.stats.Rows()
+			delRows := int(math.Floor(float64(totalRows) * delCountsProportion[idx]))
+
+			if generatedRowCnt+delRows > tombstoneTotalRows {
+				delRows = tombstoneTotalRows - generatedRowCnt - rand.Intn(100)
+				idx = selected + 100 // break
+			}
+
+			dist[id] = delRows
+			generatedRowCnt += delRows
+			idx++
 		}
 	}
 
-	missed := int(desc.GetObjectStats().Rows()) - generatedRowCnt
+	missed := tombstoneTotalRows - generatedRowCnt
+
 	if missed > 0 {
 		dist[objectio.NewObjectid()] = missed
 	}
@@ -778,7 +785,9 @@ func (t *STable) IterDataItem() iter.Seq[catalog.MergeDataItem] {
 		defer t.RUnlock()
 		for i := range t.data {
 			for _, obj := range t.data[i] {
-				yield(&obj)
+				if !yield(&obj) {
+					return
+				}
 			}
 		}
 	}
@@ -789,7 +798,9 @@ func (t *STable) IterTombstoneItem() iter.Seq[catalog.MergeTombstoneItem] {
 		t.RLock()
 		defer t.RUnlock()
 		for _, obj := range t.tombstone {
-			yield(&obj)
+			if !yield(&obj) {
+				return
+			}
 		}
 	}
 }

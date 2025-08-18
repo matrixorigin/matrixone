@@ -307,7 +307,7 @@ func (s *service) RefreshTableFilters() error {
 			res, err := txn.Exec(
 				fmt.Sprintf("select table_id, columns from %s",
 					TraceTableFilterTable),
-				executor.StatementOption{})
+				executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return err
 			}

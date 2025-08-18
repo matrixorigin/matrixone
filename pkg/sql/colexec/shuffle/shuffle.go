@@ -17,6 +17,7 @@ package shuffle
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -97,11 +98,12 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 		if err != nil {
 			return result, err
 		}
+
+		result.Status = vm.ExecNext
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
 			shuffle.ctr.lastForShufflePool = shuffle.ctr.shufflePool.Ending()
-			result.Status = vm.ExecNext
 			result.Batch = batch.EmptyBatch
 			return result, nil
 		} else if bat.Last() {
@@ -130,6 +132,7 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 	if err = shuffle.handleRuntimeFilter(proc); err != nil {
 		return vm.CancelResult, err
 	}
+
 	// send the batch
 	result.Batch = shuffle.ctr.buf
 	return result, nil

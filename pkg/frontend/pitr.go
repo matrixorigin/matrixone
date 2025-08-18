@@ -82,8 +82,8 @@ type pitrRecord struct {
 	pitrId        string
 	pitrName      string
 	createAccount uint64
-	createTime    string
-	modifiedTime  string
+	createTime    int64
+	modifiedTime  int64
 	level         string
 	accountId     uint64
 	accountName   string
@@ -1049,6 +1049,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			}
 
 			// check account exists or not
+			ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 			rtnErr = restoreAccountUsingClusterSnapshotToNew(
 				ctx,
 				ses,
@@ -1113,6 +1114,7 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 	// restore according the restore level
 	switch restoreLevel {
 	case tree.RESTORELEVELCLUSTER:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelCluster)
 		subDbToRestore := make(map[string]*subDbRestoreRecord)
 		if err = restoreToCluster(ctx, ses, bh, pitrName, ts, subDbToRestore); err != nil {
 			return
@@ -1128,14 +1130,17 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 		return
 	case tree.RESTORELEVELACCOUNT:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelAccount)
 		if err = restoreToAccountWithPitr(ctx, ses.GetService(), bh, pitrName, ts, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 	case tree.RESTORELEVELDATABASE:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 		if err = restoreToDatabaseWithPitr(ctx, ses.GetService(), bh, pitrName, ts, dbName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
 	case tree.RESTORELEVELTABLE:
+		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelTable)
 		if err = restoreToTableWithPitr(ctx, ses.service, bh, pitrName, ts, dbName, tblName, fkTableMap, viewMap, tenantInfo.TenantID); err != nil {
 			return
 		}
@@ -1856,10 +1861,10 @@ func getPitrRecords(ctx context.Context, bh BackgroundExec, sql string) ([]*pitr
 				if record.createAccount, err = er.GetUint64(ctx, row, 2); err != nil {
 					return nil, err
 				}
-				if record.createTime, err = er.GetString(ctx, row, 3); err != nil {
+				if record.createTime, err = er.GetInt64(ctx, row, 3); err != nil {
 					return nil, err
 				}
-				if record.modifiedTime, err = er.GetString(ctx, row, 4); err != nil {
+				if record.modifiedTime, err = er.GetInt64(ctx, row, 4); err != nil {
 					return nil, err
 				}
 				var level string
@@ -1946,15 +1951,11 @@ func nanoTimeFormat(ts int64) string {
 func checkPitrInValidDurtion(ts int64, pitrRecord *pitrRecord) (err error) {
 	// if the timestamp time less than the pitrRecord create time, then return error
 	// create time is utc time string, ts is coverted to utc too
-	createTimeStr := pitrRecord.createTime
-	// parse createTimeStr to utc time
-	t, err := time.ParseInLocation("2006-01-02 15:04:05", createTimeStr, time.UTC)
-	if err != nil {
-		return
-	}
-	utcNano := t.UTC().UnixNano()
-	if ts <= utcNano {
-		return moerr.NewInternalErrorNoCtxf("input timestamp %v is less than the pitr valid time %v", nanoTimeFormat(ts), nanoTimeFormat(utcNano))
+	if ts <= pitrRecord.createTime {
+		return moerr.NewInternalErrorNoCtxf(
+			"input timestamp %v is less than the pitr valid time %v",
+			nanoTimeFormat(ts), nanoTimeFormat(pitrRecord.createTime),
+		)
 	}
 
 	// use utc time now sub pitr during time get the minest time

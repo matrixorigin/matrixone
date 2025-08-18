@@ -851,7 +851,7 @@ func (s *service) ClearTxnFilters() error {
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
 					TraceTxnFilterTable),
-				executor.StatementOption{})
+				executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return err
 			}

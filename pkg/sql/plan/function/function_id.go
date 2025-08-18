@@ -411,11 +411,18 @@ const (
 	TS_TO_TIME = 343
 	STRCMP     = 344
 
+	STARLARK     = 345
+	TRY_STARLARK = 346
+
+	LLM_CHAT      = 347
+	LLM_EMBEDDING = 348
+
 	// hnsw function
-	HNSW_CDC_UPDATE = 345
+	HNSW_CDC_UPDATE = 349
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 346
+	FUNCTION_END_NUMBER = 350
 )
 
 // functionIdRegister is what function we have registered already.
@@ -746,6 +753,14 @@ var functionIdRegister = map[string]int32{
 	// match function
 	"fulltext_match":       FULLTEXT_MATCH,
 	"fulltext_match_score": FULLTEXT_MATCH_SCORE,
+
+	// starlark function
+	"starlark":     STARLARK,
+	"try_starlark": TRY_STARLARK,
+
+	// llm function
+	"llm_chat":      LLM_CHAT,
+	"llm_embedding": LLM_EMBEDDING,
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
