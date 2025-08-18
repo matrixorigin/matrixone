@@ -148,7 +148,7 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	for _, stats := range unconsumedWindow.files {
 		objects2[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
 	}
-	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchData)
+	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchDataAndDelete)
 	logutil.Infof("object1: %d, object2: %d, maxTS is %v, num %v", len(objects), len(objects2), maxTS.ToString(), len(candidates))
 
 	allCount := len(allObjects)
