@@ -113,7 +113,7 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		return nil
 	}
 	window := sancWindow.Clone()
-	windowCount := window.files
+	windowCount := len(window.files)
 	for _, stats := range window.files {
 		objects[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
 	}
