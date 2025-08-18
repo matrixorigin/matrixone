@@ -324,9 +324,10 @@ message SemiJoin {
   repeated plan.Expr right_cond = 4;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 5;
   bool hash_on_pk = 6;
-  bool is_shuffle = 7;
-  int32 join_map_tag = 8;
-  int32 shuffle_idx = 9;
+  bool can_skip_probe = 7;
+  bool is_shuffle = 8;
+  int32 join_map_tag = 9;
+  int32 shuffle_idx = 10;
 }
 
 message SingleJoin {
