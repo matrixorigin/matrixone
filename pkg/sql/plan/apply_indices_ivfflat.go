@@ -282,5 +282,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 
 	projNode.Children[0] = sortByID
 
+	// check equal distFn and only compute once for equal function()
+	projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
+
+	// replace the project with ColRef (same distFn as the order by)
+	for _, id := range projids {
+		projNode.ProjectList[id] = &Expr{
+			Typ: curr_node.TableDef.Cols[1].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: curr_node.BindingTags[0],
+					ColPos: 1, // score
+				},
+			},
+		}
+	}
+
 	return nodeID, nil
 }
