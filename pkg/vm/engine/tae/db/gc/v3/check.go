@@ -166,14 +166,18 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		for itTable.Valid() {
 			table := itTable.Get().GetPayload()
 			itObject := table.MakeDataObjectIt()
+			defer itObject.Release()
 			for ok := itObject.Last(); ok; ok = itObject.Prev() {
 				obj := itObject.Item()
+				logutil.Infof("obj.ObjectName().UnsafeString() is %v", obj.ObjectName().UnsafeString())
 				delete(allObjects, obj.ObjectName().UnsafeString())
 			}
 			itTombstone := table.MakeTombstoneObjectIt()
+			defer itTombstone.Release()
 			for ok := itTombstone.Last(); ok; ok = itTombstone.Prev() {
 				obj := itTombstone.Item()
 				delete(allObjects, obj.ObjectName().UnsafeString())
+				logutil.Infof("itTombstone.ObjectName().UnsafeString() is %v", obj.ObjectName().UnsafeString())
 			}
 
 			itTable.Next()
@@ -201,8 +205,8 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		for name := range allObjects {
 			logutil.Infof("[Check GC]not found object %s,", name)
 		}
-		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d",
-			time.Since(now), allCount, len(allObjects)-ckpObjectCount, ckpObjectCount)
+		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d, unconsumedWindow file: %d",
+			time.Since(now), allCount, len(allObjects)-ckpObjectCount, ckpObjectCount, len(window.files), len(unconsumedWindow.files))
 	} else {
 		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d",
 			time.Since(now), allCount, len(allObjects)-ckpObjectCount)
