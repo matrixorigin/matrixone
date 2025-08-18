@@ -56,7 +56,7 @@ func (s *Service) getMetadataByHashType(
 			metadata.Partitions,
 			partition.Partition{
 				Name:               name,
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, name),
+				PartitionTableName: GetPartitionTableName(def.Name, name),
 				Position:           uint32(i),
 				Expr:               def.Partition.PartitionDefs[i].Def,
 			},

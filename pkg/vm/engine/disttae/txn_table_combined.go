@@ -398,7 +398,29 @@ func (t *combinedTxnTable) PrimaryKeysMayBeUpserted(
 	bat *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
-	panic("BUG: cannot upsert primary keys in partition primary table")
+	relations, err := t.prunePKFunc(bat, -1)
+	if err != nil {
+		return false, err
+	}
+
+	changed := false
+	for _, rel := range relations {
+		v, e := rel.PrimaryKeysMayBeUpserted(
+			ctx,
+			from,
+			to,
+			bat,
+			pkIndex,
+		)
+		if e != nil {
+			return false, e
+		}
+		if v {
+			changed = true
+			break
+		}
+	}
+	return changed, err
 }
 
 func (t *combinedTxnTable) Reset(op client.TxnOperator) error {

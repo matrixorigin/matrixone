@@ -16,12 +16,12 @@ package partition
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -78,7 +78,7 @@ func runPartitionTableCreateAndDeleteTestsWithAware(
 				require.NotEqual(t, uint64(0), p.PartitionID)
 				require.Equal(t, metadata.TableID, p.PrimaryTableID)
 				require.Equal(t, uint32(idx), p.Position)
-				require.Equal(t, fmt.Sprintf("%s_%s", metadata.TableName, p.Name), p.PartitionTableName)
+				require.Equal(t, partitionservice.GetPartitionTableName(metadata.TableName, p.Name), p.PartitionTableName)
 				validPartition(idx, p)
 			}
 

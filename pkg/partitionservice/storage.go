@@ -180,8 +180,9 @@ func (s *Storage) GetMetadata(
 				) bool {
 					found = true
 					for i := 0; i < rows; i++ {
+						v := []byte(executor.GetStringRows(cols[5])[i])
 						expr := &plan.Expr{}
-						err = expr.Unmarshal([]byte(executor.GetStringRows(cols[5])[i]))
+						err = expr.Unmarshal(v)
 						if err != nil {
 							panic(err)
 						}
@@ -195,6 +196,7 @@ func (s *Storage) GetMetadata(
 								Position:           executor.GetFixedRows[uint32](cols[3])[i],
 								ExprStr:            executor.GetStringRows(cols[4])[i],
 								Expr:               expr,
+								ExprWithRowID:      getExprWithRowID(v),
 							},
 						)
 					}
@@ -271,6 +273,15 @@ func (s *Storage) Create(
 		},
 		opts,
 	)
+}
+
+func (s *Storage) Truncate(
+	ctx context.Context,
+	oldTableID uint64,
+	newTableID uint64,
+	txnOp client.TxnOperator,
+) error {
+	return nil
 }
 
 func (s *Storage) Delete(
@@ -544,4 +555,29 @@ func getInsertMetadataSQL(
 		metadata.Description,
 		len(metadata.Partitions),
 	)
+}
+
+func getExprWithRowID(v []byte) *plan.Expr {
+	e := &plan.Expr{}
+	err := e.Unmarshal(v)
+	if err != nil {
+		panic(err)
+	}
+	resetPosWithRowID(e)
+	return e
+}
+
+func resetPosWithRowID(expr *plan.Expr) {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			switch col := e.F.Args[i].Expr.(type) {
+			case *plan.Expr_Col:
+				col.Col.ColPos++
+				return
+			case *plan.Expr_F:
+				resetPosWithRowID(e.F.Args[i])
+			}
+		}
+	}
 }

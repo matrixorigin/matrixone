@@ -157,6 +157,7 @@ func (op *PartitionMultiUpdate) writeTable(
 	if len(op.raw.MultiUpdateCtx[0].PartitionCols) > 0 {
 		pos = int32(op.raw.MultiUpdateCtx[0].PartitionCols[0])
 	}
+
 	res, err := partitionprune.Prune(proc, input.Batch, op.meta, pos)
 	if err != nil {
 		return vm.CallResult{}, err
