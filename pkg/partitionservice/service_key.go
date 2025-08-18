@@ -34,10 +34,6 @@ func (s *Service) getMetadataByKeyType(
 		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("none-column is not supported in KEY partition")
 	}
 
-	if len(method.ColumnList) > 1 {
-		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("multi-column is not supported in KEY partition")
-	}
-
 	ctx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),

@@ -139,6 +139,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if err != nil {
 			return err
 		}
+
+		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
+			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
+			ignoreTables = append(ignoreTables, r)
+			continue
+		}
+
 		defs, err := t.TableDefs(c.proc.Ctx)
 		if err != nil {
 			return err
@@ -2345,6 +2352,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	defer r.Close()
 
 	createSQL := ""
 	r.ReadRows(
