@@ -55,6 +55,9 @@ func (c *checker) Check(ctx context.Context, mp *mpool.MPool) error {
 		return nil
 	}
 	now := time.Now()
+	defer func() {
+		logutil.Infof("GC Check end! time: %v", time.Since(now))
+	}()
 	c.cleaner.mutation.Lock()
 	defer c.cleaner.mutation.Unlock()
 	buffer := MakeGCWindowBuffer(mpool.MB)
