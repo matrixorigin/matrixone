@@ -372,3 +372,15 @@ func TestIndexParams_ToStringList(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, " m = 10  ef_construction = 100  ef_search = 1000  quantization 'I8'  op_type 'vector_ip_ops' ", res)
 }
+
+func TestIndexParams_TryConvertToIndexParams(t *testing.T) {
+	paramStr1 := `{"lists": "5", "op_type": "vector_l2_ops"}`
+	params, err := TryConvertToIndexParams(
+		IndexParamAlgoName_IvfFlat,
+		paramStr1,
+	)
+	require.NoError(t, err)
+	require.Equalf(t, IndexParamType_IVFFLAT, params.Type(), "params: %s", params.String())
+	require.Equal(t, int64(5), params.IVFFLATList())
+	require.Equal(t, IndexParamAlgoType_L2Distance, params.IVFFLATAlgo())
+}

@@ -529,7 +529,7 @@ func (params IndexParams) IsEmpty() bool {
 }
 
 func (params IndexParams) Type() IndexParamType {
-	if len(params) < IndexParams_HeaderLen {
+	if !params.IsValid() {
 		return IndexParamType_Invalid
 	}
 	paramType := IndexParamType(types.DecodeFixed[uint16](params[IndexParams_TypeOff:]))
@@ -537,7 +537,15 @@ func (params IndexParams) Type() IndexParamType {
 }
 
 func (params IndexParams) IsValid() bool {
-	return params.Type() != IndexParamType_Invalid
+	if len(params) < IndexParams_HeaderLen {
+		return false
+	}
+	magic := types.DecodeFixed[uint16](params[:IndexParams_MagicLen])
+	if magic != IndexParamMagicNumber {
+		return false
+	}
+	paramType := IndexParamType(types.DecodeFixed[uint16](params[IndexParams_TypeOff:]))
+	return paramType != IndexParamType_Invalid
 }
 
 func (params IndexParams) Version() uint16 {
