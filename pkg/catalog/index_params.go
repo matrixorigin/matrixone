@@ -798,7 +798,7 @@ func TryConvertToIndexParams(
 	algo string,
 	paramStr string,
 ) (params IndexParams, err error) {
-	params = IndexParams(paramStr)
+	params = IndexParams(util.UnsafeStringToBytes(paramStr))
 	if params.IsEmpty() || params.IsValid() {
 		return
 	}

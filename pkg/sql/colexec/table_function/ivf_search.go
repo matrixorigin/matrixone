@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -137,11 +138,11 @@ func InitIVFCfgFromParam(
 		return
 	}
 
-	params := catalog.IndexParams(buf)
-	if !params.IsIVFFLAT() {
-		err = moerr.NewInvalidInputNoCtxf(
-			"invalid ivf params: %s", params.String(),
-		)
+	var params catalog.IndexParams
+	if params, err = catalog.TryConvertToIndexParams(
+		catalog.IndexParamAlgoName_IvfFlat,
+		util.UnsafeBytesToString(buf),
+	); err != nil {
 		return
 	}
 
@@ -160,7 +161,7 @@ func InitIVFCfgFromParam(
 		return
 	}
 
-	cfg.Type = "ivfflat"
+	cfg.Type = catalog.IndexParamAlgoName_IvfFlat
 	cfg.Ivfflat.Lists = uint(lists)
 	cfg.Ivfflat.Metric = uint16(algo)
 	return
