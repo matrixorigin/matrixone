@@ -58,8 +58,6 @@ func (c *checker) Check(ctx context.Context, mp *mpool.MPool) error {
 	defer func() {
 		logutil.Infof("GC Check end! time: %v", time.Since(now))
 	}()
-	c.cleaner.mutation.Lock()
-	defer c.cleaner.mutation.Unlock()
 	buffer := MakeGCWindowBuffer(mpool.MB)
 	defer buffer.Close(mp)
 	bat := buffer.Fetch()
@@ -107,7 +105,7 @@ func (c *checker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 		return nil
 	}
-	window := c.cleaner.GetScannedWindowLocked()
+	window := c.cleaner.GetScannedWindow()
 	buildObjects(window, objects, window.LoadBatchData)
 
 	scanWM := c.cleaner.GetScanWaterMark()
