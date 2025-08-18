@@ -135,13 +135,11 @@ create table t1(a int primary key, b int) partition by key(a) partitions 2;
 insert into t1 values (1,1),(2,2);
 insert into t1 values (1,1),(3,3) on duplicate key update b = 10;
 select * from t1 order by a;
--- @bvt:issue#16438
 drop table if exists t1;
 create table t1(a int, b int, c int, primary key(a,b)) partition by key(a,b) partitions 2;
 insert into t1 values (1,1,1),(2,2,2);
 insert into t1 values (1,1,1),(3,3,3) on duplicate key update c = 10;
 select * from t1 order by a;
--- @bvt:issue
 drop table if exists t1;
 create table t1(a int primary key, b int);
 insert into t1 values (1,1),(2,2);
