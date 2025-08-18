@@ -1116,6 +1116,15 @@ INSERT INTO t1 VALUES (1), (2), (3);
 SELECT 2 IN ( SELECT 5 UNION SELECT NULL ) FROM t1;
 DROP TABLE IF EXISTS t1;
 
+drop table if exists task;
+drop table if exists task_detail;
+create table `task` (`id` bigint NOT NULL, PRIMARY KEY (`id`));
+create table `task_detail` (`id` bigint NOT NULL, `task_id` bigint NOT NULL, PRIMARY KEY (`id`), KEY `order_id` (`task_id`));
+insert into task select * from generate_series(1,10000) g;
+insert into task_detail select *,* from generate_series(1,100000) g;
+update task_detail set task_id = task_id % 10000;
+select 100000 - count(*) from task_detail where task_id in (select id from task where id > 1);
+
 drop database if exists test;
 create database test;
 use test;
