@@ -269,7 +269,7 @@ func (w *GCWindow) ScanCheckpoints(
 	}
 	w.files = append(w.files, newFiles...)
 	for _, file := range w.files {
-		logutil.Infof("w.files is %v", file)
+		logutil.Infof("w.files is %v", file.ObjectName().String())
 	}
 	return metaFile, nil
 }

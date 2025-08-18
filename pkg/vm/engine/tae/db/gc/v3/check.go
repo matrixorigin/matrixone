@@ -236,10 +236,10 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 			logutil.Infof("[Check GC]not found object %s,", name)
 		}
 		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d, unconsumedWindow file: %d",
-			time.Since(now), allCount, len(allObjects)-ckpObjectCount, ckpObjectCount, windowCount, unconsumedWindowCount)
+			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount, unconsumedWindowCount)
 	} else {
 		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d",
-			time.Since(now), allCount, len(allObjects)-ckpObjectCount)
+			time.Since(now), allCount, len(allObjects), ckpObjectCount)
 	}
 	return nil
 }
