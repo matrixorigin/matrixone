@@ -2459,7 +2459,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 			}
 		} else {
 			for i := range shuffleJoins {
-				op := constructSemi(node, rightTyps, c.proc)
+				op := constructSemi(node, left, rightTyps, c.proc)
 				op.ShuffleIdx = int32(i)
 				if shuffleV2 {
 					op.ShuffleIdx = -1
@@ -2627,7 +2627,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 				currentFirstFlag := c.anal.isFirst
 				for i := range rs {
-					op := constructSemi(node, rightTyps, c.proc)
+					op := constructSemi(node, left, rightTyps, c.proc)
 					op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 					rs[i].setRootOperator(op)
 				}
