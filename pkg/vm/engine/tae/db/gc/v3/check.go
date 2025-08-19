@@ -204,9 +204,6 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 	}
 
-	for name := range allObjects {
-		logutil.Infof("not GC name: %v", name)
-	}
 	// Collect all checkpoint files
 	var ckpObjectCount int
 	ckps := c.cleaner.checkpointCli.GetAllCheckpoints()
@@ -230,7 +227,9 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		ckpObjectCount += count
 		logutil.Infof("checkpoint %v, file count: %v, rows: %d", ckp.String(), len(reader.GetLocations())+1, rows)
 	}
-
+	for name := range allObjects {
+		logutil.Infof("not GC name: %v", name)
+	}
 	if len(allObjects) > NotFoundLimit {
 		for name := range allObjects {
 			logutil.Infof("[Check GC]not found object %s,", name)
@@ -238,7 +237,7 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d, unconsumedWindow file: %d",
 			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount, unconsumedWindowCount)
 	} else {
-		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d",
+		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d, checkpoint: %d",
 			time.Since(now), allCount, len(allObjects), ckpObjectCount)
 	}
 	return nil
