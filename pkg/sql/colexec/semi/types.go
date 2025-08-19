@@ -67,6 +67,7 @@ type SemiJoin struct {
 	IsShuffle          bool
 	ShuffleIdx         int32
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	CanSkipProbe       bool
 	JoinMapTag         int32
 	vm.OperatorBase
 }

@@ -164,7 +164,7 @@ func buildConjunction(key map[string]struct{}, row tree.Exprs, keyToRow map[stri
 	for k := range key {
 		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		row[keyToRow[k]].Format(fmtctx)
-		conjunctions = append(conjunctions, fmt.Sprintf("%s in (select %s)", k, fmtctx.String()))
+		conjunctions = append(conjunctions, fmt.Sprintf("%s = %s", k, fmtctx.String()))
 	}
 	return "(" + strings.Join(conjunctions, " and ") + ")"
 }
