@@ -205,7 +205,7 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 
 			s.mu.Unlock()
 
-			go s.scanAndProcess(ctx)
+			s.scanAndProcess(ctx)
 		case <-retryTicker.C:
 			s.mu.Lock()
 			if s.handling || s.lastMp == nil {
@@ -229,7 +229,7 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 	s.lastMp = s.Mp
 	s.mu.Unlock()
 
-	s.processCallback(ctx, s.lastMp)
+	go s.processCallback(ctx, s.lastMp)
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
