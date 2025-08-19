@@ -201,3 +201,36 @@ func Test_IndexTableCfgV1_BuildIVFIndexTableCfgV1(t *testing.T) {
 	require.Equal(t, int64(100), cfg.ExtraIVFCfg().KmeansTrainPercent())
 	require.Equal(t, int64(0), cfg.ExtraIVFCfg().KmeansMaxIteration())
 }
+
+func Test_IndexTableCfgV1_JsonStringToIndexTableCfgV1(t *testing.T) {
+	cfg := BuildIVFIndexTableCfgV1(
+		"db1",
+		"src1",
+		"metadata1",
+		"index1",
+		"pkey1",
+		"keypart1",
+		100,        // threadsSearch
+		50,         // threadsBuild
+		1000,       // indexCapacity
+		"entries1", // entriesTable
+		500,        // dataSize
+		200,        // nprobe
+		88,         // pKeyType
+		1099,       // keyPartType
+		100,        // kmeansTrainPercent
+		0,          // kmeansMaxIteration
+	)
+	jsonString := cfg.ToJsonString()
+	cfg2, err := JsonStringToIndexTableCfgV1(jsonString)
+	require.NoError(t, err)
+	require.Equal(t, cfg.DBName(), cfg2.DBName())
+	require.Equal(t, cfg.SrcTable(), cfg2.SrcTable())
+	require.Equal(t, cfg.MetadataTable(), cfg2.MetadataTable())
+	require.Equal(t, cfg.IndexTable(), cfg2.IndexTable())
+	require.Equal(t, cfg.PKey(), cfg2.PKey())
+	require.Equal(t, cfg.KeyPart(), cfg2.KeyPart())
+	require.Equal(t, cfg.ThreadsSearch(), cfg2.ThreadsSearch())
+	require.Equal(t, cfg.ThreadsBuild(), cfg2.ThreadsBuild())
+	require.Equal(t, cfg.IndexCapacity(), cfg2.IndexCapacity())
+}

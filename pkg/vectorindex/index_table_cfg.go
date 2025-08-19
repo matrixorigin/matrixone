@@ -17,6 +17,7 @@ package vectorindex
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -484,4 +485,56 @@ func (cfg ExtraIVFCfgV1) ToMap() map[string]string {
 		"kmeans_max_iteration": fmt.Sprintf("%d", cfg.KmeansMaxIteration()),
 		"entries":              cfg.EntriesTable(),
 	}
+}
+
+func JsonStringToIndexTableCfgV1(
+	jsonString string,
+) (cfg IndexTableCfgV1, err error) {
+	map1 := make(map[string]string)
+	if err = json.Unmarshal([]byte(jsonString), &map1); err != nil {
+		return
+	}
+	dbName := map1["db"]
+	srcTable := map1["src"]
+	metadataTable := map1["metadata"]
+	indexTable := map1["index"]
+	pKey := map1["pkey"]
+	keyPart := map1["part"]
+	threadsSearchStr := map1["threads_search"]
+	threadsBuildStr := map1["threads_build"]
+	indexCapacityStr := map1["index_capacity"]
+	var (
+		threadsSearch int64
+		threadsBuild  int64
+		indexCapacity int64
+	)
+
+	if threadsSearchStr != "" {
+		if threadsSearch, err = strconv.ParseInt(threadsSearchStr, 10, 64); err != nil {
+			return
+		}
+	}
+	if threadsBuildStr != "" {
+		if threadsBuild, err = strconv.ParseInt(threadsBuildStr, 10, 64); err != nil {
+			return
+		}
+	}
+	if indexCapacityStr != "" {
+		if indexCapacity, err = strconv.ParseInt(indexCapacityStr, 10, 64); err != nil {
+			return
+		}
+	}
+
+	cfg = BuildIndexTableCfgV1(
+		dbName,
+		srcTable,
+		metadataTable,
+		indexTable,
+		pKey,
+		keyPart,
+		threadsSearch,
+		threadsBuild,
+		indexCapacity,
+	)
+	return
 }
