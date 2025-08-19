@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -536,5 +537,16 @@ func JsonStringToIndexTableCfgV1(
 		threadsBuild,
 		indexCapacity,
 	)
+	return
+}
+
+func TryeConvertIndexTableCfgV1(
+	cfgStr string,
+) (cfg IndexTableCfgV1, err error) {
+	cfg = IndexTableCfgV1(util.UnsafeStringToBytes(cfgStr))
+	if cfg.IsCfgV1() {
+		return
+	}
+	cfg, err = JsonStringToIndexTableCfgV1(cfgStr)
 	return
 }
