@@ -294,7 +294,8 @@ func (s *Scope) handleIvfIndexCentroidsTable(
 		qryDatabase, originalTableDef.Name,
 		src_alias,
 		params.ToJsonParamString(),
-		string(cfg),
+		// string(cfg),
+		cfg.ToJsonString(),
 		part,
 	)
 
