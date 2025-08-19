@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
 	"slices"
 
@@ -579,6 +580,7 @@ func cowUnaffectedIndexes(
 	releaseClone := func() {
 		if clone != nil {
 			clone.Free(c.proc, false, err)
+			reuse.Free[table_clone.TableClone](clone, nil)
 			clone = nil
 		}
 	}

@@ -35,15 +35,9 @@ func buildCloneTable(
 ) (*Plan, error) {
 
 	var (
-		err error
-
-		//id int32
-
+		err       error
 		srcTblDef *TableDef
-
-		srcObj *ObjectRef
-
-		//query *Query
+		srcObj    *ObjectRef
 
 		createTablePlan *Plan
 
@@ -103,31 +97,10 @@ func buildCloneTable(
 
 	dstTableName = stmt.CreateTable.Table.ObjectName.String()
 	dstDatabaseName = stmt.CreateTable.Table.SchemaName.String()
-	//dstTblDef := DeepCopyTableDef(srcTblDef, true)
-	//dstTblDef.Name = stmt.CreateTable.Table.ObjectName.String()
-	//dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
 
 	if dstDatabaseName == "" {
 		dstDatabaseName = ctx.DefaultDatabase()
 	}
-
-	//node := &plan.Node{
-	//	ObjRef:       srcObj,
-	//	NodeType:     plan.Node_TABLE_CLONE,
-	//	TableDef:     srcTblDef,
-	//	ScanSnapshot: bindCtx.snapshot,
-	//	//InsertCtx: &plan.InsertCtx{
-	//	//	TableDef: dstTblDef,
-	//	//},
-	//	BindingTags: []int32{builder.genNewTag()},
-	//	Stats: &plan.Stats{
-	//		ForceOneCN: true,
-	//	},
-	//}
-
-	//builder.qry.Steps = append(builder.qry.Steps, id)
-	//builder.qry.Nodes[0].Stats.ForceOneCN = true
-	//builder.skipStats = true
 
 	var (
 		opAccount  uint32
@@ -167,13 +140,6 @@ func buildCloneTable(
 		return nil, err
 	}
 
-	//if query, err = builder.createQuery(); err != nil {
-	//	return nil, err
-	//}
-
-	//createTablePlan.Plan.(*plan.Plan_Ddl).Ddl.Query = query
-	//createTablePlan.Plan.(*plan.Plan_Ddl).Ddl.DdlType = plan.DataDefinition_CREATE_TABLE_WITH_CLONE
-
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -191,8 +157,6 @@ func buildCloneTable(
 			},
 		},
 	}, nil
-
-	//return createTablePlan, nil
 }
 
 func checkPrivilege(
