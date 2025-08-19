@@ -57,10 +57,11 @@ func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClie
 		mp:          mp,
 	}
 	worker.ctx, worker.cancel = context.WithCancel(context.Background())
+	go worker.Run()
 	return worker
 }
 
-func (w *worker) Start() {
+func (w *worker) Run() {
 	for i := 0; i < ISCPWorkerThread; i++ {
 		w.wg.Add(1)
 		go func() {
@@ -89,27 +90,24 @@ func (w *worker) Submit(iteration *IterationContext) error {
 	return nil
 }
 
-func (w *worker) onItem(items ...any) {
-	for _, item := range items {
-		iterCtx := item.(*IterationContext)
-		for {
-			err := ExecuteIteration(
-				w.ctx,
-				w.cnUUID,
-				w.cnEngine,
-				w.cnTxnClient,
-				iterCtx,
-				w.mp,
-			)
-			if err == nil {
-				break
-			}
-			logutil.Error(
-				"ISCP-Task execute iteration failed",
-				zap.Any("iterCtx", iterCtx.jobNames),
-				zap.Error(err),
-			)
+func (w *worker) onItem(iterCtx *IterationContext) {
+	for {
+		err := ExecuteIteration(
+			w.ctx,
+			w.cnUUID,
+			w.cnEngine,
+			w.cnTxnClient,
+			iterCtx,
+			w.mp,
+		)
+		if err == nil {
+			break
 		}
+		logutil.Error(
+			"ISCP-Task execute iteration failed",
+			zap.Any("iterCtx", iterCtx.jobNames),
+			zap.Error(err),
+		)
 	}
 }
 
