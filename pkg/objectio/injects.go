@@ -54,7 +54,7 @@ const (
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 
-	FJ_CDCExecutor = "fj/cdc/executor"
+	FJ_CDCExecutor  = "fj/cdc/executor"
 	FJ_CDCScanTable = "fj/cdc/scantable"
 
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
