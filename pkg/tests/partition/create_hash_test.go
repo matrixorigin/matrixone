@@ -59,6 +59,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		"create table %s (a int unsigned, c int) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
 		"create table %s (b vecf32(2), c int) partition by hash(c) partitions 2",
 		"create table %s (c datetime) partition by hash(year(c)) partitions 2",
+		"create table %s(col1 int,col2 varchar(25),col3 decimal(6,2))partition by key(col2)partitions 4",
 	}
 	inserts := []string{
 		"insert into %s values(1)",
@@ -69,6 +70,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		"insert into %s values(1, 1), (2,2), (3,3), (6,4)",
 		"insert into %s values('[1.1, 2.2]', 1), ('[1.1, 2.2]', 2), ('[1.1, 2.2]', 3)",
 		"insert into %s values('1996-01-01'), ('1997-01-01'), ('1998-01-01'), ('1999-01-01')",
+		"insert into %s values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92)",
 	}
 	deletes := []string{
 		"delete from %s where c = 1",
@@ -79,6 +81,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		"delete from %s where c > 0",
 		"delete from %s where c > 0",
 		"delete from %s where c > '1995-01-01'",
+		"delete from %s where col1 > 3",
 	}
 
 	partitionCount := []int{
@@ -90,6 +93,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		2,
 		2,
 		2,
+		4,
 	}
 
 	results := [][]int{
@@ -101,6 +105,7 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 		{4, 0},
 		{3, 0},
 		{4, 0},
+		{6, 3},
 	}
 
 	runPartitionClusterTest(
