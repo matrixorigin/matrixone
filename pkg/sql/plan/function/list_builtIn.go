@@ -5739,6 +5739,31 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `hash_partition`
+	{
+		functionId: HASH_PARTITION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) > 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInHashPartition
+				},
+			},
+		},
+	},
+
 	// function `icu_version`
 	{
 		functionId: ICULIBVERSION,
