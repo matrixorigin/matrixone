@@ -4141,7 +4141,7 @@ func strToBool(
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseBool(s)
+			val, err := strconv.ParseBool(s)
 			if err != nil {
 				return err
 			}
