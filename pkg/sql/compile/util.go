@@ -626,7 +626,11 @@ func genBuildHnswIndex(
 	}
 	indexCapacity := idxcap.(int64)
 
-	params := idxdef_index.IndexAlgoParams
+	paramsStr := idxdef_index.IndexAlgoParams
+	if catalog.IsIndexParamsString(paramsStr) {
+		params := catalog.MustIndexParams(paramsStr)
+		paramsStr = params.ToJsonParamString()
+	}
 
 	cfg := vectorindex.BuildIndexTableCfgV1(
 		dbName,
@@ -647,7 +651,7 @@ func genBuildHnswIndex(
 		qryDatabase,
 		originalTableDef.Name,
 		src_alias,
-		params,
+		paramsStr,
 		cfg.ToJsonString(),
 		pkColName,
 		part,

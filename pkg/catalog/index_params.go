@@ -858,3 +858,8 @@ func MustIndexParams(s string) IndexParams {
 	}
 	return ret
 }
+
+func IsIndexParamsString(s string) bool {
+	params := IndexParams(util.UnsafeStringToBytes(s))
+	return params.IsValid()
+}
