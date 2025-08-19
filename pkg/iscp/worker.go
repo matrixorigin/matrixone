@@ -16,13 +16,19 @@ package iscp
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"go.uber.org/zap"
+)
+
+const (
+	ISCPWorkerThread = 10
 )
 
 type Worker interface {
@@ -31,11 +37,15 @@ type Worker interface {
 }
 
 type worker struct {
-	queue       sm.Queue
 	cnUUID      string
 	cnEngine    engine.Engine
 	cnTxnClient client.TxnClient
 	mp          *mpool.MPool
+	taskChan    chan *IterationContext
+	wg          sync.WaitGroup
+	cancel      context.CancelFunc
+	ctx         context.Context
+	closed      atomic.Bool
 }
 
 func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, mp *mpool.MPool) Worker {
@@ -43,11 +53,28 @@ func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClie
 		cnUUID:      cnUUID,
 		cnEngine:    cnEngine,
 		cnTxnClient: cnTxnClient,
+		taskChan:    make(chan *IterationContext, 10000),
 		mp:          mp,
 	}
-	worker.queue = sm.NewSafeQueue(10000, 100, worker.onItem)
-	worker.queue.Start()
+	worker.ctx, worker.cancel = context.WithCancel(context.Background())
 	return worker
+}
+
+func (w *worker) Start() {
+	for i := 0; i < ISCPWorkerThread; i++ {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			for {
+				select {
+				case <-w.ctx.Done():
+					return
+				case task := <-w.taskChan:
+					w.onItem(task)
+				}
+			}
+		}()
+	}
 }
 
 func (w *worker) Submit(iteration *IterationContext) error {
@@ -55,8 +82,11 @@ func (w *worker) Submit(iteration *IterationContext) error {
 	for i := range status {
 		status[i] = &JobStatus{}
 	}
-	_, err := w.queue.Enqueue(iteration)
-	return err
+	if w.closed.Load() {
+		return moerr.NewInternalError(context.Background(), "ISCP-Worker is closed")
+	}
+	w.taskChan <- iteration
+	return nil
 }
 
 func (w *worker) onItem(items ...any) {
@@ -64,7 +94,7 @@ func (w *worker) onItem(items ...any) {
 		iterCtx := item.(*IterationContext)
 		for {
 			err := ExecuteIteration(
-				context.Background(),
+				w.ctx,
 				w.cnUUID,
 				w.cnEngine,
 				w.cnTxnClient,
@@ -84,5 +114,8 @@ func (w *worker) onItem(items ...any) {
 }
 
 func (w *worker) Stop() {
-	w.queue.Stop()
+	w.closed.Store(true)
+	w.cancel()
+	w.wg.Wait()
+	close(w.taskChan)
 }
