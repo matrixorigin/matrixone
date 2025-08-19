@@ -24,11 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func GetVersion(proc *process.Process, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+func GetVersion(proc *process.Process, tblcfg vectorindex.IndexTableCfg) (int64, error) {
 	sql := fmt.Sprintf("SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'",
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		tblcfg.DbName,
-		tblcfg.MetadataTable,
+		tblcfg.DBName(),
+		tblcfg.MetadataTable(),
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
 	res, err := runSql(proc, sql)

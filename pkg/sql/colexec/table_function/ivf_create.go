@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -55,7 +54,7 @@ func IsClusterCentersSupportedType(t types.T) bool {
 
 type ivfCreateState struct {
 	inited       bool
-	tblcfg       vectorindex.IndexTableConfig
+	tblcfg       vectorindex.IndexTableCfg
 	idxcfg       vectorindex.IndexConfig
 	data32       [][]float32
 	data64       [][]float64
@@ -79,13 +78,13 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		return err
 	}
 
-	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
+	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild())
 
 	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
 	var centers [][]T
 	if clusterer, err = elkans.NewKMeans(
 		data, int(u.idxcfg.Ivfflat.Lists),
-		int(u.tblcfg.KmeansMaxIteration),
+		int(u.tblcfg.ExtraIVFCfg().KmeansMaxIteration()),
 		defaultKmeansDeltaThreshold,
 		metric.MetricType(u.idxcfg.Ivfflat.Metric),
 		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
@@ -114,11 +113,14 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 		return moerr.NewInternalError(proc.Ctx, "output centroids is empty")
 	}
 
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s", u.tblcfg.DbName, u.tblcfg.IndexTable,
+	sql := fmt.Sprintf(
+		"INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES %s",
+		u.tblcfg.DBName(), u.tblcfg.IndexTable(),
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		strings.Join(values, ","))
+		strings.Join(values, ","),
+	)
 
 	//os.Stderr.WriteString(sql)
 
@@ -210,14 +212,12 @@ func (u *ivfCreateState) start(
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
 			return
 		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfgstr := cfgVec.GetStringAt(0)
 		if len(cfgstr) == 0 {
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 			return
 		}
-		if err = json.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
-			return
-		}
+		u.tblcfg = vectorindex.IndexTableCfgV1(cfgstr)
 
 		// support both vecf32 and vecf64
 		f32aVec := tf.ctr.argVecs[1]
@@ -233,9 +233,9 @@ func (u *ivfCreateState) start(
 		u.idxcfg.Ivfflat.Spherical = false // For Dense vector, spherical = false
 
 		u.nsample = u.idxcfg.Ivfflat.Lists * 50
-		train_percent := float64(u.tblcfg.KmeansTrainPercent) / float64(100)
-		if u.tblcfg.DataSize > 0 {
-			ns := uint(train_percent * float64(u.tblcfg.DataSize))
+		train_percent := float64(u.tblcfg.ExtraIVFCfg().KmeansTrainPercent()) / float64(100)
+		if u.tblcfg.ExtraIVFCfg().DataSize() > 0 {
+			ns := uint(train_percent * float64(u.tblcfg.ExtraIVFCfg().DataSize()))
 			if u.nsample > ns {
 				u.nsample = ns
 			}
@@ -252,8 +252,8 @@ func (u *ivfCreateState) start(
 		}
 
 		u.sample_ratio = train_percent
-		if u.tblcfg.DataSize > 0 {
-			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.DataSize)
+		if u.tblcfg.ExtraIVFCfg().DataSize() > 0 {
+			u.sample_ratio = float64(u.nsample) / float64(u.tblcfg.ExtraIVFCfg().DataSize())
 			if u.sample_ratio < train_percent {
 				u.sample_ratio = train_percent
 			}

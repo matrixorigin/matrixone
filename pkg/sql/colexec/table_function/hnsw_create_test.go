@@ -28,6 +28,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -227,7 +228,18 @@ func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 
 func makeConstInputExprsHnswCreate() []*plan.Expr {
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__metadata",
+		"__index",
+		"",
+		"",
+		0,
+		0,
+		10000,
+	)
+
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -237,7 +249,7 @@ func makeConstInputExprsHnswCreate() []*plan.Expr {
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{
 					Value: &plan.Literal_Sval{
-						Sval: tblcfg,
+						Sval: string(tblcfg),
 					},
 				},
 			},
@@ -269,8 +281,20 @@ func makeBatchHnswCreate(proc *process.Process) *batch.Batch {
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
 	bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
+	// Create a proper IndexTableCfgV1 instance
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__metadata",
+		"__index",
+		"",
+		"",
+		0,
+		0,
+		10000,
+	)
+
+	vector.AppendBytes(bat.Vecs[0], tblcfg, false, proc.Mp())
 	vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
 
 	v := []float32{0, 1, 2}
@@ -342,7 +366,18 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	}
 	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+		// Create a proper IndexTableCfgV1 instance
+		tblcfg := vectorindex.BuildIndexTableCfgV1(
+			"db",
+			"src",
+			"__metadata",
+			"__index",
+			"",
+			"",
+			0,
+			0,
+			10000,
+		)
 		ret := []*plan.Expr{
 			{
 				Typ: plan.Type{
@@ -352,7 +387,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{
 						Value: &plan.Literal_Sval{
-							Sval: tblcfg,
+							Sval: string(tblcfg),
 						},
 					},
 				},

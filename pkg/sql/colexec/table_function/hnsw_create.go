@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -36,7 +35,7 @@ var hnsw_runSql = sqlexec.RunSql
 type hnswCreateState struct {
 	inited bool
 	build  *hnsw.HnswBuild
-	tblcfg vectorindex.IndexTableConfig
+	tblcfg vectorindex.IndexTableCfg
 	idxcfg vectorindex.IndexConfig
 	offset int
 
@@ -128,16 +127,13 @@ func (u *hnswCreateState) start(
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
 			return
 		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfgstr := cfgVec.GetStringAt(0)
 		if len(cfgstr) == 0 {
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 			return
 		}
-		if err = json.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
-			return
-		}
-
-		if u.tblcfg.IndexCapacity <= 0 {
+		u.tblcfg = vectorindex.IndexTableCfgV1(cfgstr)
+		if u.tblcfg.IndexCapacity() <= int64(0) {
 			err = moerr.NewInvalidInput(proc.Ctx, "Index Capacity must be greater than 0")
 			return
 		}

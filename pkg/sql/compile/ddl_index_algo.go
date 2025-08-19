@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -211,20 +210,16 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 	return nil
 }
 
-func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
+func (s *Scope) handleIvfIndexCentroidsTable(
+	c *Compile, indexDef *plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+	totalCnt int64,
+	metadataTableName string,
+) error {
 
-	var cfg vectorindex.IndexTableConfig
 	src_alias := "src"
 	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-
-	cfg.MetadataTable = metadataTableName
-	cfg.IndexTable = indexDef.IndexTableName
-	cfg.DbName = qryDatabase
-	cfg.SrcTable = originalTableDef.Name
-	cfg.PKey = pkColName
-	cfg.KeyPart = indexDef.Parts[0]
-	cfg.DataSize = totalCnt
 
 	// 1.a algo params
 	params := catalog.MustIndexParams(indexDef.IndexAlgoParams)
@@ -259,24 +254,38 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	if err != nil {
 		return err
 	}
-	cfg.ThreadsBuild = val.(int64)
+	threadsBuild := val.(int64)
 
-	val, err = c.proc.GetResolveVariableFunc()("kmeans_train_percent", true, false)
-	if err != nil {
+	if val, err = c.proc.GetResolveVariableFunc()(
+		"kmeans_train_percent", true, false); err != nil {
 		return err
 	}
-	cfg.KmeansTrainPercent = val.(int64)
 
-	val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false)
-	if err != nil {
+	kmeansTrainPercent := val.(int64)
+
+	if val, err = c.proc.GetResolveVariableFunc()("kmeans_max_iteration", true, false); err != nil {
 		return err
 	}
-	cfg.KmeansMaxIteration = val.(int64)
+	kmeansMaxIteration := val.(int64)
 
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return err
-	}
+	cfg := vectorindex.BuildIVFIndexTableCfgV1(
+		qryDatabase,
+		originalTableDef.Name,
+		metadataTableName,
+		indexDef.IndexTableName,
+		pkColName,
+		indexDef.Parts[0],
+		int64(0),
+		threadsBuild,
+		int64(0),
+		"",
+		totalCnt,
+		uint32(0),
+		int32(0),
+		int32(0),
+		kmeansTrainPercent,
+		kmeansMaxIteration,
+	)
 
 	part := src_alias + "." + indexDef.Parts[0]
 	insertIntoIvfIndexTableFormat := "SELECT f.* from `%s`.`%s` AS %s CROSS APPLY ivf_create('%s', '%s', %s) AS f;"
@@ -285,7 +294,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		qryDatabase, originalTableDef.Name,
 		src_alias,
 		params.ToJsonParamString(),
-		string(cfgbytes),
+		string(cfg),
 		part,
 	)
 

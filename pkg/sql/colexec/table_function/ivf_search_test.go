@@ -108,13 +108,13 @@ func mock_ivf_runSql(proc *process.Process, sql string) (executor.Result, error)
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
-func mockVersion(proc *process.Process, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+func mockVersion(proc *process.Process, tblcfg vectorindex.IndexTableCfg) (int64, error) {
 	return 0, nil
 }
 
 type MockIvfSearch[T types.RealNumbers] struct {
 	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Tblcfg vectorindex.IndexTableCfg
 }
 
 func (m *MockIvfSearch[T]) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -134,7 +134,10 @@ func (m *MockIvfSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error
 	return nil
 }
 
-func newMockIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
+func newMockIvfAlgoFn(
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+) (veccache.VectorIndexSearchIf, error) {
 	return &MockIvfSearch[float32]{Idxcfg: idxcfg, Tblcfg: tblcfg}, nil
 }
 
@@ -265,7 +268,25 @@ func TestIvfSearchIndexTableConfigFail(t *testing.T) {
 
 func makeConstInputExprsIvfSearch() []*plan.Expr {
 
-	tblcfg := fmt.Sprintf(`{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "entries":"__entries", "parttype": %d}`, int32(types.T_array_float32))
+	tblcfg := vectorindex.BuildIVFIndexTableCfgV1(
+		"db",
+		"src",
+		"__metadata",
+		"__index",
+		"",
+		"",
+		0,
+		0,
+		0,
+		"__entries",
+		0,
+		0,
+		0,
+		int32(types.T_array_float32),
+		0,
+		0,
+	)
+
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -275,7 +296,7 @@ func makeConstInputExprsIvfSearch() []*plan.Expr {
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{
 					Value: &plan.Literal_Sval{
-						Sval: tblcfg,
+						Sval: string(tblcfg),
 					},
 				},
 			},

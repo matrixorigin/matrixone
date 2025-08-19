@@ -14,7 +14,12 @@
 
 package vectorindex
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 type IndexTableCfg = IndexTableCfgV1
 
@@ -382,6 +387,35 @@ func (cfg IndexTableCfgV1) ExtraIVFCfg() ExtraIVFCfgV1 {
 	return ExtraIVFCfgV1(cfg[offset:])
 }
 
+func (cfg IndexTableCfgV1) ToMap() map[string]string {
+	map1 := map[string]string{
+		"db":             cfg.DBName(),
+		"src":            cfg.SrcTable(),
+		"metadata":       cfg.MetadataTable(),
+		"index":          cfg.IndexTable(),
+		"pkey":           cfg.PKey(),
+		"part":           cfg.KeyPart(),
+		"threads_search": fmt.Sprintf("%d", cfg.ThreadsSearch()),
+		"threads_build":  fmt.Sprintf("%d", cfg.ThreadsBuild()),
+		"index_capacity": fmt.Sprintf("%d", cfg.IndexCapacity()),
+	}
+	if cfg.ExtraCfgType() == IndexTableCfg_ExtraCfgType_IVFFLAT {
+		map2 := cfg.ExtraIVFCfg().ToMap()
+		for k, v := range map2 {
+			map1[k] = v
+		}
+	}
+	return map1
+}
+
+func (cfg IndexTableCfgV1) ToJsonString() string {
+	json, err := json.Marshal(cfg.ToMap())
+	if err != nil {
+		return ""
+	}
+	return string(json)
+}
+
 // ------------------------[ExtraIVFCfgV1] ------------------------
 
 type ExtraIVFCfgV1 []byte
@@ -438,4 +472,16 @@ func (cfg ExtraIVFCfgV1) KmeansTrainPercent() int64 {
 
 func (cfg ExtraIVFCfgV1) KmeansMaxIteration() int64 {
 	return types.DecodeFixed[int64](cfg[ExtraIVFCfg_V1_KmeansMaxIterationOff:])
+}
+
+func (cfg ExtraIVFCfgV1) ToMap() map[string]string {
+	return map[string]string{
+		"datasize":             fmt.Sprintf("%d", cfg.DataSize()),
+		"nprobe":               fmt.Sprintf("%d", cfg.Nprobe()),
+		"pktype":               fmt.Sprintf("%d", cfg.PKeyType()),
+		"parttype":             fmt.Sprintf("%d", cfg.KeyPartType()),
+		"kmeans_train_percent": fmt.Sprintf("%d", cfg.KmeansTrainPercent()),
+		"kmeans_max_iteration": fmt.Sprintf("%d", cfg.KmeansMaxIteration()),
+		"entries":              cfg.EntriesTable(),
+	}
 }

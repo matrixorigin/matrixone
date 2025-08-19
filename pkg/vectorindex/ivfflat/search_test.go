@@ -50,7 +50,17 @@ func TestIvfSearchRace(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming
 
 	var idxcfg vectorindex.IndexConfig
-	var tblcfg vectorindex.IndexTableConfig
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		0,
+		0,
+		0,
+	)
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -72,7 +82,17 @@ func TestIvfSearchParserError(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming_parser_error
 
 	var idxcfg vectorindex.IndexConfig
-	var tblcfg vectorindex.IndexTableConfig
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		0,
+		0,
+		0,
+	)
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
@@ -93,7 +113,17 @@ func TestIvfSearchCancel(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming_cancel
 
 	var idxcfg vectorindex.IndexConfig
-	var tblcfg vectorindex.IndexTableConfig
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		0,
+		0,
+		0,
+	)
 
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)

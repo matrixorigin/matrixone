@@ -17,7 +17,6 @@ package compile
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -591,8 +590,12 @@ func genDeleteHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexD
 
 }
 
-func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	var cfg vectorindex.IndexTableConfig
+func genBuildHnswIndex(
+	proc *process.Process,
+	indexDefs map[string]*plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+) ([]string, error) {
 	src_alias := "src"
 	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
 
@@ -600,45 +603,55 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
 	}
-	cfg.MetadataTable = idxdef_meta.IndexTableName
+	metadataTable := idxdef_meta.IndexTableName
 
 	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
 	}
-	cfg.IndexTable = idxdef_index.IndexTableName
-	cfg.DbName = qryDatabase
-	cfg.SrcTable = originalTableDef.Name
-	cfg.PKey = pkColName
-	cfg.KeyPart = idxdef_index.Parts[0]
+	indexTable := idxdef_index.IndexTableName
+	dbName := qryDatabase
+	srcTable := originalTableDef.Name
+	pKey := pkColName
+	keyPart := idxdef_index.Parts[0]
 	val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
 	if err != nil {
 		return nil, err
 	}
-	cfg.ThreadsBuild = val.(int64)
+	threadsBuild := val.(int64)
 
 	idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
 	if err != nil {
 		return nil, err
 	}
-	cfg.IndexCapacity = idxcap.(int64)
+	indexCapacity := idxcap.(int64)
 
 	params := idxdef_index.IndexAlgoParams
 
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, err
-	}
+	cfg := vectorindex.BuildIndexTableCfgV1(
+		dbName,
+		srcTable,
+		metadataTable,
+		indexTable,
+		pKey,
+		keyPart,
+		int64(0),
+		threadsBuild,
+		indexCapacity,
+	)
 
 	part := src_alias + "." + idxdef_index.Parts[0]
 
-	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
+	sql := fmt.Sprintf(
+		insertIntoHnswIndexTableFormat,
+		qryDatabase,
+		originalTableDef.Name,
 		src_alias,
 		params,
-		string(cfgbytes),
+		string(cfg), // PXU TODO: maybe cfg.JsonString()?
 		pkColName,
-		part)
+		part,
+	)
 
 	return []string{sql}, nil
 }

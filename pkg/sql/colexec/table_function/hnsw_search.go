@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,7 +34,7 @@ import (
 
 type hnswSearchState struct {
 	inited    bool
-	tblcfg    vectorindex.IndexTableConfig
+	tblcfg    vectorindex.IndexTableCfg
 	idxcfg    vectorindex.IndexConfig
 	offset    int
 	limit     uint64
@@ -48,7 +47,7 @@ type hnswSearchState struct {
 // stub function
 var newHnswAlgo = newHnswAlgoFn
 
-func newHnswAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
+func newHnswAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableCfg) veccache.VectorIndexSearchIf {
 	return hnsw.NewHnswSearch(idxcfg, tblcfg)
 }
 
@@ -186,14 +185,12 @@ func (u *hnswSearchState) start(
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
 			return
 		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfgstr := cfgVec.GetStringAt(0)
 		if len(cfgstr) == 0 {
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 			return
 		}
-		if err = json.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
-			return
-		}
+		u.tblcfg = vectorindex.IndexTableCfgV1(cfgstr)
 
 		// f32vec
 		f32aVec := tf.ctr.argVecs[1]
@@ -233,8 +230,9 @@ func (u *hnswSearchState) start(
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
-	if err != nil {
+	if keys, u.distances, err = veccache.Cache.Search(
+		proc, u.tblcfg.IndexTable(), algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit)},
+	); err != nil {
 		return err
 	}
 

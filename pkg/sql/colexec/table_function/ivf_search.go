@@ -15,7 +15,6 @@
 package table_function
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -35,7 +34,7 @@ import (
 
 type ivfSearchState struct {
 	inited    bool
-	tblcfg    vectorindex.IndexTableConfig
+	tblcfg    vectorindex.IndexTableCfg
 	idxcfg    vectorindex.IndexConfig
 	offset    int
 	limit     uint64
@@ -51,7 +50,10 @@ var (
 	getVersion = ivfflat.GetVersion
 )
 
-func newIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
+func newIvfAlgoFn(
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+) (veccache.VectorIndexSearchIf, error) {
 	switch idxcfg.Ivfflat.VectorType {
 	case int32(types.T_array_float32):
 		return ivfflat.NewIvfflatSearch[float32](idxcfg, tblcfg), nil
@@ -191,14 +193,12 @@ func (u *ivfSearchState) start(
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig must be a String constant")
 			return
 		}
-		cfgstr := cfgVec.UnsafeGetStringAt(0)
+		cfgstr := cfgVec.GetStringAt(0)
 		if len(cfgstr) == 0 {
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 			return
 		}
-		if err = json.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
-			return
-		}
+		u.tblcfg = vectorindex.IndexTableCfgV1(cfgstr)
 
 		// f32vec
 		faVec := tf.ctr.argVecs[1]
@@ -207,7 +207,7 @@ func (u *ivfSearchState) start(
 			return
 		}
 
-		if int32(faVec.GetType().Oid) != u.tblcfg.KeyPartType {
+		if int32(faVec.GetType().Oid) != u.tblcfg.ExtraIVFCfg().KeyPartType() {
 			err = moerr.NewInvalidInput(proc.Ctx, "Second argument (vector type not match with source part type")
 			return
 		}
@@ -222,8 +222,8 @@ func (u *ivfSearchState) start(
 		if version, err = getVersion(proc, u.tblcfg); err != nil {
 			return
 		}
-		u.idxcfg.Ivfflat.Version = version                 // version from meta table
-		u.idxcfg.Ivfflat.VectorType = u.tblcfg.KeyPartType // array float32 or array float64
+		u.idxcfg.Ivfflat.Version = version                                 // version from meta table
+		u.idxcfg.Ivfflat.VectorType = u.tblcfg.ExtraIVFCfg().KeyPartType() // array float32 or array float64
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
@@ -266,11 +266,13 @@ func runIvfSearchVector[T types.RealNumbers](u *ivfSearchState, proc *process.Pr
 	if err != nil {
 		return err
 	}
-	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.idxcfg.Ivfflat.Version)
-	u.keys, u.distances, err = veccache.Cache.Search(proc, key, algo, fa, vectorindex.RuntimeConfig{Limit: uint(u.limit), Probe: uint(u.tblcfg.Nprobe)})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable(), u.idxcfg.Ivfflat.Version)
+	u.keys, u.distances, err = veccache.Cache.Search(
+		proc,
+		key,
+		algo,
+		fa,
+		vectorindex.RuntimeConfig{Limit: uint(u.limit), Probe: uint(u.tblcfg.ExtraIVFCfg().Nprobe())},
+	)
+	return err
 }

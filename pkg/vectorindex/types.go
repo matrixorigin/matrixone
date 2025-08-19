@@ -31,29 +31,6 @@ const (
 	MaxChunkSize = 65536
 )
 
-// HNSW have two secondary index tables, metadata and index storage.  For new vector index algorithm that share the same secondary tables,
-// can use the same IndexTableConfig struct
-type IndexTableConfig struct {
-	DbName        string `json:"db"`
-	SrcTable      string `json:"src"`
-	MetadataTable string `json:"metadata"`
-	IndexTable    string `json:"index"`
-	PKey          string `json:"pkey"`
-	KeyPart       string `json:"part"`
-	ThreadsBuild  int64  `json:"threads_build"`
-	ThreadsSearch int64  `json:"threads_search"`
-	IndexCapacity int64  `json:"index_capacity"`
-
-	// IVF related
-	EntriesTable       string `json:"entries"`
-	DataSize           int64  `json:"datasize"`
-	Nprobe             uint   `json:"nprobe"`
-	PKeyType           int32  `json:"pktype"`
-	KeyPartType        int32  `json:"parttype"`
-	KmeansTrainPercent int64  `json:"kmeans_train_percent"`
-	KmeansMaxIteration int64  `json:"kmeans_max_iteration"`
-}
-
 type IvfflatIndexConfig struct {
 	Lists      uint
 	Metric     uint16

@@ -105,7 +105,7 @@ func newHnswSearchTestCase(
 
 type MockSearch struct {
 	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Tblcfg vectorindex.IndexTableCfg
 }
 
 func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -125,7 +125,10 @@ func (m *MockSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 	return nil
 }
 
-func newMockAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
+func newMockAlgoFn(
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+) veccache.VectorIndexSearchIf {
 	return &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 }
 
@@ -253,7 +256,18 @@ func TestHnswSearchIndexTableConfigFail(t *testing.T) {
 
 func makeConstInputExprsHnswSearch() []*plan.Expr {
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__metadata",
+		"__index",
+		"",
+		"",
+		0,
+		0,
+		0,
+	)
+
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -263,7 +277,7 @@ func makeConstInputExprsHnswSearch() []*plan.Expr {
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{
 					Value: &plan.Literal_Sval{
-						Sval: tblcfg,
+						Sval: string(tblcfg),
 					},
 				},
 			},

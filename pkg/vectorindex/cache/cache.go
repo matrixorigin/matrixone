@@ -248,8 +248,13 @@ func (c *VectorIndexCache) Destroy() {
 }
 
 // Get index from cache and return VectorIndexSearchIf interface
-func (c *VectorIndexCache) Search(proc *process.Process, key string, newalgo VectorIndexSearchIf,
-	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (c *VectorIndexCache) Search(
+	proc *process.Process,
+	key string,
+	newalgo VectorIndexSearchIf,
+	query any,
+	rt vectorindex.RuntimeConfig,
+) (keys any, distances []float64, err error) {
 	for {
 		s := &VectorIndexSearch{Algo: newalgo}
 		// use RLocker to let Cond.Wait() to use Rlock() and RUnlock()

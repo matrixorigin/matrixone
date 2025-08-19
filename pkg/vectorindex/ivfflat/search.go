@@ -49,18 +49,23 @@ type IvfflatSearchIndex[T types.RealNumbers] struct {
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
 type IvfflatSearch[T types.RealNumbers] struct {
 	Idxcfg        vectorindex.IndexConfig
-	Tblcfg        vectorindex.IndexTableConfig
+	Tblcfg        vectorindex.IndexTableCfg
 	Index         *IvfflatSearchIndex[T]
 	ThreadsSearch int64
 }
 
-func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+func (idx *IvfflatSearchIndex[T]) LoadIndex(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+	nthread int64,
+) error {
 
 	idx.Version = idxcfg.Ivfflat.Version
 	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-		tblcfg.DbName, tblcfg.IndexTable,
+		tblcfg.DBName(), tblcfg.IndexTable(),
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		idxcfg.Ivfflat.Version)
 
@@ -191,7 +196,14 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 }
 
 // Call usearch.Search
-func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, rt vectorindex.RuntimeConfig, nthread int64) (keys any, distances []float64, err error) {
+func (idx *IvfflatSearchIndex[T]) Search(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+	query []T,
+	rt vectorindex.RuntimeConfig,
+	nthread int64,
+) (keys any, distances []float64, err error) {
 
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
@@ -220,7 +232,7 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-		tblcfg.DbName, tblcfg.EntriesTable,
+		tblcfg.DBName(), tblcfg.ExtraIVFCfg().EntriesTable(),
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		idx.Version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
@@ -294,8 +306,11 @@ func (idx *IvfflatSearchIndex[T]) Destroy() {
 	idx.Centroids = nil
 }
 
-func NewIvfflatSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *IvfflatSearch[T] {
-	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
+func NewIvfflatSearch[T types.RealNumbers](
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+) *IvfflatSearch[T] {
+	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch())
 	s := &IvfflatSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	return s
 }
