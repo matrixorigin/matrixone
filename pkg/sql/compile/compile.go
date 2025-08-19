@@ -402,12 +402,7 @@ func (c *Compile) run(s *Scope) error {
 	case AlterView:
 		return s.AlterView(c)
 	case AlterTable:
-		err := s.AlterTable(c)
-		if err != nil {
-			x := 0
-			x++
-		}
-		return err
+		return s.AlterTable(c)
 	case RenameTable:
 		return s.RenameTable(c)
 	case DropTable:
