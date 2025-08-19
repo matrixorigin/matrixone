@@ -158,10 +158,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	var (
-		cloneSnapshot = &plan.Snapshot{}
-	)
-
+	//5. obtain relation for new tables
 	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "obtain new relation for copy table for alter table",
@@ -172,18 +169,14 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	// copy on write unaffected index table
+	//6. copy on writing unaffected index table
 	if err = cowUnaffectedIndexes(
-		c, dbName, qry.AffectedCols, newRel, qry.TableDef, cloneSnapshot,
+		c, dbName, qry.AffectedCols, newRel, qry.TableDef, nil,
 	); err != nil {
 		return err
 	}
 
-	//// get this snapshot before drop operation
-	//ts := c.proc.GetTxnOperator().SnapshotTS()
-	//cloneSnapshot.TS = &ts
-
-	// 5. drop original table
+	// 7. drop original table
 	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
 	if err := c.runSqlWithOptions(
 		dropSql,
@@ -197,7 +190,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	// 5.1 delete all index objects of the table in mo_catalog.mo_indexes
+	// 7.1 delete all index objects of the table in mo_catalog.mo_indexes
 	if qry.Database != catalog.MO_CATALOG && qry.TableDef.Name != catalog.MO_INDEXES {
 		if qry.GetTableDef().Pkey != nil || len(qry.GetTableDef().Indexes) > 0 {
 			deleteSql := fmt.Sprintf(
@@ -217,11 +210,9 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	//6. obtain relation for new tables
-
 	newId := newRel.GetTableID(c.proc.Ctx)
 	//-------------------------------------------------------------------------
-	// 7. rename temporary replica table into the original table(Table Id remains unchanged)
+	// 8. rename temporary replica table into the original table(Table Id remains unchanged)
 	copyTblName := qry.CopyTableDef.Name
 	req := api.NewRenameTableReq(
 		newRel.GetDBID(c.proc.Ctx),
@@ -244,7 +235,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	//--------------------------------------------------------------------------------------------------------------
 	{
-		// 8. invoke reindex for the new table, if it contains ivf index.
+		// 9. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		newTableDef := newRel.CopyTableDef(c.proc.Ctx)
 		extra := newRel.GetExtraInfo()
@@ -585,10 +576,15 @@ func cowUnaffectedIndexes(
 		newIdxTColNameToTblName = make(map[string]string)
 	)
 
-	defer func() {
+	releaseClone := func() {
 		if clone != nil {
 			clone.Free(c.proc, false, err)
+			clone = nil
 		}
+	}
+
+	defer func() {
+		releaseClone()
 	}()
 
 	for _, idxTbl := range oriTblDef.Indexes {
@@ -632,14 +628,16 @@ func cowUnaffectedIndexes(
 		}
 
 		if err = clone.Prepare(c.proc); err != nil {
+			releaseClone()
 			return err
 		}
 
 		if _, err = clone.Call(c.proc); err != nil {
+			releaseClone()
 			return err
 		}
 
-		clone.Free(c.proc, false, err)
+		releaseClone()
 	}
 
 	return nil

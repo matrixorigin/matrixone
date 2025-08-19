@@ -133,17 +133,6 @@ func (update *MultiUpdate) insert_table(
 	insertBatch *batch.Batch,
 ) (err error) {
 
-	if updateCtx.TableDef.DbName == "test" {
-		fmt.Println(
-			"insert table",
-			updateCtx.TableDef.Name,
-			inputBatch.Attrs,
-			len(inputBatch.Vecs),
-			insertBatch.Attrs,
-			len(insertBatch.Vecs),
-		)
-	}
-
 	insertBatch.CleanOnlyData()
 	for insertIdx, inputIdx := range updateCtx.InsertCols {
 		err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
