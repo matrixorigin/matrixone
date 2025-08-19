@@ -16,7 +16,6 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -224,26 +223,20 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 		rows := uint32(0)
 		delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
-		logutil.Infof("checkpoint1 %v, file: %v", ckps[i].GetLocation().Name().UnsafeString())
+		tableIDLocations := ckp.GetTableIDLocation()
+		for y := 0; y < tableIDLocations.Len(); y++ {
+			location := tableIDLocations.Get(i)
+			delete(allObjects, location.Name().UnsafeString())
+			logutil.Infof("GetTableIDLocation .Name().String() is %v", ckp.String(), location.Name().UnsafeString())
+		}
+		logutil.Infof("checkpoint1 %v, file: %v", ckp.String(), ckps[i].GetLocation().Name().UnsafeString())
 		for _, loc := range reader.GetLocations() {
 			delete(allObjects, loc.Name().UnsafeString())
 			rows += loc.Rows()
-			logutil.Infof("checkpoint %v, file: %v", loc.Name().UnsafeString())
+			logutil.Infof("checkpoint %v, file: %v", ckp.String(), loc.Name().UnsafeString())
 		}
 		count := len(reader.GetLocations()) + 1
 		ckpObjectCount += count
-		locations, err := logtail.LoadCheckpointLocations(
-			ctx, "", reader,
-		)
-		if err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				continue
-			}
-		}
-		for name := range locations {
-			delete(allObjects, name)
-			logutil.Infof("checkpointlocations %v, file: %v", name)
-		}
 		logutil.Infof("checkpoint %v, file count: %v, rows: %d", ckp.String(), len(reader.GetLocations())+1, rows)
 	}
 	for name := range allObjects {
