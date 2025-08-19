@@ -2294,6 +2294,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	db := truncate.GetDatabase()
 	table := truncate.GetTable()
 
+	if c.db == "" {
+		c.db = db
+	}
+
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
