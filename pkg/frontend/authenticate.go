@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -1040,6 +1041,8 @@ var (
 	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
 	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
+	dropPartitionMetadata           = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionMetadata)
+	dropPartitionTables             = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOPartitionTables)
 
 	initMoMysqlCompatibilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -3873,6 +3876,17 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropAutoIcrColSql)
 		// drop autoIcr table
 		rtnErr = bh.Exec(deleteCtx, dropAutoIcrColSql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		ses.Infof(ctx, "drop partition metadata %s sql: %s", da.Name, dropPartitionMetadata)
+		rtnErr = bh.Exec(deleteCtx, dropPartitionMetadata)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		ses.Infof(ctx, "drop partition tables %s sql: %s", da.Name, dropPartitionTables)
+		rtnErr = bh.Exec(deleteCtx, dropPartitionTables)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7584,6 +7598,13 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		rtnErr = bh.Exec(newTenantCtx, createMoForeignKeysSql)
 		if rtnErr != nil {
 			return rtnErr
+		}
+
+		for _, sql := range partitionservice.InitSQLs {
+			rtnErr = bh.Exec(newTenantCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
 		}
 
 		//create createDbSqls

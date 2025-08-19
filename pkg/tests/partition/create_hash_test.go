@@ -40,6 +40,23 @@ func TestCreateAndDeleteHashBased(t *testing.T) {
 	)
 }
 
+func TestCreateAndDeleteHashBasedWithAccount(t *testing.T) {
+	runPartitionTableCreateAndDeleteTestsWithPrepare(
+		t,
+		func(c embed.Cluster) int32 {
+			return testutils.CreateAccount(
+				t,
+				c,
+				"TestCreateAndDeleteHashBasedWithAccount",
+				"123",
+			)
+		},
+		"create table %s (c int comment 'abc') partition by hash(c) partitions 2",
+		partition.PartitionMethod_Hash,
+		func(idx int, p partition.Partition) {},
+	)
+}
+
 func TestCreateAndDeleteLinearHashBased(t *testing.T) {
 	runPartitionTableCreateAndDeleteTests(
 		t,
@@ -185,6 +202,172 @@ func TestInsertAndDeleteHashBased(t *testing.T) {
 
 				testutils.ExecSQLWithReadResult(
 					t,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(results[idx][1]), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
+			}
+		},
+	)
+}
+
+func TestInsertAndDeleteHashBasedWithAccount(t *testing.T) {
+	creates := []string{
+		"create table %s (c int) partition by hash(c) partitions 2",
+		"create table %s (c int, b vecf32(2)) partition by hash(c) partitions 2",
+		"create table %s (c int, b vecf32(2)) partition by hash(c) partitions 3",
+		"create table %s (c int primary key) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
+		"create table %s (c int primary key) partition by list (c) (partition p0 values in (1, 2), partition p1 values in (3, 4))",
+		"create table %s (a int unsigned, c int) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
+		"create table %s (b vecf32(2), c int) partition by hash(c) partitions 2",
+		"create table %s (c datetime) partition by hash(year(c)) partitions 2",
+	}
+	inserts := []string{
+		"insert into %s values(1)",
+		"insert into %s values(1, '[1.1, 2.2]')",
+		"insert into %s values(1, '[1.1, 2.2]'), (2, '[1.1, 2.2]'), (3, '[1.1, 2.2]')",
+		"insert into %s values(1), (2), (3), (4)",
+		"insert into %s values(1), (2), (3), (4)",
+		"insert into %s values(1, 1), (2,2), (3,3), (6,4)",
+		"insert into %s values('[1.1, 2.2]', 1), ('[1.1, 2.2]', 2), ('[1.1, 2.2]', 3)",
+		"insert into %s values('1996-01-01'), ('1997-01-01'), ('1998-01-01'), ('1999-01-01')",
+	}
+	deletes := []string{
+		"delete from %s where c = 1",
+		"delete from %s where c = 1",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+		"delete from %s where c > 0",
+		"delete from %s where c > '1995-01-01'",
+	}
+
+	partitionCount := []int{
+		2,
+		2,
+		3,
+		2,
+		2,
+		2,
+		2,
+		2,
+	}
+
+	results := [][]int{
+		{1, 0},
+		{1, 0},
+		{3, 0},
+		{4, 0},
+		{4, 0},
+		{4, 0},
+		{3, 0},
+		{4, 0},
+	}
+
+	runPartitionClusterTest(
+		t,
+		func(c embed.Cluster) {
+			account := testutils.CreateAccount(
+				t,
+				c,
+				"TestInsertAndDeleteHashBasedWithAccount",
+				"123",
+			)
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			db := testutils.GetDatabaseName(t)
+			testutils.CreateTestDatabaseWithAccount(t, account, db, cn)
+
+			for idx := range creates {
+				table := fmt.Sprintf("%s_%d", t.Name(), idx)
+				create := fmt.Sprintf(creates[idx], table)
+				insert := fmt.Sprintf(inserts[idx], table)
+				delete := fmt.Sprintf(deletes[idx], table)
+
+				testutils.ExecSQLWithAccount(
+					t,
+					account,
+					db,
+					cn,
+					create,
+				)
+
+				fn := func() int64 {
+					n := int64(0)
+					for i := 0; i < partitionCount[idx]; i++ {
+						testutils.ExecSQLWithReadResultAndAccount(
+							t,
+							account,
+							db,
+							cn,
+							func(i int, s string, r executor.Result) {
+								r.ReadRows(
+									func(rows int, cols []*vector.Vector) bool {
+										n += executor.GetFixedRows[int64](cols[0])[0]
+										return true
+									},
+								)
+							},
+							fmt.Sprintf(
+								"select count(1) from `%s`",
+								partitionservice.GetPartitionTableName(
+									table,
+									fmt.Sprintf("p%d", i),
+								),
+							),
+						)
+					}
+					return n
+				}
+
+				testutils.ExecSQLWithAccount(
+					t,
+					account,
+					db,
+					cn,
+					insert,
+				)
+				require.Equal(t, int64(results[idx][0]), fn())
+
+				testutils.ExecSQLWithReadResultAndAccount(
+					t,
+					account,
+					db,
+					cn,
+					func(i int, s string, r executor.Result) {
+						r.ReadRows(
+							func(rows int, cols []*vector.Vector) bool {
+								require.Equal(t, int64(results[idx][0]), executor.GetFixedRows[int64](cols[0])[0])
+								return true
+							},
+						)
+					},
+					fmt.Sprintf("select count(1) from %s", table),
+				)
+
+				testutils.ExecSQLWithAccount(
+					t,
+					account,
+					db,
+					cn,
+					delete,
+				)
+				require.Equal(t, int64(results[idx][1]), fn())
+
+				testutils.ExecSQLWithReadResultAndAccount(
+					t,
+					account,
 					db,
 					cn,
 					func(i int, s string, r executor.Result) {

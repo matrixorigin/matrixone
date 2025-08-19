@@ -35,6 +35,7 @@ func TestCreatePartitionIndexes(t *testing.T) {
 	var indexes []uint64
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
+		func(c embed.Cluster) int32 { return 0 },
 		"create table %s (c int comment 'abc', b int) partition by hash(c) partitions 2",
 		partition.PartitionMethod_Hash,
 		func(idx int, p partition.Partition) {
@@ -114,9 +115,9 @@ func TestCreatePartitionIndexes(t *testing.T) {
 }
 
 func TestPartitionIndexCanWorkWithCreateIndex(t *testing.T) {
-
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
+		func(c embed.Cluster) int32 { return 0 },
 		"create table %s (c int primary key, b int) partition by list (c) (partition p0 values in (1, 3), partition p1 values in (2, 4))",
 		partition.PartitionMethod_List,
 		func(idx int, p partition.Partition) {

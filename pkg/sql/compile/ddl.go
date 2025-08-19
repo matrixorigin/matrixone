@@ -161,7 +161,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	deleteTables := make([]string, 0, len(relations)-len(ignoreTables))
+	deleteTables := make([]string, 0, len(relations))
 	for _, r := range relations {
 		isIndexTable := false
 		for _, d := range ignoreTables {
