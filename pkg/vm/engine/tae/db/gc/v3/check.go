@@ -119,41 +119,41 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	}
 	buildObjects(&window, objects, window.LoadBatchData)
 
-	scanWM := c.cleaner.GetScanWaterMark()
-	maxTS := types.TS{}
-	if scanWM != nil {
-		maxTS = scanWM.GetEnd()
-	}
+	//scanWM := c.cleaner.GetScanWaterMark()
+	//maxTS := types.TS{}
+	//if scanWM != nil {
+	//	maxTS = scanWM.GetEnd()
+	//}
 	// Collect all objects
 	allObjects, err := c.getObjects(ctx)
 	if err != nil {
 		return err
 	}
 
-	candidates := c.cleaner.checkpointCli.ICKPSeekLT(maxTS, 40)
+	//candidates := c.cleaner.checkpointCli.ICKPSeekLT(maxTS, 40)
 	unconsumedWindowCount := 0
 	objects2 := make(map[string]*ObjectEntry)
-	if len(candidates) > 0 {
-		unconsumedWindow := NewGCWindow(mp, c.cleaner.fs)
-		if _, err = unconsumedWindow.ScanCheckpoints(
-			ctx,
-			candidates,
-			c.cleaner.getCkpReader,
-			nil,
-			nil,
-			buffer,
-		); err != nil {
-			unconsumedWindow.Close()
-			unconsumedWindow = nil
-			return err
-		}
-		unconsumedWindowCount = len(unconsumedWindow.files)
-		for _, stats := range unconsumedWindow.files {
-			objects2[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
-		}
-		buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchDataAndDelete)
-		logutil.Infof("object1: %d, object2: %d, maxTS is %v, num %v", len(objects), len(objects2), maxTS.ToString(), len(candidates))
-	}
+	//if len(candidates) > 0 {
+	//	unconsumedWindow := NewGCWindow(mp, c.cleaner.fs)
+	//	if _, err = unconsumedWindow.ScanCheckpoints(
+	//		ctx,
+	//		candidates,
+	//		c.cleaner.getCkpReader,
+	//		nil,
+	//		nil,
+	//		buffer,
+	//	); err != nil {
+	//		unconsumedWindow.Close()
+	//		unconsumedWindow = nil
+	//		return err
+	//	}
+	//	unconsumedWindowCount = len(unconsumedWindow.files)
+	//	for _, stats := range unconsumedWindow.files {
+	//		objects2[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
+	//	}
+	//	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchDataAndDelete)
+	//	logutil.Infof("object1: %d, object2: %d, maxTS is %v, num %v", len(objects), len(objects2), maxTS.ToString(), len(candidates))
+	//}
 
 	allCount := len(allObjects)
 	for name := range allObjects {
@@ -161,10 +161,6 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		if _, ok := objects[name]; ok {
 			isfound = true
 			delete(objects, name)
-		}
-		if _, ok := objects2[name]; ok {
-			isfound = true
-			delete(objects2, name)
 		}
 		if isfound {
 			delete(allObjects, name)
