@@ -53,6 +53,14 @@ const (
 
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
+
+	FJ_CDCScanTable = "fj/cdc/scantable"
+
+	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
+	FJ_CDCHandleErr              = "fj/cdc/handleerr"
+	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
+	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
+	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
 )
 
 const (
@@ -320,6 +328,11 @@ func NotifyInjected(key string) {
 	fault.TriggerFault(key)
 }
 
+func CDCScanTableInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
+	return sarg, injected
+}
+
 func InjectWait(key string) (rmFault func(), err error) {
 	if err = fault.AddFaultPoint(
 		context.Background(),
@@ -407,6 +420,24 @@ func InjectCommitWait(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CommitWait)
+	}
+	return
+}
+
+func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CDCScanTable,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CDCScanTable)
 	}
 	return
 }
@@ -522,4 +553,29 @@ func CDCRecordTxnInjected(dbName, tableName string) (bool, int) {
 		return false, 0
 	}
 	return checkLoggingArgs(int(iarg), sarg, dbName, tableName)
+}
+
+func CDCHandleSlowInjected() (sleepSeconds int64, injected bool) {
+	iarg, _, injected := fault.TriggerFault(FJ_CDCHandleSlow)
+	return iarg, injected
+}
+
+func CDCHandleErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCHandleErr)
+	return injected
+}
+
+func CDCScanTableErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCScanTableErr)
+	return injected
+}
+
+func CDCAddExecErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCAddExecErr)
+	return injected
+}
+
+func CDCAddExecConsumeTruncateInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CDCAddExecConsumeTruncate)
+	return injected
 }

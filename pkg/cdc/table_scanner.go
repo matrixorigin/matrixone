@@ -17,6 +17,8 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"slices"
 	"strings"
 	"sync"
@@ -46,7 +48,7 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 	once.Do(func() {
 		detector = &TableDetector{
 			Mp:                   make(map[uint32]TblMap),
-			Callbacks:            make(map[string]func(map[uint32]TblMap)),
+			Callbacks:            make(map[string]TableCallback),
 			exec:                 getSqlExecutor(cnUUID),
 			CallBackAccountId:    make(map[string]uint32),
 			SubscribedAccountIds: make(map[uint32][]string),
@@ -62,11 +64,13 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 // TblMap key is dbName.tableName, e.g. db1.t1
 type TblMap map[string]*DbTableInfo
 
+type TableCallback func(map[uint32]TblMap) error
+
 type TableDetector struct {
 	sync.Mutex
 
 	Mp        map[uint32]TblMap
-	Callbacks map[string]func(map[uint32]TblMap)
+	Callbacks map[string]TableCallback
 	exec      executor.SQLExecutor
 	cancel    context.CancelFunc
 
@@ -82,9 +86,14 @@ type TableDetector struct {
 	CallBackTableName map[string][]string
 	// tablename -> [taska, taskb ...]
 	SubscribedTableNames map[string][]string
+
+	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
+	handling bool
+	lastMp   map[uint32]TblMap
+	mu       sync.Mutex
 }
 
-func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb func(map[uint32]TblMap)) {
+func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -173,33 +182,91 @@ func (s *TableDetector) UnRegister(id string) {
 
 func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	logutil.Info("CDC-TableDetector-Scan-Start")
-	defer func() {
-		logutil.Info("CDC-TableDetector-Scan-End")
-	}()
+	defer logutil.Info("CDC-TableDetector-Scan-End")
 
-	timeTick := time.Tick(15 * time.Second)
+	var tickerDuration, retryTickerDuration time.Duration
+	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
+		tickerDuration = 1 * time.Millisecond
+		retryTickerDuration = 1 * time.Millisecond
+	} else {
+		tickerDuration = 15 * time.Second
+		retryTickerDuration = 5 * time.Second
+	}
+	ticker := time.NewTicker(tickerDuration)
+	defer ticker.Stop()
+
+	retryTicker := time.NewTicker(retryTickerDuration)
+	defer retryTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-timeTick:
-			if err := s.scanTable(); err != nil {
-				logutil.Error(
-					"CDC-TableDetector-Scan-Error",
-					zap.Error(err),
-				)
+		case <-ticker.C:
+			s.mu.Lock()
+
+			if s.handling {
+				s.mu.Unlock()
+				continue
 			}
-			// do callbacks
-			s.Lock()
-			for _, cb := range s.Callbacks {
-				go cb(s.Mp)
+
+			s.mu.Unlock()
+
+			s.scanAndProcess(ctx)
+		case <-retryTicker.C:
+			s.mu.Lock()
+			if s.handling || s.lastMp == nil {
+				s.mu.Unlock()
+				continue
 			}
-			s.Unlock()
+			s.mu.Unlock()
+
+			go s.processCallback(ctx, s.lastMp)
 		}
 	}
 }
 
+func (s *TableDetector) scanAndProcess(ctx context.Context) {
+	if err := s.scanTable(); err != nil {
+		logutil.Error("CDC-TableDetector-Scan-Error", zap.Error(err))
+		return
+	}
+
+	s.mu.Lock()
+	s.lastMp = s.Mp
+	s.mu.Unlock()
+
+	go s.processCallback(ctx, s.lastMp)
+}
+
+func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
+	s.mu.Lock()
+	s.handling = true
+	s.mu.Unlock()
+
+	var err error
+	for _, cb := range s.Callbacks {
+		err = cb(tables)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err != nil {
+		logutil.Warn("CDC-TableDetector-Callback-Failed", zap.Error(err))
+	} else {
+		logutil.Info("CDC-TableDetector-Callback-Success")
+		s.lastMp = nil
+	}
+
+	s.handling = false
+}
+
 func (s *TableDetector) scanTable() error {
+	if objectio.CDCScanTableErrInjected() {
+		return moerr.NewInternalError(context.Background(), "CDC_SCANTABLE_ERR")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var (
@@ -289,14 +356,14 @@ func (s *TableDetector) scanTable() error {
 			if !exists {
 				mp[accountId][key] = newInfo
 			} else {
-				mp[accountId][key] = &DbTableInfo{
-					SourceDbId:      dbId,
-					SourceDbName:    dbName,
-					SourceTblId:     tblId,
-					SourceTblName:   tblName,
-					SourceCreateSql: createSql,
-					IdChanged:       oldInfo.OnlyDiffinTblId(newInfo),
-				}
+				idChanged := oldInfo.OnlyDiffinTblId(newInfo)
+				oldInfo.SourceDbId = dbId
+				oldInfo.SourceDbName = dbName
+				oldInfo.SourceTblId = tblId
+				oldInfo.SourceTblName = tblName
+				oldInfo.SourceCreateSql = createSql
+				oldInfo.IdChanged = oldInfo.IdChanged || idChanged
+				mp[accountId][key] = oldInfo
 			}
 		}
 		return true
