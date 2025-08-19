@@ -164,14 +164,6 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	); err != nil {
 		return nil, "", err
 	}
-	for _, file := range w.files {
-		if err = vector.AppendBytes(
-			vecToGC, []byte(file.ObjectName().UnsafeString()), false, mp,
-		); err != nil {
-			return nil, "", err
-		}
-		logutil.Infof("delete window is %v", file.ObjectName().UnsafeString())
-	}
 	w.files = filesNotGC
 	sourcer = w.MakeFilesReader(ctx, fs)
 	bf, err = BuildBloomfilter(
