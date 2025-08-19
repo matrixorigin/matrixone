@@ -443,41 +443,6 @@ func (w *GCWindow) LoadBatchData(
 	return false, nil
 }
 
-// collectData collects data from memory that can be written to s3
-func (w *GCWindow) LoadBatchDataAndDelete(
-	ctx context.Context,
-	_ []string,
-	_ *plan.Expr,
-	mp *mpool.MPool,
-	bat *batch.Batch,
-) (bool, error) {
-	if len(w.files) == 0 {
-		return true, nil
-	}
-	bat.CleanOnlyData()
-	err := loader(ctx, w.fs, &w.files[0], bat, mp)
-	logger := logutil.Info
-	if err != nil {
-		logger = logutil.Error
-	}
-	logger(
-		"GCWindow-LoadBatchDataAndDelete",
-		zap.Int("cnt", len(w.files)),
-		zap.String("file", w.files[0].ObjectName().String()),
-		zap.Error(err),
-	)
-	if err != nil {
-		return false, err
-	}
-	file := w.files[0]
-	w.files = w.files[1:]
-	err = w.fs.Delete(ctx, file.ObjectName().UnsafeString())
-	if err != nil {
-		return false, nil
-	}
-	return false, nil
-}
-
 func loader(
 	cxt context.Context,
 	fs fileservice.FileService,

@@ -119,42 +119,10 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	}
 	buildObjects(&window, objects, window.LoadBatchData)
 
-	//scanWM := c.cleaner.GetScanWaterMark()
-	//maxTS := types.TS{}
-	//if scanWM != nil {
-	//	maxTS = scanWM.GetEnd()
-	//}
-	// Collect all objects
 	allObjects, err := c.getObjects(ctx)
 	if err != nil {
 		return err
 	}
-
-	//candidates := c.cleaner.checkpointCli.ICKPSeekLT(maxTS, 40)
-	unconsumedWindowCount := 0
-	objects2 := make(map[string]*ObjectEntry)
-	//if len(candidates) > 0 {
-	//	unconsumedWindow := NewGCWindow(mp, c.cleaner.fs)
-	//	if _, err = unconsumedWindow.ScanCheckpoints(
-	//		ctx,
-	//		candidates,
-	//		c.cleaner.getCkpReader,
-	//		nil,
-	//		nil,
-	//		buffer,
-	//	); err != nil {
-	//		unconsumedWindow.Close()
-	//		unconsumedWindow = nil
-	//		return err
-	//	}
-	//	unconsumedWindowCount = len(unconsumedWindow.files)
-	//	for _, stats := range unconsumedWindow.files {
-	//		objects2[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
-	//	}
-	//	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchDataAndDelete)
-	//	logutil.Infof("object1: %d, object2: %d, maxTS is %v, num %v", len(objects), len(objects2), maxTS.ToString(), len(candidates))
-	//}
-
 	allCount := len(allObjects)
 	for name := range allObjects {
 		isfound := false
@@ -192,14 +160,11 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 	}
 
-	if len(objects) != 0 || len(objects2) != 0 {
+	if len(objects) != 0 {
 		for name := range objects {
 			logutil.Errorf("[Check GC]lost object %s,", name)
 		}
 
-		for name := range objects2 {
-			logutil.Errorf("[Check GC]lost unconsumed object %s,", name)
-		}
 	}
 
 	// Collect all checkpoint files
@@ -246,8 +211,8 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		for name := range allObjects {
 			logutil.Infof("[Check GC]not found object %s,", name)
 		}
-		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d, unconsumedWindow file: %d",
-			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount, unconsumedWindowCount)
+		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d",
+			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount)
 	} else {
 		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d, checkpoint: %d",
 			time.Since(now), allCount, len(allObjects), ckpObjectCount)
