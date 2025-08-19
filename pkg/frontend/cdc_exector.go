@@ -451,6 +451,7 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 				readerInfo := reader.Info()
 				// wait the old reader to stop
 				if info.OnlyDiffinTblId(readerInfo) {
+					logutil.Infof("cdc task wait old reader to stop %s %d->%d", key, readerInfo.SourceTblId, info.SourceTblId)
 					waitChan := make(chan struct{})
 					go func() {
 						defer close(waitChan)
