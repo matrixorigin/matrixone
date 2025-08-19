@@ -50,6 +50,10 @@ func NewConsumer(
 	if info.ConsumerType == int8(ConsumerType_CNConsumer) {
 		return NewInteralSqlConsumer(cnUUID, tableDef, jobID, info)
 	}
+	if info.ConsumerType == int8(ConsumerType_IndexSync) {
+		return NewIndexConsumer(cnUUID, tableDef, jobID, info)
+	}
+
 	panic("todo")
 
 }
