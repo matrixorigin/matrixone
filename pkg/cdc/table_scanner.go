@@ -185,10 +185,18 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	logutil.Info("CDC-TableDetector-Scan-Start")
 	defer logutil.Info("CDC-TableDetector-Scan-End")
 
-	ticker := time.NewTicker(15 * time.Second)
+	var tickerDuration, retryTickerDuration time.Duration
+	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
+		tickerDuration = 1 * time.Millisecond
+		retryTickerDuration = 1 * time.Millisecond
+	} else {
+		tickerDuration = 15 * time.Second
+		retryTickerDuration = 5 * time.Second
+	}
+	ticker := time.NewTicker(tickerDuration)
 	defer ticker.Stop()
 
-	retryTicker := time.NewTicker(5 * time.Second)
+	retryTicker := time.NewTicker(retryTickerDuration)
 	defer retryTicker.Stop()
 
 	for {
