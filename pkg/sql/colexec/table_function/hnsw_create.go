@@ -132,7 +132,7 @@ func (u *hnswCreateState) start(
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 			return
 		}
-		if u.tblcfg, err = vectorindex.TryeConvertIndexTableCfgV1(cfgstr); err != nil {
+		if u.tblcfg, err = vectorindex.TryConvertIndexTableCfgV1(cfgstr, false); err != nil {
 			return
 		}
 

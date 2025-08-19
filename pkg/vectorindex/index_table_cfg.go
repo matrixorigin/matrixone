@@ -490,6 +490,7 @@ func (cfg ExtraIVFCfgV1) ToMap() map[string]string {
 
 func JsonStringToIndexTableCfgV1(
 	jsonString string,
+	isIvf bool,
 ) (cfg IndexTableCfgV1, err error) {
 	map1 := make(map[string]string)
 	if err = json.Unmarshal([]byte(jsonString), &map1); err != nil {
@@ -525,8 +526,66 @@ func JsonStringToIndexTableCfgV1(
 			return
 		}
 	}
-
-	cfg = BuildIndexTableCfgV1(
+	if !isIvf {
+		cfg = BuildIndexTableCfgV1(
+			dbName,
+			srcTable,
+			metadataTable,
+			indexTable,
+			pKey,
+			keyPart,
+			threadsSearch,
+			threadsBuild,
+			indexCapacity,
+		)
+		return
+	}
+	entriesTable := map1["entries"]
+	pKeyTypeStr := map1["pktype"]
+	keyPartTypeStr := map1["parttype"]
+	kmeansTrainPercentStr := map1["kmeans_train_percent"]
+	kmeansMaxIterationStr := map1["kmeans_max_iteration"]
+	dataSizeStr := map1["datasize"]
+	nprobeStr := map1["nprobe"]
+	var (
+		pKeyType           int64
+		keyPartType        int64
+		kmeansTrainPercent int64
+		kmeansMaxIteration int64
+		dataSize           int64
+		nprobe             int64
+	)
+	if pKeyTypeStr != "" {
+		if pKeyType, err = strconv.ParseInt(pKeyTypeStr, 10, 64); err != nil {
+			return
+		}
+	}
+	if keyPartTypeStr != "" {
+		if keyPartType, err = strconv.ParseInt(keyPartTypeStr, 10, 64); err != nil {
+			return
+		}
+	}
+	if kmeansTrainPercentStr != "" {
+		if kmeansTrainPercent, err = strconv.ParseInt(kmeansTrainPercentStr, 10, 64); err != nil {
+			return
+		}
+	}
+	if kmeansMaxIterationStr != "" {
+		if kmeansMaxIteration, err = strconv.ParseInt(kmeansMaxIterationStr, 10, 64); err != nil {
+			return
+		}
+	}
+	if dataSizeStr != "" {
+		if dataSize, err = strconv.ParseInt(dataSizeStr, 10, 64); err != nil {
+			return
+		}
+	}
+	if nprobeStr != "" {
+		if nprobe, err = strconv.ParseInt(nprobeStr, 10, 64); err != nil {
+			return
+		}
+	}
+	cfg = BuildIVFIndexTableCfgV1(
 		dbName,
 		srcTable,
 		metadataTable,
@@ -536,17 +595,25 @@ func JsonStringToIndexTableCfgV1(
 		threadsSearch,
 		threadsBuild,
 		indexCapacity,
+		entriesTable,
+		dataSize,
+		uint32(nprobe),
+		int32(pKeyType),
+		int32(keyPartType),
+		kmeansTrainPercent,
+		kmeansMaxIteration,
 	)
 	return
 }
 
-func TryeConvertIndexTableCfgV1(
+func TryConvertIndexTableCfgV1(
 	cfgStr string,
+	isIvf bool,
 ) (cfg IndexTableCfgV1, err error) {
 	cfg = IndexTableCfgV1(util.UnsafeStringToBytes(cfgStr))
 	if cfg.IsCfgV1() {
 		return
 	}
-	cfg, err = JsonStringToIndexTableCfgV1(cfgStr)
+	cfg, err = JsonStringToIndexTableCfgV1(cfgStr, isIvf)
 	return
 }

@@ -222,7 +222,7 @@ func Test_IndexTableCfgV1_JsonStringToIndexTableCfgV1(t *testing.T) {
 		0,          // kmeansMaxIteration
 	)
 	jsonString := cfg.ToJsonString()
-	cfg2, err := JsonStringToIndexTableCfgV1(jsonString)
+	cfg2, err := JsonStringToIndexTableCfgV1(jsonString, true)
 	require.NoError(t, err)
 	require.Equal(t, cfg.DBName(), cfg2.DBName())
 	require.Equal(t, cfg.SrcTable(), cfg2.SrcTable())
@@ -233,4 +233,12 @@ func Test_IndexTableCfgV1_JsonStringToIndexTableCfgV1(t *testing.T) {
 	require.Equal(t, cfg.ThreadsSearch(), cfg2.ThreadsSearch())
 	require.Equal(t, cfg.ThreadsBuild(), cfg2.ThreadsBuild())
 	require.Equal(t, cfg.IndexCapacity(), cfg2.IndexCapacity())
+	require.Equal(t, cfg.ExtraCfgType(), cfg2.ExtraCfgType())
+	require.Equal(t, cfg.ExtraIVFCfg().EntriesTable(), cfg2.ExtraIVFCfg().EntriesTable())
+	require.Equal(t, cfg.ExtraIVFCfg().DataSize(), cfg2.ExtraIVFCfg().DataSize())
+	require.Equal(t, cfg.ExtraIVFCfg().Nprobe(), cfg2.ExtraIVFCfg().Nprobe())
+	require.Equal(t, cfg.ExtraIVFCfg().PKeyType(), cfg2.ExtraIVFCfg().PKeyType())
+	require.Equal(t, cfg.ExtraIVFCfg().KeyPartType(), cfg2.ExtraIVFCfg().KeyPartType())
+	require.Equal(t, cfg.ExtraIVFCfg().KmeansTrainPercent(), cfg2.ExtraIVFCfg().KmeansTrainPercent())
+	require.Equal(t, cfg.ExtraIVFCfg().KmeansMaxIteration(), cfg2.ExtraIVFCfg().KmeansMaxIteration())
 }

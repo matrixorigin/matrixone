@@ -217,7 +217,9 @@ func (u *ivfCreateState) start(
 			err = moerr.NewInternalError(proc.Ctx, "IndexTableConfig is empty")
 			return
 		}
-		u.tblcfg = vectorindex.IndexTableCfgV1(cfgstr)
+		if u.tblcfg, err = vectorindex.TryConvertIndexTableCfgV1(cfgstr, true); err != nil {
+			return
+		}
 
 		// support both vecf32 and vecf64
 		f32aVec := tf.ctr.argVecs[1]
