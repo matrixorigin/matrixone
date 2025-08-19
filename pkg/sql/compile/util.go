@@ -648,7 +648,7 @@ func genBuildHnswIndex(
 		originalTableDef.Name,
 		src_alias,
 		params,
-		string(cfg), // PXU TODO: maybe cfg.JsonString()?
+		cfg.ToJsonString(),
 		pkColName,
 		part,
 	)
