@@ -1,0 +1,102 @@
+drop database if exists test;
+create database test;
+use test;
+create table t1(a int, b int, c int, d int, e int, index(b), index compIdx(c, d), unique index(e));
+insert into t1 select *,*,*,*,* from generate_series(1, 100*100*10)g;
+delete from t1 where a in (1, 1111, 11111);
+select * from t1 where a in (1, 1111, 11111);
+a    b    c    d    e
+select count(*) from t1;
+count(*)
+99997
+alter table t1 add column f int;
+select count(*) from t1;
+count(*)
+99997
+delete from t1 where a in (2, 2222, 22222);
+select * from t1 where a in (2, 2222, 22222);
+a    b    c    d    e
+select a from t1 where b = 9;
+a
+9
+select a from t1 where c = 9000 and d = 9000;
+a
+9000
+select a from t1 where e = 27000;
+a
+27000
+alter table t1 drop column f;
+select a from t1 where b = 9;
+a
+9
+select a from t1 where c = 9000 and d = 9000;
+a
+9000
+select a from t1 where e = 27000;
+a
+27000
+alter table t1 modify column a int primary key;
+select a from t1 where b = 9;
+a
+9
+select a from t1 where c = 9000 and d = 9000;
+a
+9000
+select a from t1 where e = 27000;
+a
+27000
+alter table t1 drop primary key;
+select a from t1 where b = 9;
+a
+9
+select a from t1 where c = 9000 and d = 9000;
+a
+9000
+select a from t1 where e = 27000;
+a
+27000
+alter table t1 add primary key(a);
+select a from t1 where b = 9;
+a
+9
+select a from t1 where c = 9000 and d = 9000;
+a
+9000
+select a from t1 where e = 27000;
+a
+27000
+alter table t1 drop primary key;
+alter table t1 modify b double;
+select a from t1 where b = 9;
+a
+9
+select a from t1 where c = 9000 and d = 9000;
+a
+9000
+select a from t1 where e = 27000;
+a
+27000
+alter table t1 rename column b to b_2;
+select a from t1 where b_2 = 9;
+a
+9
+select a from t1 where c = 9000 and d = 9000;
+a
+9000
+select a from t1 where e = 27000;
+a
+27000
+delete from t1 where a mod 19 = 0;
+select * from t1 where b_2 in (1, 10, 19, 38, 100);
+a    b_2    c    d    e
+10    10.0    10    10    10
+100    100.0    100    100    100
+select * from t1 where c  in (1, 10, 19, 38, 100) and d in (1, 10, 19, 38, 100);
+a    b_2    c    d    e
+10    10.0    10    10    10
+100    100.0    100    100    100
+select * from t1 where e in (1, 10, 19, 38, 100);
+a    b_2    c    d    e
+10    10.0    10    10    10
+100    100.0    100    100    100
+drop database test;

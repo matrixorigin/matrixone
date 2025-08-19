@@ -34,7 +34,7 @@ func ChangeColumn(
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterTableChangeColumnClause,
 	alterCtx *AlterTableContext,
-) error {
+) (bool, error) {
 	tableDef := alterPlan.CopyTableDef
 
 	ctx := cctx.GetContext()
@@ -50,7 +50,7 @@ func ChangeColumn(
 	// Check whether original column has existed.
 	oCol := FindColumn(tableDef.Cols, oldColName)
 	if oCol == nil || oCol.Hidden {
-		return moerr.NewBadFieldError(
+		return false, moerr.NewBadFieldError(
 			ctx,
 			oldColNameOrigin,
 			alterPlan.TableDef.Name,
@@ -61,7 +61,7 @@ func ChangeColumn(
 	// you need to first check if the new name already exists.
 	if newColName != oldColName &&
 		FindColumn(tableDef.Cols, newColName) != nil {
-		return moerr.NewErrDupFieldName(ctx, newColName)
+		return false, moerr.NewErrDupFieldName(ctx, newColName)
 	}
 
 	//change the name of the column in the foreign key constraint
@@ -73,11 +73,11 @@ func ChangeColumn(
 				newColNameOrigin)...)
 	}
 
-	err := updateNewColumnInTableDef(
+	pkAffected, err := updateNewColumnInTableDef(
 		cctx, tableDef, oCol, specNewColumn, spec.Position,
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	updateClusterByInTableDef(ctx, tableDef, newColName, oldColName)
@@ -92,7 +92,7 @@ func ChangeColumn(
 		tmpCol.Name = newColName
 		tmpCol.OriginName = newColNameOrigin
 	}
-	return nil
+	return pkAffected, nil
 }
 
 // buildColumnAndConstraint Build the changed new column definition, and check its column level integrity constraints,
