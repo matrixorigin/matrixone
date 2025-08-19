@@ -225,7 +225,7 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
 		tableIDLocations := ckp.GetTableIDLocation()
 		for y := 0; y < tableIDLocations.Len(); y++ {
-			location := tableIDLocations.Get(i)
+			location := tableIDLocations.Get(y)
 			delete(allObjects, location.Name().UnsafeString())
 			logutil.Infof("GetTableIDLocation .Name().String() is %v", ckp.String(), location.Name().UnsafeString())
 		}
