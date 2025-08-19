@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -207,6 +208,10 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	// Collect all checkpoint files
 	var ckpObjectCount int
 	ckps := c.cleaner.checkpointCli.GetAllCheckpoints()
+	compacted := c.cleaner.checkpointCli.GetCompacted()
+	if compacted != nil {
+		ckps = append(ckps, compacted)
+	}
 	for i, ckp := range ckps {
 		reader := logtail.NewCKPReader(
 			ckps[i].GetVersion(),
@@ -227,6 +232,18 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 		count := len(reader.GetLocations()) + 1
 		ckpObjectCount += count
+		locations, err := logtail.LoadCheckpointLocations(
+			ctx, "", reader,
+		)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				continue
+			}
+		}
+		for name := range locations {
+			delete(allObjects, name)
+			logutil.Infof("checkpointlocations %v, file: %v", name)
+		}
 		logutil.Infof("checkpoint %v, file count: %v, rows: %d", ckp.String(), len(reader.GetLocations())+1, rows)
 	}
 	for name := range allObjects {
