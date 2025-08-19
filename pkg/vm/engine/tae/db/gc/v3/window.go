@@ -164,6 +164,16 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	); err != nil {
 		return nil, "", err
 	}
+
+	// Clear expired gc metadata files
+	for _, file := range w.files {
+		if err = vector.AppendBytes(
+			vecToGC, []byte(file.ObjectName().UnsafeString()), false, mp,
+		); err != nil {
+			return nil, "", err
+		}
+	}
+
 	w.files = filesNotGC
 	sourcer = w.MakeFilesReader(ctx, fs)
 	bf, err = BuildBloomfilter(
