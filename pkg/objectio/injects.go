@@ -54,6 +54,8 @@ const (
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 
+	FJ_CDCScanTable = "fj/cdc/scantable"
+
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
 	FJ_CDCHandleErr              = "fj/cdc/handleerr"
 	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
@@ -343,6 +345,11 @@ func NotifyInjected(key string) {
 	fault.TriggerFault(key)
 }
 
+func CDCScanTableInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
+	return sarg, injected
+}
+
 func InjectWait(key string) (rmFault func(), err error) {
 	if err = fault.AddFaultPoint(
 		context.Background(),
@@ -448,6 +455,25 @@ func InjectGCDumpTable(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CNGCDumpTable)
+	}
+	return
+}
+
+
+func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CDCScanTable,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CDCScanTable)
 	}
 	return
 }
