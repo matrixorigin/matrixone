@@ -219,9 +219,11 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		}
 		rows := uint32(0)
 		delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
+		logutil.Infof("checkpoint1 %v, file: %v", ckps[i].GetLocation().Name().UnsafeString())
 		for _, loc := range reader.GetLocations() {
 			delete(allObjects, loc.Name().UnsafeString())
 			rows += loc.Rows()
+			logutil.Infof("checkpoint %v, file: %v", loc.Name().UnsafeString())
 		}
 		count := len(reader.GetLocations()) + 1
 		ckpObjectCount += count
