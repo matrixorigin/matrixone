@@ -389,7 +389,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			if option != nil && option.SkipIndexesCopy[idxDef.IndexName] {
-				fmt.Println("skip index copy", idxDef.IndexName)
 				continue
 			}
 
