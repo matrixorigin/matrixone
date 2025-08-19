@@ -110,6 +110,7 @@ func MergeCheckpoint(
 		tableIDLocations := ckpEntry.GetTableIDLocation()
 		for i := 0; i < tableIDLocations.Len(); i++ {
 			location := tableIDLocations.Get(i)
+			logutil.Infof("location.Name().String() is %v", location.Name().String())
 			deleteFiles = append(deleteFiles, location.Name().String())
 		}
 
