@@ -459,7 +459,6 @@ func InjectGCDumpTable(msg string) (rmFault func() (bool, error), err error) {
 	return
 }
 
-
 func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
 	if err = fault.AddFaultPoint(
 		context.Background(),
