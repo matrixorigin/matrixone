@@ -109,9 +109,15 @@ func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType t
 
 func newTestConsumerInfo() *ConsumerInfo {
 	return &ConsumerInfo{
-		DbName:    "test_db",
+		ConsumerType: 0,
+	}
+}
+
+func newTestJobID() JobID {
+	return JobID{
+		DBName:    "test_db",
 		TableName: "test_tbl",
-		IndexName: "hnsw_idx",
+		JobName:   "hnsw_idx",
 	}
 }
 
@@ -203,8 +209,9 @@ func TestConsumer(t *testing.T) {
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 4)
 	cnUUID := "a-b-c-d"
 	info := newTestConsumerInfo()
+	job := newTestJobID()
 
-	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
+	consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
@@ -223,9 +230,10 @@ func TestHnswSnapshot(t *testing.T) {
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	cnUUID := "a-b-c-d"
 	info := newTestConsumerInfo()
+	job := newTestJobID()
 
 	t.Run("snapshot", func(t *testing.T) {
-		consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
+		consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
 		require.NoError(t, err)
 
 		bat := testutil.NewBatchWithVectors(
@@ -260,7 +268,7 @@ func TestHnswSnapshot(t *testing.T) {
 	})
 
 	t.Run("noMoreData", func(t *testing.T) {
-		consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
+		consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
 		require.NoError(t, err)
 
 		output := &MockRetriever{
@@ -289,8 +297,9 @@ func TestHnswTail(t *testing.T) {
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	cnUUID := "a-b-c-d"
 	info := newTestConsumerInfo()
+	job := newTestJobID()
 
-	consumer, err := NewIndexConsumer(cnUUID, tblDef, info)
+	consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
 	require.NoError(t, err)
 
 	bat := testutil.NewBatchWithVectors(
@@ -345,7 +354,7 @@ func TestHnswTail(t *testing.T) {
 	row1 := []any{int64(1), []float32{0.1, 0.2}}
 	row2 := []any{int64(2), []float32{0.3, 0.4}}
 
-	writer, _ := NewHnswSqlWriter("hnsw", info, tblDef, tblDef.Indexes)
+	writer, _ := NewHnswSqlWriter("hnsw", job, info, tblDef, tblDef.Indexes)
 	writer.Insert(ctx, row1)
 	writer.Insert(ctx, row2)
 	writer.Delete(ctx, row1)

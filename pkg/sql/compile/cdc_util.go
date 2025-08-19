@@ -26,26 +26,26 @@ import (
 )
 
 /* CDC APIs */
-func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, pitr_name string, info *iscp.ConsumerInfo) (bool, error) {
+func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, pitr_name string, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
-	return iscp.RegisterJob(ctx, cnUUID, txn, pitr_name, info)
+	return iscp.RegisterJob(ctx, cnUUID, txn, pitr_name, spec, job)
 }
 
-func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, info *iscp.ConsumerInfo) (bool, error) {
-	return iscp.UnregisterJob(ctx, cnUUID, txn, info)
+func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {
+	return iscp.UnregisterJob(ctx, cnUUID, txn, job)
 }
 
 /* start here */
-func CreateCdcTask(c *Compile, pitr_name string, consumerinfo iscp.ConsumerInfo) (bool, error) {
-	logutil.Infof("Create Index Task %v", consumerinfo)
+func CreateCdcTask(c *Compile, pitr_name string, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
+	logutil.Infof("Create Index Task %v", spec)
 
-	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), pitr_name, &consumerinfo)
+	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), pitr_name, spec, job)
 }
 
-func DeleteCdcTask(c *Compile, consumerinfo iscp.ConsumerInfo) (bool, error) {
-	logutil.Infof("Delete Index Task %v", consumerinfo)
-	return UnregisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), &consumerinfo)
+func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
+	logutil.Infof("Delete Index Task %v", job)
+	return UnregisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), job)
 }
 
 func getIndexPitrName(dbname string, tablename string) string {
@@ -102,8 +102,15 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname s
 		return err
 	}
 
+	spec := &iscp.JobSpec{
+		Priority:     0,
+		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: sinker_type},
+		TriggerSpec:  iscp.TriggerSpec{JobType: 0, Schedule: iscp.Schedule{}},
+	}
+	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: indexname}
+
 	// create index cdc task
-	ok, err := CreateCdcTask(c, pitr_name, iscp.ConsumerInfo{ConsumerType: sinker_type, DbName: dbname, TableName: tablename, IndexName: indexname})
+	ok, err := CreateCdcTask(c, pitr_name, spec, job)
 	if err != nil {
 		return err
 	}
@@ -125,7 +132,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	}
 
 	// delete index cdc task
-	_, err = DeleteCdcTask(c, iscp.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: indexname})
+	_, err = DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: indexname})
 	if err != nil {
 		return err
 	}
@@ -181,7 +188,7 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 				}
 				if async {
 					hasindex = true
-					_, e := DeleteCdcTask(c, iscp.ConsumerInfo{DbName: dbname, TableName: tablename, IndexName: idx.IndexName})
+					_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: idx.IndexName})
 					if e != nil {
 						return e
 					}

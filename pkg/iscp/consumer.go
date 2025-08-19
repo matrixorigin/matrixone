@@ -52,6 +52,7 @@ func _sqlExecutorFactory(cnUUID string) (executor.SQLExecutor, error) {
 /* IndexConsumer */
 type IndexConsumer struct {
 	cnUUID       string
+	jobID        JobID
 	info         *ConsumerInfo
 	tableDef     *plan.TableDef
 	sqlWriter    IndexSqlWriter
@@ -65,6 +66,7 @@ var _ Consumer = new(IndexConsumer)
 
 func NewIndexConsumer(cnUUID string,
 	tableDef *plan.TableDef,
+	jobID JobID,
 	info *ConsumerInfo) (Consumer, error) {
 
 	exec, err := sqlExecutorFactory(cnUUID)
@@ -77,7 +79,7 @@ func NewIndexConsumer(cnUUID string,
 	for _, idx := range tableDef.Indexes {
 		if idx.TableExist && (catalog.IsHnswIndexAlgo(idx.IndexAlgo) || catalog.IsIvfIndexAlgo(idx.IndexAlgo) || catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
 			key := idx.IndexName
-			if key == info.IndexName {
+			if key == jobID.JobName {
 				if len(ie.algo) == 0 {
 					ie.algo = idx.IndexAlgo
 				}
@@ -87,12 +89,13 @@ func NewIndexConsumer(cnUUID string,
 
 	}
 
-	sqlwriter, err := NewIndexSqlWriter(ie.algo, info, tableDef, ie.indexes)
+	sqlwriter, err := NewIndexSqlWriter(ie.algo, jobID, info, tableDef, ie.indexes)
 	if err != nil {
 		return nil, err
 	}
 
 	c := &IndexConsumer{cnUUID: cnUUID,
+		jobID:     jobID,
 		info:      info,
 		tableDef:  tableDef,
 		sqlWriter: sqlwriter,

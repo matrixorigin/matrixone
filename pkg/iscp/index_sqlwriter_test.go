@@ -146,8 +146,9 @@ func TestNewFulltextSqlWriter(t *testing.T) {
 
 	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
 	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
 
-	writer, err := NewIndexSqlWriter("fulltext", consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{int64(1000), []uint8("hello world"), nil}
@@ -169,8 +170,9 @@ func TestNewFulltextSqlWriterCPkey(t *testing.T) {
 
 	tabledef := newTestFulltextTableDef2Parts("__mo_cpkey", types.T_varbinary, "body", "title", types.T_varchar, 256)
 	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
 
-	writer, err := NewIndexSqlWriter("fulltext", consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 
 	row := []any{[]uint8("abcdef12"), []uint8("hello world"), []uint8("one title"), nil}
@@ -192,8 +194,9 @@ func TestNewHnswSqlWriter(t *testing.T) {
 
 	tabledef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 3)
 	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
 
-	writer, err := NewHnswSqlWriter("fulltext", consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewHnswSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 	row := []any{int64(1000), []float32{1, 2, 3}, nil}
 	err = writer.Upsert(ctx, row)
@@ -217,8 +220,9 @@ func TestNewIvfflatSqlWriter(t *testing.T) {
 
 	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
 	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
 
-	writer, err := NewIvfflatSqlWriter("ivfflat", consumerInfo, tabledef, tabledef.Indexes)
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
 	require.Nil(t, err)
 	row := []any{int64(1000), []float64{1, 2, 3}, nil}
 	err = writer.Insert(ctx, row)

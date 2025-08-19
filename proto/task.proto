@@ -74,6 +74,8 @@ option (gogoproto.protosizer_all) = true;
    InitCdc = 7;
    // MO Table Stats Task
    MOTableStats = 8;
+   // ISCP task
+   ISCPExecutor = 9;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
@@ -175,6 +177,7 @@ enum TaskType {
   KafkaSinkConnector = 1 [(gogoproto.enumvalue_customname) = "TypeKafkaSinkConnector"];
   reserved 2;
   CreateCdc = 3 [(gogoproto.enumvalue_customname) = "CreateCdc"];
+  ISCP = 4 [(gogoproto.enumvalue_customname) = "ISCP"];
 }
 
 message ConnectorDetails {
@@ -196,6 +199,15 @@ message CreateCdcDetails {
   repeated Account Accounts = 3;
 }
 
+message RetentionDetails {}
+
+message ISCPDetails {
+  // intra system change propagator task uuid
+  string TaskId = 1;
+  // intra system change propagator task name
+  string TaskName = 2;
+}
+
 message Details {
   string Description = 1;
   uint32 AccountID = 2;
@@ -206,6 +218,7 @@ message Details {
   oneof Details {
     ConnectorDetails Connector = 10;
     CreateCdcDetails CreateCdc = 12;
+    ISCPDetails ISCP = 13;
   }
 }
 
