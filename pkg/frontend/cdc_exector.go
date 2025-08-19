@@ -404,6 +404,8 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 
 	accountId := uint32(exec.spec.Accounts[0].GetId())
 	ctx := defines.AttachAccountId(context.Background(), accountId)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 
 	txnOp, err := cdc.GetTxnOp(ctx, exec.cnEngine, exec.cnTxnClient, "cdc-handleNewTables")
 	if err != nil {
