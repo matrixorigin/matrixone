@@ -461,7 +461,7 @@ func (w *GCWindow) LoadBatchDataAndDelete(
 		logger = logutil.Error
 	}
 	logger(
-		"GCWindow-LoadBatchData",
+		"GCWindow-LoadBatchDataAndDelete",
 		zap.Int("cnt", len(w.files)),
 		zap.String("file", w.files[0].ObjectName().String()),
 		zap.Error(err),
@@ -469,11 +469,12 @@ func (w *GCWindow) LoadBatchDataAndDelete(
 	if err != nil {
 		return false, err
 	}
-	err = w.fs.Delete(ctx, w.files[0].ObjectName().UnsafeString())
+	file := w.files[0]
+	w.files = w.files[1:]
+	err = w.fs.Delete(ctx, file.ObjectName().UnsafeString())
 	if err != nil {
 		return false, nil
 	}
-	w.files = w.files[1:]
 	return false, nil
 }
 

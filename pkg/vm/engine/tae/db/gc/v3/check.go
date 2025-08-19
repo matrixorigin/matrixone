@@ -131,27 +131,29 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	}
 
 	candidates := c.cleaner.checkpointCli.ICKPSeekLT(maxTS, 40)
-
-	unconsumedWindow := NewGCWindow(mp, c.cleaner.fs)
-	if _, err := unconsumedWindow.ScanCheckpoints(
-		ctx,
-		candidates,
-		c.cleaner.getCkpReader,
-		nil,
-		nil,
-		buffer,
-	); err != nil {
-		unconsumedWindow.Close()
-		unconsumedWindow = nil
-		return err
-	}
-	unconsumedWindowCount := len(unconsumedWindow.files)
+	unconsumedWindowCount := 0
 	objects2 := make(map[string]*ObjectEntry)
-	for _, stats := range unconsumedWindow.files {
-		objects2[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
+	if len(candidates) > 0 {
+		unconsumedWindow := NewGCWindow(mp, c.cleaner.fs)
+		if _, err = unconsumedWindow.ScanCheckpoints(
+			ctx,
+			candidates,
+			c.cleaner.getCkpReader,
+			nil,
+			nil,
+			buffer,
+		); err != nil {
+			unconsumedWindow.Close()
+			unconsumedWindow = nil
+			return err
+		}
+		unconsumedWindowCount = len(unconsumedWindow.files)
+		for _, stats := range unconsumedWindow.files {
+			objects2[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
+		}
+		buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchDataAndDelete)
+		logutil.Infof("object1: %d, object2: %d, maxTS is %v, num %v", len(objects), len(objects2), maxTS.ToString(), len(candidates))
 	}
-	buildObjects(unconsumedWindow, objects2, unconsumedWindow.LoadBatchDataAndDelete)
-	logutil.Infof("object1: %d, object2: %d, maxTS is %v, num %v", len(objects), len(objects2), maxTS.ToString(), len(candidates))
 
 	allCount := len(allObjects)
 	for name := range allObjects {
