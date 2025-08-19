@@ -206,7 +206,9 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 
 	// Collect all checkpoint files
 	var ckpObjectCount int
-	ckps := c.cleaner.checkpointCli.GetAllCheckpoints()
+	ckps := c.cleaner.checkpointCli.GetAllGlobalCheckpoints()
+	ckps = append(ckps, c.cleaner.checkpointCli.GetAllIncrementalCheckpoints()...)
+
 	compacted := c.cleaner.checkpointCli.GetCompacted()
 	if compacted != nil {
 		ckps = append(ckps, compacted)
@@ -227,7 +229,7 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		for y := 0; y < tableIDLocations.Len(); y++ {
 			location := tableIDLocations.Get(y)
 			delete(allObjects, location.Name().UnsafeString())
-			logutil.Infof("GetTableIDLocation .Name().String() is %v", ckp.String(), location.Name().UnsafeString())
+			logutil.Infof("GetTableIDLocation ckp %v, .Name().String() is %v", ckp.String(), location.Name().UnsafeString())
 		}
 		logutil.Infof("checkpoint1 %v, file: %v", ckp.String(), ckps[i].GetLocation().Name().UnsafeString())
 		for _, loc := range reader.GetLocations() {
