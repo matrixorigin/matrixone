@@ -263,6 +263,10 @@ func (c *Compile) clear() {
 	c.isPrepare = false
 	c.hasMergeOp = false
 	c.needBlock = false
+	c.ignorePublish = false
+	c.adjustTableExtraFunc = nil
+	c.disableDropAutoIncrement = false
+	c.keepAutoIncrement = 0
 
 	if c.lockMeta != nil {
 		c.lockMeta.clear(c.proc)

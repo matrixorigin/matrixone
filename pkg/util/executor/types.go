@@ -79,6 +79,7 @@ type StatementOption struct {
 	userId                   uint32
 	disableLog               bool
 	ignoreForeignKey         bool
+	ignorePublish            bool
 	params                   []string
 	alterCopyDedupOpt        *plan.AlterCopyDedupOpt
 	disableDropAutoIncrement bool

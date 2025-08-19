@@ -305,6 +305,7 @@ type Compile struct {
 	adjustTableExtraFunc     func(*api.SchemaExtra) error
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
+	ignorePublish            bool
 }
 
 type RemoteReceivRegInfo struct {

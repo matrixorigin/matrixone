@@ -355,3 +355,12 @@ func (opts StatementOption) WithKeepAutoIncrement(keep uint64) StatementOption {
 	opts.keepAutoIncrement = keep
 	return opts
 }
+
+func (opts StatementOption) WithIgnorePublish() StatementOption {
+	opts.ignorePublish = true
+	return opts
+}
+
+func (opts StatementOption) IgnorePublish() bool {
+	return opts.ignorePublish
+}

@@ -2332,8 +2332,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// delete from tables => truncate, need keep increment value
-	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey()
-	createOpts := executor.StatementOption{}.WithIgnoreForeignKey()
+	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish()
+	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish()
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {
@@ -2532,8 +2532,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// if dbSource is a pub, update tableList
-	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
-		return err
+	if !c.ignorePublish {
+		if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+			return err
+		}
 	}
 
 	if len(qry.UpdateFkSqls) > 0 {
