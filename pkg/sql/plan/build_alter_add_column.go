@@ -29,33 +29,39 @@ import (
 )
 
 // AddColumn will add a new column to the table.
-func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterAddCol, alterCtx *AlterTableContext) error {
+func AddColumn(
+	ctx CompilerContext,
+	alterPlan *plan.AlterTable,
+	spec *tree.AlterAddCol,
+	alterCtx *AlterTableContext,
+) (bool, error) {
+
 	tableDef := alterPlan.CopyTableDef
 
 	if len(tableDef.Cols) == TableColumnCountLimit {
-		return moerr.NewErrTooManyFields(ctx.GetContext())
+		return false, moerr.NewErrTooManyFields(ctx.GetContext())
 	}
 
 	specNewColumn := spec.Column
 	// Check whether added column has existed.
 	newColName := specNewColumn.Name.ColName()
 	if col := FindColumn(tableDef.Cols, newColName); col != nil {
-		return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
+		return false, moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
-		return err
+		return false, err
 	}
 	newCol, err := buildAddColumnAndConstraint(ctx, alterPlan, specNewColumn, colType)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err = handleAddColumnPosition(ctx.GetContext(), tableDef, newCol, spec.Position); err != nil {
-		return err
+		return false, err
 	}
 
 	if !newCol.Default.NullAbility && len(newCol.Default.OriginString) == 0 {
@@ -65,7 +71,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 		}
 	}
 
-	return nil
+	return newCol.Primary, nil
 }
 
 // checkModifyNewColumn Check the position information of the newly formed column and place the new column in the target location
@@ -331,39 +337,45 @@ func findPositionRelativeColumn(
 }
 
 // AddColumn will add a new column to the table.
-func DropColumn(ctx CompilerContext, alterPlan *plan.AlterTable, colName string, alterCtx *AlterTableContext) error {
+func DropColumn(
+	ctx CompilerContext,
+	alterPlan *plan.AlterTable,
+	colName string,
+	alterCtx *AlterTableContext,
+) (bool, error) {
+
 	tableDef := alterPlan.CopyTableDef
 	// Check whether original column has existed.
-	col := FindColumn(tableDef.Cols, colName)
-	if col == nil || col.Hidden {
-		return moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
+	column := FindColumn(tableDef.Cols, colName)
+	if column == nil || column.Hidden {
+		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
 	// We only support dropping column with single-value none Primary Key index covered now.
 	if err := handleDropColumnWithIndex(ctx.GetContext(), colName, tableDef); err != nil {
-		return err
+		return column.Primary, err
 	}
 	if err := handleDropColumnWithPrimaryKey(ctx.GetContext(), colName, tableDef); err != nil {
-		return err
+		return column.Primary, err
 	}
 	// Check the column with foreign key.
-	if err := checkDropColumnWithForeignKey(ctx, tableDef, col); err != nil {
-		return err
+	if err := checkDropColumnWithForeignKey(ctx, tableDef, column); err != nil {
+		return column.Primary, err
 	}
 	if err := checkVisibleColumnCnt(ctx.GetContext(), tableDef, 0, 1); err != nil {
-		return err
+		return column.Primary, err
 	}
 
-	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, col); err != nil {
-		return err
+	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
+		return column.Primary, err
 	}
 
-	if err := handleDropColumnWithClusterBy(ctx.GetContext(), tableDef, col); err != nil {
-		return err
+	if err := handleDropColumnWithClusterBy(ctx.GetContext(), tableDef, column); err != nil {
+		return column.Primary, err
 	}
 
 	delete(alterCtx.alterColMap, colName)
-	return nil
+	return column.Primary, nil
 }
 
 func checkVisibleColumnCnt(ctx context.Context, tblInfo *TableDef, addCount, dropCount int) error {
