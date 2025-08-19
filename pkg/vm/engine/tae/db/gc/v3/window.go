@@ -170,6 +170,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		); err != nil {
 			return nil, "", err
 		}
+		logutil.Infof("delete window is %v", file.ObjectName().UnsafeString())
 	}
 	w.files = filesNotGC
 	sourcer = w.MakeFilesReader(ctx, fs)
@@ -276,7 +277,7 @@ func (w *GCWindow) ScanCheckpoints(
 	}
 	w.files = append(w.files, newFiles...)
 	for _, file := range w.files {
-		logutil.Infof("w.files is %v", file.ObjectName().String())
+		logutil.Infof("w.files is %v, windows %v ", file.ObjectName().String(), w.tsRange.start.ToString(), w.tsRange.end)
 	}
 	return metaFile, nil
 }
