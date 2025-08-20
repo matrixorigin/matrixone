@@ -396,7 +396,13 @@ func ConstructCreateTableSQL(
 		ps := ctx.GetProcess().GetPartitionService()
 		if ps.Enabled() {
 			partitionBy := " partition by "
-			meta, err := ps.GetPartitionMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
+
+			txn := ctx.GetProcess().GetTxnOperator()
+			if snapshot != nil && snapshot.TS != nil {
+				txn = txn.CloneSnapshotOp(*snapshot.TS)
+			}
+
+			meta, err := ps.GetPartitionMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), txn)
 			if err != nil {
 				return "", nil, err
 			}
