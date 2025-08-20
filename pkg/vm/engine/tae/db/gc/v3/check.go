@@ -17,7 +17,6 @@ package gc
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"time"
 )
@@ -111,7 +108,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 	}
 	sancWindow := c.cleaner.GetScannedWindowLocked()
 	if sancWindow == nil {
-		returnStr += fmt.Sprintf("{'verify': 'not scan window'}")
+		returnStr += fmt.Sprintf("{'verify': 'OK', 'msg': 'Not-GC'}")
 		return returnStr
 	}
 	window := sancWindow.Clone()
@@ -185,41 +182,18 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 	if compacted != nil {
 		ckps = append(ckps, compacted)
 	}
-	for i, ckp := range ckps {
-		reader := logtail.NewCKPReader(
-			ckps[i].GetVersion(),
-			ckps[i].GetLocation(),
-			common.CheckpointAllocator,
-			c.cleaner.fs,
-		)
-		if err = reader.ReadMeta(ctx); err != nil {
-			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-				delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
-				continue
-			}
+	for _, ckp := range ckps {
+		var files []string
+		files, err = getCheckpointLocation(ctx, ckp, c.cleaner.fs)
+		if err != nil {
 			returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
 			return returnStr
 		}
-		rows := uint32(0)
-		delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
-		tableIDLocations := ckp.GetTableIDLocation()
-		for y := 0; y < tableIDLocations.Len(); y++ {
-			location := tableIDLocations.Get(y)
-			delete(allObjects, location.Name().UnsafeString())
-			logutil.Infof("GetTableIDLocation ckp %v, .Name().String() is %v", ckp.String(), location.Name().UnsafeString())
+		for _, file := range files {
+			delete(allObjects, file)
 		}
-		logutil.Infof("checkpoint1 %v, file: %v", ckp.String(), ckps[i].GetLocation().Name().UnsafeString())
-		for _, loc := range reader.GetLocations() {
-			delete(allObjects, loc.Name().UnsafeString())
-			rows += loc.Rows()
-			logutil.Infof("checkpoint %v, file: %v", ckp.String(), loc.Name().UnsafeString())
-		}
-		count := len(reader.GetLocations()) + 1
+		count := len(files)
 		ckpObjectCount += count
-		logutil.Infof("checkpoint %v, file count: %v, rows: %d", ckp.String(), len(reader.GetLocations())+1, rows)
-	}
-	for name := range allObjects {
-		logutil.Infof("not GC name: %v", name)
 	}
 	if len(allObjects) > NotFoundLimit {
 		returnStr += "{'verify': 'abnormal',"
@@ -234,8 +208,6 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 			logutil.Infof("[Verify GC]not found object %s,", name)
 		}
 		returnStr += "}}"
-		logutil.Warnf("[Verify GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d",
-			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount)
 	} else {
 		returnStr += "{'verify': 'OK',"
 		returnStr += fmt.Sprintf("'const': %v,", time.Since(now))
@@ -243,8 +215,6 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
 		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
 		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
-		logutil.Infof("[Verify GC]Check end!!! const: %v, all objects: %d, not found: %d, checkpoint: %d, window file: %d\",",
-			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount)
 	}
 	return returnStr
 }

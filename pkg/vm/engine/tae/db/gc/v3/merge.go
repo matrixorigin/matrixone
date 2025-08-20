@@ -250,6 +250,7 @@ func getCheckpointLocation(
 		return nil, err
 	}
 	files := make([]string, 0)
+	files = append(files, checkpoint.GetLocation().Name().UnsafeString())
 	tableIDLocations := checkpoint.GetTableIDLocation()
 	for i := 0; i < tableIDLocations.Len(); i++ {
 		location := tableIDLocations.Get(i)
