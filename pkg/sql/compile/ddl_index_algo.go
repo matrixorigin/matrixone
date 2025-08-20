@@ -39,6 +39,7 @@ const (
 
 func (s *Scope) handleUniqueIndexTable(
 	c *Compile,
+	exec executor.TxnExecutor,
 	mainTableID uint64,
 	mainExtra *api.SchemaExtra,
 	dbSource engine.Database,
@@ -57,21 +58,23 @@ func (s *Scope) handleUniqueIndexTable(
 	}
 	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
 	// it will be processed when inserting into the hidden table.
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, exec, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
-func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
+func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, exec executor.TxnExecutor, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 	insertSQL := genInsertIndexTableSql(originalTableDef, indexDef, qryDatabase, indexDef.Unique)
-	err := c.runSql(insertSQL)
+	res, err := exec.Exec(insertSQL, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
+	res.Close()
 	return nil
 }
 
 func (s *Scope) handleRegularSecondaryIndexTable(
 	c *Compile,
+	exec executor.TxnExecutor,
 	mainTableID uint64,
 	mainExtra *api.SchemaExtra,
 	dbSource engine.Database,
@@ -90,11 +93,12 @@ func (s *Scope) handleRegularSecondaryIndexTable(
 		return err
 	}
 
-	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, exec, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
 func (s *Scope) handleMasterIndexTable(
 	c *Compile,
+	exec executor.TxnExecutor,
 	mainTableID uint64,
 	mainExtra *api.SchemaExtra,
 	dbSource engine.Database,
@@ -115,16 +119,18 @@ func (s *Scope) handleMasterIndexTable(
 
 	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
+		res, err := exec.Exec(insertSQL, executor.StatementOption{})
 		if err != nil {
 			return err
 		}
+		res.Close()
 	}
 	return nil
 }
 
 func (s *Scope) handleFullTextIndexTable(
 	c *Compile,
+	exec executor.TxnExecutor,
 	mainTableID uint64,
 	mainExtra *api.SchemaExtra,
 	dbSource engine.Database,
@@ -150,22 +156,23 @@ func (s *Scope) handleFullTextIndexTable(
 
 	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
-		err = c.runSql(insertSQL)
+		res, err := exec.Exec(insertSQL, executor.StatementOption{})
 		if err != nil {
 			return err
 		}
+		res.Close()
 	}
 	return nil
 }
 
-func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
+func (s *Scope) handleIndexColCount(c *Compile, exec executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
 		indexColumnName,
 		qryDatabase,
 		originalTableDef.Name)
-	rs, err := c.runSqlWithResult(countTotalSql, NoAccountId)
+	rs, err := exec.Exec(countTotalSql, executor.StatementOption{})
 	if err != nil {
 		return 0, err
 	}
@@ -180,7 +187,7 @@ func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryData
 	return totalCnt, nil
 }
 
-func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string) error {
+func (s *Scope) handleIvfIndexMetaTable(c *Compile, exec executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string) error {
 
 	/*
 		The meta table will contain version number for now. In the future, it can contain `index progress` etc.
@@ -204,15 +211,16 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 	)
 
-	err := c.runSql(insertSQL)
+	res, err := exec.Exec(insertSQL, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
+	res.Close()
 
 	return nil
 }
 
-func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
+func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, exec executor.TxnExecutor, indexDef *plan.IndexDef,
 	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
 
 	var cfg vectorindex.IndexTableConfig
@@ -301,10 +309,11 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		return err
 	}
 
-	err = c.runSql(sql)
+	res, err := exec.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
+	res.Close()
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
 	if err != nil {
@@ -314,7 +323,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	return nil
 }
 
-func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
+func (s *Scope) handleIvfIndexEntriesTable(c *Compile, exec executor.TxnExecutor, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef,
 	metadataTableName string,
 	centroidsTableName string) error {
 
@@ -396,10 +405,11 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		return err
 	}
 
-	err = c.runSql(centroidsCrossL2JoinTbl)
+	res, err := exec.Exec(centroidsCrossL2JoinTbl, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
+	res.Close()
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_end")
 	if err != nil {
@@ -453,6 +463,7 @@ func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
 }
 
 func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
+	exec executor.TxnExecutor,
 	metadataTableName string,
 	centroidsTableName string,
 	entriesTableName string,
@@ -487,15 +498,17 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 		return err
 	}
 
-	err = c.runSql(pruneCentroidsTbl)
+	res, err := exec.Exec(pruneCentroidsTbl, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
+	res.Close()
 
-	err = c.runSql(pruneEntriesTbl)
+	res, err = exec.Exec(pruneEntriesTbl, executor.StatementOption{})
 	if err != nil {
 		return err
 	}
+	res.Close()
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "pruning_end")
 	if err != nil {
@@ -507,6 +520,7 @@ func (s *Scope) handleIvfIndexDeleteOldEntries(c *Compile,
 
 func (s *Scope) handleVectorHnswIndex(
 	c *Compile,
+	exec executor.TxnExecutor,
 	mainTableID uint64,
 	mainExtra *api.SchemaExtra,
 	dbSource engine.Database,
@@ -565,10 +579,11 @@ func (s *Scope) handleVectorHnswIndex(
 	}
 
 	for _, sql := range sqls {
-		err = c.runSql(sql)
+		res, err := exec.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err
 		}
+		res.Close()
 	}
 
 	return nil

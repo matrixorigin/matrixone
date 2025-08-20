@@ -42,6 +42,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -575,70 +576,79 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			indexInfo := act.AddIndex.IndexInfo // IndexInfo is named same as planner's IndexInfo
 			indexTableDef := act.AddIndex.IndexInfo.TableDef
 
-			// indexName -> meta      -> indexDef
-			//     		 -> centroids -> indexDef
-			//     		 -> entries   -> indexDef
-			multiTableIndexes := make(map[string]*MultiTableIndex)
-			for _, indexDef := range indexTableDef.Indexes {
+			err2 := c.runTxn(func(exec executor.TxnExecutor) error {
 
-				for i := range addIndex {
-					if indexDef.IndexName == addIndex[i].IndexName {
-						return moerr.NewDuplicateKey(c.proc.Ctx, indexDef.IndexName)
-					}
-				}
-				addIndex = append(addIndex, indexDef)
+				// indexName -> meta      -> indexDef
+				//     		 -> centroids -> indexDef
+				//     		 -> entries   -> indexDef
+				multiTableIndexes := make(map[string]*MultiTableIndex)
+				for _, indexDef := range indexTableDef.Indexes {
 
-				if indexDef.Unique {
-					// 1. Unique Index related logic
-					err = s.handleUniqueIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
-					// 2. Regular Secondary index
-					err = s.handleRegularSecondaryIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
-					// 3. Master index
-					err = s.handleMasterIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
-					// 3. FullText index
-					err = s.handleFullTextIndexTable(c, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
-				} else if !indexDef.Unique &&
-					(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo)) {
-					// 4. IVF and HNSW indexDefs are aggregated and handled later
-					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
-						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
-							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
-							IndexDefs: make(map[string]*plan.IndexDef),
+					for i := range addIndex {
+						if indexDef.IndexName == addIndex[i].IndexName {
+							return moerr.NewDuplicateKey(c.proc.Ctx, indexDef.IndexName)
 						}
 					}
-					multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+					addIndex = append(addIndex, indexDef)
 
+					if indexDef.Unique {
+						// 1. Unique Index related logic
+						err = s.handleUniqueIndexTable(c, exec, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
+					} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
+						// 2. Regular Secondary index
+						err = s.handleRegularSecondaryIndexTable(c, exec, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
+					} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+						// 3. Master index
+						err = s.handleMasterIndexTable(c, exec, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
+					} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
+						// 3. FullText index
+						err = s.handleFullTextIndexTable(c, exec, tblId, extra, dbSource, indexDef, qry.Database, oTableDef, indexInfo)
+					} else if !indexDef.Unique &&
+						(catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) || catalog.IsHnswIndexAlgo(indexDef.IndexAlgo)) {
+						// 4. IVF and HNSW indexDefs are aggregated and handled later
+						if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+							multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+								IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+								IndexDefs: make(map[string]*plan.IndexDef),
+							}
+						}
+						multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+
+					}
+					if err != nil {
+						return err
+					}
 				}
-				if err != nil {
-					return err
-				}
-			}
-			for _, multiTableIndex := range multiTableIndexes {
-				switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
-				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
-				case catalog.MoIndexHnswAlgo.ToString():
-					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+				for _, multiTableIndex := range multiTableIndexes {
+					switch multiTableIndex.IndexAlgo { // no need for catalog.ToLower() here
+					case catalog.MoIndexIvfFlatAlgo.ToString():
+						err = s.handleVectorIvfFlatIndex(c, exec, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+					case catalog.MoIndexHnswAlgo.ToString():
+						err = s.handleVectorHnswIndex(c, exec, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, indexInfo)
+					}
+
+					if err != nil {
+						return err
+					}
 				}
 
-				if err != nil {
-					return err
+				//1. build and update constraint def
+				for _, indexDef := range indexTableDef.Indexes {
+					insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef, oTableDef)
+					if err != nil {
+						return err
+					}
+					res, err := exec.Exec(insertSql, executor.StatementOption{})
+					if err != nil {
+						return err
+					}
+					res.Close()
 				}
-			}
 
-			//1. build and update constraint def
-			for _, indexDef := range indexTableDef.Indexes {
-				insertSql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tblId, indexDef, oTableDef)
-				if err != nil {
-					return err
-				}
-				err = c.runSql(insertSql)
-				if err != nil {
-					return err
-				}
+				return nil
+			})
+			if err2 != nil {
+				return err2
 			}
 		case *plan.AlterTable_Action_AlterIndex:
 			hasUpdateConstraints = true
@@ -723,20 +733,29 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 
-			// update the hidden tables
-			for _, multiTableIndex := range multiTableIndexes {
-				switch multiTableIndex.IndexAlgo {
-				case catalog.MoIndexIvfFlatAlgo.ToString():
-					err = s.handleVectorIvfFlatIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
-				case catalog.MoIndexHnswAlgo.ToString():
-					// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
-					err = s.handleVectorHnswIndex(c, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
-				}
+			err2 := c.runTxn(func(exec executor.TxnExecutor) error {
+				var err error
+				// update the hidden tables
+				for _, multiTableIndex := range multiTableIndexes {
+					switch multiTableIndex.IndexAlgo {
+					case catalog.MoIndexIvfFlatAlgo.ToString():
+						err = s.handleVectorIvfFlatIndex(c, exec, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					case catalog.MoIndexHnswAlgo.ToString():
+						// TODO: we should call refresh Hnsw Index function instead of CreateHnswIndex function
+						err = s.handleVectorHnswIndex(c, exec, tblId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, oTableDef, nil)
+					}
 
-				if err != nil {
-					return err
+					if err != nil {
+						return err
+					}
 				}
+				return nil
+			})
+
+			if err2 != nil {
+				return err2
 			}
+
 		case *plan.AlterTable_Action_AlterComment:
 			reqs = append(reqs, api.NewUpdateCommentReq(
 				did, tid,
@@ -1740,7 +1759,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	ps := c.proc.GetPartitionService()
 	if !ps.Enabled() ||
 		!features.IsPartitioned(r.GetExtraInfo().FeatureFlag) {
-		return s.doCreateIndex(c, qry, dbSource, r)
+		err = c.runTxn(func(exec executor.TxnExecutor) error {
+			return s.doCreateIndex(c, exec, qry, dbSource, r)
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	metadata, err := ps.GetPartitionMetadata(
@@ -1752,36 +1776,40 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		return err
 	}
 
-	for _, p := range metadata.Partitions {
-		q := *qry
-		q.Table = p.PartitionTableName
-		r, err := dbSource.Relation(c.proc.Ctx, q.Table, nil)
-		if err != nil {
-			return err
-		}
-		q.TableDef = r.CopyTableDef(c.proc.Ctx)
-		for _, def := range q.Index.IndexTables {
-			def.Name = fmt.Sprintf("%s_%s", def.Name, p.Name)
-		}
-		for _, def := range q.Index.TableDef.Indexes {
-			def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, p.Name)
-		}
+	err = c.runTxn(func(exec executor.TxnExecutor) error {
+		for _, p := range metadata.Partitions {
+			q := *qry
+			q.Table = p.PartitionTableName
+			r, err := dbSource.Relation(c.proc.Ctx, q.Table, nil)
+			if err != nil {
+				return err
+			}
+			q.TableDef = r.CopyTableDef(c.proc.Ctx)
+			for _, def := range q.Index.IndexTables {
+				def.Name = fmt.Sprintf("%s_%s", def.Name, p.Name)
+			}
+			for _, def := range q.Index.TableDef.Indexes {
+				def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, p.Name)
+			}
 
-		err = s.doCreateIndex(c, &q, dbSource, r)
-		if err != nil {
-			return err
+			err = s.doCreateIndex(c, exec, &q, dbSource, r)
+			if err != nil {
+				return err
+			}
 		}
-	}
+		return nil
+	})
+
 	return nil
 }
 
 func (s *Scope) doCreateIndex(
 	c *Compile,
+	exec executor.TxnExecutor,
 	qry *plan.CreateIndex,
 	dbSource engine.Database,
 	r engine.Relation,
 ) error {
-	var err error
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 	tableId := r.GetTableID(c.proc.Ctx)
 	tableDef := r.GetTableDef(c.proc.Ctx)
@@ -1791,6 +1819,7 @@ func (s *Scope) doCreateIndex(
 	indexInfo := qry.GetIndex() // IndexInfo is named same as planner's IndexInfo
 	indexTableDef := indexInfo.GetTableDef()
 
+	var err error
 	// In MySQL, the `CREATE INDEX` syntax can only create one index instance at a time
 	// indexName -> meta      -> indexDef[0]
 	//     		 -> centroids -> indexDef[1]
@@ -1800,13 +1829,13 @@ func (s *Scope) doCreateIndex(
 		indexAlgo := indexDef.IndexAlgo
 		if indexDef.Unique {
 			// 1. Unique Index related logic
-			err = s.handleUniqueIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleUniqueIndexTable(c, exec, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexAlgo) {
 			// 2. Regular Secondary index
-			err = s.handleRegularSecondaryIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleRegularSecondaryIndexTable(c, exec, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
 			// 3. Master index
-			err = s.handleMasterIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleMasterIndexTable(c, exec, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique &&
 			(catalog.IsIvfIndexAlgo(indexAlgo) || catalog.IsHnswIndexAlgo(indexAlgo)) {
 			// 4. IVF indexDefs are aggregated and handled later
@@ -1819,7 +1848,7 @@ func (s *Scope) doCreateIndex(
 			multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
 		} else if !indexDef.Unique && catalog.IsFullTextIndexAlgo(indexAlgo) {
 			// 5. FullText index
-			err = s.handleFullTextIndexTable(c, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
+			err = s.handleFullTextIndexTable(c, exec, tableId, extra, dbSource, indexDef, qry.Database, originalTableDef, indexInfo)
 		}
 		if err != nil {
 			return err
@@ -1829,9 +1858,9 @@ func (s *Scope) doCreateIndex(
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
-			err = s.handleVectorIvfFlatIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorIvfFlatIndex(c, exec, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		case catalog.MoIndexHnswAlgo.ToString():
-			err = s.handleVectorHnswIndex(c, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
+			err = s.handleVectorHnswIndex(c, exec, tableId, extra, dbSource, multiTableIndex.IndexDefs, qry.Database, originalTableDef, indexInfo)
 		}
 
 		if err != nil {
@@ -1868,16 +1897,19 @@ func (s *Scope) doCreateIndex(
 	}
 
 	// generate inserts into mo_indexes metadata
+
 	for _, indexDef := range indexTableDef.Indexes {
 		sql, err := makeInsertSingleIndexSQL(c.e, c.proc, databaseId, tableId, indexDef, tableDef)
 		if err != nil {
 			return err
 		}
-		err = c.runSql(sql)
+		res, err := exec.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err
 		}
+		res.Close()
 	}
+
 	return nil
 }
 
@@ -1941,6 +1973,7 @@ func indexTableBuild(
 
 func (s *Scope) handleVectorIvfFlatIndex(
 	c *Compile,
+	exec executor.TxnExecutor,
 	mainTableID uint64,
 	mainExtra *api.SchemaExtra,
 	dbSource engine.Database,
@@ -1976,19 +2009,19 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	cache.Cache.Remove(key)
 
 	// 3. get count of secondary index column in original table
-	totalCnt, err := s.handleIndexColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	totalCnt, err := s.handleIndexColCount(c, exec, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
 	if err != nil {
 		return err
 	}
 
 	// 4.a populate meta table
-	err = s.handleIvfIndexMetaTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
+	err = s.handleIvfIndexMetaTable(c, exec, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase)
 	if err != nil {
 		return err
 	}
 
 	// 4.b populate centroids table
-	err = s.handleIvfIndexCentroidsTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
+	err = s.handleIvfIndexCentroidsTable(c, exec, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids], qryDatabase, originalTableDef,
 		totalCnt,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName)
 	if err != nil {
@@ -1996,7 +2029,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 	}
 
 	// 4.c populate entries table
-	err = s.handleIvfIndexEntriesTable(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
+	err = s.handleIvfIndexEntriesTable(c, exec, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries], qryDatabase, originalTableDef,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 	if err != nil {
@@ -2005,6 +2038,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 
 	// 4.d delete older entries in index table.
 	err = s.handleIvfIndexDeleteOldEntries(c,
+		exec,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName,
 		indexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName,

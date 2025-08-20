@@ -4782,6 +4782,77 @@ func (c *Compile) runSqlWithResultAndOptions(
 	return exec.Exec(ctx, sql, opts)
 }
 
+func (c *Compile) runTxn(execFunc func(executor.TxnExecutor) error) error {
+	return c.runTxnWithAccountId(execFunc, NoAccountId)
+}
+
+func (c *Compile) runTxnWithOptions(
+	execFunc func(executor.TxnExecutor) error,
+	options executor.StatementOption,
+) error {
+	return c.runTxnWithAccountIdAndOptions(execFunc, NoAccountId, options)
+}
+
+func (c *Compile) runTxnWithAccountId(execFunc func(executor.TxnExecutor) error, accountId int32) error {
+	return c.runTxnWithAccountIdAndOptions(execFunc, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runTxnWithAccountIdAndOptions(
+	execFunc func(executor.TxnExecutor) error,
+	accountId int32,
+	options executor.StatementOption,
+) error {
+	if execFunc == nil {
+		return nil
+	}
+	err := c.runTxnWithResultAndOptions(execFunc, accountId, options)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Compile) runTxnWithResult(execFunc func(executor.TxnExecutor) error, accountId int32) error {
+	return c.runTxnWithResultAndOptions(execFunc, accountId, executor.StatementOption{})
+}
+
+func (c *Compile) runTxnWithResultAndOptions(
+	execFunc func(executor.TxnExecutor) error,
+	accountId int32,
+	options executor.StatementOption,
+) error {
+	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+
+	lower := c.getLower()
+
+	if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
+		if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
+			options = options.WithIgnoreForeignKey()
+		}
+	}
+
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(c.proc.GetTxnOperator()).
+		WithDatabase(c.db).
+		WithTimeZone(c.proc.GetSessionInfo().TimeZone).
+		WithLowerCaseTableNames(&lower).
+		WithStatementOption(options).
+		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
+
+	ctx := c.proc.Ctx
+	if accountId >= 0 {
+		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
+	}
+	return exec.ExecTxn(ctx, execFunc, opts)
+}
+
 func (c *Compile) fatalLog(retry int, err error) {
 	if err == nil {
 		return
