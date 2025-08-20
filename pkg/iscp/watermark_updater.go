@@ -72,7 +72,23 @@ func ExecWithResult(
 	return exec.Exec(ctx, sql, opts)
 }
 
-// return true if create, return false if task already exists, return error when error
+// RegisterJob create jobs. return true if create, return false if task already exists, return error when error
+// JobID.DBName: required, the name of the database.
+// JobID.TableName: required, the name of the table.
+// JobID.JobName: required, used to distinguish jobs on the same table. 
+//                Each job on the same table must have a unique job name. 
+//                If a duplicate job name is encountered, the returned 'ok' will be false, 
+//                and the original job will be kept without creating a new one.
+// JobSpec.ConsumerInfo.ConsumerType: required, the type of downstream consumer. 
+//                The consumer will be generated according to this type during synchronization.
+// JobSpec.ConsumerInfo.ColumnNames: optional, currently not effective (TODO). 
+//                Specifies the columns needed by the downstream consumer. 
+//                If empty, the consumer will receive all columns of the table.
+// JobSpec.Priority: optional, the priority for acquiring a worker during execution, currently not effective (TODO).
+// JobSpec.TriggerSpec.JobType: optional, if not set, it will be set to TriggerType_Default.
+// JobSpec.TriggerSpec.Schedule: should be filled according to the triggertype. 
+//                For example, for TriggerType_Default, no need to fill; 
+//                for TriggerType_Timed, Interval and share should be specified.
 func RegisterJob(
 	ctx context.Context,
 	cnUUID string,
