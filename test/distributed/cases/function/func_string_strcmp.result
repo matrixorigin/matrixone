@@ -19,3 +19,148 @@ strcmp(BINARY(a), BINARY(A))
 select strcmp(65, 97);
 strcmp(65, 97)
 -1
+SELECT STRCMP('apple', 'apple');
+STRCMP(apple, apple)
+0
+SELECT STRCMP('banana', 'apple');
+STRCMP(banana, apple)
+1
+SELECT STRCMP('apple', 'banana');
+STRCMP(apple, banana)
+-1
+SELECT STRCMP('Apple', 'apple');
+STRCMP(Apple, apple)
+-1
+SELECT STRCMP('apple', 'Apple');
+STRCMP(apple, Apple)
+1
+SELECT STRCMP('apple', 'Apple');
+STRCMP(apple, Apple)
+1
+SELECT STRCMP('这样就实现了按与指定字符串的字典顺序升序排列的效果。如果想降序排列，只需要把 ORDER BY子句改成 ORDER BY STRCMP(name, "banana") DESC即可，原理是一样的：比较结果大的（正数大的）会排在前面，小的排在后面', '这样就实现了按与指定字符串的字典顺序升序排列的效果。如果想降序排列，只需要把 ORDER BY子句改成 ORDER BY STRCMP(name, "banana") DESC即可，原理是一样的：比较结果大的（正数大的）会排在前面，小的排在后面');
+STRCMP(这样就实现了按与指定字符串的字典顺序升序排列的效果。如果想降序排列，只需要把 ORDER BY子句改成 ORDER BY STRCMP(name, "banana") DESC即可，原理是一样的：比较结果大的（正数大的）会排在前面，小的排在后面, 这样就实现了按与指定字符串的字典顺序升序排列的效果。如果想降序排列，只需要把 ORDER BY子句改成 ORDER BY STRCMP(name, "banana") DESC即可，原理是一样的：比较结果大的（正数大的）会排在前面，小的排在后面)
+0
+SELECT STRCMP('banana', 'apple') AS banana_vs_apple, STRCMP('apple', 'banana') AS apple_vs_banana;
+banana_vs_apple    apple_vs_banana
+1    -1
+SELECT STRCMP('10', '10') AS equal_numbers, STRCMP('11', '10') AS eleven_vs_ten, STRCMP('10', '11') AS ten_vs_eleven;
+equal_numbers    eleven_vs_ten    ten_vs_eleven
+0    1    -1
+SELECT STRCMP(LOWER('Apple'), LOWER('apple'));
+STRCMP(LOWER(Apple), LOWER(apple))
+0
+SELECT STRCMP('Apple', 'apple') AS uppercase_vs_lowercase, STRCMP('apple', 'Apple') AS lowercase_vs_uppercase;
+uppercase_vs_lowercase    lowercase_vs_uppercase
+-1    1
+SELECT STRCMP('', '');
+STRCMP(, )
+0
+SELECT STRCMP(' ', ' ');
+STRCMP( ,  )
+0
+SELECT
+STRCMP('apple', NULL) AS apple_vs_null,
+STRCMP(NULL, 'apple') AS null_vs_apple,
+STRCMP(NULL, NULL) AS null_vs_null;
+apple_vs_null    null_vs_apple    null_vs_null
+null    null    null
+SELECT
+STRCMP('😊', '😢') AS emoji_comparison,
+STRCMP('你', '好') AS chinese_character_comparison;
+emoji_comparison    chinese_character_comparison
+-1    -1
+SELECT
+STRCMP('苹果', '香蕉') AS apple_vs_banana,
+STRCMP('香蕉', '苹果') AS banana_vs_apple;
+apple_vs_banana    banana_vs_apple
+-1    1
+drop database if exists test;
+create database test;
+use test;
+drop table if exists fruits;
+CREATE TABLE fruits (
+id INT PRIMARY KEY AUTO_INCREMENT,
+name VARCHAR(50) NOT NULL
+);
+INSERT INTO fruits (name) VALUES ('apple'), ('banana'), ('cherry'), ('date');
+SELECT * FROM fruits WHERE STRCMP(name, 'banana') != 0;
+id    name
+1    apple
+3    cherry
+4    date
+SELECT * FROM fruits WHERE STRCMP(name, 'banana') = 0;
+id    name
+2    banana
+SELECT name FROM fruits ORDER BY STRCMP(name, 'banana');
+name
+apple
+banana
+cherry
+date
+SELECT
+name,
+STRCMP(name, 'banana') AS comparison_result
+FROM
+fruits
+ORDER BY
+comparison_result;
+name    comparison_result
+apple    -1
+banana    0
+cherry    1
+date    1
+drop table fruits;
+drop table if exists t_strcmp_test;
+CREATE TEMPORARY TABLE t_strcmp_test(
+id          INT AUTO_INCREMENT PRIMARY KEY,
+s1          VARCHAR(100),
+s2          VARCHAR(100),
+expect      INT,
+actual      INT
+);
+INSERT INTO t_strcmp_test(s1, s2, expect) VALUES
+('abc', 'abc', 0),
+('MySQL', 'mysql', 0),
+('abc', ' abc', -1),
+('abc ', 'abc', 1),
+('', '', 0),
+(NULL, 'abc', NULL),
+('abc', NULL, NULL),
+('123', '0123', -1),
+('2', '10', 1),
+('数据库', '数据', 1),
+('数据库', '数锯', -1);
+UPDATE t_strcmp_test
+SET actual = STRCMP(s1, s2);
+SELECT  s1, s2, expect, actual
+FROM t_strcmp_test
+ORDER BY id;
+s1    s2    expect    actual
+abc    abc    0    0
+MySQL    mysql    0    -1
+abc     abc    -1    1
+abc     abc    1    1
+        0    0
+null    abc    null    null
+abc    null    null    null
+123    0123    -1    1
+2    10    1    1
+数据库    数据    1    1
+数据库    数锯    -1    -1
+drop table t_strcmp_test;
+drop table if exists varchar_test;
+create table varchar_test (a varchar(30), b varchar(30));
+insert into varchar_test values('abcdef', 'abcdef');
+insert into varchar_test values('_bcdef', '_bcdef');
+insert into varchar_test values('mo是云原生数据库', 'Mo是云原生数据库');
+insert into varchar_test values('STRCMP函数的作用是比较两个字符串的字典序列','STRCMP函数的作用是比较两个字符串的字典序列');
+SELECT * FROM varchar_test WHERE STRCMP(a, b) != 0;
+a    b
+mo是云原生数据库    Mo是云原生数据库
+SELECT * FROM varchar_test WHERE STRCMP(a, b) = 0;
+a    b
+abcdef    abcdef
+_bcdef    _bcdef
+STRCMP函数的作用是比较两个字符串的字典序列    STRCMP函数的作用是比较两个字符串的字典序列
+drop table varchar_test;
+drop database test;
