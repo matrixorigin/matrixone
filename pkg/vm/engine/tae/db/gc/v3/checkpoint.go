@@ -1246,7 +1246,6 @@ func (c *checkpointCleaner) Verify(ctx context.Context) string {
 	checker := &gcChecker{
 		cleaner: c,
 	}
-	checker.Verify(ctx, c.mp)
 	return checker.Verify(ctx, c.mp)
 }
 
