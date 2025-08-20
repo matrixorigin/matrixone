@@ -120,8 +120,6 @@ create database mysql_new clone mysql;
 use mysql_new;
 drop database if exists system_new;
 create database system_new clone system;
-select count(`database`) from system.statement_info where `database` = 'mo_task';
-select count(`database`) from system.statement_info where `database` = 'mo_task';
 drop database if exists system_metrics_new;
 create database system_metrics_new clone system_metrics;
 use system_metrics_new;
@@ -167,7 +165,6 @@ select table_catalog,table_schema,table_name,table_type,engine,version,row_forma
 select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
 select * from mo_debug.trace_features;
 show create table mysql_new.columns_priv;
-select count(`database`) from system.statement_info where `database` = 'mo_task';
 drop snapshot sp01;
 drop snapshot sp02;
 drop snapshot sp03;

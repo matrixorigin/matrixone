@@ -218,3 +218,4 @@ drop database test11;
 drop database test10;
 drop snapshot sp10;
 drop account acc06;
+drop snapshot sp06;

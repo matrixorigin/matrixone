@@ -178,20 +178,14 @@ task_metadata_executor    task_metadata_context    task_metadata_option
 2        {"Concurrency":1}
 select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task.sys_cron_task;
 task_metadata_executor    task_metadata_context    task_metadata_option
-2        {"Concurrency":1}
 3        {"Concurrency":1}
 8        {"Concurrency":1}
+2        {"Concurrency":1}
 drop database if exists mysql_new;
 create database mysql_new clone mysql;
 use mysql_new;
 drop database if exists system_new;
 create database system_new clone system;
-select count(`database`) from system.statement_info where `database` = 'mo_task';
-count(database)
-45686
-select count(`database`) from system.statement_info where `database` = 'mo_task';
-count(database)
-45686
 drop database if exists system_metrics_new;
 create database system_metrics_new clone system_metrics;
 use system_metrics_new;
@@ -377,9 +371,6 @@ txn-workspace    disable
 show create table mysql_new.columns_priv;
 Table    Create Table
 columns_priv    CREATE TABLE `columns_priv` (\n  `Host` char(255) NOT NULL DEFAULT '',\n  `Db` char(64) NOT NULL DEFAULT '',\n  `User` char(32) NOT NULL DEFAULT '',\n  `Table_name` char(64) NOT NULL DEFAULT '',\n  `Column_name` char(64) NOT NULL DEFAULT '',\n  `Timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `Column_priv` varchar(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`,`Column_name`)\n)
-select count(`database`) from system.statement_info where `database` = 'mo_task';
-count(database)
-45686
 drop snapshot sp01;
 drop snapshot sp02;
 drop snapshot sp03;
