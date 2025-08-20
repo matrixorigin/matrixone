@@ -4786,13 +4786,6 @@ func (c *Compile) runTxn(execFunc func(executor.TxnExecutor) error) error {
 	return c.runTxnWithAccountId(execFunc, NoAccountId)
 }
 
-func (c *Compile) runTxnWithOptions(
-	execFunc func(executor.TxnExecutor) error,
-	options executor.StatementOption,
-) error {
-	return c.runTxnWithAccountIdAndOptions(execFunc, NoAccountId, options)
-}
-
 func (c *Compile) runTxnWithAccountId(execFunc func(executor.TxnExecutor) error, accountId int32) error {
 	return c.runTxnWithAccountIdAndOptions(execFunc, accountId, executor.StatementOption{})
 }
@@ -4805,18 +4798,14 @@ func (c *Compile) runTxnWithAccountIdAndOptions(
 	if execFunc == nil {
 		return nil
 	}
-	err := c.runTxnWithResultAndOptions(execFunc, accountId, options)
+	err := c.runTxnWithOptions(execFunc, accountId, options)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *Compile) runTxnWithResult(execFunc func(executor.TxnExecutor) error, accountId int32) error {
-	return c.runTxnWithResultAndOptions(execFunc, accountId, executor.StatementOption{})
-}
-
-func (c *Compile) runTxnWithResultAndOptions(
+func (c *Compile) runTxnWithOptions(
 	execFunc func(executor.TxnExecutor) error,
 	accountId int32,
 	options executor.StatementOption,

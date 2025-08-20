@@ -1799,6 +1799,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
