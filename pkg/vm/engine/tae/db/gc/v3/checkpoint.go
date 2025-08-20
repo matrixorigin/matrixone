@@ -691,8 +691,6 @@ func (c *checkpointCleaner) deleteStaleCKPMetaFileLocked() (err error) {
 			return
 		}
 		for _, file := range gcWindow.files {
-			logutil.Infof("window %v-%v, file %v",
-				gcWindow.tsRange.start.ToString(), gcWindow.tsRange.end.ToString(), file.ObjectName().UnsafeString())
 			filesToDelete = append(filesToDelete, file.ObjectName().UnsafeString())
 		}
 		filesToDelete = append(filesToDelete, metaFile.GetGCFullName())

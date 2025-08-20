@@ -88,13 +88,6 @@ func MergeCheckpoint(
 			)
 		}
 
-		tableIDLocations := ckpEntry.GetTableIDLocation()
-		for i := 0; i < tableIDLocations.Len(); i++ {
-			location := tableIDLocations.Get(i)
-			logutil.Infof("location.Name().String() is %v", location.Name().String())
-			deleteFiles = append(deleteFiles, location.Name().UnsafeString())
-		}
-
 		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
 		deleteFiles = append(deleteFiles, nameMeta)
 		// add checkpoint idx file to deleteFiles
@@ -112,6 +105,12 @@ func MergeCheckpoint(
 
 		for name := range locations {
 			deleteFiles = append(deleteFiles, name)
+		}
+
+		tableIDLocations := ckpEntry.GetTableIDLocation()
+		for i := 0; i < tableIDLocations.Len(); i++ {
+			location := tableIDLocations.Get(i)
+			deleteFiles = append(deleteFiles, location.Name().UnsafeString())
 		}
 
 	}
