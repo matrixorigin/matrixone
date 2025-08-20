@@ -773,10 +773,17 @@ func (h *Handle) HandleDiskCleaner(
 		if err != nil {
 			return
 		}
+		resp.ReturnStr = "{"
 		for accountID, stats := range tables {
-			resp.ReturnStr += fmt.Sprintf("acount: %v {sharedCnt: %d, sharedSize: %d, totalCnt: %d, totalSize: %d} \n\n",
-				accountID, stats.SharedCnt, stats.SharedSize, stats.TotalCnt, stats.TotalSize)
+			resp.ReturnStr += "{"
+			resp.ReturnStr += fmt.Sprintf("\"acount\": %v,", accountID)
+			resp.ReturnStr += fmt.Sprintf("\"sharedCnt\": %v,", stats.SharedCnt)
+			resp.ReturnStr += fmt.Sprintf("\"sharedSize\": %v,", stats.SharedSize)
+			resp.ReturnStr += fmt.Sprintf("\"totalCnt\": %v,", stats.TotalCnt)
+			resp.ReturnStr += fmt.Sprintf("\"totalSize\": %v,", stats.TotalSize)
+			resp.ReturnStr += "}"
 		}
+		resp.ReturnStr += "}"
 		return
 	case cmd_util.AddChecker:
 		break

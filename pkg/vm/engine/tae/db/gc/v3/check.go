@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -184,6 +185,10 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 			c.cleaner.fs,
 		)
 		if err = reader.ReadMeta(ctx); err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+				delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
+				continue
+			}
 			return err
 		}
 		rows := uint32(0)
