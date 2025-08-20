@@ -320,3 +320,25 @@ Project
 select count(*) as cnt from t4 group by c2 having cnt>1;
 cnt
 drop database if exists d1;
+drop database if exists test;
+create database test;
+use test;
+create table t1(a int primary key, b int);
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'test.t1');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, test.t1)
+true
+insert into t1 select *, 1 from generate_series(1, 1000*1000*10)g;
+select sum(b) from t1;
+sum(b)
+10000000
+update t1 set b = b + 1 where a mod 100 = 0;
+select sum(b) from t1;
+sum(b)
+10100000
+select disable_fault_injection();
+disable_fault_injection()
+true
+drop database if exists test;
