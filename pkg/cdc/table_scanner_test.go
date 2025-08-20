@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -163,6 +164,12 @@ func TestScanAndProcess(t *testing.T) {
 
 	fault.Enable()
 	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
+	rm, _ := objectio.InjectCDCScanTable("fast scan")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go td.scanTableLoop(ctx)
+	time.Sleep(2 * time.Millisecond)
+	defer rm()
 	td.scanAndProcess(context.Background())
 	fault.Disable()
 
