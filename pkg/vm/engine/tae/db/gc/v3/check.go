@@ -227,7 +227,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		returnStr += fmt.Sprintf("'objects-count': %d,", allCount)
 		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
 		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
-		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
+		returnStr += fmt.Sprintf("'windows': %d},", windowCount)
 		returnStr += "{'not-found-object': { "
 		for name := range allObjects {
 			returnStr += fmt.Sprintf("'object': %v,", name)

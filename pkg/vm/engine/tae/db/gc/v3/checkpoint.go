@@ -934,7 +934,30 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 				zap.String("task", c.TaskNameLocked()),
 				zap.String("gckp", nameMeta),
 			)
+
 			deleteFiles = append(deleteFiles, nameMeta)
+			reader := logtail.NewCKPReader(
+				ckp.GetVersion(),
+				ckp.GetLocation(),
+				common.CheckpointAllocator,
+				c.fs,
+			)
+			if err = reader.ReadMeta(ctx); err != nil {
+				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					continue
+				}
+			}
+			tableIDLocations := ckp.GetTableIDLocation()
+			for i := 0; i < tableIDLocations.Len(); i++ {
+				location := tableIDLocations.Get(i)
+				deleteFiles = append(deleteFiles, location.Name().UnsafeString())
+				continue
+			}
+
+			for _, loc := range reader.GetLocations() {
+				deleteFiles = append(deleteFiles, loc.Name().UnsafeString())
+			}
+
 		}
 	}
 	if c.GCCheckpointEnabled() {
