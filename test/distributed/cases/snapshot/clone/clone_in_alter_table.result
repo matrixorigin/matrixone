@@ -99,4 +99,21 @@ select * from t1 where e in (1, 10, 19, 38, 100);
 a    b_2    c    d    e
 10    10.0    10    10    10
 100    100.0    100    100    100
+update t1 set a = a + 1 where c in (8,88,888,8888,88888);
+select * from t1 where c in (8,88,888,8888,88888);
+a    b_2    c    d    e
+9    8.0    8    8    8
+89    88.0    88    88    88
+889    888.0    888    888    888
+8889    8888.0    8888    8888    8888
+88889    88888.0    88888    88888    88888
+alter table t1 add column f int;
+update t1 set a = a + 1 where c in (8,88,888,8888,88888);
+select * from t1 where c in (8,88,888,8888,88888);
+a    b_2    c    d    e    f
+10    8.0    8    8    8    null
+90    88.0    88    88    88    null
+890    888.0    888    888    888    null
+8890    8888.0    8888    8888    8888    null
+88890    88888.0    88888    88888    88888    null
 drop database test;
