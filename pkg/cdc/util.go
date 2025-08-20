@@ -639,6 +639,8 @@ var GetTableDef = func(
 	cnEngine engine.Engine,
 	tblId uint64,
 ) (*plan.TableDef, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, rel, err := cnEngine.GetRelationById(ctx, txnOp, tblId)
 	if err != nil {
 		return nil, err
