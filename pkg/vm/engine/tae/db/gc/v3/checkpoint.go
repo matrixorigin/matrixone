@@ -936,26 +936,14 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 			)
 
 			deleteFiles = append(deleteFiles, nameMeta)
-			reader := logtail.NewCKPReader(
-				ckp.GetVersion(),
-				ckp.GetLocation(),
-				common.CheckpointAllocator,
-				c.fs,
-			)
-			if err = reader.ReadMeta(ctx); err != nil {
-				if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-					continue
-				}
+			var files []string
+			files, err = getCheckpointLocation(ctx, ckp, c.fs)
+			if err != nil {
+				extraErrMsg = "getCheckpointLocation failed"
+				return err
 			}
-			tableIDLocations := ckp.GetTableIDLocation()
-			for i := 0; i < tableIDLocations.Len(); i++ {
-				location := tableIDLocations.Get(i)
-				deleteFiles = append(deleteFiles, location.Name().UnsafeString())
-				continue
-			}
-
-			for _, loc := range reader.GetLocations() {
-				deleteFiles = append(deleteFiles, loc.Name().UnsafeString())
+			if len(files) > 0 {
+				deleteFiles = append(deleteFiles, files...)
 			}
 
 		}

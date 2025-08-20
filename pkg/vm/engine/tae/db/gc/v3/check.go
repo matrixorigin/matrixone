@@ -237,7 +237,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		logutil.Warnf("[Verify GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d",
 			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount)
 	} else {
-		returnStr += "{'verify': 'normal',"
+		returnStr += "{'verify': 'OK',"
 		returnStr += fmt.Sprintf("'const': %v,", time.Since(now))
 		returnStr += fmt.Sprintf("'objects-count': %d,", allCount)
 		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
