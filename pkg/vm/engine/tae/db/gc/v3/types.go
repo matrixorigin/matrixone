@@ -150,6 +150,7 @@ type Cleaner interface {
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
 	GetDetails(ctx context.Context) (map[uint32]*TableStats, error)
+	Verify(ctx context.Context) string
 
 	// For testing
 	GetTablePK(tableId uint64) string

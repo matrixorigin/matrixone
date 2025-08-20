@@ -776,14 +776,17 @@ func (h *Handle) HandleDiskCleaner(
 		resp.ReturnStr = "{"
 		for accountID, stats := range tables {
 			resp.ReturnStr += "{"
-			resp.ReturnStr += fmt.Sprintf("\"acount\": %v,", accountID)
-			resp.ReturnStr += fmt.Sprintf("\"sharedCnt\": %v,", stats.SharedCnt)
-			resp.ReturnStr += fmt.Sprintf("\"sharedSize\": %v,", stats.SharedSize)
-			resp.ReturnStr += fmt.Sprintf("\"totalCnt\": %v,", stats.TotalCnt)
-			resp.ReturnStr += fmt.Sprintf("\"totalSize\": %v,", stats.TotalSize)
+			resp.ReturnStr += fmt.Sprintf("'acount': %v", accountID)
+			resp.ReturnStr += fmt.Sprintf("'sharedCnt': %v", stats.SharedCnt)
+			resp.ReturnStr += fmt.Sprintf("'sharedSize': %v", stats.SharedSize)
+			resp.ReturnStr += fmt.Sprintf("'totalCnt': %v", stats.TotalCnt)
+			resp.ReturnStr += fmt.Sprintf("'totalSize': %v", stats.TotalSize)
 			resp.ReturnStr += "}"
 		}
 		resp.ReturnStr += "}"
+		return
+	case cmd_util.GCVerify:
+		resp.ReturnStr = h.db.DiskCleaner.Verify(ctx)
 		return
 	case cmd_util.AddChecker:
 		break

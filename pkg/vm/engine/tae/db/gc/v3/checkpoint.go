@@ -1231,6 +1231,16 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 	return
 }
 
+func (c *checkpointCleaner) Verify(ctx context.Context) string {
+	c.StartMutationTask("gc-verify")
+	defer c.StopMutationTask()
+	checker := &gcChecker{
+		cleaner: c,
+	}
+	checker.Verify(ctx, c.mp)
+	return checker.Verify(ctx, c.mp)
+}
+
 func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 	c.StartMutationTask("gc-do-check")
 	defer c.StopMutationTask()
@@ -1516,13 +1526,6 @@ func (c *checkpointCleaner) Process(
 		return
 	}
 	err = c.tryGCLocked(ctx, memoryBuffer)
-	if err != nil {
-		return
-	}
-	ck := &gcChecker{
-		cleaner: c,
-	}
-	ck.Check(ctx, c.mp)
 	return
 }
 

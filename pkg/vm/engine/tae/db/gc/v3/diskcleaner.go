@@ -416,6 +416,10 @@ func (cleaner *DiskCleaner) GetDetails(ctx context.Context) (map[uint32]*TableSt
 	return cleaner.cleaner.GetDetails(ctx)
 }
 
+func (cleaner *DiskCleaner) Verify(ctx context.Context) string {
+	return cleaner.cleaner.Verify(ctx)
+}
+
 func (cleaner *DiskCleaner) Start() {
 	cleaner.onceStart.Do(func() {
 		cleaner.processQueue.Start()

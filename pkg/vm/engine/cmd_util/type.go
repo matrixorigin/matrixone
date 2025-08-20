@@ -31,4 +31,5 @@ const (
 	ForceGC = "force_gc"
 
 	GCDetails = "details"
+	GCVerify  = "verify"
 )

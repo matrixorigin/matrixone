@@ -16,6 +16,7 @@ package gc
 
 import (
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,16 +53,20 @@ func (c *gcChecker) getObjects(ctx context.Context) (map[string]struct{}, error)
 	return objects, nil
 }
 
-func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
-	logutil.Info("[Check GC] Starting...")
-	if c.cleaner.fs.Cost().List != fileservice.CostLow {
-		logutil.Info("[Check GC]skip gc check, cost is high")
-		return nil
-	}
+func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
+	returnStr := "{"
+	logutil.Info("[Verify GC] Starting...")
 	now := time.Now()
 	defer func() {
-		logutil.Infof("GC Check end! time: %v", time.Since(now))
+		returnStr += "}"
+		logutil.Info("[Verify GC] End!",
+			zap.Duration("duration", time.Since(now)))
 	}()
+	if c.cleaner.fs.Cost().List != fileservice.CostLow {
+		logutil.Info("[Verify GC]skip gc check, cost is high")
+		returnStr += "{'verify': 'skip gc check, cost is high'}"
+		return returnStr
+	}
 	buffer := MakeGCWindowBuffer(mpool.MB)
 	defer buffer.Close(mp)
 	bat := buffer.Fetch()
@@ -76,13 +81,8 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 			bat.CleanOnlyData()
 			done, err := loadfn(context.Background(), nil, nil, mp, bat)
 			if err != nil {
-				logutil.Error(
-					"GCWindow-Compre-Err",
-					zap.Error(err),
-				)
 				return err
 			}
-
 			if done {
 				break
 			}
@@ -111,18 +111,24 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	}
 	sancWindow := c.cleaner.GetScannedWindowLocked()
 	if sancWindow == nil {
-		return nil
+		returnStr += fmt.Sprintf("{'verify': 'not scan window'}")
+		return returnStr
 	}
 	window := sancWindow.Clone()
 	windowCount := len(window.files)
 	for _, stats := range window.files {
 		objects[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
 	}
-	buildObjects(&window, objects, window.LoadBatchData)
+	err := buildObjects(&window, objects, window.LoadBatchData)
+	if err != nil {
+		returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
+		return returnStr
+	}
 
 	allObjects, err := c.getObjects(ctx)
 	if err != nil {
-		return err
+		returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
+		return returnStr
 	}
 	allCount := len(allObjects)
 	for name := range allObjects {
@@ -162,10 +168,12 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 	}
 
 	if len(objects) != 0 {
+		returnStr += "{'lost object':"
 		for name := range objects {
-			logutil.Errorf("[Check GC]lost object %s,", name)
+			returnStr += fmt.Sprintf("{ 'object': %v}", name)
+			logutil.Errorf("[Verify GC]lost object %s,", name)
 		}
-
+		returnStr += "}"
 	}
 
 	// Collect all checkpoint files
@@ -189,7 +197,8 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 				delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
 				continue
 			}
-			return err
+			returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
+			return returnStr
 		}
 		rows := uint32(0)
 		delete(allObjects, ckps[i].GetLocation().Name().UnsafeString())
@@ -213,14 +222,29 @@ func (c *gcChecker) Check(ctx context.Context, mp *mpool.MPool) error {
 		logutil.Infof("not GC name: %v", name)
 	}
 	if len(allObjects) > NotFoundLimit {
+		returnStr += "{'verify': 'abnormal',"
+		returnStr += fmt.Sprintf("'const': %v,", time.Since(now))
+		returnStr += fmt.Sprintf("'objects-count': %d,", allCount)
+		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
+		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
+		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
+		returnStr += "{'not found object':"
 		for name := range allObjects {
-			logutil.Infof("[Check GC]not found object %s,", name)
+			returnStr += fmt.Sprintf("{ 'object': %v}", name)
+			logutil.Infof("[Verify GC]not found object %s,", name)
 		}
-		logutil.Warnf("[Check GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d",
+		returnStr += "}"
+		logutil.Warnf("[Verify GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d",
 			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount)
 	} else {
-		logutil.Infof("[Check GC]Check end!!! const: %v, all objects: %d, not found: %d, checkpoint: %d",
-			time.Since(now), allCount, len(allObjects), ckpObjectCount)
+		returnStr += "{'verify': 'normal',"
+		returnStr += fmt.Sprintf("'const': %v,", time.Since(now))
+		returnStr += fmt.Sprintf("'objects-count': %d,", allCount)
+		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
+		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
+		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
+		logutil.Infof("[Verify GC]Check end!!! const: %v, all objects: %d, not found: %d, checkpoint: %d, window file: %d\",",
+			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount)
 	}
-	return nil
+	return returnStr
 }
