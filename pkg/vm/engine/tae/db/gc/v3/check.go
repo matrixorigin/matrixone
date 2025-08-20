@@ -228,12 +228,12 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
 		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
 		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
-		returnStr += "{'not found object':"
+		returnStr += "{'not found object': { "
 		for name := range allObjects {
-			returnStr += fmt.Sprintf("{ 'object': %v}", name)
+			returnStr += fmt.Sprintf("'object': %v,", name)
 			logutil.Infof("[Verify GC]not found object %s,", name)
 		}
-		returnStr += "}"
+		returnStr += "}}"
 		logutil.Warnf("[Verify GC]GC abnormal!!! const: %v, all objects: %d, not found: %d, checkpoint file: %d, window file: %d",
 			time.Since(now), allCount, len(allObjects), ckpObjectCount, windowCount)
 	} else {
