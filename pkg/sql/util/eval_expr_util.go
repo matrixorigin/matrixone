@@ -122,7 +122,7 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		v, err := strconv.ParseBool(val)
+		v, err := types.ParseBool(val)
 		if err != nil {
 			return err
 		}
@@ -521,7 +521,7 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 		canInsert = false
 	case tree.P_char:
 		originStr := numVal.String()
-		bval, err := strconv.ParseBool(originStr)
+		bval, err := types.ParseBool(originStr)
 		if err != nil {
 			return false, false, err
 		}
