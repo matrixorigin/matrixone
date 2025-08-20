@@ -108,7 +108,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 	}
 	sancWindow := c.cleaner.GetScannedWindowLocked()
 	if sancWindow == nil {
-		returnStr += fmt.Sprintf("{'verify': 'OK', 'msg': 'Not-GC'}")
+		returnStr += "{'verify': 'OK', 'msg': 'Not-GC'}"
 		return
 	}
 	window := sancWindow.Clone()
