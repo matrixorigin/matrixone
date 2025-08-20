@@ -73,5 +73,10 @@ select * from t1 where b_2 in (1, 10, 19, 38, 100);
 select * from t1 where c  in (1, 10, 19, 38, 100) and d in (1, 10, 19, 38, 100);
 select * from t1 where e in (1, 10, 19, 38, 100);
 
+update t1 set a = a + 1 where c in (8,88,888,8888,88888);
+select * from t1 where c in (8,88,888,8888,88888);
+alter table t1 add column f int;
+update t1 set a = a + 1 where c in (8,88,888,8888,88888);
+select * from t1 where c in (8,88,888,8888,88888);
 
 drop database test;
