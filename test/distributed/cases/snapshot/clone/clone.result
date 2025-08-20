@@ -28,6 +28,24 @@ id    body    title
 8    null    NOT INCLUDED
 9    NOT INCLUDED BODY    null
 10    null    null
+drop table if exists aerr;
+create table aerr (uid varchar(120), email varchar(20), lmethod varchar(100));
+insert into aerr values ("user1", 'xx@yeah.net', 'basic'),('user2', 'xx@mo.cn','basic'),('user3', '11@tt.cn', 'basic');
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+uid    lmethod    email
+user2    basic    xx@mo.cn
+create unique index mail_method_idx on aerr(email,lmethod);
+alter table aerr add primary key (uid);
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+uid    lmethod    email
+user2    basic    xx@mo.cn
+set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
+prepare err1 from @novar;
+internal error: the user variable novar does not exist
+prepare s1 from @idxsql;
+execute s1;
+count(*)
+3
 drop snapshot if exists sp01;
 create snapshot sp01 for account;
 drop database if exists test02;
@@ -104,16 +122,123 @@ create database test01_new clone test01 {snapshot = 'sp01'};
 create database test02_new clone test02 {snapshot = 'sp02'};
 create database test03_new clone test03 {snapshot = 'sp03'};
 create database test04_new clone test04 {snapshot = 'sp04'};
+drop database if exists mo_catalog_new;
+drop database if exists mo_catalog_new_new;
+create database mo_catalog_new clone mo_catalog {snapshot = 'sp01'};
+create table mo_catalog_new.src_new clone mo_catalog.mo_database {snapshot = 'sp01'};
+show create table mo_catalog_new.src_new;
+Table    Create Table
+src_new    CREATE TABLE `src_new` (\n  `dat_id` bigint unsigned DEFAULT NULL,\n  `datname` varchar(5000) NOT NULL,\n  `dat_catalog_name` varchar(5000) DEFAULT NULL,\n  `dat_createsql` varchar(5000) DEFAULT NULL,\n  `owner` int unsigned DEFAULT NULL,\n  `creator` int unsigned DEFAULT NULL,\n  `created_time` timestamp NULL DEFAULT NULL,\n  `account_id` int unsigned NOT NULL,\n  `dat_type` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`datname`)\n)
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+create database mo_catalog_new_new clone mo_catalog {snapshot = 'sp04'};
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new.mo_database where datname = 'test01' or datname = 'test02' or datname = 'test03';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+test02    def    create database test02    0
+test03    def    create database test03    0
+drop database if exists mo_catalog_new01;
+create database mo_catalog_new01 clone mo_catalog_new;
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+drop database if exists mo_catalog_new_new01;
+create database mo_catalog_new_new01 clone mo_catalog_new;
+drop database mo_catalog_new;
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+drop database mo_catalog_new_new;
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+drop database if exists information_schema_new;
+create database information_schema_new clone information_schema;
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+drop database if exists mo_debug_new;
+create database mo_debug_new clone mo_debug;
+select * from trace_features;
+SQL parser error: table "trace_features" does not exist
+drop database if exists mo_task_new;
+create database mo_task_new clone mo_task;
+select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task_new.sys_cron_task;
+task_metadata_executor    task_metadata_context    task_metadata_option
+3        {"Concurrency":1}
+8        {"Concurrency":1}
+2        {"Concurrency":1}
+select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task.sys_cron_task;
+task_metadata_executor    task_metadata_context    task_metadata_option
+2        {"Concurrency":1}
+3        {"Concurrency":1}
+8        {"Concurrency":1}
+drop database if exists mysql_new;
+create database mysql_new clone mysql;
+use mysql_new;
+drop database if exists system_new;
+create database system_new clone system;
+select count(`database`) from system.statement_info where `database` = 'mo_task';
+count(database)
+45686
+select count(`database`) from system.statement_info where `database` = 'mo_task';
+count(database)
+45686
+drop database if exists system_metrics_new;
+create database system_metrics_new clone system_metrics;
+use system_metrics_new;
+show tables;
+Tables_in_system_metrics_new
+metric
+mo_log_message_count
+process_cpu_percent
+process_cpu_seconds_total
+process_open_fds
+process_resident_memory_bytes
+server_connections
+server_object_count
+server_snapshot_usage
+server_storage_usage
+sql_statement_cu
+sql_statement_duration_total
+sql_statement_errors
+sql_statement_total
+sql_transaction_errors
+sql_transaction_total
+sys_cpu_combined_percent
+sys_cpu_seconds_total
+sys_disk_read_bytes
+sys_disk_write_bytes
+sys_memory_available
+sys_memory_used
+sys_net_recv_bytes
+sys_net_sent_bytes
 show databases;
 Database
 clone
 information_schema
+information_schema_new
 mo_catalog
+mo_catalog_new01
+mo_catalog_new_new01
 mo_debug
+mo_debug_new
 mo_task
+mo_task_new
 mysql
+mysql_new
 system
 system_metrics
+system_metrics_new
+system_new
 test01
 test01_new
 test02
@@ -125,6 +250,7 @@ test04_new
 use test01_new;
 show tables;
 Tables_in_test01_new
+aerr
 src
 select * from src;
 id    body    title
@@ -182,6 +308,7 @@ update enum01 set col1 ='blue' where col1 = 'green';
 use test01_new;
 show tables;
 Tables_in_test01_new
+aerr
 src
 select * from src;
 id    body    title
@@ -224,6 +351,35 @@ col1
 red
 blue
 green
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+select * from mo_debug.trace_features;
+name    state
+data    disable
+statement    disable
+txn    disable
+txn-action    disable
+txn-workspace    disable
+show create table mysql_new.columns_priv;
+Table    Create Table
+columns_priv    CREATE TABLE `columns_priv` (\n  `Host` char(255) NOT NULL DEFAULT '',\n  `Db` char(64) NOT NULL DEFAULT '',\n  `User` char(32) NOT NULL DEFAULT '',\n  `Table_name` char(64) NOT NULL DEFAULT '',\n  `Column_name` char(64) NOT NULL DEFAULT '',\n  `Timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `Column_priv` varchar(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`,`Column_name`)\n)
+select count(`database`) from system.statement_info where `database` = 'mo_task';
+count(database)
+45686
 drop snapshot sp01;
 drop snapshot sp02;
 drop snapshot sp03;
@@ -236,6 +392,14 @@ drop database test01_new;
 drop database test02_new;
 drop database test03_new;
 drop database test04_new;
+drop database mo_catalog_new01;
+drop database mo_catalog_new_new01;
+drop database information_schema_new;
+drop database mo_debug_new;
+drop database mysql_new;
+drop database system_new;
+drop database system_metrics_new;
+drop database mo_task_new;
 drop account if exists acc01;
 create account acc01 admin_name = 'test_account' identified by '111';
 drop database if exists test05;
@@ -372,9 +536,34 @@ drop database if exists test06_new;
 drop database if exists test07_new;
 drop database if exists test08_new;
 create database test05_new clone test05;
+create table test05_new.t2 clone test05_new.t2;
+table t2 already exists
+create table test05_new.t3 clone test05_new.t2;
 create database test06_new clone test06;
+create table test06_new.temp_test clone test05_new.t2;
+show create table test06_new.temp_test;
+Table    Create Table
+temp_test    CREATE TABLE `temp_test` (\n  `id` int DEFAULT NULL,\n  `category` int NOT NULL DEFAULT 0,\n  `county` int NOT NULL DEFAULT 0,\n  `state` int NOT NULL DEFAULT 0,\n  `phones` int NOT NULL DEFAULT 0,\n  `nophones` int NOT NULL DEFAULT 0\n)
+select * from test06_new.temp_test;
+id    category    county    state    phones    nophones
+3    2    11    12    5400    7800
+4    2    25    12    6500    11200
+5    1    37    6    10000    12000
+drop table test06_new.temp_test;
 create database test07_new clone test07;
 create database test08_new clone test08;
+create table test07_new.vtab32 clone test08.vtab32;
+create table test07_new.vtab64 clone test08.vtab64;
+select * from test07_new.vtab32;
+id    vecf32_3    vecf32_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+select * from test07_new.vtab64;
+id    vecf64_3    vecf64_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+3    [8.5606893, 6.7903588, 821.977768]    [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]
+4    [0.9260021, 0.26637346, 0.06567037]    [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
 show databases;
 Database
 clone
@@ -422,6 +611,7 @@ show tables;
 Tables_in_test05_new
 t1
 t2
+t3
 select * from t1;
 id    token    count    qty    phone    times
 21    e45703b64de71482360de8fec94c3ade    3    7800    n    1999-12-23 17:22:21
@@ -884,15 +1074,7 @@ insert into bit01 values('c', '010');
 insert into bit01 values('d', null);
 
 select * from bit01;
-id    b
-a    111       
-a    110       
-a    143       
-a    000       
-b    001       
-b    011       
-c    010       
-d    null
+
 drop table if exists time01;
 
 create table time01 (a datetime(0) not null, primary key(a));
@@ -940,8 +1122,7 @@ insert into vector_ip_01 values(9777, normalize_l2("[16, 15, 0, 0, 5, 46, 5, 5, 
 create index idx01 using hnsw on vector_ip_01(b) op_type "vector_ip_ops";
 
 show create table vector_ip_01;
-Table    Create Table
-vector_ip_01    CREATE TABLE `vector_ip_01` (\n  `a` bigint NOT NULL,\n  `b` vecf32(128) DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `c_k` (`c`),\n  KEY `idx01` USING hnsw (`b`) op_type 'vector_ip_ops' \n)
+
 drop database if exists test14;
 
 create database test14;
@@ -971,11 +1152,7 @@ insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-1
 (9004,'1999-02-20', 'MARY', 'PROGRAMMER', 'M', '2008-02-20');
 
 select * from index03;
-emp_no    birth_date    first_name    last_name    gender    hire_date
-9001    1980-12-17    SMITH    CLERK    F    2008-12-17
-9002    1981-02-20    ALLEN    SALESMAN    F    2008-02-20
-9003    1991-02-20    Bob    TEACHER    M    2008-02-20
-9004    1999-02-20    MARY    PROGRAMMER    M    2008-02-20
+
 drop database if exists test15;
 
 create database test15;
@@ -990,8 +1167,7 @@ department_name varchar(100)
 );
 
 show create table departments;
-Table    Create Table
-departments    CREATE TABLE `departments` (\n  `department_id` int NOT NULL AUTO_INCREMENT,\n  `department_name` varchar(100) DEFAULT NULL,\n  PRIMARY KEY (`department_id`)\n)
+
 insert into departments (department_id, department_name)
 values (1, 'HR'),(2, 'Engineering');
 
@@ -1047,26 +1223,13 @@ create database test13_new_new clone test13_new;
 use test12_new_new;
 
 show tables;
-Tables_in_test12_new_new
-double01
-time01
-tinyint01
+
 select * from double01;
-a
--1.7976931348623157E308
--2.2250738585072014E-308
-0.0
-2.2250738585072014E-308
-1.7976931348623157E308
+
 show create table time01;
-Table    Create Table
-time01    CREATE TABLE `time01` (\n  `a` datetime NOT NULL,\n  PRIMARY KEY (`a`)\n)
+
 select * from tinyint01;
-a
-252
-253
-254
-255
+
 create database test14_new clone test14;
 
 create database test15_new clone test15;
@@ -1080,7 +1243,7 @@ drop table employees;
 create database test14_new_new clone test14_new;
 
 create database test15_new_new clone test15_new;
-SQL parser error: table "employees" does not exist
+
 drop database test12;
 
 use test13;
@@ -1108,40 +1271,25 @@ drop database test15_new;
 use test12_new_new;
 
 select * from time01;
-a
-2020-01-01 00:00:00
-2022-01-02 00:00:00
-2022-01-02 00:00:01
-2022-01-02 00:00:02
+
 select count(*) from tinyint01;
-count(*)
-4
+
 use test13_new_new;
 
 select * from vector_index_09;
-a    b    c
-9774    null    3
-9775    null    10
-9777    null    4
-9778    null    9
+
 select * from vector_ip_01;
-a    b    c
-9774    [0.0019665654, 0, 0.0019665654, 0.011799393, 0.011799393, 0.033431612, 0.09242858, 0.07669605, 0.0039331308, 0, 0.0019665654, 0.04916414, 0.053097267, 0.019665655, 0.110127665, 0.2556535, 0.035398178, 0.009832827, 0.0039331308, 0.011799393, 0.029498482, 0.0039331308, 0.037364744, 0.2556535, 0.08259575, 0.055063833, 0.0019665654, 0.0019665654, 0.0039331308, 0.0019665654, 0, 0.009832827, 0, 0.0039331308, 0.0078662615, 0.0078662615, 0.06096353, 0.066863224, 0.08652888, 0.06882979, 0.017699089, 0.0058996966, 0.015732523, 0.02163222, 0.06489666, 0.023598786, 0.119960494, 0.2556535, 0.2556535, 0.033431612, 0, 0.0019665654, 0.011799393, 0.0039331308, 0.017699089, 0.2556535, 0.21828876, 0.070796356, 0, 0, 0.02163222, 0.017699089, 0.0019665654, 0.023598786, 0.0039331308, 0.19665655, 0.2556535, 0.055063833, 0.013765958, 0.0039331308, 0.011799393, 0.013765958, 0.017699089, 0.053097267, 0.2556535, 0.16322494, 0.009832827, 0, 0.0019665654, 0.035398178, 0.2556535, 0.2556535, 0.1651915, 0.017699089, 0, 0, 0.0039331308, 0.047197573, 0.21828876, 0.047197573, 0, 0.0019665654, 0.07276292, 0.047197573, 0.0039331308, 0.019665655, 0.023598786, 0.12192706, 0.06489666, 0.0058996966, 0, 0, 0, 0.0019665654, 0.0058996966, 0.031465046, 0.20845594, 0.055063833, 0, 0, 0, 0, 0.033431612, 0.090462014, 0.16715807, 0.019665655, 0, 0, 0.0019665654, 0.0078662615, 0.02163222, 0.0078662615, 0.0039331308, 0.0039331308, 0.017699089, 0.027531916, 0.015732523, 0.015732523]    3
-9775    [0, 0.0019629742, 0.0019629742, 0.0058889226, 0, 0.0058889226, 0.09029681, 0.039259482, 0.0019629742, 0.007851897, 0.033370562, 0.017666768, 0.0019629742, 0.033370562, 0.2120012, 0.029444613, 0, 0.0058889226, 0.07263005, 0.033370562, 0.011777845, 0.029444613, 0.227705, 0.031407587, 0.011777845, 0.0019629742, 0.007851897, 0.013740819, 0.013740819, 0.013740819, 0.017666768, 0.011777845, 0, 0.015703794, 0.019629741, 0.007851897, 0.051037326, 0.25322366, 0.0530003, 0.017666768, 0, 0, 0.009814871, 0.0039259484, 0.021592716, 0.25322366, 0.25322366, 0.02355569, 0.20218635, 0.007851897, 0, 0, 0.0039259484, 0.0608522, 0.25322366, 0.25322366, 0.18451957, 0.007851897, 0, 0, 0, 0.0058889226, 0.025518663, 0.08244491, 0, 0.029444613, 0.074593015, 0.0039259484, 0.1374082, 0.25322366, 0.0019629742, 0, 0.009814871, 0.019629741, 0.078518964, 0.02355569, 0.1452601, 0.25322366, 0.011777845, 0.0019629742, 0.25322366, 0.07655599, 0.011777845, 0.0019629742, 0.0039259484, 0.04318543, 0.017666768, 0.06477815, 0.23948285, 0.025518663, 0, 0, 0, 0, 0.009814871, 0.045148406, 0.007851897, 0.021592716, 0.017666768, 0.02355569, 0.08833384, 0.074593015, 0.0019629742, 0, 0, 0.007851897, 0.07066707, 0.074593015, 0.111889526, 0.062815174, 0, 0, 0.16096388, 0.04318543, 0.017666768, 0.009814871, 0.025518663, 0.021592716, 0.0058889226, 0.18451957, 0.0687041, 0.0058889226, 0, 0, 0, 0.0019629742, 0.031407587, 0.1904085]    5
-9776    [0.01968958, 0.005906874, 0.015751664, 0.00984479, 0.09450998, 0.051192906, 0.00984479, 0.031503327, 0.033472285, 0, 0, 0.003937916, 0.25990245, 0.10435477, 0.001968958, 0.031503327, 0.2205233, 0.011813748, 0, 0, 0.013782706, 0.003937916, 0.001968958, 0.09450998, 0.09450998, 0.02953437, 0.035441242, 0.061037697, 0.005906874, 0, 0, 0.017720621, 0.011813748, 0.01968958, 0.0374102, 0.053161863, 0.0984479, 0.09057207, 0.033472285, 0.017720621, 0.035441242, 0.001968958, 0.007875832, 0.09450998, 0.25990245, 0.045286033, 0.005906874, 0.00984479, 0.25990245, 0.017720621, 0.007875832, 0.005906874, 0.021658538, 0, 0.003937916, 0.09057207, 0.16539247, 0.023627495, 0.01968958, 0.01968958, 0.001968958, 0, 0.023627495, 0.1496408, 0.051192906, 0.043317076, 0.031503327, 0.051192906, 0.06891353, 0.02953437, 0.005906874, 0.031503327, 0.02953437, 0.001968958, 0.100416854, 0.25990245, 0.24611974, 0.015751664, 0.001968958, 0.003937916, 0.25990245, 0.100416854, 0.13192019, 0.17917517, 0.015751664, 0, 0, 0.05906874, 0.2480887, 0.07678936, 0.063006654, 0.0748204, 0.007875832, 0, 0.001968958, 0.023627495, 0.04725499, 0.003937916, 0.003937916, 0.003937916, 0.007875832, 0.013782706, 0.003937916, 0.0374102, 0.18311308, 0.0374102, 0.13782705, 0.18114413, 0.003937916, 0.005906874, 0.001968958, 0.04134812, 0.070882484, 0.114199564, 0.25990245, 0.18508205, 0, 0, 0, 0, 0.04134812, 0.04922395, 0.11223061, 0.09450998, 0.001968958, 0, 0, 0.001968958]    3
-9777    [0.03149466, 0.029526243, 0, 0, 0.009842081, 0.090547144, 0.009842081, 0.009842081, 0.007873665, 0, 0, 0, 0.055115655, 0.23227312, 0.023620995, 0.009842081, 0.14763121, 0.08661032, 0.009842081, 0, 0.011810497, 0.06298932, 0.011810497, 0.09645239, 0.08070506, 0.1456628, 0.017715747, 0.0019684162, 0, 0, 0, 0.017715747, 0.0019684162, 0.017715747, 0.03149466, 0.08070506, 0.13975756, 0.1574733, 0.0059052487, 0, 0, 0.007873665, 0.0059052487, 0.009842081, 0.10038923, 0.20865212, 0.02165258, 0.0059052487, 0.22046262, 0.055115655, 0.02558941, 0.0019684162, 0.007873665, 0.01574733, 0.0059052487, 0.20471528, 0.23227312, 0.027557828, 0.0019684162, 0.0019684162, 0, 0, 0, 0.17322063, 0.0059052487, 0.053147238, 0.090547144, 0.23227312, 0.21258895, 0.09645239, 0.0039368323, 0, 0.0019684162, 0.090547144, 0.23227312, 0.23227312, 0.053147238, 0.023620995, 0, 0, 0.06495774, 0.23227312, 0.23227312, 0.01574733, 0, 0, 0, 0.007873665, 0.23227312, 0.18699954, 0.07873665, 0, 0, 0, 0.0019684162, 0.02165258, 0.053147238, 0.07479981, 0.023620995, 0.023620995, 0.035431493, 0.05708407, 0.0059052487, 0.0039368323, 0.02558941, 0.059052486, 0.18503113, 0.15353647, 0.059052486, 0.037399907, 0.017715747, 0.0059052487, 0.061020903, 0.08857873, 0.13778913, 0.08267348, 0.029526243, 0.0019684162, 0.0059052487, 0.023620995, 0.027557828, 0.04330516, 0.03149466, 0.0039368323, 0.0059052487, 0.033463076, 0.04724199, 0.02558941]    4
-9778    [0.08063698, 0, 0, 0.01376729, 0.0019667556, 0.0019667556, 0.039335113, 0.13177262, 0.0177008, 0, 0, 0, 0, 0.060969424, 0.23601067, 0.119972095, 0.049168892, 0, 0, 0, 0, 0.019667557, 0.23601067, 0.177008, 0.06293618, 0, 0, 0.0019667556, 0.025567824, 0.021634312, 0.043268625, 0.098337784, 0.007867022, 0, 0.003933511, 0.18290828, 0.078670226, 0.029501334, 0.07276996, 0.0354016, 0.023601068, 0.003933511, 0.003933511, 0.037368357, 0.015734045, 0.08653725, 0.23601067, 0.049168892, 0.23601067, 0.009833778, 0, 0, 0, 0.003933511, 0.09440427, 0.1907753, 0.20060907, 0.02753458, 0.005900267, 0.005900267, 0.021634312, 0.0177008, 0.06686969, 0.08063698, 0, 0, 0.007867022, 0.23601067, 0.11013832, 0.005900267, 0.007867022, 0.009833778, 0.011800534, 0.029501334, 0.07276996, 0.22814366, 0.05506916, 0, 0, 0.005900267, 0.23601067, 0.23601067, 0.047202136, 0.011800534, 0.003933511, 0, 0.0019667556, 0.05506916, 0.10423805, 0.177008, 0.10030454, 0.021634312, 0.021634312, 0.003933511, 0.023601068, 0.02753458, 0.015734045, 0.011800534, 0.007867022, 0.059002668, 0.0177008, 0.0019667556, 0.007867022, 0.043268625, 0.049168892, 0.15537369, 0.23601067, 0.12980588, 0.009833778, 0, 0, 0.011800534, 0.08260374, 0.23601067, 0.17897476, 0.08457049, 0.029501334, 0.003933511, 0.007867022, 0.076703474, 0.023601068, 0.0177008, 0.0177008, 0.023601068, 0.029501334, 0.009833778, 0.047202136, 0.0708032]    4
+
 use test14_new_new;
 
 show create table index03;
-Table    Create Table
-index03    CREATE TABLE `index03` (\n  `emp_no` int NOT NULL,\n  `birth_date` date NOT NULL,\n  `first_name` varchar(14) NOT NULL,\n  `last_name` varchar(16) NOT NULL,\n  `gender` varchar(5) NOT NULL,\n  `hire_date` date NOT NULL,\n  PRIMARY KEY (`emp_no`)\n)
+
 use test15_new_new;
-Unknown database test15_new_new
+
 select * from departments;
-SQL parser error: table "departments" does not exist
+
 show create table departments;
-no such table test14_new_new.departments
+
 drop account acc05;
 
 show databases;

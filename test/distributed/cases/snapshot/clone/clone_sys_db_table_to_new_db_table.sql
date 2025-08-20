@@ -126,7 +126,6 @@ drop account acc04;
 
 
 -- sys clone sys db to current account
--- @bvt:issue#22238
 select count(*) from mo_catalog.mo_database;
 drop snapshot if exists sp06;
 create snapshot sp06 for account;
@@ -138,12 +137,15 @@ select count(*) from mo_catalog.mo_database;
 select count(*) from mo_catalog_new.mo_database;
 create database mo_catalog_new_new clone mo_catalog {snapshot = 'sp06'};
 use mo_catalog_new_new;
--- @bvt:issue
+show tables;
+drop database mo_catalog_new_new;
+drop database mo_catalog_new;
 
 
 
 
 -- table level snapshot, clone db
+-- @bvt:issue#22350
 drop database if exists test100;
 create database test100;
 use test100;
@@ -159,6 +161,7 @@ create database test_1000 clone test100 {snapshot = 'sp07'};
 drop database test100;
 drop database test_1000;
 drop snapshot sp07;
+-- @bvt:issue
 
 
 
