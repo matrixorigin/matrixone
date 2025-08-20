@@ -168,7 +168,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 	if lostCount != 0 {
 		returnStr += "{'lost object':"
 		for name := range objects {
-			returnStr += fmt.Sprintf("{ 'object': %v}", name)
+			returnStr += fmt.Sprintf("'object': %v,", name)
 			logutil.Errorf("[Verify GC]lost object %s,", name)
 		}
 		returnStr += "}"
