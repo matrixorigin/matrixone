@@ -167,7 +167,7 @@ func (opAlyzr *operatorAnalyzer) Input(bat *batch.Batch) {
 		panic("operatorAnalyzer.Input: operatorAnalyzer.opStats is nil")
 	}
 
-	if bat != nil && opAlyzr.isFirst {
+	if bat != nil {
 		opAlyzr.opStats.InputSize += int64(bat.Size())
 		opAlyzr.opStats.InputRows += int64(bat.RowCount())
 	}
@@ -179,7 +179,7 @@ func (opAlyzr *operatorAnalyzer) Output(bat *batch.Batch) {
 		panic("operatorAnalyzer.Output: operatorAnalyzer.opStats is nil")
 	}
 
-	if bat != nil && opAlyzr.isLast {
+	if bat != nil {
 		opAlyzr.opStats.OutputSize += int64(bat.Size())
 		opAlyzr.opStats.OutputRows += int64(bat.RowCount())
 	}
