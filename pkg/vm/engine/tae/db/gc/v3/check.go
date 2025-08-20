@@ -164,7 +164,8 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		}
 	}
 
-	if len(objects) != 0 {
+	lostCount := len(objects)
+	if lostCount != 0 {
 		returnStr += "{'lost object':"
 		for name := range objects {
 			returnStr += fmt.Sprintf("{ 'object': %v}", name)
@@ -200,6 +201,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		returnStr += fmt.Sprintf("'const': %v,", time.Since(now))
 		returnStr += fmt.Sprintf("'objects-count': %d,", allCount)
 		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
+		returnStr += fmt.Sprintf("'lost-count': %d,", lostCount)
 		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
 		returnStr += fmt.Sprintf("'windows': %d},", windowCount)
 		returnStr += "{'not-found-object': { "
@@ -213,6 +215,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		returnStr += fmt.Sprintf("'const': %v,", time.Since(now))
 		returnStr += fmt.Sprintf("'objects-count': %d,", allCount)
 		returnStr += fmt.Sprintf("'not-found': %d,", len(allObjects))
+		returnStr += fmt.Sprintf("'lost-count': %d,", lostCount)
 		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
 		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
 	}
