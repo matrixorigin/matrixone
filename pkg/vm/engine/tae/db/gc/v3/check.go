@@ -50,19 +50,19 @@ func (c *gcChecker) getObjects(ctx context.Context) (map[string]struct{}, error)
 	return objects, nil
 }
 
-func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
-	returnStr := "{"
+func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr string) {
+	returnStr = "[{"
 	logutil.Info("[Verify GC] Starting...")
 	now := time.Now()
 	defer func() {
-		returnStr += "}"
+		returnStr += "}]"
 		logutil.Info("[Verify GC] End!",
 			zap.Duration("duration", time.Since(now)))
 	}()
 	if c.cleaner.fs.Cost().List != fileservice.CostLow {
 		logutil.Info("[Verify GC]skip gc check, cost is high")
 		returnStr += "{'verify': 'skip gc check, cost is high'}"
-		return returnStr
+		return
 	}
 	buffer := MakeGCWindowBuffer(mpool.MB)
 	defer buffer.Close(mp)
@@ -109,7 +109,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 	sancWindow := c.cleaner.GetScannedWindowLocked()
 	if sancWindow == nil {
 		returnStr += fmt.Sprintf("{'verify': 'OK', 'msg': 'Not-GC'}")
-		return returnStr
+		return
 	}
 	window := sancWindow.Clone()
 	windowCount := len(window.files)
@@ -119,13 +119,13 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 	err := buildObjects(&window, objects, window.LoadBatchData)
 	if err != nil {
 		returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
-		return returnStr
+		return
 	}
 
 	allObjects, err := c.getObjects(ctx)
 	if err != nil {
 		returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
-		return returnStr
+		return
 	}
 	allCount := len(allObjects)
 	for name := range allObjects {
@@ -219,5 +219,5 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) string {
 		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
 		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
 	}
-	return returnStr
+	return
 }
