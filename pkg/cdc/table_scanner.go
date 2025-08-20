@@ -185,10 +185,18 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	logutil.Info("CDC-TableDetector-Scan-Start")
 	defer logutil.Info("CDC-TableDetector-Scan-End")
 
-	ticker := time.NewTicker(15 * time.Second)
+	var tickerDuration, retryTickerDuration time.Duration
+	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
+		tickerDuration = 1 * time.Millisecond
+		retryTickerDuration = 1 * time.Millisecond
+	} else {
+		tickerDuration = 15 * time.Second
+		retryTickerDuration = 5 * time.Second
+	}
+	ticker := time.NewTicker(tickerDuration)
 	defer ticker.Stop()
 
-	retryTicker := time.NewTicker(5 * time.Second)
+	retryTicker := time.NewTicker(retryTickerDuration)
 	defer retryTicker.Stop()
 
 	for {
@@ -205,7 +213,7 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 
 			s.mu.Unlock()
 
-			go s.scanAndProcess(ctx)
+			s.scanAndProcess(ctx)
 		case <-retryTicker.C:
 			s.mu.Lock()
 			if s.handling || s.lastMp == nil {
@@ -229,7 +237,7 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 	s.lastMp = s.Mp
 	s.mu.Unlock()
 
-	s.processCallback(ctx, s.lastMp)
+	go s.processCallback(ctx, s.lastMp)
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {

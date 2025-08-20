@@ -1,0 +1,50 @@
+drop database if exists test;
+create database test;
+use test;
+create table t1(a int primary key, b int);
+insert into t1 select *,* from generate_series(1, 10)g;
+delete from t1 where a mod 2 = 0;
+drop snapshot if exists sp;
+create snapshot sp for table test t1;
+insert into t1 select *,* from generate_series(11, 20)g;
+delete from t1 where a mod 2 = 0;
+drop snapshot if exists sp2;
+create snapshot sp2 for table test t1;
+delete from t1 where a mod 3 = 0;
+select mo_ctl("dn", "flush", "test.t1");
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+create table t2 clone t1 {snapshot = "sp"};
+select * from t2 order by a asc;
+a    b
+1    1
+3    3
+5    5
+7    7
+9    9
+create table t3 clone t1 {snapshot = "sp2"};
+select * from t3 order by a asc;
+a    b
+1    1
+3    3
+5    5
+7    7
+9    9
+11    11
+13    13
+15    15
+17    17
+19    19
+create table t4 clone t1;
+select * from t4 order by a asc;
+a    b
+1    1
+5    5
+7    7
+11    11
+13    13
+17    17
+19    19
+drop database test;
+drop snapshot sp;
+drop snapshot sp2;

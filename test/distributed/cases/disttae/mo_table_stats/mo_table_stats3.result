@@ -9,6 +9,7 @@ mo_cache    null    null    null    null    null    null    null    null    null
 mo_configurations    null    null    null    null    null    null    null    null    null    2025-07-17 12:05:12    null    null    null    null    null    VIEW    0    moadmin
 mo_foreign_keys    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-17 12:05:11    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_indexes    Tae    Dynamic    25953    0    635794    0    0    NULL    0    2025-07-17 12:05:11    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+mo_iscp_log    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-22 04:29:13    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_locks    null    null    null    null    null    null    null    null    null    2025-07-17 12:05:12    null    null    null    null    null    VIEW    0    moadmin
 mo_mysql_compatibility_mode    Tae    Dynamic    8    0    3883    0    0    NULL    0    2025-07-17 12:05:12    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
 mo_pitr    Tae    Dynamic    0    0    0    0    0    NULL    0    2025-07-17 12:05:11    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
