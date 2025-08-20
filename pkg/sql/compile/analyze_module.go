@@ -156,10 +156,14 @@ func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.N
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = &plan.AnalyzeInfo{}
 		}
-		node.AnalyzeInfo.InputRows += op.OpStats.InputRows
-		node.AnalyzeInfo.OutputRows += op.OpStats.OutputRows
-		node.AnalyzeInfo.InputSize += op.OpStats.InputSize
-		node.AnalyzeInfo.OutputSize += op.OpStats.OutputSize
+		if op.IsFirst {
+			node.AnalyzeInfo.InputRows += op.OpStats.InputRows
+			node.AnalyzeInfo.InputSize += op.OpStats.InputSize
+		}
+		if op.IsLast {
+			node.AnalyzeInfo.OutputRows += op.OpStats.OutputRows
+			node.AnalyzeInfo.OutputSize += op.OpStats.OutputSize
+		}
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.WaitTimeConsumed
@@ -338,6 +342,8 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 		OpName:       op.OpType().String(),
 		NodeIdx:      op.GetOperatorBase().Idx,
 		DestReceiver: getDestReceiver(op, rmp),
+		IsFirst:      op.GetOperatorBase().IsFirst,
+		IsLast:       op.GetOperatorBase().IsLast,
 	}
 
 	if op.GetOperatorBase().IsFirst {

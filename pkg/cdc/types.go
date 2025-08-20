@@ -153,6 +153,7 @@ type Sink interface {
 	SendBegin(ctx context.Context) error
 	SendCommit(ctx context.Context) error
 	SendRollback(ctx context.Context) error
+	Reset()
 	Close()
 }
 

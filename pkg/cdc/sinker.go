@@ -855,6 +855,10 @@ var NewMysqlSink = func(
 	return ret, err
 }
 
+func (s *mysqlSink) Reset() {
+	s.tx = nil
+}
+
 func (s *mysqlSink) recordTxnSQL(sqlBuf []byte) {
 	if !s.debugTxnRecorder.doRecord {
 		return
@@ -938,17 +942,11 @@ func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
 
 func (s *mysqlSink) SendCommit(_ context.Context) error {
 	s.resetRecordedTxn()
-	defer func() {
-		s.tx = nil
-	}()
 	return s.tx.Commit()
 }
 
 func (s *mysqlSink) SendRollback(_ context.Context) error {
 	s.resetRecordedTxn()
-	defer func() {
-		s.tx = nil
-	}()
 	return s.tx.Rollback()
 }
 

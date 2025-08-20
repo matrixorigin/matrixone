@@ -55,6 +55,8 @@ type PhyOperator struct {
 	DestReceiver []PhyReceiver          `json:"toMergeReceiver,omitempty"`
 	OpStats      *process.OperatorStats `json:"OpStats,omitempty"`
 	Children     []*PhyOperator         `json:"Children,omitempty"`
+	IsFirst      bool                   `json:"IsFirst,omitempty"`
+	IsLast       bool                   `json:"IsLast,omitempty"`
 }
 
 func NewPhyPlan() *PhyPlan {
