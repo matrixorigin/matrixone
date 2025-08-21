@@ -1073,7 +1073,7 @@ func (mr *MockRelationMockRecorder) BuildShardingReaders(ctx, proc, expr, relDat
 }
 
 // CollectChanges mocks base method.
-func (m *MockRelation) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+func (m *MockRelation) CollectChanges(ctx context.Context, from, to types.TS, skipDeletes bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CollectChanges", ctx, from, to, mp)
 	ret0, _ := ret[0].(engine.ChangesHandle)
