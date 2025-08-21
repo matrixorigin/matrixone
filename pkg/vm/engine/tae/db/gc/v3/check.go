@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 	"time"
 )
@@ -111,6 +112,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 		returnStr += "{'verify': 'OK', 'msg': 'Not-GC'}"
 		return
 	}
+	maxTS := sancWindow.tsRange.end
 	window := sancWindow.Clone()
 	windowCount := len(window.files)
 	for _, stats := range window.files {
@@ -127,12 +129,31 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 		returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
 		return
 	}
+
+	objects2 := make(map[string]map[uint64]*ObjectEntry)
+
+	candidates := c.cleaner.checkpointCli.ICKPSeekLT(maxTS, 100)
+	for _, ckp := range candidates {
+		var reader *logtail.CKPReader
+		reader, err = c.cleaner.getCkpReader(ctx, ckp)
+		if err != nil {
+			returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
+			return
+		}
+		collectObjectsFromCheckpointData(ctx, reader, objects2)
+	}
+
 	allCount := len(allObjects)
 	for name := range allObjects {
 		isfound := false
 		if _, ok := objects[name]; ok {
 			isfound = true
 			delete(objects, name)
+		}
+
+		if _, ok := objects2[name]; ok {
+			isfound = true
+			delete(objects2, name)
 		}
 		if isfound {
 			delete(allObjects, name)
@@ -167,12 +188,17 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 	lostCount := len(objects)
 	var lostStr string
 	if lostCount != 0 {
-		lostStr += ", {'lost object':"
+		lostStr += ", {'lost object': {"
 		for name := range objects {
 			lostStr += fmt.Sprintf("'object': %v,", name)
 			logutil.Errorf("[Verify GC]lost object %s,", name)
 		}
-		lostStr += "}"
+
+		for name := range objects2 {
+			lostStr += fmt.Sprintf("'object2': %v,", name)
+			logutil.Errorf("[Verify GC]lost object2 %s,", name)
+		}
+		lostStr += "}}"
 	}
 
 	// Collect all checkpoint files
