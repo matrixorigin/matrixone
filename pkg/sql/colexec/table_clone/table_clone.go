@@ -28,8 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -60,33 +62,43 @@ func (tc *TableClone) Free(proc *process.Process, pipelineFailed bool, err error
 		tc.tombstoneObjBat.Clean(proc.Mp())
 	}
 
-	tc.idxNameToReader = nil
-	tc.dstIdxNameToRel = nil
+	for _, r := range tc.srcReader {
+		r.Close()
+	}
+
+	for _, r := range tc.srcIdxReader {
+		r.Close()
+	}
+
+	tc.srcRel = nil
+	tc.srcReader = nil
+	tc.srcIdxReader = nil
+	tc.dstRel = nil
+	tc.dstIdxRel = nil
 }
 
 func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if tc.dataObjBat != nil {
-		tc.dataObjBat.CleanOnlyData()
+		tc.dataObjBat.Clean(proc.Mp())
 	}
 
 	if tc.tombstoneObjBat != nil {
-		tc.tombstoneObjBat.CleanOnlyData()
+		tc.tombstoneObjBat.Clean(proc.Mp())
 	}
 
-	if tc.idxNameToReader != nil {
-		for _, r := range tc.idxNameToReader {
-			r.Close()
-		}
-		clear(tc.idxNameToReader)
+	for _, r := range tc.srcReader {
+		r.Close()
 	}
 
-	if tc.dstIdxNameToRel != nil {
-		clear(tc.dstIdxNameToRel)
+	for _, r := range tc.srcIdxReader {
+		r.Close()
 	}
 
-	if tc.srcRelReader != nil {
-		tc.srcRelReader.Close()
-	}
+	tc.srcRel = nil
+	tc.srcReader = nil
+	tc.srcIdxReader = nil
+	tc.dstRel = nil
+	tc.dstIdxRel = nil
 
 	if tc.Ctx.SrcAutoIncrOffsets != nil {
 		clear(tc.Ctx.SrcAutoIncrOffsets)
@@ -102,6 +114,93 @@ func (tc *TableClone) OpType() vm.OpType {
 	return 0
 }
 
+func initRelAndReader(
+	ctx context.Context,
+	db engine.Database,
+	masterTblName string,
+	relMap map[string]engine.Relation,
+	readerMap map[string]engine.Reader,
+	idxRelMap map[string]engine.Relation,
+	idxReaderMap map[string]engine.Reader,
+	metadata partition.PartitionMetadata,
+) (err error) {
+
+	var (
+		tmpRel    engine.Relation
+		tmpReader engine.Reader
+	)
+
+	// if it is a partitioned table
+	if metadata.Partitions != nil {
+		// master tables
+		for _, p := range metadata.Partitions {
+			if tmpRel, err = db.Relation(ctx, p.PartitionTableName, nil); err != nil {
+				return err
+			}
+
+			relMap[p.Name] = tmpRel
+
+			if readerMap != nil {
+				if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+					return err
+				}
+				readerMap[p.Name] = tmpReader
+			}
+		}
+
+		// index tables
+		for pName, rel := range relMap {
+			for _, idx := range rel.GetTableDef(ctx).Indexes {
+				if tmpRel, err = db.Relation(ctx, idx.IndexTableName, nil); err != nil {
+					return err
+				}
+
+				if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+					return err
+				}
+
+				if idxReaderMap != nil {
+					idxReaderMap[pName+"."+idx.IndexName] = tmpReader
+				}
+
+				if idxRelMap != nil {
+					idxRelMap[pName+"."+idx.IndexName] = tmpRel
+				}
+			}
+		}
+	} else {
+		if tmpRel, err = db.Relation(ctx, masterTblName, nil); err != nil {
+			return err
+		}
+		relMap["p0"] = tmpRel
+
+		if readerMap != nil {
+			if tmpReader, err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+				return err
+			}
+			readerMap["p0"] = tmpReader
+		}
+
+		for _, idx := range relMap["p0"].GetTableDef(ctx).Indexes {
+			if tmpRel, err = db.Relation(ctx, idx.IndexTableName, nil); err != nil {
+				return err
+			}
+
+			if idxReaderMap != nil {
+				if idxReaderMap[idx.IndexName], err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+					return err
+				}
+			}
+
+			if idxRelMap != nil {
+				idxRelMap[idx.IndexName] = tmpRel
+			}
+		}
+	}
+
+	return nil
+}
+
 func (tc *TableClone) Prepare(proc *process.Process) error {
 	if tc.OpAnalyzer == nil {
 		tc.OpAnalyzer = process.NewAnalyzer(
@@ -113,85 +212,99 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		tc.OpAnalyzer.Reset()
 	}
 
+	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, false)
+	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
+
+	tc.srcRel = make(map[string]engine.Relation)
+	tc.srcReader = make(map[string]engine.Reader)
+	tc.srcIdxReader = make(map[string]engine.Reader)
+
+	tc.dstRel = make(map[string]engine.Relation)
+	tc.dstIdxRel = make(map[string]engine.Relation)
+
 	var (
 		err   error
 		txnOp client.TxnOperator
 
 		srcDB engine.Database
 		dstDB engine.Database
-
-		srcIdxRel engine.Relation
 	)
 
-	if len(tc.Ctx.SrcTblDef.Indexes) > 0 {
-		tc.idxNameToReader = make(map[string]engine.Reader)
-		tc.dstIdxNameToRel = make(map[string]engine.Relation)
+	tc.Ctx.SrcCtx = proc.Ctx
+	if tc.Ctx.SrcObjDef.PubInfo != nil {
+		// the src table is a publication
+		tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, uint32(tc.Ctx.SrcObjDef.PubInfo.TenantId))
+
+	} else if tc.Ctx.ScanSnapshot != nil && tc.Ctx.ScanSnapshot.Tenant != nil {
+		// the source data may be coming from a different account.
+		tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, tc.Ctx.ScanSnapshot.Tenant.TenantID)
 	}
 
-	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, false)
-	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
+	txnOp = proc.GetCloneTxnOperator()
+	if txnOp == nil {
+		txnOp = proc.GetTxnOperator()
+	}
 
+	if srcDB, err = tc.Ctx.Eng.Database(
+		tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.DbName, txnOp,
+	); err != nil {
+		return err
+	}
+
+	if dstDB, err = tc.Ctx.Eng.Database(
+		proc.Ctx, tc.Ctx.DstDatabaseName, proc.GetTxnOperator(),
+	); err != nil {
+		return err
+	}
+
+	var (
+		pSrv = proc.GetPartitionService()
+
+		partitioned bool
+		metadata    partition.PartitionMetadata
+	)
+
+	partitioned =
+		pSrv != nil &&
+			pSrv.Enabled() &&
+			features.IsPartitioned(tc.Ctx.SrcTblDef.FeatureFlag)
+
+	// src tables
 	{
-		tc.Ctx.SrcCtx = proc.Ctx
-		if tc.Ctx.SrcObjDef.PubInfo != nil {
-			// the src table is a publication
-			tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, uint32(tc.Ctx.SrcObjDef.PubInfo.TenantId))
-
-		} else if tc.Ctx.ScanSnapshot != nil && tc.Ctx.ScanSnapshot.Tenant != nil {
-			// the source data may be coming from a different account.
-			tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, tc.Ctx.ScanSnapshot.Tenant.TenantID)
+		if partitioned {
+			if metadata, err = pSrv.GetPartitionMetadata(
+				tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.TblId, txnOp,
+			); err != nil {
+				return err
+			}
 		}
 
-		txnOp = proc.GetCloneTxnOperator()
-		if txnOp == nil {
-			txnOp = proc.GetTxnOperator()
-		}
-
-		if srcDB, err = tc.Ctx.Eng.Database(
-			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.DbName, txnOp,
+		if err = initRelAndReader(
+			tc.Ctx.SrcCtx, srcDB, tc.Ctx.SrcTblDef.Name, tc.srcRel,
+			tc.srcReader, nil, tc.srcIdxReader, metadata,
 		); err != nil {
-			return err
-		}
-
-		if tc.srcRel, err = srcDB.Relation(
-			tc.Ctx.SrcCtx, tc.Ctx.SrcTblDef.Name, nil,
-		); err != nil {
-			return err
-		}
-
-		if tc.srcRelReader, err = disttae.NewTableMetaReader(tc.Ctx.SrcCtx, tc.srcRel); err != nil {
 			return err
 		}
 	}
 
+	// dst tables
 	{
-		if dstDB, err = tc.Ctx.Eng.Database(
-			proc.Ctx, tc.Ctx.DstDatabaseName, proc.GetTxnOperator(),
+		if tc.dstMasterRel, err = dstDB.Relation(proc.Ctx, tc.Ctx.DstTblName, nil); err != nil {
+			return err
+		}
+
+		if partitioned {
+			if metadata, err = pSrv.GetPartitionMetadata(
+				proc.Ctx, tc.dstMasterRel.GetTableID(proc.Ctx), proc.GetTxnOperator(),
+			); err != nil {
+				return err
+			}
+		}
+
+		if err = initRelAndReader(
+			proc.Ctx, dstDB, tc.dstMasterRel.GetTableName(),
+			tc.dstRel, nil, tc.dstIdxRel, nil, metadata,
 		); err != nil {
-			return err
-		}
-
-		if tc.dstRel, err = dstDB.Relation(proc.Ctx, tc.Ctx.DstTblName, nil); err != nil {
-			return err
-		}
-	}
-
-	for _, idx := range tc.Ctx.SrcTblDef.Indexes {
-		if srcIdxRel, err =
-			srcDB.Relation(tc.Ctx.SrcCtx, idx.IndexTableName, nil); err != nil {
-			return err
-		}
-
-		if tc.idxNameToReader[idx.IndexName], err =
-			disttae.NewTableMetaReader(tc.Ctx.SrcCtx, srcIdxRel); err != nil {
-			return err
-		}
-	}
-
-	dstIndexes := tc.dstRel.GetTableDef(proc.Ctx).Indexes
-	for _, idx := range dstIndexes {
-		if tc.dstIdxNameToRel[idx.IndexName], err =
-			dstDB.Relation(proc.Ctx, idx.IndexTableName, nil); err != nil {
 			return err
 		}
 	}
@@ -296,21 +409,23 @@ func (tc *TableClone) Call(proc *process.Process) (vm.CallResult, error) {
 		err error
 	)
 
-	if err = clone(
-		proc.Ctx, tc.Ctx.SrcCtx,
-		proc.Mp(), tc.srcRelReader, tc.dstRel,
-		tc.dataObjBat, tc.tombstoneObjBat,
-	); err != nil {
-		return vm.CallResult{}, err
+	for name, srcReader := range tc.srcReader {
+		if err = clone(
+			proc.Ctx, tc.Ctx.SrcCtx,
+			proc.Mp(), srcReader, tc.dstRel[name],
+			tc.dataObjBat, tc.tombstoneObjBat,
+		); err != nil {
+			return vm.CallResult{}, err
+		}
 	}
 
-	for idxName, reader := range tc.idxNameToReader {
+	for idxName, reader := range tc.srcIdxReader {
 		tc.dataObjBat.CleanOnlyData()
 		tc.tombstoneObjBat.CleanOnlyData()
 
 		if err = clone(
 			proc.Ctx, tc.Ctx.SrcCtx,
-			proc.Mp(), reader, tc.dstIdxNameToRel[idxName],
+			proc.Mp(), reader, tc.dstIdxRel[idxName],
 			tc.dataObjBat, tc.tombstoneObjBat,
 		); err != nil {
 			return vm.CallResult{}, err
@@ -343,7 +458,7 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		dstTblDef *plan.TableDef
 	)
 
-	dstTblDef = tc.dstRel.GetTableDef(dstCtx)
+	dstTblDef = tc.dstMasterRel.GetTableDef(dstCtx)
 	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(dstTblDef)
 	incrCols = incrservice.GetAutoColumnFromDef(dstTblDef)
 
@@ -390,7 +505,7 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	}
 
 	if _, err = proc.GetIncrService().InsertValues(
-		dstCtx, tc.dstRel.GetTableID(dstCtx), vecs, vecs[0].Length(), maxVal,
+		dstCtx, tc.dstMasterRel.GetTableID(dstCtx), vecs, vecs[0].Length(), maxVal,
 	); err != nil {
 		return err
 	}
