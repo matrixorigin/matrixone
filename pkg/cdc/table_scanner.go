@@ -216,13 +216,13 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 			s.scanAndProcess(ctx)
 		case <-retryTicker.C:
 			s.mu.Lock()
-			if s.handling || s.lastMp == nil {
-				s.mu.Unlock()
+			handling, lastMp := s.handling, s.lastMp
+			s.mu.Unlock()
+			if handling || lastMp == nil {
 				continue
 			}
-			s.mu.Unlock()
 
-			go s.processCallback(ctx, s.lastMp)
+			go s.processCallback(ctx, lastMp)
 		}
 	}
 }
