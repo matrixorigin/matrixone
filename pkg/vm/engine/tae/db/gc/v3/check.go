@@ -165,13 +165,14 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 	}
 
 	lostCount := len(objects)
+	var lostStr string
 	if lostCount != 0 {
-		returnStr += "{'lost object':"
+		lostStr += ", {'lost object':"
 		for name := range objects {
-			returnStr += fmt.Sprintf("'object': %v,", name)
+			lostStr += fmt.Sprintf("'object': %v,", name)
 			logutil.Errorf("[Verify GC]lost object %s,", name)
 		}
-		returnStr += "}"
+		lostStr += "}"
 	}
 
 	// Collect all checkpoint files
@@ -219,5 +220,6 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 		returnStr += fmt.Sprintf("'checkpoints': %d,", ckpObjectCount)
 		returnStr += fmt.Sprintf("'windows': %d}", windowCount)
 	}
+	returnStr += lostStr
 	return
 }
