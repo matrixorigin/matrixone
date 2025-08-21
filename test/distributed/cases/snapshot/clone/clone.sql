@@ -110,11 +110,21 @@ select table_catalog,table_schema,table_name,table_type,engine,version,row_forma
 select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
 drop database if exists mo_debug_new;
 create database mo_debug_new clone mo_debug;
-select * from trace_features;
+select * from mo_debug.trace_features;
 drop database if exists mo_task_new;
 create database mo_task_new clone mo_task;
-select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task_new.sys_cron_task;
-select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task.sys_cron_task;
+create snapshot spx for account;
+drop database if exists mo_task_new;
+create database mo_task_new clone mo_task {snapshot = "spx"};
+select
+    task_metadata_executor, task_metadata_context, task_metadata_option
+from
+    mo_task_new.sys_cron_task {snapshot = "spx"}
+except
+select
+    task_metadata_executor, task_metadata_context, task_metadata_option
+from
+    mo_task_new.sys_cron_task {snapshot = "spx"};
 drop database if exists mysql_new;
 create database mysql_new clone mysql;
 use mysql_new;
@@ -169,6 +179,7 @@ drop snapshot sp01;
 drop snapshot sp02;
 drop snapshot sp03;
 drop snapshot sp04;
+drop snapshot spx;
 drop database test01;
 drop database test02;
 drop database test03;
