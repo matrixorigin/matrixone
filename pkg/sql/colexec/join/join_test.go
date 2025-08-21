@@ -17,6 +17,7 @@ package join
 import (
 	"bytes"
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -82,6 +83,225 @@ func TestString(t *testing.T) {
 	for _, tc := range makeTestCases(t) {
 		tc.arg.String(buf)
 	}
+}
+
+func TestJoinSplit(t *testing.T) {
+	cs := [][]*plan.Expr{
+		{newExpr(0, types.T_int32.ToType())},
+		{newExpr(0, types.T_int32.ToType())},
+	}
+	tag := int32(42)
+	join := &InnerJoin{
+		Result: []colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		Conditions: cs,
+		Cond:       nil,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     1,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+		JoinMapTag: tag,
+	}
+	hashbuild := &hashbuild.HashBuild{
+		NeedHashMap: true,
+		Conditions:  cs[1],
+		NeedBatches: true,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+		NeedAllocateSels: true,
+		JoinMapTag:       tag,
+		JoinMapRefCnt:    1,
+	}
+	bat := batch.New([]string{"a", "b"})
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6}, nil)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil)
+	bat.SetRowCount(bat.Vecs[0].Length())
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+
+	bat2 := batch.New([]string{"a", "b"})
+	vals := []int32{0, 2, 3}
+	vals = append(vals, slices.Repeat([]int32{1}, 5000)...)
+	vals = append(vals, slices.Repeat([]int32{4}, 5000)...)
+	vals = append(vals, 5, 5, 7, 7)
+	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
+	bat2.Vecs[1] = testutil.MakeInt32Vector(vals, nil)
+	bat2.SetRowCount(bat2.Vecs[0].Length())
+	hashbuild.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat2}))
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
+	err := join.Prepare(proc)
+	require.NoError(t, err)
+	err = hashbuild.Prepare(proc)
+	require.NoError(t, err)
+	res, err := vm.Exec(hashbuild, proc)
+	require.NoError(t, err)
+	require.Equal(t, true, res.Batch == nil)
+
+	batCnt := 0
+	rowCount := 0
+	for end := false; !end; {
+		result, er := vm.Exec(join, proc)
+		if er != nil {
+			t.Fatal(er)
+		}
+		end = result.Status == vm.ExecStop || result.Batch == nil
+		if result.Batch != nil {
+			rowCount += result.Batch.RowCount()
+			batCnt++
+		}
+	}
+
+	require.Equal(t, 2, batCnt)
+	require.Equal(t, 10000+3, rowCount)
+
+	t.Log(batCnt, rowCount)
+
+	join.Free(proc, false, nil)
+	hashbuild.Free(proc, false, nil)
+	proc.Free()
+}
+
+func TestJoinEvalCondFalse(t *testing.T) {
+	cs := [][]*plan.Expr{
+		{newExpr(0, types.T_int32.ToType())},
+		{newExpr(0, types.T_int32.ToType())},
+	}
+	tag := int32(42)
+	args := make([]*plan.Expr, 0, 2)
+	args = append(args, &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_int32),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			},
+		},
+	})
+	args = append(args, &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_int32),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 1,
+			},
+		},
+	})
+
+	fr, _ := function.GetFunctionByName(
+		context.Background(),
+		">",
+		[]types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+	)
+	fid := fr.GetEncodedOverloadID()
+	cond := &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_bool),
+		},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Args: args,
+				Func: &plan.ObjectRef{Obj: fid, ObjName: ">"},
+			},
+		},
+	}
+	join := &InnerJoin{
+		Result: []colexec.ResultPos{
+			colexec.NewResultPos(0, 0),
+			colexec.NewResultPos(1, 0),
+		},
+		Conditions: cs,
+		Cond:       cond,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     1,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+		JoinMapTag: tag,
+	}
+	hashbuild := &hashbuild.HashBuild{
+		NeedHashMap: true,
+		Conditions:  cs[1],
+		NeedBatches: true,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+		NeedAllocateSels: true,
+		JoinMapTag:       tag,
+		JoinMapRefCnt:    1,
+	}
+	bat := batch.New([]string{"a", "b"})
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 4, 5, 6}, nil)
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5}, nil)
+	bat.SetRowCount(bat.Vecs[0].Length())
+	join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+
+	bat2 := batch.New([]string{"a", "b"})
+	vals := []int32{0, 2, 3}                                // !(2 > 2), 2 will be filtered out
+	vals = append(vals, slices.Repeat([]int32{1}, 5000)...) // !(1 > 2), 1 will be filtered out
+	vals = append(vals, slices.Repeat([]int32{4}, 5050)...) // 4 > 2, 4 will be selected
+	vals = append(vals, 5, 5, 7, 7)                         // 5 > 2, 5 will be selected
+	col2 := slices.Repeat([]int32{2}, len(vals))
+	bat2.Vecs[0] = testutil.MakeInt32Vector(vals, nil)
+	bat2.Vecs[1] = testutil.MakeInt32Vector(col2, nil)
+	bat2.SetRowCount(bat2.Vecs[0].Length())
+	hashbuild.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat2}))
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc.SetMessageBoard(message.NewMessageBoard())
+
+	err := join.Prepare(proc)
+	require.NoError(t, err)
+	err = hashbuild.Prepare(proc)
+	require.NoError(t, err)
+	res, err := vm.Exec(hashbuild, proc)
+	require.NoError(t, err)
+	require.Equal(t, true, res.Batch == nil)
+
+	batCnt := 0
+	rowCount := 0
+	for end := false; !end; {
+		result, er := vm.Exec(join, proc)
+		if er != nil {
+			t.Fatal(er)
+		}
+		end = result.Status == vm.ExecStop || result.Batch == nil
+		if result.Batch != nil {
+			rowCount += result.Batch.RowCount()
+			batCnt++
+		}
+	}
+
+	require.Equal(t, 1, batCnt)
+	require.Equal(t, 5052, rowCount)
+
+	t.Log(batCnt, rowCount)
+
+	join.Free(proc, false, nil)
+	hashbuild.Free(proc, false, nil)
+	proc.Free()
+
 }
 
 func TestJoin(t *testing.T) {
