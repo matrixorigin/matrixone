@@ -391,7 +391,6 @@ func (c *PushClient) toSubscribeTable(
 	if faultInjected, _ := objectio.LogCNSubscribeTableFailInjected(
 		dbName, tableName,
 	); faultInjected {
-		fmt.Println("hhhh")
 		return nil, moerr.NewInternalErrorNoCtx("injected subscribe table err")
 	}
 
