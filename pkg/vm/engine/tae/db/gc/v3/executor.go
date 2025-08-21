@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
@@ -203,6 +204,11 @@ func (exec *GCExecutor) Run(
 		return
 	}
 	canGCObjects, canGCMemTable := canGCSinker.GetResult()
+	if len(canGCObjects) > 0 {
+		for _, obj := range canGCObjects {
+			logutil.Infof("canGCObjects %v", obj.ObjectName().UnsafeString())
+		}
+	}
 	defer func() {
 		if err = DeleteObjects(ctx, exec.fs, canGCObjects); err != nil {
 			//TODO: handle error

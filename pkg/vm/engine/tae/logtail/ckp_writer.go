@@ -903,12 +903,15 @@ func SyncTableIDBatch(
 	if len(inMems) > 0 {
 		panic("logic error")
 	}
-
+	var ckpstr string
+	if !ckpLocation.IsEmpty() {
+		ckpstr = ckpLocation.Name().UnsafeString()
+	}
 	for _, file := range files {
 		location := file.ObjectLocation()
 		location.SetID(uint16(file.BlkCnt()))
 		locations.Append(location)
-		logutil.Infof("ckp %v-%v, SyncTableid %v, ckp %v", start, end, location.Name().UnsafeString(), ckpLocation.Name().UnsafeString())
+		logutil.Infof("ckp %v-%v, SyncTableid %v, ckp %v", start.ToString(), end.ToString(), location.Name().UnsafeString(), ckpstr)
 	}
 	return
 }
