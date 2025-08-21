@@ -110,11 +110,21 @@ select table_catalog,table_schema,table_name,table_type,engine,version,row_forma
 select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
 drop database if exists mo_debug_new;
 create database mo_debug_new clone mo_debug;
-select * from trace_features;
+select * from mo_debug.trace_features;
 drop database if exists mo_task_new;
 create database mo_task_new clone mo_task;
-select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task_new.sys_cron_task;
-select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task.sys_cron_task;
+create snapshot spx for account;
+drop database if exists mo_task_new;
+create database mo_task_new clone mo_task {snapshot = "spx"};
+select
+    task_metadata_executor, task_metadata_context, task_metadata_option
+from
+    mo_task_new.sys_cron_task {snapshot = "spx"}
+except
+select
+    task_metadata_executor, task_metadata_context, task_metadata_option
+from
+    mo_task_new.sys_cron_task {snapshot = "spx"};
 drop database if exists mysql_new;
 create database mysql_new clone mysql;
 use mysql_new;
@@ -169,6 +179,7 @@ drop snapshot sp01;
 drop snapshot sp02;
 drop snapshot sp03;
 drop snapshot sp04;
+drop snapshot spx;
 drop database test01;
 drop database test02;
 drop database test03;
@@ -355,20 +366,20 @@ insert into vector_index_07 values(9777, " [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 
 create index idx01 using hnsw on vector_index_07(b) op_type "vector_l2_ops";
 drop table if exists employees;
 create table employees (
-       employeeNumber int(11) NOT NULL,
-       lastName varchar(50) NOT NULL,
-       firstName varchar(50) NOT NULL,
-       extension varchar(10) NOT NULL,
-       email varchar(100) NOT NULL,
-       officeCode varchar(10) NOT NULL,
-       reportsTo int(11) DEFAULT NULL,
-       jobTitle varchar(50) NOT NULL,
-       PRIMARY KEY (employeeNumber)
+                           employeeNumber int(11) NOT NULL,
+                           lastName varchar(50) NOT NULL,
+                           firstName varchar(50) NOT NULL,
+                           extension varchar(10) NOT NULL,
+                           email varchar(100) NOT NULL,
+                           officeCode varchar(10) NOT NULL,
+                           reportsTo int(11) DEFAULT NULL,
+                           jobTitle varchar(50) NOT NULL,
+                           PRIMARY KEY (employeeNumber)
 );
 insert into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
-   (1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
-   (1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
-   (1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing');
+                                                                                                           (1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
+                                                                                                           (1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
+                                                                                                           (1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing');
 drop table if exists src;
 create table src (id bigint primary key, json1 json, json2 json);
 insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthdayhappybirthdayhappybirthday", "f":"winterautumnsummerspring"}'),
@@ -466,7 +477,7 @@ select count(*) from vector_index_07;
 use test10_table;
 select * from employees;
 insert into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
-              (1012,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President');
+    (1012,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President');
 -- @session
 -- @session:id=4&user=acc04:test_account&password=111
 use test11_new;
@@ -532,17 +543,17 @@ create database test12;
 use test12;
 drop table if exists t1;
 create table t1 (
-    a bigint not null,
-    b bigint not null default 0,
-    c bigint not null default 0,
-    d bigint not null default 0,
-    e bigint not null default 0,
-    f bigint not null default 0,
-    g bigint not null default 0,
-    h bigint not null default 0,
-    i bigint not null default 0,
-    j bigint not null default 0,
-    primary key (a));
+                    a bigint not null,
+                    b bigint not null default 0,
+                    c bigint not null default 0,
+                    d bigint not null default 0,
+                    e bigint not null default 0,
+                    f bigint not null default 0,
+                    g bigint not null default 0,
+                    h bigint not null default 0,
+                    i bigint not null default 0,
+                    j bigint not null default 0,
+                    primary key (a));
 insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
 drop table if exists bit01;
 create table bit01(id char(1), b binary(10));
@@ -688,4 +699,3 @@ show create table departments;
 drop account acc05;
 -- @bvt:issue
 show databases;
-
