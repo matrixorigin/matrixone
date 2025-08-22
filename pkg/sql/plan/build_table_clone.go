@@ -31,12 +31,9 @@ func buildCloneTable(
 ) (*Plan, error) {
 
 	var (
-		err error
-		id  int32
-
+		err       error
 		srcTblDef *TableDef
 		srcObj    *ObjectRef
-		query     *Query
 
 		createTablePlan *Plan
 
@@ -89,28 +86,17 @@ func buildCloneTable(
 			"table %v-%v does not exist", srcDatabaseName.String(), srcTableName.String())
 	}
 
-	dstTblDef := DeepCopyTableDef(srcTblDef, true)
-	dstTblDef.Name = stmt.CreateTable.Table.ObjectName.String()
-	dstTblDef.DbName = stmt.CreateTable.Table.SchemaName.String()
+	var (
+		dstTableName    string
+		dstDatabaseName string
+	)
 
-	if dstTblDef.DbName == "" {
-		dstTblDef.DbName = ctx.DefaultDatabase()
+	dstTableName = stmt.CreateTable.Table.ObjectName.String()
+	dstDatabaseName = stmt.CreateTable.Table.SchemaName.String()
+
+	if dstDatabaseName == "" {
+		dstDatabaseName = ctx.DefaultDatabase()
 	}
-
-	id = builder.appendNode(&plan.Node{
-		ObjRef:       srcObj,
-		NodeType:     plan.Node_TABLE_CLONE,
-		TableDef:     srcTblDef,
-		ScanSnapshot: bindCtx.snapshot,
-		InsertCtx: &plan.InsertCtx{
-			TableDef: dstTblDef,
-		},
-		BindingTags: []int32{builder.genNewTag()},
-	}, bindCtx)
-
-	builder.qry.Steps = append(builder.qry.Steps, id)
-	builder.qry.Nodes[0].Stats.ForceOneCN = true
-	builder.skipStats = true
 
 	var (
 		opAccount  uint32
@@ -136,12 +122,14 @@ func buildCloneTable(
 
 	stmt.StmtType = tree.DecideCloneStmtType(
 		ctx.GetContext(), stmt,
-		srcTblDef.DbName, dstTblDef.DbName,
+		srcTblDef.DbName, dstDatabaseName,
 		dstAccount, srcAccount,
 	)
 
 	if err = checkPrivilege(
-		ctx.GetContext(), stmt, opAccount, srcAccount, dstAccount, srcTblDef, dstTblDef,
+		ctx.GetContext(), stmt,
+		opAccount, srcAccount, dstAccount,
+		srcTblDef, dstTableName, dstDatabaseName,
 	); err != nil {
 		return nil, err
 	}
@@ -150,14 +138,23 @@ func buildCloneTable(
 		return nil, err
 	}
 
-	if query, err = builder.createQuery(); err != nil {
-		return nil, err
-	}
-
-	createTablePlan.Plan.(*plan.Plan_Ddl).Ddl.Query = query
-	createTablePlan.Plan.(*plan.Plan_Ddl).Ddl.DdlType = plan.DataDefinition_CREATE_TABLE_WITH_CLONE
-
-	return createTablePlan, nil
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_TABLE_WITH_CLONE,
+				Definition: &plan.DataDefinition_CloneTable{
+					CloneTable: &plan.CloneTable{
+						SrcTableDef:     srcTblDef,
+						SrcObjDef:       srcObj,
+						DstDatabaseName: dstDatabaseName,
+						DstTableName:    dstTableName,
+						CreateTable:     createTablePlan,
+						ScanSnapshot:    bindCtx.snapshot,
+					},
+				},
+			},
+		},
+	}, nil
 }
 
 func checkPrivilege(
@@ -167,7 +164,8 @@ func checkPrivilege(
 	dstAccount uint32,
 	srcAccount uint32,
 	srcTblDef *TableDef,
-	dstTblDef *TableDef,
+	dstTableName string,
+	dstDatabaseName string,
 ) (err error) {
 
 	// 1. only sys can clone from system databases
@@ -196,7 +194,7 @@ func checkPrivilege(
 		// clone from system databases
 		typ = 1
 	} else if slices.Index(
-		catalog.SystemDatabases, strings.ToLower(dstTblDef.DbName),
+		catalog.SystemDatabases, strings.ToLower(dstDatabaseName),
 	) != -1 {
 		// clone to a system database
 		typ = 2

@@ -31,38 +31,38 @@ func updateNewColumnInTableDef(
 	oCol *ColDef,
 	nColSpec *tree.ColumnTableDef,
 	nPos *tree.ColumnPosition,
-) error {
+) (bool, error) {
 	ctx := cctx.GetContext()
 
 	nTy, err := getTypeFromAst(ctx, nColSpec.Type)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if err = checkTypeCapSize(ctx, &nTy, nColSpec.Name.ColName()); err != nil {
-		return err
+		return false, err
 	}
 
 	// check if the type of the new column is compatible with the old column
 	if err = checkChangeTypeCompatible(ctx, &oCol.Typ, &nTy); err != nil {
-		return err
+		return false, err
 	}
 
 	nCol, err := buildColumnAndConstraint(cctx, tableDef, oCol, nColSpec, nTy)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Check new column foreign key constraints
 	if err = checkColumnForeignkeyConstraint(cctx, tableDef, oCol, nCol); err != nil {
-		return err
+		return false, err
 	}
 
 	if err = modifyColPosition(ctx, tableDef, oCol, nCol, nPos); err != nil {
-		return err
+		return false, err
 	}
 
-	return nil
+	return nCol.Primary, nil
 
 }
 
@@ -74,7 +74,7 @@ func ModifyColumn(
 	alterPlan *plan.AlterTable,
 	spec *tree.AlterTableModifyColumnClause,
 	alterCtx *AlterTableContext,
-) error {
+) (bool, error) {
 	tableDef := alterPlan.CopyTableDef
 	nColSpec := spec.NewColumn
 	nPos := spec.Position
@@ -83,15 +83,16 @@ func ModifyColumn(
 	// Check whether added column has existed.
 	oCol := FindColumn(tableDef.Cols, nColName)
 	if oCol == nil || oCol.Hidden {
-		return moerr.NewBadFieldError(
+		return false, moerr.NewBadFieldError(
 			cctx.GetContext(),
 			nColSpec.Name.ColNameOrigin(),
 			alterPlan.TableDef.Name,
 		)
 	}
-	err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
+
+	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	alterCtx.alterColMap[nColName] = selectExpr{
@@ -99,7 +100,7 @@ func ModifyColumn(
 		sexprStr:  oCol.Name,
 	}
 
-	return nil
+	return pkAffected, nil
 }
 
 // modifyColPosition Check the position information of the newly formed column
