@@ -915,8 +915,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	newWaterMark := newCkp.GetEnd()
 	c.updateCheckpointGCWaterMark(&newWaterMark)
 
-	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
-	for _, ckp := range gckps {
+	gCkps := c.checkpointCli.GetAllGlobalCheckpoints()
+	for _, ckp := range gCkps {
 		end := ckp.GetEnd()
 		logutil.Info(
 			"GC-TRACE-GLOBAL-CHECKPOINT-FILE",
@@ -933,6 +933,18 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 				zap.String("gckp", nameMeta),
 			)
 			deleteFiles = append(deleteFiles, nameMeta)
+
+			// fix gckp files leak
+			var files []string
+			files, err = getCheckpointLocation(ctx, ckp, c.fs)
+			if err != nil {
+				extraErrMsg = "getCheckpointLocation failed"
+				return err
+			}
+			if len(files) > 0 {
+				deleteFiles = append(deleteFiles, files...)
+			}
+
 		}
 	}
 	if c.GCCheckpointEnabled() {
