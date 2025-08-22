@@ -4207,13 +4207,6 @@ func (s *Scope) CreateCDC(c *Compile) error {
 	return err
 }
 
-func getUUIDFromServiceIdentifier(id string) string {
-	if len(id) <= 19 {
-		return id
-	}
-	return id[19:]
-}
-
 func (s *Scope) DropCDC(c *Compile) error {
 	planCDC := s.Plan.GetDdl().GetDropCdc()
 	var (
@@ -4352,6 +4345,10 @@ func getTaskKeysCount(
 		return
 	}
 	defer rows.Close()
+
+	if rows.Err() != nil {
+		return 0, rows.Err()
+	}
 
 	for rows.Next() {
 		var taskId string

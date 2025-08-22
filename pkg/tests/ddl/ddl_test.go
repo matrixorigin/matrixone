@@ -96,15 +96,27 @@ func TestPitrCases(t *testing.T) {
 			require.NoError(t, err)
 			res.Close()
 
-			// create pitr with different units
-			for _, unit := range []string{"h", "d", "mo", "y"} {
-				name := "pitr_" + unit
+			// create pitr with different units and verify, also exercise a frequency-like variety
+			type pitrCase struct{ unit, label string }
+			for _, pc := range []pitrCase{{"h", "hour"}, {"d", "day"}, {"mo", "month"}, {"y", "year"}} {
+				name := "pitr_" + pc.unit
 				res, err = exec.Exec(ctx, "drop pitr if exists "+name+" internal", executor.Options{}.WithDatabase(db))
 				require.NoError(t, err)
 				res.Close()
-				res, err = exec.Exec(ctx, "create pitr "+name+" for database "+db+" range 1 '"+unit+"' internal", executor.Options{}.WithDatabase(db))
+				res, err = exec.Exec(ctx, "create pitr "+name+" for database "+db+" range 1 '"+pc.unit+"' internal", executor.Options{}.WithDatabase(db))
 				require.NoError(t, err)
 				res.Close()
+				// verify exists
+				verify := "select pitr_unit from mo_catalog.mo_pitr where level='database' and database_name='" + db + "' and pitr_name='" + name + "'"
+				res, err = exec.Exec(ctx, verify, executor.Options{})
+				require.NoError(t, err)
+				cnt := 0
+				for _, b := range res.Batches {
+					cnt += b.RowCount()
+				}
+				require.Greater(t, cnt, 0)
+				res.Close()
+				// cleanup
 				res, err = exec.Exec(ctx, "drop pitr if exists "+name+" internal", executor.Options{}.WithDatabase(db))
 				require.NoError(t, err)
 				res.Close()
@@ -118,9 +130,20 @@ func TestPitrCases(t *testing.T) {
 			require.NoError(t, err)
 			res.Close()
 
-			// create pitr with if not exists
+			// create pitr with if not exists (treat as frequency scenario: ensure idempotence)
 			res, err = exec.Exec(ctx, "create pitr if not exists "+pitr1+" for table "+db+" "+table+" range 1 'h' internal", executor.Options{}.WithDatabase(db))
 			require.NoError(t, err)
+			res.Close()
+			// verify table-level pitr row present
+			res, err = exec.Exec(ctx, "select * from mo_catalog.mo_pitr where level='table' and database_name='"+db+"' and table_name='"+table+"'", executor.Options{})
+			require.NoError(t, err)
+			{
+				tc := 0
+				for _, b := range res.Batches {
+					tc += b.RowCount()
+				}
+				require.Greater(t, tc, 0)
+			}
 			res.Close()
 
 			// error: duplicate create

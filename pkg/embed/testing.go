@@ -17,17 +17,14 @@ package embed
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
-
 	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"sync"
 )
 
 var (
@@ -88,15 +85,6 @@ func RunBaseClusterTests(
 		svc, e := basicCluster.GetCNService(0)
 		if e != nil {
 			return
-		}
-		type hasSQL interface{ GetSQLExecutor() executor.SQLExecutor }
-		if h, ok := svc.RawService().(hasSQL); ok {
-			exec := h.GetSQLExecutor()
-			if exec != nil {
-				ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel2()
-				_, _ = exec.Exec(ctx2, "select @@lower_case_table_names", executor.Options{})
-			}
 		}
 		// Create and register a TaskService for embed cluster
 		// Build a simple address factory using CN SQL address
