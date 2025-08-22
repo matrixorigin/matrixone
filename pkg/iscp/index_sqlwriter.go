@@ -302,7 +302,7 @@ func (w *FulltextSqlWriter) ToSql() ([]byte, error) {
 }
 
 func (w *FulltextSqlWriter) toFulltextDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.jobID.DBName, w.indexTableName, catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DBName, w.indexTableName, catalog.FullTextIndex_TabCol_Id, string(w.vbuf))
 	return []byte(sql), nil
 }
 
@@ -411,8 +411,8 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 	w.meta = vectorindex.HnswCdcParam{
 		MetaTbl:   meta,
 		IndexTbl:  storage,
-		DbName:    jobID.DBName,
-		Table:     jobID.TableName,
+		DbName:    info.DBName,
+		Table:     info.TableName,
 		Params:    hnswparam,
 		Dimension: tabledef.Cols[w.partsPos[0]].Typ.Width,
 	}
@@ -598,7 +598,7 @@ func (w *IvfflatSqlWriter) ToSql() ([]byte, error) {
 // catalog.SystemSI_IVFFLAT_TblCol_Entries_pk
 // catalog.CPrimaryKeyColName
 func (w *IvfflatSqlWriter) toIvfflatDelete() ([]byte, error) {
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.jobID.DBName, w.entries_tbl,
+	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE `%s` IN (%s)", w.info.DBName, w.entries_tbl,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		string(w.vbuf))
 	return []byte(sql), nil
@@ -621,9 +621,9 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	cnames_str := strings.Join(cnames, ", ")
 
 	if upsert {
-		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.jobID.DBName, w.entries_tbl)
+		sql += fmt.Sprintf("REPLACE INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
 	} else {
-		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.jobID.DBName, w.entries_tbl)
+		sql += fmt.Sprintf("INSERT INTO `%s`.`%s` ", w.info.DBName, w.entries_tbl)
 	}
 
 	sql += fmt.Sprintf("(`%s`, `%s`, `%s`, `%s`) ",
@@ -633,9 +633,9 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
 
 	versql := fmt.Sprintf("SELECT CAST(%s as BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'", catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		w.jobID.DBName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
+		w.info.DBName, w.meta_tbl, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key)
 
-	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = (%s) ), ", w.jobID.DBName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
+	sql += fmt.Sprintf("WITH centroid as (SELECT * FROM `%s`.`%s` WHERE `%s` = (%s) ), ", w.info.DBName, w.centroids_tbl, catalog.SystemSI_IVFFLAT_TblCol_Centroids_version, versql)
 	sql += fmt.Sprintf("src as (SELECT %s FROM (VALUES %s)) ", cols, string(w.vbuf))
 	sql += fmt.Sprintf("SELECT `%s`, `%s`, %s FROM src CENTROIDX('%s') JOIN centroid using (`%s`, `%s`)",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,

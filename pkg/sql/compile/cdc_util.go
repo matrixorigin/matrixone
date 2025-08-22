@@ -103,11 +103,12 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname s
 	}
 
 	spec := &iscp.JobSpec{
-		Priority:     0,
-		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: sinker_type},
-		TriggerSpec:  iscp.TriggerSpec{JobType: 0, Schedule: iscp.Schedule{}},
+		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: sinker_type,
+			DBName:    dbname,
+			TableName: tablename,
+			IndexName: indexname},
 	}
-	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: indexname}
+	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)}
 
 	// create index cdc task
 	ok, err := CreateCdcTask(c, pitr_name, spec, job)
@@ -123,6 +124,10 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname s
 	return nil
 }
 
+func genCdcTaskJobID(indexname string) string {
+	return "index_" + indexname
+}
+
 func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
 	var err error
 
@@ -132,7 +137,7 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	}
 
 	// delete index cdc task
-	_, err = DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: indexname})
+	_, err = DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)})
 	if err != nil {
 		return err
 	}
@@ -188,7 +193,7 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 				}
 				if async {
 					hasindex = true
-					_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: idx.IndexName})
+					_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(idx.IndexName)})
 					if e != nil {
 						return e
 					}
@@ -212,7 +217,7 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 	} else if catalog.IsFullTextIndexAlgo(algo) {
 		return int8(iscp.ConsumerType_IndexSync)
 	}
-	return int8(0)
+	panic("getSinkerTypeFromAlgo: invalid sinker type")
 }
 
 // NOTE: CreateAllIndexCdcTasks will create CDC task according to existing tableDef

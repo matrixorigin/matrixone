@@ -110,6 +110,9 @@ func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType t
 func newTestConsumerInfo() *ConsumerInfo {
 	return &ConsumerInfo{
 		ConsumerType: 0,
+		DBName:       "test_db",
+		TableName:    "test_tbl",
+		IndexName:    "hnsw_idx",
 	}
 }
 
@@ -117,7 +120,7 @@ func newTestJobID() JobID {
 	return JobID{
 		DBName:    "test_db",
 		TableName: "test_tbl",
-		JobName:   "hnsw_idx",
+		JobName:   "index_hnsw_idx",
 	}
 }
 
