@@ -155,13 +155,13 @@ func (ctr *container) emptyProbe(ap *AntiJoin, inbat *batch.Batch, proc *process
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
-		for k := 0; k < n; k++ {
-			for j, pos := range ap.Result {
-				if err := ctr.rbat.Vecs[j].UnionOne(inbat.Vecs[pos], int64(i+k), proc.Mp()); err != nil {
-					return err
-				}
+
+		for j, pos := range ap.Result {
+			if err := ctr.rbat.Vecs[j].UnionBatch(inbat.Vecs[pos], int64(i), n, nil, proc.Mp()); err != nil {
+				return err
 			}
 		}
+
 		ctr.rbat.AddRowCount(n)
 	}
 

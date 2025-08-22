@@ -2042,13 +2042,23 @@ func (tbl *txnTable) getPartitionState(
 
 	// Subscribe a latest partition state
 	eng := tbl.eng.(*Engine)
-	ps, err = eng.PushClient().toSubscribeTable(
+	if ps, err = eng.PushClient().toSubscribeTable(
 		ctx,
 		tbl.tableId,
 		tbl.tableName,
 		tbl.db.databaseId,
-		tbl.db.databaseName)
-	if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
+		tbl.db.databaseName,
+	); err != nil {
+		logutil.Error(
+			"Txn-Table-Subscribe-Failed",
+			zap.String("table-name", tbl.tableName),
+			zap.Uint64("table-id", tbl.tableId),
+			zap.String("txn", tbl.db.op.Txn().DebugString()),
+			zap.Bool("is-snapshot", tbl.db.op.IsSnapOp()),
+			zap.Error(err),
+		)
+		return nil, err
+	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
 		return
 	}
 

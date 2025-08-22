@@ -62,7 +62,8 @@ const (
 	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
 	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
 
-	FJ_CNFlushSmallObjs = "fj/cn/flush_small_objs"
+	FJ_CNFlushSmallObjs     = "fj/cn/flush_small_objs"
+	FJ_CNSubscribeTableFail = "fj/cn/subscribe_table_fail"
 )
 
 const (
@@ -178,6 +179,16 @@ func LogReaderInjected(args ...string) (bool, int) {
 
 func LogCNFlushSmallObjsInjected(args ...string) (bool, int) {
 	iarg, sarg, injected := fault.TriggerFault(FJ_CNFlushSmallObjs)
+	if !injected {
+		return false, 0
+	}
+
+	ok, level := checkLoggingArgs(int(iarg), sarg, args...)
+	return ok, level
+}
+
+func LogCNSubscribeTableFailInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_CNSubscribeTableFail)
 	if !injected {
 		return false, 0
 	}
