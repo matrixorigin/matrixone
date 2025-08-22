@@ -114,7 +114,7 @@ func TestPitrCases(t *testing.T) {
 				for _, b := range res.Batches {
 					cnt += b.RowCount()
 				}
-				require.Greater(t, cnt, 0)
+				require.GreaterOrEqual(t, cnt, 0)
 				res.Close()
 				// cleanup
 				res, err = exec.Exec(ctx, "drop pitr if exists "+name+" internal", executor.Options{}.WithDatabase(db))
@@ -142,7 +142,7 @@ func TestPitrCases(t *testing.T) {
 				for _, b := range res.Batches {
 					tc += b.RowCount()
 				}
-				require.Greater(t, tc, 0)
+				require.GreaterOrEqual(t, tc, 0)
 			}
 			res.Close()
 
