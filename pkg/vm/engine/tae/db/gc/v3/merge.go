@@ -231,7 +231,6 @@ func appendValToBatchForObjectListBatch(src, dst *batch.Batch, row int, mp *mpoo
 	vector.AppendBytes(dst.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], cluster, false, mp)
 	dst.SetRowCount(dst.Vecs[0].Length())
 }
-
 func getCheckpointLocation(
 	ctx context.Context,
 	checkpoint *checkpoint.CheckpointEntry,
@@ -254,7 +253,6 @@ func getCheckpointLocation(
 	for i := 0; i < tableIDLocations.Len(); i++ {
 		location := tableIDLocations.Get(i)
 		files = append(files, location.Name().UnsafeString())
-		continue
 	}
 
 	for _, loc := range reader.GetLocations() {

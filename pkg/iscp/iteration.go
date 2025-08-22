@@ -330,6 +330,9 @@ func FlushJobStatusOnIterationState(
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
+	if err != nil {
+		return
+	}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, txnWriter.Rollback(ctx))
