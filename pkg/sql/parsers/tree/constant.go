@@ -186,11 +186,6 @@ func NewNumVal[T bool | int64 | uint64 | float64 | string](val T, originString s
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
-	if node.origString != "" {
-		ctx.WriteValue(node.ValType, FormatString(node.origString))
-		return
-	}
-
 	switch node.ValType {
 	case P_null:
 		ctx.WriteString("null")
