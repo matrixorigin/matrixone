@@ -54,6 +54,7 @@ type Options struct {
 	txnOp                   client.TxnOperator
 	database                string
 	accountID               uint32
+	hasAccountID            bool
 	minCommittedTS          timestamp.Timestamp
 	innerTxn                bool
 	waitCommittedLogApplied bool
@@ -75,6 +76,7 @@ type Options struct {
 type StatementOption struct {
 	waitPolicy               lock.WaitPolicy
 	accountId                uint32
+	hasAccountID             bool
 	roleId                   uint32
 	userId                   uint32
 	disableLog               bool

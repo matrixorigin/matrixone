@@ -2294,9 +2294,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	db := truncate.GetDatabase()
 	table := truncate.GetTable()
 
-	if c.db == "" {
-		c.db = db
-	}
+	c.db = db
 
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -2367,16 +2365,18 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	)
 
 	// drop table
-	if err = c.runSqlWithOptions(
+	if err = c.runSqlWithAccountIdAndOptions(
 		fmt.Sprintf("drop table `%s`.`%s`", db, table),
+		int32(accountID),
 		dropOpts,
 	); err != nil {
 		return err
 	}
 
 	// create table
-	if err = c.runSqlWithOptions(
+	if err = c.runSqlWithAccountIdAndOptions(
 		createSQL,
+		int32(accountID),
 		createOpts,
 	); err != nil {
 		return err

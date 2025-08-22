@@ -54,6 +54,7 @@ func (opts Options) WithDatabase(database string) Options {
 // WithAccountID execute sql in account
 func (opts Options) WithAccountID(accountID uint32) Options {
 	opts.accountID = accountID
+	opts.hasAccountID = true
 	return opts
 }
 
@@ -89,7 +90,7 @@ func (opts Options) AccountID() uint32 {
 
 // HasAccountID returns true if account is set
 func (opts Options) HasAccountID() bool {
-	return opts.accountID > 0
+	return opts.hasAccountID
 }
 
 // MinCommittedTS returns min committed ts
@@ -163,6 +164,7 @@ func (opts StatementOption) WaitPolicy() lock.WaitPolicy {
 // WithAccountID execute sql in account
 func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
 	opts.accountId = accountID
+	opts.hasAccountID = true
 	return opts
 }
 
@@ -180,7 +182,7 @@ func (opts StatementOption) AccountID() uint32 {
 }
 
 func (opts StatementOption) HasAccountID() bool {
-	return opts.accountId > 0
+	return opts.hasAccountID
 }
 
 func (opts StatementOption) WithRoleID(roleID uint32) StatementOption {

@@ -176,17 +176,20 @@ func (s *sqlExecutor) getCompileContext(
 
 func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
-	opts executor.Options) (context.Context, executor.Options, error) {
+	opts executor.Options,
+) (context.Context, executor.Options, error) {
+	if ctx.Value(defines.TenantIDKey{}) == nil {
+		ctx = context.WithValue(
+			ctx,
+			defines.TenantIDKey{},
+			uint32(0))
+	}
+
 	if opts.HasAccountID() {
 		ctx = context.WithValue(
 			ctx,
 			defines.TenantIDKey{},
 			opts.AccountID())
-	} else if ctx.Value(defines.TenantIDKey{}) == nil {
-		ctx = context.WithValue(
-			ctx,
-			defines.TenantIDKey{},
-			uint32(0))
 	}
 
 	if !opts.HasExistsTxn() {

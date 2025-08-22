@@ -4779,11 +4779,10 @@ func (c *Compile) runSqlWithResultAndOptions(
 		WithStatementOption(options).
 		WithResolveVariableFunc(c.proc.GetResolveVariableFunc())
 
-	ctx := c.proc.Ctx
 	if accountId >= 0 {
-		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
+		opts = opts.WithAccountID(uint32(accountId))
 	}
-	return exec.Exec(ctx, sql, opts)
+	return exec.Exec(c.proc.Ctx, sql, opts)
 }
 
 func (c *Compile) fatalLog(retry int, err error) {
