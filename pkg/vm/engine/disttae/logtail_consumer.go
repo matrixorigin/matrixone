@@ -388,18 +388,24 @@ func (c *PushClient) toSubscribeTable(
 	dbName string,
 ) (ps *logtailreplay.PartitionState, err error) {
 
-	if faultInjected, _ := objectio.LogCNSubscribeTableFailInjected(
+	var (
+		skip     bool
+		state    SubscribeState
+		injected bool
+	)
+
+	if injected, _ = objectio.LogCNSubscribeTableFailInjected(
 		dbName, tableName,
-	); faultInjected {
-		return nil, moerr.NewInternalErrorNoCtx("injected subscribe table err")
+	); injected {
+		return nil,
+			moerr.NewInternalErrorNoCtx("injected subscribe table err")
 	}
 
-	var skip bool
 	if skip, ps = c.skipSubIfSubscribed(ctx, tableID, dbID); skip {
 		return ps, nil
 	}
 
-	state, err := c.toSubIfUnsubscribed(ctx, dbID, tableID)
+	state, err = c.toSubIfUnsubscribed(ctx, dbID, tableID)
 	if err != nil {
 		return nil, err
 	}
@@ -423,12 +429,7 @@ func (c *PushClient) toSubscribeTable(
 			}
 		case SubRspTableNotExist:
 			c.subscribed.clearTable(dbID, tableID)
-			return nil, moerr.NewInternalErrorf(
-				ctx,
-				"%s to subcribe tbl[%d-%s] failed since table is not exist",
-				logTag,
-				tableID,
-				tableName)
+			return nil, moerr.NewNoSuchTable(ctx, fmt.Sprintf("%s(%d)", dbName, dbID), fmt.Sprintf("%s(%d)", tableName, tableID))
 		case Unsubscribing:
 			//need to wait for unsubscribe succeed for making the subscribe and unsubscribe execute in order,
 			// otherwise the partition state will leak log tails.
