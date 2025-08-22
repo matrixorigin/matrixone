@@ -3473,9 +3473,6 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 		credentials = formatCredentials(cs.Credentials)
 
 		StageStatus = "in_use"
-		if cs.Status.Exist {
-			StageStatus = cs.Status.Option.String()
-		}
 
 		if cs.Comment.Exist {
 			comment = cs.Comment.Comment
