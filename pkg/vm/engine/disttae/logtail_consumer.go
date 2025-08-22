@@ -388,6 +388,12 @@ func (c *PushClient) toSubscribeTable(
 	dbName string,
 ) (ps *logtailreplay.PartitionState, err error) {
 
+	if faultInjected, _ := objectio.LogCNSubscribeTableFailInjected(
+		dbName, tableName,
+	); faultInjected {
+		return nil, moerr.NewInternalErrorNoCtx("injected subscribe table err")
+	}
+
 	var skip bool
 	if skip, ps = c.skipSubIfSubscribed(ctx, tableID, dbID); skip {
 		return ps, nil
