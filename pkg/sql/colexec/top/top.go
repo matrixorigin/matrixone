@@ -192,9 +192,13 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process) er
 		}
 
 		if ctr.bat == nil {
-			ctr.bat = batch.NewWithSize(len(bat.Vecs))
+			batNew, vecNew := batch.NewWithSize, vector.NewVec
+			if ap.ctr.limit > 10240 {
+				batNew, vecNew = batch.NewOffHeapWithSize, vector.NewOffHeapVecWithType
+			}
+			ctr.bat = batNew(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
-				ctr.bat.Vecs[i] = vector.NewVec(*vec.GetType())
+				ctr.bat.Vecs[i] = vecNew(*vec.GetType())
 			}
 		}
 
@@ -223,30 +227,35 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process) er
 }
 
 func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process.Process) error {
-	var start int64
+	rowCount := int64(bat.RowCount())
+	toFillCount := int64(limit) - int64(len(ctr.sels))
 
-	length := int64(bat.RowCount())
-	if n := uint64(len(ctr.sels)); n < limit {
-		start = int64(limit - n)
-		if start > length {
-			start = length
-		}
-		for i := int64(0); i < start; i++ {
-			for j, vec := range ctr.bat.Vecs {
-				if err := vec.UnionOne(bat.Vecs[j], i, proc.Mp()); err != nil {
-					return err
-				}
+	processCount := min(int64(toFillCount), rowCount)
+
+	if processCount > 0 {
+		for j, vec := range ctr.bat.Vecs {
+			if err := vec.UnionBatch(
+				bat.Vecs[j],
+				0,
+				int(processCount),
+				nil,
+				proc.Mp(),
+			); err != nil {
+				return err
 			}
-			ctr.sels = append(ctr.sels, int64(n))
-			n++
 		}
-		ctr.bat.AddRowCount(int(start))
+		baseSel := int64(len(ctr.sels))
+		for i := range processCount {
+			ctr.sels = append(ctr.sels, baseSel+i)
+		}
+		ctr.bat.AddRowCount(int(processCount))
 
-		if n == limit {
+		if uint64(len(ctr.sels)) == limit {
 			ctr.sort()
 		}
 	}
-	if start == length {
+
+	if processCount == rowCount {
 		return nil
 	}
 
@@ -254,7 +263,7 @@ func (ctr *container) processBatch(limit uint64, bat *batch.Batch, proc *process
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
 	}
-	for i, j := start, length; i < j; i++ {
+	for i, j := processCount, rowCount; i < j; i++ {
 		if ctr.compare(1, 0, i, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
