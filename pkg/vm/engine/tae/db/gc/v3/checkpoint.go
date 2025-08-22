@@ -915,8 +915,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	newWaterMark := newCkp.GetEnd()
 	c.updateCheckpointGCWaterMark(&newWaterMark)
 
-	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
-	for _, ckp := range gckps {
+	gCkps := c.checkpointCli.GetAllGlobalCheckpoints()
+	for _, ckp := range gCkps {
 		end := ckp.GetEnd()
 		logutil.Info(
 			"GC-TRACE-GLOBAL-CHECKPOINT-FILE",
