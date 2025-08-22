@@ -521,12 +521,11 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 		canInsert = false
 	case tree.P_char:
 		originStr := numVal.String()
-		if len(originStr) == 4 && strings.ToLower(originStr) == "true" {
-			num = true
-		} else {
-			num = false
+		bval, err := types.ParseBool(originStr)
+		if err != nil {
+			return false, false, err
 		}
-
+		num = bval
 	default:
 		canInsert = false
 	}

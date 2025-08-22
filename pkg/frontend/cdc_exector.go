@@ -17,11 +17,11 @@ package frontend
 import (
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"regexp"
-	"strconv"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -698,7 +698,7 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	exec.noFull, _ = strconv.ParseBool(noFull)
+	exec.noFull, _ = types.ParseBool(noFull)
 
 	// additionalConfig
 	additionalConfigStr, err := res.GetString(ctx, 0, 8)

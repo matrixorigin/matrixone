@@ -42,7 +42,8 @@ type Cache[K comparable, V any] struct {
 		_      cpu.CacheLinePad
 	}
 
-	itemQueue chan *_CacheItem[K, V]
+	enqueueJobs1 chan *_CacheItem[K, V] // items to be enqueued to queue1
+	enqueueJobs2 chan *_CacheItem[K, V] // items to be enqueued to queue2
 
 	queueLock sync.RWMutex
 	used1     int64
@@ -99,7 +100,8 @@ func New[K comparable, V any](
 		capacity1: func() int64 {
 			return capacity() / 10
 		},
-		itemQueue:    make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
+		enqueueJobs1: make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
+		enqueueJobs2: make(chan *_CacheItem[K, V], runtime.GOMAXPROCS(0)*2),
 		queue1:       *NewQueue[*_CacheItem[K, V]](),
 		queue2:       *NewQueue[*_CacheItem[K, V]](),
 		ghost:        *NewQueue[*_CacheItem[K, V]](),
@@ -114,7 +116,7 @@ func New[K comparable, V any](
 	return ret
 }
 
-func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_CacheItem[K, V] {
+func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) (item *_CacheItem[K, V], ghostItemSet bool) {
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
@@ -131,20 +133,19 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 				valueOK: true,
 				size:    size,
 			}
-			item.count.Store(oldItem.count.Load())
 			// replacing the oldItem. oldItem will be evicted from ghost queue eventually.
 			shard.values[key] = item
 			if c.postSet != nil {
 				c.postSet(ctx, key, value, size)
 			}
-			return item
+			return item, true
 		}
 
 		// existed and value ok, skip set
-		return nil
+		return nil, false
 	}
 
-	item := &_CacheItem[K, V]{
+	item = &_CacheItem[K, V]{
 		key:     key,
 		value:   value,
 		valueOK: true,
@@ -155,47 +156,67 @@ func (c *Cache[K, V]) set(ctx context.Context, key K, value V, size int64) *_Cac
 		c.postSet(ctx, key, value, size)
 	}
 
-	return item
+	return item, false
 }
 
 func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, size int64) {
-	if item := c.set(ctx, key, value, size); item != nil {
+	if item, ghostItemSet := c.set(ctx, key, value, size); item != nil {
 		// item inserted, enqueue
-		c.enqueue(item)
+		c.enqueue(item, ghostItemSet)
 		c.Evict(ctx, nil, 0)
 	}
 }
 
-func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V]) {
+func (c *Cache[K, V]) enqueue(item *_CacheItem[K, V], ghostItemSet bool) {
 	if !c.queueLock.TryLock() {
-		// try put itemQueue
-		select {
-		case c.itemQueue <- item:
-			// let the queueLock holder do the job
-			return
-		default:
-			// block until get lock
-			c.queueLock.Lock()
-			defer c.queueLock.Unlock()
+		// try put itemQueue or itemQueue2, let the queueLock holder do the job
+		if ghostItemSet {
+			select {
+			case c.enqueueJobs2 <- item:
+				return
+			default:
+				// queue full, block until get lock
+				c.queueLock.Lock()
+				defer c.queueLock.Unlock()
+			}
+		} else {
+			select {
+			case c.enqueueJobs1 <- item:
+				return
+			default:
+				// queue full, block until get lock
+				c.queueLock.Lock()
+				defer c.queueLock.Unlock()
+			}
 		}
 	} else {
+		// locked
 		defer c.queueLock.Unlock()
 	}
 
 	// enqueue
-	c.queue1.enqueue(item)
-	c.used1 += item.size
+	if ghostItemSet {
+		c.queue2.enqueue(item)
+		c.used2 += item.size
+	} else {
+		c.queue1.enqueue(item)
+		c.used1 += item.size
+	}
 
 	// help enqueue
 	for {
 		select {
-		case item := <-c.itemQueue:
+		case item := <-c.enqueueJobs1:
 			c.queue1.enqueue(item)
 			c.used1 += item.size
+		case item := <-c.enqueueJobs2:
+			c.queue2.enqueue(item)
+			c.used2 += item.size
 		default:
 			return
 		}
 	}
+
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
@@ -337,9 +358,8 @@ func (c *Cache[K, V]) evict2(ctx context.Context) {
 			c.queue2.enqueue(item)
 			item.dec()
 		} else {
-			// put ghost
-			c.enqueueGhost(ctx, item)
-			c.evictGhost()
+			// delete
+			c.Delete(ctx, item.key)
 			c.used2 -= item.size
 			return
 		}

@@ -191,6 +191,9 @@ type TriggerSpec struct {
 
 type ConsumerInfo struct {
 	ConsumerType int8
+	IndexName    string
+	TableName    string
+	DBName       string
 	Columns      []string
 }
 

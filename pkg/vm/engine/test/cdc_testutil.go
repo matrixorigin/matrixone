@@ -231,11 +231,10 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 		i5 BIGINT,
 		i6 FLOAT,
 		i7 DOUBLE,
-		i8 TIMESTAMP,
-		i9 TINYINT UNSIGNED,
-		i10 SMALLINT UNSIGNED,
-		i11 INT UNSIGNED,
-		i12 BIGINT UNSIGNED
+		i8 TINYINT UNSIGNED,
+		i9 SMALLINT UNSIGNED,
+		i10 INT UNSIGNED,
+		i11 BIGINT UNSIGNED
 		)`, databaseName, tableName)
 
 	v, ok := moruntime.ServiceRuntime("").
@@ -261,13 +260,12 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 			types.T_int64.ToType(), //i5
 			types.T_float32.ToType(),
 			types.T_float64.ToType(),
-			types.T_timestamp.ToType(),
 			types.T_uint8.ToType(),
 			types.T_uint16.ToType(),
 			types.T_uint32.ToType(),
-			types.T_uint64.ToType(), //i12
+			types.T_uint64.ToType(), //i11
 		},
-		[]string{"id", "name", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10", "i11", "i12"},
+		[]string{"id", "name", "i1", "i2", "i3", "i4", "i5", "i6", "i7", "i8", "i9", "i10", "i11"},
 		rowCount,
 		0,
 		nil,

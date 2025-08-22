@@ -123,7 +123,7 @@ func (part *Partition) Id() uint64 {
 
 // memory allocation with mpool.MPool
 func (part *Partition) alloc(capacity uint64) (err error) {
-	part.data, err = part.proc.Mp().Alloc(int(capacity), false)
+	part.data, err = part.proc.Mp().Alloc(int(capacity), true)
 	if err != nil {
 		return err
 	}

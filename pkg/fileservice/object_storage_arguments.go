@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type ObjectStorageArguments struct {
@@ -86,12 +87,12 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 		case "shared-config-profile":
 			o.SharedConfigProfile = value
 		case "no-bucket-validation":
-			b, err := strconv.ParseBool(value)
+			b, err := types.ParseBool(value)
 			if err == nil {
 				o.NoBucketValidation = b
 			}
 		case "no-default-credentials":
-			b, err := strconv.ParseBool(value)
+			b, err := types.ParseBool(value)
 			if err == nil {
 				o.NoDefaultCredentials = b
 			}

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -151,7 +152,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		value := tmpOpts[key]
 		switch key {
 		case cdc.CDCRequestOptions_NoFull:
-			opts.NoFull, _ = strconv.ParseBool(value)
+			opts.NoFull, _ = types.ParseBool(value)
 		case cdc.CDCRequestOptions_Level:
 			if err = opts.handleLevel(ctx, ses, req, value); err != nil {
 				return

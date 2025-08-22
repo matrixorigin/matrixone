@@ -40,20 +40,6 @@ const (
 	TargetDbName = "test_intra_system_change_propagation"
 )
 
-func NewConsumer(
-	cnUUID string,
-	tableDef *plan.TableDef,
-	jobID JobID,
-	info *ConsumerInfo,
-) (Consumer, error) {
-
-	if info.ConsumerType == int8(ConsumerType_CNConsumer) {
-		return NewInteralSqlConsumer(cnUUID, tableDef, jobID, info)
-	}
-	panic("todo")
-
-}
-
 var _ Consumer = &interalSqlConsumer{}
 
 type interalSqlConsumer struct {
