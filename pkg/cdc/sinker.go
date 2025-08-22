@@ -54,7 +54,6 @@ var (
 )
 
 var NewSinker = func(
-	cnUUID string,
 	sinkUri UriInfo,
 	accountId uint64,
 	taskId string,
@@ -70,10 +69,6 @@ var NewSinker = func(
 	//TODO: remove console
 	if sinkUri.SinkTyp == CDCSinkType_Console {
 		return NewConsoleSinker(dbTblInfo, watermarkUpdater), nil
-	}
-
-	if sinkUri.SinkTyp == CDCSinkType_IndexSync {
-		return NewIndexSyncSinker(cnUUID, sinkUri, accountId, taskId, dbTblInfo, watermarkUpdater, tableDef, retryTimes, retryDuration, ar, maxSqlLength, sendSqlTimeout)
 	}
 
 	var (
@@ -516,8 +511,7 @@ func (s *mysqlSinker) SendDummy() {
 }
 
 func (s *mysqlSinker) Error() error {
-	if ptr := s.err.Load(); ptr != nil {
-		errPtr := ptr.(*error)
+	if errPtr := s.err.Load().(*error); *errPtr != nil {
 		if moErr, ok := (*errPtr).(*moerr.Error); !ok {
 			return moerr.ConvertGoError(context.Background(), *errPtr)
 		} else {

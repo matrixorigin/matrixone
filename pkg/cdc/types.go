@@ -52,10 +52,9 @@ const (
 )
 
 const (
-	CDCSinkType_MySQL     = "mysql"
-	CDCSinkType_MO        = "matrixone"
-	CDCSinkType_Console   = "console"
-	CDCSinkType_IndexSync = "indexsync"
+	CDCSinkType_MySQL   = "mysql"
+	CDCSinkType_MO      = "matrixone"
+	CDCSinkType_Console = "console"
 )
 
 const (
