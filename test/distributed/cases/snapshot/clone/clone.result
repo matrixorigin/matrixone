@@ -103,7 +103,7 @@ create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('red','blue','green')    YES        null        
+col1    ENUM('red','blue','green')    YES        null
 select * from enum01;
 col1
 red
@@ -167,20 +167,28 @@ def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
 def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
 drop database if exists mo_debug_new;
 create database mo_debug_new clone mo_debug;
-select * from trace_features;
-SQL parser error: table "trace_features" does not exist
+select * from mo_debug.trace_features;
+name    state
+data    disable
+statement    disable
+txn    disable
+txn-action    disable
+txn-workspace    disable
 drop database if exists mo_task_new;
 create database mo_task_new clone mo_task;
-select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task_new.sys_cron_task;
+create snapshot spx for account;
+drop database if exists mo_task_new;
+create database mo_task_new clone mo_task {snapshot = "spx"};
+select
+task_metadata_executor, task_metadata_context, task_metadata_option
+from
+mo_task_new.sys_cron_task {snapshot = "spx"}
+except
+select
+task_metadata_executor, task_metadata_context, task_metadata_option
+from
+mo_task_new.sys_cron_task {snapshot = "spx"};
 task_metadata_executor    task_metadata_context    task_metadata_option
-3        {"Concurrency":1}
-8        {"Concurrency":1}
-2        {"Concurrency":1}
-select task_metadata_executor, task_metadata_context, task_metadata_option from mo_task.sys_cron_task;
-task_metadata_executor    task_metadata_context    task_metadata_option
-3        {"Concurrency":1}
-8        {"Concurrency":1}
-2        {"Concurrency":1}
 drop database if exists mysql_new;
 create database mysql_new clone mysql;
 use mysql_new;
@@ -289,7 +297,7 @@ blue
 green
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM('red','blue','green')    YES        null        
+col1    ENUM('red','blue','green')    YES        null
 use test01;
 drop table src;
 use test02;
@@ -375,6 +383,7 @@ drop snapshot sp01;
 drop snapshot sp02;
 drop snapshot sp03;
 drop snapshot sp04;
+drop snapshot spx;
 drop database test01;
 drop database test02;
 drop database test03;
