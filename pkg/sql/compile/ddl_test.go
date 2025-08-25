@@ -848,3 +848,22 @@ func Test_CDCStrToTime(t *testing.T) {
 		t.Fatalf("CDCStrToTime empty got ts=%v err=%v", ts, err)
 	}
 }
+
+func Test_toHours(t *testing.T) {
+	cases := []struct {
+		val  int64
+		unit string
+		want int64
+	}{
+		{1, "h", 1},
+		{2, "d", 48},
+		{1, "mo", 24 * 30},
+		{1, "y", 24 * 365},
+		{5, "unknown", 5},
+	}
+	for _, c := range cases {
+		if got := toHours(c.val, c.unit); got != c.want {
+			t.Fatalf("toHours(%d,%q)=%d, want %d", c.val, c.unit, got, c.want)
+		}
+	}
+}
