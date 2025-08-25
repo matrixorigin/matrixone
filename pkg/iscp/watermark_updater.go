@@ -273,8 +273,9 @@ func updateJobSpec(
 	if err != nil {
 		return
 	}
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	tableID, err = getTableID(
-		ctx,
+		ctxWithSysAccount,
 		cnUUID,
 		txn,
 		tenantId,
@@ -306,7 +307,7 @@ func updateJobSpec(
 		internalJobID,
 		jobSpecJson,
 	)
-	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	return
 }
 func unregisterJob(
@@ -340,8 +341,9 @@ func unregisterJob(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	tableID, err = getTableID(
-		ctx,
+		ctxWithSysAccount,
 		cnUUID,
 		txn,
 		tenantId,
@@ -352,7 +354,7 @@ func unregisterJob(
 		return
 	}
 	exist, dropped, internalJobID, err := queryIndexLog(
-		ctx,
+		ctxWithSysAccount,
 		cnUUID,
 		txn,
 		tenantId,
