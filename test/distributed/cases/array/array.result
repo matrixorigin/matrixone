@@ -54,9 +54,9 @@ select b + "[1,2,3]" from vec_table;
 b + [1,2,3]
 [2, 4, 6]
 select b + "[1,2]" from vec_table;
-invalid input: vector ops between different dimensions (3, 2) is not permitted.
+invalid input: expected vector dimension 3 != actual dimension 2.
 select b + "[1,2,3,4]" from vec_table;
-invalid input: vector ops between different dimensions (3, 4) is not permitted.
+invalid input: expected vector dimension 3 != actual dimension 4.
 select cast("[1,2,3]" as vecf32(3));
 cast([1,2,3] as vecf32(3))
 [1, 2, 3]

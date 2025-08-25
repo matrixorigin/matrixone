@@ -2070,6 +2070,7 @@ type IndexOption struct {
 	HnswEfConstruction       int64
 	HnswEfSearch             int64
 	HnswQuantization         string
+	Async                    bool
 }
 
 // Must follow the following sequence when test
@@ -2128,6 +2129,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.Visible != VISIBLE_TYPE_INVALID {
 		ctx.WriteString(node.Visible.ToString())
+	}
+	if node.Async {
+		ctx.WriteString("ASYNC ")
 	}
 }
 

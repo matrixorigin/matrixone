@@ -147,6 +147,7 @@ func TestNewSinker(t *testing.T) {
 			defer sinkerStub.Reset()
 
 			got, err := NewSinker(
+				"",
 				tt.args.sinkUri,
 				tt.args.accountId,
 				tt.args.taskId,

@@ -3081,6 +3081,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	stubSinker := gostub.Stub(
 		&cdc.NewSinker,
 		func(
+			string,
 			cdc.UriInfo,
 			uint64,
 			string,
