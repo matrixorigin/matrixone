@@ -218,8 +218,8 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 			s.mu.Lock()
 			handling, lastMp := s.handling, s.lastMp
 			s.mu.Unlock()
-			if _, injected := objectio.CDCScanTableInjected(); !injected {
-				if handling || lastMp == nil {
+			if handling || lastMp == nil {
+				if _, injected := objectio.CDCScanTableInjected(); !injected {
 					continue
 				}
 			}
