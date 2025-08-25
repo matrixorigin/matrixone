@@ -2376,19 +2376,19 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 
 func constructTableClone(
 	c *Compile,
-	n *plan.Node,
+	clonePlan *plan.CloneTable,
 ) (*table_clone.TableClone, error) {
 
 	metaCopy := table_clone.NewTableClone()
 
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
-		SrcTblDef: n.TableDef,
-		SrcObjDef: n.ObjRef,
+		SrcTblDef: clonePlan.SrcTableDef,
+		SrcObjDef: clonePlan.SrcObjDef,
 
-		ScanSnapshot:    n.ScanSnapshot,
-		DstTblName:      n.InsertCtx.TableDef.Name,
-		DstDatabaseName: n.InsertCtx.TableDef.DbName,
+		ScanSnapshot:    clonePlan.ScanSnapshot,
+		DstTblName:      clonePlan.DstTableName,
+		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
 
 	var (
@@ -2401,7 +2401,7 @@ func constructTableClone(
 		hasAutoIncr bool
 	)
 
-	for _, colDef := range n.TableDef.Cols {
+	for _, colDef := range clonePlan.SrcTableDef.Cols {
 		if colDef.Typ.AutoIncr {
 			hasAutoIncr = true
 			break
@@ -2413,17 +2413,20 @@ func constructTableClone(
 	}
 
 	sql = fmt.Sprintf(
-		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d", n.TableDef.TblId)
+		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
+		clonePlan.SrcTableDef.TblId,
+	)
 
-	if n.ScanSnapshot != nil {
-		if n.ScanSnapshot.Tenant != nil {
-			account = n.ScanSnapshot.Tenant.TenantID
+	if clonePlan.ScanSnapshot != nil {
+		if clonePlan.ScanSnapshot.Tenant != nil {
+			account = clonePlan.ScanSnapshot.Tenant.TenantID
 		}
 
-		if n.ScanSnapshot.TS != nil {
+		if clonePlan.ScanSnapshot.TS != nil {
 			sql = fmt.Sprintf(
 				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
-				n.ScanSnapshot.TS.PhysicalTime, n.TableDef.TblId)
+				clonePlan.ScanSnapshot.TS.PhysicalTime, clonePlan.SrcTableDef.TblId,
+			)
 		}
 	}
 

@@ -204,7 +204,13 @@ func addRenameContextToAlterCtx(
 
 // AlterColumn ALTER ... SET DEFAULT or ALTER ... DROP DEFAULT specify a new default value for a column or remove the old default value, respectively.
 // If the old default is removed and the column can be NULL, the new default is NULL. If the column cannot be NULL, MySQL assigns a default value
-func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.AlterTableAlterColumnClause, alterCtx *AlterTableContext) error {
+func AlterColumn(
+	ctx CompilerContext,
+	alterPlan *plan.AlterTable,
+	spec *tree.AlterTableAlterColumnClause,
+	alterCtx *AlterTableContext,
+) (bool, error) {
+
 	tableDef := alterPlan.CopyTableDef
 
 	// get the original column name
@@ -213,7 +219,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 	// Check whether original column has existed.
 	originalCol := FindColumn(tableDef.Cols, originalColName)
 	if originalCol == nil || originalCol.Hidden {
-		return moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
+		return false, moerr.NewBadFieldError(ctx.GetContext(), spec.ColumnName.ColNameOrigin(), alterPlan.TableDef.Name)
 	}
 
 	for i, col := range tableDef.Cols {
@@ -226,7 +232,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 				}()
 				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
 				if err != nil {
-					return err
+					return false, err
 				}
 				defaultValue.NullAbility = colDef.Default.NullAbility
 				colDef.Default = defaultValue
@@ -238,7 +244,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 			break
 		}
 	}
-	return nil
+	return originalCol.Primary, nil
 }
 
 // OrderByColumn Currently, Mo only performs semantic checks on alter table order by
