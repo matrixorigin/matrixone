@@ -3779,7 +3779,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
-	existRes, err := c.runSqlWithResult(checkExistSql, int32(accountId))
+	existRes, err := c.runSqlWithResult(checkExistSql, int32(sysAccountId))
 	if err != nil {
 		return err
 	}
