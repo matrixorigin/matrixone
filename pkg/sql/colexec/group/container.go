@@ -26,3 +26,14 @@ func (ctr *container) MemoryUsed() int64 {
 	}
 	return size
 }
+
+func (ctr *container) GetHashTableState() (*HashTableState, error) {
+	return ctr.hr.Marshal(ctr.mtyp, ctr.keyWidth, ctr.keyNullable)
+}
+
+func (ctr *container) RestoreHashTableState(state *HashTableState) error {
+	ctr.mtyp = state.HashType
+	ctr.keyWidth = state.KeyWidth
+	ctr.keyNullable = state.KeyNullable
+	return ctr.hr.Unmarshal(state)
+}
