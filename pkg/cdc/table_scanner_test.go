@@ -163,13 +163,38 @@ func TestScanAndProcess(t *testing.T) {
 	}
 	defer td.Close()
 
+	tables := map[uint32]TblMap{
+		1: {
+			"db1.tbl1": &DbTableInfo{
+				SourceDbId:      1,
+				SourceDbName:    "db1",
+				SourceTblId:     1001,
+				SourceTblName:   "tbl1",
+				SourceCreateSql: "create table tbl1 (a int)",
+				IdChanged:       false,
+			},
+		},
+	}
+	scanCount := 0
+	td.scanTableFn = func() error {
+		td.mu.Lock()
+		if scanCount%5 == 0 {
+			td.lastMp = tables
+		} else {
+			td.lastMp = nil
+		}
+		td.mu.Unlock()
+		scanCount++
+		return nil
+	}
+
 	fault.Enable()
 	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
 	rm, _ := objectio.InjectCDCScanTable("fast scan")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go td.scanTableLoop(ctx)
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	defer rm()
 	fault.Disable()
 }
