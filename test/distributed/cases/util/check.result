@@ -1,0 +1,6 @@
+select mo_ctl('dn','DiskCleaner','details');
+mo_ctl(dn, DiskCleaner, details)
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn','DiskCleaner','verify');
+mo_ctl(dn, DiskCleaner, verify)
+{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
