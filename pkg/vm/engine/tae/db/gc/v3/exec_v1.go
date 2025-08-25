@@ -351,8 +351,8 @@ func MakeSnapshotAndPitrFineFilter(
 				tables := transObjects[name]
 				if entry := tables[tableID]; entry != nil {
 
-					// The table has not been dropped, and the deleteTS is empty, so it cannot be deleted.
-					if deleteTS.IsEmpty() {
+					// The table has not been dropped, and the dropTS is empty, so it cannot be deleted.
+					if entry.dropTS.IsEmpty() {
 						continue
 					}
 
