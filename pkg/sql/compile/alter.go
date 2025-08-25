@@ -245,27 +245,35 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				multiTableIndexes[indexDef.IndexName].IndexDefs[ty] = indexDef
 			}
 		}
-		for _, multiTableIndex := range multiTableIndexes {
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				err = s.handleVectorIvfFlatIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
-				)
-			case catalog.MoIndexHnswAlgo.ToString():
-				err = s.handleVectorHnswIndex(
-					c, id, extra, dbSource, multiTableIndex.IndexDefs,
-					qry.Database, newTableDef, nil,
-				)
+		err = c.runTxn(func(exec executor.TxnExecutor) error {
+			var err error
+			for _, multiTableIndex := range multiTableIndexes {
+				switch multiTableIndex.IndexAlgo {
+				case catalog.MoIndexIvfFlatAlgo.ToString():
+					err = s.handleVectorIvfFlatIndex(
+						c, exec, id, extra, dbSource, multiTableIndex.IndexDefs,
+						qry.Database, newTableDef, nil,
+					)
+				case catalog.MoIndexHnswAlgo.ToString():
+					err = s.handleVectorHnswIndex(
+						c, exec, id, extra, dbSource, multiTableIndex.IndexDefs,
+						qry.Database, newTableDef, nil,
+					)
+				}
+				if err != nil {
+					c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
+						zap.String("origin tableName", qry.GetTableDef().Name),
+						zap.String("copy table name", qry.CopyTableDef.Name),
+						zap.String("indexAlgo", multiTableIndex.IndexAlgo),
+						zap.Error(err))
+					return err
+				}
 			}
-			if err != nil {
-				c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
-					zap.String("origin tableName", qry.GetTableDef().Name),
-					zap.String("copy table name", qry.CopyTableDef.Name),
-					zap.String("indexAlgo", multiTableIndex.IndexAlgo),
-					zap.Error(err))
-				return err
-			}
+			return nil
+		})
+
+		if err != nil {
+			return err
 		}
 	}
 
