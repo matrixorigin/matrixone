@@ -30,7 +30,7 @@ import (
 	"time"
 )
 
-const NotFoundLimit = 10
+const NotFoundLimit = 30
 
 type gcChecker struct {
 	cleaner *checkpointCleaner

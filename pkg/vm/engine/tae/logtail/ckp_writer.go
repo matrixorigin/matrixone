@@ -17,7 +17,6 @@ package logtail
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 	"time"
 
@@ -298,9 +297,7 @@ func (data *CheckpointData_V2) Sync(
 	ckpfiles = make([]string, 0)
 	for _, obj := range files {
 		ckpfiles = append(ckpfiles, obj.ObjectName().String())
-		logutil.Infof("CheckpointData_V2 Sync is %v, data %v", obj.ObjectName().UnsafeString())
 	}
-	logutil.Infof("location Sync is %v, data %v", location.Name().UnsafeString())
 	return
 }
 func (data *CheckpointData_V2) Close() {
@@ -903,15 +900,10 @@ func SyncTableIDBatch(
 	if len(inMems) > 0 {
 		panic("logic error")
 	}
-	var ckpstr string
-	if !ckpLocation.IsEmpty() {
-		ckpstr = ckpLocation.Name().UnsafeString()
-	}
 	for _, file := range files {
 		location := file.ObjectLocation()
 		location.SetID(uint16(file.BlkCnt()))
 		locations.Append(location)
-		logutil.Infof("ckp %v-%v, SyncTableid %v, ckp %v", start.ToString(), end.ToString(), location.Name().UnsafeString(), ckpstr)
 	}
 	return
 }

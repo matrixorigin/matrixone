@@ -1837,6 +1837,10 @@ func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 }
 
 func (c *checkpointCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
-	scan := c.GetScannedWindow().Clone()
-	return scan.Details(ctx, c.mutation.snapshotMeta, c.mp)
+	scan := c.GetScannedWindow()
+	if scan == nil {
+		return nil, nil
+	}
+	window := scan.Clone()
+	return window.Details(ctx, c.mutation.snapshotMeta, c.mp)
 }

@@ -194,9 +194,6 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 
 	e.result.filesNotGC = make([]objectio.ObjectStats, 0, len(newFiles))
 	e.result.filesNotGC = append(e.result.filesNotGC, newFiles...)
-	for _, file := range newFiles {
-		logutil.Infof("CheckpointBasedGCJob exec %v", file.ObjectName().UnsafeString())
-	}
 	return nil
 }
 
