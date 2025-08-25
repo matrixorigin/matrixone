@@ -240,12 +240,6 @@ func getCheckpointLocation(
 	}
 	files := make([]string, 0)
 	files = append(files, checkpoint.GetLocation().Name().UnsafeString())
-	tableIDLocations := checkpoint.GetTableIDLocation()
-	for i := 0; i < tableIDLocations.Len(); i++ {
-		location := tableIDLocations.Get(i)
-		files = append(files, location.Name().UnsafeString())
-	}
-
 	for _, loc := range reader.GetLocations() {
 		files = append(files, loc.Name().UnsafeString())
 	}

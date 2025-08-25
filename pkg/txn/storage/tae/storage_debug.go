@@ -126,17 +126,11 @@ func (s *taeStorage) Debug(ctx context.Context,
 		}
 		return resp.Read()
 	case uint32(api.OpCode_OpDiskDiskCleaner):
-		_, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDiskCleaner)
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDiskCleaner)
 		if err != nil {
-			resp := protoc.MustMarshal(&api.TNStringResponse{
-				ReturnStr: "Failed!" + err.Error(),
-			})
-			return resp, err
+			return nil, err
 		}
-		resp := protoc.MustMarshal(&api.TNStringResponse{
-			ReturnStr: "OK",
-		})
-		return resp, nil
+		return resp.Read()
 	case uint32(api.OpCode_OpGetLatestCheckpoint):
 		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleGetLatestCheckpoint)
 		if err != nil {
