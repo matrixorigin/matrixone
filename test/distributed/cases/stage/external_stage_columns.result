@@ -20,10 +20,10 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-17    stage01    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:04    
+1250016    stage01    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage01    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select col1, col2 from t1 into outfile 'stage://stage01/local_stage_table001.csv';
 drop table t1;
 create table t1(
@@ -55,10 +55,10 @@ drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-18    stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:05    
+1250017    stage02    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage02    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage02    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select col3, col4 from t2 into outfile 'stage://stage02/local_stage_table002.csv';
 drop table t2;
 create table t2(
@@ -109,10 +109,10 @@ drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-19    stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:05    
+1250018    stage03    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage03    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage03    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select col1, col3 from t3 into outfile 'stage://stage03/local_stage_table003.csv';
 drop table t3;
 create table t3(
@@ -173,10 +173,10 @@ drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-20    stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:05    
+1250019    stage04    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage04    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage04    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select col1, col3, col5, col7 from t4 into outfile 'stage://stage04/local_stage_table004.csv';
 drop table if exists t4;
 create table t4(
@@ -218,10 +218,10 @@ drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-21    stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:06    
+1250020    stage05    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage05    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage05    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select col1,col2,col3 from t5 into outfile 'stage://stage05/local_stage_table005.csv';
 truncate t5;
 insert into t5 values (1,1,1);
@@ -282,10 +282,10 @@ drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-22    stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:06    
+1250021    stage07    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage07    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage07    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select col2 from t7 into outfile 'stage://stage07/local_stage_table007.csv';
 drop table if exists t7;
 create table t7(col1 text);
@@ -314,10 +314,10 @@ drop stage if exists stage11;
 create stage stage11 url = 'file:///$resources/into_outfile/stage' comment = 'this is a stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:07    this is a stage
+1    stage11    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    this is a stage
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage11    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    this is a stage
+stage11    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    this is a stage
 select col1 from t11 into outfile 'stage://stage11/local_stage_table011.csv';
 drop table if exists t11;
 create table t11 (col1 int);
@@ -362,10 +362,10 @@ create stage ex_stage url = 'file:///$resources/into_outfile/stage' comment = 'f
 select col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 from ex_table_01 into outfile 'stage://ex_stage/ttttable01.csv';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-23    ex_stage    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage        disabled    2024-09-19 10:46:07    file stage
+1250022    ex_stage    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-08-22 14:37:29    file stage
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-ex_stage    file:////Users/ariznawl/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    file stage
+ex_stage    file:////Users/eric/github/mo-tester/../matrixone/test/distributed/resources/into_outfile/stage    in_use    file stage
 drop table ex_table_01;
 create external table ex_table_01(
 col1 tinyint,
