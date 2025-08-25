@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,13 +54,16 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 
 	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	params, err := catalog.TryToIndexParams(idxdef.IndexAlgoParams)
 	if err != nil {
 		return false
 	}
+	if !params.HNSWAlgo().IsValid() {
+		return false
+	}
 
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
+	optype := params.HNSWAlgo().String()
+	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
 		return false
 	}
 
@@ -117,17 +118,20 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	if err != nil {
 		return nodeID, err
 	}
-	tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
-		SrcTable:      scanNode.TableDef.Name,
-		MetadataTable: metadef.IndexTableName,
-		IndexTable:    idxdef.IndexTableName,
-		ThreadsSearch: val.(int64)}
 
-	cfgbytes, err := json.Marshal(tblcfg)
-	if err != nil {
-		return nodeID, err
-	}
-	tblcfgstr := string(cfgbytes)
+	cfg := vectorindex.BuildIndexTableCfgV1(
+		scanNode.ObjRef.SchemaName,
+		scanNode.TableDef.Name,
+		metadef.IndexTableName,
+		idxdef.IndexTableName,
+		"",
+		"",
+		val.(int64),
+		int64(0),
+		int64(0), // index capacity
+	)
+
+	tblcfgstr := string(cfg)
 
 	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
 	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
@@ -143,13 +147,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	// JOIN between source table and hnsw_search table function
 	var exprs tree.Exprs
 
-	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(params, params, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(tblcfgstr, tblcfgstr, false, tree.P_char))
 
 	fnexpr := value.GetF()
 	f32vec := fnexpr.Args[0].GetLit().GetSval()
 
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
+	valExpr := &tree.CastExpr{Expr: tree.NewNumVal(f32vec, f32vec, false, tree.P_char),
 		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
 			FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 

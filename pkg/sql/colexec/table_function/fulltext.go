@@ -15,10 +15,10 @@
 package table_function
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -156,17 +156,39 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 	return vm.CancelResult, nil
 }
 
+func InitFulltextCfgFromParam(
+	buf []byte,
+	cfg *fulltext.FullTextParserParam,
+) (err error) {
+	if len(buf) == 0 {
+		return
+	}
+	params := catalog.IndexParams(buf)
+	if !params.IsFullText() {
+		err = moerr.NewInvalidInputNoCtxf(
+			"invalid fulltext index params %s",
+			params.String(),
+		)
+		return
+	}
+	cfg.Parser = params.ParserType().String()
+	return
+}
+
 // start calling tvf on nthRow and put the result in u.batch.  Note that current unnest impl will
 // always return one batch per nthRow.
-func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
+func (u *fulltextState) start(
+	tf *TableFunction,
+	proc *process.Process,
+	nthRow int,
+	analyzer process.Analyzer,
+) (err error) {
 
 	if !u.inited {
-		if len(tf.Params) > 0 {
-			err := json.Unmarshal([]byte(tf.Params), &u.param)
-			if err != nil {
-				return err
-			}
+		if err = InitFulltextCfgFromParam(tf.Params, &u.param); err != nil {
+			return
 		}
+
 		u.batch = tf.createResultBatch()
 		u.errors = make(chan error)
 		u.stream_chan = make(chan executor.Result, 8)
@@ -177,34 +199,59 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 
 	v := tf.ctr.argVecs[0]
 	if v.GetType().Oid != types.T_varchar {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("First argument (source table name) must be string, but got %s", v.GetType().String()))
+		err = moerr.NewInvalidInputNoCtxf(
+			"First argument (source table name) must be string, but got %s",
+			v.GetType().String(),
+		)
+		return
 	}
 	source_table := v.UnsafeGetStringAt(0)
 
 	v = tf.ctr.argVecs[1]
 	if v.GetType().Oid != types.T_varchar {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Second argument (index table name) must be string, but got %s", v.GetType().String()))
+		err = moerr.NewInvalidInputNoCtxf(
+			"Second argument (index table name) must be string, but got %s",
+			v.GetType().String(),
+		)
+		return
 	}
 	index_table := v.UnsafeGetStringAt(0)
 
 	v = tf.ctr.argVecs[2]
 	if v.GetType().Oid != types.T_varchar {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
+		err = moerr.NewInvalidInputNoCtxf(
+			"Third argument (pattern) must be string, but got %s",
+			v.GetType().String(),
+		)
+		return
 	}
 	pattern := v.UnsafeGetStringAt(0)
 
 	v = tf.ctr.argVecs[3]
 	if v.GetType().Oid != types.T_int64 {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Fourth argument (mode) must be int64, but got %s", v.GetType().String()))
+		err = moerr.NewInvalidInputNoCtxf(
+			"Fourth argument (mode) must be int64, but got %s",
+			v.GetType().String(),
+		)
+		return
 	}
-	mode := vector.GetFixedAtNoTypeCheck[int64](v, 0)
 
 	scoreAlgo, err := fulltext.GetScoreAlgo(proc)
 	if err != nil {
-		return err
+		return
 	}
 
-	return fulltextIndexMatch(u, proc, tf, source_table, index_table, pattern, mode, scoreAlgo, u.batch)
+	return fulltextIndexMatch(
+		u,
+		proc,
+		tf,
+		source_table,
+		index_table,
+		pattern,
+		vector.GetFixedAtNoTypeCheck[int64](v, 0),
+		scoreAlgo,
+		u.batch,
+	)
 }
 
 // prepare

@@ -32,7 +32,7 @@ import (
 
 type MockSearch struct {
 	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Tblcfg vectorindex.IndexTableCfg
 }
 
 func (m *MockSearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -54,7 +54,7 @@ func (m *MockSearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
 
 type MockAnySearch struct {
 	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Tblcfg vectorindex.IndexTableCfg
 }
 
 func (m *MockAnySearch) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -77,7 +77,7 @@ func (m *MockAnySearch) UpdateConfig(newalgo VectorIndexSearchIf) error {
 // Load Error
 type MockSearchLoadError struct {
 	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Tblcfg vectorindex.IndexTableCfg
 }
 
 func (m *MockSearchLoadError) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -99,7 +99,7 @@ func (m *MockSearchLoadError) UpdateConfig(newalgo VectorIndexSearchIf) error {
 // Search Error
 type MockSearchSearchError struct {
 	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Tblcfg vectorindex.IndexTableCfg
 }
 
 func (m *MockSearchSearchError) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -125,10 +125,22 @@ func TestCacheServe(t *testing.T) {
 	Cache.serve()
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
-	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		int64(0),
+		int64(0),
+		int64(0),
+	)
 	m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys, distances, err := Cache.Search(
+		proc, tblcfg.IndexTable(), m, fp32a, vectorindex.RuntimeConfig{Limit: 4},
+	)
 	require.Nil(t, err)
 	if keys, ok := anykeys.([]int64); ok {
 		require.Equal(t, len(keys), 1)
@@ -136,7 +148,7 @@ func TestCacheServe(t *testing.T) {
 	}
 	require.Equal(t, distances[0], float64(2.0))
 
-	Cache.Remove(tblcfg.IndexTable)
+	Cache.Remove(tblcfg.IndexTable())
 
 	Cache.Destroy()
 }
@@ -148,10 +160,21 @@ func TestCacheAny(t *testing.T) {
 	Cache.serve()
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
-	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		int64(0),
+		int64(0),
+		int64(0),
+	)
 	m := &MockAnySearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys, distances, err := Cache.Search(
+		proc, tblcfg.IndexTable(), m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.Nil(t, err)
 	keys, ok := anykeys.([]any)
 	require.True(t, ok)
@@ -159,7 +182,7 @@ func TestCacheAny(t *testing.T) {
 	require.Equal(t, keys[0], any(1))
 	require.Equal(t, distances[0], float64(2.0))
 
-	Cache.Remove(tblcfg.IndexTable)
+	Cache.Remove(tblcfg.IndexTable())
 
 	Cache.Destroy()
 }
@@ -180,12 +203,24 @@ func TestCache(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
-	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		int64(0),
+		int64(0),
+		int64(0),
+	)
 	os.Stderr.WriteString("cache getindex\n")
 	m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	os.Stderr.WriteString("cache search\n")
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	anykeys1, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys1, distances, err := Cache.Search(
+		proc, tblcfg.IndexTable(), m, fp32a, vectorindex.RuntimeConfig{Limit: 4},
+	)
 	require.Nil(t, err)
 	if keys1, ok := anykeys1.([]int64); ok {
 		require.Equal(t, len(keys1), 1)
@@ -200,7 +235,9 @@ func TestCache(t *testing.T) {
 
 	// new search
 	m3 := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
-	anykeys2, distances, err := Cache.Search(proc, tblcfg.IndexTable, m3, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys2, distances, err := Cache.Search(
+		proc, tblcfg.IndexTable(), m3, fp32a, vectorindex.RuntimeConfig{Limit: 4},
+	)
 	require.Nil(t, err)
 	if keys2, ok := anykeys2.([]int64); ok {
 		require.Equal(t, len(keys2), 1)
@@ -238,12 +275,25 @@ func TestCacheConcurrent(t *testing.T) {
 			for j := 0; j < 2000; j++ {
 				idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 				idxcfg.Usearch.Metric = usearch.L2sq
-				tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+				tblcfg := vectorindex.BuildIndexTableCfgV1(
+					"db",
+					"src",
+					"__secondary_meta",
+					"__secondary_index",
+					"",
+					"",
+					int64(0),
+					int64(0),
+					int64(0),
+				)
+
 				//os.Stderr.WriteString("cache getindex\n")
 				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				//os.Stderr.WriteString("cache search\n")
 				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-				anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := Cache.Search(
+					proc, tblcfg.IndexTable(), m, fp32a, vectorindex.RuntimeConfig{Limit: 4},
+				)
 				require.Nil(t, err)
 				if keys, ok := anykeys.([]int64); ok {
 					require.Equal(t, len(keys), 1)
@@ -287,12 +337,24 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 			for j := 0; j < 2000; j++ {
 				idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 				idxcfg.Usearch.Metric = usearch.L2sq
-				tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+				tblcfg := vectorindex.BuildIndexTableCfgV1(
+					"db",
+					"src",
+					"__secondary_meta",
+					"__secondary_index",
+					"",
+					"",
+					int64(0),
+					int64(0),
+					int64(0),
+				)
 				//os.Stderr.WriteString("cache getindex\n")
 				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				//os.Stderr.WriteString("cache search\n")
 				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-				anykeys, distances, err := Cache.Search(proc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := Cache.Search(
+					proc, tblcfg.IndexTable(), m, fp32a, vectorindex.RuntimeConfig{Limit: 4},
+				)
 				require.Nil(t, err)
 				if keys, ok := anykeys.([]int64); ok {
 					require.Equal(t, len(keys), 1)
@@ -334,11 +396,22 @@ func TestCacheLoadError(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
-	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
-	os.Stderr.WriteString("cache getindex\n")
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		int64(0),
+		int64(0),
+		int64(0),
+	)
 	m1 := &MockSearchLoadError{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	_, _, err := Cache.Search(proc, tblcfg.IndexTable, m1, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	_, _, err := Cache.Search(
+		proc, tblcfg.IndexTable(), m1, fp32a, vectorindex.RuntimeConfig{Limit: 4},
+	)
 	require.NotNil(t, err)
 
 	os.Stderr.WriteString(fmt.Sprintf("error : %v\n", err))
@@ -363,11 +436,23 @@ func TestCacheSearchError(t *testing.T) {
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
-	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__secondary_meta",
+		"__secondary_index",
+		"",
+		"",
+		int64(0),
+		int64(0),
+		int64(0),
+	)
 	os.Stderr.WriteString("cache getindex\n")
 	m1 := &MockSearchSearchError{Idxcfg: idxcfg, Tblcfg: tblcfg}
 	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-	_, _, err := Cache.Search(proc, tblcfg.IndexTable, m1, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	_, _, err := Cache.Search(
+		proc, tblcfg.IndexTable(), m1, fp32a, vectorindex.RuntimeConfig{Limit: 4},
+	)
 	require.NotNil(t, err)
 
 	os.Stderr.WriteString(fmt.Sprintf("error : %v\n", err))

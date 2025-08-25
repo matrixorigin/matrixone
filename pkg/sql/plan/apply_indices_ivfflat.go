@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,16 +54,15 @@ func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sor
 
 	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	params, err := catalog.TryToIndexParams(idxdef.IndexAlgoParams)
 	if err != nil {
 		return false
 	}
-
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
+	if !params.IVFFLATAlgo().IsValid() {
 		return false
 	}
 
+	optype := params.IVFFLATAlgo().String()
 	if optype != metric.DistFuncOpTypes[distFnExpr.Func.ObjName] {
 		return false
 	}
@@ -132,23 +129,26 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		}
 	}
 
-	tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
-		SrcTable:      scanNode.TableDef.Name,
-		MetadataTable: metadef.IndexTableName,
-		IndexTable:    idxdef.IndexTableName,
-		ThreadsSearch: val.(int64),
-		EntriesTable:  entriesdef.IndexTableName,
-		Nprobe:        uint(nprobe),
-		PKeyType:      pkType.Id,
-		PKey:          scanNode.TableDef.Pkey.PkeyColName,
-		KeyPart:       keypart,
-		KeyPartType:   partType.Id}
+	cfg := vectorindex.BuildIVFIndexTableCfgV1(
+		scanNode.ObjRef.SchemaName,
+		scanNode.TableDef.Name,
+		metadef.IndexTableName,
+		idxdef.IndexTableName,
+		"",
+		"",
+		val.(int64),
+		int64(0),
+		int64(0),
+		entriesdef.IndexTableName,
+		int64(0),
+		uint32(nprobe),
+		int32(pkType.Id),
+		int32(partType.Id),
+		int64(0),
+		int64(0),
+	)
 
-	cfgbytes, err := json.Marshal(tblcfg)
-	if err != nil {
-		return nodeID, err
-	}
-	tblcfgstr := string(cfgbytes)
+	tblcfgstr := string(cfg)
 
 	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
 	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC

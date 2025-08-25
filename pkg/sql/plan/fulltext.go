@@ -15,8 +15,7 @@
 package plan
 
 import (
-	"encoding/json"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
@@ -84,7 +83,14 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 
 	colDefs := _getColDefs(ftIndexColdefs)
 
-	params, err := builder.getFullTextParams(tbl.Func)
+	rawParams, err := builder.getFullTextParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	params, err := catalog.TryConvertToIndexParams(
+		catalog.IndexParamAlgoName_FullText,
+		rawParams,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -116,33 +122,40 @@ func (builder *QueryBuilder) buildFullTextIndexScan(tbl *tree.TableFunction, ctx
 	return builder.appendNode(node, ctx), nil
 }
 
-func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (string, error) {
-	var param fulltext.FullTextParserParam
-	if len(params) > 0 {
-		err := json.Unmarshal([]byte(params), &param)
-		if err != nil {
-			return "", err
-		}
-	}
-
+func (builder *QueryBuilder) getFullTextSql(
+	fn *tree.FuncExpr,
+	indexParams catalog.IndexParams,
+) (string, error) {
 	if _, ok := fn.Exprs[2].(*tree.NumVal); !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "index table name is not a constant")
+		return "", moerr.NewInvalidInput(
+			builder.GetContext(),
+			"index table name is not a constant",
+		)
 	}
 
 	idxtbl := fn.Exprs[2].String()
 
 	if _, ok := fn.Exprs[3].(*tree.NumVal); !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "pattern is not a constant")
+		return "", moerr.NewInvalidInput(
+			builder.GetContext(),
+			"pattern is not a constant",
+		)
 	}
 
 	pattern := fn.Exprs[3].String()
 	modeVal, ok := fn.Exprs[4].(*tree.NumVal)
 	if !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not a constant")
+		return "", moerr.NewInvalidInput(
+			builder.GetContext(),
+			"mode is not a constant",
+		)
 	}
 	mode, ok := modeVal.Int64()
 	if !ok {
-		return "", moerr.NewInvalidInput(builder.GetContext(), "mode is not an integer")
+		return "", moerr.NewInvalidInput(
+			builder.GetContext(),
+			"mode is not an integer",
+		)
 	}
 
 	ps, err := fulltext.ParsePattern(pattern, mode)
@@ -153,7 +166,11 @@ func (builder *QueryBuilder) getFullTextSql(fn *tree.FuncExpr, params string) (s
 	if err != nil {
 		return "", err
 	}
-	return fulltext.PatternToSql(ps, mode, idxtbl, param.Parser, scoreAlgo)
+	var parser string
+	if !indexParams.IsEmpty() {
+		parser = indexParams.ParserType().String()
+	}
+	return fulltext.PatternToSql(ps, mode, idxtbl, parser, scoreAlgo)
 }
 
 // select * from index_table, fulltext_index_tokenize(doc_id, concat(body, ' ', title))
@@ -165,7 +182,14 @@ func (builder *QueryBuilder) buildFullTextIndexTokenize(tbl *tree.TableFunction,
 	}
 
 	colDefs := _getColDefs(tokenizeColDefs)
-	params, err := builder.getFullTextParams(tbl.Func)
+	rawParams, err := builder.getFullTextParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	params, err := catalog.TryConvertToIndexParams(
+		catalog.IndexParamAlgoName_FullText,
+		rawParams,
+	)
 	if err != nil {
 		return 0, err
 	}
