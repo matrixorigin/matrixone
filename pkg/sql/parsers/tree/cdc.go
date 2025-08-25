@@ -45,6 +45,7 @@ type CreateCDCOption struct {
 
 type CreateCDC struct {
 	statementImpl
+	Internal    bool
 	IfNotExists bool
 	TaskName    Identifier
 	SourceUri   string
@@ -63,10 +64,15 @@ func (node *CreateCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.Tables))
 	ctx.WriteString("{ ")
 	for i := 0; i < len(node.Option)-1; i += 2 {
-		ctx.WriteString(fmt.Sprintf("\"%s\"='%s',", node.Option[i], node.Option[i+1]))
+		if i > 0 {
+			ctx.WriteByte(',')
+		}
+		ctx.WriteString(fmt.Sprintf("\"%s\"='%s'", node.Option[i], node.Option[i+1]))
 	}
 	ctx.WriteString("}")
-	ctx.WriteByte(';')
+	if node.Internal {
+		ctx.WriteString(" internal")
+	}
 }
 
 func (node *CreateCDC) GetStatementType() string { return "Create CDC" }
@@ -129,12 +135,14 @@ func (node *PauseCDC) TypeName() string { return "tree.PauseCDC" }
 
 type DropCDC struct {
 	statementImpl
-	Option *AllOrNotCDC
+	Internal bool
+	Option   *AllOrNotCDC
 }
 
-func NewDropCDC(option *AllOrNotCDC) *DropCDC {
+func NewDropCDC(option *AllOrNotCDC, internal bool) *DropCDC {
 	drop := reuse.Alloc[DropCDC](nil)
 	drop.Option = option
+	drop.Internal = internal
 	return drop
 }
 

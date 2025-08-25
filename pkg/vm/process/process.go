@@ -20,6 +20,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -89,6 +92,26 @@ func (proc *Process) GetQueryClient() qclient.QueryClient {
 
 func (proc *Process) GetFileService() fileservice.FileService {
 	return proc.Base.FileService
+}
+
+func (proc *Process) GetTaskService() taskservice.TaskService {
+	if proc == nil {
+		return nil
+	}
+	if proc.Base.TaskService != nil {
+		return proc.Base.TaskService
+	}
+	// best-effort fallback: try to fetch from service runtime if available
+	sid := proc.GetService()
+	if sid != "" {
+		if v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables("task-service"); ok {
+			if ts, ok2 := v.(taskservice.TaskService); ok2 {
+				proc.Base.TaskService = ts
+				return ts
+			}
+		}
+	}
+	return nil
 }
 
 func (proc *Process) GetUnixTime() int64 {

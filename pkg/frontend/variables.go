@@ -240,6 +240,8 @@ func (svbt SystemVariableBoolType) Convert(value interface{}) (interface{}, erro
 		return cv2(v)
 	case string:
 		return cv3(v)
+	case nil:
+		return int8(1), nil
 	}
 	return nil, errorConvertToBoolFailed
 }

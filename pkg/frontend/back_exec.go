@@ -315,7 +315,8 @@ func doComQueryInBack(
 		pu.QueryClient,
 		pu.HAKeeperClient,
 		pu.UdfService,
-		getAicm(service))
+		getAicm(service),
+		getPu(backSes.GetService()).TaskService)
 	proc.Base.Id = backSes.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows

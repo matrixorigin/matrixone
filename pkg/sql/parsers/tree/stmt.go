@@ -680,7 +680,12 @@ func (node *ShowRecoveryWindow) StmtKind() StmtKind {
 	return compositeResRowType
 }
 
-func (node *CreateCDC) StmtKind() StmtKind { return frontendStatusTyp }
+func (node *CreateCDC) StmtKind() StmtKind {
+	if node.Internal {
+		return defaultStatusTyp
+	}
+	return frontendStatusTyp
+}
 
 func (node *ShowCDC) StmtKind() StmtKind {
 	return compositeResRowType
@@ -691,6 +696,9 @@ func (node *PauseCDC) StmtKind() StmtKind {
 }
 
 func (node *DropCDC) StmtKind() StmtKind {
+	if node.Internal {
+		return defaultStatusTyp
+	}
 	return frontendStatusTyp
 }
 

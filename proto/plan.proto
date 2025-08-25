@@ -1155,6 +1155,8 @@ message DataDefinition {
 		CREATE_PITR = 36;
 		DROP_PITR = 37;
 		CREATE_TABLE_WITH_CLONE = 38;
+		CREATE_CDC = 39;
+		DROP_CDC = 40;
 	}
 
 	//DataDefinition type
@@ -1187,6 +1189,8 @@ message DataDefinition {
 		RenameTable rename_table 	    = 21;
 		CreatePitr create_pitr = 100;
 		DropPitr drop_pitr = 101;
+		CreateCDC create_cdc = 102;
+		DropCDC drop_cdc = 103;
 	}
 }
 
@@ -1606,4 +1610,24 @@ message CreatePitr {
 message DropPitr {
   bool if_exists = 1;
   string name = 2;
+}
+
+message CreateCDC {
+	bool if_not_exists = 1;
+	string task_name = 2;
+	string source_uri = 3;
+	string sink_type = 4;
+	string sink_uri = 5;
+	string tables = 6;
+	repeated string option = 7;
+	string user_name = 8;
+	uint32 account_id = 9;
+	string account_name = 10;
+}
+
+message DropCDC {
+	bool if_exists = 1;
+	string task_name = 2;
+	bool all = 3;
+	uint32 account_id = 4;
 }

@@ -2951,7 +2951,7 @@ func getChangedTableList(
 		de.mp, de.cli, txnOperator,
 		de.fs, de.ls,
 		de.qc, de.hakeeper,
-		de.us, nil,
+		de.us, nil, nil,
 	)
 
 	var resp *cmd_util.GetChangedTableListResp

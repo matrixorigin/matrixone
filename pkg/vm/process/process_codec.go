@@ -207,6 +207,7 @@ func (c *codecService) Decode(
 		c.hakeeper,
 		c.udfService,
 		nil,
+		nil,
 	)
 	proc.Base.LockService = c.lockService
 	proc.Base.PartitionService = c.partitionService

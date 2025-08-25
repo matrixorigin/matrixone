@@ -97,6 +97,7 @@ func NewProcessWithMPool(t testing.TB, sid string, mp *mpool.MPool) *process.Pro
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	proc.Base.Lim.Size = 1 << 20
 	proc.Base.Lim.BatchRows = 1 << 20

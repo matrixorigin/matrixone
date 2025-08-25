@@ -136,6 +136,7 @@ func getInternalProcessByUniqueID(
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 	internalProcesses[id] = proc
 	return proc, nil

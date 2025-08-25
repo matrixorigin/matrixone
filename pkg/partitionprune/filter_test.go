@@ -41,6 +41,7 @@ func TestFilter(t *testing.T) {
 		nil, // no hakeeper
 		nil, // no udf service
 		nil, // no auto increase
+		nil,
 	)
 	defer proc.Free()
 

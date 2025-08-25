@@ -188,7 +188,7 @@ func Test_gettingInfo(t *testing.T) {
 	}
 	defer mpool.DeleteMPool(mp)
 
-	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, nil, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, nil, nil, nil, nil)
 
 	type args struct {
 		proc *process.Process
@@ -587,7 +587,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	defer mpool.DeleteMPool(mp)
-	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, &mockHKClient{}, nil, nil)
+	testProc := process.NewTopProcess(context.Background(), mp, nil, nil, nil, nil, &mockQueryService{}, &mockHKClient{}, nil, nil, nil)
 
 	type args struct {
 		in0  int

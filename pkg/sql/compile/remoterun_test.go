@@ -102,6 +102,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		nil)
 	proc.Base.Id = "1"
 	proc.Base.Lim = process.Limitation{}
@@ -350,6 +351,7 @@ func Test_decodeBatch(t *testing.T) {
 	mp := &mpool.MPool{}
 	vp := process.NewTopProcess(
 		context.TODO(),
+		nil,
 		nil,
 		nil,
 		nil,

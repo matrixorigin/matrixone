@@ -1101,6 +1101,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		return
 	}
 
+	// ensure session system variables container exists in embed/basic cluster
+	if ses.sesSysVars == nil {
+		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
+	}
+
 	if def.UpdateSessVar != nil {
 		err = def.UpdateSessVar(ctx, ses, ses.sesSysVars, name, val)
 	} else {

@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -275,6 +276,7 @@ type BaseProcess struct {
 	SessionInfo      SessionInfo
 	FileService      fileservice.FileService
 	LockService      lockservice.LockService
+	TaskService      taskservice.TaskService
 	PartitionService partitionservice.PartitionService
 	IncrService      incrservice.AutoIncrementService
 

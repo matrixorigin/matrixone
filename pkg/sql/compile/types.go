@@ -52,11 +52,13 @@ const (
 	CreateDatabase
 	CreateTable
 	CreatePitr
+	CreateCDC
 	CreateView
 	CreateIndex
 	DropDatabase
 	DropTable
 	DropPitr
+	DropCDC
 	DropIndex
 	TruncateTable
 	AlterView

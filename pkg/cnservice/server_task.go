@@ -104,6 +104,8 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 		panic("no task service is initialized")
 	}
 	s.pu.TaskService = ts
+	// register into service runtime for fallback retrievals
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables("task-service", ts)
 }
 
 func (s *service) initSqlWriterFactory() {

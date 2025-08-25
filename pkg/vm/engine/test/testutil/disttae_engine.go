@@ -196,6 +196,7 @@ func NewTestDisttaeEngine(
 		qc,
 		hakeeper,
 		nil, //s.udfService
+		nil,
 	)
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
 

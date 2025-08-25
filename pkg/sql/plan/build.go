@@ -308,8 +308,12 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildCreateTable(ctx, stmt, nil)
 	case *tree.CreatePitr:
 		return buildCreatePitr(stmt, ctx)
+	case *tree.CreateCDC:
+		return buildCreateCDC(stmt, ctx)
 	case *tree.DropPitr:
 		return buildDropPitr(stmt, ctx)
+	case *tree.DropCDC:
+		return buildDropCDC(stmt, ctx)
 	case *tree.DropTable:
 		return buildDropTable(stmt, ctx)
 	case *tree.TruncateTable:

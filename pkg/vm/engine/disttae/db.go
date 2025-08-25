@@ -386,6 +386,7 @@ func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS)
 		tableProc.Base.FileService, tableProc.Base.LockService,
 		tableProc.Base.QueryClient, tableProc.Base.Hakeeper,
 		tableProc.Base.UdfService, tableProc.Base.Aicm,
+		tableProc.Base.TaskService,
 	)
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpSnapshotRead, whichTN, payload, responseUnmarshaler)
 	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)

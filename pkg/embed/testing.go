@@ -15,10 +15,16 @@
 package embed
 
 import (
-	"sync"
-
+	"context"
+	"fmt"
+	mruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
+	"sync"
 )
 
 var (
@@ -55,6 +61,7 @@ func RunBaseClusterTests(
 							func(config *ServiceConfig) {
 								config.CN.LockService.MaxFixedSliceSize = 10001
 								config.CN.LockService.MaxLockRowCount = 10000
+								config.CN.Frontend.SkipCheckUser = true
 							},
 						)
 					}
@@ -73,6 +80,37 @@ func RunBaseClusterTests(
 	if err != nil {
 		return err
 	}
+	// Initialize essential frontend/session state using SQL executor
+	func() {
+		svc, e := basicCluster.GetCNService(0)
+		if e != nil {
+			return
+		}
+		// Create and register a TaskService for embed cluster
+		// Build a simple address factory using CN SQL address
+		cfg := svc.GetServiceConfig()
+		sqlAddr := fmt.Sprintf("%s:%d", cfg.CN.Frontend.Host, cfg.CN.Frontend.Port)
+		addressFactory := func(ctx context.Context, random bool) (string, error) { return sqlAddr, nil }
+		holder := taskservice.NewTaskServiceHolder(mruntime.ServiceRuntime(svc.ServiceID()), addressFactory)
+		// register special user for task framework
+		username := "task_user"
+		password := "task_pass"
+		frontend.SetSpecialUser(username, []byte(password))
+		_ = holder.Create(logservicepb.CreateTaskService{
+			User: logservicepb.TaskTableUser{
+				Username: username,
+				Password: password,
+			},
+			TaskDatabase: "mo_task",
+		})
+		if ts, ok := holder.Get(); ok {
+			mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("task-service", ts)
+		}
+
+		// Also prepare and register a ParameterUnit for compile path fallback
+		pu := config.NewParameterUnit(&cfg.CN.Frontend, nil, nil, nil)
+		mruntime.ServiceRuntime(svc.ServiceID()).SetGlobalVariables("parameter-unit", pu)
+	}()
 	fn(basicCluster)
 	return nil
 }
