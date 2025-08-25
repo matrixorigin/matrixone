@@ -1031,9 +1031,6 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
-	if sv.mp == nil {
-		sv.mp = make(map[string]interface{})
-	}
 	sv.mp[name] = value
 }
 

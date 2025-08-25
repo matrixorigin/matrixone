@@ -305,6 +305,39 @@ func TestCDCCases(t *testing.T) {
 			_, err = exec.Exec(ctx, "create cdc bad_level '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='cluster'} internal", executor.Options{}.WithDatabase(db))
 			require.Error(t, err)
 
+			// Case 3.8: invalid Frequency '0h' (must be positive) should error
+			_, err = exec.Exec(ctx, "create cdc bad_freq_zero '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database','Frequency'='0h'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Case 3.9: invalid Frequency exceeding upper bound should error
+			_, err = exec.Exec(ctx, "create cdc bad_freq_large '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database','Frequency'='10000001h'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Case 3.10: invalid MaxSqlLength (non-integer) should error
+			_, err = exec.Exec(ctx, "create cdc bad_max_sql '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database','MaxSqlLength'='abc'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Case 3.11: StartTs only (valid) should succeed
+			cdcTaskStartOnly := "cdc_task_start_only"
+			mustExec("create cdc "+cdcTaskStartOnly+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+				"'Level'='database','StartTs'='2025-01-02T01:02:03Z'"+
+				"} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskStartOnly, true)
+
+			// Case 3.12: EndTs only (valid) should succeed
+			cdcTaskEndOnly := "cdc_task_end_only"
+			mustExec("create cdc "+cdcTaskEndOnly+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+				"'Level'='database','EndTs'='2025-01-02T06:07:08Z'"+
+				"} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskEndOnly, true)
+
+			// Case 3.13: valid Exclude regex should succeed
+			cdcTaskExclude := "cdc_task_exclude"
+			mustExec("create cdc "+cdcTaskExclude+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+				"'Level'='database','Exclude'='^ignore_'"+
+				"} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskExclude, true)
+
 			// Case 4: if not exists should pass when exists
 			mustExec("create cdc if not exists "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
 

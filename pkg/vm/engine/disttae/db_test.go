@@ -45,9 +45,6 @@ func (m mockCluster) RemoveCN(string)                                      {}
 func (m mockCluster) AddCN(metadata.CNService)                             {}
 func (m mockCluster) UpdateCN(metadata.CNService)                          {}
 
-// This test hacks a minimal txnTable and Process to exercise requestSnapshotRead path
-// It only verifies that the handler wiring does not panic and returns either a typed
-// response or a graceful not-supported error path.
 func Test_requestSnapshotRead_Smoke(t *testing.T) {
 	ctx := context.Background()
 

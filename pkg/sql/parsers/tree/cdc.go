@@ -64,10 +64,12 @@ func (node *CreateCDC) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("'%s' ", node.Tables))
 	ctx.WriteString("{ ")
 	for i := 0; i < len(node.Option)-1; i += 2 {
-		ctx.WriteString(fmt.Sprintf("\"%s\"='%s',", node.Option[i], node.Option[i+1]))
+		if i > 0 {
+			ctx.WriteByte(',')
+		}
+		ctx.WriteString(fmt.Sprintf("\"%s\"='%s'", node.Option[i], node.Option[i+1]))
 	}
 	ctx.WriteString("}")
-	ctx.WriteByte(';')
 	if node.Internal {
 		ctx.WriteString(" internal")
 	}
