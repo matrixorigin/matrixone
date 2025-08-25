@@ -650,7 +650,7 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
 		for i := 0; i < bat.Vecs[0].Length(); i++ {
 			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
-			name := stats.ObjectName().UnsafeString()
+			name := stats.ObjectName().String()
 			if objects[name] == nil {
 				objects[name] = make(map[uint64]*ObjectEntry)
 			}

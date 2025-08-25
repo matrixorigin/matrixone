@@ -116,7 +116,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 	window := sancWindow.Clone()
 	windowCount := len(window.files)
 	for _, stats := range window.files {
-		objects[stats.ObjectName().UnsafeString()] = &ObjectEntry{}
+		objects[stats.ObjectName().String()] = &ObjectEntry{}
 	}
 	err := buildObjects(&window, objects, window.LoadBatchData)
 	if err != nil {
@@ -172,13 +172,13 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 			defer itObject.Release()
 			for ok := itObject.Last(); ok; ok = itObject.Prev() {
 				obj := itObject.Item()
-				delete(allObjects, obj.ObjectName().UnsafeString())
+				delete(allObjects, obj.ObjectName().String())
 			}
 			itTombstone := table.MakeTombstoneObjectIt()
 			defer itTombstone.Release()
 			for ok := itTombstone.Last(); ok; ok = itTombstone.Prev() {
 				obj := itTombstone.Item()
-				delete(allObjects, obj.ObjectName().UnsafeString())
+				delete(allObjects, obj.ObjectName().String())
 			}
 
 			itTable.Next()

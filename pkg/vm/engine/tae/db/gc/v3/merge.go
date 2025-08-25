@@ -91,7 +91,7 @@ func MergeCheckpoint(
 		// add checkpoint metafile(ckp/mete_ts-ts.ckp...) to deleteFiles
 		deleteFiles = append(deleteFiles, nameMeta)
 		// add checkpoint idx file to deleteFiles
-		deleteFiles = append(deleteFiles, ckpEntry.GetLocation().Name().UnsafeString())
+		deleteFiles = append(deleteFiles, ckpEntry.GetLocation().Name().String())
 		locations, err = logtail.LoadCheckpointLocations(
 			ctx, sid, data,
 		)
@@ -110,7 +110,7 @@ func MergeCheckpoint(
 		tableIDLocations := ckpEntry.GetTableIDLocation()
 		for i := 0; i < tableIDLocations.Len(); i++ {
 			location := tableIDLocations.Get(i)
-			deleteFiles = append(deleteFiles, location.Name().UnsafeString())
+			deleteFiles = append(deleteFiles, location.Name().String())
 		}
 
 	}
