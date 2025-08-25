@@ -374,7 +374,7 @@ func unregisterJob(
 		jobID.JobName,
 		internalJobID,
 	)
-	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
