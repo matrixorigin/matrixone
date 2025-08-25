@@ -254,23 +254,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	projNode.Children[0] = sortByID
 
-	/*
-		// check equal distFn and only compute once for equal function()
-		projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
+	// check equal distFn and only compute once for equal function()
+	projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
 
-		// replace the project with ColRef (same distFn as the order by)
-		for _, id := range projids {
-			projNode.ProjectList[id] = &Expr{
-				Typ: curr_node.TableDef.Cols[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: curr_node.BindingTags[0],
-						ColPos: 1, // score
-					},
+	// replace the project with ColRef (same distFn as the order by)
+	for _, id := range projids {
+		projNode.ProjectList[id] = &Expr{
+			Typ: curr_node.TableDef.Cols[1].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: curr_node.BindingTags[0],
+					ColPos: 1, // score
 				},
-			}
+			},
 		}
-	*/
+	}
 
 	return nodeID, nil
 }
@@ -318,6 +316,7 @@ func (builder *QueryBuilder) findPkFromProject(projNode *plan.Node, pkPos int32)
 	}
 	return projids
 }
+*/
 
 // e.g. SELECT a, L2_DISTANCE(b, '[0, ..]') FROM SRC ORDER BY L2_DISTANCE(b, '[0,..]') limit 4
 // the plan is 'project -> sort -> project -> tablescan'
@@ -366,4 +365,3 @@ func (builder *QueryBuilder) findEqualDistFnFromProject(projNode *plan.Node, dis
 
 	return projids
 }
-*/
