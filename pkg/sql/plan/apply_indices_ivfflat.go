@@ -34,9 +34,17 @@ func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sor
 		return false
 	}
 
-	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+	orderExpr := sortNode.OrderBy[0].Expr
+	distFnExpr := orderExpr.GetF()
 	if distFnExpr == nil {
-		return false
+		childNode := builder.qry.Nodes[sortNode.Children[0]]
+		if childNode.NodeType == plan.Node_PROJECT {
+			distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
+		}
+
+		if distFnExpr == nil {
+			return false
+		}
 	}
 	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
 		return false
@@ -150,7 +158,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	}
 	tblcfgstr := string(cfgbytes)
 
-	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+	var childNode *plan.Node
+	orderExpr := sortNode.OrderBy[0].Expr
+	distFnExpr := orderExpr.GetF()
+	if distFnExpr == nil {
+		childNode = builder.qry.Nodes[sortNode.Children[0]]
+		distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
+	}
 	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
 
 	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, keypart)
@@ -164,8 +178,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	// JOIN between source table and hnsw_search table function
 	var exprs tree.Exprs
 
-	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(params, params, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(tblcfgstr, tblcfgstr, false, tree.P_char))
 
 	fnexpr := value.GetF()
 	vecsval := fnexpr.Args[0].GetLit().GetSval()
@@ -173,7 +187,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	if value.Typ.GetId() == int32(types.T_array_float64) {
 		family = "vecf64"
 	}
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](vecsval, vecsval, false, tree.P_char),
+	valExpr := &tree.CastExpr{Expr: tree.NewNumVal(vecsval, vecsval, false, tree.P_char),
 		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
 			FamilyString: family, Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 	exprs = append(exprs, valExpr)
@@ -260,19 +274,20 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	scanNode.Offset = nil
 
 	// Create SortBy with distance column from table function
-	orderByScore := make([]*OrderBySpec, 0, 1)
-	orderByScore = append(orderByScore, &OrderBySpec{
-		Expr: &Expr{
-			Typ: curr_node.TableDef.Cols[1].Typ, // score column
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: curr_node.BindingTags[0],
-					ColPos: 1, // score column
+	orderByScore := []*OrderBySpec{
+		{
+			Expr: &plan.Expr{
+				Typ: curr_node.TableDef.Cols[1].Typ, // score column
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: curr_node.BindingTags[0],
+						ColPos: 1, // score column
+					},
 				},
 			},
+			Flag: sortDirection,
 		},
-		Flag: sortDirection,
-	})
+	}
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
@@ -281,6 +296,20 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 	}, ctx)
 
 	projNode.Children[0] = sortByID
+
+	if childNode != nil {
+		sortIdx := orderExpr.GetCol().ColPos
+		projMap := make(map[[2]int32]*plan.Expr)
+		for i, proj := range childNode.ProjectList {
+			if i == int(sortIdx) {
+				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
+			} else {
+				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
+			}
+		}
+
+		replaceColumnsForNode(projNode, projMap)
+	}
 
 	return nodeID, nil
 }
