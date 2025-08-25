@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"go.uber.org/zap"
@@ -58,6 +57,7 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			CallBackTableName:    make(map[string][]string),
 			SubscribedTableNames: make(map[string][]string),
 		}
+		detector.scanTableFn = detector.scanTable
 	})
 	return detector
 }
@@ -87,6 +87,8 @@ type TableDetector struct {
 	CallBackTableName map[string][]string
 	// tablename -> [taska, taskb ...]
 	SubscribedTableNames map[string][]string
+
+	scanTableFn func() error
 
 	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
 	handling bool
@@ -219,9 +221,7 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 			handling, lastMp := s.handling, s.lastMp
 			s.mu.Unlock()
 			if handling || lastMp == nil {
-				if _, injected := objectio.CDCScanTableInjected(); !injected {
-					continue
-				}
+				continue
 			}
 
 			go s.processCallback(ctx, lastMp)
@@ -230,7 +230,7 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 }
 
 func (s *TableDetector) scanAndProcess(ctx context.Context) {
-	if err := s.scanTable(); err != nil {
+	if err := s.scanTableFn(); err != nil {
 		logutil.Error("CDC-TableDetector-Scan-Error", zap.Error(err))
 		return
 	}
@@ -266,10 +266,6 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 }
 
 func (s *TableDetector) scanTable() error {
-	if objectio.CDCScanTableErrInjected() {
-		return moerr.NewInternalError(context.Background(), "CDC_SCANTABLE_ERR")
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var (
