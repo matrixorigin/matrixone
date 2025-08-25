@@ -2237,14 +2237,6 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 		switch vv := v.(type) {
 		case int64:
 			lctn = vv
-		case int32:
-			lctn = int64(vv)
-		case int:
-			lctn = int64(vv)
-		case string:
-			if n, e := strconv.ParseInt(vv, 10, 64); e == nil {
-				lctn = n
-			}
 		}
 	}
 	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)

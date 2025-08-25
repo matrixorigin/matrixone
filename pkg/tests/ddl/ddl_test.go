@@ -232,7 +232,7 @@ func TestCDCCases(t *testing.T) {
 			mustExec("create table "+table+" (col1 int)", executor.Options{}.WithDatabase(db))
 
 			// ensure PITR for CDC precondition
-			mustExec("create pitr if not exists pitr_db for database "+db+" range 2 'h' internal", executor.Options{}.WithDatabase(db))
+			mustExec("create pitr if not exists pitr_db for database "+db+" range 3 'h' internal", executor.Options{}.WithDatabase(db))
 
 			// helper: verify mo_catalog.mo_cdc_task by task_name
 			verifyTaskPresent := func(taskName string, expect bool) {
@@ -256,6 +256,54 @@ func TestCDCCases(t *testing.T) {
 			// Case 3: account-level CDC (all)
 			mustExec("create cdc "+cdcTaskAcc+" '"+conn+"' 'matrixone' '"+conn+"' '*.*' {'Level'='account'} internal", executor.Options{}.WithDatabase(db))
 			verifyTaskPresent(cdcTaskAcc, true)
+
+			// Case 3.1: database-level with rich options
+			cdcTaskOpts1 := "cdc_task_opts1"
+			mustExec("create cdc "+cdcTaskOpts1+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+				"'Level'='database',"+
+				"'NoFull'='true',"+
+				"'MaxSqlLength'='8192',"+
+				"'SendSqlTimeout'='2m',"+
+				"'InitSnapshotSplitTxn'='false',"+
+				"'Frequency'='120m',"+
+				"'Exclude'='.*',"+
+				"'StartTs'='2025-01-02T03:04:05Z',"+
+				"'EndTs'='2025-01-02T04:05:06Z'"+
+				"} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskOpts1, true)
+			// Validate the no_full flag via where clause
+			require.Greater(t, rows("select task_name from mo_catalog.mo_cdc_task where task_name='"+cdcTaskOpts1+"' and no_full=true", executor.Options{}), 0)
+
+			// Case 3.2: table-level with frequency in hours
+			cdcTaskOpts2 := "cdc_task_opts2"
+			mustExec("create cdc "+cdcTaskOpts2+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {"+
+				"'Level'='table',"+
+				"'NoFull'='false',"+
+				"'Frequency'='2h'"+
+				"} internal", executor.Options{}.WithDatabase(db))
+			verifyTaskPresent(cdcTaskOpts2, true)
+
+			// Case 3.3: invalid exclude regex (should error)
+			_, err = exec.Exec(ctx, "create cdc bad_exclude '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database','Exclude'='\\'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Case 3.4: invalid sink type (should error)
+			_, err = exec.Exec(ctx, "create cdc bad_sink '"+conn+"' 'unknown' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Case 3.5: invalid StartTs format (should error)
+			_, err = exec.Exec(ctx, "create cdc bad_ts '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database','StartTs'='bad'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Case 3.6: reversed time range (EndTs before StartTs) should error
+			_, err = exec.Exec(ctx, "create cdc bad_time_order '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {"+
+				"'Level'='database','StartTs'='2025-01-02T05:00:00Z','EndTs'='2025-01-02T04:00:00Z'"+
+				"} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+
+			// Case 3.7: invalid Level value 'cluster' (compile path rejects) should error
+			_, err = exec.Exec(ctx, "create cdc bad_level '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='cluster'} internal", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
 
 			// Case 4: if not exists should pass when exists
 			mustExec("create cdc if not exists "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
