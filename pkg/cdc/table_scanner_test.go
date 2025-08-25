@@ -168,7 +168,7 @@ func TestScanAndProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go td.scanTableLoop(ctx)
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	defer rm()
 	td.scanAndProcess(context.Background())
 	fault.Disable()
