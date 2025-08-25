@@ -4883,7 +4883,7 @@ func (c *Compile) checkPitrGranularity(
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResult(sqlCluster, int32(catalog.System_Account)); err == nil {
 		if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
-			val := vector.MustFixedColNoTypeCheck[int64](res.Batches[0].Vecs[0])[0]
+			val := int64(vector.MustFixedColNoTypeCheck[uint8](res.Batches[0].Vecs[0])[0])
 			unit := strings.ToLower(res.Batches[0].Vecs[1].GetStringAt(0))
 			if toHours(val, unit) >= minPitrLen {
 				res.Close()
@@ -4906,7 +4906,7 @@ func (c *Compile) checkPitrGranularity(
 			}
 			defer res.Close()
 			if len(res.Batches) > 0 && res.Batches[0].Vecs[0].Length() > 0 {
-				val := vector.MustFixedColNoTypeCheck[int64](res.Batches[0].Vecs[0])[0]
+				val := int64(vector.MustFixedColNoTypeCheck[uint8](res.Batches[0].Vecs[0])[0])
 				unit := strings.ToLower(res.Batches[0].Vecs[1].GetStringAt(0))
 				return toHours(val, unit) >= minPitrLen, nil
 			}
