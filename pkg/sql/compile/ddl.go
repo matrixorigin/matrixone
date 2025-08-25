@@ -3784,7 +3784,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// check pitr if exists（pitr_name + create_account）
 	checkExistSql := getSqlForCheckPitrExists(pitrName, accountId)
-	existRes, err := c.runSqlWithResult(checkExistSql, int32(accountId))
+	existRes, err := c.runSqlWithResult(checkExistSql, int32(sysAccountId))
 	if err != nil {
 		return err
 	}
@@ -3799,7 +3799,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 
 	// Check if pitr dup
 	checkSql := getSqlForCheckPitrDup(createPitr)
-	res, err := c.runSqlWithResult(checkSql, int32(accountId))
+	res, err := c.runSqlWithResult(checkSql, int32(sysAccountId))
 	if err != nil {
 		return err
 	}
@@ -3848,7 +3848,7 @@ func (s *Scope) CreatePitr(c *Compile) error {
 	)
 
 	// Execute create pitr sql
-	err = c.runSql(sql)
+	err = c.runSqlWithAccountId(sql, int32(sysAccountId))
 	if err != nil {
 		return err
 	}
@@ -3978,7 +3978,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 
 	// 1. Check if PITR exists
 	checkSql := fmt.Sprintf("select pitr_id from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
-	res, err := c.runSqlWithResult(checkSql, int32(accountId))
+	res, err := c.runSqlWithResult(checkSql, int32(sysAccountId))
 	if err != nil {
 		return err
 	}
@@ -3992,7 +3992,7 @@ func (s *Scope) DropPitr(c *Compile) error {
 
 	// 2. Delete PITR record
 	deleteSql := fmt.Sprintf("delete from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d", pitrName, accountId)
-	err = c.runSqlWithAccountId(deleteSql, int32(accountId))
+	err = c.runSqlWithAccountId(deleteSql, int32(sysAccountId))
 	if err != nil {
 		return err
 	}
