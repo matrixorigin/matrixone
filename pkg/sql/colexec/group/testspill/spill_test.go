@@ -78,13 +78,13 @@ func TestSpill(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// query
+	// query, large number of groups
 	rows, err := db.Query(`
 		select 
 			product_id, 
 			customer_id,
 			sale_date,
-		sum(amount) as total_sales
+			sum(amount) as total_sales
 		from sales
 		group by product_id, customer_id, sale_date
 		order by total_sales desc;
