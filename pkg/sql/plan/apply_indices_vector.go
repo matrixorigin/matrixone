@@ -17,6 +17,10 @@ package plan
 import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int32) *plan.Node {
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+		return builder.resolveScanNodeWithIndex(builder.qry.Nodes[node.Children[0]], depth)
+	}
+
 	if depth == 0 {
 		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Indexes != nil {
 			return node
