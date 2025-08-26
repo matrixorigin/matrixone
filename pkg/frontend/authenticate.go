@@ -1297,10 +1297,7 @@ const (
 
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
-	checkDatabaseTableFormat = `select t.rel_id from mo_catalog.mo_database d, mo_catalog.mo_tables t
-										where d.dat_id = t.reldatabase_id
-											and d.datname = "%s"
-											and t.relname = "%s";`
+	checkDatabaseTableFormat = `select rel_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = "%d";`
 
 	//TODO:fix privilege_level string and obj_type string
 	//For object_type : table, privilege_level : *.*
@@ -1941,12 +1938,30 @@ func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, account
 	return fmt.Sprintf(checkDatabaseWithOwnerFormat, dbName, accountId), nil
 }
 
-func getSqlForCheckDatabaseTable(ctx context.Context, dbName, tableName string) (string, error) {
+func getSqlForCheckDatabaseTable(
+	ctx context.Context,
+	dbName string,
+	tableName string,
+) (string, error) {
+
 	err := inputNameIsInvalid(ctx, dbName, tableName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkDatabaseTableFormat, dbName, tableName), nil
+
+	var (
+		account uint32
+	)
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		account = v.(uint32)
+	} else {
+		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
+	}
+
+	// we need the account id here to filter out the same dbName and tableName that exist in the
+	// different accounts.
+	return fmt.Sprintf(checkDatabaseTableFormat, tableName, dbName, account), nil
 }
 
 func getSqlForDeleteRole(roleId int64) []string {
