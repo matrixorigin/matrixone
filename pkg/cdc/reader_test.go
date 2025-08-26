@@ -650,6 +650,7 @@ func Test_tableReader_readTable(t *testing.T) {
 		runningReaders: &sync.Map{},
 		sinker:         NewConsoleSinker(nil, nil),
 		wMarkUpdater:   u,
+		tick:           time.NewTicker(DefaultFrequency),
 		info: &DbTableInfo{
 			SourceDbName:  "db1",
 			SourceTblName: "t1",
