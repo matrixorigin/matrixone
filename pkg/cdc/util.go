@@ -622,7 +622,7 @@ var GetSnapshotTS = func(txnOp client.TxnOperator) timestamp.Timestamp {
 }
 
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
-	return rel.CollectChanges(ctx, fromTs, toTs, mp)
+	return rel.CollectChanges(ctx, fromTs, toTs, true, mp)
 }
 
 var EnterRunSql = func(txnOp client.TxnOperator) {
@@ -639,6 +639,8 @@ var GetTableDef = func(
 	cnEngine engine.Engine,
 	tblId uint64,
 ) (*plan.TableDef, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 	_, _, rel, err := cnEngine.GetRelationById(ctx, txnOp, tblId)
 	if err != nil {
 		return nil, err

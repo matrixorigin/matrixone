@@ -292,3 +292,4 @@ create database test;
 use test;
 SHOW CREATE TABLE information_schema.columns;
 drop database test;
+

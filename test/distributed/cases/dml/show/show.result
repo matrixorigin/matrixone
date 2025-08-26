@@ -225,6 +225,7 @@ use mo_catalog;
 show tables;
 Tables_in_mo_catalog
 mo_account
+mo_iscp_log
 mo_cache
 mo_cdc_task
 mo_cdc_watermark
@@ -262,7 +263,7 @@ mo_variables
 mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-36
+37
 show column_number from mo_database;
 Number of columns in mo_database
 9

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"slices"
 	"strconv"
 	"strings"
@@ -705,11 +706,18 @@ func (h *Handle) HandleDiskCleaner(
 	ctx context.Context,
 	meta txn.TxnMeta,
 	req *cmd_util.DiskCleaner,
-	resp *api.SyncLogTailResp,
+	resp *api.TNStringResponse,
 ) (cb func(), err error) {
 	op := req.Op
 	key := req.Key
 	value := req.Value
+	defer func() {
+		if err != nil {
+			resp.ReturnStr += err.Error()
+		} else if resp.ReturnStr == "" {
+			resp.ReturnStr += "OK"
+		}
+	}()
 	switch op {
 	case cmd_util.RemoveChecker:
 		return nil, h.db.DiskCleaner.GetCleaner().RemoveChecker(key)
@@ -758,6 +766,27 @@ func (h *Handle) HandleDiskCleaner(
 			return
 		}
 		err = h.db.DiskCleaner.ForceGC(ctx, &minTS)
+		return
+	case cmd_util.GCDetails:
+		var tables map[uint32]*gc.TableStats
+		tables, err = h.db.DiskCleaner.GetDetails(ctx)
+		if err != nil {
+			return
+		}
+		resp.ReturnStr = "{"
+		for accountID, stats := range tables {
+			resp.ReturnStr += "{"
+			resp.ReturnStr += fmt.Sprintf("'acount': %v, ", accountID)
+			resp.ReturnStr += fmt.Sprintf("'sharedCnt': %v, ", stats.SharedCnt)
+			resp.ReturnStr += fmt.Sprintf("'sharedSize': %v, ", stats.SharedSize)
+			resp.ReturnStr += fmt.Sprintf("'totalCnt': %v, ", stats.TotalCnt)
+			resp.ReturnStr += fmt.Sprintf("'totalSize': %v, ", stats.TotalSize)
+			resp.ReturnStr += "}"
+		}
+		resp.ReturnStr += "}"
+		return
+	case cmd_util.GCVerify:
+		resp.ReturnStr = h.db.DiskCleaner.Verify(ctx)
 		return
 	case cmd_util.AddChecker:
 		break

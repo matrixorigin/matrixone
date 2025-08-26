@@ -17,11 +17,11 @@ package frontend
 import (
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"regexp"
-	"strconv"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -449,6 +449,8 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 				readerInfo := reader.Info()
 				// wait the old reader to stop
 				if info.OnlyDiffinTblId(readerInfo) {
+					logutil.Infof("cdc task wait old reader to stop %s %d->%d",
+						key, readerInfo.SourceTblId, info.SourceTblId)
 					waitChan := make(chan struct{})
 					go func() {
 						defer close(waitChan)
@@ -696,7 +698,7 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	exec.noFull, _ = strconv.ParseBool(noFull)
+	exec.noFull, _ = types.ParseBool(noFull)
 
 	// additionalConfig
 	additionalConfigStr, err := res.GetString(ctx, 0, 8)

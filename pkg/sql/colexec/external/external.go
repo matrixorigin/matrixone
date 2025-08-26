@@ -1190,7 +1190,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	case types.T_bool:
 		b, err := types.ParseBool(field.Val)
 		if err != nil {
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%s' is not bool type for column %d", field.Val, colIdx)
+			return err
 		}
 		if err = vector.AppendFixed(vec, b, false, mp); err != nil {
 			return err

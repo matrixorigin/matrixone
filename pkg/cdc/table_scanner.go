@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"go.uber.org/zap"
@@ -58,6 +57,7 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			CallBackTableName:    make(map[string][]string),
 			SubscribedTableNames: make(map[string][]string),
 		}
+		detector.scanTableFn = detector.scanTable
 	})
 	return detector
 }
@@ -87,6 +87,8 @@ type TableDetector struct {
 	CallBackTableName map[string][]string
 	// tablename -> [taska, taskb ...]
 	SubscribedTableNames map[string][]string
+
+	scanTableFn func() error
 
 	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
 	handling bool
@@ -185,10 +187,18 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	logutil.Info("CDC-TableDetector-Scan-Start")
 	defer logutil.Info("CDC-TableDetector-Scan-End")
 
-	ticker := time.NewTicker(15 * time.Second)
+	var tickerDuration, retryTickerDuration time.Duration
+	if msg, injected := objectio.CDCScanTableInjected(); injected || msg == "fast scan" {
+		tickerDuration = 1 * time.Millisecond
+		retryTickerDuration = 1 * time.Millisecond
+	} else {
+		tickerDuration = 15 * time.Second
+		retryTickerDuration = 5 * time.Second
+	}
+	ticker := time.NewTicker(tickerDuration)
 	defer ticker.Stop()
 
-	retryTicker := time.NewTicker(5 * time.Second)
+	retryTicker := time.NewTicker(retryTickerDuration)
 	defer retryTicker.Stop()
 
 	for {
@@ -205,22 +215,22 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 
 			s.mu.Unlock()
 
-			go s.scanAndProcess(ctx)
+			s.scanAndProcess(ctx)
 		case <-retryTicker.C:
 			s.mu.Lock()
-			if s.handling || s.lastMp == nil {
-				s.mu.Unlock()
+			handling, lastMp := s.handling, s.lastMp
+			s.mu.Unlock()
+			if handling || lastMp == nil {
 				continue
 			}
-			s.mu.Unlock()
 
-			go s.processCallback(ctx, s.lastMp)
+			go s.processCallback(ctx, lastMp)
 		}
 	}
 }
 
 func (s *TableDetector) scanAndProcess(ctx context.Context) {
-	if err := s.scanTable(); err != nil {
+	if err := s.scanTableFn(); err != nil {
 		logutil.Error("CDC-TableDetector-Scan-Error", zap.Error(err))
 		return
 	}
@@ -229,7 +239,7 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 	s.lastMp = s.Mp
 	s.mu.Unlock()
 
-	s.processCallback(ctx, s.lastMp)
+	go s.processCallback(ctx, s.lastMp)
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
@@ -256,10 +266,6 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 }
 
 func (s *TableDetector) scanTable() error {
-	if objectio.CDCScanTableErrInjected() {
-		return moerr.NewInternalError(context.Background(), "CDC_SCANTABLE_ERR")
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var (
