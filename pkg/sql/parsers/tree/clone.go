@@ -17,6 +17,7 @@ package tree
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
@@ -82,6 +83,15 @@ type CloneTable struct {
 
 	Sql      string
 	StmtType CloneStmtType
+}
+
+func (node *CloneTable) String() string {
+	return fmt.Sprintf(
+		"IsRestore(%v)-IsRestoreByTS(%v)-FromAccountId(%d)-ToAccountId(%d)-ToAccountName(%s)-StmtType(%v)-Sql: %s",
+		node.IsRestore, node.IsRestoreByTS,
+		node.FromAccount, node.ToAccountId, node.ToAccountName.String(),
+		node.StmtType, node.Sql,
+	)
 }
 
 func (node *CloneTable) StmtKind() StmtKind {
