@@ -65,6 +65,14 @@ func (r *MockRetriever) GetDataType() int8 {
 	return r.dtype
 }
 
+func (r *MockRetriever) GetAccountID() uint32 {
+	return uint32(0)
+}
+
+func (r *MockRetriever) GetTableID() uint64 {
+	return uint64(0)
+}
+
 var _ DataRetriever = new(MockRetriever)
 
 func newTestTableDef(pkName string, pkType types.T, vecColName string, vecType types.T, vecWidth int32) *plan.TableDef {
