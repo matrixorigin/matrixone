@@ -25,9 +25,7 @@ restore account sys from snapshot sp01;
 
 -- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
--- @bvt:issue#16438
 show databases;
--- @bvt:issue
 use republication01;
 select * from repub01;
 -- @ignore:5,6
@@ -102,9 +100,7 @@ restore account sys from snapshot sp02;
 show publications;
 -- @ignore:0,4,8,9
 select * from mo_catalog.mo_pubs;
--- @bvt:issue#16438
 show databases;
--- @bvt:issue
 use repub02;
 select * from pri01;
 select * from aff01;
@@ -162,9 +158,7 @@ select * from rs03;
 restore account acc01 from snapshot sp01;
 -- @ignore:5,7
 show subscriptions;
--- @bvt:issue#16438
 show databases;
--- @bvt:issue
 drop snapshot sp01;
 -- @session
 -- @ignore:0,4,8,9
@@ -255,7 +249,6 @@ select count(*) from index02;
 drop database if exists db10;
 create database db10;
 use db10;
--- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -274,7 +267,6 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
--- @bvt:issue
 -- @session
 
 drop snapshot if exists sp05;
