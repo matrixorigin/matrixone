@@ -151,7 +151,7 @@ type Handler interface {
 		ctx context.Context,
 		meta txn.TxnMeta,
 		req *cmd_util.DiskCleaner,
-		resp *apipb.SyncLogTailResp,
+		resp *apipb.TNStringResponse,
 	) (cb func(), err error)
 
 	HandleGetLatestCheckpoint(
