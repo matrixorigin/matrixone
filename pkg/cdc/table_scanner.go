@@ -237,9 +237,10 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 
 	s.mu.Lock()
 	s.lastMp = s.Mp
+	mp := s.lastMp
 	s.mu.Unlock()
 
-	go s.processCallback(ctx, s.lastMp)
+	go s.processCallback(ctx, mp)
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
