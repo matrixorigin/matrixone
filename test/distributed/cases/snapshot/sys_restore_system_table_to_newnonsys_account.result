@@ -214,8 +214,8 @@ drop stage if exists my_ext_stage1;
 create stage my_ext_stage1 URL='s3://load/files/' CREDENTIALS={'AWS_KEY_ID'='1a2b3c' ,'AWS_SECRET_KEY'='4x5y6z'};
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        disabled    2025-07-19 05:52:35    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2025-07-19 05:52:35    
+1    my_ext_stage    s3://load/files/        in_use    2025-07-19 05:52:35    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-07-19 05:52:35    
 drop snapshot if exists stage_sp01;
 create snapshot stage_sp01 for account acc01;
 alter stage my_ext_stage1 SET URL='s3://load/files2/';
@@ -223,8 +223,8 @@ drop stage my_ext_stage;
 restore account acc01 from snapshot stage_sp01 to account acc02;
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    my_ext_stage    s3://load/files/        disabled    2025-07-19 05:52:35    
-2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    disabled    2025-07-19 05:52:35    
+1    my_ext_stage    s3://load/files/        in_use    2025-07-19 05:52:35    
+2    my_ext_stage1    s3://load/files/    AWS_KEY_ID=1a2b3c,AWS_SECRET_KEY=4x5y6z    in_use    2025-07-19 05:52:35    
 drop stage my_ext_stage;
 drop stage my_ext_stage1;
 drop snapshot stage_sp01;
