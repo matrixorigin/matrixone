@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -126,7 +127,9 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 					return
 				}
 				func() {
-					newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+					newctx := context.WithValue(ctx, defines.TenantIDKey{}, r.GetAccountID())
+					newctx, cancel := context.WithTimeout(newctx, time.Hour)
+
 					defer cancel()
 					//os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
 					opts := executor.Options{}
@@ -144,7 +147,8 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 
 	} else {
 		// TAIL
-		newctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		newctx := context.WithValue(ctx, defines.TenantIDKey{}, r.GetAccountID())
+		newctx, cancel := context.WithTimeout(newctx, time.Hour)
 		defer cancel()
 		opts := executor.Options{}
 		err := c.exec.ExecTxn(newctx,

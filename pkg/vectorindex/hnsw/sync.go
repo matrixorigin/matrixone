@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -38,7 +39,7 @@ import (
 // CdcSync is the main function to update hnsw index via CDC.  SQL function hnsw_cdc_update() will call this function.
 
 const (
-	catalogsql = "select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s') and algo='hnsw';"
+	catalogsql = "select index_table_name, algo_table_type, algo_params, column_name from mo_catalog.mo_indexes where table_id = (select rel_id from mo_catalog.mo_tables where relname = '%s' and reldatabase = '%s' and account_id = %d) and algo='hnsw';"
 )
 
 var runTxn = sqlexec.RunTxn
@@ -46,8 +47,13 @@ var runCatalogSql = sqlexec.RunSql
 
 func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc *vectorindex.VectorIndexCdc[float32]) error {
 
+	accountId, err := defines.GetAccountId(proc.Ctx)
+	if err != nil {
+		return err
+	}
+
 	// get index catalog
-	sql := fmt.Sprintf(catalogsql, tbl, db)
+	sql := fmt.Sprintf(catalogsql, tbl, db, accountId)
 	res, err := runCatalogSql(proc, sql)
 	if err != nil {
 		return err
@@ -57,7 +63,8 @@ func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc 
 	//os.Stderr.WriteString(sql)
 
 	if len(res.Batches) == 0 {
-		return nil
+		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("hnsw cdc sync: no secondary index tables found with accountID %d, table %s and db %s",
+			accountId, tbl, db))
 	}
 
 	bat := res.Batches[0]

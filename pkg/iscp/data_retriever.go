@@ -137,6 +137,14 @@ func (r *DataRetrieverImpl) GetDataType() int8 {
 	return r.typ
 }
 
+func (r *DataRetrieverImpl) GetAccountID() uint32 {
+	return r.accountID
+}
+
+func (r *DataRetrieverImpl) GetTableID() uint64 {
+	return r.tableID
+}
+
 func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) {
 	if r.hasError() {
 		return

@@ -57,6 +57,8 @@ type DataRetriever interface {
 	Next() (iscpData *ISCPData)
 	UpdateWatermark(executor.TxnExecutor, executor.StatementOption) error
 	GetDataType() int8
+	GetAccountID() uint32
+	GetTableID() uint64
 }
 
 // In an iteration, the table's data is propagated downstream.
