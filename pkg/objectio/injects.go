@@ -54,13 +54,16 @@ const (
 	FJ_CronJobsOpen = "fj/cronjobs/open"
 	FJ_CDCRecordTxn = "fj/cdc/recordtxn"
 
+	FJ_CDCScanTable = "fj/cdc/scantable"
+
 	FJ_CDCHandleSlow             = "fj/cdc/handleslow"
 	FJ_CDCHandleErr              = "fj/cdc/handleerr"
 	FJ_CDCScanTableErr           = "fj/cdc/scantableerr"
 	FJ_CDCAddExecErr             = "fj/cdc/addexecerr"
 	FJ_CDCAddExecConsumeTruncate = "fj/cdc/addexecconsumetruncate"
 
-	FJ_CNFlushSmallObjs = "fj/cn/flush_small_objs"
+	FJ_CNFlushSmallObjs     = "fj/cn/flush_small_objs"
+	FJ_CNSubscribeTableFail = "fj/cn/subscribe_table_fail"
 )
 
 const (
@@ -176,6 +179,16 @@ func LogReaderInjected(args ...string) (bool, int) {
 
 func LogCNFlushSmallObjsInjected(args ...string) (bool, int) {
 	iarg, sarg, injected := fault.TriggerFault(FJ_CNFlushSmallObjs)
+	if !injected {
+		return false, 0
+	}
+
+	ok, level := checkLoggingArgs(int(iarg), sarg, args...)
+	return ok, level
+}
+
+func LogCNSubscribeTableFailInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_CNSubscribeTableFail)
 	if !injected {
 		return false, 0
 	}
@@ -343,6 +356,11 @@ func NotifyInjected(key string) {
 	fault.TriggerFault(key)
 }
 
+func CDCScanTableInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
+	return sarg, injected
+}
+
 func InjectWait(key string) (rmFault func(), err error) {
 	if err = fault.AddFaultPoint(
 		context.Background(),
@@ -448,6 +466,24 @@ func InjectGCDumpTable(msg string) (rmFault func() (bool, error), err error) {
 	}
 	rmFault = func() (ok bool, err error) {
 		return fault.RemoveFaultPoint(context.Background(), FJ_CNGCDumpTable)
+	}
+	return
+}
+
+func InjectCDCScanTable(msg string) (rmFault func() (bool, error), err error) {
+	if err = fault.AddFaultPoint(
+		context.Background(),
+		FJ_CDCScanTable,
+		":::",
+		"echo",
+		0,
+		msg,
+		false,
+	); err != nil {
+		return
+	}
+	rmFault = func() (ok bool, err error) {
+		return fault.RemoveFaultPoint(context.Background(), FJ_CDCScanTable)
 	}
 	return
 }
