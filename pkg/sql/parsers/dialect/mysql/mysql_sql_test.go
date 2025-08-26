@@ -2663,7 +2663,7 @@ var (
 			output: "restore account account_01 from snapshot snapshot_01 to account account_02",
 		},
 		{
-			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0',};`,
+			input: `create cdc test_create_task 'mysql://dump:111@127.0.0.1:6001' 'mysql' 'mysql://root:123456@127.0.0.1:3306' 'a,b' { "StartTS"='',"EndTS"='',"NoFull"='false',"FullConcurrency"='16',"IncrementalConcurrency"='16',"ConfigFile"='',"FullTaskRetry"='',"IncrementalTaskRetry"='',"FullDDLRetry"='0',"FullDMLRetry"='0',"IncrementalDDLRetry"='0',"IncrementalDMLRetry"='0'}`,
 		},
 		{
 			input: `show cdc all;`,
@@ -3284,6 +3284,10 @@ var (
 		},
 		{
 			input: "create table t1 (a bigint(20) unsigned)",
+		},
+		{
+			input:  "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' {'Level'='database'} internal;",
+			output: "create cdc cdc_tpcc 'mysql://sys#dump:111@127.0.0.1:6001' 'matrixone' 'mysql://sys#dump:111@127.0.0.1:6001' 'test_cdc:t1' { \"Level\"='database'} internal",
 		},
 	}
 )
