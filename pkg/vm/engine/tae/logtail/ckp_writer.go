@@ -900,7 +900,6 @@ func SyncTableIDBatch(
 	if len(inMems) > 0 {
 		panic("logic error")
 	}
-
 	for _, file := range files {
 		location := file.ObjectLocation()
 		location.SetID(uint16(file.BlkCnt()))

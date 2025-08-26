@@ -66,6 +66,7 @@ func TestCombinedTxnTable_CollectChanges(t *testing.T) {
 			context.Background(),
 			types.TS{},
 			types.TS{},
+			false,
 			&mpool.MPool{},
 		)
 	})
@@ -1096,7 +1097,7 @@ func (m *mockRelation) CollectTombstones(ctx context.Context, txnOffset int, pol
 	return nil, nil
 }
 
-func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
+func (m *mockRelation) CollectChanges(ctx context.Context, from, to types.TS, _ bool, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return nil, nil
 }
 

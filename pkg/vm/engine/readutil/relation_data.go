@@ -286,6 +286,7 @@ func (or *ObjListRelData) Split(cpunum int) []engine.RelData {
 	result := make([]engine.RelData, cpunum)
 	for i := range result {
 		result[i] = or.blocklistRelData.BuildEmptyRelData(int(or.TotalBlocks) / cpunum)
+		_ = result[i].AttachTombstones(or.blocklistRelData.tombstones)
 	}
 	if or.NeedFirstEmpty {
 		result[0].AppendBlockInfo(&objectio.EmptyBlockInfo)
