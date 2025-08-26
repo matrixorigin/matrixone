@@ -176,6 +176,10 @@ func (s *TableDetector) UnRegister(id string) {
 	}
 
 	delete(s.Callbacks, id)
+	if len(s.Callbacks) == 0 {
+		s.cancel()
+		s.cancel = nil
+	}
 
 	logutil.Info(
 		"CDC-TableDetector-UnRegister",
@@ -237,9 +241,10 @@ func (s *TableDetector) scanAndProcess(ctx context.Context) {
 
 	s.mu.Lock()
 	s.lastMp = s.Mp
+	mp := s.lastMp
 	s.mu.Unlock()
 
-	go s.processCallback(ctx, s.lastMp)
+	go s.processCallback(ctx, mp)
 }
 
 func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]TblMap) {
@@ -263,6 +268,12 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	}
 
 	s.handling = false
+}
+
+func (s *TableDetector) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *TableDetector) scanTable() error {
