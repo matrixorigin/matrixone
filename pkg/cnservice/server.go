@@ -897,6 +897,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.queryClient,
 		s._hakeeperClient,
 		s.udfService,
+		s.pu.TaskService,
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 }

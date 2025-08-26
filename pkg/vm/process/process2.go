@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"sync"
 	"time"
 
@@ -55,7 +56,8 @@ func NewTopProcess(
 	lockService lockservice.LockService,
 	queryClient qclient.QueryClient, HAKeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
-	autoIncrease *defines.AutoIncrCacheManager) *Process {
+	autoIncrease *defines.AutoIncrCacheManager,
+	taskService taskservice.TaskService) *Process {
 
 	// get needed attributes from input parameters.
 	sid := ""
@@ -80,6 +82,7 @@ func NewTopProcess(
 		QueryClient:      queryClient,
 		Hakeeper:         HAKeeper,
 		UdfService:       udfService,
+		TaskService:      taskService,
 
 		// 2. fields from make.
 		LastInsertID: new(uint64),

@@ -372,7 +372,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		cnInfo.queryClient,
 		cnInfo.hakeeper,
 		cnInfo.udfService,
-		cnInfo.aicm)
+		cnInfo.aicm,
+		nil)
 	proc.Base.UnixTime = pHelper.unixTime
 	proc.Base.Id = pHelper.id
 	proc.Base.Lim = pHelper.lim
