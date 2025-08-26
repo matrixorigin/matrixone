@@ -39,6 +39,14 @@ const (
 	DefaultFrequency = 200 * time.Millisecond
 )
 
+type WatermarkUpdater interface {
+	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
+	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string) (err error)
+	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
+	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
+	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
+}
+
 type tableReader struct {
 	cnTxnClient          client.TxnClient
 	cnEngine             engine.Engine
@@ -48,7 +56,7 @@ type tableReader struct {
 	taskId               string
 	info                 *DbTableInfo
 	sinker               Sinker
-	wMarkUpdater         *CDCWatermarkUpdater
+	wMarkUpdater         WatermarkUpdater
 	tick                 *time.Ticker
 	force                bool
 	initSnapshotSplitTxn bool
@@ -134,6 +142,11 @@ func (reader *tableReader) Close() {
 }
 
 func (reader *tableReader) forceNextInterval(wait time.Duration) {
+	logutil.Info(
+		"CDC-TableReader-ResetNextInterval",
+		zap.String("info", reader.info.String()),
+		zap.Duration("wait", wait),
+	)
 	reader.force = true
 	reader.tick.Reset(wait)
 }
@@ -234,7 +247,13 @@ func (reader *tableReader) Run(
 		if reader.force {
 			reader.force = false
 			reader.tick.Reset(reader.frequency)
+			logutil.Info(
+				"CDC-TableReader-ResetNextInterval",
+				zap.String("info", reader.info.String()),
+				zap.Duration("frequency", reader.frequency),
+			)
 		}
+		logutil.Infof("lalala read")
 		if err = reader.readTable(ctx, ar); err != nil {
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 			return
