@@ -212,6 +212,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 	}
 	for _, ckp := range ckps {
 		var files []string
+		logutil.Infof("Verify ckp %v", ckp.String())
 		files, err = getCheckpointLocation(ctx, ckp, c.cleaner.fs)
 		if err != nil {
 			returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
