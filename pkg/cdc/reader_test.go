@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 )
@@ -140,6 +142,44 @@ func TestNewTableReader(t *testing.T) {
 	}
 }
 
+type testWatermarkUpdater struct {
+	wmMap   map[WatermarkKey]types.TS
+	errorMp map[WatermarkKey]error
+}
+
+func (u *testWatermarkUpdater) GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error) {
+	watermark, ok := u.wmMap[*key]
+	if !ok {
+		return types.TS{}, moerr.NewInternalErrorNoCtx("key not found")
+	}
+	return watermark, nil
+}
+
+func (u *testWatermarkUpdater) GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error) {
+	ret, ok := u.wmMap[*key]
+	if ok {
+		return ret, nil
+	}
+	u.wmMap[*key] = *watermark
+	u.errorMp[*key] = nil
+	return *watermark, nil
+}
+
+func (u *testWatermarkUpdater) RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error) {
+	delete(u.wmMap, *key)
+	delete(u.errorMp, *key)
+	return nil
+}
+
+func (u *testWatermarkUpdater) UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string) (err error) {
+	u.errorMp[*key] = moerr.NewInternalErrorNoCtx(errMsg)
+	return nil
+}
+
+func (u *testWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error) {
+	u.wmMap[*key] = *watermark
+	return nil
+}
 func Test_tableReader_Run(t *testing.T) {
 	type fields struct {
 		cnTxnClient           client.TxnClient
@@ -610,6 +650,7 @@ func Test_tableReader_readTable(t *testing.T) {
 		runningReaders: &sync.Map{},
 		sinker:         NewConsoleSinker(nil, nil),
 		wMarkUpdater:   u,
+		tick:           time.NewTicker(DefaultFrequency),
 		info: &DbTableInfo{
 			SourceDbName:  "db1",
 			SourceTblName: "t1",
@@ -865,4 +906,90 @@ func allocTestBatch(
 
 func Test_changesHandle(t *testing.T) {
 	newTestChangesHandle("db", "t1", 20, 23, types.TS{}, nil, nil)
+}
+
+func TestStaleRead(t *testing.T) {
+	readDone := make(chan struct{})
+	defer close(readDone)
+	var readCount atomic.Int32
+	stub := gostub.Stub(&readTableWithTxn, func(*tableReader, context.Context, client.TxnOperator, *types.Packer, *ActiveRoutine) error {
+		t.Logf("read %d", readCount.Load())
+		readDone <- struct{}{}
+		var err error
+		if readCount.Load() == 0 {
+			err = moerr.NewErrStaleReadNoCtx("", "")
+		}
+		readCount.Add(1)
+		return err
+	})
+	defer stub.Reset()
+	stub1 := gostub.Stub(&GetTxnOp,
+		func(_ context.Context, _ engine.Engine, _ client.TxnClient, _ string) (client.TxnOperator, error) {
+			return nil, nil
+		})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&FinishTxnOp,
+		func(ctx context.Context, inputErr error, txnOp client.TxnOperator, cnEngine engine.Engine) {
+
+		})
+	defer stub2.Reset()
+	stub3 := gostub.Stub(&GetTxn,
+		func(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator) error {
+			return nil
+		})
+	defer stub3.Reset()
+
+	stub7 := gostub.Stub(&EnterRunSql, func(client.TxnOperator) {})
+	defer stub7.Reset()
+
+	stub8 := gostub.Stub(&ExitRunSql, func(client.TxnOperator) {})
+	defer stub8.Reset()
+
+	runnerReaders := &sync.Map{}
+	reader := &tableReader{
+		info: &DbTableInfo{
+			SourceDbName:  "db1",
+			SourceTblName: "t1",
+		},
+		runningReaders: runnerReaders,
+		accountId:      1,
+		taskId:         "task1",
+		wMarkUpdater: &testWatermarkUpdater{
+			wmMap:   map[WatermarkKey]types.TS{},
+			errorMp: map[WatermarkKey]error{},
+		},
+		sinker:    NewConsoleSinker(nil, nil),
+		frequency: time.Hour,
+		tick:      time.NewTicker(time.Hour),
+		packerPool: fileservice.NewPool(
+			128,
+			func() *types.Packer {
+				return types.NewPacker()
+			},
+			func(packer *types.Packer) {
+				packer.Reset()
+			},
+			func(packer *types.Packer) {
+				packer.Close()
+			},
+		),
+	}
+	key := GenDbTblKey(reader.info.SourceDbName, reader.info.SourceTblName)
+
+	ar := NewCdcActiveRoutine()
+	ctx, cancel := context.WithCancel(context.Background())
+	go reader.Run(ctx, ar)
+	for i := 0; i < 2; i++ {
+		<-readDone
+	}
+	time.Sleep(2 * DefaultFrequency)
+	assert.Equal(t, int32(2), readCount.Load())
+	cancel()
+	testutils.WaitExpect(1000, func() bool {
+		_, ok := runnerReaders.Load(key)
+		return !ok
+	})
+	_, ok := runnerReaders.Load(key)
+	assert.False(t, ok)
 }
