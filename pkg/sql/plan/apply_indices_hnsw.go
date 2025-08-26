@@ -34,9 +34,17 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 		return false
 	}
 
-	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+	orderExpr := sortNode.OrderBy[0].Expr
+	distFnExpr := orderExpr.GetF()
 	if distFnExpr == nil {
-		return false
+		childNode := builder.qry.Nodes[sortNode.Children[0]]
+		if childNode.NodeType == plan.Node_PROJECT {
+			distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
+		}
+
+		if distFnExpr == nil {
+			return false
+		}
 	}
 	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
 		return false
@@ -129,7 +137,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	}
 	tblcfgstr := string(cfgbytes)
 
-	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+	var childNode *plan.Node
+	orderExpr := sortNode.OrderBy[0].Expr
+	distFnExpr := orderExpr.GetF()
+	if distFnExpr == nil {
+		childNode = builder.qry.Nodes[sortNode.Children[0]]
+		distFnExpr = childNode.ProjectList[orderExpr.GetCol().ColPos].GetF()
+	}
 	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
 
 	_, value, ok := builder.getArgsFromDistFn(scanNode, distFnExpr, keypart)
@@ -143,13 +157,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	// JOIN between source table and hnsw_search table function
 	var exprs tree.Exprs
 
-	exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-	exprs = append(exprs, tree.NewNumVal[string](tblcfgstr, tblcfgstr, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(params, params, false, tree.P_char))
+	exprs = append(exprs, tree.NewNumVal(tblcfgstr, tblcfgstr, false, tree.P_char))
 
 	fnexpr := value.GetF()
 	f32vec := fnexpr.Args[0].GetLit().GetSval()
 
-	valExpr := &tree.CastExpr{Expr: tree.NewNumVal[string](f32vec, f32vec, false, tree.P_char),
+	valExpr := &tree.CastExpr{Expr: tree.NewNumVal(f32vec, f32vec, false, tree.P_char),
 		Type: &tree.T{InternalType: tree.InternalType{Oid: uint32(defines.MYSQL_TYPE_VAR_STRING),
 			FamilyString: "vecf32", Family: tree.ArrayFamily, DisplayWith: partType.Width}}}
 
@@ -232,19 +246,20 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 	scanNode.Offset = nil
 
 	// Create SortBy with distance column from table function
-	orderByScore := make([]*OrderBySpec, 0, 1)
-	orderByScore = append(orderByScore, &OrderBySpec{
-		Expr: &Expr{
-			Typ: curr_node.TableDef.Cols[1].Typ, // score column
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: curr_node.BindingTags[0],
-					ColPos: 1, // score column
+	orderByScore := []*OrderBySpec{
+		{
+			Expr: &Expr{
+				Typ: curr_node.TableDef.Cols[1].Typ, // score column
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: curr_node.BindingTags[0],
+						ColPos: 1, // score column
+					},
 				},
 			},
+			Flag: sortDirection,
 		},
-		Flag: sortDirection,
-	})
+	}
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
@@ -254,23 +269,19 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 
 	projNode.Children[0] = sortByID
 
-	/*
-		// check equal distFn and only compute once for equal function()
-		projids := builder.findEqualDistFnFromProject(projNode, distFnExpr)
-
-		// replace the project with ColRef (same distFn as the order by)
-		for _, id := range projids {
-			projNode.ProjectList[id] = &Expr{
-				Typ: curr_node.TableDef.Cols[1].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: curr_node.BindingTags[0],
-						ColPos: 1, // score
-					},
-				},
+	if childNode != nil {
+		sortIdx := orderExpr.GetCol().ColPos
+		projMap := make(map[[2]int32]*plan.Expr)
+		for i, proj := range childNode.ProjectList {
+			if i == int(sortIdx) {
+				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = DeepCopyExpr(orderByScore[0].Expr)
+			} else {
+				projMap[[2]int32{childNode.BindingTags[0], int32(i)}] = proj
 			}
 		}
-	*/
+
+		replaceColumnsForNode(projNode, projMap)
+	}
 
 	return nodeID, nil
 }
@@ -304,66 +315,3 @@ func (builder *QueryBuilder) getArgsFromDistFn(scanNode *plan.Node, distfn *plan
 
 	return key, value, found
 }
-
-/*
-func (builder *QueryBuilder) findPkFromProject(projNode *plan.Node, pkPos int32) []int32 {
-
-	projids := make([]int32, 0)
-	for i, expr := range projNode.ProjectList {
-		if expr.GetCol() != nil {
-			if expr.GetCol().ColPos == pkPos {
-				projids = append(projids, int32(i))
-			}
-		}
-	}
-	return projids
-}
-
-// e.g. SELECT a, L2_DISTANCE(b, '[0, ..]') FROM SRC ORDER BY L2_DISTANCE(b, '[0,..]') limit 4
-// the plan is 'project -> sort -> project -> tablescan'
-func (builder *QueryBuilder) findEqualDistFnFromProject(projNode *plan.Node, distfn *plan.Function) []int32 {
-
-	projids := make([]int32, 0)
-	optype := distfn.Func.ObjName
-
-	for i, expr := range projNode.ProjectList {
-		fn := expr.GetF()
-		if fn == nil {
-			continue
-		}
-
-		if fn.Func.ObjName != optype {
-			continue
-		}
-
-		// check args
-
-		equal := false
-		for j := range distfn.Args {
-			targ := distfn.Args[j]
-			arg := fn.Args[j]
-
-			if targ.GetCol() != nil && arg.GetCol() != nil && targ.GetCol().ColPos == arg.GetCol().ColPos {
-				equal = true
-				continue
-			}
-			if targ.GetF() != nil && arg.GetF() != nil && targ.GetF().Func.ObjName == "cast" && arg.GetF().Func.ObjName == "cast" {
-				tv32 := targ.GetF().Args[0].GetLit().GetSval()
-				v32 := arg.GetF().Args[0].GetLit().GetSval()
-				if tv32 == v32 {
-					equal = true
-					continue
-				}
-			}
-
-			equal = false
-		}
-
-		if equal {
-			projids = append(projids, int32(i))
-		}
-	}
-
-	return projids
-}
-*/
