@@ -23,6 +23,8 @@ create table test.t5 clone test.t1 {snapshot = "sp3"};
 create snapshot sp4 for table test t1;
 create table test.t6 clone test.t2 {snapshot = "sp4"};
 
+create database test3 clone test {snapshot = "sp4"};
+
 drop snapshot sp1;
 drop snapshot sp2;
 drop snapshot sp3;
