@@ -672,7 +672,6 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 			for tid, entry := range tables {
 				accountID, ok := snapshotMeta.GetAccountId(tid)
 				if !ok {
-					logutil.Error("GetAccountId is error")
 					continue
 				}
 				if details[accountID] == nil {
@@ -702,7 +701,6 @@ func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMe
 		for tid, entry := range tables {
 			accountID, ok := snapshotMeta.GetAccountId(tid)
 			if !ok {
-				logutil.Error("GetAccountId is error")
 				continue
 			}
 			if details[accountID] == nil {
