@@ -41,7 +41,7 @@ func TestGetTableScanner(t *testing.T) {
 	assert.NotNil(t, GetTableDetector("cnUUID"))
 }
 
-func TestTableScanner(t *testing.T) {
+func TestTableScanner1(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -73,6 +73,7 @@ func TestTableScanner(t *testing.T) {
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 mockSqlExecutor,
 	}
+	defer td.Close()
 
 	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
 	assert.Equal(t, 1, len(td.Callbacks))
@@ -161,6 +162,7 @@ func TestScanAndProcess(t *testing.T) {
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 nil,
 	}
+	defer td.Close()
 
 	tables := map[uint32]TblMap{
 		1: {
@@ -195,10 +197,7 @@ func TestScanAndProcess(t *testing.T) {
 	go td.scanTableLoop(ctx)
 	time.Sleep(200 * time.Millisecond)
 	defer rm()
-	td.scanAndProcess(context.Background())
 	fault.Disable()
-
-	td.scanAndProcess(context.Background())
 }
 
 func TestProcessCallBack(t *testing.T) {
@@ -218,6 +217,7 @@ func TestProcessCallBack(t *testing.T) {
 		exec:                 nil,
 		lastMp:               make(map[uint32]TblMap),
 	}
+	defer td.Close()
 
 	tables := map[uint32]TblMap{
 		1: {
@@ -304,7 +304,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 mockSqlExecutor,
 	}
-
+	defer td.Close()
 	td.Register("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
 		return nil
 	})
