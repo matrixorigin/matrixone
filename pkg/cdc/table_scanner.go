@@ -17,14 +17,11 @@ package cdc
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"go.uber.org/zap"
 
