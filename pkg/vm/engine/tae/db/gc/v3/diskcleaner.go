@@ -312,7 +312,6 @@ func (cleaner *DiskCleaner) doForceExecute(ctx context.Context, ts *types.TS) (e
 		if !minTS.IsEmpty() &&
 			((start.IsEmpty() && end.LT(minTS)) ||
 				start.LT(minTS)) {
-			logutil.Infof("doForceExecute minTs %v, ckp is %v", minTS.ToString(), ckp.String())
 			return true
 		}
 		return false
