@@ -103,4 +103,16 @@ insert into routines values('specific_name01','routine_catalog01','specific_name
 SELECT DISTINCT ROUTINE_SCHEMA, ROUTINE_NAME, PARAMS.PARAMETER FROM ROUTINES LEFT JOIN ( SELECT SPECIFIC_SCHEMA, SPECIFIC_NAME, GROUP_CONCAT(CONCAT(DATA_TYPE, ' ', PARAMETER_NAME) ORDER BY ORDINAL_POSITION SEPARATOR ', ') PARAMETER, ROUTINE_TYPE FROM PARAMETERS GROUP BY SPECIFIC_SCHEMA, SPECIFIC_NAME, ROUTINE_TYPE ) PARAMS ON ROUTINES.ROUTINE_SCHEMA = PARAMS.SPECIFIC_SCHEMA AND ROUTINES.ROUTINE_NAME = PARAMS.SPECIFIC_NAME AND ROUTINES.ROUTINE_TYPE = PARAMS.ROUTINE_TYPE WHERE ROUTINE_SCHEMA = 'specific_name01' ORDER BY ROUTINE_SCHEMA;
 drop table routines;
 drop table parameters;
+
+create table x1 (a int, b int);
+insert into x1 values (1, 1), (2, 2), (3, 3);
+-- one row has 20000 matches
+insert into x1 select 42, result from generate_series(1,20000,1) g;
+insert into x1 values (10, 10), (20, 20);
+create table x2 as select * from x1 order by a limit 10;
+select count(*) from x2 left join x1 on x1.a = x2.a;
+select * from x2 left join x1 on x1.a = x2.a order by x1.a limit 10;
+drop table x1;
+drop table x2;
+
 drop database if exists d1;
