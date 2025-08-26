@@ -190,3 +190,14 @@ drop table t1;
 drop table t2;
 
 select * from mo_catalog.mo_indexes where name = 'idx1' and table_id = (select rel_id from mo_catalog.mo_tables where relname = 't1');
+
+create table x1 (a int, b int);
+insert into x1 values (1, 1), (2, 2), (3, 3);
+-- one row has 20000 matches
+insert into x1 select 42, result from generate_series(1,20000,1) g;
+insert into x1 values (10, 10), (20, 20);
+create table x2 as select * from x1 limit 10;
+select count(*) from x2 inner join x1 on x1.a = x2.a;
+select * from x2 inner join x1 on x1.a = x2.a order by x1.a limit 10;
+drop table x1;
+drop table x2;
