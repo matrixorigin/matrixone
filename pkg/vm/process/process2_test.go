@@ -56,6 +56,22 @@ func TestBuildPipelineContext(t *testing.T) {
 	assert.Error(t, proc.Ctx.Err())
 }
 
+func TestGetTaskService(t *testing.T) {
+	// Create a parent context
+	parentCtx := context.Background()
+
+	// Create a new process
+	proc := &Process{
+		Base: &BaseProcess{
+			sqlContext: QueryBaseContext{
+				outerContext: parentCtx,
+			},
+		},
+	}
+
+	assert.Nil(t, proc.GetTaskService())
+}
+
 func TestGetSpillFileService(t *testing.T) {
 	localFS, err := fileservice.NewLocalFS(
 		context.Background(),

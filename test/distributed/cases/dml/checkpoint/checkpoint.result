@@ -79,9 +79,6 @@ a
 4
 5
 drop snapshot snapshot01;
-select mo_ctl('dn','DiskCleaner','force_gc');
-mo_ctl(dn, DiskCleaner, force_gc)
-{\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select mo_ctl('dn','DiskCleaner','stop_gc');
 mo_ctl('dn','DiskCleaner','stop_gc')
 {\n  "method": "DiskCleaner",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
