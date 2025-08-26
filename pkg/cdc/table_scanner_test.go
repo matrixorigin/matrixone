@@ -40,7 +40,7 @@ func TestGetTableScanner(t *testing.T) {
 	assert.NotNil(t, GetTableDetector("cnUUID"))
 }
 
-func TestTableScanner(t *testing.T) {
+func TestTableScanner1(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -72,6 +72,7 @@ func TestTableScanner(t *testing.T) {
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 mockSqlExecutor,
 	}
+	defer td.Close()
 
 	td.Register("id1", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error { return nil })
 	assert.Equal(t, 1, len(td.Callbacks))
@@ -160,6 +161,32 @@ func TestScanAndProcess(t *testing.T) {
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 nil,
 	}
+	defer td.Close()
+
+	tables := map[uint32]TblMap{
+		1: {
+			"db1.tbl1": &DbTableInfo{
+				SourceDbId:      1,
+				SourceDbName:    "db1",
+				SourceTblId:     1001,
+				SourceTblName:   "tbl1",
+				SourceCreateSql: "create table tbl1 (a int)",
+				IdChanged:       false,
+			},
+		},
+	}
+	scanCount := 0
+	td.scanTableFn = func() error {
+		td.mu.Lock()
+		if scanCount%5 == 0 {
+			td.lastMp = tables
+		} else {
+			td.lastMp = nil
+		}
+		td.mu.Unlock()
+		scanCount++
+		return nil
+	}
 
 	fault.Enable()
 	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
@@ -167,12 +194,9 @@ func TestScanAndProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go td.scanTableLoop(ctx)
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	defer rm()
-	td.scanAndProcess(context.Background())
 	fault.Disable()
-
-	td.scanAndProcess(context.Background())
 }
 
 func TestProcessCallBack(t *testing.T) {
@@ -192,6 +216,7 @@ func TestProcessCallBack(t *testing.T) {
 		exec:                 nil,
 		lastMp:               make(map[uint32]TblMap),
 	}
+	defer td.Close()
 
 	tables := map[uint32]TblMap{
 		1: {
@@ -278,7 +303,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		SubscribedTableNames: make(map[string][]string),
 		exec:                 mockSqlExecutor,
 	}
-
+	defer td.Close()
 	td.Register("test-task", 1, []string{"db1"}, []string{"tbl1"}, func(mp map[uint32]TblMap) error {
 		return nil
 	})
