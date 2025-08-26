@@ -16,9 +16,10 @@ package partitionprune
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -329,9 +330,8 @@ func TestPrune(t *testing.T) {
 			Partitions: []partition.Partition{},
 		}
 
-		result, err := Prune(proc, bat, metadata, -1)
-		require.NoError(t, err)
-		require.Equal(t, 0, batchCount(result))
+		_, err := Prune(proc, bat, metadata, -1)
+		require.Error(t, err)
 	})
 }
 

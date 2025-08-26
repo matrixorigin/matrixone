@@ -88,7 +88,7 @@ func TestGetMetadataByKeyType(t *testing.T) {
 
 			method.ColumnList = append(columns, columns[0])
 			_, err = s.getMetadataByKeyType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 		},
 	)
 }

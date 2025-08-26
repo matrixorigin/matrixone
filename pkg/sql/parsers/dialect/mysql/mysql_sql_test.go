@@ -1231,7 +1231,7 @@ var (
 		}, {
 			input: "create table a (a int) partition by range columns (a, b, db.t.c)",
 		}, {
-			input: "create table a (a int) partition by range(1 + 21)",
+			input: "create table a (a int) partition by range (1 + 21)",
 		}, {
 			input: "create table a (a int storage disk constraint cx check (b + c) enforced)",
 		}, {
@@ -1301,7 +1301,7 @@ var (
 					PARTITION p2 VALUES LESS THAN (2001),
 					PARTITION p3 VALUES LESS THAN MAXVALUE
 				);`,
-			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range(YEAR(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
+			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range (YEAR(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
 		},
 		{
 			input: `CREATE TABLE tp14 (
@@ -1328,7 +1328,7 @@ var (
 					PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 					PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 				);`,
-			output: `create table tp15 (id int primary key, name varchar(35), age int unsigned) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))`,
+			output: `create table tp15 (id int primary key, name varchar(35), age int unsigned) partition by list (id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))`,
 		},
 		{
 			input: `CREATE TABLE tp16 (
@@ -1355,7 +1355,7 @@ var (
 					PARTITION p2 VALUES LESS THAN (16),
 					PARTITION p3 VALUES LESS THAN (21)
 				);`,
-			output: `create table tp17 (id int not null primary key, fname varchar(30), lname varchar(30)) partition by range(id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))`,
+			output: `create table tp17 (id int not null primary key, fname varchar(30), lname varchar(30)) partition by range (id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))`,
 		},
 		{
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
@@ -2496,8 +2496,8 @@ var (
 			output: "alter table t1 truncate partition all",
 		},
 		{
-			input:  "ALTER TABLE titles partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')), partition p03 values less than (to_days('1987-12-31')))",
-			output: "alter table titles partition by range(to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
+			input:  "ALTER TABLE titles partition by range (to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')), partition p03 values less than (to_days('1987-12-31')))",
+			output: "alter table titles partition by range (to_days(from_date)) (partition p01 values less than (to_days(1985-12-31)), partition p02 values less than (to_days(1986-12-31)), partition p03 values less than (to_days(1987-12-31)))",
 		},
 		{
 			input:  "Alter table nation rename to nations",
@@ -2512,8 +2512,8 @@ var (
 			output: "rename table rename_table_01 rename to rename01, rename_table_02 rename to rename02, rename_table_03 rename to rename03, rename_table_04 rename to rename04, rename_table_05 rename to rename05",
 		},
 		{
-			input:  "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
-			output: "create table pt2 (id int, date_column date) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
+			input:  "create table pt2 (id int, date_column date) partition by range (year(date_column)) (partition p1 values less than (2010) comment 'p1 comment', partition p2 values less than maxvalue comment 'p3 comment')",
+			output: "create table pt2 (id int, date_column date) partition by range (year(date_column)) (partition p1 values less than (2010) comment = 'p1 comment', partition p2 values less than (MAXVALUE) comment = 'p3 comment')",
 		},
 		{
 			input: "create publication pub1 database db1 account all",
@@ -3305,16 +3305,16 @@ var (
 		output string
 	}{
 		{
-			input:  "create table pt1 (id int, category varchar(50)) partition by list columns(category) (partition p1 values in ('A', 'B') comment 'Category A and B', partition p2 values in ('C', 'D') comment 'Category C and D')",
+			input:  "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment 'Category A and B', partition p2 values in ('C', 'D') comment 'Category C and D')",
 			output: "create table pt1 (id int, category varchar(50)) partition by list columns (category) (partition p1 values in ('A', 'B') comment = 'Category A and B', partition p2 values in ('C', 'D') comment = 'Category C and D')",
 		},
 		{
-			input:  "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
-			output: "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range(to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
+			input:  "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range (to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
+			output: "create table titles (emp_no int not null, title varchar(50) not null, from_date date not null, to_date date, primary key (emp_no, title, from_date)) partition by range (to_days(from_date)) (partition p01 values less than (to_days('1985-12-31')), partition p02 values less than (to_days('1986-12-31')))",
 		},
 		{
-			input:  "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment 'Before 2010', partition p2 values less than (2020) comment '2010 - 2019', partition p3 values less than (MAXVALUE) comment '2020 and Beyond')",
-			output: "create table pt2 (id int, date_column date, value int) partition by range(year(date_column)) (partition p1 values less than (2010) comment = 'Before 2010', partition p2 values less than (2020) comment = '2010 - 2019', partition p3 values less than (MAXVALUE) comment = '2020 and Beyond')",
+			input:  "create table pt2 (id int, date_column date, value int) partition by range (year(date_column)) (partition p1 values less than (2010) comment 'Before 2010', partition p2 values less than (2020) comment '2010 - 2019', partition p3 values less than (MAXVALUE) comment '2020 and Beyond')",
+			output: "create table pt2 (id int, date_column date, value int) partition by range (year(date_column)) (partition p1 values less than (2010) comment = 'Before 2010', partition p2 values less than (2020) comment = '2010 - 2019', partition p3 values less than (MAXVALUE) comment = '2020 and Beyond')",
 		},
 	}
 )

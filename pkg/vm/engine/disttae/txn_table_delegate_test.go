@@ -110,19 +110,3 @@ func TestTxnTableDelegate_Delete(t *testing.T) {
 		table.Delete(context.Background(), &batch.Batch{}, "")
 	})
 }
-
-func TestTxnTableDelegate_PrimaryKeysMayBeUpserted(t *testing.T) {
-	table := &txnTableDelegate{}
-	table.combined.is = true
-	table.combined.tbl = newMockCombinedTxnTable()
-
-	assert.PanicsWithValue(t, "BUG: cannot upsert primary keys in partition primary table", func() {
-		table.PrimaryKeysMayBeUpserted(
-			context.Background(),
-			types.TS{},
-			types.TS{},
-			&batch.Batch{},
-			0,
-		)
-	})
-}

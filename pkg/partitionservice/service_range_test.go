@@ -118,7 +118,7 @@ func TestGetMetadataByRangeColumnsType(t *testing.T) {
 
 			method.ColumnList = nil
 			_, err = s.getMetadataByRangeType(stmt.PartitionOption, def)
-			require.Error(t, err)
+			require.NoError(t, err)
 		},
 	)
 }
