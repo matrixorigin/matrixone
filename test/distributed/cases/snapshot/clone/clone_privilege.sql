@@ -30,8 +30,12 @@ create table mo_catalog.t1 clone db4.t1;
 create table system.t1 clone db4.t1;
 
 
+use mo_catalog;
+create database db5 clone db4;
+
 drop account if exists acc1;
 drop database if exists db1;
 drop database if exists db2;
 drop database if exists db3;
 drop database if exists db4;
+drop database if exists db5;
