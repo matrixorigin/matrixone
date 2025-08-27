@@ -2284,38 +2284,13 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
 		}
 
-		var (
-			err           error
-			delta         statistic.StatsArray
-			havePrivilege bool
-			checkStep     int
-		)
-
-		defer func() {
-			if !havePrivilege {
-				if clone, ok := stmt.(*tree.CloneTable); ok {
-					level := reqCtx.Value(tree.CloneLevelCtxKey{})
-					reqCtxAccount, _ := defines.GetAccountId(reqCtx)
-					logutil.Error("CLONE-HAVEN'T-PRIVILEGE",
-						zap.Uint32("sesAccount", ses.GetAccountId()),
-						zap.Uint32("reqCtxAccount", reqCtxAccount),
-						zap.Int("checkStep", checkStep),
-						zap.Any("cloneLevel", level),
-						zap.String("cloneDetail", clone.String()),
-						zap.String("sesSql", ses.sql),
-					)
-				}
-			}
-		}()
-
-		havePrivilege, delta, err = authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
+		havePrivilege, delta, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(reqCtx, ses, stmt)
 		if err != nil {
 			return stats, err
 		}
 		stats.Add(&delta)
 
 		if !havePrivilege {
-			checkStep++
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 			return stats, err
 		}
@@ -2327,7 +2302,6 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		stats.Add(&delta)
 
 		if !havePrivilege {
-			checkStep++
 			err = moerr.NewInternalError(reqCtx, "do not have privilege to execute the statement")
 			return stats, err
 		}
