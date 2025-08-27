@@ -29,6 +29,7 @@ import (
 type PartitionMultiUpdate struct {
 	vm.OperatorBase
 
+	waitRelease      *MultiUpdate
 	raw              *MultiUpdate
 	affectedRows     uint64
 	tableID          uint64
@@ -325,11 +326,18 @@ func (op *PartitionMultiUpdate) Free(
 	}
 
 	affectedRows := op.affectedRows
-	*op = PartitionMultiUpdate{affectedRows: affectedRows}
+	raw := op.raw
+	*op = PartitionMultiUpdate{
+		affectedRows: affectedRows,
+		waitRelease:  raw,
+	}
 }
 
 func (op *PartitionMultiUpdate) Release() {
-	op.raw.Release()
+	if op.waitRelease != nil {
+		op.waitRelease.Release()
+		op.waitRelease = nil
+	}
 }
 
 func (op *PartitionMultiUpdate) Reset(
