@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"go.uber.org/zap"
 )
 
 const DefaultLoadParallism = 20
@@ -124,6 +125,17 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		return
 	}
 	h.currentPSTo = state.GetEnd()
+	if h.currentPSTo.GT(&h.toTs) {
+		h.currentPSTo = h.toTs
+	}
+	if !h.currentPSFrom.EQ(&h.fromTs) || !h.currentPSTo.EQ(&h.toTs) {
+		logutil.Info("ChangesHandle-Split change handles",
+			zap.String("from", h.fromTs.ToString()),
+			zap.String("to", h.toTs.ToString()),
+			zap.String("ps from", h.currentPSFrom.ToString()),
+			zap.String("ps to", h.currentPSTo.ToString()),
+		)
+	}
 	h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
 		ctx,
 		state,
