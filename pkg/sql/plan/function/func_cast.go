@@ -60,7 +60,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_bit: {
@@ -73,7 +72,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
-		types.T_datalink,
 	},
 
 	types.T_int8: {
@@ -86,7 +84,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_int16: {
@@ -99,7 +96,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_int32: {
@@ -112,7 +108,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_int64: {
@@ -125,7 +120,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
-		types.T_datalink,
 	},
 
 	types.T_uint8: {
@@ -138,7 +132,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
-		types.T_datalink,
 	},
 
 	types.T_uint16: {
@@ -151,7 +144,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
-		types.T_datalink,
 	},
 
 	types.T_uint32: {
@@ -164,7 +156,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
-		types.T_datalink,
 	},
 
 	types.T_uint64: {
@@ -177,7 +168,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_enum,
-		types.T_datalink,
 	},
 
 	types.T_float32: {
@@ -189,7 +179,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_float64: {
@@ -201,7 +190,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_date: {
@@ -210,7 +198,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_datetime: {
@@ -220,7 +207,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_timestamp: {
@@ -230,7 +216,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_time: {
@@ -242,7 +227,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_binary, types.T_varbinary,
 		types.T_bit,
-		types.T_datalink,
 	},
 
 	types.T_decimal64: {
@@ -254,7 +238,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_time, types.T_timestamp,
-		types.T_datalink,
 	},
 
 	types.T_decimal128: {
@@ -265,7 +248,6 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_decimal64, types.T_decimal128,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_datalink,
 	},
 
 	types.T_char: {
@@ -363,32 +345,22 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_datalink,
 	},
 	types.T_datalink: {
-		types.T_bit,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128,
-		types.T_bool,
-		types.T_json,
-		types.T_uuid,
 		types.T_text,
-		types.T_date, types.T_datetime,
-		types.T_time, types.T_timestamp,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
-		types.T_array_float32, types.T_array_float64,
 		types.T_datalink,
 	},
 
 	types.T_json: {
-		types.T_char, types.T_varchar, types.T_text, types.T_datalink,
+		types.T_char, types.T_varchar, types.T_text,
 	},
 
 	types.T_uuid: {
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary, types.T_text,
 	},
 
 	types.T_TS: {
@@ -405,7 +377,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	types.T_enum: {
 		types.T_enum, types.T_uint16, types.T_uint8, types.T_uint32, types.T_uint64, types.T_uint128,
 		types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink,
+		types.T_binary, types.T_varbinary, types.T_text,
 	},
 
 	types.T_array_float32: {
