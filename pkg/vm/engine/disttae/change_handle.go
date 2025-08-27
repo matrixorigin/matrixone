@@ -119,8 +119,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		}
 		h.currentPSFrom = h.currentPSTo.Next()
 	}
-	h.tbl.db.op.UpdateSnapshot(ctx, h.currentPSFrom.ToTimestamp())
-	state, err := h.tbl.getPartitionState(ctx)
+	state, err := h.tbl.getPartitionStateWithTs(ctx, h.currentPSFrom.Prev().ToTimestamp())
 	if err != nil {
 		return
 	}
