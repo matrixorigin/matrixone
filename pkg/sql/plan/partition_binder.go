@@ -155,15 +155,29 @@ func (p *PartitionBinder) constructRangeExpression(
 		condition2 = valuesLessThan.ValueList[0]
 	}
 
+	// Check if condition1 is MAXVALUE
+	_, isMaxValue := condition1.(*tree.MaxValue)
+
 	// col < p0
 	// p0 <= col < p1
 	// p1 <= col < p2
+	// p2 <= col (for MAXVALUE partition)
 	if position == 0 {
-		expr = tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+		if isMaxValue {
+			// First partition with MAXVALUE: all values go here
+			expr = tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+		} else {
+			expr = tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+		}
 	} else {
-		left := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, column, condition2)
-		right := tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
-		expr = tree.NewAndExpr(left, right)
+		if isMaxValue {
+			// Last partition with MAXVALUE: column >= condition2
+			expr = tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, column, condition2)
+		} else {
+			left := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, column, condition2)
+			right := tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+			expr = tree.NewAndExpr(left, right)
+		}
 	}
 
 	planExpr, err := p.BindExpr(expr, 0, false)
