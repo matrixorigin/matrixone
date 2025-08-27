@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,20 +44,106 @@ func (tbl *txnTable) CollectChanges(
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return nil, err
+	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, mp)
+}
+
+type PartitionChangesHandle struct {
+	currentChangeHandle engine.ChangesHandle
+	currentPSFrom       types.TS
+	currentPSTo         types.TS
+
+	fromTs types.TS
+	toTs   types.TS
+	tbl    *txnTable
+
+	skipDeletes   bool
+	primarySeqnum int
+	mp            *mpool.MPool
+	fs            fileservice.FileService
+}
+
+func NewPartitionChangesHandle(
+	ctx context.Context,
+	tbl *txnTable,
+	from, to types.TS,
+	skipDeletes bool,
+	mp *mpool.MPool,
+) (*PartitionChangesHandle, error) {
+	handle := &PartitionChangesHandle{
+		tbl:           tbl,
+		fromTs:        from,
+		toTs:          to,
+		skipDeletes:   skipDeletes,
+		primarySeqnum: tbl.primarySeqnum,
+		mp:            mp,
+		fs:            tbl.getTxn().engine.fs,
 	}
-	return logtailreplay.NewChangesHandler(
+	end, err := handle.getNextChangeHandle(ctx)
+	if end {
+		panic(fmt.Sprintf("logic error: from %s to %s", from.ToString(), to.ToString()))
+	}
+	return handle, err
+}
+
+func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	for {
+		data, tombstone, hint, err = h.currentChangeHandle.Next(ctx, mp)
+		if err != nil {
+			return
+		}
+		if data != nil || tombstone != nil {
+			return
+		}
+		var end bool
+		end, err = h.getNextChangeHandle(
+			ctx,
+		)
+		if err != nil {
+			return
+		}
+		if end {
+			return
+		}
+	}
+
+}
+
+func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
+	if h.currentPSTo.IsEmpty() {
+		h.currentPSFrom = h.fromTs
+	} else {
+		h.currentChangeHandle.Close()
+		if h.currentPSTo.GE(&h.toTs) {
+			return true, nil
+		}
+		h.currentPSFrom = h.currentPSTo.Next()
+	}
+	h.tbl.db.op.UpdateSnapshot(ctx, h.currentPSFrom.ToTimestamp())
+	state, err := h.tbl.getPartitionState(ctx)
+	if err != nil {
+		return
+	}
+	h.currentPSTo = state.GetEnd()
+	h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
 		ctx,
 		state,
-		from, to,
-		skipDeletes,
+		h.currentPSFrom,
+		h.currentPSTo,
+		h.skipDeletes,
 		objectio.BlockMaxRows,
-		tbl.primarySeqnum,
-		mp,
-		tbl.getTxn().engine.fs,
+		h.primarySeqnum,
+		h.mp,
+		h.fs,
 	)
+	if err != nil {
+		return
+	}
+	return false, nil
+}
+
+func (h *PartitionChangesHandle) Close() error {
+	h.currentChangeHandle.Close()
+	return nil
 }
 
 type CheckpointChangesHandle struct {
