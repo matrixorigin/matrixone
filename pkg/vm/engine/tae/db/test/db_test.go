@@ -7430,7 +7430,7 @@ func TestPitrMeta(t *testing.T) {
 	var err error
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err = testutil.CreateDatabase2(ctx, txn, "db1")
+		database, err = txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
 		assert.Nil(t, err)
 		rel3, err = testutil.CreateRelation2(ctx, txn, database, pitrSchema)
 		assert.Nil(t, err)
@@ -7490,7 +7490,7 @@ func TestPitrMeta(t *testing.T) {
 			assert.Nil(t, txn1.Commit(context.Background()))
 		}
 	}
-	appendPitr("db1", rel3.ID())
+	appendPitr("mo_catalog", rel3.ID())
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
@@ -7513,7 +7513,7 @@ func TestPitrMeta(t *testing.T) {
 
 	txn, err := db.StartTxn(nil)
 	require.NoError(t, err)
-	db1, err := txn.GetDatabase("db1")
+	db1, err := txn.GetDatabase("mo_catalog")
 	assert.NoError(t, err)
 	rel, err := db1.GetRelationByName(pitrSchema.Name)
 	assert.NoError(t, err)
@@ -7538,7 +7538,7 @@ func TestPitrMeta(t *testing.T) {
 	}
 	txn, err = db.StartTxn(nil)
 	require.NoError(t, err)
-	db1, err = txn.GetDatabase("db1")
+	db1, err = txn.GetDatabase("mo_catalog")
 	assert.NoError(t, err)
 	rel, err = db1.GetRelationByName(pitrSchema.Name)
 	assert.NoError(t, err)
