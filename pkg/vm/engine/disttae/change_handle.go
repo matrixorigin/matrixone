@@ -154,6 +154,7 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 
 func (h *PartitionChangesHandle) Close() error {
 	h.currentChangeHandle.Close()
+	h.currentChangeHandle = nil
 	return nil
 }
 

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -2848,6 +2850,13 @@ func TestPartitionChangesHandle(t *testing.T) {
 	defer bat.Close()
 	bats := bat.Split(2)
 
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			taeHandler.GetRPCHandle().HandleSnapshotRead,
+		),
+	)
+	defer ssStub.Reset()
 	// insert 1 row
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -2897,8 +2906,8 @@ func TestPartitionChangesHandle(t *testing.T) {
 			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 			assert.Nil(t, tombstone)
 			t.Log(data.Attrs)
-			data.Clean(mp)
 			totalRows += data.Vecs[0].Length()
+			data.Clean(mp)
 		}
 		assert.Equal(t, totalRows, 2)
 		assert.NoError(t, handle.Close())
