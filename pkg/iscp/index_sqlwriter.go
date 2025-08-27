@@ -111,7 +111,7 @@ func NewIndexSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *p
 	case catalog.MoIndexHnswAlgo.ToString():
 		return NewHnswSqlWriter(algo, jobID, info, tabledef, indexdef)
 	default:
-		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx("IndexSqlWriter: invalid algo type")
+		return IndexSqlWriter(nil), moerr.NewInternalErrorNoCtx(fmt.Sprintf("IndexSqlWriter: invalid algo type: %s", algo))
 
 	}
 }

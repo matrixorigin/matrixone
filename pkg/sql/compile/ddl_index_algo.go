@@ -170,7 +170,7 @@ func (s *Scope) handleFullTextIndexTable(
 		logutil.Infof("fulltext index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-			indexDef.IndexTableName, sinker_type)
+			indexDef.IndexName, sinker_type)
 		if err != nil {
 			return err
 		}

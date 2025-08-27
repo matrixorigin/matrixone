@@ -2049,7 +2049,7 @@ func (s *Scope) handleVectorIvfFlatIndex(
 		logutil.Infof("Ivfflat index Async is true")
 		sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
 		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexTableName, sinker_type)
+			indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexName, sinker_type)
 		if err != nil {
 			return err
 		}
