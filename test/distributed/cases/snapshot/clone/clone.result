@@ -1,0 +1,1304 @@
+set experimental_fulltext_index=1;
+set ft_relevancy_algorithm="TF-IDF";
+SET experimental_hnsw_index = 1;
+drop database if exists test01;
+create database test01;
+use test01;
+drop table if exists src;
+create table src (id bigint primary key, body varchar, title text);
+insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy car'), (2, 'sky is blue', 'no limit'), (3, 'blue is not red', 'colorful'),
+(4, '遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。', '遠東兒童中文'),
+(5, '每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。', '遠東兒童中文'),
+(6, '各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。', '中文短篇小說'),
+(7, '59個簡單的英文和中文短篇小說', '適合初學者'),
+(8, NULL, 'NOT INCLUDED'),
+(9, 'NOT INCLUDED BODY', NULL),
+(10, NULL, NULL);
+create fulltext index ftidx on src (body, title);
+select * from src;
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
+drop table if exists aerr;
+create table aerr (uid varchar(120), email varchar(20), lmethod varchar(100));
+insert into aerr values ("user1", 'xx@yeah.net', 'basic'),('user2', 'xx@mo.cn','basic'),('user3', '11@tt.cn', 'basic');
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+uid    lmethod    email
+user2    basic    xx@mo.cn
+create unique index mail_method_idx on aerr(email,lmethod);
+alter table aerr add primary key (uid);
+select uid,lmethod,email from aerr where lmethod = 'basic' and  email = 'xx@mo.cn';
+uid    lmethod    email
+user2    basic    xx@mo.cn
+set @idxsql = concat("select count(*) from `", (SELECT index_table_name FROM mo_catalog.mo_indexes WHERE column_name = 'lmethod'), "`");
+prepare err1 from @novar;
+internal error: the user variable novar does not exist
+prepare s1 from @idxsql;
+execute s1;
+count(*)
+3
+drop snapshot if exists sp01;
+create snapshot sp01 for account;
+drop database if exists test02;
+create database test02;
+use test02;
+drop table if exists vector_test;
+create table `vector_test` (id INT PRIMARY KEY AUTO_INCREMENT, vector vecf32(3));
+INSERT INTO `vector_test` VALUES(1,"[1,2,4]");
+INSERT INTO `vector_test` VALUES(2,"[1,2,6]");
+INSERT INTO `vector_test` VALUES(3,"[1,3,6]");
+INSERT INTO `vector_test` VALUES(4,"[1,3,6]");
+INSERT INTO `vector_test` VALUES(5,"[1,3,6]");
+INSERT INTO `vector_test` VALUES(6,"[1,3,6]");
+select * from vector_test;
+id    vector
+1    [1, 2, 4]
+2    [1, 2, 6]
+3    [1, 3, 6]
+4    [1, 3, 6]
+5    [1, 3, 6]
+6    [1, 3, 6]
+drop snapshot if exists sp02;
+create snapshot sp02 for account;
+drop database if exists test03;
+create database test03;
+use test03;
+drop table if exists vector_index_01;
+create table vector_index_01(a bigint primary key, b vecf32(128),c int,key c_k(c));
+create index idx01 using hnsw on vector_index_01(b) op_type "vector_l2_ops" M 48 EF_CONSTRUCTION 64 EF_SEARCH 64;
+insert into vector_index_01 values(9774 ,"[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]",3),(9775,"[0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]",5),(9776,"[10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]",3);
+insert into vector_index_01 values(9777, " [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]",4),(9778,"[41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]",4);
+select * from vector_index_01;
+a    b    c
+9774    [1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]    3
+9775    [0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]    5
+9776    [10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]    3
+9777    [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]    4
+9778    [41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]    4
+drop snapshot if exists sp03;
+create snapshot sp03 for account;
+drop database if exists test04;
+create database test04;
+use test04;
+drop table if exists fk_01;
+drop table if exists fk_02;
+create table fk_01(col1 varchar(30) not null primary key,col2 int);
+create table fk_02(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(col1));
+show create table fk_02;
+Table    Create Table
+fk_02    CREATE TABLE `fk_02` (\n  `col1` int DEFAULT NULL,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` tinyint DEFAULT NULL,\n  CONSTRAINT `ck` FOREIGN KEY (`col2`) REFERENCES `fk_01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+insert into fk_01 values ('90',5983),('100',734),('190',50);
+insert into fk_02(col2,col3) values ('90',5),('90',4),('100',0),(NULL,80);
+drop table if exists enum01;
+create table enum01 (col1 enum('red','blue','green'));
+insert into enum01 values ('red'),('blue'),('green');
+desc enum01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    ENUM('red','blue','green')    YES        null
+select * from enum01;
+col1
+red
+blue
+green
+show create table enum01;
+Table    Create Table
+enum01    CREATE TABLE `enum01` (\n  `col1` enum('red','blue','green') DEFAULT NULL\n)
+drop snapshot if exists sp04;
+create snapshot sp04 for account;
+drop database if exists test01_new;
+drop database if exists test02_new;
+drop database if exists test03_new;
+drop database if exists test04_new;
+create database test01_new clone test01 {snapshot = 'sp01'};
+create database test02_new clone test02 {snapshot = 'sp02'};
+create database test03_new clone test03 {snapshot = 'sp03'};
+create database test04_new clone test04 {snapshot = 'sp04'};
+drop database if exists mo_catalog_new;
+drop database if exists mo_catalog_new_new;
+create database mo_catalog_new clone mo_catalog {snapshot = 'sp01'};
+create table mo_catalog_new.src_new clone mo_catalog.mo_database {snapshot = 'sp01'};
+show create table mo_catalog_new.src_new;
+Table    Create Table
+src_new    CREATE TABLE `src_new` (\n  `dat_id` bigint unsigned DEFAULT NULL,\n  `datname` varchar(5000) NOT NULL,\n  `dat_catalog_name` varchar(5000) DEFAULT NULL,\n  `dat_createsql` varchar(5000) DEFAULT NULL,\n  `owner` int unsigned DEFAULT NULL,\n  `creator` int unsigned DEFAULT NULL,\n  `created_time` timestamp NULL DEFAULT NULL,\n  `account_id` int unsigned NOT NULL,\n  `dat_type` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`account_id`,`datname`)\n)
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+create database mo_catalog_new_new clone mo_catalog {snapshot = 'sp04'};
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new.mo_database where datname = 'test01' or datname = 'test02' or datname = 'test03';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+test02    def    create database test02    0
+test03    def    create database test03    0
+drop database if exists mo_catalog_new01;
+create database mo_catalog_new01 clone mo_catalog_new;
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+drop database if exists mo_catalog_new_new01;
+create database mo_catalog_new_new01 clone mo_catalog_new;
+drop database mo_catalog_new;
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+drop database mo_catalog_new_new;
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+drop database if exists information_schema_new;
+create database information_schema_new clone information_schema;
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+drop database if exists mo_debug_new;
+create database mo_debug_new clone mo_debug;
+select * from mo_debug.trace_features;
+name    state
+data    disable
+statement    disable
+txn    disable
+txn-action    disable
+txn-workspace    disable
+drop database if exists mo_task_new;
+create database mo_task_new clone mo_task;
+create snapshot spx for account;
+drop database if exists mo_task_new;
+create database mo_task_new clone mo_task {snapshot = "spx"};
+select
+task_metadata_executor, task_metadata_context, task_metadata_option
+from
+mo_task_new.sys_cron_task {snapshot = "spx"}
+except
+select
+task_metadata_executor, task_metadata_context, task_metadata_option
+from
+mo_task_new.sys_cron_task {snapshot = "spx"};
+task_metadata_executor    task_metadata_context    task_metadata_option
+drop database if exists mysql_new;
+create database mysql_new clone mysql;
+use mysql_new;
+drop database if exists system_new;
+create database system_new clone system;
+drop database if exists system_metrics_new;
+create database system_metrics_new clone system_metrics;
+use system_metrics_new;
+show tables;
+Tables_in_system_metrics_new
+metric
+mo_log_message_count
+process_cpu_percent
+process_cpu_seconds_total
+process_open_fds
+process_resident_memory_bytes
+server_connections
+server_object_count
+server_snapshot_usage
+server_storage_usage
+sql_statement_cu
+sql_statement_duration_total
+sql_statement_errors
+sql_statement_total
+sql_transaction_errors
+sql_transaction_total
+sys_cpu_combined_percent
+sys_cpu_seconds_total
+sys_disk_read_bytes
+sys_disk_write_bytes
+sys_memory_available
+sys_memory_used
+sys_net_recv_bytes
+sys_net_sent_bytes
+show databases;
+Database
+clone
+information_schema
+information_schema_new
+mo_catalog
+mo_catalog_new01
+mo_catalog_new_new01
+mo_debug
+mo_debug_new
+mo_task
+mo_task_new
+mysql
+mysql_new
+system
+system_metrics
+system_metrics_new
+system_new
+test01
+test01_new
+test02
+test02_new
+test03
+test03_new
+test04
+test04_new
+use test01_new;
+show tables;
+Tables_in_test01_new
+aerr
+src
+select * from src;
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`)\n)
+use test02_new;
+select count(*) from vector_test;
+count(*)
+6
+desc vector_test;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null    auto_increment    
+vector    VECF32(3)    YES        null        
+use test03_new;
+select * from vector_index_01;
+a    b    c
+9774    [1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]    3
+9775    [0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]    5
+9776    [10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]    3
+9777    [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]    4
+9778    [41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]    4
+show create table vector_index_01;
+Table    Create Table
+vector_index_01    CREATE TABLE `vector_index_01` (\n  `a` bigint NOT NULL,\n  `b` vecf32(128) DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `c_k` (`c`),\n  KEY `idx01` USING hnsw (`b`) m = 48  ef_construction = 64  ef_search = 64  op_type 'vector_l2_ops' \n)
+use test04_new;
+select * from enum01;
+col1
+red
+blue
+green
+desc enum01;
+Field    Type    Null    Key    Default    Extra    Comment
+col1    ENUM('red','blue','green')    YES        null
+use test01;
+drop table src;
+use test02;
+alter table vector_test drop column vector;
+use test03;
+truncate vector_index_01;
+use test04;
+delete from enum01 where col1 = 'blue';
+update enum01 set col1 ='blue' where col1 = 'green';
+use test01_new;
+show tables;
+Tables_in_test01_new
+aerr
+src
+select * from src;
+id    body    title
+0    color is red    t1
+1    car is yellow    crazy car
+2    sky is blue    no limit
+3    blue is not red    colorful
+4    遠東兒童中文是針對6到9歲的小朋友精心設計的中文學習教材，共三冊，目前已出版一、二冊。    遠東兒童中文
+5    每冊均採用近百張全幅彩圖及照片，生動活潑、自然真實，加深兒童學習印象，洋溢學習樂趣。    遠東兒童中文
+6    各個單元主題內容涵蓋中華文化及生活應用的介紹。本套教材含課本、教學指引、生字卡、學生作業本與CD，中英對照，精美大字版。本系列有繁體字及簡體字兩種版本印行。    中文短篇小說
+7    59個簡單的英文和中文短篇小說    適合初學者
+8    null    NOT INCLUDED
+9    NOT INCLUDED BODY    null
+10    null    null
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`)\n)
+use test02_new;
+select count(*) from vector_test;
+count(*)
+6
+desc vector_test;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null    auto_increment    
+vector    VECF32(3)    YES        null        
+use test03_new;
+select * from vector_index_01;
+a    b    c
+9774    [1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]    3
+9775    [0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]    5
+9776    [10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]    3
+9777    [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]    4
+9778    [41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]    4
+show create table vector_index_01;
+Table    Create Table
+vector_index_01    CREATE TABLE `vector_index_01` (\n  `a` bigint NOT NULL,\n  `b` vecf32(128) DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `c_k` (`c`),\n  KEY `idx01` USING hnsw (`b`) m = 48  ef_construction = 64  ef_search = 64  op_type 'vector_l2_ops' \n)
+use test04_new;
+select * from enum01;
+col1
+red
+blue
+green
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+select datname,dat_catalog_name,dat_createsql,account_id from mo_catalog_new_new01.mo_database where datname = 'test01';
+datname    dat_catalog_name    dat_createsql    account_id
+test01    def    create database test01    0
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+select table_catalog,table_schema,table_name,table_type,engine,version,row_format from information_schema_new.tables where table_name = 'mo_columns';
+table_catalog    table_schema    table_name    table_type    engine    version    row_format
+def    mo_catalog    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+def    mo_catalog_new_new01    mo_columns    BASE TABLE    Tae    10    Compressed
+select * from mo_debug.trace_features;
+name    state
+data    disable
+statement    disable
+txn    disable
+txn-action    disable
+txn-workspace    disable
+show create table mysql_new.columns_priv;
+Table    Create Table
+columns_priv    CREATE TABLE `columns_priv` (\n  `Host` char(255) NOT NULL DEFAULT '',\n  `Db` char(64) NOT NULL DEFAULT '',\n  `User` char(32) NOT NULL DEFAULT '',\n  `Table_name` char(64) NOT NULL DEFAULT '',\n  `Column_name` char(64) NOT NULL DEFAULT '',\n  `Timestamp` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP() ON UPDATE CURRENT_TIMESTAMP(),\n  `Column_priv` varchar(10) NOT NULL DEFAULT '',\n  PRIMARY KEY (`Host`,`Db`,`User`,`Table_name`,`Column_name`)\n)
+drop snapshot sp01;
+drop snapshot sp02;
+drop snapshot sp03;
+drop snapshot sp04;
+drop snapshot spx;
+drop database test01;
+drop database test02;
+drop database test03;
+drop database test04;
+drop database test01_new;
+drop database test02_new;
+drop database test03_new;
+drop database test04_new;
+drop database mo_catalog_new01;
+drop database mo_catalog_new_new01;
+drop database information_schema_new;
+drop database mo_debug_new;
+drop database mysql_new;
+drop database system_new;
+drop database system_metrics_new;
+drop database mo_task_new;
+drop account if exists acc01;
+create account acc01 admin_name = 'test_account' identified by '111';
+drop database if exists test05;
+create database test05;
+use test05;
+drop table if exists t1;
+drop table if exists t2;
+CREATE TABLE t1 (
+id int,
+token varchar(100) DEFAULT '' NOT NULL,
+count int DEFAULT 0 NOT NULL,
+qty int,
+phone char(1) DEFAULT '' NOT NULL,
+times datetime DEFAULT '2000-01-01 00:00:00' NOT NULL
+);
+INSERT INTO t1 VALUES (21,'e45703b64de71482360de8fec94c3ade',3,7800,'n','1999-12-23 17:22:21');
+INSERT INTO t1 VALUES (22,'e45703b64de71482360de8fec94c3ade',4,5000,'y','1999-12-23 17:22:21');
+INSERT INTO t1 VALUES (18,'346d1cb63c89285b2351f0ca4de40eda',3,13200,'b','1999-12-23 11:58:04');
+INSERT INTO t1 VALUES (17,'ca6ddeb689e1b48a04146b1b5b6f936a',4,15000,'b','1999-12-23 11:36:53');
+INSERT INTO t1 VALUES (16,'ca6ddeb689e1b48a04146b1b5b6f936a',3,13200,'b','1999-12-23 11:36:53');
+INSERT INTO t1 VALUES (26,'a71250b7ed780f6ef3185bfffe027983',5,1500,'b','1999-12-27 09:44:24');
+INSERT INTO t1 VALUES (24,'4d75906f3c37ecff478a1eb56637aa09',3,5400,'y','1999-12-23 17:29:12');
+CREATE TABLE t2 (
+id int,
+category int DEFAULT 0 NOT NULL,
+county int DEFAULT 0 NOT NULL,
+state int DEFAULT 0 NOT NULL,
+phones int DEFAULT 0 NOT NULL,
+nophones int DEFAULT 0 NOT NULL
+);
+INSERT INTO t2 VALUES (3,2,11,12,5400,7800);
+INSERT INTO t2 VALUES (4,2,25,12,6500,11200);
+INSERT INTO t2 VALUES (5,1,37,6,10000,12000);
+drop database if exists test06;
+create database test06;
+use test06;
+create publication publication01 database republication01 account acc01 comment 'republish';
+internal error: database 'republication01' does not exist
+create table repub01(col1 int);
+insert into repub01 values (1);
+drop database if exists test07;
+create database test07;
+use test07;
+drop table if exists t1;
+create table t1(
+col1 date not null,
+col2 datetime,
+col3 timestamp,
+col4 bool
+);
+set time_zone = 'SYSTEM';
+load data infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
+select * from t1;
+col1    col2    col3    col4
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+drop database if exists test08;
+create database test08;
+use test08;
+create table vtab32(id int primary key auto_increment,`vecf32_3` vecf32(3),`vecf32_5` vecf32(5));
+create table vtab64(id int primary key auto_increment,`vecf64_3` vecf64(3),`vecf64_5` vecf64(5));
+insert into vtab32(vecf32_3,vecf32_5) values(NULL,NULL);
+insert into vtab32(vecf32_3,vecf32_5) values("[0.8166459,0.66616553,0.4886152]",NULL);
+insert into vtab64(vecf64_3,vecf64_5) values(NULL,NULL);
+insert into vtab64(vecf64_3,vecf64_5) values("[0.8166459,0.66616553,0.4886152]",NULL);
+insert into vtab64(vecf64_3,vecf64_5) values ("[8.5606893,6.7903588,821.977768]","[0.46323407,23.49801546,563.9229458,56.07673508,8732.9583881]");
+insert into vtab64(vecf64_3,vecf64_5) values ("[0.9260021,0.26637346,0.06567037]","[0.45756745,65.2996871,321.623636,3.60082066,87.58445764]");
+use test05;
+show tables;
+Tables_in_test05
+t1
+t2
+select * from t1;
+id    token    count    qty    phone    times
+21    e45703b64de71482360de8fec94c3ade    3    7800    n    1999-12-23 17:22:21
+22    e45703b64de71482360de8fec94c3ade    4    5000    y    1999-12-23 17:22:21
+18    346d1cb63c89285b2351f0ca4de40eda    3    13200    b    1999-12-23 11:58:04
+17    ca6ddeb689e1b48a04146b1b5b6f936a    4    15000    b    1999-12-23 11:36:53
+16    ca6ddeb689e1b48a04146b1b5b6f936a    3    13200    b    1999-12-23 11:36:53
+26    a71250b7ed780f6ef3185bfffe027983    5    1500    b    1999-12-27 09:44:24
+24    4d75906f3c37ecff478a1eb56637aa09    3    5400    y    1999-12-23 17:29:12
+select * from t2;
+id    category    county    state    phones    nophones
+3    2    11    12    5400    7800
+4    2    25    12    6500    11200
+5    1    37    6    10000    12000
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `id` int DEFAULT NULL,\n  `token` varchar(100) NOT NULL DEFAULT '',\n  `count` int NOT NULL DEFAULT 0,\n  `qty` int DEFAULT NULL,\n  `phone` char(1) NOT NULL DEFAULT '',\n  `times` datetime NOT NULL DEFAULT '2000-01-01 00:00:00'\n)
+show create table t2;
+Table    Create Table
+t2    CREATE TABLE `t2` (\n  `id` int DEFAULT NULL,\n  `category` int NOT NULL DEFAULT 0,\n  `county` int NOT NULL DEFAULT 0,\n  `state` int NOT NULL DEFAULT 0,\n  `phones` int NOT NULL DEFAULT 0,\n  `nophones` int NOT NULL DEFAULT 0\n)
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    YES        null        
+token    VARCHAR(100)    NO                
+count    INT(32)    NO        0        
+qty    INT(32)    YES        null        
+phone    CHAR(1)    NO                
+times    DATETIME(0)    NO        2000-01-01 00:00:00        
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    YES        null        
+category    INT(32)    NO        0        
+county    INT(32)    NO        0        
+state    INT(32)    NO        0        
+phones    INT(32)    NO        0        
+nophones    INT(32)    NO        0        
+use test06;
+show tables;
+Tables_in_test06
+repub01
+select * from repub01;
+col1
+1
+use test07;
+select * from t1;
+col1    col2    col3    col4
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+use test08;
+select * from vtab32;
+id    vecf32_3    vecf32_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+select * from vtab64;
+id    vecf64_3    vecf64_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+3    [8.5606893, 6.7903588, 821.977768]    [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]
+4    [0.9260021, 0.26637346, 0.06567037]    [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
+drop database if exists test05_new;
+drop database if exists test06_new;
+drop database if exists test07_new;
+drop database if exists test08_new;
+create database test05_new clone test05;
+create table test05_new.t2 clone test05_new.t2;
+table t2 already exists
+create table test05_new.t3 clone test05_new.t2;
+create database test06_new clone test06;
+create table test06_new.temp_test clone test05_new.t2;
+show create table test06_new.temp_test;
+Table    Create Table
+temp_test    CREATE TABLE `temp_test` (\n  `id` int DEFAULT NULL,\n  `category` int NOT NULL DEFAULT 0,\n  `county` int NOT NULL DEFAULT 0,\n  `state` int NOT NULL DEFAULT 0,\n  `phones` int NOT NULL DEFAULT 0,\n  `nophones` int NOT NULL DEFAULT 0\n)
+select * from test06_new.temp_test;
+id    category    county    state    phones    nophones
+3    2    11    12    5400    7800
+4    2    25    12    6500    11200
+5    1    37    6    10000    12000
+drop table test06_new.temp_test;
+create database test07_new clone test07;
+create database test08_new clone test08;
+create table test07_new.vtab32 clone test08.vtab32;
+create table test07_new.vtab64 clone test08.vtab64;
+select * from test07_new.vtab32;
+id    vecf32_3    vecf32_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+select * from test07_new.vtab64;
+id    vecf64_3    vecf64_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+3    [8.5606893, 6.7903588, 821.977768]    [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]
+4    [0.9260021, 0.26637346, 0.06567037]    [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
+show databases;
+Database
+clone
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
+test05
+test05_new
+test06
+test06_new
+test07
+test07_new
+test08
+test08_new
+drop database test05;
+use test06;
+drop publication publication01;
+internal error: publication 'publication01' does not exist
+drop table repub01;
+drop database test07;
+use test08;
+truncate vtab32;
+show databases;
+Database
+clone
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
+test05_new
+test06
+test06_new
+test07_new
+test08
+test08_new
+use test05_new;
+show tables;
+Tables_in_test05_new
+t1
+t2
+t3
+select * from t1;
+id    token    count    qty    phone    times
+21    e45703b64de71482360de8fec94c3ade    3    7800    n    1999-12-23 17:22:21
+22    e45703b64de71482360de8fec94c3ade    4    5000    y    1999-12-23 17:22:21
+18    346d1cb63c89285b2351f0ca4de40eda    3    13200    b    1999-12-23 11:58:04
+17    ca6ddeb689e1b48a04146b1b5b6f936a    4    15000    b    1999-12-23 11:36:53
+16    ca6ddeb689e1b48a04146b1b5b6f936a    3    13200    b    1999-12-23 11:36:53
+26    a71250b7ed780f6ef3185bfffe027983    5    1500    b    1999-12-27 09:44:24
+24    4d75906f3c37ecff478a1eb56637aa09    3    5400    y    1999-12-23 17:29:12
+select * from t2;
+id    category    county    state    phones    nophones
+3    2    11    12    5400    7800
+4    2    25    12    6500    11200
+5    1    37    6    10000    12000
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n  `id` int DEFAULT NULL,\n  `token` varchar(100) NOT NULL DEFAULT '',\n  `count` int NOT NULL DEFAULT 0,\n  `qty` int DEFAULT NULL,\n  `phone` char(1) NOT NULL DEFAULT '',\n  `times` datetime NOT NULL DEFAULT '2000-01-01 00:00:00'\n)
+show create table t2;
+Table    Create Table
+t2    CREATE TABLE `t2` (\n  `id` int DEFAULT NULL,\n  `category` int NOT NULL DEFAULT 0,\n  `county` int NOT NULL DEFAULT 0,\n  `state` int NOT NULL DEFAULT 0,\n  `phones` int NOT NULL DEFAULT 0,\n  `nophones` int NOT NULL DEFAULT 0\n)
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    YES        null        
+token    VARCHAR(100)    NO                
+count    INT(32)    NO        0        
+qty    INT(32)    YES        null        
+phone    CHAR(1)    NO                
+times    DATETIME(0)    NO        2000-01-01 00:00:00        
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    YES        null        
+category    INT(32)    NO        0        
+county    INT(32)    NO        0        
+state    INT(32)    NO        0        
+phones    INT(32)    NO        0        
+nophones    INT(32)    NO        0        
+use test06_new;
+use test07_new;
+select * from t1;
+col1    col2    col3    col4
+1000-01-01    0001-01-01 00:00:00    1970-01-01 00:00:01    false
+9999-12-31    9999-12-31 00:00:00    2038-01-19 00:00:00    true
+use test08_new;
+select * from vtab32;
+id    vecf32_3    vecf32_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+select * from vtab64;
+id    vecf64_3    vecf64_5
+1    null    null
+2    [0.8166459, 0.66616553, 0.4886152]    null
+3    [8.5606893, 6.7903588, 821.977768]    [0.46323407, 23.49801546, 563.9229458, 56.07673508, 8732.9583881]
+4    [0.9260021, 0.26637346, 0.06567037]    [0.45756745, 65.2996871, 321.623636, 3.60082066, 87.58445764]
+desc vtab32;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO    PRI    null    auto_increment    
+vecf32_3    VECF32(3)    YES        null        
+vecf32_5    VECF32(5)    YES        null        
+show create table vtab64;
+Table    Create Table
+vtab64    CREATE TABLE `vtab64` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `vecf64_3` vecf64(3) DEFAULT NULL,\n  `vecf64_5` vecf64(5) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+drop database test05;
+Can't drop database 'test05'; database doesn't exist
+drop database test06;
+drop database test07;
+Can't drop database 'test07'; database doesn't exist
+drop database test08;
+drop database test05_new;
+drop database test06_new;
+drop database test07_new;
+drop database test08_new;
+drop account if exists acc02;
+create account acc02 admin_name = 'test_account' identified by '111';
+drop account if exists acc03;
+create account acc03 admin_name = 'test_account' identified by '111';
+drop account if exists acc04;
+create account acc04 admin_name = 'test_account' identified by '111';
+drop database if exists test09;
+create database test09;
+use test09;
+drop table if exists t1;
+create table t1(a int);
+create view v1 as select * from t1;
+SELECT relname, rel_createsql,relkind FROM mo_catalog.mo_tables WHERE reldatabase='test' order by relname;
+relname    rel_createsql    relkind
+create table t2(a int not null, b varchar(20), c char(20));
+create view v2 as select * from t2;
+desc v2;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    NO        null        
+b    VARCHAR(20)    YES        null        
+c    CHAR(20)    YES        null        
+drop snapshot if exists sp09;
+create snapshot sp09 for account;
+drop database if exists test10;
+create database test10;
+use test10;
+drop table if exists vector_index_07;
+create table vector_index_07(a bigint primary key, b vecf32(128),c int,key c_k(c));
+insert into vector_index_07 values(9774 ,"[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]",3),(9775,"[0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]",5),(9776,"[10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]",3);
+insert into vector_index_07 values(9777, " [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]",4),(9778,"[41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]",4);
+create index idx01 using hnsw on vector_index_07(b) op_type "vector_l2_ops";
+drop table if exists employees;
+create table employees (
+employeeNumber int(11) NOT NULL,
+lastName varchar(50) NOT NULL,
+firstName varchar(50) NOT NULL,
+extension varchar(10) NOT NULL,
+email varchar(100) NOT NULL,
+officeCode varchar(10) NOT NULL,
+reportsTo int(11) DEFAULT NULL,
+jobTitle varchar(50) NOT NULL,
+PRIMARY KEY (employeeNumber)
+);
+insert into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
+(1002,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President'),
+(1056,'Patterson','Mary','x4611','mpatterso@classicmodelcars.com','1',1002,'VP Sales'),
+(1076,'Firrelli','Jeff','x9273','jfirrelli@classicmodelcars.com','1',1002,'VP Marketing');
+drop table if exists src;
+create table src (id bigint primary key, json1 json, json2 json);
+insert into src values  (0, '{"a":1, "b":"redredredredredredredredredredrerr"}', '{"d": "happybirthdayhappybirthdayhappybirthday", "f":"winterautumnsummerspring"}'),
+(1, '{"a":2, "b":"中文學習教材"}', '["apple", "orange", "banana", "指引"]'),
+(2, '{"a":3, "b":"redbluebrownyelloworange"}', '{"d":"兒童中文"}');
+drop snapshot if exists sp10;
+create snapshot sp10 for account;
+drop database if exists test11;
+create database test11;
+use test11;
+drop table if exists t1;
+create table t1(a smallint unsigned auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (65535);
+select * from t1;
+a
+1
+3
+4
+6
+7
+65535
+drop table if exists dense_rank01;
+create table dense_rank01 (id integer, sex char(1));
+insert into dense_rank01 values (1, 'm');
+insert into dense_rank01 values (2, 'f');
+insert into dense_rank01 values (3, 'f');
+insert into dense_rank01 values (4, 'f');
+insert into dense_rank01 values (5, 'm');
+drop table if exists text_01;
+create table text_01(t1 text,t2 text,t3 text);
+insert into text_01 values ('中文123abcd','',NULL);
+insert into text_01 values ('yef&&190',' wwww ',983);
+insert into text_01 select '',null,'中文';
+insert into text_01 select '123','7834','commmmmmment';
+insert into text_01 values ('789',' 23:50:00','20');
+drop table if exists t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+select * from t1;
+a    b
+{"t1": "a"}    1
+{"t1": "b"}    2
+drop table if exists test05;
+create table test05 (col1 int, col2 datalink);
+insert into test05 values (1, 'file://$resources/load_data/test_columnlist_01.csv?offset=5');
+insert into test05 values (2, 'file://$resources/load_data/test_columnlist_02.csv?offset=10');
+select col1, load_file(col2) from test05;
+col1    load_file(col2)
+1    on, 32\n2, ben, 35\n3, cindy, 22\n4, david, 33\n5, emma, 18\n6, frank, 59
+2     ben\n3, cindy\n4, david\n5, emma\n6, frank
+drop snapshot if exists sp11;
+create snapshot sp11 for account;
+show databases;
+Database
+clone
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
+test09
+test10
+test11
+use test09;
+select count(*) from t1;
+count(*)
+0
+select * from v1;
+a
+show create table v1;
+View    Create View    character_set_client    collation_connection
+v1    create view v1 as select * from t1;    utf8mb4    utf8mb4_general_ci
+select * from v2;
+a    b    c
+show tables;
+Tables_in_test09
+t1
+t2
+v1
+v2
+use test10;
+show tables;
+Tables_in_test10
+employees
+src
+vector_index_07
+select * from employees;
+employeenumber    lastname    firstname    extension    email    officecode    reportsto    jobtitle
+1002    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1056    Patterson    Mary    x4611    mpatterso@classicmodelcars.com    1    1002    VP Sales
+1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES        null        
+json2    JSON(0)    YES        null        
+select count(*) from vector_index_07;
+count(*)
+5
+use test11;
+select * from dense_rank01;
+id    sex
+1    m
+2    f
+3    f
+4    f
+5    m
+select * from t1;
+a    b
+{"t1": "a"}    1
+{"t1": "b"}    2
+select count(*) from test05;
+count(*)
+2
+select * from text_01;
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+show tables;
+Tables_in_test11
+dense_rank01
+t1
+test05
+text_01
+drop database if exists test09_new;
+drop database if exists test09_table;
+create database test09_table;
+drop database if exists test10_new;
+drop database if exists test10_table;
+create database test10_table;
+drop database if exists test11_new;
+drop database if exists test11_table;
+create database test11_table;
+create database test09_new clone test09 {snapshot = 'sp09'} to account acc02;
+create database test10_new clone test10 {snapshot = 'sp10'} to account acc03;
+create database test11_new clone test11 {snapshot = 'sp11'} to account acc04;
+create table test09_table.t1 clone test09.t1 {snapshot = 'sp09'} to account acc02;
+create table test10_table.employees clone test10.employees {snapshot = 'sp10'} to account acc03;
+create table test10_table.employees clone test10.employees {snapshot = 'sp10'} to account acc03;
+table employees already exists
+create table test11_table.dense_rank01 clone test11.dense_rank01 {snapshot = 'sp11'} to account acc04;
+use test09_new;
+select count(*) from t1;
+count(*)
+0
+select * from v1;
+a
+show create table v1;
+View    Create View    character_set_client    collation_connection
+v1    create view v1 as select * from t1;    utf8mb4    utf8mb4_general_ci
+select * from v2;
+a    b    c
+use test09_table;
+select * from t1;
+a
+use test10_new;
+show tables;
+Tables_in_test10_new
+employees
+src
+vector_index_07
+select * from employees;
+employeenumber    lastname    firstname    extension    email    officecode    reportsto    jobtitle
+1002    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1056    Patterson    Mary    x4611    mpatterso@classicmodelcars.com    1    1002    VP Sales
+1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES        null        
+json2    JSON(0)    YES        null        
+select count(*) from vector_index_07;
+count(*)
+5
+use test10_table;
+select * from employees;
+employeenumber    lastname    firstname    extension    email    officecode    reportsto    jobtitle
+1002    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1056    Patterson    Mary    x4611    mpatterso@classicmodelcars.com    1    1002    VP Sales
+1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
+insert into employees(employeeNumber,lastName,firstName,extension,email,officeCode,reportsTo,jobTitle) values
+(1012,'Murphy','Diane','x5800','dmurphy@classicmodelcars.com','1',NULL,'President');
+use test11_new;
+select * from dense_rank01;
+id    sex
+1    m
+2    f
+3    f
+4    f
+5    m
+select * from t1;
+a    b
+{"t1": "a"}    1
+{"t1": "b"}    2
+select count(*) from test05;
+count(*)
+2
+select * from text_01;
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+use test11_table;
+select * from dense_rank01;
+id    sex
+1    m
+2    f
+3    f
+4    f
+5    m
+delete from dense_rank01 where id < 5;
+drop database test09;
+drop database test10;
+drop database test11;
+use test09_new;
+select count(*) from t1;
+count(*)
+0
+select * from v1;
+a
+show create table v1;
+View    Create View    character_set_client    collation_connection
+v1    create view v1 as select * from t1;    utf8mb4    utf8mb4_general_ci
+select * from v2;
+a    b    c
+use test09_table;
+select * from t1;
+a
+drop database test09_new;
+drop database test09_table;
+use test10_new;
+show tables;
+Tables_in_test10_new
+employees
+src
+vector_index_07
+select * from employees;
+employeenumber    lastname    firstname    extension    email    officecode    reportsto    jobtitle
+1002    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1056    Patterson    Mary    x4611    mpatterso@classicmodelcars.com    1    1002    VP Sales
+1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
+desc src;
+Field    Type    Null    Key    Default    Extra    Comment
+id    BIGINT(64)    NO    PRI    null        
+json1    JSON(0)    YES        null        
+json2    JSON(0)    YES        null        
+select count(*) from vector_index_07;
+count(*)
+5
+drop database test10_new;
+use test10_table;
+select * from employees;
+employeenumber    lastname    firstname    extension    email    officecode    reportsto    jobtitle
+1012    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1002    Murphy    Diane    x5800    dmurphy@classicmodelcars.com    1    null    President
+1056    Patterson    Mary    x4611    mpatterso@classicmodelcars.com    1    1002    VP Sales
+1076    Firrelli    Jeff    x9273    jfirrelli@classicmodelcars.com    1    1002    VP Marketing
+drop database test10_table;
+use test11_new;
+select * from dense_rank01;
+id    sex
+1    m
+2    f
+3    f
+4    f
+5    m
+select * from t1;
+a    b
+{"t1": "a"}    1
+{"t1": "b"}    2
+select count(*) from test05;
+count(*)
+2
+select * from text_01;
+t1    t2    t3
+中文123abcd        null
+yef&&190     wwww     983
+    null    中文
+123    7834    commmmmmment
+789     23:50:00    20
+drop database test11_new;
+use test11_table;
+select * from dense_rank01;
+id    sex
+5    m
+drop database test11_table;
+drop snapshot sp09;
+drop snapshot sp10;
+drop snapshot sp11;
+drop account if exists acc05;
+
+create account acc05 admin_name = 'test_account' identified by '111';
+
+drop database if exists test12;
+
+create database test12;
+
+use test12;
+
+drop table if exists t1;
+
+create table t1 (
+a bigint not null,
+b bigint not null default 0,
+c bigint not null default 0,
+d bigint not null default 0,
+e bigint not null default 0,
+f bigint not null default 0,
+g bigint not null default 0,
+h bigint not null default 0,
+i bigint not null default 0,
+j bigint not null default 0,
+primary key (a));
+
+insert into t1 (a) values (2),(4),(6),(8),(10),(12),(14),(16),(18),(20),(22),(24),(26),(23);
+
+drop table if exists bit01;
+
+create table bit01(id char(1), b binary(10));
+
+insert into bit01 values('a', '111');
+
+insert into bit01 values('a', '110');
+
+insert into bit01 values('a', '143');
+
+insert into bit01 values('a', '000');
+
+insert into bit01 values('b', '001');
+
+insert into bit01 values('b', '011');
+
+insert into bit01 values('c', '010');
+
+insert into bit01 values('d', null);
+
+select * from bit01;
+
+drop table if exists time01;
+
+create table time01 (a datetime(0) not null, primary key(a));
+
+insert into time01 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
+
+drop table if exists double01;
+
+create table double01 (a double not null, primary key(a));
+
+insert into double01 values(-1.7976931348623157E+308),(-2.2250738585072014E-308),(0),(2.2250738585072014E-308),(1.7976931348623157E+308);
+
+drop table if exists tinyint01;
+
+create table tinyint01 (a tinyint unsigned not null, primary key(a));
+
+insert into tinyint01 values (255), (0xFC), (254), (253);
+
+SET experimental_hnsw_index = 1;
+
+drop database if exists test13;
+
+create database test13;
+
+use test13;
+
+drop table if exists vector_index_09;
+
+create table vector_index_09(a bigint primary key, b vecf32(128),c int,key c_k(c));
+
+create index idx01 using hnsw on vector_index_09(b) op_type "vector_l2_ops";
+
+insert into vector_index_09 values(9774 ,NULL,3),(9775,NULL,10);
+
+insert into vector_index_09(a,c) values(9777,4),(9778,9);
+
+drop table if exists vector_ip_01;
+
+create table vector_ip_01(a bigint primary key, b vecf32(128), c int, key c_k(c));
+
+insert into vector_ip_01 values(9774 ,normalize_l2("[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]"),3),(9775,normalize_l2("[0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]"),5),(9776,normalize_l2("[10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]"),3);
+
+insert into vector_ip_01 values(9777, normalize_l2("[16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]"),4),(9778,normalize_l2("[41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]"),4);
+
+create index idx01 using hnsw on vector_ip_01(b) op_type "vector_ip_ops";
+
+show create table vector_ip_01;
+
+drop database if exists test14;
+
+create database test14;
+
+use test14;
+
+drop table if exists index03;
+
+create table index03 (
+emp_no      int             not null,
+birth_date  date            not null,
+first_name  varchar(14)     not null,
+last_name   varchar(16)     not null,
+gender      varchar(5)      not null,
+hire_date   date            not null,
+primary key (emp_no)
+) partition by range columns (emp_no)(
+partition p01 values less than (100001),
+partition p02 values less than (200001),
+partition p03 values less than (300001),
+partition p04 values less than (400001)
+);
+
+insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
+(9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20'),
+(9003,'1991-02-20', 'Bob', 'TEACHER', 'M', '2008-02-20'),
+(9004,'1999-02-20', 'MARY', 'PROGRAMMER', 'M', '2008-02-20');
+
+select * from index03;
+
+drop database if exists test15;
+
+create database test15;
+
+use test15;
+
+drop table if exists departments;
+
+create table departments (
+department_id INT primary key auto_increment,
+department_name varchar(100)
+);
+
+show create table departments;
+
+insert into departments (department_id, department_name)
+values (1, 'HR'),(2, 'Engineering');
+
+drop table if exists employees;
+
+create table employees (
+employee_id INT primary key,
+first_name varchar(50),
+last_name varchar(50),
+department_id INT,
+FOREIGN KEY (department_id) REFERENCES departments(department_id)
+);
+
+insert into employees values
+(1, 'John', 'Doe', 1),
+(2, 'Jane', 'Smith', 2),
+(3, 'Bob', 'Johnson', 1);
+
+drop view if exists employee_view;
+
+create view employee_view as select employee_id, first_name, last_name, department_id from employees;
+
+drop database if exists test12_new;
+
+drop database if exists test13_new;
+
+drop database if exists test14_new;
+
+drop database if exists test15_new;
+
+create database test12_new clone test12;
+
+create database test13_new clone test13;
+
+use test12_new;
+
+drop table t1;
+
+drop table bit01;
+
+drop database if exists test12_new_new;
+
+drop database if exists test13_new_new;
+
+drop database if exists test14_new_new;
+
+drop database if exists test15_new_new;
+
+create database test12_new_new clone test12_new;
+
+create database test13_new_new clone test13_new;
+
+use test12_new_new;
+
+show tables;
+
+select * from double01;
+
+show create table time01;
+
+select * from tinyint01;
+
+create database test14_new clone test14;
+
+create database test15_new clone test15;
+
+drop database test14;
+
+use test15_new;
+
+drop table employees;
+
+create database test14_new_new clone test14_new;
+
+create database test15_new_new clone test15_new;
+
+drop database test12;
+
+use test13;
+
+drop table if exists vector_index_09;
+
+drop table if exists vector_ip_01;
+
+drop database test15;
+
+drop database test12_new;
+
+use test13_new;
+
+drop table if exists vector_index_09;
+
+drop table if exists vector_ip_01;
+
+use test14_new;
+
+truncate index03;
+
+drop database test15_new;
+
+use test12_new_new;
+
+select * from time01;
+
+select count(*) from tinyint01;
+
+use test13_new_new;
+
+select * from vector_index_09;
+
+select * from vector_ip_01;
+
+use test14_new_new;
+
+show create table index03;
+
+use test15_new_new;
+
+select * from departments;
+
+show create table departments;
+
+drop account acc05;
+
+show databases;
+Database
+clone
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
