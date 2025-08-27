@@ -113,10 +113,10 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if h.currentPSTo.IsEmpty() {
 		h.currentPSFrom = h.fromTs
 	} else {
-		h.currentChangeHandle.Close()
 		if h.currentPSTo.GE(&h.toTs) {
 			return true, nil
 		}
+		h.currentChangeHandle.Close()
 		h.currentPSFrom = h.currentPSTo.Next()
 	}
 	state, err := h.tbl.getPartitionStateWithTs(ctx, h.currentPSFrom.Prev().ToTimestamp())
