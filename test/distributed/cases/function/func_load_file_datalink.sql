@@ -70,5 +70,27 @@ insert into t4 values(1, cast('stage://outfilestage/datalink/text1.txt' as datal
 
 select a, save_file(b, c) from t4;
 
+-- failed cast
+select cast(cast('file://xxx' as bool) as datalink);
+select cast(cast('file://xxx' as bigint) as datalink);
+select cast(cast('file://xxx' as int) as datalink);
+select cast(cast('file://xxx' as float) as datalink);
+select cast(cast(cast('file://xxx' as char) as datalink) as bool);
+select cast(cast(cast('file://xxx' as char) as datalink) as bigint);
+select cast(cast(cast('file://xxx' as char) as datalink) as int);
+
+
+-- success cast
+select cast(cast('file://xxx' as binary) as datalink);
+select cast(cast('file://xxx' as varchar) as datalink);
+select cast(cast('file://xxx' as char) as datalink);
+select cast(cast('file://xxx' as text) as datalink);
+select cast(cast(cast('file://xxx' as char) as datalink) as text);
+select cast(cast(cast('file://xxx' as char) as datalink) as varchar);
+select cast(cast(cast('file://xxx' as char) as datalink) as char);
+
+
+
+
 drop stage filestage;
 drop stage outfilestage;
