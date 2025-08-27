@@ -6729,6 +6729,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			tbName := string(st.Names[0].ObjectName)
 			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
+		case *tree.CloneTable, *tree.CloneDatabase:
+			return true, stats, nil
 		}
 	}
 	return ok, stats, nil
