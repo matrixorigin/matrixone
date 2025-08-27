@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -127,12 +126,11 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 					return
 				}
 				func() {
-					newctx := context.WithValue(ctx, defines.TenantIDKey{}, r.GetAccountID())
-					newctx, cancel := context.WithTimeout(newctx, time.Hour)
+					newctx, cancel := context.WithTimeout(ctx, time.Hour)
 
 					defer cancel()
 					//os.Stderr.WriteString("Wait for BEGIN but sql. execute anyway\n")
-					opts := executor.Options{}
+					opts := executor.Options{}.WithAccountID(r.GetAccountID())
 					res, err := c.exec.Exec(newctx, string(sql), opts)
 					if err != nil {
 						logutil.Errorf("cdc indexConsumer(%v) send sql failed, err: %v, sql: %s", c.info, err, string(sql))
@@ -147,8 +145,7 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 
 	} else {
 		// TAIL
-		newctx := context.WithValue(ctx, defines.TenantIDKey{}, r.GetAccountID())
-		newctx, cancel := context.WithTimeout(newctx, time.Hour)
+		newctx, cancel := context.WithTimeout(ctx, time.Hour)
 		defer cancel()
 		opts := executor.Options{}
 		err := c.exec.ExecTxn(newctx,
@@ -166,7 +163,7 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 						}
 
 						// update SQL
-						res, err := exec.Exec(string(sql), opts.StatementOption())
+						res, err := exec.Exec(string(sql), opts.StatementOption().WithAccountID(r.GetAccountID()))
 						if err != nil {
 							return err
 						}

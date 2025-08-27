@@ -222,7 +222,6 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 			}
 		}
 	case ISCPDataType_Tail:
-		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, data.GetAccountID())
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
 		err := s.internalSqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
