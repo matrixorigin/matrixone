@@ -65,6 +65,7 @@ func init() {
 		switch strings.ToLower(enable) {
 		case "true":
 			enableChecker.Store(true)
+			enableVerbose.Store(true)
 		}
 	}
 
