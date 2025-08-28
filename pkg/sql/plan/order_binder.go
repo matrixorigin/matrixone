@@ -132,27 +132,14 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	var colPos int32
 	var ok bool
 
-	var exprStr string
-	protoSz := expr.ProtoSize()
-	if protoSz < 256 {
-		exprBytes := make([]byte, protoSz)
-		_, err := expr.MarshalToSizedBuffer(exprBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		exprStr = string(exprBytes)
-	}
-
+	exprStr := expr.String()
 	if colPos, ok = b.ctx.projectByExpr[exprStr]; !ok {
 		if b.ctx.isDistinct {
 			return nil, moerr.NewSyntaxError(b.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 		}
 
 		colPos = int32(len(b.ctx.projects))
-		if len(exprStr) > 0 {
-			b.ctx.projectByExpr[exprStr] = colPos
-		}
+		b.ctx.projectByExpr[exprStr] = colPos
 		b.ctx.projects = append(b.ctx.projects, expr)
 	}
 

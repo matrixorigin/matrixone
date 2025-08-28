@@ -3254,19 +3254,9 @@ func (builder *QueryBuilder) bindProjection(
 
 	resultLen = len(ctx.projects)
 	for i, proj := range ctx.projects {
-		protoSz := proj.ProtoSize()
-		if protoSz < 256 {
-			exprBytes := make([]byte, protoSz)
-			_, err = proj.MarshalToSizedBuffer(exprBytes)
-			if err != nil {
-				return
-			}
-
-			exprStr := string(exprBytes)
-			if _, ok := ctx.projectByExpr[exprStr]; !ok {
-				ctx.projectByExpr[exprStr] = int32(i)
-			}
-
+		exprStr := proj.String()
+		if _, ok := ctx.projectByExpr[exprStr]; !ok {
+			ctx.projectByExpr[exprStr] = int32(i)
 		}
 
 		if exprCol, ok := proj.Expr.(*plan.Expr_Col); ok {
