@@ -26,8 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -48,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -700,7 +699,10 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 // for col1=col2 and col3 = col4, trying to deduce new pred
 // for example , if col1 and col3 are the same, then we can deduce that col2=col4
 func deduceTranstivity(expr *plan.Expr, col1, col2, col3, col4 *ColRef) (bool, *plan.Expr) {
-	if col1.ColRefString() == col3.ColRefString() || col1.ColRefString() == col4.ColRefString() || col2.ColRefString() == col3.ColRefString() || col2.ColRefString() == col4.ColRefString() {
+	if col1.ColRefString() == col3.ColRefString() ||
+		col1.ColRefString() == col4.ColRefString() ||
+		col2.ColRefString() == col3.ColRefString() ||
+		col2.ColRefString() == col4.ColRefString() {
 		retExpr := DeepCopyExpr(expr)
 		substituteMatchColumn(retExpr, col3, col4)
 		return true, retExpr
