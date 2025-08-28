@@ -416,6 +416,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 		tids := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[0])
 		nameVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](objectBat.Vecs[1])
 		nameArea := objectBat.Vecs[1].GetArea()
+		dbVarlena := vector.MustFixedColWithTypeCheck[types.Varlena](objectBat.Vecs[2])
+		dbArea := objectBat.Vecs[2].GetArea()
 		dbs := vector.MustFixedColWithTypeCheck[uint64](objectBat.Vecs[3])
 		accounts := vector.MustFixedColWithTypeCheck[uint32](objectBat.Vecs[11])
 		creates := vector.MustFixedColWithTypeCheck[types.TS](objectBat.Vecs[len(objectBat.Vecs)-1])
@@ -425,6 +427,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 				continue
 			}
 			name := string(nameVarlena[i].GetByteSlice(nameArea))
+			dbName := string(dbVarlena[i].GetByteSlice(dbArea))
 			tid := tids[i]
 			account := accounts[i]
 			db := dbs[i]
@@ -435,7 +438,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 				return err
 			}
 			pk := tuple.ErrString(nil)
-			if name == catalog2.MO_SNAPSHOTS {
+			if dbName == catalog2.MO_CATALOG && name == catalog2.MO_SNAPSHOTS {
 				sm.snapshotTableIDs[tid] = struct{}{}
 				logutil.Info(
 					"UpdateSnapTable-P1",
@@ -444,7 +447,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 					zap.String("create-at", createAt.ToString()),
 				)
 			}
-			if name == catalog2.MO_PITR {
+			if dbName == catalog2.MO_CATALOG && name == catalog2.MO_PITR {
 				if sm.pitr.tid > 0 && sm.pitr.tid != tid {
 					logutil.Warn(
 						"GC-PANIC-UPDATE-TABLE-P2",
