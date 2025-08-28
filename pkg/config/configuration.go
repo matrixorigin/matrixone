@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -951,6 +952,8 @@ func (c *OBCUConfig) SetDefaultValues() {
 }
 
 type ParameterUnit struct {
+	sync.RWMutex
+
 	SV *FrontendParameters
 
 	//Storage Engine
@@ -1003,4 +1006,16 @@ func GetParameterUnit(ctx context.Context) *ParameterUnit {
 		panic("parameter unit is invalid")
 	}
 	return pu
+}
+
+func (p *ParameterUnit) SetTaskService(taskService taskservice.TaskService) {
+	p.Lock()
+	defer p.Unlock()
+	p.TaskService = taskService
+}
+
+func (p *ParameterUnit) GetTaskService() taskservice.TaskService {
+	p.RLock()
+	defer p.RUnlock()
+	return p.TaskService
 }
