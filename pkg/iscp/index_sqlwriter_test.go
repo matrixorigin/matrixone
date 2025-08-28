@@ -155,7 +155,7 @@ func TestNewFulltextSqlWriter(t *testing.T) {
 	err = writer.Upsert(ctx, row)
 	require.Nil(t, err)
 
-	row = []any{int64(2000), []uint8("hello world"), nil}
+	row = []any{int64(2000), nil, nil}
 	err = writer.Upsert(ctx, row)
 	require.Nil(t, err)
 

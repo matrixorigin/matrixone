@@ -17,7 +17,9 @@ package iscp
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"slices"
+
 	// "encoding/hex"
 	"math"
 	// "slices"
@@ -171,7 +173,8 @@ func convertColIntoSql(
 	typ *types.Type,
 	sqlBuff []byte) ([]byte, error) {
 	if data == nil {
-		sqlBuff = appendString(sqlBuff, "NULL")
+		typstr := typ.DescString()
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST(NULL as %s)", typstr))
 		return sqlBuff, nil
 	}
 	var temp string
