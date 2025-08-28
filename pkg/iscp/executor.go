@@ -651,6 +651,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.Error(err),
 		)
 	}()
+	defer logutil.Infof("lalala")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
