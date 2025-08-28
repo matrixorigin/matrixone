@@ -126,6 +126,9 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if !sinker.IsInitedAndFinished() {
 			continue
 		}
+		if sinker.dropAt != 0 {
+			continue
+		}
 		candidates = append(candidates, sinker)
 	}
 	iterations := make([]*IterationContext, 0, len(candidates))
