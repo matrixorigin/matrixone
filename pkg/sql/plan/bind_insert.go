@@ -121,11 +121,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
 
-	if tableDef.TableType != catalog.SystemOrdinaryRel &&
-		tableDef.TableType != catalog.SystemIndexRel {
-		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into vector/text index table")
-	}
-
 	var (
 		err         error
 		onDupAction plan.Node_OnDuplicateAction
