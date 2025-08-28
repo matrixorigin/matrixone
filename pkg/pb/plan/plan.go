@@ -95,28 +95,15 @@ func (m *Expr) ExprString() string {
 	return string(data)
 }
 
-func (m *ColRef) ColRefBytes() []byte {
+func (m *ColRef) ColRefString() string {
 	if m == nil {
-		return nil
+		return ""
 	}
 
 	data, err := m.Marshal()
 	if err != nil {
-		return nil
+		return ""
 	}
 
-	return data
-}
-
-func (m *CorrColRef) CorrColRefBytes() []byte {
-	if m == nil {
-		return nil
-	}
-
-	data, err := m.Marshal()
-	if err != nil {
-		return nil
-	}
-
-	return data
+	return string(data)
 }

@@ -16,11 +16,14 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"go.uber.org/zap"
 	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -141,7 +144,7 @@ func buildCloneTable(
 	)
 
 	if err = checkPrivilege(
-		ctx.GetContext(), stmt, opAccount, srcAccount, dstAccount, srcTblDef, dstTblDef,
+		ctx.GetContext(), stmt, opAccount, srcAccount, dstAccount, srcTblDef, dstTblDef, bindCtx.snapshot,
 	); err != nil {
 		return nil, err
 	}
@@ -164,11 +167,55 @@ func checkPrivilege(
 	ctx context.Context,
 	stmt *tree.CloneTable,
 	opAccount uint32,
-	dstAccount uint32,
 	srcAccount uint32,
+	dstAccount uint32,
 	srcTblDef *TableDef,
 	dstTblDef *TableDef,
+	scanSnapshot *Snapshot,
 ) (err error) {
+
+	var (
+		snapshotMisMatch = false
+	)
+
+	if scanSnapshot != nil && scanSnapshot.ExtraInfo != nil {
+		switch scanSnapshot.ExtraInfo.Level {
+		case tree.SNAPSHOTLEVELCLUSTER.String():
+		case tree.SNAPSHOTLEVELACCOUNT.String():
+			if scanSnapshot.ExtraInfo.ObjId != uint64(srcAccount) {
+				snapshotMisMatch = true
+			}
+		case tree.SNAPSHOTLEVELDATABASE.String():
+			if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.DbId) {
+				snapshotMisMatch = true
+			}
+		case tree.SNAPSHOTLEVELTABLE.String():
+			if scanSnapshot.ExtraInfo.ObjId != uint64(srcTblDef.TblId) {
+				snapshotMisMatch = true
+			}
+		}
+	}
+
+	if snapshotMisMatch {
+		logutil.Error(
+			"SNAPSHOT-MISMATCH",
+			zap.String("snapshot",
+				fmt.Sprintf("%s-%s-%d",
+					scanSnapshot.ExtraInfo.Name,
+					scanSnapshot.ExtraInfo.Level,
+					scanSnapshot.ExtraInfo.ObjId)),
+			zap.String("table",
+				fmt.Sprintf("%s(%d)-%s(%d)",
+					srcTblDef.DbName,
+					srcTblDef.DbId,
+					srcTblDef.Name,
+					srcTblDef.TblId)),
+		)
+
+		return moerr.NewInternalErrorNoCtxf(
+			"the snapshot %s doesnot contain the table %s", scanSnapshot.ExtraInfo.Name, srcTblDef.Name,
+		)
+	}
 
 	// 1. only sys can clone from system databases
 	// 2. sys and non-sys both cannot clone to system database

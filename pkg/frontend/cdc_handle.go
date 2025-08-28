@@ -173,7 +173,7 @@ func doUpdateCDCTask(
 	service string,
 	conds ...taskservice.Condition,
 ) (err error) {
-	ts := getPu(service).TaskService
+	ts := getPu(service).GetTaskService()
 	if ts == nil {
 		return nil
 	}
