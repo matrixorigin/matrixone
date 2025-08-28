@@ -5134,6 +5134,8 @@ func Test_doGrantPrivilege(t *testing.T) {
 			},
 		}
 
+		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
 			ses := newSes(priv, ctrl)
@@ -5165,14 +5167,14 @@ func Test_doGrantPrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(context.TODO(), dbName, tableName)
+				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 				mrs := newMrsForCheckDatabaseTable([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
 			}
 
-			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(context.TODO(), ses, bh, stmt.ObjType, *stmt.Level)
+			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
 			convey.So(err, convey.ShouldBeNil)
 
 			for _, p := range stmt.Privileges {
@@ -5436,6 +5438,8 @@ func Test_doRevokePrivilege(t *testing.T) {
 			},
 		}
 
+		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
+
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
 			ses := newSes(priv, ctrl)
@@ -5467,14 +5471,14 @@ func Test_doRevokePrivilege(t *testing.T) {
 				bh.sql2result[sql] = mrs
 			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
 				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
-				sql, _ := getSqlForCheckDatabaseTable(context.TODO(), dbName, tableName)
+				sql, _ := getSqlForCheckDatabaseTable(ctx, dbName, tableName)
 				mrs := newMrsForCheckDatabaseTable([][]interface{}{
 					{0},
 				})
 				bh.sql2result[sql] = mrs
 			}
 
-			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(context.TODO(), ses, bh, stmt.ObjType, *stmt.Level)
+			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, stmt.ObjType, *stmt.Level)
 			convey.So(err, convey.ShouldBeNil)
 
 			for _, p := range stmt.Privileges {

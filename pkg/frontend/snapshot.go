@@ -1630,6 +1630,11 @@ func doResolveSnapshotWithSnapshotName(ctx context.Context, ses FeSession, snaps
 			TenantName: record.accountName,
 			TenantID:   accountId,
 		},
+		ExtraInfo: &pbplan.SnapshotExtraInfo{
+			Level: record.level,
+			ObjId: record.objId,
+			Name:  record.snapshotName,
+		},
 	}, nil
 }
 
