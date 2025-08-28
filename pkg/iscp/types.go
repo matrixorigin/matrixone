@@ -152,6 +152,7 @@ type JobEntry struct {
 	watermark          types.TS
 	persistedWatermark types.TS
 	state              int8
+	dropAt             types.Timestamp
 }
 
 // Intra-System Change Propagation Table Entry

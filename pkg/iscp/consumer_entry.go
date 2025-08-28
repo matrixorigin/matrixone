@@ -37,6 +37,7 @@ func NewJobEntry(
 	jobID uint64,
 	watermark types.TS,
 	state int8,
+	dropAt types.Timestamp,
 ) *JobEntry {
 	jobEntry := &JobEntry{
 		tableInfo: tableInfo,
@@ -45,11 +46,12 @@ func NewJobEntry(
 		jobSpec:   &jobSpec.TriggerSpec,
 		watermark: watermark,
 		state:     state,
+		dropAt:    dropAt,
 	}
 	return jobEntry
 }
 
-func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8) {
+func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8, dropAt types.Timestamp) {
 	if jobSpec.GetType() != jobEntry.jobSpec.GetType() && watermark.LT(&jobEntry.watermark) {
 		jobEntry.jobSpec = &jobSpec.TriggerSpec
 		return
@@ -64,6 +66,7 @@ func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int
 	jobEntry.persistedWatermark = watermark
 	jobEntry.watermark = watermark
 	jobEntry.state = state
+	jobEntry.dropAt = dropAt
 }
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {

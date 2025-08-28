@@ -20,10 +20,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 func tableInfoLess(a, b *TableEntry) bool {
@@ -58,20 +59,21 @@ func (t *TableEntry) AddOrUpdateSinker(
 	jobID uint64,
 	watermark types.TS,
 	state int8,
+	dropAt types.Timestamp,
 ) (newCreate bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	jobEntry, ok := t.jobs[jobName]
 	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
-		jobEntry = NewJobEntry(t, jobName, jobSpec, jobID, watermark, state)
+		jobEntry = NewJobEntry(t, jobName, jobSpec, jobID, watermark, state, dropAt)
 		t.jobs[jobName] = jobEntry
 		return
 	}
 	if jobEntry.jobID > jobID {
 		return
 	}
-	jobEntry.update(jobSpec, watermark, state)
+	jobEntry.update(jobSpec, watermark, state, dropAt)
 	return
 }
 
@@ -93,17 +95,27 @@ func (t *TableEntry) IsEmpty() bool {
 	return len(t.jobs) == 0
 }
 
-func (t *TableEntry) DeleteSinker(
-	jobName string,
-) (isEmpty bool, err error) {
+func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, ok := t.jobs[jobName]
-	if !ok {
-		return false, moerr.NewInternalErrorNoCtx("sinker not found")
+	jobsToDelete := make([]string, 0)
+	now := time.Now()
+	for _, jobEntry := range t.jobs {
+		if jobEntry.dropAt != 0 && uint64(now.Nanosecond())-uint64(threshold) > uint64(jobEntry.dropAt) {
+			jobsToDelete = append(jobsToDelete, jobEntry.jobName)
+		}
 	}
-	delete(t.jobs, jobName)
-	return len(t.jobs) == 0, nil
+	for _, jobName := range jobsToDelete {
+		delete(t.jobs, jobName)
+	}
+	if len(jobsToDelete) != 0 {
+		logutil.Info(
+			"ISCP-Task gc in memory job",
+			zap.String("table", t.String()),
+			zap.Strings("jobsToDelete", jobsToDelete),
+		)
+	}
+	return len(t.jobs) == 0
 }
 
 func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.TS) {
