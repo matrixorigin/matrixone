@@ -488,12 +488,12 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		type job struct {
 			ts     types.TS
 			offset int
-			jobID  uint64
 		}
 		type jobName struct {
 			accountID uint32
 			tableID   uint64
 			jobName   string
+			jobID     uint64
 		}
 		jobMap := make(map[jobName]job)
 		for i := 0; i < insertData.RowCount(); i++ {
@@ -501,17 +501,14 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 				accountID: accountIDs[i],
 				tableID:   tableIDs[i],
 				jobName:   jobNameVector.GetStringAt(i),
+				jobID:     jobIDs[i],
 			}
 			if job, ok := jobMap[jobName]; ok {
-				if job.jobID > jobIDs[i] {
-					continue
-				}
 				if job.ts.GT(&commitTSs[i]) {
 					continue
 				}
 			}
 			jobMap[jobName] = job{
-				jobID:  jobIDs[i],
 				ts:     commitTSs[i],
 				offset: i,
 			}
