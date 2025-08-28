@@ -520,7 +520,13 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 			if !dropAtVector.IsNull(uint64(job.offset)) {
 				dropAt = dropAts[job.offset]
 			}
-			err = retry(
+			/*
+				todo:
+				register job & create table
+				unregister job & drop table
+				apply add, error not found table
+			*/
+			retry(
 				func() error {
 					return exec.addOrUpdateJob(
 						accountIDs[job.offset],
@@ -535,9 +541,6 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 				},
 				exec.option.RetryTimes,
 			)
-			if err != nil {
-				return
-			}
 		}
 	}
 
@@ -651,7 +654,6 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.Error(err),
 		)
 	}()
-	defer logutil.Infof("lalala")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
