@@ -158,7 +158,6 @@ func (op *PartitionInsert) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-	*op = PartitionInsert{}
 }
 
 func (op *PartitionInsert) Release() {
