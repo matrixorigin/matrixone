@@ -492,8 +492,6 @@ func checkDNF(expr *plan.Expr) []string {
 		}
 		return ret
 
-	case *plan.Expr_Corr:
-		ret = append(ret, exprImpl.Corr.CorrColRefString())
 	case *plan.Expr_Col:
 		ret = append(ret, exprImpl.Col.ColRefString())
 	}
@@ -531,12 +529,6 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 			return expr
 		}
 
-	case *plan.Expr_Corr:
-		if exprImpl.Corr.CorrColRefString() == keywords {
-			return expr
-		} else {
-			return nil
-		}
 	case *plan.Expr_Col:
 		if exprImpl.Col.ColRefString() == keywords {
 			return expr

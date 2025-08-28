@@ -107,16 +107,3 @@ func (m *ColRef) ColRefString() string {
 
 	return string(data)
 }
-
-func (m *CorrColRef) CorrColRefString() string {
-	if m == nil {
-		return ""
-	}
-
-	data, err := m.Marshal()
-	if err != nil {
-		return ""
-	}
-
-	return string(data)
-}
