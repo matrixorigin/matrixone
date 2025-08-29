@@ -109,6 +109,7 @@ func (update *MultiUpdate) insert_secondary_index_table(
 				attrs = append(attrs, col.Name)
 			}
 		}
+
 		ctr.insertBuf[tableIndex] = batch.New(attrs)
 		for insertIdx, inputIdx := range updateCtx.InsertCols {
 			ctr.insertBuf[tableIndex].Vecs[insertIdx] = vector.NewVec(*inputBatch.Vecs[inputIdx].GetType())
@@ -131,6 +132,7 @@ func (update *MultiUpdate) insert_table(
 	inputBatch *batch.Batch,
 	insertBatch *batch.Batch,
 ) (err error) {
+
 	insertBatch.CleanOnlyData()
 	for insertIdx, inputIdx := range updateCtx.InsertCols {
 		err = insertBatch.Vecs[insertIdx].UnionBatch(inputBatch.Vecs[inputIdx], 0, inputBatch.Vecs[inputIdx].Length(), nil, proc.GetMPool())
