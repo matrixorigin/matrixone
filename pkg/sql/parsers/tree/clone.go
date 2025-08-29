@@ -68,6 +68,10 @@ const (
 	BetweenAccCloneTable
 )
 
+type ToAccountOpt struct {
+	AccountName Identifier
+}
+
 type CloneTable struct {
 	statementImpl
 
@@ -78,8 +82,8 @@ type CloneTable struct {
 	IsRestoreByTS bool
 	FromAccount   uint32
 
-	ToAccountName Identifier
-	ToAccountId   uint32
+	ToAccountOpt *ToAccountOpt
+	ToAccountId  uint32
 
 	Sql      string
 	StmtType CloneStmtType
@@ -124,10 +128,10 @@ func (node *CloneTable) reset() {
 
 type CloneDatabase struct {
 	statementImpl
-	SrcDatabase   Identifier
-	DstDatabase   Identifier
-	AtTsExpr      *AtTimeStamp
-	ToAccountName Identifier
+	SrcDatabase  Identifier
+	DstDatabase  Identifier
+	AtTsExpr     *AtTimeStamp
+	ToAccountOpt *ToAccountOpt
 }
 
 func (node *CloneDatabase) Free() {

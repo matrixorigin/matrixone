@@ -79,7 +79,7 @@ func getOpAndToAccountId(
 	reqCtx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	toAccountName string,
+	toAccountOpt *tree.ToAccountOpt,
 	atTsExpr *tree.AtTimeStamp,
 ) (opAccountId, toAccountId uint32, snapshot *plan2.Snapshot, err error) {
 
@@ -94,11 +94,11 @@ func getOpAndToAccountId(
 		return 0, 0, nil, err
 	}
 
-	if len(toAccountName) == 0 {
+	if toAccountOpt == nil {
 		return opAccountId, opAccountId, snapshot, nil
 	}
 
-	if toAccountId, err = getAccountId(reqCtx, bh, toAccountName); err != nil {
+	if toAccountId, err = getAccountId(reqCtx, bh, toAccountOpt.AccountName.String()); err != nil {
 		return 0, 0, nil, err
 	}
 
@@ -151,7 +151,7 @@ func handleCloneTable(
 	}
 
 	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountName.String(), stmt.SrcTable.AtTsExpr,
+		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
 	); err != nil {
 		return
 	}
@@ -295,7 +295,7 @@ func handleCloneDatabase(
 	}()
 
 	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountName.String(), stmt.AtTsExpr,
+		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.AtTsExpr,
 	); err != nil {
 		return err
 	}
