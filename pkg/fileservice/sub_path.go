@@ -17,20 +17,24 @@ package fileservice
 import (
 	"context"
 	"fmt"
+	"io"
 	"iter"
 	"path"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type subPathFS struct {
-	upstream FileService
-	path     string
-	name     string
+	upstream   FileService
+	rwUpstream ReaderWriterFileService
+	path       string
+	name       string
 }
 
 // SubPath returns a FileService instance that operates at specified sub path of the upstream instance
 func SubPath(upstream FileService, path string) FileService {
-	return &subPathFS{
+	ret := &subPathFS{
 		upstream: upstream,
 		path:     path,
 		name: strings.Join([]string{
@@ -39,9 +43,13 @@ func SubPath(upstream FileService, path string) FileService {
 			path,
 		}, ","),
 	}
+	if rwfs, ok := upstream.(ReaderWriterFileService); ok {
+		ret.rwUpstream = rwfs
+	}
+	return ret
 }
 
-var _ FileService = new(subPathFS)
+var _ ReaderWriterFileService = new(subPathFS)
 
 func (s *subPathFS) Name() string {
 	return s.name
@@ -141,6 +149,28 @@ func (s *subPathFS) PrefetchFile(ctx context.Context, filePath string) error {
 
 func (s *subPathFS) Cost() *CostAttr {
 	return s.upstream.Cost()
+}
+
+func (s *subPathFS) NewReader(ctx context.Context, filePath string) (io.ReadCloser, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if s.rwUpstream != nil {
+		return s.rwUpstream.NewReader(ctx, p)
+	}
+	return nil, moerr.NewNotSupportedNoCtx("not ReaderWriterFileService")
+}
+
+func (s *subPathFS) NewWriter(ctx context.Context, filePath string) (io.WriteCloser, error) {
+	p, err := s.toUpstreamPath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if s.rwUpstream != nil {
+		return s.rwUpstream.NewWriter(ctx, p)
+	}
+	return nil, moerr.NewNotSupportedNoCtx("not ReaderWriterFileService")
 }
 
 var _ MutableFileService = new(subPathFS)

@@ -37,7 +37,7 @@ func (exec *groupConcatExec) GetOptResult() SplitResult {
 	return &exec.ret.optSplitResult
 }
 
-func (exec *groupConcatExec) marshal() ([]byte, error) {
+func (exec *groupConcatExec) Marshal() ([]byte, error) {
 	d := exec.multiAggInfo.getEncoded()
 	r, em, err := exec.ret.marshalToBytes()
 	if err != nil {
@@ -59,7 +59,7 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *groupConcatExec) unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
+func (exec *groupConcatExec) Unmarshal(_ *mpool.MPool, result, empties, groups [][]byte) error {
 	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
 		return err
 	}
