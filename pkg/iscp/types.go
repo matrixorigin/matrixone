@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -152,18 +151,23 @@ type JobEntry struct {
 	watermark          types.TS
 	persistedWatermark types.TS
 	state              int8
+	dropAt             types.Timestamp
+}
+
+type JobKey struct {
+	JobName string
+	JobID   uint64
 }
 
 // Intra-System Change Propagation Table Entry
 type TableEntry struct {
 	exec      *ISCPTaskExecutor
-	tableDef  *plan.TableDef
 	accountID uint32
 	dbID      uint64
 	tableID   uint64
 	tableName string
 	dbName    string
-	jobs      map[string]*JobEntry
+	jobs      map[JobKey]*JobEntry
 	mu        sync.RWMutex
 }
 
