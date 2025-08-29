@@ -56,6 +56,9 @@ func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int
 		jobEntry.jobSpec = &jobSpec.TriggerSpec
 		return
 	}
+	if dropAt != 0 {
+		jobEntry.dropAt = dropAt
+	}
 	if jobEntry.persistedWatermark.EQ(&watermark) {
 		return
 	}
@@ -147,10 +150,12 @@ func (jobEntry *JobEntry) StringLocked() string {
 		stateStr = "C"
 	}
 	return fmt.Sprintf(
-		"Index[%s]%s,%v[%v]",
+		"Index[%s-%d]%s,%v[%v]%v",
 		jobEntry.jobName,
+		jobEntry.jobID,
 		jobEntry.watermark.ToString(),
 		jobEntry.jobSpec,
 		stateStr,
+		jobEntry.dropAt,
 	)
 }
