@@ -124,7 +124,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 			"ISCP-Task flush watermark failed",
 			zap.String("job", jobEntry.jobName),
 			zap.String("table", jobEntry.tableInfo.tableName),
-			zap.String("account", jobEntry.tableInfo.dbName),
+			zap.String("database", jobEntry.tableInfo.dbName),
 			zap.Uint64("tableID", jobEntry.tableInfo.tableID),
 			zap.Uint64("jobID", jobEntry.jobID),
 			zap.String("watermark", jobEntry.watermark.ToString()),

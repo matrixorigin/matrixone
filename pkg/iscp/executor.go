@@ -417,7 +417,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 					zap.Error(err),
 				)
 			}
-			exec.gcInMemoryJob(exec.option.GCTTL)
+			exec.GCInMemoryJob(exec.option.GCTTL)
 		}
 	}
 }
@@ -688,7 +688,6 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			tableDef.TblId,
 			tableDef.DbName,
 			tableDef.Name,
-			tableDef,
 		)
 		exec.setTable(table)
 	}
@@ -696,7 +695,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	return
 }
 
-func (exec *ISCPTaskExecutor) gcInMemoryJob(threshold time.Duration) {
+func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
 	tables := exec.getAllTables()
 	tablesToDelete := make([]*TableEntry, 0)
 	for _, table := range tables {
@@ -705,9 +704,12 @@ func (exec *ISCPTaskExecutor) gcInMemoryJob(threshold time.Duration) {
 			tablesToDelete = append(tablesToDelete, table)
 		}
 	}
+	tids := make([]uint64, 0, len(tablesToDelete))
 	for _, table := range tablesToDelete {
 		exec.deleteTableEntry(table)
+		tids = append(tids, table.tableID)
 	}
+	logutil.Infof("ISCP-Task delete table %v", tids)
 }
 
 // getCandidateTables returns all candidate IterationContexts, their corresponding TableEntries, and the minimal fromTS for each table.

@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"go.uber.org/zap"
 )
@@ -39,12 +38,10 @@ func NewTableEntry(
 	accountID uint32,
 	dbID, tableID uint64,
 	dbName, tableName string,
-	tableDef *plan.TableDef,
 ) *TableEntry {
 	return &TableEntry{
 		exec:      exec,
 		accountID: accountID,
-		tableDef:  tableDef,
 		jobs:      make(map[JobKey]*JobEntry),
 		dbID:      dbID,
 		tableID:   tableID,
@@ -105,7 +102,8 @@ func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
 	jobsToDelete := make([]JobKey, 0)
 	now := time.Now()
 	for _, jobEntry := range t.jobs {
-		if jobEntry.dropAt != 0 && uint64(now.Nanosecond())-uint64(threshold) > uint64(jobEntry.dropAt) {
+		loc := now.Location()
+		if jobEntry.dropAt != 0 && uint64(now.Unix())-uint64(threshold) >= uint64(jobEntry.dropAt.ToDatetime(loc).UnixTimestamp(loc)) {
 			jobsToDelete = append(
 				jobsToDelete,
 				JobKey{
@@ -121,7 +119,7 @@ func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
 	if len(jobsToDelete) != 0 {
 		logutil.Info(
 			"ISCP-Task gc in memory job",
-			zap.String("table", t.String()),
+			zap.Uint64("table", t.tableID),
 			zap.Any("jobsToDelete", jobsToDelete),
 		)
 	}
