@@ -249,32 +249,23 @@ func getSinkerTypeFromAlgo(algo string) int8 {
 // NOTE: CreateAllIndexCdcTasks will create CDC task according to existing tableDef
 func CreateAllIndexCdcTasks(c *Compile, indexes []*plan.IndexDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
-	var err error
 	for _, idx := range indexes {
-		if idx.TableExist &&
-			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-			_, ok := idxmap[idx.IndexName]
-			if !ok {
-				idxmap[idx.IndexName] = true
-				async := false
-				if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-					// HNSW always async
-					async = true
-				} else {
-					async, err = catalog.IsIndexAsync(idx.IndexAlgoParams)
-					if err != nil {
-						return err
-					}
-				}
-				if async {
-					sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
-					e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type)
-					if e != nil {
-						return e
-					}
-				}
+		_, ok := idxmap[idx.IndexName]
+		if ok {
+			continue
+		}
+
+		valid, err := checkValidIndexCdcByIndexdef(idx)
+		if err != nil {
+			return err
+		}
+
+		if valid {
+			idxmap[idx.IndexName] = true
+			sinker_type := getSinkerTypeFromAlgo(idx.IndexAlgo)
+			e := CreateIndexCdcTask(c, dbname, tablename, idx.IndexName, sinker_type)
+			if e != nil {
+				return e
 			}
 		}
 	}
