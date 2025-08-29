@@ -159,8 +159,8 @@ func buildInsertPlans(
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
 
-	if v := builder.compCtx.GetContext().Value(defines.AlterCopyDedupOpt{}); v != nil {
-		dedupOpt := v.(*plan.AlterCopyDedupOpt)
+	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
+		dedupOpt := v.(*plan.AlterCopyOpt)
 		if dedupOpt.TargetTableName == tableDef.Name {
 			logutil.Info("alter copy dedup exec",
 				zap.String("tableDef", tableDef.Name),

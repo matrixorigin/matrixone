@@ -3012,8 +3012,13 @@ func (s *Scope) TableClone(c *Compile) error {
 		err error
 	)
 
-	if err = s.CreateTable(c); err != nil {
-		return err
+	clonePlan := s.Plan.GetDdl().GetCloneTable()
+
+	if clonePlan.CreateTable != nil {
+		s.Plan = clonePlan.CreateTable
+		if err = s.CreateTable(c); err != nil {
+			return err
+		}
 	}
 
 	return s.Run(c)

@@ -4950,26 +4950,20 @@ func (c *Compile) compileTableClone(
 		err error
 		s1  *Scope
 
-		nodes    []engine.Node
-		cloneQry = pn.GetDdl().Query
+		node      engine.Node
+		clonePlan = pn.GetDdl().GetCloneTable()
 	)
 
-	nodes, err = c.generateNodes(cloneQry.Nodes[0])
-	if err != nil {
-		return nil, err
-	}
+	node = getEngineNode(c)
 
-	copyOp, err := constructTableClone(c, cloneQry.Nodes[0])
+	copyOp, err := constructTableClone(c, clonePlan)
 	if err != nil {
 		return nil, err
 	}
 
 	s1 = newScope(TableClone)
-	s1.NodeInfo = nodes[0]
+	s1.NodeInfo = node
 	s1.TxnOffset = c.TxnOffset
-	s1.DataSource = &Source{
-		node: cloneQry.Nodes[0],
-	}
 	s1.Plan = pn
 
 	s1.Proc = c.proc.NewNoContextChildProc(0)
