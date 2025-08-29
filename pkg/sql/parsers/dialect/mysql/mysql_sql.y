@@ -230,6 +230,7 @@ import (
     indexVisibility tree.VisibleType
 
     killOption tree.KillOption
+    toAccountOpt *tree.ToAccountOpt
     statementOption tree.StatementOption
 
     tableLock tree.TableLock
@@ -350,7 +351,7 @@ import (
 %token <str> PREPARE DEALLOCATE RESET
 %token <str> EXTENSION
 %token <str> RETENTION PERIOD
-%token <str> CLONE
+%token <str> CLONE MO BRANCH LOG REVERT REBASE DIFF
 
 // Sequence
 %token <str> INCREMENT CYCLE MINVALUE
@@ -559,6 +560,8 @@ import (
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
 %type <str> alter_publication_db_name_opt
+%type <statement> branch_stmt
+%type <toAccountOpt> to_account_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -952,6 +955,7 @@ normal_stmt:
 |   pause_cdc_stmt
 |   resume_cdc_stmt
 |   restart_cdc_stmt
+|   branch_stmt
 
 
 backup_stmt:
@@ -3658,6 +3662,8 @@ algorithm_type:
 |   INPLACE
 |   COPY
 |   CLONE
+|   MO
+|   BRANCH
 
 able_type:
     DISABLE
@@ -7745,21 +7751,13 @@ create_database_stmt:
         )
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
-|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt
+|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt to_account_opt
     {
     	var t = tree.NewCloneDatabase()
     	t.DstDatabase = tree.Identifier($4)
     	t.SrcDatabase = tree.Identifier($6)
     	t.AtTsExpr = $7
-    	$$ = t
-    }
-|   CREATE database_or_schema not_exists_opt db_name CLONE db_name table_snapshot_opt TO ACCOUNT ident
-    {
-    	var t = tree.NewCloneDatabase()
-    	t.DstDatabase = tree.Identifier($4)
-    	t.SrcDatabase = tree.Identifier($6)
-    	t.AtTsExpr = $7
-    	t.ToAccountName = tree.Identifier($10.Compare())
+    	t.ToAccountOpt = $8
     	$$ = t
     }
 
@@ -7947,7 +7945,50 @@ replace_opt:
     }
 
 
+branch_stmt:
+    MO BRANCH CREATE TABLE table_name FROM table_name to_account_opt
+    {
+    	t := tree.NewDataBranchCreateTable()
+    	t.CreateTable.Table = *$5
+        t.CreateTable.LikeTableName = *$7
+        t.CreateTable.IsAsLike = true
+        t.SrcTable = *$7
+        t.ToAccountOpt = $8
+        $$ = t
+    }
+|   MO BRANCH CREATE DATABASE db_name FROM db_name table_snapshot_opt to_account_opt
+    {
+    	t := tree.NewDataBranchCreateDatabase()
+        t.DstDatabase = tree.Identifier($4)
+        t.SrcDatabase = tree.Identifier($6)
+        t.AtTsExpr = $8
+        t.ToAccountOpt = $9
+        $$ = t
+    }
+|   MO BRANCH DELETE TABLE table_name
+    {
+    	t := tree.NewDataBranchDeleteTable()
+    	t.TableName = *$5
+    	$$ = t
+    }
+|   MO BRANCH DELETE DATABASE db_name
+    {
+	t := tree.NewDataBranchDeleteDatabase()
+	t.DatabaseName = tree.Identifier($5)
+	$$ = t
+    }
 
+to_account_opt:
+    /* empty */
+    {
+    	$$ = nil
+    }
+    | TO ACCOUNT ident
+    {
+    	$$ = &tree.ToAccountOpt {
+    	    AccountName: tree.Identifier($3.Compare()),
+    	}
+    }
 
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
@@ -8052,23 +8093,14 @@ create_table_stmt:
         t.SubscriptionOption = $6
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name
+|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name to_account_opt
     {
 	t := tree.NewCloneTable()
 	t.CreateTable.Table = *$5
 	t.CreateTable.LikeTableName = *$7
 	t.CreateTable.IsAsLike = true
 	t.SrcTable = *$7
-	$$ = t
-    }
-|   CREATE temporary_opt TABLE not_exists_opt table_name CLONE table_name TO ACCOUNT ident
-    {
-	t := tree.NewCloneTable()
-	t.CreateTable.Table = *$5
-	t.CreateTable.LikeTableName = *$7
-	t.CreateTable.IsAsLike = true
-	t.SrcTable = *$7
-	t.ToAccountName = tree.Identifier($10.Compare())
+	t.ToAccountOpt = $8
 	$$ = t
     }
 
@@ -12597,6 +12629,8 @@ equal_opt:
 //|   RETURNS
 //|   MYSQL_COMPATIBILITY_MODE
 //|   CLONE
+//|   MO
+//|   BRANCH
 
 non_reserved_keyword:
     ACCOUNT
