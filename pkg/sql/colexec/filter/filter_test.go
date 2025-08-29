@@ -1034,9 +1034,9 @@ func TestConstantTranspose(t *testing.T) {
 			require.NoError(t, err)
 
 			if tt.expect == nil {
-				require.Equal(t, tt.input.String(), result.String())
+				require.Equal(t, tt.input.ExprString(), result.ExprString())
 			} else {
-				require.Equal(t, tt.expect.String(), result.String())
+				require.Equal(t, tt.expect.ExprString(), result.ExprString())
 			}
 		})
 	}
