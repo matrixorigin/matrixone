@@ -78,18 +78,43 @@ func DeleteIndexPitr(c *Compile, dbname string, tablename string) error {
 	return nil
 }
 
-func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) bool {
+func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
+	var err error
+
+	if idx.TableExist &&
+		(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
+			catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
+			catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
+		async := false
+		if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
+			// HNSW always async
+			async = true
+		} else {
+			async, err = catalog.IsIndexAsync(idx.IndexAlgoParams)
+			if err != nil {
+				return false, err
+			}
+		}
+
+		return async, nil
+	}
+	return false, nil
+}
+
+func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) (bool, error) {
 	for _, idx := range tableDef.Indexes {
+
 		if idx.IndexName == indexname {
-			if idx.TableExist &&
-				(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-					catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-					catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-				return true
+			valid, err := checkValidIndexCdcByIndexdef(idx)
+			if err != nil {
+				return false, err
+			}
+			if valid {
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 // NOTE: CreateIndexCdcTask will create CDC task without any checking.  Original TableDef may be empty
@@ -131,7 +156,12 @@ func genCdcTaskJobID(indexname string) string {
 func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablename string, indexname string) error {
 	var err error
 
-	if !checkValidIndexCdc(tableDef, indexname) {
+	valid, err := checkValidIndexCdc(tableDef, indexname)
+	if err != nil {
+		return err
+	}
+
+	if !valid {
 		// index name is not valid cdc task. ignore it
 		return nil
 	}
@@ -143,21 +173,25 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 	}
 
 	// remove pitr if no index uses the pitr
-	nindex := 0
+	hasCdcIndex := false
 	for _, idx := range tableDef.Indexes {
-		if idx.TableExist &&
-			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-
-			if idx.IndexName != indexname {
-				nindex++
-			}
+		if idx.IndexName == indexname {
+			// skip same index name. don't count
+			continue
 		}
 
+		valid, err := checkValidIndexCdcByIndexdef(idx)
+		if err != nil {
+			return err
+		}
+
+		if valid {
+			hasCdcIndex = true
+			break
+		}
 	}
 
-	if nindex == 0 {
+	if !hasCdcIndex {
 		// remove pitr
 		err = DeleteIndexPitr(c, dbname, tablename)
 		if err != nil {
@@ -171,33 +205,25 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 // drop all cdc tasks according to tableDef
 func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
-	var err error
 	hasindex := false
 	for _, idx := range tabledef.Indexes {
-		if idx.TableExist &&
-			(catalog.IsHnswIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsIvfIndexAlgo(idx.IndexAlgo) ||
-				catalog.IsFullTextIndexAlgo(idx.IndexAlgo)) {
-			_, ok := idxmap[idx.IndexName]
-			if !ok {
-				idxmap[idx.IndexName] = true
-				async := false
-				if catalog.IsHnswIndexAlgo(idx.IndexAlgo) {
-					// HNSW always async
-					async = true
-				} else {
-					async, err = catalog.IsIndexAsync(idx.IndexAlgoParams)
-					if err != nil {
-						return err
-					}
-				}
-				if async {
-					hasindex = true
-					_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(idx.IndexName)})
-					if e != nil {
-						return e
-					}
-				}
+
+		_, ok := idxmap[idx.IndexName]
+		if ok {
+			continue
+		}
+
+		valid, err := checkValidIndexCdcByIndexdef(idx)
+		if err != nil {
+			return err
+		}
+
+		if valid {
+			idxmap[idx.IndexName] = true
+			hasindex = true
+			_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(idx.IndexName)})
+			if e != nil {
+				return e
 			}
 		}
 	}
