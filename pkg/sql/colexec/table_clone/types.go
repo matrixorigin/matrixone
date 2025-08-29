@@ -44,16 +44,18 @@ type TableClone struct {
 	vm.OperatorBase
 	Ctx *TableCloneCtx
 
-	srcRel engine.Relation
-	dstRel engine.Relation
+	srcRel map[string]engine.Relation
+	dstRel map[string]engine.Relation
 
-	srcRelReader engine.Reader
+	srcReader map[string]engine.Reader
 
-	dstIdxNameToRel map[string]engine.Relation
-	idxNameToReader map[string]engine.Reader
+	dstIdxRel    map[string]engine.Relation
+	srcIdxReader map[string]engine.Reader
 
 	dataObjBat      *batch.Batch
 	tombstoneObjBat *batch.Batch
+
+	dstMasterRel engine.Relation
 }
 
 func NewTableClone() *TableClone {

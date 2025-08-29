@@ -16,7 +16,6 @@ package partitionservice
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +35,8 @@ type Service struct {
 
 	mu struct {
 		sync.RWMutex
+		// FIXME: MVCC cache instead. Alter table add/drop partition. Or delete cache if main table has ddl while
+		// log tail applied.
 		tables map[uint64]metadataCache
 	}
 }
@@ -84,6 +85,24 @@ func (s *Service) Create(
 		def,
 		stmt,
 		metadata,
+		txnOp,
+	)
+}
+
+func (s *Service) Truncate(
+	ctx context.Context,
+	oldTableID uint64,
+	newTableID uint64,
+	txnOp client.TxnOperator,
+) error {
+	if !s.cfg.Enable {
+		return nil
+	}
+
+	return s.store.Truncate(
+		ctx,
+		oldTableID,
+		newTableID,
 		txnOp,
 	)
 }
@@ -167,6 +186,11 @@ func (s *Service) getMetadata(
 			option,
 			def,
 		)
+	case *tree.KeyType:
+		return s.getMetadataByKeyType(
+			option,
+			def,
+		)
 	case *tree.RangeType:
 		return s.getMetadataByRangeType(
 			option,
@@ -238,7 +262,7 @@ func (s *Service) getManualPartitions(
 			metadata.Partitions,
 			partition.Partition{
 				Name:               p.Name.String(),
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, p.Name.String()),
+				PartitionTableName: GetPartitionTableName(def.Name, p.Name.String()),
 				Position:           uint32(i),
 				ExprStr:            applyPartitionComment(p),
 				Expr:               def.Partition.PartitionDefs[i].Def,
@@ -258,4 +282,11 @@ func newMetadataCache(
 	return metadataCache{
 		metadata: metadata,
 	}
+}
+
+func GetPartitionTableName(
+	tableName string,
+	partitionName string,
+) string {
+	return "%!%" + partitionName + "%!%" + tableName
 }

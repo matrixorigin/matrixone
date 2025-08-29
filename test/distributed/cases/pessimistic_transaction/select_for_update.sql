@@ -539,7 +539,6 @@ select * from su_04;
 
 drop table if exists su_04;
 
--- @bvt:issue#16438
 create table su_05(c1 int not null primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
 insert into  su_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
 select * from `%!%p0%!%su_05`;
@@ -603,7 +602,6 @@ select * from su_05;
 -- @session}
 commit;
 drop table su_05;
--- @bvt:issue
 
 -- @bvt:issue#11009
 create table su_05_1(c1 int auto_increment primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;

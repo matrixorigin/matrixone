@@ -734,18 +734,18 @@ create table su_05(c1 int not null primary key,c2 varchar(25),c3 decimal(6,2))pa
 insert into  su_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
 select * from `%!%p0%!%su_05`;
 c1    c2    c3
+4    mode    9.00
 select * from `%!%p1%!%su_05`;
 c1    c2    c3
-4    mode    9.00
+1    mod    78.90
 5    make    662.90
 select * from `%!%p2%!%su_05`;
 c1    c2    c3
-3    mod    6.50
+2    proto    0.34
 6    io    88.92
 select * from `%!%p3%!%su_05`;
 c1    c2    c3
-1    mod    78.90
-2    proto    0.34
+3    mod    6.50
 begin;
 select * from su_05 where c1>3 for update;
 c1    c2    c3

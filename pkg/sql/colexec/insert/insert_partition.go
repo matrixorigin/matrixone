@@ -16,9 +16,9 @@ package insert
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -158,7 +158,6 @@ func (op *PartitionInsert) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-	*op = PartitionInsert{}
 }
 
 func (op *PartitionInsert) Release() {

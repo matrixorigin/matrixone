@@ -20,11 +20,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/partition"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -397,32 +396,27 @@ func ConstructCreateTableSQL(
 		ps := ctx.GetProcess().GetPartitionService()
 		if ps.Enabled() {
 			partitionBy := " partition by "
-			meta, err := ps.GetPartitionMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), ctx.GetProcess().GetTxnOperator())
+
+			txn := ctx.GetProcess().GetTxnOperator()
+			if snapshot != nil && snapshot.TS != nil {
+				txn = txn.CloneSnapshotOp(*snapshot.TS)
+			}
+
+			meta, err := ps.GetPartitionMetadata(ctx.GetProcess().Ctx, tableDef.GetTblId(), txn)
 			if err != nil {
 				return "", nil, err
 			}
-			rangeOrList := false
+
+			partitionBy += meta.Description
+
 			switch meta.Method {
-			case partition.PartitionMethod_Hash:
-				partitionBy += "hash"
-			case partition.PartitionMethod_Key:
-				partitionBy += "key"
-			case partition.PartitionMethod_Range:
-				rangeOrList = true
-				partitionBy += "range "
-			case partition.PartitionMethod_List:
-				rangeOrList = true
-				partitionBy += "List "
-			case partition.PartitionMethod_LinearHash:
-				partitionBy += "linear hash"
-			}
-
-			cols := "("
-			cols += meta.Description
-			cols += ")"
-
-			if rangeOrList {
-				partitionBy += "columns" + cols + " ("
+			case partition.PartitionMethod_Hash,
+				partition.PartitionMethod_LinearHash,
+				partition.PartitionMethod_Key,
+				partition.PartitionMethod_LinearKey:
+				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
+			default:
+				partitionBy += " ("
 				for i, p := range meta.Partitions {
 					if i > 0 {
 						partitionBy += ", "
@@ -430,10 +424,8 @@ func ConstructCreateTableSQL(
 					partitionBy += "partition" + " " + p.Name + " " + p.ExprStr
 				}
 				partitionBy += ")"
-			} else {
-				partitionBy += cols
-				partitionBy += fmt.Sprintf(" partitions %d", len(meta.Partitions))
 			}
+
 			createStr += partitionBy
 		}
 	}
@@ -535,7 +527,6 @@ func ConstructCreateTableSQL(
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
 	}
-
 	stmt, err := getRewriteSQLStmt(ctx, createStr)
 	return createStr, stmt, err
 }

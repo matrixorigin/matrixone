@@ -180,17 +180,20 @@ func (s *sqlExecutor) getCompileContext(
 
 func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
-	opts executor.Options) (context.Context, executor.Options, error) {
+	opts executor.Options,
+) (context.Context, executor.Options, error) {
+	if ctx.Value(defines.TenantIDKey{}) == nil {
+		ctx = context.WithValue(
+			ctx,
+			defines.TenantIDKey{},
+			uint32(0))
+	}
+
 	if opts.HasAccountID() {
 		ctx = context.WithValue(
 			ctx,
 			defines.TenantIDKey{},
 			opts.AccountID())
-	} else if ctx.Value(defines.TenantIDKey{}) == nil {
-		ctx = context.WithValue(
-			ctx,
-			defines.TenantIDKey{},
-			uint32(0))
 	}
 
 	if !opts.HasExistsTxn() {
@@ -370,8 +373,13 @@ func (exec *txnExecutor) Exec(
 		receiveAt,
 	)
 	c.SetOriginSQL(sql)
-	defer c.Release()
+	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
+	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
+	c.ignorePublish = statementOption.IgnorePublish()
+
+	defer c.Release()
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
