@@ -75,6 +75,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
@@ -653,7 +654,27 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
 		op.DelColIdx = t.DelColIdx
-
+		return op
+	case vm.RightDedupJoin:
+		t := sourceOp.(*rightdedupjoin.RightDedupJoin)
+		op := rightdedupjoin.NewArgument()
+		op.Result = t.Result
+		op.LeftTypes = t.LeftTypes
+		op.RightTypes = t.RightTypes
+		op.Conditions = t.Conditions
+		op.IsShuffle = t.IsShuffle
+		op.ShuffleIdx = t.ShuffleIdx
+		if t.ShuffleIdx == -1 { // shuffleV2
+			op.ShuffleIdx = int32(index)
+		}
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.JoinMapTag = t.JoinMapTag
+		op.OnDuplicateAction = t.OnDuplicateAction
+		op.DedupColName = t.DedupColName
+		op.DedupColTypes = t.DedupColTypes
+		op.UpdateColIdxList = t.UpdateColIdxList
+		op.UpdateColExprList = t.UpdateColExprList
+		op.DelColIdx = t.DelColIdx
 		return op
 	case vm.PostDml:
 		t := sourceOp.(*postdml.PostDml)
@@ -1219,6 +1240,44 @@ func constructDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *
 		panic("dedupjoin should not have non-equi join condition")
 	}
 	arg := dedupjoin.NewArgument()
+	arg.LeftTypes = leftTypes
+	arg.RightTypes = rightTypes
+	arg.Result = result
+	arg.Conditions = constructJoinConditions(conds, proc)
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	arg.OnDuplicateAction = n.OnDuplicateAction
+	arg.DedupColName = n.DedupColName
+	arg.DedupColTypes = n.DedupColTypes
+	arg.DelColIdx = -1
+	if n.DedupJoinCtx != nil {
+		arg.UpdateColIdxList = n.DedupJoinCtx.UpdateColIdxList
+		arg.UpdateColExprList = n.DedupJoinCtx.UpdateColExprList
+		if n.OnDuplicateAction == plan.Node_FAIL && len(n.DedupJoinCtx.OldColList) > 0 {
+			arg.DelColIdx = n.DedupJoinCtx.OldColList[0].ColPos
+		}
+	}
+	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
+	for i := range n.SendMsgList {
+		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
+			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+		}
+	}
+	if arg.JoinMapTag <= 0 {
+		panic("wrong joinmap tag!")
+	}
+	return arg
+}
+
+func constructRightDedupJoin(n *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *rightdedupjoin.RightDedupJoin {
+	result := make([]colexec.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	if cond != nil {
+		panic("dedupjoin should not have non-equi join condition")
+	}
+	arg := rightdedupjoin.NewArgument()
 	arg.LeftTypes = leftTypes
 	arg.RightTypes = rightTypes
 	arg.Result = result
@@ -1978,6 +2037,22 @@ func constructHashBuild(op vm.Operator, proc *process.Process, mcpu int32) *hash
 		}
 		ret.JoinMapTag = arg.JoinMapTag
 
+	case vm.RightDedupJoin:
+		arg := op.(*rightdedupjoin.RightDedupJoin)
+		ret.NeedHashMap = true
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = false
+		ret.NeedAllocateSels = false
+		ret.IsDedup = false
+		ret.OnDuplicateAction = arg.OnDuplicateAction
+		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
+		ret.DelColIdx = arg.DelColIdx
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = arg.RuntimeFilterSpecs[0]
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+
 	default:
 		ret.Release()
 		panic(moerr.NewInternalErrorf(proc.Ctx, "unsupport join type '%v'", op.OpType()))
@@ -2102,6 +2177,22 @@ func constructShuffleBuild(op vm.Operator, proc *process.Process) *shufflebuild.
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = arg.OnDuplicateAction == plan.Node_UPDATE
 		ret.IsDedup = true
+		ret.OnDuplicateAction = arg.OnDuplicateAction
+		ret.DedupColName = arg.DedupColName
+		ret.DedupColTypes = arg.DedupColTypes
+		ret.DelColIdx = arg.DelColIdx
+		if len(arg.RuntimeFilterSpecs) > 0 {
+			ret.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(arg.RuntimeFilterSpecs[0])
+		}
+		ret.JoinMapTag = arg.JoinMapTag
+		ret.ShuffleIdx = arg.ShuffleIdx
+
+	case vm.RightDedupJoin:
+		arg := op.(*rightdedupjoin.RightDedupJoin)
+		ret.Conditions = arg.Conditions[1]
+		ret.NeedBatches = false
+		ret.NeedAllocateSels = false
+		ret.IsDedup = false
 		ret.OnDuplicateAction = arg.OnDuplicateAction
 		ret.DedupColName = arg.DedupColName
 		ret.DedupColTypes = arg.DedupColTypes

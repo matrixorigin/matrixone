@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 )
 
@@ -242,23 +243,52 @@ func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(ctx context.Context, options
 }
 
 func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Table: "
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Table: ")
 	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
 		tableDef := ndesc.Node.TableDef
-		result += "'" + tableDef.Name + "' ("
+		buf.WriteString("'" + tableDef.Name + "' (")
 		first := true
 		for i, col := range tableDef.Cols {
 			if !first {
-				result += ", "
+				buf.WriteString(", ")
 			}
 			first = false
-			result += strconv.Itoa(i) + ":'" + col.Name + "'"
+			buf.WriteString(strconv.Itoa(i) + ":'" + col.Name + "'")
 		}
-		result += ")"
+		buf.WriteString(")")
+
+		if ndesc.Node.Stats.HashmapStats.Shuffle {
+			shuffleType := ndesc.Node.Stats.HashmapStats.ShuffleType
+			var firstSortColName string
+			if tableDef.ClusterBy != nil {
+				firstSortColName = util.GetClusterByFirstColumn(tableDef.ClusterBy.Name)
+			} else {
+				firstSortColName = tableDef.Pkey.Names[0]
+			}
+
+			if ndesc.Node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+				buf.WriteString(" shuffle: REUSE")
+			} else {
+				if shuffleType == plan.ShuffleType_Hash {
+					buf.WriteString(" shuffle: hash(")
+					buf.WriteString(firstSortColName)
+					buf.WriteString(")")
+				} else {
+					buf.WriteString(" shuffle: range(")
+					buf.WriteString(firstSortColName)
+					buf.WriteString(")")
+				}
+
+				if ndesc.Node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+					buf.WriteString(" HYBRID ")
+				}
+			}
+		}
 	} else {
 		panic("implement me")
 	}
-	return result, nil
+	return buf.String(), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
@@ -456,11 +486,11 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(ctx context.Context, options *
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(ctx context.Context, options *ExplainOptions) (string, error) {
-	result := "Join Type: " + ndesc.Node.JoinType.String()
-	if ndesc.Node.BuildOnLeft {
-		if ndesc.Node.JoinType == plan.Node_SEMI || ndesc.Node.JoinType == plan.Node_ANTI {
-			result = "Join Type: RIGHT " + ndesc.Node.JoinType.String()
-		}
+	result := "Join Type: "
+	if ndesc.Node.IsRightJoin && ndesc.Node.JoinType != plan.Node_RIGHT {
+		result += "RIGHT " + ndesc.Node.JoinType.String()
+	} else {
+		result += ndesc.Node.JoinType.String()
 	}
 	if ndesc.Node.JoinType == plan.Node_DEDUP {
 		result += " (" + ndesc.Node.OnDuplicateAction.String() + ")"

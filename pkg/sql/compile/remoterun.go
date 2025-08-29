@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
@@ -813,6 +814,26 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			UpdateColIdxList:       t.UpdateColIdxList,
 			UpdateColExprList:      t.UpdateColExprList,
 		}
+	case *rightdedupjoin.RightDedupJoin:
+		relList, colList := getRelColList(t.Result)
+		in.RightDedupJoin = &pipeline.RightDedupJoin{
+			RelList:                relList,
+			ColList:                colList,
+			LeftCond:               t.Conditions[0],
+			RightCond:              t.Conditions[1],
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			IsShuffle:              t.IsShuffle,
+			JoinMapTag:             t.JoinMapTag,
+			ShuffleIdx:             t.ShuffleIdx,
+			OnDuplicateAction:      t.OnDuplicateAction,
+			DedupColName:           t.DedupColName,
+			DedupColTypes:          t.DedupColTypes,
+			DelColIdx:              t.DelColIdx,
+			LeftTypes:              convertToPlanTypes(t.LeftTypes),
+			RightTypes:             convertToPlanTypes(t.RightTypes),
+			UpdateColIdxList:       t.UpdateColIdxList,
+			UpdateColExprList:      t.UpdateColExprList,
+		}
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
 		in.Apply = &pipeline.Apply{
@@ -1312,6 +1333,24 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.DedupJoin:
 		arg := dedupjoin.NewArgument()
 		t := opr.GetDedupJoin()
+		arg.Result = convertToResultPos(t.RelList, t.ColList)
+		arg.LeftTypes = convertToTypes(t.LeftTypes)
+		arg.RightTypes = convertToTypes(t.RightTypes)
+		arg.Conditions = [][]*plan.Expr{t.LeftCond, t.RightCond}
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
+		arg.IsShuffle = t.IsShuffle
+		arg.JoinMapTag = t.JoinMapTag
+		arg.ShuffleIdx = t.ShuffleIdx
+		arg.OnDuplicateAction = t.OnDuplicateAction
+		arg.DedupColName = t.DedupColName
+		arg.DedupColTypes = t.DedupColTypes
+		arg.DelColIdx = t.DelColIdx
+		arg.UpdateColIdxList = t.UpdateColIdxList
+		arg.UpdateColExprList = t.UpdateColExprList
+		op = arg
+	case vm.RightDedupJoin:
+		arg := rightdedupjoin.NewArgument()
+		t := opr.GetRightDedupJoin()
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.LeftTypes = convertToTypes(t.LeftTypes)
 		arg.RightTypes = convertToTypes(t.RightTypes)
