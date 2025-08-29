@@ -155,6 +155,11 @@ type JobEntry struct {
 	dropAt             types.Timestamp
 }
 
+type JobKey struct {
+	JobName string
+	JobID   uint64
+}
+
 // Intra-System Change Propagation Table Entry
 type TableEntry struct {
 	exec      *ISCPTaskExecutor
@@ -164,7 +169,7 @@ type TableEntry struct {
 	tableID   uint64
 	tableName string
 	dbName    string
-	jobs      map[string]*JobEntry
+	jobs      map[JobKey]*JobEntry
 	mu        sync.RWMutex
 }
 

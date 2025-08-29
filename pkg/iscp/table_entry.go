@@ -45,7 +45,7 @@ func NewTableEntry(
 		exec:      exec,
 		accountID: accountID,
 		tableDef:  tableDef,
-		jobs:      make(map[string]*JobEntry),
+		jobs:      make(map[JobKey]*JobEntry),
 		dbID:      dbID,
 		tableID:   tableID,
 		dbName:    dbName,
@@ -63,11 +63,15 @@ func (t *TableEntry) AddOrUpdateSinker(
 ) (newCreate bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	jobEntry, ok := t.jobs[jobName]
+	key := JobKey{
+		JobName: jobName,
+		JobID:   jobID,
+	}
+	jobEntry, ok := t.jobs[key]
 	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
 		jobEntry = NewJobEntry(t, jobName, jobSpec, jobID, watermark, state, dropAt)
-		t.jobs[jobName] = jobEntry
+		t.jobs[key] = jobEntry
 		return
 	}
 	if jobEntry.jobID > jobID {
@@ -82,7 +86,7 @@ func (t *TableEntry) GetWatermark(jobName string) (watermark types.TS, ok bool) 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, sinker := range t.jobs {
-		if sinker.jobName == jobName {
+		if sinker.jobName == jobName && sinker.dropAt == 0 {
 			return sinker.watermark, true
 		}
 	}
@@ -98,11 +102,17 @@ func (t *TableEntry) IsEmpty() bool {
 func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	jobsToDelete := make([]string, 0)
+	jobsToDelete := make([]JobKey, 0)
 	now := time.Now()
 	for _, jobEntry := range t.jobs {
 		if jobEntry.dropAt != 0 && uint64(now.Nanosecond())-uint64(threshold) > uint64(jobEntry.dropAt) {
-			jobsToDelete = append(jobsToDelete, jobEntry.jobName)
+			jobsToDelete = append(
+				jobsToDelete,
+				JobKey{
+					JobName: jobEntry.jobName,
+					JobID:   jobEntry.jobID,
+				},
+			)
 		}
 	}
 	for _, jobName := range jobsToDelete {
@@ -112,7 +122,7 @@ func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
 		logutil.Info(
 			"ISCP-Task gc in memory job",
 			zap.String("table", t.String()),
-			zap.Strings("jobsToDelete", jobsToDelete),
+			zap.Any("jobsToDelete", jobsToDelete),
 		)
 	}
 	return len(t.jobs) == 0
@@ -183,8 +193,11 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, jobName := range iter.jobNames {
-		jobEntry := t.jobs[jobName]
+	for i, jobName := range iter.jobNames {
+		jobEntry := t.jobs[JobKey{
+			JobName: jobName,
+			JobID:   iter.jobIDs[i],
+		}]
 		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
 	}
 }

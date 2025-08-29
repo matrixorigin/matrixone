@@ -368,14 +368,20 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				if ok {
 					// The update on mo_iscp_log may not be available in the next applyISCPLog,
 					// so update the in-memory state directly to prevent repeated triggering of the iteration.
-					for _, jobName := range iter.jobNames {
-						job := table.jobs[jobName]
+					for i, jobName := range iter.jobNames {
+						job := table.jobs[JobKey{
+							JobName: jobName,
+							JobID:   iter.jobIDs[i],
+						}]
 						job.state = ISCPJobState_Pending
 					}
 					err := exec.worker.Submit(iter)
 					if err != nil {
-						for _, jobName := range iter.jobNames {
-							job := table.jobs[jobName]
+						for i, jobName := range iter.jobNames {
+							job := table.jobs[JobKey{
+								JobName: jobName,
+								JobID:   iter.jobIDs[i],
+							}]
 							job.state = ISCPJobState_Completed
 						}
 						logutil.Error(
@@ -434,11 +440,13 @@ func (exec *ISCPTaskExecutor) GetJobType(accountID uint32, srcTableID uint64, jo
 	}
 	table.mu.RLock()
 	defer table.mu.RUnlock()
-	job, ok := table.jobs[jobName]
-	if !ok {
-		return
+	for _, job := range table.jobs {
+		if job.jobName == jobName && job.dropAt == 0 {
+			jobType = job.jobSpec.GetType()
+			ok = true
+			break
+		}
 	}
-	jobType = job.jobSpec.GetType()
 	return
 }
 
