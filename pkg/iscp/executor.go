@@ -595,7 +595,7 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 				continue
 			}
 			jobCount++
-			err = retry(
+			retry(
 				func() error {
 					return exec.addOrUpdateJob(
 						accountIDs[i],
@@ -610,9 +610,6 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 				},
 				exec.option.RetryTimes,
 			)
-			if err != nil {
-				return false
-			}
 		}
 		return true
 	})
