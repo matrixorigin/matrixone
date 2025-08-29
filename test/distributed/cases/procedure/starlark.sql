@@ -27,10 +27,10 @@ call sp_empty('foo');
 -- @bvt:issue
 
 
-create procedure sp_badparam(in mo int) language 'starlark'
+create procedure sp_badparam(in `mo` int) language 'starlark'
 '';
 
-create procedure sp_badparam(in mo.foo int) language 'starlark'
+create procedure sp_badparam(in `mo.foo` int) language 'starlark'
 '';
 
 create procedure sp_badparam(inout out_foo int) language 'starlark'
