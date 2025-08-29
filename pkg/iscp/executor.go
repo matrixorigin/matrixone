@@ -368,14 +368,20 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 				if ok {
 					// The update on mo_iscp_log may not be available in the next applyISCPLog,
 					// so update the in-memory state directly to prevent repeated triggering of the iteration.
-					for _, jobName := range iter.jobNames {
-						job := table.jobs[jobName]
+					for i, jobName := range iter.jobNames {
+						job := table.jobs[JobKey{
+							JobName: jobName,
+							JobID:   iter.jobIDs[i],
+						}]
 						job.state = ISCPJobState_Pending
 					}
 					err := exec.worker.Submit(iter)
 					if err != nil {
-						for _, jobName := range iter.jobNames {
-							job := table.jobs[jobName]
+						for i, jobName := range iter.jobNames {
+							job := table.jobs[JobKey{
+								JobName: jobName,
+								JobID:   iter.jobIDs[i],
+							}]
 							job.state = ISCPJobState_Completed
 						}
 						logutil.Error(
@@ -411,6 +417,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context) {
 					zap.Error(err),
 				)
 			}
+			exec.GCInMemoryJob(exec.option.GCTTL)
 		}
 	}
 }
@@ -433,11 +440,13 @@ func (exec *ISCPTaskExecutor) GetJobType(accountID uint32, srcTableID uint64, jo
 	}
 	table.mu.RLock()
 	defer table.mu.RUnlock()
-	job, ok := table.jobs[jobName]
-	if !ok {
-		return
+	for _, job := range table.jobs {
+		if job.jobName == jobName && job.dropAt == 0 {
+			jobType = job.jobSpec.GetType()
+			ok = true
+			break
+		}
 	}
-	jobType = job.jobSpec.GetType()
 	return
 }
 
@@ -483,17 +492,18 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
 		watermarkVector := insertData.Vecs[6]
 		dropAtVector := insertData.Vecs[9]
+		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
 		commitTSVector := insertData.Vecs[11]
 		commitTSs := vector.MustFixedColWithTypeCheck[types.TS](commitTSVector)
 		type job struct {
 			ts     types.TS
 			offset int
-			jobID  uint64
 		}
 		type jobName struct {
 			accountID uint32
 			tableID   uint64
 			jobName   string
+			jobID     uint64
 		}
 		jobMap := make(map[jobName]job)
 		for i := 0; i < insertData.RowCount(); i++ {
@@ -501,51 +511,44 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 				accountID: accountIDs[i],
 				tableID:   tableIDs[i],
 				jobName:   jobNameVector.GetStringAt(i),
+				jobID:     jobIDs[i],
 			}
 			if job, ok := jobMap[jobName]; ok {
-				if job.jobID > jobIDs[i] {
-					continue
-				}
 				if job.ts.GT(&commitTSs[i]) {
 					continue
 				}
 			}
 			jobMap[jobName] = job{
-				jobID:  jobIDs[i],
 				ts:     commitTSs[i],
 				offset: i,
 			}
 		}
 		for _, job := range jobMap {
-			if dropAtVector.IsNull(uint64(job.offset)) {
-				err = retry(
-					func() error {
-						return exec.addOrUpdateJob(
-							accountIDs[job.offset],
-							tableIDs[job.offset],
-							jobNameVector.GetStringAt(job.offset),
-							jobIDs[job.offset],
-							states[job.offset],
-							watermarkVector.GetStringAt(job.offset),
-							jobSpecVector.GetBytesAt(job.offset),
-						)
-					},
-					exec.option.RetryTimes,
-				)
-				if err != nil {
-					return
-				}
-			} else {
-				err = retry(
-					func() error {
-						return exec.deleteJob(accountIDs[job.offset], tableIDs[job.offset], jobNameVector.GetStringAt(job.offset))
-					},
-					exec.option.RetryTimes,
-				)
-				if err != nil {
-					return
-				}
+			var dropAt types.Timestamp
+			if !dropAtVector.IsNull(uint64(job.offset)) {
+				dropAt = dropAts[job.offset]
 			}
+			/*
+				todo:
+				register job & create table
+				unregister job & drop table
+				apply add, error not found table
+			*/
+			retry(
+				func() error {
+					return exec.addOrUpdateJob(
+						accountIDs[job.offset],
+						tableIDs[job.offset],
+						jobNameVector.GetStringAt(job.offset),
+						jobIDs[job.offset],
+						states[job.offset],
+						watermarkVector.GetStringAt(job.offset),
+						jobSpecVector.GetBytesAt(job.offset),
+						dropAt,
+					)
+				},
+				exec.option.RetryTimes,
+			)
 		}
 	}
 
@@ -594,12 +597,13 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
 		watermarkVector := cols[6]
 		dropAtVector := cols[9]
+		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
 		for i := 0; i < rows; i++ {
 			if !dropAtVector.IsNull(uint64(i)) {
 				continue
 			}
 			jobCount++
-			err = retry(
+			retry(
 				func() error {
 					return exec.addOrUpdateJob(
 						accountIDs[i],
@@ -609,13 +613,11 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 						states[i],
 						watermarkVector.GetStringAt(i),
 						jobSpecVector.GetBytesAt(i),
+						dropAts[i],
 					)
 				},
 				exec.option.RetryTimes,
 			)
-			if err != nil {
-				return false
-			}
 		}
 		return true
 	})
@@ -631,10 +633,12 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	state int8,
 	watermarkStr string,
 	jobSpecStr []byte,
+	dropAt types.Timestamp,
 ) (err error) {
 	var newCreate bool
+
 	defer func() {
-		if !newCreate && err == nil {
+		if !newCreate && err == nil && dropAt == 0 {
 			return
 		}
 		var logger func(msg string, fields ...zap.Field)
@@ -651,6 +655,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.Uint64("jobID", jobID),
 			zap.String("watermark", watermarkStr),
 			zap.Bool("newcreate", newCreate),
+			zap.String("dropAt", dropAt.String()),
 			zap.Error(err),
 		)
 	}()
@@ -665,6 +670,9 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
+		if dropAt != 0 {
+			return
+		}
 		var rel engine.Relation
 		var txn client.TxnOperator
 		rel, txn, err = getRelation(exec.txnEngine, exec.cnTxnClient, accountID, tableID)
@@ -680,49 +688,28 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			tableDef.TblId,
 			tableDef.DbName,
 			tableDef.Name,
-			tableDef,
 		)
 		exec.setTable(table)
 	}
-	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state)
+	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state, dropAt)
 	return
 }
 
-func (exec *ISCPTaskExecutor) deleteJob(
-	accountID uint32,
-	tableID uint64,
-	jobName string,
-) (err error) {
-	defer func() {
-		var logger func(msg string, fields ...zap.Field)
-		if err != nil {
-			logger = logutil.Error
-		} else {
-			logger = logutil.Info
+func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
+	tables := exec.getAllTables()
+	tablesToDelete := make([]*TableEntry, 0)
+	for _, table := range tables {
+		isEmpty := table.gcInMemoryJob(threshold)
+		if isEmpty {
+			tablesToDelete = append(tablesToDelete, table)
 		}
-		logger(
-			"ISCP-Task delete job",
-			zap.Uint32("accountID", accountID),
-			zap.Uint64("tableID", tableID),
-			zap.String("jobName", jobName),
-			zap.Error(err),
-		)
-	}()
-	table, ok := exec.getTable(accountID, tableID)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("table not found")
 	}
-	empty, err := table.DeleteSinker(jobName)
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "deleteJob" {
-		err = moerr.NewInternalErrorNoCtx(msg)
-	}
-	if err != nil {
-		return
-	}
-	if empty {
+	tids := make([]uint64, 0, len(tablesToDelete))
+	for _, table := range tablesToDelete {
 		exec.deleteTableEntry(table)
+		tids = append(tids, table.tableID)
 	}
-	return
+	logutil.Infof("ISCP-Task delete table %v", tids)
 }
 
 // getCandidateTables returns all candidate IterationContexts, their corresponding TableEntries, and the minimal fromTS for each table.
