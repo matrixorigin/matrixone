@@ -328,6 +328,18 @@ var (
 		catalog.MO_MERGE_SETTINGS,
 		merge.MergeSettingsVersion_Curr,
 		merge.DefaultMergeSettings.String())
+
+	MoCatalogBranchMetadataDDL = fmt.Sprintf(`create table mo_catalog.%s(
+    	table_id bigint unsigned comment 'id of the table this branch points to',
+   	 	clone_ts bigint signed comment 'branch creation timestamp in nanoseconds',
+    	p_table_id bigint unsigned comment 'id of the parent table this branch is based on',
+    	creator bigint unsigned comment 'account id of the creator',
+    	level varchar,
+    	table_deleted bool,
+    	index(p_table_id),
+    	index(creator),
+    	primary key(table_id)
+	)`, catalog.MO_BRANCH_METADATA)
 )
 
 // `mo_catalog` database system tables
