@@ -560,6 +560,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 						newIndexes = append(newIndexes, extra.IndexTables[idx])
 					}
 				}
+
+				// drop index cdc task
+				err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName)
+				if err != nil {
+					return err
+				}
+
 				// Avoid modifying slice directly during iteration
 				oTableDef.Indexes = notDroppedIndex
 				extra.IndexTables = newIndexes
