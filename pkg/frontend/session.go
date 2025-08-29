@@ -598,7 +598,7 @@ func NewSession(
 		pu.HAKeeperClient,
 		pu.UdfService,
 		getAicm(service),
-		getPu(ses.GetService()).TaskService)
+		getPu(ses.GetService()).GetTaskService())
 
 	ses.proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
 	ses.proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows

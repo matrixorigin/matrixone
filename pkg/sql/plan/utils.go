@@ -26,8 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -48,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -493,10 +492,8 @@ func checkDNF(expr *plan.Expr) []string {
 		}
 		return ret
 
-	case *plan.Expr_Corr:
-		ret = append(ret, string(exprImpl.Corr.CorrColRefBytes()))
 	case *plan.Expr_Col:
-		ret = append(ret, string(exprImpl.Col.ColRefBytes()))
+		ret = append(ret, exprImpl.Col.ColRefString())
 	}
 	return ret
 }
@@ -532,14 +529,8 @@ func walkThroughDNF(ctx context.Context, expr *plan.Expr, keywords string) *plan
 			return expr
 		}
 
-	case *plan.Expr_Corr:
-		if exprImpl.Corr.String() == keywords {
-			return expr
-		} else {
-			return nil
-		}
 	case *plan.Expr_Col:
-		if exprImpl.Col.String() == keywords {
+		if exprImpl.Col.ColRefString() == keywords {
 			return expr
 		} else {
 			return nil
@@ -700,10 +691,10 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 // for col1=col2 and col3 = col4, trying to deduce new pred
 // for example , if col1 and col3 are the same, then we can deduce that col2=col4
 func deduceTranstivity(expr *plan.Expr, col1, col2, col3, col4 *ColRef) (bool, *plan.Expr) {
-	if bytes.Equal(col1.ColRefBytes(), col3.ColRefBytes()) ||
-		bytes.Equal(col1.ColRefBytes(), col4.ColRefBytes()) ||
-		bytes.Equal(col2.ColRefBytes(), col3.ColRefBytes()) ||
-		bytes.Equal(col2.ColRefBytes(), col4.ColRefBytes()) {
+	if col1.ColRefString() == col3.ColRefString() ||
+		col1.ColRefString() == col4.ColRefString() ||
+		col2.ColRefString() == col3.ColRefString() ||
+		col2.ColRefString() == col4.ColRefString() {
 		retExpr := DeepCopyExpr(expr)
 		substituteMatchColumn(retExpr, col3, col4)
 		return true, retExpr
@@ -716,13 +707,13 @@ func substituteMatchColumn(expr *plan.Expr, onPredCol1, onPredCol2 *ColRef) bool
 	var ret bool
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		colName := exprImpl.Col.ColRefBytes()
-		if bytes.Equal(colName, onPredCol1.ColRefBytes()) {
+		colName := exprImpl.Col.ColRefString()
+		if colName == onPredCol1.ColRefString() {
 			exprImpl.Col.RelPos = onPredCol2.RelPos
 			exprImpl.Col.ColPos = onPredCol2.ColPos
 			exprImpl.Col.Name = onPredCol2.Name
 			return true
-		} else if bytes.Equal(colName, onPredCol2.ColRefBytes()) {
+		} else if colName == onPredCol2.ColRefString() {
 			exprImpl.Col.RelPos = onPredCol1.RelPos
 			exprImpl.Col.ColPos = onPredCol1.ColPos
 			exprImpl.Col.Name = onPredCol1.Name
