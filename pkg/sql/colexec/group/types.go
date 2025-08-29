@@ -93,6 +93,10 @@ type Group struct {
 	GroupingFlag []bool
 	// agg info and agg column.
 	Aggs []aggexec.AggFuncExecExpression
+
+	// spill configuration
+	SpillManager   SpillManager
+	SpillThreshold int64
 }
 
 func (group *Group) evaluateGroupByAndAgg(proc *process.Process, bat *batch.Batch) (err error) {
