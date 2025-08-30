@@ -42,7 +42,7 @@ type HnswBuildIndex struct {
 type HnswBuild struct {
 	uid      string
 	cfg      vectorindex.IndexConfig
-	tblcfg   vectorindex.IndexTableConfig
+	tblcfg   vectorindex.IndexTableCfg
 	indexes  []*HnswBuildIndex
 	nthread  int
 	add_chan chan AddItem
@@ -135,7 +135,7 @@ func (idx *HnswBuildIndex) SaveToFile() error {
 
 // Generate the SQL to update the secondary index tables.
 // 1. store the index file into the index table
-func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableCfg) ([]string, error) {
 
 	err := idx.SaveToFile()
 	if err != nil {
@@ -156,7 +156,7 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) ([]string, er
 
 	sqls := make([]string, 0, 5)
 
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
+	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DBName(), cfg.IndexTable())
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
 	n := 0
 	for offset = 0; offset < filesz; {
@@ -218,17 +218,22 @@ func (idx *HnswBuildIndex) Add(key int64, vec []float32) error {
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(proc *process.Process, uid string, nworker int32,
-	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild(
+	proc *process.Process,
+	uid string,
+	nworker int32,
+	cfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+) (info *HnswBuild, err error) {
 
 	// estimate the number of worker threads
 	nthread := 0
 	if nworker <= 1 {
 		// single database thread and set nthread to ThreadsBuild
-		nthread = int(vectorindex.GetConcurrency(tblcfg.ThreadsBuild))
+		nthread = int(vectorindex.GetConcurrency(tblcfg.ThreadsBuild()))
 	} else {
 		// multiple database worker threads
-		threadsbuild := vectorindex.GetConcurrencyForBuild(tblcfg.ThreadsBuild)
+		threadsbuild := vectorindex.GetConcurrencyForBuild(tblcfg.ThreadsBuild())
 		nthread = int(float64(threadsbuild) / float64(nworker))
 	}
 	if nthread < 1 {
@@ -348,7 +353,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+		idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity()))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -363,7 +368,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswBuildIndex, save_idx *HnswBuildIn
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+			idx, err = NewHnswBuildIndex(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity()))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -464,7 +469,7 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 		metas = append(metas, fmt.Sprintf("('%s', '%s', %d, %d)", idx.Id, chksum, ts, fs))
 	}
 
-	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", h.tblcfg.DbName, h.tblcfg.MetadataTable, strings.Join(metas, ", "))
+	metasql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES %s", h.tblcfg.DBName(), h.tblcfg.MetadataTable(), strings.Join(metas, ", "))
 
 	sqls = append(sqls, metasql)
 	return sqls, nil

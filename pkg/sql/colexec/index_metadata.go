@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -318,7 +319,14 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if len(index.IndexAlgoParams) == 0 {
 						err = vector.AppendBytes(vec_algo_params, []byte(""), true, proc.Mp())
 					} else {
-						err = vector.AppendBytes(vec_algo_params, []byte(index.IndexAlgoParams), false, proc.Mp())
+						params := catalog.MustIndexParams(index.IndexAlgoParams)
+						rawParams := params.ToJsonParamString()
+						err = vector.AppendBytes(
+							vec_algo_params,
+							util.UnsafeStringToBytes(rawParams),
+							false,
+							proc.Mp(),
+						)
 					}
 					if err != nil {
 						return nil, err

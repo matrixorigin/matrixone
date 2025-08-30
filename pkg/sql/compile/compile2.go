@@ -50,7 +50,8 @@ import (
 func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
-	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error,
+) (err error) {
 	// clear the last query context to avoid process reuse.
 	c.proc.ResetQueryContext()
 

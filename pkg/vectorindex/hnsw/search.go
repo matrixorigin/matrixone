@@ -50,7 +50,7 @@ type HnswSearchIndex struct {
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
 type HnswSearch struct {
 	Idxcfg        vectorindex.IndexConfig
-	Tblcfg        vectorindex.IndexTableConfig
+	Tblcfg        vectorindex.IndexTableCfg
 	Indexes       []*HnswSearchIndex
 	Concurrency   atomic.Int64
 	Mutex         sync.Mutex
@@ -102,7 +102,12 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 // 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
 // 4. according to the chunk_id, seek to the offset and write the chunk
 // 5. check the checksum to verify the correctness of the file
-func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+func (idx *HnswSearchIndex) LoadIndex(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+	nthread int64,
+) error {
 
 	stream_chan := make(chan executor.Result, 2)
 	error_chan := make(chan error)
@@ -120,7 +125,10 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 	}
 
 	// run streaming sql
-	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+	sql := fmt.Sprintf(
+		"SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'",
+		tblcfg.DBName(), tblcfg.IndexTable(), idx.Id,
+	)
 	go func() {
 		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
 		if err != nil {
@@ -175,8 +183,11 @@ func (idx *HnswSearchIndex) Search(query []float32, limit uint) (keys []usearch.
 	return idx.Index.Search(query, limit)
 }
 
-func NewHnswSearch(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch {
-	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
+func NewHnswSearch(
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+) *HnswSearch {
+	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch())
 	s := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	s.Cond = sync.NewCond(&s.Mutex)
 	return s
@@ -302,7 +313,7 @@ func (s *HnswSearch) Destroy() {
 // load metadata from database
 func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, error) {
 
-	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s`", s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s`", s.Tblcfg.DBName(), s.Tblcfg.MetadataTable())
 	res, err := runSql(proc, sql)
 	if err != nil {
 		return nil, err

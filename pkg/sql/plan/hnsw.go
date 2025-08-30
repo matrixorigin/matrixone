@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -64,7 +65,14 @@ func (builder *QueryBuilder) buildHnswCreate(tbl *tree.TableFunction, ctx *BindC
 	}
 
 	colDefs := _getColDefs(hnswBuildIndexColDefs)
-	params, err := builder.getHnswParams(tbl.Func)
+	rawParams, err := builder.getHnswParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	params, err := catalog.TryConvertToIndexParams(
+		catalog.IndexParamAlgoName_Hnsw,
+		rawParams,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -105,7 +113,14 @@ func (builder *QueryBuilder) buildHnswSearch(tbl *tree.TableFunction, ctx *BindC
 
 	colDefs := _getColDefs(hnswSearchColDefs)
 
-	params, err := builder.getHnswParams(tbl.Func)
+	rawParams, err := builder.getHnswParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	params, err := catalog.TryConvertToIndexParams(
+		catalog.IndexParamAlgoName_Hnsw,
+		rawParams,
+	)
 	if err != nil {
 		return 0, err
 	}

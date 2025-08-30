@@ -1985,15 +1985,16 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	// get optype
 	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	params, err := catalog.TryToIndexParams(idxdef.IndexAlgoParams)
 	if err != nil {
 		return -1, err
 	}
-
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
-		return -1, err
+	if !params.IVFFLATAlgo().IsValid() {
+		return -1, moerr.NewInternalErrorNoCtxf(
+			"invalid ivf flat algo: %s", params.String(),
+		)
 	}
+	optype := params.IVFFLATAlgo().String()
 
 	//1.b Handle mo_cp_key
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
@@ -2005,14 +2006,30 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	}
 
 	// 3. create a scan node for centroids x meta on centroids.version = cast (meta.version as bigint)
-	currVersionCentroids, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
-		indexTableDefs, idxRefs, metaCurrVersionRow)
+	currVersionCentroids, err := makeCrossJoinCentroidsMetaForCurrVersion(
+		builder,
+		bindCtx,
+		indexTableDefs,
+		idxRefs,
+		metaCurrVersionRow,
+	)
 	if err != nil {
 		return -1, err
 	}
 
 	// 4. create "CrossJoinL2" on tbl x centroids
-	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(builder, bindCtx, tableDef, lastNodeId, currVersionCentroids, typeOriginPk, posOriginPk, typeOriginVecColumn, posOriginVecColumn, optype)
+	joinTblAndCentroidsUsingCrossL2Join := makeTblCrossJoinL2Centroids(
+		builder,
+		bindCtx,
+		tableDef,
+		lastNodeId,
+		currVersionCentroids,
+		typeOriginPk,
+		posOriginPk,
+		typeOriginVecColumn,
+		posOriginVecColumn,
+		optype,
+	)
 
 	// 5. Create a Project with CP Key for LockNode
 	projectWithCpKey, err := makeFinalProject(builder, bindCtx, joinTblAndCentroidsUsingCrossL2Join)
@@ -2040,7 +2057,13 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	return sourceStep, nil
 }
 
-func recomputeMoCPKeyViaProjection(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeId int32, posOriginPk int) int32 {
+func recomputeMoCPKeyViaProjection(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeId int32,
+	posOriginPk int,
+) int32 {
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		lastProject := builder.qry.Nodes[lastNodeId].ProjectList
 
@@ -4767,7 +4790,7 @@ func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindC
 				SourceTableName: tableDef.Name,
 				IndexTableName:  indexTableDef.Name,
 				Parts:           indexdef.Parts,
-				AlgoParams:      indexdef.IndexAlgoParams,
+				AlgoParams:      indexdef.IndexAlgoParams, // PXU TODO: check if this is correct
 			},
 		},
 	}

@@ -92,7 +92,8 @@ func (txn *Transaction) WriteBatch(
 	databaseName string,
 	tableName string,
 	bat *batch.Batch,
-	tnStore DNStore) (genRowidVec *vector.Vector, err error) {
+	tnStore DNStore,
+) (genRowidVec *vector.Vector, err error) {
 	start := time.Now()
 	seq := txn.op.NextSequence()
 	trace.GetService(txn.proc.GetService()).AddTxnDurationAction(
