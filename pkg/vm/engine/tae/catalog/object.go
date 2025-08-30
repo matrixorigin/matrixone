@@ -728,3 +728,36 @@ func (entry *ObjectEntry) ForeachMVCCNodeInRange(start, end types.TS, f func(*tx
 	}
 	return nil
 }
+
+// ForeachMVCCSpecificNodeInRange is used by "do checkpoint".
+// The purpose is to ensure that the checkpoint contains all data before the end timestamp.
+func (entry *ObjectEntry) ForeachMVCCSpecificNodeInRange(start, end types.TS, f func(*txnbase.TxnMVCCNode) error) error {
+	needWait, txn := entry.GetLastMVCCNode().NeedWaitCommitting(end.Next())
+	if needWait {
+		txn.GetTxnState(true)
+	}
+
+	var createIn, deleteIn bool
+	createIn, _ = entry.CreateNode.PreparedIn(start, end)
+	if createIn {
+		if err := f(&entry.CreateNode); err != nil {
+			return err
+		}
+	}
+	deleteIn, _ = entry.DeleteNode.PreparedIn(start, end)
+	if !deleteIn {
+		if !entry.IsAppendable() {
+			return nil
+		}
+		if !createIn {
+			return nil
+		}
+		if !entry.DeleteNode.IsCommitted() {
+			return nil
+		}
+	}
+	if err := f(&entry.DeleteNode); err != nil {
+		return err
+	}
+	return nil
+}
