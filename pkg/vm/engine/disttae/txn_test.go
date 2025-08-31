@@ -150,4 +150,7 @@ func Test_BatchAllocNewRowIds(t *testing.T) {
 		_, err := txn.batchAllocNewRowIds(1)
 		require.Error(t, err)
 	})
+
+	var deletedBlocks *deletedBlocks
+	require.Equal(t, 0, deletedBlocks.size())
 }
