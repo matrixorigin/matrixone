@@ -448,7 +448,8 @@ func loader(
 	mp *mpool.MPool,
 ) error {
 	for id := uint32(0); id < stats.BlkCnt(); id++ {
-		stats.ObjectLocation().SetID(uint16(id))
+		location := stats.ObjectLocation()
+		location.SetID(uint16(id))
 		data, _, err := ioutil.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
 		if err != nil {
 			return err
