@@ -1358,7 +1358,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 // CN blocks compaction for txn
 func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
-	if txn.deletedBlocks == nil {
+	if txn.deletedBlocks.size() == 0 {
 		return nil
 	}
 
