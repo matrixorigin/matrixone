@@ -397,6 +397,15 @@ type deletedBlocks struct {
 	offsets map[types.Blockid][]int64
 }
 
+func (b *deletedBlocks) size() int {
+	if b == nil {
+		return 0
+	}
+	b.RLock()
+	defer b.RUnlock()
+	return len(b.offsets)
+}
+
 func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64) {
 	b.Lock()
 	defer b.Unlock()
