@@ -186,7 +186,7 @@ func (exec *ISCPTaskExecutor) setISCPLogTableID(ctx context.Context) (err error)
 	}
 	defer txn.Commit(ctx)
 
-	tableID, err := getTableID(ctx, exec.cnUUID, txn, tenantId, catalog.MO_CATALOG, MOISCPLogTableName)
+	tableID, _, err := getTableID(ctx, exec.cnUUID, txn, tenantId, catalog.MO_CATALOG, MOISCPLogTableName)
 	if err != nil {
 		return err
 	}
@@ -455,6 +455,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	rel, txn, err := getRelation(exec.txnEngine, exec.cnTxnClient, catalog.System_Account, exec.iscpLogTableID)
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+	}
 	if err != nil {
 		return
 	}
@@ -528,26 +531,15 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 			if !dropAtVector.IsNull(uint64(job.offset)) {
 				dropAt = dropAts[job.offset]
 			}
-			/*
-				todo:
-				register job & create table
-				unregister job & drop table
-				apply add, error not found table
-			*/
-			retry(
-				func() error {
-					return exec.addOrUpdateJob(
-						accountIDs[job.offset],
-						tableIDs[job.offset],
-						jobNameVector.GetStringAt(job.offset),
-						jobIDs[job.offset],
-						states[job.offset],
-						watermarkVector.GetStringAt(job.offset),
-						jobSpecVector.GetBytesAt(job.offset),
-						dropAt,
-					)
-				},
-				exec.option.RetryTimes,
+			exec.addOrUpdateJob(
+				accountIDs[job.offset],
+				tableIDs[job.offset],
+				jobNameVector.GetStringAt(job.offset),
+				jobIDs[job.offset],
+				states[job.offset],
+				watermarkVector.GetStringAt(job.offset),
+				jobSpecVector.GetBytesAt(job.offset),
+				dropAt,
 			)
 		}
 	}
@@ -603,20 +595,15 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 				continue
 			}
 			jobCount++
-			retry(
-				func() error {
-					return exec.addOrUpdateJob(
-						accountIDs[i],
-						tableIDs[i],
-						jobNameVector.GetStringAt(i),
-						jobIDs[i],
-						states[i],
-						watermarkVector.GetStringAt(i),
-						jobSpecVector.GetBytesAt(i),
-						dropAts[i],
-					)
-				},
-				exec.option.RetryTimes,
+			exec.addOrUpdateJob(
+				accountIDs[i],
+				tableIDs[i],
+				jobNameVector.GetStringAt(i),
+				jobIDs[i],
+				states[i],
+				watermarkVector.GetStringAt(i),
+				jobSpecVector.GetBytesAt(i),
+				dropAts[i],
 			)
 		}
 		return true
@@ -634,20 +621,14 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	watermarkStr string,
 	jobSpecStr []byte,
 	dropAt types.Timestamp,
-) (err error) {
+) {
 	var newCreate bool
 
 	defer func() {
-		if !newCreate && err == nil && dropAt == 0 {
+		if !newCreate && dropAt == 0 {
 			return
 		}
-		var logger func(msg string, fields ...zap.Field)
-		if err != nil {
-			logger = logutil.Error
-		} else {
-			logger = logutil.Info
-		}
-		logger(
+		logutil.Info(
 			"ISCP-Task add or update job",
 			zap.Uint32("accountID", accountID),
 			zap.Uint64("tableID", tableID),
@@ -656,15 +637,11 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.String("watermark", watermarkStr),
 			zap.Bool("newcreate", newCreate),
 			zap.String("dropAt", dropAt.String()),
-			zap.Error(err),
 		)
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	jobSpec, err := UnmarshalJobSpec(jobSpecStr)
 	if err != nil {
-		return
+		panic(err)
 	}
 	watermark := types.StringToTS(watermarkStr)
 	var table *TableEntry
@@ -673,26 +650,17 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		if dropAt != 0 {
 			return
 		}
-		var rel engine.Relation
-		var txn client.TxnOperator
-		rel, txn, err = getRelation(exec.txnEngine, exec.cnTxnClient, accountID, tableID)
-		if err != nil {
-			return
-		}
-		defer txn.Commit(ctx)
-		tableDef := rel.GetTableDef(ctx)
 		table = NewTableEntry(
 			exec,
 			accountID,
-			tableDef.DbId,
-			tableDef.TblId,
-			tableDef.DbName,
-			tableDef.Name,
+			jobSpec.SrcTable.DBID,
+			jobSpec.SrcTable.TableID,
+			jobSpec.SrcTable.DBName,
+			jobSpec.SrcTable.TableName,
 		)
 		exec.setTable(table)
 	}
-	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state, dropAt)
-	return
+	newCreate = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state, dropAt)
 }
 
 func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {

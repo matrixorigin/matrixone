@@ -101,11 +101,14 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 				iterCtx,
 				w.mp,
 			)
-			logutil.Error(
-				"ISCP-Task execute iteration failed",
-				zap.Any("iterCtx", iterCtx.jobNames),
-				zap.Error(err),
-			)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task execute iteration failed",
+					zap.Uint64("tableID", iterCtx.tableID),
+					zap.Any("iterCtx", iterCtx.jobNames),
+					zap.Error(err),
+				)
+			}
 			return err
 		},
 		DefaultRetryTimes,
@@ -118,6 +121,11 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 			}
 		}
 		for {
+			select {
+			case <-w.ctx.Done():
+				return
+			default:
+			}
 			err = FlushJobStatusOnIterationState(
 				w.ctx,
 				w.cnUUID,

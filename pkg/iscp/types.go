@@ -199,6 +199,14 @@ type ConsumerInfo struct {
 	TableName    string
 	DBName       string
 	Columns      []string
+	SrcTable     TableInfo
+}
+
+type TableInfo struct {
+	DBName    string
+	DBID      uint64
+	TableName string
+	TableID   uint64
 }
 
 type Consumer interface {
