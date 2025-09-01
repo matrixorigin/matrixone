@@ -383,15 +383,17 @@ func collectMapData(
 	if len(objects) == 0 {
 		return nil
 	}
+	rows := 0
 	for _, tables := range objects {
 		for _, entry := range tables {
 			err := addObjectToBatch(bat, entry.stats, entry, mp)
 			if err != nil {
 				return err
 			}
+			rows++
 		}
 	}
-	batch.SetLength(bat, len(objects))
+	batch.SetLength(bat, rows)
 	return nil
 }
 
@@ -448,7 +450,8 @@ func loader(
 	mp *mpool.MPool,
 ) error {
 	for id := uint32(0); id < stats.BlkCnt(); id++ {
-		stats.ObjectLocation().SetID(uint16(id))
+		location := stats.ObjectLocation()
+		location.SetID(uint16(id))
 		data, _, err := ioutil.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
 		if err != nil {
 			return err
