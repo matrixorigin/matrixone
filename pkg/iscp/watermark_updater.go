@@ -119,6 +119,21 @@ func UnregisterJobsByDBName(
 	txn client.TxnOperator,
 	dbName string,
 ) (err error) {
+	return retry(
+		func() error {
+			err = unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
+			return err
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func unregisterJobsByDBName(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbName string,
+) (err error) {
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
 	defer cancel()
