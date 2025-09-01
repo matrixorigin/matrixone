@@ -120,7 +120,6 @@ type ISCPTaskExecutor struct {
 	cnUUID         string
 	txnEngine      engine.Engine
 	cnTxnClient    client.TxnClient
-	iscpLogTableID uint64
 	iscpLogWm      types.TS
 
 	rpcHandleFn func(

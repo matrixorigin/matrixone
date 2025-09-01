@@ -168,30 +168,7 @@ func NewISCPTaskExecutor(
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	err = exec.setISCPLogTableID(ctx)
-	if err != nil {
-		return nil, err
-	}
 	return exec, nil
-}
-
-func (exec *ISCPTaskExecutor) setISCPLogTableID(ctx context.Context) (err error) {
-	tenantId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-	txn, err := getTxn(exec.ctx, exec.txnEngine, exec.cnTxnClient, "setISCPLogTableID")
-	if err != nil {
-		return err
-	}
-	defer txn.Commit(ctx)
-
-	tableID, _, err := getTableID(ctx, exec.cnUUID, txn, tenantId, catalog.MO_CATALOG, MOISCPLogTableName)
-	if err != nil {
-		return err
-	}
-	exec.iscpLogTableID = tableID
-	return nil
 }
 
 type RpcHandleFn func(
@@ -454,14 +431,33 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	rel, txn, err := getRelation(exec.txnEngine, exec.cnTxnClient, catalog.System_Account, exec.iscpLogTableID)
+
+	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"iscp iteration",
+		0)
+	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
+	if err != nil {
+		return
+	}
+	err = exec.txnEngine.New(ctx, txnOp)
+	if err != nil {
+		return
+	}
+	db, err := exec.txnEngine.Database(ctx, catalog.MO_CATALOG, txnOp)
+	if err != nil {
+		return
+	}
+	rel, err := db.Relation(ctx, MOISCPLogTableName, nil)
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
 		err = moerr.NewInternalErrorNoCtx(msg)
 	}
 	if err != nil {
 		return
 	}
-	defer txn.Commit(ctx)
+	defer txnOp.Commit(ctx)
 	changes, err := CollectChanges(ctx, rel, from, to, exec.mp)
 	if err != nil {
 		return
