@@ -639,9 +639,6 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.String("dropAt", dropAt.String()),
 		)
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
 	jobSpec, err := UnmarshalJobSpec(jobSpecStr)
 	if err != nil {
 		panic(err)
@@ -663,8 +660,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		)
 		exec.setTable(table)
 	}
-	newCreate, err = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state, dropAt)
-	return
+	newCreate = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state, dropAt)
 }
 
 func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
