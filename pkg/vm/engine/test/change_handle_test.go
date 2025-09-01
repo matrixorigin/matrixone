@@ -1808,7 +1808,7 @@ func TestISCPExecutor3(t *testing.T) {
 		}
 	}
 	// add index
-	rmFn, err := objectio.InjectCDCExecutor("addJob")
+	rmFn, err := objectio.InjectCDCExecutor("applyISCPLog")
 	assert.NoError(t, err)
 
 	registerFn("hnsw_idx_0")
@@ -1829,12 +1829,9 @@ func TestISCPExecutor3(t *testing.T) {
 	appendFn(0)
 
 	// insert AsyncIndexIterations failed
-	rmFn, err = objectio.InjectCDCExecutor("insertAsyncIndexIterations")
-	assert.NoError(t, err)
 
 	registerFn("hnsw_idx_0")
 	checkWaterMarkFn("hnsw_idx_0", 4000, true)
-	rmFn()
 
 	// changesNext failed
 	rmFn, err = objectio.InjectCDCExecutor("changesNext")
@@ -2016,16 +2013,13 @@ func TestISCPExecutor4(t *testing.T) {
 	appendFn(1)
 
 	// insertAsyncIndexIterations failed
-	rmFn, err := objectio.InjectCDCExecutor("insertAsyncIndexIterations")
-	assert.NoError(t, err)
 	appendFn(2)
 	for i := 0; i < indexCount; i++ {
 		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, true)
 	}
-	rmFn()
 
 	// collectChanges failed
-	rmFn, err = objectio.InjectCDCExecutor("collectChanges")
+	rmFn, err := objectio.InjectCDCExecutor("collectChanges")
 	assert.NoError(t, err)
 	appendFn(3)
 	checkWaterMarkFn("hnsw_idx_0", 100, false)

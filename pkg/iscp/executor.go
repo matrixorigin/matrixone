@@ -455,6 +455,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
 	rel, txn, err := getRelation(exec.txnEngine, exec.cnTxnClient, catalog.System_Account, exec.iscpLogTableID)
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+	}
 	if err != nil {
 		return
 	}
