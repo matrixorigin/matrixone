@@ -276,13 +276,12 @@ func MakeBloomfilterCoarseFilter(
 					return
 				}
 
-				bm.Add(uint64(i))
 				createTS := createTSs[i]
 				dropTS := dropTSs[i]
 				if !createTS.LT(ts) || !dropTS.LT(ts) {
 					return
 				}
-
+				bm.Add(uint64(i))
 				buf := bat.Vecs[0].GetRawBytesAt(i)
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().UnsafeString()
