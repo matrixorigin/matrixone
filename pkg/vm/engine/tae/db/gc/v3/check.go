@@ -65,7 +65,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 		returnStr += "{'verify': 'skip gc check, cost is high'}"
 		return
 	}
-	buffer := MakeGCWindowBuffer(mpool.MB)
+	buffer := MakeGCWindowBuffer(32 * mpool.MB)
 	defer buffer.Close(mp)
 	bat := buffer.Fetch()
 	defer buffer.Putback(bat, mp)
