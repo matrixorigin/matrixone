@@ -154,7 +154,8 @@ func registerJob(
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
-	tableID, err = getTableID(
+	var dbID uint64
+	tableID, dbID, err = getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -164,6 +165,12 @@ func registerJob(
 	)
 	if err != nil {
 		return
+	}
+	jobSpec.SrcTable = TableInfo{
+		DBID:      dbID,
+		TableID:   tableID,
+		DBName:    jobID.DBName,
+		TableName: jobID.TableName,
 	}
 	exist, dropped, prevID, err := queryIndexLog(
 		ctxWithSysAccount,
@@ -278,7 +285,7 @@ func updateJobSpec(
 		return
 	}
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	tableID, err = getTableID(
+	tableID, _, err = getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -348,7 +355,7 @@ func unregisterJob(
 		return
 	}
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	tableID, err = getTableID(
+	tableID, _, err = getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -394,7 +401,7 @@ func getTableID(
 	tenantId uint32,
 	dbName string,
 	tableName string,
-) (tableID uint64, err error) {
+) (tableID, dbID uint64, err error) {
 	tableIDSql := cdc.CDCSQLBuilder.GetTableIDSQL(
 		tenantId,
 		dbName,
@@ -412,14 +419,15 @@ func getTableID(
 		}
 		for i := 0; i < rows; i++ {
 			tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
+			dbID = vector.MustFixedColWithTypeCheck[uint64](cols[1])[i]
 		}
 		return true
 	})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if tableID == 0 {
-		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
+		return 0, -0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
 	}
 	return
 }
