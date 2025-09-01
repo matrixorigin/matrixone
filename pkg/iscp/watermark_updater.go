@@ -333,12 +333,8 @@ func updateJobSpec(
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
-	jobSpecJson, err = MarshalJobSpec(jobSpec)
-	if err != nil {
-		return
-	}
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	tableID, _, err = getTableID(
+	tableID, dbID, err := getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -346,6 +342,16 @@ func updateJobSpec(
 		jobID.DBName,
 		jobID.TableName,
 	)
+	if err != nil {
+		return
+	}
+	jobSpec.SrcTable = TableInfo{
+		DBID:      dbID,
+		TableID:   tableID,
+		DBName:    jobID.DBName,
+		TableName: jobID.TableName,
+	}
+	jobSpecJson, err = MarshalJobSpec(jobSpec)
 	if err != nil {
 		return
 	}

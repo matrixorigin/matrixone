@@ -174,6 +174,7 @@ func ExecuteIteration(
 			continue
 		}
 		dataRetrievers[i] = NewDataRetriever(
+			ctx,
 			iterCtx.accountID,
 			iterCtx.tableID,
 			iterCtx.jobNames[i],

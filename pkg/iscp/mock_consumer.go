@@ -244,6 +244,10 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 
 }
 func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, iscpData *ISCPData, txn executor.TxnExecutor) (noMoreData bool, err error) {
+	if iscpData == nil {
+		noMoreData = true
+		return
+	}
 	defer iscpData.Done()
 	if iscpData.err != nil {
 		return false, iscpData.err
