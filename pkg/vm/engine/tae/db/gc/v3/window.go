@@ -383,15 +383,17 @@ func collectMapData(
 	if len(objects) == 0 {
 		return nil
 	}
+	rows := 0
 	for _, tables := range objects {
 		for _, entry := range tables {
 			err := addObjectToBatch(bat, entry.stats, entry, mp)
 			if err != nil {
 				return err
 			}
+			rows++
 		}
 	}
-	batch.SetLength(bat, len(objects))
+	batch.SetLength(bat, rows)
 	return nil
 }
 
