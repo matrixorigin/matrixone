@@ -450,7 +450,7 @@ func loader(
 	for id := uint32(0); id < stats.BlkCnt(); id++ {
 		location := stats.ObjectLocation()
 		location.SetID(uint16(id))
-		data, _, err := ioutil.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
+		data, _, err := ioutil.LoadOneBlock(cxt, fs, location, objectio.SchemaData)
 		if err != nil {
 			return err
 		}
