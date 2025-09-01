@@ -469,25 +469,6 @@ func GetJobSpecs(
 	return
 }
 
-func getRelation(
-	cnEngine engine.Engine,
-	cnTxnClient client.TxnClient,
-	accountID uint32,
-	tableID uint64,
-) (rel engine.Relation, txnOp client.TxnOperator, err error) {
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
-	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
-
-	if _, _, rel, err = cdc.GetRelationById(ctx, cnEngine, txnOp, tableID); err != nil {
-		return
-	}
-	return
-}
-
 // TODO
 func isPermanentError(err error) bool {
 	return err.Error() == "permanent error"

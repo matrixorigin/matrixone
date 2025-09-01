@@ -166,8 +166,6 @@ func NewISCPTaskExecutor(
 		option:      option,
 		mp:          mp,
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
 	return exec, nil
 }
 

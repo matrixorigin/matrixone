@@ -113,14 +113,14 @@ type JobStatus struct {
 // Intra-System Change Propagation Task Executor
 // iscp executor manages iterations, updates watermarks, and updates the iscp table.
 type ISCPTaskExecutor struct {
-	tables         *btree.BTreeG[*TableEntry]
-	tableMu        sync.RWMutex
-	packer         *types.Packer
-	mp             *mpool.MPool
-	cnUUID         string
-	txnEngine      engine.Engine
-	cnTxnClient    client.TxnClient
-	iscpLogWm      types.TS
+	tables      *btree.BTreeG[*TableEntry]
+	tableMu     sync.RWMutex
+	packer      *types.Packer
+	mp          *mpool.MPool
+	cnUUID      string
+	txnEngine   engine.Engine
+	cnTxnClient client.TxnClient
+	iscpLogWm   types.TS
 
 	rpcHandleFn func(
 		ctx context.Context,
