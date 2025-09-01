@@ -316,6 +316,11 @@ func ExecuteIteration(
 				watermark = status.To
 			}
 			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				err = FlushJobStatusOnIterationState(
 					ctx,
 					cnUUID,
