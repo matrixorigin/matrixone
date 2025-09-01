@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -104,6 +105,14 @@ func ExecuteIteration(
 	}
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
+	}
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iteration:") {
+		strs := strings.Split(msg, ":")
+		for i := 1; i < len(strs); i++ {
+			if strs[i] == tableName {
+				err = moerr.NewInternalErrorNoCtx(msg)
+			}
+		}
 	}
 	if err != nil {
 		return

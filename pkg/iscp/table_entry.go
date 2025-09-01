@@ -57,7 +57,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	watermark types.TS,
 	state int8,
 	dropAt types.Timestamp,
-) (newCreate bool, err error) {
+) (newCreate bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := JobKey{
