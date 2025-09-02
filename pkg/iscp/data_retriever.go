@@ -51,6 +51,10 @@ func (d *ISCPData) Set(cnt int) {
 }
 
 func (d *ISCPData) Done() {
+	// if ctx of data retreiver is cancelled, dr.Next return nil
+	if d == nil {
+		return
+	}
 	newRefcnt := d.refcnt.Add(-1)
 	if newRefcnt == 0 {
 		if d.insertBatch != nil {
@@ -86,6 +90,7 @@ type DataRetrieverImpl struct {
 }
 
 func NewDataRetriever(
+	ctx context.Context,
 	accountID uint32,
 	tableID uint64,
 	jobName string,
@@ -93,7 +98,7 @@ func NewDataRetriever(
 	status *JobStatus,
 	dataType int8,
 ) *DataRetrieverImpl {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	return &DataRetrieverImpl{
 		accountID:    accountID,
 		tableID:      tableID,
@@ -108,6 +113,11 @@ func NewDataRetriever(
 }
 
 func (r *DataRetrieverImpl) Next() *ISCPData {
+	select {
+	case <-r.ctx.Done():
+		return nil
+	default:
+	}
 	data := <-r.insertDataCh
 	return data
 }

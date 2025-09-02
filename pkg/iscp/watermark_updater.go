@@ -113,6 +113,74 @@ func RegisterJob(
 	)
 }
 
+func UnregisterJobsByDBName(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbName string,
+) (err error) {
+	return retry(
+		func() error {
+			err = unregisterJobsByDBName(ctx, cnUUID, txn, dbName)
+			return err
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func unregisterJobsByDBName(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbName string,
+) (err error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	defer cancel()
+	var tenantId uint32
+	var tableIDs []uint64
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"ISCP-Task unregister jobs by db name",
+			zap.Uint32("tenantID", tenantId),
+			zap.String("dbName", dbName),
+			zap.Any("tableIDs", tableIDs),
+			zap.Error(err),
+		)
+	}()
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
+	GetTIDsSql := fmt.Sprintf("SELECT rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s'", tenantId, dbName)
+	result, err := ExecWithResult(ctxWithSysAccount, GetTIDsSql, cnUUID, txn)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	tableIDs = make([]uint64, 0)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		currentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
+		tableIDs = append(tableIDs, currentIDs...)
+		return true
+	})
+	tableIDStr := ""
+	for i, tid := range tableIDs {
+		if i != 0 {
+			tableIDStr += ","
+		}
+		tableIDStr += fmt.Sprintf("%d", tid)
+	}
+	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
+	_, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
+	return
+}
+
 func registerJob(
 	ctx context.Context,
 	cnUUID string,
@@ -154,7 +222,8 @@ func registerJob(
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
-	tableID, err = getTableID(
+	var dbID uint64
+	tableID, dbID, err = getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -164,6 +233,12 @@ func registerJob(
 	)
 	if err != nil {
 		return
+	}
+	jobSpec.SrcTable = TableInfo{
+		DBID:      dbID,
+		TableID:   tableID,
+		DBName:    jobID.DBName,
+		TableName: jobID.TableName,
 	}
 	exist, dropped, prevID, err := queryIndexLog(
 		ctxWithSysAccount,
@@ -273,12 +348,8 @@ func updateJobSpec(
 	if jobSpec.TriggerSpec.JobType == 0 {
 		jobSpec.TriggerSpec.JobType = TriggerType_Default
 	}
-	jobSpecJson, err = MarshalJobSpec(jobSpec)
-	if err != nil {
-		return
-	}
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	tableID, err = getTableID(
+	tableID, dbID, err := getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -286,6 +357,16 @@ func updateJobSpec(
 		jobID.DBName,
 		jobID.TableName,
 	)
+	if err != nil {
+		return
+	}
+	jobSpec.SrcTable = TableInfo{
+		DBID:      dbID,
+		TableID:   tableID,
+		DBName:    jobID.DBName,
+		TableName: jobID.TableName,
+	}
+	jobSpecJson, err = MarshalJobSpec(jobSpec)
 	if err != nil {
 		return
 	}
@@ -348,7 +429,7 @@ func unregisterJob(
 		return
 	}
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	tableID, err = getTableID(
+	tableID, _, err = getTableID(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -394,7 +475,7 @@ func getTableID(
 	tenantId uint32,
 	dbName string,
 	tableName string,
-) (tableID uint64, err error) {
+) (tableID, dbID uint64, err error) {
 	tableIDSql := cdc.CDCSQLBuilder.GetTableIDSQL(
 		tenantId,
 		dbName,
@@ -412,14 +493,15 @@ func getTableID(
 		}
 		for i := 0; i < rows; i++ {
 			tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
+			dbID = vector.MustFixedColWithTypeCheck[uint64](cols[1])[i]
 		}
 		return true
 	})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if tableID == 0 {
-		return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
+		return 0, -0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("tableID is 0, tableIDSql %s", tableIDSql))
 	}
 	return
 }
