@@ -17,9 +17,11 @@ package test
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -3194,4 +3196,204 @@ func TestDropJobsByDBName(t *testing.T) {
 	)
 	_, ok = cdcExecutor.GetWatermark(accountId, tableID2, "job2")
 	assert.False(t, ok)
+}
+
+func TestCancelIteration1(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	cancelCh := make(chan struct{})
+
+	stub := gostub.Stub(
+		&iscp.GetJobSpecs,
+		func(
+			context.Context,
+			string,
+			client.TxnOperator,
+			uint32,
+			uint64,
+			[]string,
+			[]uint64,
+		) (jobSpec []*iscp.JobSpec, err error) {
+			cancelCh <- struct{}{}
+			<-cancelCh
+			return []*iscp.JobSpec{
+				{
+					ConsumerInfo: iscp.ConsumerInfo{
+						ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+						SrcTable: iscp.TableInfo{
+							DBName:    "srcdb",
+							TableName: "src_table",
+						},
+					},
+				},
+			}, nil
+		},
+	)
+	defer stub.Reset()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	defer bat.Close()
+
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err = iscp.ExecuteIteration(
+			ctxWithTimeout,
+			"",
+			disttaeEngine.Engine,
+			disttaeEngine.GetTxnClient(),
+			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, types.TS{}, types.TS{}),
+			common.DebugAllocator,
+		)
+		assert.Error(t, err)
+	}()
+	<-cancelCh
+	cancel()
+	close(cancelCh)
+	wg.Wait()
+}
+
+func TestCancelIteration2(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	cancelCh := make(chan struct{})
+
+	stub := gostub.Stub(
+		&iscp.GetJobSpecs,
+		func(
+			context.Context,
+			string,
+			client.TxnOperator,
+			uint32,
+			uint64,
+			[]string,
+			[]uint64,
+		) (jobSpec []*iscp.JobSpec, err error) {
+			return []*iscp.JobSpec{
+				{
+					ConsumerInfo: iscp.ConsumerInfo{
+						ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+						SrcTable: iscp.TableInfo{
+							DBName:    "srcdb",
+							TableName: "src_table",
+						},
+					},
+				},
+			}, nil
+		},
+	)
+	defer stub.Reset()
+
+	var flushCount int
+	stub2 := gostub.Stub(
+		&iscp.FlushJobStatusOnIterationState,
+		func(
+			context.Context,
+			string,
+			engine.Engine,
+			client.TxnClient,
+			uint32,
+			uint64,
+			[]string,
+			[]uint64,
+			[]*iscp.JobStatus,
+			types.TS,
+			int8,
+		) error {
+			if flushCount == 0 {
+				cancelCh <- struct{}{}
+				<-cancelCh
+				return nil
+			}
+			flushCount++
+			return nil
+		},
+	)
+	defer stub2.Reset()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	defer bat.Close()
+
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err = iscp.ExecuteIteration(
+			ctxWithTimeout,
+			"",
+			disttaeEngine.Engine,
+			disttaeEngine.GetTxnClient(),
+			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, types.TS{}, types.TS{}),
+			common.DebugAllocator,
+		)
+		assert.NoError(t, err)
+	}()
+	<-cancelCh
+	cancel()
+	close(cancelCh)
+	wg.Wait()
+
 }

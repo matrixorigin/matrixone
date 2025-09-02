@@ -345,7 +345,7 @@ func ExecuteIteration(
 	return nil
 }
 
-func FlushJobStatusOnIterationState(
+var FlushJobStatusOnIterationState = func(
 	ctx context.Context,
 	cnUUID string,
 	cnEngine engine.Engine,
@@ -435,7 +435,7 @@ func FlushStatus(
 	return
 }
 
-func GetJobSpecs(
+var GetJobSpecs = func(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
@@ -494,4 +494,15 @@ func (status *JobStatus) SetError(err error) {
 
 func (status *JobStatus) PermanentlyFailed() bool {
 	return status.ErrorCode >= PermanentErrorThreshold
+}
+
+func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jobIDs []uint64, fromTS types.TS, toTS types.TS) *IterationContext {
+	return &IterationContext{
+		accountID: accountID,
+		tableID:   tableID,
+		jobNames:  jobNames,
+		jobIDs:    jobIDs,
+		fromTS:    fromTS,
+		toTS:      toTS,
+	}
 }
