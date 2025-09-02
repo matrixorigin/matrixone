@@ -18,9 +18,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -950,6 +952,8 @@ func (c *OBCUConfig) SetDefaultValues() {
 }
 
 type ParameterUnit struct {
+	sync.RWMutex
+
 	SV *FrontendParameters
 
 	//Storage Engine
@@ -977,6 +981,8 @@ type ParameterUnit struct {
 	HAKeeperClient logservice.CNHAKeeperClient
 
 	TaskService taskservice.TaskService
+
+	CNMemoryThrottler rscthrottler.RSCThrottler
 }
 
 func NewParameterUnit(
@@ -1000,4 +1006,16 @@ func GetParameterUnit(ctx context.Context) *ParameterUnit {
 		panic("parameter unit is invalid")
 	}
 	return pu
+}
+
+func (p *ParameterUnit) SetTaskService(taskService taskservice.TaskService) {
+	p.Lock()
+	defer p.Unlock()
+	p.TaskService = taskService
+}
+
+func (p *ParameterUnit) GetTaskService() taskservice.TaskService {
+	p.RLock()
+	defer p.RUnlock()
+	return p.TaskService
 }

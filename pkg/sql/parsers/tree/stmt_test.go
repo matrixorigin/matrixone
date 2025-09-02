@@ -142,3 +142,17 @@ func TestQueryType(t *testing.T) {
 	}
 
 }
+
+func Test_CreateCDC_StmtKind_InternalFlag(t *testing.T) {
+	c1 := &CreateCDC{Internal: true}
+	require.Equal(t, defaultStatusTyp, c1.StmtKind())
+	c2 := &CreateCDC{Internal: false}
+	require.Equal(t, frontendStatusTyp, c2.StmtKind())
+}
+
+func Test_DropCDC_StmtKind_InternalFlag(t *testing.T) {
+	d1 := &DropCDC{Internal: true}
+	require.Equal(t, defaultStatusTyp, d1.StmtKind())
+	d2 := &DropCDC{Internal: false}
+	require.Equal(t, frontendStatusTyp, d2.StmtKind())
+}

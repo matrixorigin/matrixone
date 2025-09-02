@@ -26,11 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -56,6 +54,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
 )
 
 const (
@@ -229,6 +229,8 @@ type Engine struct {
 		extraWorkspaceThreshold  uint64
 		quota                    atomic.Uint64
 
+		memThrottler rscthrottler.RSCThrottler
+
 		cnTransferTxnLifespanThreshold time.Duration
 
 		ieFactory            func() ie.InternalExecutor
@@ -393,6 +395,15 @@ type deletedBlocks struct {
 	// used to store cn block's deleted rows
 	// blockId => deletedOffsets
 	offsets map[types.Blockid][]int64
+}
+
+func (b *deletedBlocks) size() int {
+	if b == nil {
+		return 0
+	}
+	b.RLock()
+	defer b.RUnlock()
+	return len(b.offsets)
 }
 
 func (b *deletedBlocks) addDeletedBlocks(blockID *types.Blockid, offsets []int64) {

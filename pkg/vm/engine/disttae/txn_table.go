@@ -745,9 +745,8 @@ func (tbl *txnTable) doRanges(ctx context.Context, rangesParam engine.RangesPara
 				zap.String("name", tbl.tableDef.Name),
 				zap.String("exprs", plan2.FormatExprs(
 					rangesParam.BlockFilters, plan2.FormatOption{
-						ExpandVec:       true,
-						ExpandVecMaxLen: 2,
-						MaxDepth:        5,
+						ExpandVec: false,
+						MaxDepth:  5,
 					},
 				)),
 				zap.Uint64("tbl-id", tbl.tableId),
@@ -2026,7 +2025,12 @@ func (tbl *txnTable) getPartitionState(
 		}
 	}()
 
-	createdInTxn, err := tbl.isCreatedInTxn(ctx)
+	var (
+		eng          = tbl.eng.(*Engine)
+		createdInTxn bool
+	)
+
+	createdInTxn, err = tbl.isCreatedInTxn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2042,14 +2046,30 @@ func (tbl *txnTable) getPartitionState(
 	}
 
 	// Subscribe a latest partition state
-	eng := tbl.eng.(*Engine)
-	ps, err = eng.PushClient().toSubscribeTable(
+	if ps, err = eng.PushClient().toSubscribeTable(
 		ctx,
 		tbl.tableId,
 		tbl.tableName,
 		tbl.db.databaseId,
-		tbl.db.databaseName)
-	if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
+		tbl.db.databaseName,
+	); err != nil {
+		logutil.Error(
+			"Txn-Table-ToSubscribeTable-Failed",
+			zap.String("db-name", tbl.db.databaseName),
+			zap.Uint64("db-id", tbl.db.databaseId),
+			zap.String("tbl-name", tbl.tableName),
+			zap.Uint64("tbl-id", tbl.tableId),
+			zap.String("txn-info", tbl.db.op.Txn().DebugString()),
+			zap.Bool("is-snapshot-op", tbl.db.op.IsSnapOp()),
+			zap.Error(err),
+		)
+
+		// if the table not exists, try snapshot read
+		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return nil, err
+		}
+
+	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
 		return
 	}
 

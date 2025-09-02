@@ -73,6 +73,7 @@ type TestDisttaeEngine struct {
 	writeWorkspaceThreshold  uint64
 	quota                    uint64
 	insertEntryMaxCount      int
+	newTxnMu                 sync.Mutex
 
 	rootDir string
 }
@@ -195,6 +196,7 @@ func NewTestDisttaeEngine(
 		qc,
 		hakeeper,
 		nil, //s.udfService
+		nil,
 	)
 	runtime.ServiceRuntime("").SetGlobalVariables(runtime.InternalSQLExecutor, sqlExecutor)
 
@@ -218,12 +220,16 @@ func NewTestDisttaeEngine(
 	//err = de.prevSubscribeSysTables(ctx, rpcAgent)
 	return de, err
 }
-
+func (de *TestDisttaeEngine) GetTxnClient() client.TxnClient {
+	return de.txnClient
+}
 func (de *TestDisttaeEngine) NewTxnOperator(
 	ctx context.Context,
 	commitTS timestamp.Timestamp,
 	opts ...client.TxnOption,
 ) (client.TxnOperator, error) {
+	de.newTxnMu.Lock()
+	defer de.newTxnMu.Unlock()
 	op, err := de.txnClient.New(ctx, commitTS, opts...)
 	if err != nil {
 		return nil, err

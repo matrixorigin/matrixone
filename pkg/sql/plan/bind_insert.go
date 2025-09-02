@@ -279,16 +279,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 		}
 	} else {
-		var skipPkDedup bool
-		var skipUniqueIdxDedup map[string]bool
-		if v := builder.compCtx.GetContext().Value(defines.AlterCopyDedupOpt{}); v != nil {
-			dedupOpt := v.(*plan.AlterCopyDedupOpt)
-			if dedupOpt.TargetTableName == tableDef.Name {
+
+		var (
+			option             *plan.AlterCopyOpt
+			skipPkDedup        bool
+			skipUniqueIdxDedup map[string]bool
+		)
+
+		if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
+			option = v.(*plan.AlterCopyOpt)
+			if option.TargetTableName == tableDef.Name {
 				logutil.Info("alter copy dedup exec",
 					zap.String("tableDef", tableDef.Name),
-					zap.Any("dedupOpt", dedupOpt))
-				skipPkDedup = dedupOpt.SkipPkDedup
-				skipUniqueIdxDedup = dedupOpt.SkipUniqueIdxDedup
+					zap.Any("option", option),
+				)
+				skipPkDedup = option.SkipPkDedup
+				skipUniqueIdxDedup = option.SkipUniqueIdxDedup
 			}
 		}
 
@@ -382,13 +388,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			if skipUniqueIdxDedup != nil && skipUniqueIdxDedup[idxDef.IndexName] {
+			if option != nil && option.SkipIndexesCopy[idxDef.IndexName] {
 				continue
 			}
 
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
 				return 0, err
+			}
+
+			// This optimization skips unnecessary unique index deduplication
+			// during ALTER TABLE COPY operations, but only after index resolution completes
+			// since the copy process depends on the finalized idxTableDefs list
+			if skipUniqueIdxDedup != nil && skipUniqueIdxDedup[idxDef.IndexName] {
+				continue
 			}
 
 			if !idxDef.Unique {

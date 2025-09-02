@@ -359,6 +359,7 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.Cond = t.Cond
 		op.Conditions = t.Conditions
 		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.CanSkipProbe = t.CanSkipProbe
 		op.JoinMapTag = t.JoinMapTag
 		op.HashOnPK = t.HashOnPK
 		op.IsShuffle = t.IsShuffle
@@ -1060,26 +1061,27 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	return arg
 }
 
-func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi.SemiJoin {
-	result := make([]int32, len(n.ProjectList))
-	for i, expr := range n.ProjectList {
+func constructSemi(node, left *plan.Node, typs []types.Type, proc *process.Process) *semi.SemiJoin {
+	result := make([]int32, len(node.ProjectList))
+	for i, expr := range node.ProjectList {
 		rel, pos := constructJoinResult(expr, proc)
 		if rel != 0 {
 			panic(moerr.NewNYIf(proc.GetTopContext(), "semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
-	cond, conds := extraJoinConditions(n.OnList)
+	cond, conds := extraJoinConditions(node.OnList)
 	arg := semi.NewArgument()
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
-	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
-	for i := range n.SendMsgList {
-		if n.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
-			arg.JoinMapTag = n.SendMsgList[i].MsgTag
+	arg.RuntimeFilterSpecs = node.RuntimeFilterBuildList
+	arg.HashOnPK = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.HashOnPK
+	arg.CanSkipProbe = left.NodeType == plan.Node_TABLE_SCAN
+	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
+	for i := range node.SendMsgList {
+		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {
+			arg.JoinMapTag = node.SendMsgList[i].MsgTag
 		}
 	}
 	if arg.JoinMapTag <= 0 {
@@ -2374,19 +2376,19 @@ func constructPostDml(n *plan.Node, eg engine.Engine) *postdml.PostDml {
 
 func constructTableClone(
 	c *Compile,
-	n *plan.Node,
+	clonePlan *plan.CloneTable,
 ) (*table_clone.TableClone, error) {
 
 	metaCopy := table_clone.NewTableClone()
 
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
-		SrcTblDef: n.TableDef,
-		SrcObjDef: n.ObjRef,
+		SrcTblDef: clonePlan.SrcTableDef,
+		SrcObjDef: clonePlan.SrcObjDef,
 
-		ScanSnapshot:    n.ScanSnapshot,
-		DstTblName:      n.InsertCtx.TableDef.Name,
-		DstDatabaseName: n.InsertCtx.TableDef.DbName,
+		ScanSnapshot:    clonePlan.ScanSnapshot,
+		DstTblName:      clonePlan.DstTableName,
+		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
 
 	var (
@@ -2399,7 +2401,7 @@ func constructTableClone(
 		hasAutoIncr bool
 	)
 
-	for _, colDef := range n.TableDef.Cols {
+	for _, colDef := range clonePlan.SrcTableDef.Cols {
 		if colDef.Typ.AutoIncr {
 			hasAutoIncr = true
 			break
@@ -2411,17 +2413,20 @@ func constructTableClone(
 	}
 
 	sql = fmt.Sprintf(
-		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d", n.TableDef.TblId)
+		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
+		clonePlan.SrcTableDef.TblId,
+	)
 
-	if n.ScanSnapshot != nil {
-		if n.ScanSnapshot.Tenant != nil {
-			account = n.ScanSnapshot.Tenant.TenantID
+	if clonePlan.ScanSnapshot != nil {
+		if clonePlan.ScanSnapshot.Tenant != nil {
+			account = clonePlan.ScanSnapshot.Tenant.TenantID
 		}
 
-		if n.ScanSnapshot.TS != nil {
+		if clonePlan.ScanSnapshot.TS != nil {
 			sql = fmt.Sprintf(
 				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
-				n.ScanSnapshot.TS.PhysicalTime, n.TableDef.TblId)
+				clonePlan.ScanSnapshot.TS.PhysicalTime, clonePlan.SrcTableDef.TblId,
+			)
 		}
 	}
 

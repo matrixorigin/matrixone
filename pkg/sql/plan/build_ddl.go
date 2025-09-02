@@ -701,8 +701,9 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 }
 
 func buildCreateTable(
-	stmt *tree.CreateTable,
 	ctx CompilerContext,
+	stmt *tree.CreateTable,
+	cloneStmt *tree.CloneTable,
 ) (*Plan, error) {
 
 	if stmt.IsAsLike {
@@ -752,12 +753,12 @@ func buildCreateTable(
 			tableDef.DbName = ctx.DefaultDatabase()
 		}
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true)
+		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
 		if err != nil {
 			return nil, err
 		}
 		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
-			return buildCreateTable(stmtLike, ctx)
+			return buildCreateTable(ctx, stmtLike, nil)
 		}
 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
@@ -4099,7 +4100,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			// update new column info to copy_table_def
-			err := updateNewColumnInTableDef(
+			_, err := updateNewColumnInTableDef(
 				ctx,
 				alterTable.CopyTableDef,
 				FindColumn(tableDef.Cols, opt.NewColumn.Name.ColName()),
@@ -4748,6 +4749,55 @@ func buildDropPitr(stmt *tree.DropPitr, ctx CompilerContext) (*Plan, error) {
 				DdlType: ddlType,
 				Definition: &plan.DataDefinition_DropPitr{
 					DropPitr: dropPitr,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildCreateCDC(stmt *tree.CreateCDC, ctx CompilerContext) (*Plan, error) {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_CREATE_CDC,
+				Definition: &plan.DataDefinition_CreateCdc{
+					CreateCdc: &plan.CreateCDC{
+						IfNotExists: stmt.IfNotExists,
+						TaskName:    string(stmt.TaskName),
+						SourceUri:   stmt.SourceUri,
+						SinkType:    stmt.SinkType,
+						SinkUri:     stmt.SinkUri,
+						Tables:      stmt.Tables,
+						Option:      stmt.Option,
+						UserName:    ctx.GetUserName(),
+						AccountName: ctx.GetAccountName(),
+						AccountId:   accountId,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropCDC(stmt *tree.DropCDC, ctx CompilerContext) (*Plan, error) {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_DROP_CDC,
+				Definition: &plan.DataDefinition_DropCdc{
+					DropCdc: &plan.DropCDC{
+						AccountId: accountId,
+						All:       stmt.Option.All,
+						TaskName:  string(stmt.Option.TaskName),
+					},
 				},
 			},
 		},

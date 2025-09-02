@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
@@ -39,6 +40,33 @@ func init() {
 	) //WithEnableChecker()
 }
 
+type CloneLevelCtxKey struct{}
+type CloneLevelType uint64
+type CloneStmtType int
+
+const (
+	NormalCloneLevelTable CloneLevelType = 1 << iota
+	NormalCloneLevelDatabase
+	NormalCloneLevelAccount
+	NormalCloneLevelCluster
+
+	RestoreCloneLevelTable
+	RestoreCloneLevelDatabase
+	RestoreCloneLevelAccount
+	RestoreCloneLevelCluster
+)
+
+const (
+	NoClone CloneStmtType = iota
+	CloneCluster
+	CloneAccount
+	WithinAccCloneDB
+	BetweenAccCloneDB
+	WithinDBCloneTable
+	WithinAccBetweenDBCloneTable
+	BetweenAccCloneTable
+)
+
 type CloneTable struct {
 	statementImpl
 
@@ -52,7 +80,8 @@ type CloneTable struct {
 	ToAccountName Identifier
 	ToAccountId   uint32
 
-	Sql string
+	Sql      string
+	StmtType CloneStmtType
 }
 
 func (node *CloneTable) StmtKind() StmtKind {
@@ -123,3 +152,49 @@ func NewCloneDatabase() *CloneDatabase {
 func (node *CloneDatabase) GetStatementType() string { return "CREATE DATABASE CLONE" }
 
 func (node *CloneDatabase) GetQueryType() string { return QueryTypeOth }
+
+func DecideCloneStmtType(
+	ctx context.Context,
+	stmt *CloneTable,
+	srcDbName string,
+	dstDbName string,
+	toAccount uint32,
+	srcAccount uint32,
+) (cloneType CloneStmtType) {
+
+	if stmt.StmtType != NoClone {
+		return stmt.StmtType
+	}
+
+	var (
+		level = NormalCloneLevelTable
+	)
+
+	if val := ctx.Value(CloneLevelCtxKey{}); val != nil {
+		level = val.(CloneLevelType)
+	}
+
+	switch level {
+	case NormalCloneLevelCluster, RestoreCloneLevelCluster:
+		return CloneCluster
+	case NormalCloneLevelAccount, RestoreCloneLevelAccount:
+		return CloneAccount
+	case NormalCloneLevelDatabase, RestoreCloneLevelDatabase:
+		if srcAccount == toAccount {
+			return WithinAccCloneDB
+		}
+		return BetweenAccCloneDB
+
+	case NormalCloneLevelTable, RestoreCloneLevelTable:
+		if srcAccount == toAccount {
+			if srcDbName == dstDbName {
+				return WithinDBCloneTable
+			}
+			return WithinAccBetweenDBCloneTable
+		}
+		return BetweenAccCloneTable
+
+	default:
+		return NoClone
+	}
+}

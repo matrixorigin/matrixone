@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -77,7 +78,7 @@ type MergeScheduler struct {
 	defaultTrigger *MMsgTaskTrigger
 
 	baseInterval time.Duration
-	rc           rscController
+	rc           rscthrottler.RSCThrottler
 	executor     MergeTaskExecutor
 
 	clock Clock
@@ -90,7 +91,6 @@ func NewMergeScheduler(
 	clock Clock,
 ) *MergeScheduler {
 	sched := &MergeScheduler{
-		rc:           new(resourceController),
 		baseInterval: baseInterval,
 		executor:     executor,
 
@@ -105,6 +105,12 @@ func NewMergeScheduler(
 
 		clock: clock,
 	}
+
+	sched.rc = rscthrottler.NewMemThrottler(
+		"Merge",
+		3.0/4.0,
+		rscthrottler.WithAllowOutOfLimitAcquire(),
+	)
 
 	sched.stopped.Store(true)
 
@@ -122,12 +128,11 @@ func NewMergeScheduler(
 	}
 	cata.SetMergeNotifier(sched)
 
-	sched.rc.refresh()
 	return sched
 
 }
 
-func (a *MergeScheduler) PatchTestRscController(rc rscController) {
+func (a *MergeScheduler) PatchTestRscController(rc rscthrottler.RSCThrottler) {
 	a.rc = rc
 }
 
@@ -667,22 +672,22 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 		)
 	}
 
-	logutil.Info("MergeExecutorEvent",
-		zap.String("event", "vacuum check"),
+	logutil.Info(
+		"MergeExecutorEvent-VacuumCheck",
 		zap.String("table", msg.Table.GetNameDesc()),
-		zap.String("tombstoneVacuum", fmt.Sprintf("%.2g", stats.DelVacuumPercent)),
-		zap.String("dataVacuum", fmt.Sprintf("%.2g", stats.DataVacuumPercent)),
-		zap.Duration("maxAge", stats.MaxCreateAgo.Round(time.Second)),
-		zap.Int("compactThreshold", stats.DataVacuumScoreToCompact),
-		zap.Int("compact", len(compactTasks)),
+		zap.String("tombstone", fmt.Sprintf("%.2g", stats.DelVacuumPercent)),
+		zap.String("data", fmt.Sprintf("%.2g", stats.DataVacuumPercent)),
+		zap.Duration("max-age", stats.MaxCreateAgo.Round(time.Second)),
+		zap.Int("compact-threshold", stats.DataVacuumScoreToCompact),
+		zap.Int("compact-tasks", len(compactTasks)),
 	)
 }
 
 func (a *MergeScheduler) ioConfigBootstrap(msg MMsgConfigBootstrap) {
 	bat, release := msg.ReadSettingsBatch()
 	if bat == nil {
-		logutil.Error("MergeExecutorEvent",
-			zap.String("event", "return nil for bootstrap config"),
+		logutil.Error(
+			"MergeExecutorEvent-NilBootstrapConfig",
 		)
 		return
 	}
@@ -693,9 +698,9 @@ func (a *MergeScheduler) ioConfigBootstrap(msg MMsgConfigBootstrap) {
 		count++
 	})
 
-	logutil.Info("MergeExecutorEvent",
-		zap.String("event", "bootstrap config"),
-		zap.Int("batRows", bat.RowCount()),
+	logutil.Info(
+		"MergeExecutorEvent-BootstrapConfig",
+		zap.Int("bat-rows", bat.RowCount()),
 		zap.Int("count", count),
 	)
 }
@@ -742,7 +747,7 @@ func (a *MergeScheduler) handleMainLoop() {
 	never := make(<-chan time.Time)
 
 	// fallback to check the status of the priority queue
-	heartbeat := a.clock.NewTicker(time.Second * 10)
+	heartbeat := a.clock.NewTicker(time.Second * 60)
 
 	vacuumCheckTicker := a.clock.NewTicker(time.Hour * 1)
 
@@ -759,17 +764,17 @@ func (a *MergeScheduler) handleMainLoop() {
 			// handle tasks in the priority queue
 			for a.pq.Len() > 0 {
 				if len(a.msgChan) > 50 {
-					logutil.Info("MergeExecutorEvent",
-						zap.String("event", "handle msg first"),
-						zap.Int("msgLen", len(a.msgChan)),
+					logutil.Info(
+						"MergeExecutorEvent-HandleMsgFirst",
+						zap.Int("msg-len", len(a.msgChan)),
 					)
 					// handle msg first, because it can change the priority queue
 					break
 				}
-				if a.rc.availableMem() < 500*common.Const1MBytes {
-					logutil.Info("MergeExecutorEvent",
-						zap.String("event", "pause due to OOM alert"),
-						zap.Int64("availableMem", a.rc.availableMem()),
+				if a.rc.Available() < 500*common.Const1MBytes {
+					logutil.Info(
+						"MergeExecutorEvent-PauseDueToOOMAlert",
+						zap.Int64("available-mem", a.rc.Available()),
 					)
 					// let's pause for a while to avoid OOM
 					break
@@ -805,8 +810,8 @@ func (a *MergeScheduler) handleMainLoop() {
 		case <-nextReadyAt:
 			// continue the loop
 		case <-heartbeat.Chan():
-			a.rc.printMemUsage()
-			a.rc.refresh()
+			a.rc.PrintUsage()
+			a.rc.Refresh()
 		// continue the loop
 		case <-vacuumCheckTicker.Chan():
 			a.fallbackSchedVacuumCheck()
@@ -893,8 +898,8 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 			// there is patch already, merge it in place
 			supp.triggers[0] = supp.triggers[0].Merge(msg)
 		}
-		logutil.Info("MergeExecutorEvent",
-			zap.String("event", "patch trigger"),
+		logutil.Info(
+			"MergeExecutorEvent-PatchTrigger",
 			zap.String("table", msg.table.GetNameDesc()),
 			zap.Any("trigger", supp.triggers[0]),
 		)
@@ -909,10 +914,10 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 func (a *MergeScheduler) handleSwitch(msg MMsgSwitch) {
 	if msg.Table == nil {
 		if msg.On {
-			logutil.Info("MergeExecutorEvent", zap.String("event", "resume all"))
+			logutil.Info("MergeExecutorEvent-ResumeAll")
 			a.allPaused = false
 		} else {
-			logutil.Info("MergeExecutorEvent", zap.String("event", "pause all"))
+			logutil.Info("MergeExecutorEvent-PauseAll")
 			a.allPaused = true
 		}
 	} else {
@@ -921,15 +926,15 @@ func (a *MergeScheduler) handleSwitch(msg MMsgSwitch) {
 			return
 		}
 		if msg.On && supp.paused {
-			logutil.Info("MergeExecutorEvent",
-				zap.String("event", "resume table"),
+			logutil.Info(
+				"MergeExecutorEvent-ResumeTable",
 				zap.String("table", msg.Table.GetNameDesc()),
 			)
 			supp.paused = false
 			a.pq.Update(supp.todo, a.clock.Now().Add(time.Second*1))
 		} else if !msg.On && !supp.paused {
-			logutil.Info("MergeExecutorEvent",
-				zap.String("event", "pause table"),
+			logutil.Info(
+				"MergeExecutorEvent-PauseTable",
 				zap.String("table", msg.Table.GetNameDesc()),
 			)
 			supp.paused = true
@@ -993,8 +998,8 @@ func (a *MergeScheduler) handleConfig(msg MMsgConfig) {
 	if msg.Trigger != nil {
 		settings = msg.Trigger.String()
 	}
-	logutil.Info("MergeExecutorEvent",
-		zap.String("event", "set base config"),
+	logutil.Info(
+		"MergeExecutorEvent-SetBaseConfig",
 		zap.String("table", supp.todo.table.GetNameDesc()),
 		zap.String("settings", settings),
 	)
@@ -1020,7 +1025,7 @@ func (a *MergeScheduler) handleMergeDone(table catalog.MergeTable, esz int) {
 	if supp := a.supps[table.ID()]; supp != nil {
 		supp.DoneTask()
 	}
-	a.rc.releaseResources(int64(esz))
+	a.rc.Release(int64(esz))
 }
 
 // region: schedule
@@ -1030,8 +1035,8 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	if todo.table.HasDropCommitted() {
 		delete(a.supps, todo.table.ID())
 		heap.Pop(&a.pq)
-		logutil.Info("MergeExecutorEvent",
-			zap.String("event", "remove table"),
+		logutil.Info(
+			"MergeExecutorEvent-RemoveTable",
 			zap.String("table", todo.table.GetNameDesc()),
 		)
 		return
@@ -1091,7 +1096,7 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	for _, task := range tasks {
 		task.doneCB = a.taskObserverFactory(todo.table, task.eSize)
 		if a.executor.ExecuteFor(todo.table, task) {
-			a.rc.reserveResources(int64(task.eSize))
+			a.rc.Acquire(int64(task.eSize))
 			if task.isTombstone {
 				supp.totalTombstoneMergeCnt++
 			} else {
@@ -1211,7 +1216,7 @@ func (p *launchPad) InitWithTrigger(trigger *MMsgTaskTrigger, lastMergeTime time
 
 func (p *launchPad) gatherTombstoneTasks(ctx context.Context,
 	tombstoneOpts *TombstoneOpts,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) {
 	tasks := GatherTombstoneTasks(ctx, IterStats(p.tombstoneStats), tombstoneOpts, p.lastMergeTime)
 	p.revisedResults = append(p.revisedResults, controlTaskMemInPlace(tasks, rc, 1)...)
@@ -1221,7 +1226,7 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 	lnOpts *OverlapOpts,
 	startlv int,
 	endlv int,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) {
 	if startlv < 1 {
 		startlv = 1
@@ -1235,8 +1240,8 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 		}
 		overlapTasks, err := GatherOverlapMergeTasks(ctx, p.leveledObjects[i], lnOpts, int8(i))
 		if err != nil {
-			logutil.Warn("MergeExecutorEvent",
-				zap.String("warn", "GatherOverlapMergeTasks failed"),
+			logutil.Warn(
+				"MergeExecutorEvent-GatherOverlapMergeTasksFailed",
 				zap.String("table", p.table.GetNameDesc()),
 				zap.Error(err),
 			)
@@ -1249,7 +1254,7 @@ func (p *launchPad) gatherLnTasks(ctx context.Context,
 
 func (p *launchPad) gatherL0Tasks(ctx context.Context,
 	l0Opts *LayerZeroOpts,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) {
 	l0Tasks := GatherLayerZeroMergeTasks(ctx, p.leveledObjects[0], p.lastMergeTime, l0Opts)
 	// logutil.Info("MergeExecutorEvent",
@@ -1265,7 +1270,7 @@ func (p *launchPad) gatherL0Tasks(ctx context.Context,
 func (p *launchPad) gatherByTrigger(ctx context.Context,
 	trigger *MMsgTaskTrigger,
 	lastMergeTime time.Time,
-	rc rscController,
+	rc rscthrottler.RSCThrottler,
 ) []mergeTask {
 	p.Reset()
 	p.InitWithTrigger(trigger, lastMergeTime)
@@ -1299,7 +1304,12 @@ func sumOsize(objs []*objectio.ObjectStats) int {
 	return sum
 }
 
-func controlTaskMemInPlace(tasks []mergeTask, rc rscController, deleteLessThan int) []mergeTask {
+func controlTaskMemInPlace(
+	tasks []mergeTask,
+	rc rscthrottler.RSCThrottler,
+	deleteLessThan int,
+) []mergeTask {
+
 	if len(tasks) == 0 {
 		return tasks
 	}
@@ -1307,7 +1317,7 @@ func controlTaskMemInPlace(tasks []mergeTask, rc rscController, deleteLessThan i
 		task := &tasks[i]
 		original := len(task.objs)
 		estSize := mergesort.EstimateMergeSize(IterStats(task.objs))
-		for ; !rc.resourceAvailable(int64(estSize)) && len(task.objs) > 1; estSize = mergesort.EstimateMergeSize(IterStats(task.objs)) {
+		for ; !resourceAvailable(int64(estSize), rc) && len(task.objs) > 1; estSize = mergesort.EstimateMergeSize(IterStats(task.objs)) {
 			task.objs = task.objs[:len(task.objs)/2]
 		}
 		if original-len(task.objs) > 0 {

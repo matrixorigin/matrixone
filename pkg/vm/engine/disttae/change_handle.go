@@ -37,6 +37,7 @@ const DefaultLoadParallism = 20
 func (tbl *txnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,
+	skipDeletes bool,
 	mp *mpool.MPool,
 ) (engine.ChangesHandle, error) {
 	if from.IsEmpty() {
@@ -50,6 +51,7 @@ func (tbl *txnTable) CollectChanges(
 		ctx,
 		state,
 		from, to,
+		skipDeletes,
 		objectio.BlockMaxRows,
 		tbl.primarySeqnum,
 		mp,
@@ -172,7 +174,9 @@ func (h *CheckpointChangesHandle) Next(
 	return
 }
 func (h *CheckpointChangesHandle) Close() error {
-	h.reader.Close()
+	if h.reader != nil {
+		h.reader.Close()
+	}
 	return nil
 }
 func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {

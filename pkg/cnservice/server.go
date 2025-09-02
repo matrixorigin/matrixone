@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -196,11 +197,18 @@ func NewService(
 		panic(err)
 	}
 
+	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
+		"CNFlushS3",
+		90.0/100.0,
+		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+	)
+
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
 	srv.pu.QueryClient = srv.queryClient
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
+	srv.pu.CNMemoryThrottler = srv.CNMemoryThrottler
 
 	if err = srv.initMOServer(ctx, pu, srv.aicm); err != nil {
 		return nil, err
@@ -241,7 +249,10 @@ func NewService(
 		panic(err)
 	}
 	srv.pipelines.client = c
+
 	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.PipelineClient, c)
+	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.CNMemoryThrottler, srv.CNMemoryThrottler)
+
 	return srv, nil
 }
 
@@ -886,6 +897,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		s.queryClient,
 		s._hakeeperClient,
 		s.udfService,
+		s.pu.GetTaskService(),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 }

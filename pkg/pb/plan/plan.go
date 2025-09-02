@@ -81,3 +81,29 @@ func (def *ColDef) GetOriginCaseName() string {
 	}
 	return def.OriginName
 }
+
+func (m *Expr) ExprString() string {
+	if m == nil {
+		return ""
+	}
+
+	data, err := m.Marshal()
+	if err != nil {
+		return ""
+	}
+
+	return string(data)
+}
+
+func (m *ColRef) ColRefString() string {
+	if m == nil {
+		return ""
+	}
+
+	data, err := m.Marshal()
+	if err != nil {
+		return ""
+	}
+
+	return string(data)
+}

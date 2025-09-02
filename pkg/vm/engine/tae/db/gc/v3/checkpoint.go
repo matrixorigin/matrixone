@@ -930,8 +930,8 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 	newWaterMark := newCkp.GetEnd()
 	c.updateCheckpointGCWaterMark(&newWaterMark)
 
-	gckps := c.checkpointCli.GetAllGlobalCheckpoints()
-	for _, ckp := range gckps {
+	gCkps := c.checkpointCli.GetAllGlobalCheckpoints()
+	for _, ckp := range gCkps {
 		end := ckp.GetEnd()
 		logutil.Info(
 			"GC-TRACE-GLOBAL-CHECKPOINT-FILE",
@@ -947,7 +947,19 @@ func (c *checkpointCleaner) mergeCheckpointFilesLocked(
 				zap.String("task", c.TaskNameLocked()),
 				zap.String("gckp", nameMeta),
 			)
+
 			deleteFiles = append(deleteFiles, nameMeta)
+			// fix gckp files leak
+			var files []string
+			files, err = getCheckpointLocation(ctx, ckp, c.fs)
+			if err != nil {
+				extraErrMsg = "getCheckpointLocation failed"
+				return err
+			}
+			if len(files) > 0 {
+				deleteFiles = append(deleteFiles, files...)
+			}
+
 		}
 	}
 	if c.GCCheckpointEnabled() {
@@ -990,36 +1002,6 @@ func (c *checkpointCleaner) GetPITRs() (*logtail.PitrInfo, error) {
 func (c *checkpointCleaner) GetPITRsLocked(ctx context.Context) (*logtail.PitrInfo, error) {
 	ts := time.Now()
 	return c.mutation.snapshotMeta.GetPITR(ctx, c.sid, ts, c.fs, c.mp)
-}
-
-func (c *checkpointCleaner) TryGC(inputCtx context.Context) (err error) {
-	now := time.Now()
-	c.StartMutationTask("gc-try-gc")
-	defer c.StopMutationTask()
-	defer func() {
-		logutil.Info(
-			"GC-TRACE-TRY-GC",
-			zap.String("task", c.TaskNameLocked()),
-			zap.Duration("duration", time.Since(now)),
-			zap.Error(err),
-		)
-	}()
-	ctx, cancel := context.WithCancelCause(inputCtx)
-	defer cancel(nil)
-	go func() {
-		select {
-		case <-c.ctx.Done():
-			cancel(context.Cause(c.ctx))
-		case <-inputCtx.Done():
-			cancel(context.Cause(inputCtx))
-		case <-ctx.Done():
-		}
-	}()
-
-	memoryBuffer := MakeGCWindowBuffer(16 * mpool.MB)
-	defer memoryBuffer.Close(c.mp)
-	err = c.tryGCLocked(ctx, memoryBuffer)
-	return
 }
 
 // (no incremental checkpoint scan)
@@ -1085,7 +1067,6 @@ func (c *checkpointCleaner) tryGCLocked(
 			zap.String("checkpoint", maxGlobalCKP.String()),
 		)
 	}
-
 	return
 }
 
@@ -1274,6 +1255,15 @@ func (c *checkpointCleaner) scanCheckpointsAsDebugWindow(
 		window = nil
 	}
 	return
+}
+
+func (c *checkpointCleaner) Verify(ctx context.Context) string {
+	c.StartMutationTask("gc-verify")
+	defer c.StopMutationTask()
+	checker := &gcChecker{
+		cleaner: c,
+	}
+	return checker.Verify(ctx, c.mp)
 }
 
 func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
@@ -1869,4 +1859,13 @@ func (c *checkpointCleaner) ISCPTables() map[uint64]types.TS {
 		return c.iscpTablesFunc()
 	}
 	return nil
+}
+
+func (c *checkpointCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
+	scan := c.GetScannedWindow()
+	if scan == nil {
+		return nil, nil
+	}
+	window := scan.Clone()
+	return window.Details(ctx, c.mutation.snapshotMeta, c.mp)
 }

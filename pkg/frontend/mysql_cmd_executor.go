@@ -1122,6 +1122,20 @@ func handlePrepareStmt(ses FeSession, execCtx *ExecCtx, st *tree.PrepareStmt, sq
 	return doPrepareStmt(execCtx, ses.(*Session), st, sql, execCtx.executeParamTypes)
 }
 
+func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*PrepareStmt, error) {
+	wrapper := &tree.PrepareString{
+		Name: st.Name,
+		Sql:  st.Var,
+	}
+	p, err := ses.GetUserDefinedVar(st.Var)
+	if err != nil {
+		return nil, err
+	}
+	wrapper.Sql = p.Value.(string)
+
+	return doPrepareString(ses, execCtx, wrapper)
+}
+
 func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*PrepareStmt, error) {
 	v, err := ses.GetSessionSysVar("lower_case_table_names")
 	if err != nil {
@@ -1868,26 +1882,6 @@ func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) erro
 	return err
 }
 
-func GetExplainColumns(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
-	cols := []*plan2.ColDef{
-		{
-			Typ:        plan2.Type{Id: int32(types.T_varchar)},
-			Name:       strings.ToLower(explainColName),
-			OriginName: explainColName,
-		},
-	}
-	columns := make([]interface{}, len(cols))
-	var err error = nil
-	for i, col := range cols {
-		c, err := colDef2MysqlColumn(ctx, col)
-		if err != nil {
-			return nil, nil, err
-		}
-		columns[i] = c
-	}
-	return cols, columns, err
-}
-
 func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {
@@ -2237,16 +2231,15 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
-	var v interface{}
-	v, err = execCtx.ses.GetSessionSysVar("lower_case_table_names")
-	if err != nil {
-		v = int64(1)
+	v, err := execCtx.ses.GetSessionSysVar("lower_case_table_names")
+	var lctn int64 = 1 // default
+	if err == nil {
+		switch vv := v.(type) {
+		case int64:
+			lctn = vv
+		}
 	}
-	stmts, err = p.Parse(execCtx.reqCtx, execCtx.input.getSql(), v.(int64))
-	if err != nil {
-		return nil, err
-	}
-	return
+	return p.Parse(execCtx.reqCtx, execCtx.input.getSql(), lctn)
 }
 
 func incTransactionCounter(tenant string) {

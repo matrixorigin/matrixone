@@ -99,7 +99,7 @@ func (anal *AnalyzeModule) release() {
 	//for i := range a.analInfos {
 	//	reuse.Free[process.AnalyzeInfo](a.analInfos[i], nil)
 	//}
-	reuse.Free[AnalyzeModule](anal, nil)
+	reuse.Free(anal, nil)
 }
 
 func (c *Compile) initAnalyzeModule(qry *plan.Query) {
@@ -156,10 +156,14 @@ func applyOpStatsToNode(op *models.PhyOperator, qry *plan.Query, nodes []*plan.N
 		if node.AnalyzeInfo == nil {
 			node.AnalyzeInfo = &plan.AnalyzeInfo{}
 		}
-		node.AnalyzeInfo.InputRows += op.OpStats.InputRows
-		node.AnalyzeInfo.OutputRows += op.OpStats.OutputRows
-		node.AnalyzeInfo.InputSize += op.OpStats.InputSize
-		node.AnalyzeInfo.OutputSize += op.OpStats.OutputSize
+		if op.IsFirst {
+			node.AnalyzeInfo.InputRows += op.OpStats.InputRows
+			node.AnalyzeInfo.InputSize += op.OpStats.InputSize
+		}
+		if op.IsLast {
+			node.AnalyzeInfo.OutputRows += op.OpStats.OutputRows
+			node.AnalyzeInfo.OutputSize += op.OpStats.OutputSize
+		}
 		node.AnalyzeInfo.TimeConsumed += op.OpStats.TimeConsumed
 		node.AnalyzeInfo.MemorySize += op.OpStats.MemorySize
 		node.AnalyzeInfo.WaitTimeConsumed += op.OpStats.WaitTimeConsumed
@@ -338,6 +342,8 @@ func ConvertOperatorToPhyOperator(op vm.Operator, rmp map[*process.WaitRegister]
 		OpName:       op.OpType().String(),
 		NodeIdx:      op.GetOperatorBase().Idx,
 		DestReceiver: getDestReceiver(op, rmp),
+		IsFirst:      op.GetOperatorBase().IsFirst,
+		IsLast:       op.GetOperatorBase().IsLast,
 	}
 
 	if op.GetOperatorBase().IsFirst {
@@ -457,23 +463,10 @@ func (c *Compile) UpdatePreparePhyPlan(runC *Compile) bool {
 }
 
 func (c *Compile) GenPhyPlan(runC *Compile) {
-	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
-	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
-		for i := range s.PreScopes {
-			generateReceiverMap(s.PreScopes[i], mp)
-		}
-		if s.Proc == nil {
-			return
-		}
-		for i := range s.Proc.Reg.MergeReceivers {
-			mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
-		}
-	}
-
-	receiverMap := make(map[*process.WaitRegister]int)
-	ss := runC.scopes
-	for i := range ss {
-		generateReceiverMap(ss[i], receiverMap)
+	recvMap := make(map[*process.WaitRegister]int)
+	scopes := runC.scopes
+	for i := range scopes {
+		genReceiverMap(scopes[i], recvMap)
 	}
 
 	//------------------------------------------------------------------------------------------------------
@@ -481,10 +474,10 @@ func (c *Compile) GenPhyPlan(runC *Compile) {
 	c.anal.phyPlan.RetryTime = runC.anal.retryTimes
 	c.anal.curNodeIdx = runC.anal.curNodeIdx
 
-	if len(runC.scopes) > 0 {
-		for i := range runC.scopes {
-			phyScope := ConvertScopeToPhyScope(runC.scopes[i], receiverMap)
-			c.anal.phyPlan.LocalScope = append(c.anal.phyPlan.LocalScope, phyScope)
+	if len(scopes) > 0 {
+		for i := range scopes {
+			phy := ConvertScopeToPhyScope(scopes[i], recvMap)
+			c.anal.phyPlan.LocalScope = append(c.anal.phyPlan.LocalScope, phy)
 		}
 	}
 
@@ -534,30 +527,41 @@ func getExplainOption(options []tree.OptionElem) *ExplainOption {
 }
 
 // makeExplainPhyPlanBuffer used to explain phyplan statement
-func makeExplainPhyPlanBuffer(ss []*Scope, queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption) *bytes.Buffer {
-	receiverMap := make(map[*process.WaitRegister]int)
+func makeExplainPhyPlanBuffer(
+	ss []*Scope,
+	queryResult *util.RunResult,
+	statsInfo *statistic.StatsInfo,
+	anal *AnalyzeModule,
+	option *ExplainOption,
+) *bytes.Buffer {
+	recvMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
-		genReceiverMap(ss[i], receiverMap)
+		genReceiverMap(ss[i], recvMap)
 	}
 
-	buffer := bytes.NewBuffer(make([]byte, 0, 300))
-
-	//explainGlobalResources(queryResult, statsInfo, anal, option, buffer)
-	explainResourceOverview(queryResult, statsInfo, anal, option, buffer)
-	explainScopes(ss, 0, receiverMap, option, buffer)
-	return buffer
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	explainResourceOverview(queryResult, statsInfo, anal, option, buf)
+	explainScopes(ss, 0, recvMap, option, buf)
+	return buf
 }
 
-func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.StatsInfo, anal *AnalyzeModule, option *ExplainOption, buffer *bytes.Buffer) {
+func explainResourceOverview(
+	queryResult *util.RunResult,
+	statsInfo *statistic.StatsInfo,
+	anal *AnalyzeModule,
+	option *ExplainOption,
+	buffer *bytes.Buffer,
+) {
 	if option.Analyze || option.Verbose {
 		gblStats := models.ExtractPhyPlanGlbStats(anal.phyPlan)
 		buffer.WriteString("Overview:\n")
-		buffer.WriteString(fmt.Sprintf("\tMemoryUsage:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
+		fmt.Fprintf(buffer,
+			"\tMemoryUsage:%dB,  DiskI/O:%dB,  NewWorkI/O:%dB, AffectedRows: %d",
 			gblStats.MemorySize,
 			gblStats.DiskIOSize,
 			gblStats.NetWorkSize,
 			queryResult.AffectRows,
-		))
+		)
 
 		if statsInfo != nil {
 			buffer.WriteString("\n")
@@ -565,9 +569,11 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 			list, head, put, get, delete, deleteMul, writtenRows, deletedRows := models.CalcTotalS3Requests(gblStats, statsInfo)
 
 			s3InputEstByRows := objectio.EstimateS3Input(writtenRows)
-			buffer.WriteString(fmt.Sprintf("\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d, S3InputEstByRows((%d+%d)/8192):%.4f \n",
+			fmt.Fprintf(
+				buffer,
+				"\tS3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d, S3InputEstByRows((%d+%d)/8192):%.4f \n",
 				list, head, put, get, delete, deleteMul, writtenRows, deletedRows, s3InputEstByRows,
-			))
+			)
 
 			cpuTimeVal := gblStats.OperatorTimeConsumed +
 				int64(statsInfo.ParseStage.ParseDuration+statsInfo.PlanStage.PlanDuration+statsInfo.CompileStage.CompileDuration) +
@@ -576,8 +582,8 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				(statsInfo.IOAccessTimeConsumption + statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
 
 			buffer.WriteString("\tCPU Usage: \n")
-			buffer.WriteString(fmt.Sprintf("\t\t- Total CPU Time: %dns \n", cpuTimeVal))
-			buffer.WriteString(fmt.Sprintf("\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
+			fmt.Fprintf(buffer, "\t\t- Total CPU Time: %dns \n", cpuTimeVal)
+			fmt.Fprintf(buffer, "\t\t- CPU Time Detail: Parse(%d)+BuildPlan(%d)+Compile(%d)+PhyExec(%d)+PrepareRun(%d)-PreRunWaitLock(%d)-PlanStatsIO(%d)-IOAccess(%d)-IOMerge(%d)\n",
 				statsInfo.ParseStage.ParseDuration,
 				statsInfo.PlanStage.PlanDuration,
 				statsInfo.CompileStage.CompileDuration,
@@ -586,80 +592,80 @@ func explainResourceOverview(queryResult *util.RunResult, statsInfo *statistic.S
 				statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock,
 				statsInfo.PlanStage.BuildPlanStatsIOConsumption,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption))
-			buffer.WriteString(fmt.Sprintf("\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth))
+				statsInfo.S3FSPrefetchFileIOMergerTimeConsumption)
+			fmt.Fprintf(buffer, "\t\t- Permission Authentication Stats Array: %v \n", statsInfo.PermissionAuth)
 
 			//-------------------------------------------------------------------------------------------------------
 			if option.Analyze {
 				buffer.WriteString("\tQuery Build Plan Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", int64(statsInfo.PlanStage.PlanDuration)-statsInfo.PlanStage.BuildPlanStatsIOConsumption)
+				fmt.Fprintf(buffer, "\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanS3Request.List,
 					statsInfo.PlanStage.BuildPlanS3Request.Head,
 					statsInfo.PlanStage.BuildPlanS3Request.Put,
 					statsInfo.PlanStage.BuildPlanS3Request.Get,
 					statsInfo.PlanStage.BuildPlanS3Request.Delete,
 					statsInfo.PlanStage.BuildPlanS3Request.DeleteMul,
-				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration)))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call StatsInCache Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsInCacheDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption))
-				buffer.WriteString(fmt.Sprintf("\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+				)
+				fmt.Fprintf(buffer, "\t\t- Build Plan Duration: %dns \n", int64(statsInfo.PlanStage.PlanDuration))
+				fmt.Fprintf(buffer, "\t\t- Call Stats Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsDuration)
+				fmt.Fprintf(buffer, "\t\t- Call StatsInCache Duration: %dns \n", statsInfo.PlanStage.BuildPlanStatsInCacheDuration)
+				fmt.Fprintf(buffer, "\t\t- Call Stats IO Consumption: %dns \n", statsInfo.PlanStage.BuildPlanStatsIOConsumption)
+				fmt.Fprintf(buffer, "\t\t- Call Stats S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PlanStage.BuildPlanStatsS3.List,
 					statsInfo.PlanStage.BuildPlanStatsS3.Head,
 					statsInfo.PlanStage.BuildPlanStatsS3.Put,
 					statsInfo.PlanStage.BuildPlanStatsS3.Get,
 					statsInfo.PlanStage.BuildPlanStatsS3.Delete,
 					statsInfo.PlanStage.BuildPlanStatsS3.DeleteMul,
-				))
+				)
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Compile Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", statsInfo.CompileStage.CompileDuration)
+				fmt.Fprintf(buffer, "\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.CompileStage.CompileS3Request.List,
 					statsInfo.CompileStage.CompileS3Request.Head,
 					statsInfo.CompileStage.CompileS3Request.Put,
 					statsInfo.CompileStage.CompileS3Request.Get,
 					statsInfo.CompileStage.CompileS3Request.Delete,
 					statsInfo.CompileStage.CompileS3Request.DeleteMul,
-				))
-				buffer.WriteString(fmt.Sprintf("\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileStage.CompileTableScanDuration))
+				)
+				fmt.Fprintf(buffer, "\t\t- Compile TableScan Duration: %dns \n", statsInfo.CompileStage.CompileTableScanDuration)
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Prepare Exec Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
-				buffer.WriteString(fmt.Sprintf("\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- PreRunOnce WaitLock: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock))
-				buffer.WriteString(fmt.Sprintf("\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed))
-				buffer.WriteString(fmt.Sprintf("\t\t- BuildReader Duration: %dns \n", statsInfo.PrepareRunStage.BuildReaderDuration))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", gblStats.ScopePrepareTimeConsumed+statsInfo.PrepareRunStage.CompilePreRunOnceDuration-statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)
+				fmt.Fprintf(buffer, "\t\t- CompilePreRunOnce Duration: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceDuration)
+				fmt.Fprintf(buffer, "\t\t- PreRunOnce WaitLock: %dns \n", statsInfo.PrepareRunStage.CompilePreRunOnceWaitLock)
+				fmt.Fprintf(buffer, "\t\t- ScopePrepareTimeConsumed: %dns \n", gblStats.ScopePrepareTimeConsumed)
+				fmt.Fprintf(buffer, "\t\t- BuildReader Duration: %dns \n", statsInfo.PrepareRunStage.BuildReaderDuration)
+				fmt.Fprintf(buffer, "\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.List,
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.Head,
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.Put,
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.Get,
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.Delete,
 					statsInfo.PrepareRunStage.ScopePrepareS3Request.DeleteMul,
-				))
+				)
 
 				//-------------------------------------------------------------------------------------------------------
 				buffer.WriteString("\tQuery Execution Stage:\n")
-				buffer.WriteString(fmt.Sprintf("\t\t- CPU Time: %dns \n", gblStats.OperatorTimeConsumed))
-				buffer.WriteString(fmt.Sprintf("\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
+				fmt.Fprintf(buffer, "\t\t- CPU Time: %dns \n", gblStats.OperatorTimeConsumed)
+				fmt.Fprintf(buffer, "\t\t- S3List:%d, S3Head:%d, S3Put:%d, S3Get:%d, S3Delete:%d, S3DeleteMul:%d\n",
 					gblStats.S3ListRequest,
 					gblStats.S3HeadRequest,
 					gblStats.S3PutRequest,
 					gblStats.S3GetRequest,
 					gblStats.S3DeleteRequest,
 					gblStats.S3DeleteMultiRequest,
-				))
+				)
 
-				buffer.WriteString(fmt.Sprintf("\t\t- MemoryUsage: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
+				fmt.Fprintf(buffer, "\t\t- MemoryUsage: %dB,  DiskI/O: %dB,  NewWorkI/O:%dB\n",
 					gblStats.MemorySize,
 					gblStats.DiskIOSize,
 					gblStats.NetWorkSize,
-				))
+				)
 			}
 			//-------------------------------------------------------------------------------------------------------
 			buffer.WriteString("Physical Plan Deployment:")
@@ -686,20 +692,20 @@ func explainSingleScope(scope *Scope, index int, gap int, rmp map[*process.WaitR
 	}
 
 	if option.Verbose || option.Analyze {
-		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr))
+		fmt.Fprintf(buffer, "Scope %d (Magic: %s, addr:%v, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Addr, scope.NodeInfo.Mcpu, receiverStr)
 		if scope.ScopeAnalyzer != nil {
-			buffer.WriteString(fmt.Sprintf(" PrepareTimeConsumed: %dns", scope.ScopeAnalyzer.TimeConsumed))
+			fmt.Fprintf(buffer, " PrepareTimeConsumed: %dns", scope.ScopeAnalyzer.TimeConsumed)
 		} else {
 			buffer.WriteString(" PrepareTimeConsumed: 0ns")
 		}
 	} else {
-		buffer.WriteString(fmt.Sprintf("Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr))
+		fmt.Fprintf(buffer, "Scope %d (Magic: %s, mcpu: %v, Receiver: %s)", index+1, magicShow(scope.Magic), scope.NodeInfo.Mcpu, receiverStr)
 	}
 
 	// Scope DataSource
 	if scope.DataSource != nil {
 		gapNextLine(gap, buffer)
-		buffer.WriteString(fmt.Sprintf("  DataSource: %s", showDataSource(scope.DataSource)))
+		fmt.Fprintf(buffer, "  DataSource: %s", showDataSource(scope.DataSource))
 	}
 
 	if scope.RootOp != nil {
@@ -724,8 +730,7 @@ func explainPipeline(node vm.Operator, prefix string, isRoot bool, isTail bool, 
 		return
 	}
 
-	id := node.OpType()
-	name, ok := debugInstructionNames[id]
+	name, ok := debugInstructionNames[node.OpType()]
 	if !ok {
 		name = "unknown"
 	}
@@ -746,18 +751,18 @@ func explainPipeline(node vm.Operator, prefix string, isRoot bool, isTail bool, 
 	// Write to the current node
 	if isRoot {
 		headPrefix := "  Pipeline: └── "
-		buffer.WriteString(fmt.Sprintf("%s%s%s", headPrefix, name, analyzeStr))
+		fmt.Fprintf(buffer, "%s%s%s", headPrefix, name, analyzeStr)
 		hanldeTailNodeReceiver(node, mp, buffer)
 		buffer.WriteString("\n")
 		// Ensure that child nodes are properly indented
 		prefix += "   "
 	} else {
 		if isTail {
-			buffer.WriteString(fmt.Sprintf("%s└── %s%s", prefix, name, analyzeStr))
+			fmt.Fprintf(buffer, "%s└── %s%s", prefix, name, analyzeStr)
 			hanldeTailNodeReceiver(node, mp, buffer)
 			buffer.WriteString("\n")
 		} else {
-			buffer.WriteString(fmt.Sprintf("%s├── %s%s\n", prefix, name, analyzeStr))
+			fmt.Fprintf(buffer, "%s├── %s%s\n", prefix, name, analyzeStr)
 		}
 	}
 

@@ -37,7 +37,7 @@ func BytesToArray[T RealNumbers](input []byte) (res []T) {
 }
 
 func ArrayToBytes[T RealNumbers](input []T) []byte {
-	return EncodeSlice[T](input)
+	return EncodeSlice(input)
 }
 
 func ArrayToString[T RealNumbers](input []T) string {
@@ -66,7 +66,7 @@ func ArrayToString[T RealNumbers](input []T) string {
 func ArraysToString[T RealNumbers](input [][]T, sep string) string {
 	strValues := make([]string, len(input))
 	for i, row := range input {
-		strValues[i] = ArrayToString[T](row)
+		strValues[i] = ArrayToString(row)
 	}
 	return strings.Join(strValues, sep)
 }
@@ -113,7 +113,7 @@ func StringToArrayToBytes[T RealNumbers](input string) ([]byte, error) {
 		return nil, err
 	}
 	// Convert []float32{1.0, 2.0, 3.0} --> []byte{11, 33, 45, 56,.....}
-	return ArrayToBytes[T](a), nil
+	return ArrayToBytes(a), nil
 }
 
 func BytesToArrayToString[T RealNumbers](input []byte) string {
@@ -121,5 +121,5 @@ func BytesToArrayToString[T RealNumbers](input []byte) string {
 	a := BytesToArray[T](input)
 
 	// Convert []float32{1.0, 2.0, 3.0} --> "[1,2,3]"
-	return ArrayToString[T](a)
+	return ArrayToString(a)
 }

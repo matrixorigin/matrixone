@@ -31,7 +31,14 @@ import (
 )
 
 // ConstructCreateTableSQL used to build CREATE Table statement
-func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snapshot *Snapshot, useDbName bool) (string, tree.Statement, error) {
+func ConstructCreateTableSQL(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+) (string, tree.Statement, error) {
+
 	var err error
 	var createStr string
 
@@ -253,6 +260,64 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		}
 	}
 
+	updateFKTableDef := func(fkDef *TableDef) (*TableDef, error) {
+		if cloneStmt == nil || cloneStmt.StmtType == tree.NoClone {
+			return fkDef, nil
+		}
+
+		if fkDef == nil || tableDef == fkDef {
+			// self refer
+			return fkDef, nil
+		}
+
+		var (
+			referType    int
+			tempTableDef *TableDef
+		)
+
+		update := func(snap *Snapshot) error {
+			if _, tempTableDef, err = ctx.Resolve(schemaName, fkDef.Name, snap); err != nil {
+				return err
+			}
+
+			fkDef = tempTableDef
+			return err
+		}
+
+		if cloneStmt.SrcTable.SchemaName.String() == fkDef.DbName {
+			// within db refer
+			referType = 1
+		} else {
+			// between db refer
+			referType = 2
+		}
+
+		switch cloneStmt.StmtType {
+		case tree.CloneCluster, tree.CloneAccount, tree.WithinDBCloneTable, tree.WithinAccBetweenDBCloneTable:
+			return fkDef, nil
+		case tree.WithinAccCloneDB:
+			if referType == 1 {
+				err = update(nil)
+			}
+			return fkDef, err
+		case tree.BetweenAccCloneDB:
+			if referType == 1 {
+				err = update(nil)
+			} else {
+				err = moerr.NewInternalErrorNoCtx(
+					"cannot clone a db to another account when it has foreign key reference on another db",
+				)
+			}
+			return fkDef, err
+		case tree.BetweenAccCloneTable:
+			return nil, moerr.NewInternalErrorNoCtx(
+				"cannot clone a table to another account when it has foreign key reference on another table",
+			)
+		default:
+			return fkDef, nil
+		}
+	}
+
 	dedupFkName := make(UnorderedSet[string])
 	for _, fk := range tableDef.Fkeys {
 		if len(fk.Name) != 0 {
@@ -274,8 +339,10 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		} else {
 			if ctx.GetQueryingSubscription() != nil {
 				_, fkTableDef, err = ctx.ResolveSubscriptionTableById(fk.ForeignTbl, ctx.GetQueryingSubscription())
+				fkTableDef, err = updateFKTableDef(fkTableDef)
 			} else {
 				_, fkTableDef, err = ctx.ResolveById(fk.ForeignTbl, snapshot)
+				fkTableDef, err = updateFKTableDef(fkTableDef)
 			}
 			if err != nil {
 				return "", nil, err
@@ -301,7 +368,7 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 		}
 
 		fkRefDbTblName := fmt.Sprintf("`%s`", formatStr(fkTableDef.Name))
-		if tableDef.DbName != fkTableDef.DbName {
+		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
 			fkRefDbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(fkTableDef.DbName), formatStr(fkTableDef.Name))
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT `%s` FOREIGN KEY (`%s`) REFERENCES %s (`%s`) ON DELETE %s ON UPDATE %s",
@@ -346,6 +413,8 @@ func ConstructCreateTableSQL(ctx CompilerContext, tableDef *plan.TableDef, snaps
 			case partition.PartitionMethod_List:
 				rangeOrList = true
 				partitionBy += "List "
+			case partition.PartitionMethod_LinearHash:
+				partitionBy += "linear hash"
 			}
 
 			cols := "("

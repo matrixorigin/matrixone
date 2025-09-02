@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -45,16 +46,17 @@ import (
 )
 
 type sqlExecutor struct {
-	addr      string
-	eng       engine.Engine
-	mp        *mpool.MPool
-	txnClient client.TxnClient
-	fs        fileservice.FileService
-	ls        lockservice.LockService
-	qc        qclient.QueryClient
-	hakeeper  logservice.CNHAKeeperClient
-	us        udf.Service
-	buf       *buffer.Buffer
+	addr        string
+	eng         engine.Engine
+	mp          *mpool.MPool
+	txnClient   client.TxnClient
+	fs          fileservice.FileService
+	ls          lockservice.LockService
+	qc          qclient.QueryClient
+	hakeeper    logservice.CNHAKeeperClient
+	us          udf.Service
+	buf         *buffer.Buffer
+	taskservice taskservice.TaskService
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -67,22 +69,24 @@ func NewSQLExecutor(
 	qc qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	us udf.Service,
+	taskService taskservice.TaskService,
 ) executor.SQLExecutor {
 	v, ok := runtime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(runtime.LockService)
 	if !ok {
 		panic("missing lock service")
 	}
 	return &sqlExecutor{
-		addr:      addr,
-		eng:       eng,
-		txnClient: txnClient,
-		fs:        fs,
-		ls:        v.(lockservice.LockService),
-		qc:        qc,
-		hakeeper:  hakeeper,
-		us:        us,
-		mp:        mp,
-		buf:       buffer.New(),
+		addr:        addr,
+		eng:         eng,
+		txnClient:   txnClient,
+		fs:          fs,
+		ls:          v.(lockservice.LockService),
+		qc:          qc,
+		hakeeper:    hakeeper,
+		us:          us,
+		mp:          mp,
+		buf:         buffer.New(),
+		taskservice: taskService,
 	}
 }
 
@@ -271,7 +275,7 @@ func (exec *txnExecutor) Exec(
 
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
-			defines.AlterCopyDedupOpt{}, v)
+			defines.AlterCopyOpt{}, v)
 	}
 
 	receiveAt := time.Now()
@@ -312,6 +316,7 @@ func (exec *txnExecutor) Exec(
 		exec.s.hakeeper,
 		exec.s.us,
 		nil,
+		exec.s.taskservice,
 	)
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
@@ -503,6 +508,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.hakeeper,
 		exec.s.us,
 		nil,
+		exec.s.taskservice,
 	)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf

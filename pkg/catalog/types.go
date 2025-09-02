@@ -171,6 +171,7 @@ const (
 
 	MO_MERGE_SETTINGS = "mo_merge_settings"
 
+	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 )
 

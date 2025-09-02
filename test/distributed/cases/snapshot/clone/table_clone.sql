@@ -9,6 +9,13 @@ insert into t1(b) values(20000),(20001);
 insert into t1(a,b) values(40000, 40000);
 
 create table t2 clone t1;
+
+select enable_fault_injection();
+-- @ignore:0
+select add_fault_point('fj/cn/subscribe_table_fail',':::','echo',40,'db1.t2');
+select * from t2 order by a asc;
+select disable_fault_injection();
+
 select * from t2 order by a asc;
 
 insert into t2(b) values(3),(4);
@@ -108,3 +115,4 @@ drop snapshot if exists sp1;
 drop account if exists acc1;
 drop account if exists acc2;
 drop database if exists db1;
+drop database if exists db2;

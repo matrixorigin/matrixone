@@ -208,7 +208,7 @@ func buildTestShowCreateTable(sql string) (string, error) {
 	}
 
 	var snapshot *plan.Snapshot
-	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false)
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, snapshot, false, nil)
 	if err != nil {
 		return "", err
 	}

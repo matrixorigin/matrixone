@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -38,6 +39,7 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"go.uber.org/zap"
 )
 
@@ -101,7 +103,9 @@ func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
 	if !ok {
 		panic("no task service is initialized")
 	}
-	s.pu.TaskService = ts
+	s.pu.SetTaskService(ts)
+	// register into service runtime for fallback retrievals
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables("task-service", ts)
 }
 
 func (s *service) initSqlWriterFactory() {
@@ -222,6 +226,17 @@ func (s *service) startTaskRunner() {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))
 	}
+	if err := s.initAsyncTasks(); err != nil {
+		s.logger.Error("init async tasks failed", zap.Error(err))
+	}
+}
+
+func (s *service) initAsyncTasks() error {
+	ts, ok := s.task.holder.Get()
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("task service not ok")
+	}
+	return frontend.AddISCPTaskIfNotExists(context.Background(), ts)
 }
 
 func (s *service) GetTaskRunner() taskservice.TaskRunner {
@@ -322,6 +337,16 @@ func (s *service) registerExecutorsLocked() {
 			s.fileService,
 			s._txnClient,
 			s.storeEngine,
+		),
+	)
+
+	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
+		iscp.ISCPTaskExecutorFactory(
+			s.storeEngine,
+			s._txnClient,
+			s.task.runner.Attach,
+			s.cfg.UUID,
+			common.ISCPAllocator,
 		),
 	)
 }

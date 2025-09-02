@@ -317,8 +317,10 @@ func TestShowCreatePartitionTable(t *testing.T) {
 		"create table %s (c int primary key) partition by list (c) (partition p0 values in (1, 2), partition p1 values in (3, 4))",
 		"create table %s (a int unsigned, c int) partition by range columns(c) (partition p0 values less than (1), partition p1 values less than (5))",
 		"create table %s (b vecf32(2), c int) partition by hash(c) partitions 2",
+		"create table %s (b vecf32(2), c int) partition by linear hash(c) partitions 2",
 	}
 	showCreates := []string{
+		"show create table %s",
 		"show create table %s",
 		"show create table %s",
 		"show create table %s",
@@ -335,6 +337,7 @@ func TestShowCreatePartitionTable(t *testing.T) {
 		"CREATE TABLE `testshowcreatepartitiontable_4` (\n  `c` int NOT NULL,\n  PRIMARY KEY (`c`)\n) partition by List columns(`c`) (partition p0 values in (1, 2), partition p1 values in (3, 4))",
 		"CREATE TABLE `testshowcreatepartitiontable_5` (\n  `a` int unsigned DEFAULT NULL,\n  `c` int DEFAULT NULL\n) partition by range columns(`c`) (partition p0 values less than (1), partition p1 values less than (5))",
 		"CREATE TABLE `testshowcreatepartitiontable_6` (\n  `b` vecf32(2) DEFAULT NULL,\n  `c` int DEFAULT NULL\n) partition by hash(`c`) partitions 2",
+		"CREATE TABLE `testshowcreatepartitiontable_7` (\n  `b` vecf32(2) DEFAULT NULL,\n  `c` int DEFAULT NULL\n) partition by linear hash(`c`) partitions 2",
 	}
 
 	runPartitionClusterTest(

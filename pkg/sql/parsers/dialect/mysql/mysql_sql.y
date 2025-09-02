@@ -997,7 +997,7 @@ backup_timestamp_opt:
     }
 
 create_cdc_stmt:
-    CREATE CDC not_exists_opt ident STRING STRING STRING STRING '{' create_cdc_opts '}'
+    CREATE CDC not_exists_opt ident STRING STRING STRING STRING '{' create_cdc_opts '}' internal_opt
     {
         $$ = &tree.CreateCDC{
              		IfNotExists: $3,
@@ -1007,6 +1007,7 @@ create_cdc_stmt:
              		SinkUri:     $7,
              		Tables:      $8,
              		Option:      $10,
+             		Internal:    $12,
              	}
     }
 
@@ -1046,9 +1047,9 @@ pause_cdc_stmt:
     }
 
 drop_cdc_stmt:
-    DROP CDC all_cdc_opt
+    DROP CDC all_cdc_opt internal_opt
     {
-        $$ = tree.NewDropCDC($3)
+        $$ = tree.NewDropCDC($3, $4)
     }
 
 all_cdc_opt:
@@ -3046,6 +3047,11 @@ prepare_stmt:
     {
         $$ = tree.NewPrepareString(tree.Identifier($2), $4)
     }
+|   prepare_sym stmt_name FROM user_variable
+    {
+        $$ = tree.NewPrepareVar(tree.Identifier($2), $4)
+    }
+
 
 execute_stmt:
     execute_sym stmt_name
