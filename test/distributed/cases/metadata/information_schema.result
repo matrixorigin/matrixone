@@ -25,7 +25,6 @@ where table_schema = 'mo_catalog' and table_type = 'BASE TABLE'
 order by table_name;
 table_catalog    table_schema    table_name    table_type    engine
 def    mo_catalog    mo_account    BASE TABLE    Tae
-def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
 def    mo_catalog    mo_cdc_task    BASE TABLE    Tae
 def    mo_catalog    mo_cdc_watermark    BASE TABLE    Tae
 def    mo_catalog    mo_columns    BASE TABLE    Tae
@@ -33,10 +32,11 @@ def    mo_catalog    mo_data_key    BASE TABLE    Tae
 def    mo_catalog    mo_database    BASE TABLE    Tae
 def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
+def    mo_catalog    mo_iscp_log    BASE TABLE    Tae
 def    mo_catalog    mo_merge_settings    BASE TABLE    Tae
 def    mo_catalog    mo_mysql_compatibility_mode    BASE TABLE    Tae
-def    mo_catalog    mo_table_partitions    BASE TABLE    Tae
-def    mo_catalog    mo_table_stats_alpha    BASE TABLE    Tae
+def    mo_catalog    mo_partition_metadata    BASE TABLE    Tae
+def    mo_catalog    mo_partition_tables    BASE TABLE    Tae
 def    mo_catalog    mo_pitr    BASE TABLE    Tae
 def    mo_catalog    mo_pubs    BASE TABLE    Tae
 def    mo_catalog    mo_role    BASE TABLE    Tae
