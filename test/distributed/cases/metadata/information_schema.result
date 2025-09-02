@@ -35,6 +35,8 @@ def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
 def    mo_catalog    mo_indexes    BASE TABLE    Tae
 def    mo_catalog    mo_merge_settings    BASE TABLE    Tae
 def    mo_catalog    mo_mysql_compatibility_mode    BASE TABLE    Tae
+def    mo_catalog    mo_table_partitions    BASE TABLE    Tae
+def    mo_catalog    mo_table_stats_alpha    BASE TABLE    Tae
 def    mo_catalog    mo_pitr    BASE TABLE    Tae
 def    mo_catalog    mo_pubs    BASE TABLE    Tae
 def    mo_catalog    mo_role    BASE TABLE    Tae
