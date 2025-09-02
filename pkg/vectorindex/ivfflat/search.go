@@ -95,9 +95,15 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 }
 
 // load chunk from database
-func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *process.Process,
-	query []T, distfn metric.DistanceFunction[T], heap *vectorindex.SearchResultSafeHeap,
-	stream_chan chan executor.Result, error_chan chan error) (stream_closed bool, err error) {
+func (idx *IvfflatSearchIndex[T]) searchEntries(
+	ctx context.Context,
+	proc *process.Process,
+	query []T,
+	distfn metric.DistanceFunction[T],
+	heap *vectorindex.SearchResultSafeHeap,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+) (stream_closed bool, err error) {
 
 	var res executor.Result
 	var ok bool
@@ -111,9 +117,9 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *proc
 		return false, err
 	case <-proc.Ctx.Done():
 		return false, proc.Ctx.Err()
-	case <-lctx.Done():
+	case <-ctx.Done():
 		// local context cancelled. something went wrong with other threads
-		return false, context.Cause(lctx)
+		return false, context.Cause(ctx)
 	}
 
 	bat := res.Batches[0]
