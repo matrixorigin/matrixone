@@ -431,6 +431,9 @@ func (exec *txnExecutor) Exec(
 						case <-proc.Ctx.Done():
 							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 							return moerr.NewInternalError(proc.Ctx, "context cancelled")
+						case <-exec.ctx.Done():
+							err_chan <- exec.ctx.Err()
+							return exec.ctx.Err()
 						default:
 							time.Sleep(1 * time.Millisecond)
 						}

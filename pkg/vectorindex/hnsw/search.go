@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -102,29 +103,46 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 // 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
 // 4. according to the chunk_id, seek to the offset and write the chunk
 // 5. check the checksum to verify the correctness of the file
-func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
+func (idx *HnswSearchIndex) LoadIndex(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	nthread int64,
+) (err error) {
 
-	stream_chan := make(chan executor.Result, 2)
-	error_chan := make(chan error)
+	var (
+		fp          *os.File
+		stream_chan = make(chan executor.Result, 2)
+		error_chan  = make(chan error)
+	)
 
 	// create tempfile for writing
-	fp, err := os.CreateTemp("", "hnswindx")
-	if err != nil {
-		return err
+	if fp, err = os.CreateTemp("", "hnswindx"); err != nil {
+		return
 	}
-	defer os.Remove(fp.Name())
+	defer func() {
+		fp.Close()
+		os.Remove(fp.Name())
+	}()
 
-	err = fallocate.Fallocate(fp, 0, idx.Filesize)
-	if err != nil {
-		return err
+	if err = fallocate.Fallocate(fp, 0, idx.Filesize); err != nil {
+		return
 	}
 
 	// run streaming sql
-	sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+	sql := fmt.Sprintf(
+		"SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'",
+		tblcfg.DbName, tblcfg.IndexTable, idx.Id,
+	)
+
+	ctx, cancel := context.WithCancelCause(proc.GetTopContext())
+	defer cancel(nil)
+
 	go func() {
-		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-		if err != nil {
-			error_chan <- err
+		if _, err2 := runSql_streaming(
+			ctx, proc, sql, stream_chan, error_chan,
+		); err2 != nil {
+			error_chan <- err2
 			return
 		}
 	}()
@@ -132,42 +150,50 @@ func (idx *HnswSearchIndex) LoadIndex(proc *process.Process, idxcfg vectorindex.
 	// incremental load from database
 	sql_closed := false
 	for !sql_closed {
-		sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp)
-		if err != nil {
-			return err
+		if sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp); err != nil {
+			// notify the producer to stop the sql streaming
+			cancel(err)
+			break
 		}
 	}
 
-	// load index to memory
-	fp.Close()
+	// wait for the sql streaming to be closed. make sure all the remaining
+	// results in stream_chan are closed.
+	if !sql_closed {
+		for res := range stream_chan {
+			res.Close()
+		}
+	}
+
+	if err != nil {
+		return
+	}
 
 	// check checksum
-	chksum, err := vectorindex.CheckSum(fp.Name())
-	if err != nil {
-		return err
+	var chksum string
+	if chksum, err = vectorindex.CheckSum(fp.Name()); err != nil {
+		return
 	}
 	if chksum != idx.Checksum {
-		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
+		return moerr.NewInternalError(ctx, "Checksum mismatch with the index file")
 	}
 
-	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
-	if err != nil {
-		return err
+	var usearchidx *usearch.Index
+	if usearchidx, err = usearch.NewIndex(idxcfg.Usearch); err != nil {
+		return
 	}
 
-	err = usearchidx.ChangeThreadsSearch(uint(nthread))
-	if err != nil {
-		return err
+	if err = usearchidx.ChangeThreadsSearch(uint(nthread)); err != nil {
+		return
 	}
 
-	err = usearchidx.Load(fp.Name())
-	if err != nil {
-		return err
+	if err = usearchidx.Load(fp.Name()); err != nil {
+		return
 	}
 
 	idx.Index = usearchidx
 
-	return nil
+	return
 }
 
 // Call usearch.Search
