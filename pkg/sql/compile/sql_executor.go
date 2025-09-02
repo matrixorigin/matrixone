@@ -18,8 +18,9 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -419,7 +420,7 @@ func (exec *txnExecutor) Exec(
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
 				// our current internal sql will never read too much data.
-				rows, err := bat.Dup(exec.s.mp)
+				rows, err := bat.Clone(exec.s.mp, true)
 				if err != nil {
 					return err
 				}
