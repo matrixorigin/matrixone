@@ -222,3 +222,26 @@ func appendValToBatchForObjectListBatch(src, dst *batch.Batch, row int, mp *mpoo
 	vector.AppendBytes(dst.Vecs[ckputil.TableObjectsAttr_Cluster_Idx], cluster, false, mp)
 	dst.SetRowCount(dst.Vecs[0].Length())
 }
+func getCheckpointLocation(
+	ctx context.Context,
+	checkpoint *checkpoint.CheckpointEntry,
+	service fileservice.FileService) ([]string, error) {
+	reader := logtail.NewCKPReader(
+		checkpoint.GetVersion(),
+		checkpoint.GetLocation(),
+		common.CheckpointAllocator,
+		service,
+	)
+	if err := reader.ReadMeta(ctx); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	files := make([]string, 0)
+	files = append(files, checkpoint.GetLocation().Name().UnsafeString())
+	for _, loc := range reader.GetLocations() {
+		files = append(files, loc.Name().UnsafeString())
+	}
+	return files, nil
+}

@@ -133,8 +133,7 @@ var (
 
 type Cleaner interface {
 	Replay(context.Context) error
-	Process(context.Context) error
-	TryGC(context.Context) error
+	Process(context.Context, func(*checkpoint.CheckpointEntry) bool) error
 	AddChecker(checker func(item any) bool, key string) int
 	RemoveChecker(key string) error
 	GetScanWaterMark() *checkpoint.CheckpointEntry
@@ -150,6 +149,8 @@ type Cleaner interface {
 	GCEnabled() bool
 	GetMPool() *mpool.MPool
 	GetSnapshots() (map[uint32]containers.Vector, error)
+	GetDetails(ctx context.Context) (map[uint32]*TableStats, error)
+	Verify(ctx context.Context) string
 
 	// For testing
 	GetTablePK(tableId uint64) string

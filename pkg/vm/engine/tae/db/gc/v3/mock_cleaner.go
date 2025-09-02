@@ -65,7 +65,7 @@ func (c *MockCleaner) Replay(ctx context.Context) error {
 	return nil
 }
 
-func (c *MockCleaner) Process(ctx context.Context) error {
+func (c *MockCleaner) Process(ctx context.Context, _ func(*checkpoint.CheckpointEntry) bool) error {
 	if c.processFunc != nil {
 		return c.processFunc(ctx)
 	}
@@ -144,5 +144,13 @@ func (c *MockCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 }
 
 func (c *MockCleaner) GetTablePK(tableId uint64) string {
+	return ""
+}
+
+func (c *MockCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
+	return nil, nil
+}
+
+func (c *MockCleaner) Verify(ctx context.Context) string {
 	return ""
 }

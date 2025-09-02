@@ -276,13 +276,12 @@ func MakeBloomfilterCoarseFilter(
 					return
 				}
 
-				bm.Add(uint64(i))
 				createTS := createTSs[i]
 				dropTS := dropTSs[i]
 				if !createTS.LT(ts) || !dropTS.LT(ts) {
 					return
 				}
-
+				bm.Add(uint64(i))
 				buf := bat.Vecs[0].GetRawBytesAt(i)
 				stats := (objectio.ObjectStats)(buf)
 				name := stats.ObjectName().UnsafeString()
@@ -350,6 +349,12 @@ func MakeSnapshotAndPitrFineFilter(
 			if transObjects[name] != nil {
 				tables := transObjects[name]
 				if entry := tables[tableID]; entry != nil {
+
+					// The table has not been dropped, and the dropTS is empty, so it cannot be deleted.
+					if entry.dropTS.IsEmpty() {
+						continue
+					}
+
 					if !logtail.ObjectIsSnapshotRefers(
 						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
 					) {

@@ -383,15 +383,17 @@ func collectMapData(
 	if len(objects) == 0 {
 		return nil
 	}
+	rows := 0
 	for _, tables := range objects {
 		for _, entry := range tables {
 			err := addObjectToBatch(bat, entry.stats, entry, mp)
 			if err != nil {
 				return err
 			}
+			rows++
 		}
 	}
-	batch.SetLength(bat, len(objects))
+	batch.SetLength(bat, rows)
 	return nil
 }
 
@@ -448,8 +450,9 @@ func loader(
 	mp *mpool.MPool,
 ) error {
 	for id := uint32(0); id < stats.BlkCnt(); id++ {
-		stats.ObjectLocation().SetID(uint16(id))
-		data, _, err := ioutil.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
+		location := stats.ObjectLocation()
+		location.SetID(uint16(id))
+		data, _, err := ioutil.LoadOneBlock(cxt, fs, location, objectio.SchemaData)
 		if err != nil {
 			return err
 		}
@@ -611,4 +614,108 @@ func (w *GCWindow) String(objects map[string]*ObjectEntry) string {
 	}
 	_, _ = buf.WriteString("]\n")
 	return buf.String()
+}
+
+type TableStats struct {
+	SharedCnt  uint64
+	SharedSize uint64
+	TotalCnt   uint64
+	TotalSize  uint64
+}
+
+func (w *GCWindow) Details(ctx context.Context, snapshotMeta *logtail.SnapshotMeta, mp *mpool.MPool) (map[uint32]*TableStats, error) {
+	buffer := MakeGCWindowBuffer(16 * mpool.MB)
+	defer buffer.Close(mp)
+	bat := buffer.Fetch()
+	defer buffer.Putback(bat, mp)
+	sourcer := w.MakeFilesReader(ctx, w.fs)
+
+	details := make(map[uint32]*TableStats)
+	objects := make(map[string]map[uint64]*ObjectEntry)
+	for {
+		bat.CleanOnlyData()
+		select {
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		default:
+		}
+		done, err := sourcer.Read(ctx, bat.Attrs, nil, mp, bat)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			break
+		}
+		createTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[1])
+		dropTSs := vector.MustFixedColNoTypeCheck[types.TS](bat.Vecs[2])
+		dbs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[3])
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[4])
+		nameVec := vector.NewVec(types.New(types.T_varchar, types.MaxVarcharLen, 0))
+		for i := 0; i < bat.Vecs[0].Length(); i++ {
+			stats := objectio.ObjectStats(bat.Vecs[0].GetBytesAt(i))
+			name := stats.ObjectName().String()
+			if objects[name] == nil {
+				objects[name] = make(map[uint64]*ObjectEntry)
+			}
+			object := &ObjectEntry{
+				stats:    &stats,
+				createTS: createTSs[i],
+				dropTS:   dropTSs[i],
+				db:       dbs[i],
+				table:    tableIDs[i],
+			}
+			objects[name][tableIDs[i]] = object
+		}
+		defer nameVec.Free(mp)
+	}
+
+	for _, tables := range objects {
+		if len(tables) > 1 {
+			shard := false
+			for tid, entry := range tables {
+				accountID, ok := snapshotMeta.GetAccountId(tid)
+				if !ok {
+					continue
+				}
+				if details[accountID] == nil {
+					details[accountID] = &TableStats{
+						SharedCnt:  1,
+						SharedSize: uint64(entry.stats.Size()),
+						TotalCnt:   1,
+						TotalSize:  uint64(entry.stats.Size()),
+					}
+					shard = true
+					continue
+				}
+				if !shard {
+					details[accountID].SharedSize += uint64(entry.stats.Size())
+					shard = true
+				}
+				details[accountID].SharedCnt++
+				details[accountID].TotalCnt++
+				details[accountID].TotalSize += uint64(entry.stats.Size())
+			}
+
+			continue
+		}
+		if snapshotMeta == nil {
+			continue
+		}
+		for tid, entry := range tables {
+			accountID, ok := snapshotMeta.GetAccountId(tid)
+			if !ok {
+				continue
+			}
+			if details[accountID] == nil {
+				details[accountID] = &TableStats{
+					TotalCnt:  1,
+					TotalSize: uint64(entry.stats.Size()),
+				}
+				continue
+			}
+			details[accountID].TotalCnt++
+			details[accountID].TotalSize += uint64(entry.stats.Size())
+		}
+	}
+	return details, nil
 }
