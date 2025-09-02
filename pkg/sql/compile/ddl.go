@@ -27,6 +27,7 @@ import (
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 
@@ -231,6 +232,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
+
+	// 5.unregister iscp jobs
+	err = iscp.UnregisterJobsByDBName(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), dbName)
+	if err != nil {
+		return err
+	}
+
 	return err
 }
 
