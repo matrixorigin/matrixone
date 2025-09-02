@@ -139,12 +139,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		affectedCols        = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
 		unsupportedErrorFmt = "unsupported alter option in copy mode: %s"
-		hasFakePK           = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
+		copyFakePKCol       = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
 	)
 
 	affectedAllIdxCols := func() {
-		hasFakePK = false
-
+		copyFakePKCol = false
 		affectedCols = affectedCols[:0]
 		for _, colDef := range tableDef.Cols {
 			affectedCols = append(affectedCols, colDef.Name)
@@ -253,7 +252,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		zap.Strings("affectedCols", affectedCols),
 		zap.Any("option", opt))
 
-	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, hasFakePK)
+	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, copyFakePKCol)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +279,7 @@ var ID atomic.Int64
 func buildAlterInsertDataSQL(
 	ctx CompilerContext,
 	alterCtx *AlterTableContext,
-	hasFakePK bool,
+	copyFakePKCol bool,
 ) (string, error) {
 
 	schemaName := alterCtx.schemaName
@@ -311,7 +310,7 @@ func buildAlterInsertDataSQL(
 		}
 	}
 
-	if hasFakePK {
+	if copyFakePKCol {
 		// why select fake pk col here?
 		// we want to clone unaffected indexes to avoid deep copy table.
 		// but if the primary table has tombstones, the re-generated fake pk column

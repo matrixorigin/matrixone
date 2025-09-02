@@ -111,6 +111,7 @@ func handleCloneTable(
 	execCtx *ExecCtx,
 	ses *Session,
 	stmt *tree.CloneTable,
+	receipt *cloneReceipt,
 	bh BackgroundExec,
 ) (err error) {
 
@@ -128,6 +129,20 @@ func handleCloneTable(
 		opAccountId   uint32
 		fromAccountId uint32
 	)
+
+	defer func() {
+		if receipt != nil {
+			receipt.srcDb = stmt.SrcTable.SchemaName.String()
+			receipt.srcTbl = stmt.SrcTable.ObjectName.String()
+			receipt.dstDb = stmt.CreateTable.Table.SchemaName.String()
+			receipt.dstTbl = stmt.CreateTable.Table.ObjectName.String()
+			receipt.snapshot = snapshot
+			receipt.snapshotTS = snapshotTS
+			receipt.toAccount = toAccountId
+			receipt.opAccount = opAccountId
+			receipt.srcAccount = fromAccountId
+		}
+	}()
 
 	if reqCtx.Value(tree.CloneLevelCtxKey{}) == nil {
 		reqCtx = context.WithValue(reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
@@ -161,12 +176,12 @@ func handleCloneTable(
 		return
 	}
 
-	if stmt.SrcTable.SchemaName == "" {
-		fromAccountId = opAccountId
-		if snapshot != nil && snapshot.Tenant != nil {
-			fromAccountId = snapshot.Tenant.TenantID
-		}
+	fromAccountId = opAccountId
+	if snapshot != nil && snapshot.Tenant != nil {
+		fromAccountId = snapshot.Tenant.TenantID
+	}
 
+	if stmt.SrcTable.SchemaName == "" {
 		// src acc = op acc
 		// src acc = to acc
 		// src != op acc and src != to acc
@@ -212,7 +227,7 @@ func handleCloneTable(
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
 	sql := execCtx.input.sql
-	if len(stmt.ToAccountName) != 0 {
+	if stmt.ToAccountOpt != nil {
 		// create table to account x
 		sql, _, _ = strings.Cut(strings.ToLower(sql), " to account ")
 	}
@@ -368,8 +383,8 @@ func handleCloneDatabase(
 			sql = sql + fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
 		}
 
-		if len(stmt.ToAccountName) != 0 {
-			sql = sql + fmt.Sprintf(" to account %s", stmt.ToAccountName)
+		if stmt.ToAccountOpt != nil {
+			sql = sql + fmt.Sprintf(" to account %s", stmt.ToAccountOpt.AccountName)
 		}
 
 		var (
@@ -389,7 +404,7 @@ func handleCloneDatabase(
 		}()
 
 		if err = handleCloneTable(
-			tempExecCtx, ses, cloneStmts[0].(*tree.CloneTable), bh,
+			tempExecCtx, ses, cloneStmts[0].(*tree.CloneTable), nil, bh,
 		); err != nil {
 			return err
 		}
