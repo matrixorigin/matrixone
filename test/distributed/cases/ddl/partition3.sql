@@ -61,7 +61,7 @@ col2 INT NOT NULL,
 col3 DATE NOT NULL,
 UNIQUE KEY (col1, col3)
 )
-PARTITION BY HASH(col1 + col3)
+PARTITION BY HASH(col1)
 PARTITIONS 6;
 
 insert into t2 values
