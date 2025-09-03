@@ -1867,8 +1867,6 @@ func (c *checkpointCleaner) ISCPTables() (map[uint64]types.TS, error) {
 	if c.iscpTablesFunc != nil {
 		return c.iscpTablesFunc()
 	}
-	c.mutation.Lock()
-	defer c.mutation.Unlock()
 	return c.mutation.snapshotMeta.GetISCP(c.ctx, c.sid, c.fs, c.mp)
 }
 

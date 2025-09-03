@@ -151,6 +151,7 @@ type Cleaner interface {
 	GetSnapshots() (map[uint32]containers.Vector, error)
 	GetDetails(ctx context.Context) (map[uint32]*TableStats, error)
 	Verify(ctx context.Context) string
+	ISCPTables() (map[uint64]types.TS, error)
 
 	// For testing
 	GetTablePK(tableId uint64) string

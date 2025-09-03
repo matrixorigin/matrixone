@@ -296,12 +296,6 @@ func (i *IscpInfo) ToTsList() []types.TS {
 	return tsList
 }
 
-type pitr struct {
-	tid        uint64
-	objects    map[objectio.Segmentid]*objectInfo
-	tombstones map[objectio.Segmentid]*objectInfo
-}
-
 // Special table information structure, used to process special tables such as PITR and ISCP
 type specialTableInfo struct {
 	tid        uint64

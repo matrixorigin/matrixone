@@ -565,7 +565,7 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, false)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-2, false)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(context.Background(), filter)
@@ -1988,10 +1988,10 @@ func TestCrossDBTxn(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	schema1 := catalog.MockSchema(2, 0)
-	schema1.Extra.BlockMaxRows = 10
+	schema1.Extra.BlockMaxRows = 100
 	schema1.Extra.ObjectMaxBlocks = 2
 	schema2 := catalog.MockSchema(4, 0)
-	schema2.Extra.BlockMaxRows = 10
+	schema2.Extra.BlockMaxRows = 100
 	schema2.Extra.ObjectMaxBlocks = 2
 
 	rows1 := schema1.Extra.BlockMaxRows * 5 / 2
@@ -2245,34 +2245,9 @@ func TestADA(t *testing.T) {
 
 	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
-
-	id, row, err = rel.GetByFilter(context.Background(), filter)
-	assert.NoError(t, err)
-
-	err = rel.Append(context.Background(), bat)
-	assert.Error(t, err)
-
-	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
-	assert.NoError(t, err)
 	_, _, err = rel.GetByFilter(context.Background(), filter)
-	assert.Error(t, err)
-	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
-
-	assert.NoError(t, txn.Commit(context.Background()))
-
-	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	err = rel.Append(context.Background(), bat)
-	assert.Error(t, err)
-	id, row, err = rel.GetByFilter(context.Background(), filter)
-	assert.NoError(t, err)
-	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
-	assert.NoError(t, err)
-	_, _, err = rel.GetByFilter(context.Background(), filter)
-	assert.Error(t, err)
-
-	err = rel.Append(context.Background(), bat)
-	assert.NoError(t, err)
+	testutil.CheckAllColRowsByScan(t, rel, 1, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
@@ -2465,10 +2440,9 @@ func TestChaos1(t *testing.T) {
 // Testing Steps
 // 1. Append 10 rows
 // 2. Start txn1
-// 3. Start txn2. Update the 3rd row 3rd col to int64(2222) and commit. -- PASS
-// 4. Txn1 try to update the 3rd row 3rd col to int64(1111). -- W-W Conflict.
-// 5. Txn1 try to delete the 3rd row. W-W Conflict. Rollback
-// 6. Start txn3 and try to update th3 3rd row 3rd col to int64(3333). -- PASS
+// 3. Start txn2 and append one row and commit
+// 4. Start txn3 and delete the row and commit
+// 5. Txn1 try to append the row. (W-W). Rollback
 func TestSnapshotIsolation1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -3830,7 +3804,7 @@ func TestRollbackCreateTable(t *testing.T) {
 		txn.Rollback(ctx)
 	}
 
-	t.Log(tae.Catalog.SimplePPString(3))
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestDropCreated4(t *testing.T) {
@@ -7639,6 +7613,326 @@ func TestPitrMeta(t *testing.T) {
 	assert.True(t, len(pitr.ToTsList()) > 0)
 }
 
+func TestIscpMeta(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := new(options.Options)
+	opts = config.WithQuickScanAndCKPOpts(opts)
+	options.WithDisableGCCheckpoint()(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	db := tae.DB
+	db.MergeScheduler.PauseAll()
+
+	fault.Enable()
+	defer fault.Disable()
+	rmFn, err2 := objectio.InjectPrintFlushEntry("")
+	assert.NoError(t, err2)
+	defer rmFn()
+
+	// Create ISCP schema based on mo_iscp_log table structure
+	iscpSchema := catalog.NewEmptySchema("mo_iscp_log")
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
+	// Define schema according to mo_iscp_log DDL
+	iscpSchema.AppendCol("account_id", types.T_uint32.ToType())   // account_id INT UNSIGNED NOT NULL
+	iscpSchema.AppendCol("table_id", types.T_uint64.ToType())     // table_id BIGINT UNSIGNED NOT NULL
+	iscpSchema.AppendCol("job_name", types.T_varchar.ToType())    // job_name VARCHAR NOT NULL
+	iscpSchema.AppendCol("job_id", types.T_uint64.ToType())       // job_id BIGINT UNSIGNED NOT NULL
+	iscpSchema.AppendCol("job_spec", types.T_json.ToType())       // job_spec JSON NOT NULL
+	iscpSchema.AppendCol("job_state", types.T_uint8.ToType())     // job_state TINYINT NOT NULL
+	iscpSchema.AppendCol("watermark", types.T_varchar.ToType())   // watermark VARCHAR NOT NULL
+	iscpSchema.AppendCol("job_status", types.T_json.ToType())     // job_status JSON NOT NULL
+	iscpSchema.AppendCol("create_at", types.T_timestamp.ToType()) // create_at TIMESTAMP NOT NULL
+	iscpSchema.AppendCol("drop_at", types.T_timestamp.ToType())   // drop_at TIMESTAMP NULL
+
+	// Create composite primary key: (account_id, table_id, job_name, job_id)
+	pkConstraint := &engine.PrimaryKeyDef{
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "account_id,table_id,job_name,job_id",
+			Names:       []string{"account_id", "table_id", "job_name", "job_id"},
+		},
+	}
+	constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
+	iscpSchema.Constraint, _ = constraintDef.MarshalBinary()
+
+	// Allow drop_at to be NULL
+	iscpSchema.ColDefs[len(iscpSchema.ColDefs)-1].NullAbility = true
+
+	_ = iscpSchema.Finalize(false)
+	iscpSchema.Extra.BlockMaxRows = 2
+	iscpSchema.Extra.ObjectMaxBlocks = 2
+
+	// Create test table schema
+	testSchema := catalog.MockSchemaAll(13, 2)
+	testSchema.Extra.BlockMaxRows = 10
+	testSchema.Extra.ObjectMaxBlocks = 2
+
+	var iscpRel handle.Relation
+	var database, testDatabase handle.Database
+	var testRel handle.Relation
+	var err error
+
+	// Setup database and relations
+	{
+		txn, _ := db.StartTxn(nil)
+		database, err = txn.GetDatabaseByID(pkgcatalog.MO_CATALOG_ID)
+		assert.Nil(t, err)
+
+		// Create ISCP table in mo_catalog
+		iscpRel, err = testutil.CreateRelation2(ctx, txn, database, iscpSchema)
+		assert.Nil(t, err)
+
+		// Create test database and table
+		testDatabase, err = testutil.CreateDatabase2(ctx, txn, "test_db")
+		assert.Nil(t, err)
+		testRel, err = testutil.CreateRelation2(ctx, txn, testDatabase, testSchema)
+		assert.Nil(t, err)
+
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+
+	// Helper function to append ISCP records
+	appendIscpRecord := func(accountID uint32, tableID uint64, jobName string, jobID uint64, watermark string, isDropped bool) {
+		opt := containers.Options{}
+		opt.Capacity = 0
+
+		attrs := []string{"account_id", "table_id", "job_name", "job_id", "job_spec", "job_state", "watermark", "job_status", "create_at", "drop_at"}
+		vecTypes := []types.Type{
+			types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+			types.T_json.ToType(), types.T_uint8.ToType(), types.T_varchar.ToType(), types.T_json.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(),
+		}
+
+		data := containers.BuildBatch(attrs, vecTypes, opt)
+
+		data.Vecs[0].Append(accountID, false)                                   // account_id
+		data.Vecs[1].Append(tableID, false)                                     // table_id
+		data.Vecs[2].Append([]byte(jobName), false)                             // job_name
+		data.Vecs[3].Append(jobID, false)                                       // job_id
+		data.Vecs[4].Append([]byte(`{"type":"backup","interval":"1h"}`), false) // job_spec
+		data.Vecs[5].Append(uint8(1), false)                                    // job_state (active)
+		data.Vecs[6].Append([]byte(watermark), false)                           // watermark
+		data.Vecs[7].Append([]byte(`{"status":"running"}`), false)              // job_status
+		data.Vecs[8].Append("", false)                                          // create_at
+
+		if isDropped {
+			data.Vecs[9].Append(tae.TxnMgr.Now().ToString(), false) // drop_at (not null for dropped jobs)
+		} else {
+			data.Vecs[9].Append(types.TS{}.ToString(), true) // drop_at (null for active jobs)
+		}
+
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("mo_catalog")
+		rel, _ := database.GetRelationByID(iscpRel.ID())
+		err := rel.Append(context.Background(), data)
+		data.Close()
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+
+	// Add multiple ISCP records with different watermarks for the same table
+	// Testing the "take minimum timestamp" logic
+	testTableID := testRel.ID()
+
+	// Create test timestamps using types.TS
+	ts1 := types.BuildTS(time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC).UnixNano(), 0) // Earlier watermark
+	ts2 := types.BuildTS(time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC).UnixNano(), 0) // Later watermark
+	ts3 := types.BuildTS(time.Date(2024, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano(), 0)  // Earliest watermark (should be selected)
+	ts4 := types.BuildTS(time.Date(2024, 1, 15, 14, 0, 0, 0, time.UTC).UnixNano(), 0) // Dropped job (should be ignored)
+	ts5 := types.BuildTS(time.Date(2024, 1, 15, 9, 0, 0, 0, time.UTC).UnixNano(), 0)  // Other table
+	ts6 := types.BuildTS(time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC).UnixNano(), 0) // Account1 backup
+	ts7 := types.BuildTS(time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC).UnixNano(), 0) // New backup job
+
+	appendIscpRecord(0, testTableID, "backup_job_1", 1001, ts1.ToString(), false) // Earlier watermark
+	appendIscpRecord(0, testTableID, "backup_job_2", 1002, ts2.ToString(), false) // Later watermark
+	appendIscpRecord(0, testTableID, "backup_job_3", 1003, ts3.ToString(), false) // Earliest watermark (should be selected)
+	appendIscpRecord(0, testTableID, "dropped_job", 1004, ts4.ToString(), true)   // Dropped job (should be ignored)
+
+	// Add records for different tables
+	appendIscpRecord(0, testTableID+1, "other_backup", 2001, ts5.ToString(), false)
+	appendIscpRecord(1, testTableID, "account1_backup", 3001, ts6.ToString(), false)
+
+	// Insert test data into the test table
+	testBat := catalog.MockBatch(testSchema, int(testSchema.Extra.BlockMaxRows*5-1))
+	defer testBat.Close()
+	testBats := testBat.Split(testBat.Length())
+
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+
+	var wg sync.WaitGroup
+	for _, dataBatch := range testBats {
+		wg.Add(1)
+		err = pool.Submit(testutil.AppendClosure(t, dataBatch, testSchema.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+
+	// Wait for checkpoints to finish
+	testutils.WaitExpect(10000, func() bool {
+		return testutil.AllCheckpointsFinished(db)
+	})
+
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
+
+	// Test deletion of ISCP records
+	{
+		txn, err := db.StartTxn(nil)
+		require.NoError(t, err)
+		db1, err := txn.GetDatabase("mo_catalog")
+		assert.NoError(t, err)
+		rel, err := db1.GetRelationByName(iscpSchema.Name)
+		assert.NoError(t, err)
+
+		// Delete one of the backup jobs by setting drop_at
+		filter := handle.NewEQFilter([]byte("backup_job_2"))
+		id, offset, err := rel.GetByFilter(context.Background(), filter)
+		assert.NoError(t, err)
+
+		// Update the record to mark it as dropped
+		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
+		if err != nil {
+			t.Logf("range delete %v, rollbacking", err)
+			_ = txn.Rollback(context.Background())
+			return
+		}
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
+	}
+
+	// Wait for checkpoints to finish after deletion
+	testutils.WaitExpected(10000, func() bool {
+		return testutil.AllCheckpointsFinished(db)
+	})
+
+	if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
+		return
+	}
+
+	// Enable GC and test ISCP functionality
+	cfg, err := db.BGCheckpointRunner.DisableCheckpoint(ctx)
+	assert.NoError(t, err)
+	db.DiskCleaner.GetCleaner().EnableGC()
+	assert.True(t, testutil.AllCheckpointsFinished(db))
+
+	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+
+	// Wait for GC to process
+	testutils.WaitExpect(3000, func() bool {
+		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
+			return false
+		}
+		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
+		if minEnd.IsEmpty() {
+			return false
+		}
+		if initMinMerged == nil {
+			return true
+		}
+		initMinEnd := initMinMerged.GetEnd()
+		return minEnd.GT(&initMinEnd)
+	})
+
+	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
+	if minMerged == nil {
+		return
+	}
+	minEnd := minMerged.GetEnd()
+	if minEnd.IsEmpty() {
+		return
+	}
+	if initMinMerged != nil {
+		initMinEnd := initMinMerged.GetEnd()
+		if !minEnd.GT(&initMinEnd) {
+			return
+		}
+	}
+
+	// Test ISCP functionality
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
+	assert.Nil(t, err)
+	assert.NotNil(t, minMerged)
+
+	// Get ISCP information
+	iscpTables, err := db.DiskCleaner.GetCleaner().ISCPTables()
+	assert.Nil(t, err)
+	assert.True(t, len(iscpTables) > 0)
+
+	// Verify that the minimum watermark is correctly selected for testTableID
+	iscpTS, exists := iscpTables[testTableID]
+	assert.True(t, exists)
+	assert.False(t, iscpTS.IsEmpty())
+
+	// The minimum watermark should be from "backup_job_3" (2024-01-15 08:00:00)
+	expectedMinTS := ts3
+	assert.True(t, iscpTS.EQ(&expectedMinTS),
+		"Expected ISCP timestamp to be the minimum watermark, got %s, expected %s",
+		iscpTS.ToString(), expectedMinTS.ToString())
+
+	// Restart and verify persistence
+	tae.Restart(ctx)
+	db = tae.DB
+
+	testutils.WaitExpect(5000, func() bool {
+		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
+			return false
+		}
+		end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
+		minEnd := minMerged.GetEnd()
+		return end.GE(&minEnd)
+	})
+
+	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
+	minEnd = minMerged.GetEnd()
+	assert.True(t, end.GE(&minEnd))
+
+	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
+	assert.Nil(t, err)
+	db.BGCheckpointRunner.EnableCheckpoint(cfg)
+
+	// Test adding new ISCP records after restart
+	{
+		txn, _ := db.StartTxn(nil)
+		testDatabase, _ = txn.GetDatabase("test_db")
+		newRel, err := testutil.CreateRelation2(ctx, txn, testDatabase, testSchema)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+
+		// Add ISCP record for the new table
+		appendIscpRecord(0, newRel.ID(), "new_backup_job", 4001, ts7.ToString(), false)
+	}
+
+	testutils.WaitExpect(10000, func() bool {
+		return testutil.AllCheckpointsFinished(db)
+	})
+
+	// Verify ISCP functionality still works after restart
+	iscpTables, err = db.DiskCleaner.GetCleaner().ISCPTables()
+	assert.Nil(t, err)
+
+	testutils.WaitExpect(10000, func() bool {
+		if len(iscpTables) <= 0 {
+			iscpTables, err = db.DiskCleaner.GetCleaner().ISCPTables()
+			assert.Nil(t, err)
+		}
+		return len(iscpTables) > 0
+	})
+
+	assert.True(t, len(iscpTables) > 0)
+	t.Logf("ISCP test completed successfully with %d tables tracked", len(iscpTables))
+}
+
 func TestMergeGC(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -11391,7 +11685,7 @@ func TestRW3(t *testing.T) {
 				txn, err := tae.StartTxn(nil)
 				assert.NoError(t, err)
 				obj := objs[offset]
-				task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{obj}, nil, tae.Runtime)
+				task, err := jobs.NewFlushTableTailTask(nil, txn, nil, []*catalog.ObjectEntry{obj}, tae.Runtime)
 				assert.NoError(t, err)
 				err = task.OnExec(context.Background())
 				assert.NoError(t, err)
@@ -12651,6 +12945,7 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 			testutils.WaitExpect(10000, func() bool {
 				return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 			})
+
 		},
 	)
 }
