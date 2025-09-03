@@ -140,16 +140,22 @@ func (w *LogEntryWriter) SetSafeDSN(dsn uint64) {
 }
 
 func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
-	w.buf.Reset()
-	if _, err = entry.WriteTo(&w.buf); err != nil {
-		return
-	}
-	w.entries = append(w.entries, entry)
-	eBuf := w.buf.Bytes()
-	if w.Footer.GetEntryCount() == 0 {
+	//w.buf.Reset()
+	//if _, err = entry.WriteTo(&w.buf); err != nil {
+	//	return
+	//}
+	//w.entries = append(w.entries, entry)
+	//eBuf := w.buf.Bytes()
+	//if w.Footer.GetEntryCount() == 0 {
+	//	w.Entry.SetStartDSN(entry.DSN)
+	//}
+	//w.Append(eBuf)
+
+	if len(w.entries) == 0 {
 		w.Entry.SetStartDSN(entry.DSN)
 	}
-	w.Append(eBuf)
+	w.entries = append(w.entries, entry)
+
 	return
 }
 
@@ -158,6 +164,20 @@ func (w *LogEntryWriter) SetStartDSN(dsn uint64) {
 }
 
 func (w *LogEntryWriter) Finish() LogEntry {
+	for _, e := range w.entries {
+		if err := e.Entry.ExecuteGroupWalPreCallbacks(); err != nil {
+			panic(err)
+		}
+
+		w.buf.Reset()
+		if _, err := e.WriteTo(&w.buf); err != nil {
+			panic(err)
+		}
+
+		eBuf := w.buf.Bytes()
+		w.Append(eBuf)
+	}
+
 	w.Entry.SetFooter(w.Footer)
 	return w.Entry
 }

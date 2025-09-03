@@ -610,7 +610,7 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	mgr.OnCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback or commit event to all waiting threads
-	_ = op.Txn.WaitDone(err, isAbort)
+	_ = op.Txn.DoneApply(err, isAbort)
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 	if mgr.GetTxnSkipFlags().Skip(TxnFlag_Heartbeat) && txn.GetStore().IsHeartbeat() {
@@ -640,7 +640,7 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	}
 	// Here to change the txn state and
 	// broadcast the rollback event to all waiting threads
-	_ = op.Txn.WaitDone(err, isAbort)
+	_ = op.Txn.DoneApply(err, isAbort)
 }
 
 // 1PC and 2PC
@@ -658,7 +658,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
-			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
+			op.Txn.DoneApply(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
 			continue
 		}
 
@@ -763,8 +763,8 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		store := op.Txn.GetStore()
 		store.TriggerTrace(txnif.TracePrepared)
 		mgr.workers.Submit(func() {
-			//Notice that WaitPrepared do nothing when op is OpRollback
-			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
+			//Notice that WaitWalAndTail do nothing when op is OpRollback
+			if err := op.Txn.WaitWalAndTail(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
 			}
