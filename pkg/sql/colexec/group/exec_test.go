@@ -46,6 +46,10 @@ func (h *hackAggExecToTest) GetOptResult() aggexec.SplitResult {
 	return nil
 }
 
+func (h *hackAggExecToTest) Size() int64 {
+	return 0
+}
+
 func (h *hackAggExecToTest) GroupGrow(more int) error {
 	h.groupNumber += more
 	return nil
