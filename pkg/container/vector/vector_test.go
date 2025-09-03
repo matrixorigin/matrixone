@@ -2562,7 +2562,7 @@ func TestGetAny(t *testing.T) {
 		v := NewVec(types.T_timestamp.ToType())
 		err := AppendFixedList(v, []types.Timestamp{10000000, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		s := GetAny(v, 0)
+		s := GetAny(v, 0, false)
 		require.Equal(t, types.Timestamp(10000000), s.(types.Timestamp))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
