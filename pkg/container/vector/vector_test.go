@@ -2481,7 +2481,7 @@ func TestGetAny(t *testing.T) {
 		err := AppendFixedList(w, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
 
-		s := GetAny(w, 0)
+		s := GetAny(w, 0, false)
 		require.Equal(t, int64(1), s.(int64))
 
 		w.Free(mp)
