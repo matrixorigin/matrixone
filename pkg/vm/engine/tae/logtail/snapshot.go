@@ -1264,6 +1264,7 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 	appendSpecialObjects(bat, sm.pitr.tid, sm.pitr.objects, sm.iscp.tid, sm.iscp.objects)
 	appendBat(deltaBat, sm.tombstones)
 	appendSpecialObjects(deltaBat, sm.pitr.tid, sm.pitr.tombstones, sm.iscp.tid, sm.iscp.tombstones)
+	defer bat.Close()
 	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
