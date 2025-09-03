@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
@@ -79,6 +80,7 @@ type LogServiceDriver struct {
 
 	clientPool *clientPool
 	committer  *groupCommitter
+	pending    []*entry.Entry
 
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
@@ -89,7 +91,8 @@ type LogServiceDriver struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	workers *ants.Pool
+	appendWorker *ants.Pool
+	splitWorker  *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -97,9 +100,15 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
-	pool, _ := ants.NewPool(cfg.ClientMaxCount, ants.WithPanicHandler(func(v interface{}) {
-		panic(v)
-	}))
+	pool1, _ := ants.NewPool(
+		cfg.ClientMaxCount, ants.WithPanicHandler(func(v interface{}) {
+			panic(v)
+		}))
+
+	//pool2, _ := ants.NewPool(
+	//	runtime.NumCPU(), ants.WithPanicHandler(func(v interface{}) {
+	//		panic(v)
+	//	}))
 
 	d := &LogServiceDriver{
 		clientPool:          newClientPool(cfg),
@@ -107,8 +116,10 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		sequenceNumberState: newSequenceNumberState(),
 		commitWaitQueue:     make(chan any, 10000),
 		postCommitQueue:     make(chan any, 10000),
-		workers:             pool,
+		appendWorker:        pool1,
+		//splitWorker:         pool2,
 	}
+
 	d.config = *cfg
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
@@ -136,7 +147,8 @@ func (d *LogServiceDriver) Close() error {
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.workers.Release()
+	d.appendWorker.Release()
+	d.splitWorker.Release()
 	return nil
 }
 

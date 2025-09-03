@@ -78,4 +78,7 @@ type Entry interface {
 	StartTime()
 	PrintTime()
 	IsPrintTime() bool
+
+	RegisterGroupWalPreCallbacks(cb func() error)
+	ExecuteGroupWalPreCallbacks() error
 }

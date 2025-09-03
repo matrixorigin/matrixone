@@ -87,10 +87,13 @@ func (a *groupCommitter) Commit() (err error) {
 	v2.LogTailBytesHistogram.Observe(float64(entry.Size()))
 	defer logSlowAppend(entry)()
 
+	//fmt.Println("Size", common.HumanReadableBytes(entry.Size()), entry.GetEntryCount())
+
 	var (
 		ctx         context.Context
 		timeoutSpan trace.Span
 	)
+
 	// Before issue#10467 is resolved, we skip this span,
 	// avoiding creating too many goroutines, which affects the performance.
 	ctx, timeoutSpan = trace.Debug(

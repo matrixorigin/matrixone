@@ -17,6 +17,7 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
@@ -82,12 +84,15 @@ type Manager struct {
 
 	maxCommittedLSN atomic.Uint64
 
-	previousSaveTS      types.TS
-	logtailCallback     atomic.Pointer[callback]
-	collectLogtailQueue sm.Queue
-	waitCommitQueue     sm.Queue
-	eventOnce           sync.Once
-	nextCompactTS       types.TS
+	previousSaveTS  types.TS
+	logtailCallback atomic.Pointer[callback]
+	logtailQueue    sm.Queue
+	eventOnce       sync.Once
+	nextCompactTS   types.TS
+
+	orderedList []*txnWithLogtails
+	collectWg   sync.WaitGroup
+	collectPool *ants.Pool
 }
 
 func NewManager(
@@ -104,8 +109,10 @@ func NewManager(
 		),
 		nowClock: nowClock,
 	}
-	mgr.collectLogtailQueue = sm.NewSafeQueue(10000, 100, mgr.onCollectTxnLogtails)
-	mgr.waitCommitQueue = sm.NewSafeQueue(10000, 100, mgr.onWaitTxnCommit)
+
+	mgr.orderedList = make([]*txnWithLogtails, 1000)
+	mgr.collectPool, _ = ants.NewPool(runtime.NumCPU())
+	mgr.logtailQueue = sm.NewSafeQueue(10000, 100, mgr.onTxnLogTails)
 
 	return mgr
 }
@@ -116,67 +123,65 @@ type txnWithLogtails struct {
 	closeCB func()
 }
 
-func (mgr *Manager) onCollectTxnLogtails(items ...any) {
-	for _, item := range items {
+func (mgr *Manager) onTxnLogTails(items ...any) {
+	if len(mgr.orderedList) < len(items) {
+		mgr.orderedList = make([]*txnWithLogtails, len(items))
+	}
+
+	for i, item := range items {
 		txn := item.(txnif.AsyncTxn)
 		if txn.IsReplay() {
-			lsn := txn.GetLSN()
-			if lsn > mgr.maxCommittedLSN.Load() {
-				mgr.maxCommittedLSN.Store(lsn)
-			} else {
-				logutil.Warn(
-					"Logtail-Manager-Wrong-LSN",
-					zap.Uint64("lsn", lsn),
-					zap.Uint64("max-lsn", mgr.maxCommittedLSN.Load()),
-				)
-			}
 			continue
 		}
-		builder := NewTxnLogtailRespBuilder(mgr.rt)
-		entries, closeCB := builder.CollectLogtail(txn)
-		txn.GetStore().DoneWaitEvent(1)
-		txnWithLogtails := &txnWithLogtails{
-			txn:     txn,
-			tails:   entries,
-			closeCB: closeCB,
-		}
-		mgr.waitCommitQueue.Enqueue(txnWithLogtails)
+
+		mgr.collectWg.Add(1)
+
+		mgr.collectPool.Submit(func() {
+			defer func() {
+				mgr.collectWg.Done()
+			}()
+
+			txn.GetStore().WaitEvent(txnif.WalPreparing)
+
+			builder := NewTxnLogtailRespBuilder(mgr.rt)
+			entries, closeCB := builder.CollectLogtail(txn)
+
+			txn.GetStore().DoneEvent(txnif.TailCollecting)
+
+			txnTail := &txnWithLogtails{
+				txn:     txn,
+				tails:   entries,
+				closeCB: closeCB,
+			}
+
+			mgr.orderedList[i] = txnTail
+
+			state := txn.GetTxnState(true)
+			if state != txnif.TxnStateCommitted {
+				if state != txnif.TxnStateRollbacked {
+					panic(fmt.Sprintf("wrong state %v", state))
+				}
+				return
+			}
+		})
 	}
-}
-func (mgr *Manager) onWaitTxnCommit(items ...any) {
-	for _, item := range items {
-		txn := item.(*txnWithLogtails)
-		state := txn.txn.GetTxnState(true)
-		if state != txnif.TxnStateCommitted {
-			if state != txnif.TxnStateRollbacked {
-				panic(fmt.Sprintf("wrong state %v", state))
-			}
-			continue
+
+	mgr.collectWg.Wait()
+	for i := range len(items) {
+		if mgr.orderedList[i] != nil {
+			mgr.generateLogtailWithTxn(mgr.orderedList[i])
+			mgr.orderedList[i] = nil
 		}
-		if !txn.txn.GetStore().IsHeartbeat() {
-			lsn := txn.txn.GetLSN()
-			if lsn > mgr.maxCommittedLSN.Load() {
-				mgr.maxCommittedLSN.Store(lsn)
-			} else {
-				logutil.Warn(
-					"Logtail-Manager-Wrong-LSN",
-					zap.Uint64("lsn", lsn),
-					zap.Uint64("max-lsn", mgr.maxCommittedLSN.Load()),
-				)
-			}
-		}
-		mgr.generateLogtailWithTxn(txn)
 	}
 }
 
 func (mgr *Manager) Stop() {
-	mgr.collectLogtailQueue.Stop()
-	mgr.waitCommitQueue.Stop()
+	mgr.logtailQueue.Stop()
+	mgr.collectPool.Release()
 }
 
 func (mgr *Manager) Start() {
-	mgr.waitCommitQueue.Start()
-	mgr.collectLogtailQueue.Start()
+	mgr.logtailQueue.Start()
 }
 
 func (mgr *Manager) UpdateMaxCommittedLSN(lsn uint64) {
@@ -219,9 +224,10 @@ func (mgr *Manager) OnEndPrePrepare(txn txnif.AsyncTxn) {
 	}
 	mgr.table.AddTxn(txn)
 }
+
 func (mgr *Manager) OnEndPrepareWAL(txn txnif.AsyncTxn) {
-	txn.GetStore().AddWaitEvent(1)
-	mgr.collectLogtailQueue.Enqueue(txn)
+	txn.GetStore().AddEvent(txnif.TailCollecting)
+	mgr.logtailQueue.Enqueue(txn)
 }
 
 // GetReader get a snapshot of all txn prepared between from and to.
