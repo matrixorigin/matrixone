@@ -7614,7 +7614,6 @@ func TestPitrMeta(t *testing.T) {
 }
 
 func TestIscpMeta(t *testing.T) {
-	t.Skip("skip")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -7642,22 +7641,22 @@ func TestIscpMeta(t *testing.T) {
 	}
 
 	// Define schema according to mo_iscp_log DDL
-	iscpSchema.AppendCol("account_id", types.T_uint32.ToType())   // account_id INT UNSIGNED NOT NULL
-	iscpSchema.AppendCol("table_id", types.T_uint64.ToType())     // table_id BIGINT UNSIGNED NOT NULL
-	iscpSchema.AppendCol("job_name", types.T_varchar.ToType())    // job_name VARCHAR NOT NULL
-	iscpSchema.AppendCol("job_id", types.T_uint64.ToType())       // job_id BIGINT UNSIGNED NOT NULL
-	iscpSchema.AppendCol("job_spec", types.T_json.ToType())       // job_spec JSON NOT NULL
-	iscpSchema.AppendCol("job_state", types.T_uint8.ToType())     // job_state TINYINT NOT NULL
-	iscpSchema.AppendCol("watermark", types.T_varchar.ToType())   // watermark VARCHAR NOT NULL
-	iscpSchema.AppendCol("job_status", types.T_json.ToType())     // job_status JSON NOT NULL
-	iscpSchema.AppendCol("create_at", types.T_timestamp.ToType()) // create_at TIMESTAMP NOT NULL
-	iscpSchema.AppendCol("drop_at", types.T_timestamp.ToType())   // drop_at TIMESTAMP NULL
+	iscpSchema.AppendCol("account_id", types.T_uint32.ToType())     // account_id INT UNSIGNED NOT NULL
+	iscpSchema.AppendCol("table_id", types.T_uint64.ToType())       // table_id BIGINT UNSIGNED NOT NULL
+	iscpSchema.AppendPKCol("job_name", types.T_varchar.ToType(), 0) // job_name VARCHAR NOT NULL
+	iscpSchema.AppendCol("job_id", types.T_uint64.ToType())         // job_id BIGINT UNSIGNED NOT NULL
+	iscpSchema.AppendCol("job_spec", types.T_json.ToType())         // job_spec JSON NOT NULL
+	iscpSchema.AppendCol("job_state", types.T_uint8.ToType())       // job_state TINYINT NOT NULL
+	iscpSchema.AppendCol("watermark", types.T_varchar.ToType())     // watermark VARCHAR NOT NULL
+	iscpSchema.AppendCol("job_status", types.T_json.ToType())       // job_status JSON NOT NULL
+	iscpSchema.AppendCol("create_at", types.T_timestamp.ToType())   // create_at TIMESTAMP NOT NULL
+	iscpSchema.AppendCol("drop_at", types.T_timestamp.ToType())     // drop_at TIMESTAMP NULL
 
 	// Create composite primary key: (account_id, table_id, job_name, job_id)
 	pkConstraint := &engine.PrimaryKeyDef{
 		Pkey: &plan.PrimaryKeyDef{
-			PkeyColName: "account_id,table_id,job_name,job_id",
-			Names:       []string{"account_id", "table_id", "job_name", "job_id"},
+			PkeyColName: "job_name",
+			Names:       []string{"job_name"},
 		},
 	}
 	constraintDef.Cts = append(constraintDef.Cts, pkConstraint)
@@ -7721,12 +7720,12 @@ func TestIscpMeta(t *testing.T) {
 		data.Vecs[5].Append(uint8(1), false)                                    // job_state (active)
 		data.Vecs[6].Append([]byte(watermark), false)                           // watermark
 		data.Vecs[7].Append([]byte(`{"status":"running"}`), false)              // job_status
-		data.Vecs[8].Append("", false)                                          // create_at
+		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false)         // create_at
 
 		if isDropped {
-			data.Vecs[9].Append(tae.TxnMgr.Now().ToString(), false) // drop_at (not null for dropped jobs)
+			data.Vecs[9].Append([]byte(tae.TxnMgr.Now().ToString()), false) // drop_at (not null for dropped jobs)
 		} else {
-			data.Vecs[9].Append(types.TS{}.ToString(), true) // drop_at (null for active jobs)
+			data.Vecs[9].Append([]byte(types.TS{}.ToString()), true) // drop_at (null for active jobs)
 		}
 
 		txn, _ := db.StartTxn(nil)
