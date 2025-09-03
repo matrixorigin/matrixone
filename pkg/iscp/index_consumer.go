@@ -181,6 +181,16 @@ func (c *IndexConsumer) run(ctx context.Context, errch chan error, r DataRetriev
 
 func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, datatype int8, errch chan error) bool {
 	// release the data
+
+	if data == nil {
+		err := c.flushCdc()
+		if err != nil {
+			errch <- err
+		}
+		close(c.sqlBufSendCh)
+		return true
+	}
+
 	defer data.Done()
 
 	insertBatch := data.insertBatch
