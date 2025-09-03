@@ -135,8 +135,7 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(
 		if bat.Vecs[1].IsNull(uint64(i)) {
 			continue
 		}
-		bs := bat.Vecs[1].GetStringAt(i)
-		vec := types.BytesToArray[T]([]byte(bs))
+		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
 		dist, err := distfn(query, vec)
 		if err != nil {
 			return false, err
