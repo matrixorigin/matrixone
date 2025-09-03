@@ -1132,7 +1132,7 @@ func (sm *SnapshotMeta) GetISCP(
 	sid string,
 	fs fileservice.FileService,
 	mp *mpool.MPool,
-) (*IscpInfo, error) {
+) (map[uint64]types.TS, error) {
 	idxes := []uint16{ColIscpTableId, ColIscpWatermark, ColIscpDropAt}
 	tombstonesStats := make([]objectio.ObjectStats, 0)
 	for _, obj := range sm.iscp.tombstones {
@@ -1140,9 +1140,7 @@ func (sm *SnapshotMeta) GetISCP(
 	}
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
-	iscpInfo := &IscpInfo{
-		tables: make(map[uint64]types.TS),
-	}
+	tables := make(map[uint64]types.TS)
 	for _, object := range sm.iscp.objects {
 		select {
 		case <-ctx.Done():
@@ -1184,9 +1182,9 @@ func (sm *SnapshotMeta) GetISCP(
 				}
 
 				// For the same tableID, take the smallest TS
-				existingTS := iscpInfo.tables[tableID]
+				existingTS := tables[tableID]
 				if existingTS.IsEmpty() || iscpTS.LT(&existingTS) {
-					iscpInfo.tables[tableID] = iscpTS
+					tables[tableID] = iscpTS
 				}
 
 				logutil.Info(
@@ -1198,7 +1196,7 @@ func (sm *SnapshotMeta) GetISCP(
 			}
 		}
 	}
-	return iscpInfo, nil
+	return tables, nil
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {

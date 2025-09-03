@@ -12615,7 +12615,7 @@ func TestGCWithCustomISCPTables(t *testing.T) {
 			bats := bat.Split(bat.Length())
 			tableID := rel.ID()
 			myTables := map[uint64]types.TS{tableID: ts}
-			db.DiskCleaner.GetCleaner().UpdateOption(gc.WithISCPTablesFunc(func() map[uint64]types.TS { return myTables }))
+			db.DiskCleaner.GetCleaner().UpdateOption(gc.WithISCPTablesFunc(func() (map[uint64]types.TS, error) { return myTables, nil }))
 
 			pool, err := ants.NewPool(20)
 			assert.Nil(t, err)
