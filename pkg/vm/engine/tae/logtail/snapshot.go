@@ -268,83 +268,30 @@ func (p *PitrInfo) ToTsList() []types.TS {
 }
 
 type IscpInfo struct {
-	cluster  types.TS
-	account  map[uint32]types.TS
-	database map[uint64]types.TS
-	tables   map[uint64]types.TS
+	tables map[uint64]types.TS
 }
 
 func (i *IscpInfo) IsEmpty() bool {
-	return i.cluster.IsEmpty() &&
-		len(i.account) == 0 &&
-		len(i.database) == 0 &&
-		len(i.tables) == 0
+	return len(i.tables) == 0
 }
 
-func (i *IscpInfo) GetTS(
-	accountID uint32,
-	dbID uint64,
-	tableID uint64,
-) (ts types.TS) {
-	ts = i.cluster
-	accountTS := i.account[accountID]
-	if !accountTS.IsEmpty() && (ts.IsEmpty() || accountTS.LT(&ts)) {
-		ts = accountTS
-	}
-
-	dbTS := i.database[dbID]
-	if !dbTS.IsEmpty() && (ts.IsEmpty() || dbTS.LT(&ts)) {
-		ts = dbTS
-	}
-
-	tableTS := i.tables[tableID]
-	if !tableTS.IsEmpty() && (ts.IsEmpty() || tableTS.LT(&ts)) {
-		ts = tableTS
-	}
-	return
+func (i *IscpInfo) GetTS(tableID uint64) (ts types.TS) {
+	return i.tables[tableID]
 }
 
 func (i *IscpInfo) MinTS() (ts types.TS) {
-	if !i.cluster.IsEmpty() {
-		ts = i.cluster
-	}
-
-	// find the minimum account ts
-	for _, p := range i.account {
-		if ts.IsEmpty() || p.LT(&ts) {
-			ts = p
-		}
-	}
-
-	// find the minimum database ts
-	for _, p := range i.database {
-		if ts.IsEmpty() || p.LT(&ts) {
-			ts = p
-		}
-	}
-
-	// find the minimum table ts
-	for _, p := range i.tables {
-		if ts.IsEmpty() || p.LT(&ts) {
-			ts = p
+	for _, t := range i.tables {
+		if ts.IsEmpty() || t.LT(&ts) {
+			ts = t
 		}
 	}
 	return
 }
 
 func (i *IscpInfo) ToTsList() []types.TS {
-	tsList := make([]types.TS, 0, len(i.account)+len(i.database)+len(i.tables)+1)
-	for _, ts := range i.account {
-		tsList = append(tsList, ts)
-	}
-	for _, ts := range i.database {
-		tsList = append(tsList, ts)
-	}
+	tsList := make([]types.TS, 0, len(i.tables))
 	for _, ts := range i.tables {
 		tsList = append(tsList, ts)
-	}
-	if !i.cluster.IsEmpty() {
-		tsList = append(tsList, i.cluster)
 	}
 	return tsList
 }
@@ -1186,7 +1133,7 @@ func (sm *SnapshotMeta) GetISCP(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (*IscpInfo, error) {
-	idxes := []uint16{ColIscpAccountId, ColIscpTableId, ColIscpWatermark, ColIscpDropAt}
+	idxes := []uint16{ColIscpTableId, ColIscpWatermark, ColIscpDropAt}
 	tombstonesStats := make([]objectio.ObjectStats, 0)
 	for _, obj := range sm.iscp.tombstones {
 		tombstonesStats = append(tombstonesStats, obj.stats)
@@ -1194,10 +1141,7 @@ func (sm *SnapshotMeta) GetISCP(
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
 	iscpInfo := &IscpInfo{
-		cluster:  types.TS{},
-		account:  make(map[uint32]types.TS),
-		database: make(map[uint64]types.TS),
-		tables:   make(map[uint64]types.TS),
+		tables: make(map[uint64]types.TS),
 	}
 	for _, object := range sm.iscp.objects {
 		select {
@@ -1219,57 +1163,34 @@ func (sm *SnapshotMeta) GetISCP(
 				return nil, err
 			}
 			defer bat.Clean(mp)
-			accountIDList := vector.MustFixedColWithTypeCheck[uint32](bat.Vecs[0])
-			tableIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[1])
-			watermarkList := bat.Vecs[2]
-			dropAtList := bat.Vecs[3]
+			tableIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
+			watermarkList := bat.Vecs[1]
+			dropAtList := bat.Vecs[2]
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
-				accountID := accountIDList[r]
 				tableID := tableIDList[r]
 				watermark := watermarkList.GetStringAt(r)
 				dropAtBytes := dropAtList.GetRawBytesAt(r)
 
-				// Parse watermark as timestamp for ISCP retention
-				// For simplicity, we use the watermark as the retention point
-				// In a real implementation, this would need proper watermark parsing
-				var iscpTS types.TS
-				if len(watermark) > 0 {
-					// Use current time as fallback if watermark parsing fails
-					iscpTS = types.BuildTS(time.Now().UnixNano(), 0)
-				} else {
-					iscpTS = types.BuildTS(time.Now().UnixNano(), 0)
-				}
-
-				// Skip if the job is dropped
+				// Skip deleted jobs
 				if len(dropAtBytes) > 0 {
 					continue
 				}
 
-				// Store the ISCP timestamp for the table
-				p := iscpInfo.tables[tableID]
-				if !p.IsEmpty() {
-					logutil.Warn("GC-PANIC-DUP-ISCP",
-						zap.Uint32("account", accountID),
-						zap.Uint64("table", tableID),
-						zap.String("old", p.ToString()),
-						zap.String("new", iscpTS.ToString()),
-					)
-					if p.LT(&iscpTS) {
-						continue
-					}
-				}
-				iscpInfo.tables[tableID] = iscpTS
-
-				// Also store for the account
-				accountP := iscpInfo.account[accountID]
-				if accountP.IsEmpty() || iscpTS.LT(&accountP) {
-					iscpInfo.account[accountID] = iscpTS
+				var iscpTS types.TS
+				if len(watermark) > 0 {
+					iscpTS = types.StringToTS(watermark)
+				} else {
+					iscpTS = types.TS{}
 				}
 
-				// TODO: info to debug
+				// For the same tableID, take the smallest TS
+				existingTS := iscpInfo.tables[tableID]
+				if existingTS.IsEmpty() || iscpTS.LT(&existingTS) {
+					iscpInfo.tables[tableID] = iscpTS
+				}
+
 				logutil.Info(
 					"GC-GetISCP",
-					zap.Uint32("account", accountID),
 					zap.Uint64("table", tableID),
 					zap.String("watermark", watermark),
 					zap.String("ts", iscpTS.ToString()),
