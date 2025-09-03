@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -260,7 +261,8 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}()
 
 	var (
-		heap = vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
+		gStreamClosed atomic.Bool
+		heap          = vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
 	)
 
 	for n := int64(0); n < nthread; n++ {
@@ -299,15 +301,20 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			// 3. Producer send one batch into stream_chan
 			// 4. Consumer notify the producer to stop streaming
 			// 5. Consumer fetch the remaining batches from stream_chan until the stream_chan is closed.
-			if !streamClosed {
-				for res := range stream_chan {
-					res.Close()
-				}
+			if streamClosed {
+				gStreamClosed.Store(true)
 			}
 		}()
 	}
 
 	wg.Wait()
+
+	// close the stream_chan if it is not closed
+	if !gStreamClosed.Load() {
+		for res := range stream_chan {
+			res.Close()
+		}
+	}
 
 	// check local context cancelled
 	select {
