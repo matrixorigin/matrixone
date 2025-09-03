@@ -15,51 +15,115 @@
 package group
 
 import (
-	"encoding/json"
+	"bytes"
+	"encoding/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type SpillableAggState struct {
-	GroupVectors  []*vector.Vector
-	PartialStates []any
-	GroupCount    int
+	GroupVectors       []*vector.Vector
+	MarshaledAggStates [][]byte
+	GroupCount         int
 }
 
 func (s *SpillableAggState) Serialize() ([]byte, error) {
-	data := map[string]interface{}{
-		"group_count":    s.GroupCount,
-		"partial_states": s.PartialStates,
-		"group_vectors":  make([]map[string]interface{}, len(s.GroupVectors)),
+	buf := bytes.NewBuffer(nil)
+
+	if err := binary.Write(buf, binary.LittleEndian, int32(s.GroupCount)); err != nil {
+		return nil, err
 	}
 
-	for i, vec := range s.GroupVectors {
-		if vec != nil {
-			vecData := map[string]interface{}{
-				"type":     vec.GetType().String(),
-				"length":   vec.Length(),
-				"is_const": vec.IsConst(),
+	if err := binary.Write(buf, binary.LittleEndian, int32(len(s.GroupVectors))); err != nil {
+		return nil, err
+	}
+	for _, vec := range s.GroupVectors {
+		if vec == nil {
+			if err := binary.Write(buf, binary.LittleEndian, int32(0)); err != nil {
+				return nil, err
 			}
-			data["group_vectors"].([]map[string]interface{})[i] = vecData
+			continue
+		}
+
+		vecBytes, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, int32(len(vecBytes))); err != nil {
+			return nil, err
+		}
+		if _, err := buf.Write(vecBytes); err != nil {
+			return nil, err
 		}
 	}
 
-	return json.Marshal(data)
+	if err := binary.Write(buf, binary.LittleEndian, int32(len(s.MarshaledAggStates))); err != nil {
+		return nil, err
+	}
+	for _, aggState := range s.MarshaledAggStates {
+		if err := binary.Write(buf, binary.LittleEndian, int32(len(aggState))); err != nil {
+			return nil, err
+		}
+		if _, err := buf.Write(aggState); err != nil {
+			return nil, err
+		}
+	}
+
+	return buf.Bytes(), nil
 }
 
 func (s *SpillableAggState) Deserialize(data []byte) error {
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	buf := bytes.NewReader(data)
+
+	var groupCount int32
+	if err := binary.Read(buf, binary.LittleEndian, &groupCount); err != nil {
 		return err
 	}
+	s.GroupCount = int(groupCount)
 
-	if count, ok := parsed["group_count"].(float64); ok {
-		s.GroupCount = int(count)
+	var groupVecCount int32
+	if err := binary.Read(buf, binary.LittleEndian, &groupVecCount); err != nil {
+		return err
+	}
+	s.GroupVectors = make([]*vector.Vector, groupVecCount)
+	for i := 0; i < int(groupVecCount); i++ {
+		var size int32
+		if err := binary.Read(buf, binary.LittleEndian, &size); err != nil {
+			return err
+		}
+		if size == 0 {
+			s.GroupVectors[i] = nil
+			continue
+		}
+
+		vecBytes := make([]byte, size)
+		if _, err := buf.Read(vecBytes); err != nil {
+			return err
+		}
+
+		vec := vector.NewVec(types.T_any.ToType())
+		if err := vec.UnmarshalBinary(vecBytes); err != nil {
+			return err
+		}
+		s.GroupVectors[i] = vec
 	}
 
-	if states, ok := parsed["partial_states"].([]interface{}); ok {
-		s.PartialStates = states
+	var aggStateCount int32
+	if err := binary.Read(buf, binary.LittleEndian, &aggStateCount); err != nil {
+		return err
+	}
+	s.MarshaledAggStates = make([][]byte, aggStateCount)
+	for i := 0; i < int(aggStateCount); i++ {
+		var size int32
+		if err := binary.Read(buf, binary.LittleEndian, &size); err != nil {
+			return err
+		}
+		s.MarshaledAggStates[i] = make([]byte, size)
+		if _, err := buf.Read(s.MarshaledAggStates[i]); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -72,7 +136,9 @@ func (s *SpillableAggState) EstimateSize() int64 {
 			size += int64(vec.Size())
 		}
 	}
-	size += int64(len(s.PartialStates) * 64)
+	for _, aggState := range s.MarshaledAggStates {
+		size += int64(len(aggState))
+	}
 	return size
 }
 
@@ -83,5 +149,5 @@ func (s *SpillableAggState) Free(mp *mpool.MPool) {
 		}
 	}
 	s.GroupVectors = nil
-	s.PartialStates = nil
+	s.MarshaledAggStates = nil
 }
