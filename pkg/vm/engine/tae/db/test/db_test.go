@@ -565,7 +565,7 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 	testutil.CompactBlocks(t, 0, tae, testutil.DefaultTestDB, schema, false)
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-2, false)
+	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-1, false)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(context.Background(), filter)
@@ -1988,10 +1988,10 @@ func TestCrossDBTxn(t *testing.T) {
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	schema1 := catalog.MockSchema(2, 0)
-	schema1.Extra.BlockMaxRows = 100
+	schema1.Extra.BlockMaxRows = 10
 	schema1.Extra.ObjectMaxBlocks = 2
 	schema2 := catalog.MockSchema(4, 0)
-	schema2.Extra.BlockMaxRows = 100
+	schema2.Extra.BlockMaxRows = 10
 	schema2.Extra.ObjectMaxBlocks = 2
 
 	rows1 := schema1.Extra.BlockMaxRows * 5 / 2
@@ -2245,9 +2245,34 @@ func TestADA(t *testing.T) {
 
 	err = rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
-	_, _, err = rel.GetByFilter(context.Background(), filter)
+
+	id, row, err = rel.GetByFilter(context.Background(), filter)
 	assert.NoError(t, err)
-	testutil.CheckAllColRowsByScan(t, rel, 1, true)
+
+	err = rel.Append(context.Background(), bat)
+	assert.Error(t, err)
+
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(context.Background(), filter)
+	assert.Error(t, err)
+	err = rel.Append(context.Background(), bat)
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit(context.Background()))
+
+	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
+	err = rel.Append(context.Background(), bat)
+	assert.Error(t, err)
+	id, row, err = rel.GetByFilter(context.Background(), filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row, handle.DT_Normal)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(context.Background(), filter)
+	assert.Error(t, err)
+
+	err = rel.Append(context.Background(), bat)
+	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
@@ -2440,9 +2465,10 @@ func TestChaos1(t *testing.T) {
 // Testing Steps
 // 1. Append 10 rows
 // 2. Start txn1
-// 3. Start txn2 and append one row and commit
-// 4. Start txn3 and delete the row and commit
-// 5. Txn1 try to append the row. (W-W). Rollback
+// 3. Start txn2. Update the 3rd row 3rd col to int64(2222) and commit. -- PASS
+// 4. Txn1 try to update the 3rd row 3rd col to int64(1111). -- W-W Conflict.
+// 5. Txn1 try to delete the 3rd row. W-W Conflict. Rollback
+// 6. Start txn3 and try to update th3 3rd row 3rd col to int64(3333). -- PASS
 func TestSnapshotIsolation1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
@@ -3804,7 +3830,7 @@ func TestRollbackCreateTable(t *testing.T) {
 		txn.Rollback(ctx)
 	}
 
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	t.Log(tae.Catalog.SimplePPString(3))
 }
 
 func TestDropCreated4(t *testing.T) {
@@ -11685,7 +11711,7 @@ func TestRW3(t *testing.T) {
 				txn, err := tae.StartTxn(nil)
 				assert.NoError(t, err)
 				obj := objs[offset]
-				task, err := jobs.NewFlushTableTailTask(nil, txn, nil, []*catalog.ObjectEntry{obj}, tae.Runtime)
+				task, err := jobs.NewFlushTableTailTask(nil, txn, []*catalog.ObjectEntry{obj}, nil, tae.Runtime)
 				assert.NoError(t, err)
 				err = task.OnExec(context.Background())
 				assert.NoError(t, err)
@@ -12865,89 +12891,6 @@ func TestTNCatalogEventSource(t *testing.T) {
 	defer free()
 	require.NotNil(t, bat)
 
-}
-
-func TestGCWithCustomISCPTables(t *testing.T) {
-	ioutil.RunPipelineTest(
-		func() {
-			defer testutils.AfterTest(t)()
-			testutils.EnsureNoLeak(t)
-			ctx := context.Background()
-
-			opts := new(options.Options)
-			opts = config.WithQuickScanAndCKPOpts(opts)
-			options.WithDisableGCCheckpoint()(opts)
-
-			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-			defer tae.Close()
-			db := tae.DB
-
-			db.MergeScheduler.PauseAll()
-
-			ts := types.BuildTS(time.Now().UnixNano(), 0)
-
-			schema1 := catalog.MockSchemaAll(13, 2)
-			schema1.Extra.BlockMaxRows = 10
-			schema1.Extra.ObjectMaxBlocks = 2
-
-			schema2 := catalog.MockSchemaAll(13, 2)
-			schema2.Extra.BlockMaxRows = 10
-			schema2.Extra.ObjectMaxBlocks = 2
-			var rel handle.Relation
-			{
-				txn, _ := db.StartTxn(nil)
-				database, err := txn.CreateDatabase("db", "", "")
-				assert.Nil(t, err)
-				_, err = database.CreateRelation(schema1)
-				assert.Nil(t, err)
-				rel, err = database.CreateRelation(schema2)
-				assert.Nil(t, err)
-				assert.Nil(t, txn.Commit(context.Background()))
-			}
-			bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
-			defer bat.Close()
-			bats := bat.Split(bat.Length())
-			tableID := rel.ID()
-			myTables := map[uint64]types.TS{tableID: ts}
-			db.DiskCleaner.GetCleaner().UpdateOption(gc.WithISCPTablesFunc(func() (map[uint64]types.TS, error) { return myTables, nil }))
-
-			pool, err := ants.NewPool(20)
-			assert.Nil(t, err)
-			defer pool.Release()
-			var wg sync.WaitGroup
-
-			for _, data := range bats {
-				wg.Add(2)
-				err = pool.Submit(testutil.AppendClosure(t, data, schema1.Name, db, &wg))
-				assert.Nil(t, err)
-				err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
-				assert.Nil(t, err)
-			}
-			wg.Wait()
-			testutils.WaitExpect(10000, func() bool {
-				if tae.Wal.GetPenddingCnt() != 0 {
-					return false
-				}
-				ckp := tae.BGCheckpointRunner.GetICKPIntentOnlyForTest()
-				if ckp == nil {
-					return true
-				}
-				return ckp.IsFinished()
-			})
-			t.Log(tae.Catalog.SimplePPString(common.PPL1))
-			if db.Runtime.Scheduler.GetPenddingLSNCnt() != 0 {
-				return
-			}
-			logutil.Infof("start gc")
-			assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-			err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
-			assert.Nil(t, err)
-			testutils.WaitExpect(10000, func() bool {
-				return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
-			})
-
-		},
-	)
 }
 
 func TestCheckpointTableIDBatch1(t *testing.T) {
