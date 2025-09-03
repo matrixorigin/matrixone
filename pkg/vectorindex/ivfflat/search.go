@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -86,7 +87,8 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 				//os.Stderr.WriteString("Centroid is NULL\n")
 				continue
 			}
-			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
+			val := faVec.GetStringAt(r)
+			vec := types.BytesToArray[T](util.UnsafeStringToBytes(val))
 			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: vec})
 		}
 	}
@@ -129,11 +131,12 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(
 	defer res.Close()
 
 	for i := 0; i < bat.RowCount(); i++ {
-		pk := vector.GetAny(bat.Vecs[0], i)
+		pk := vector.GetAny(bat.Vecs[0], i, true)
 		if bat.Vecs[1].IsNull(uint64(i)) {
 			continue
 		}
-		vec := types.BytesToArray[T](bat.Vecs[1].GetBytesAt(i))
+		bs := bat.Vecs[1].GetStringAt(i)
+		vec := types.BytesToArray[T]([]byte(bs))
 		dist, err := distfn(query, vec)
 		if err != nil {
 			return false, err

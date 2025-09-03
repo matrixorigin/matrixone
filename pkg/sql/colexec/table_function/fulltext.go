@@ -324,7 +324,7 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 
 	for i := 0; i < bat.RowCount(); i++ {
 		// doc_id any
-		doc_id := vector.GetAny(bat.Vecs[0], i)
+		doc_id := vector.GetAny(bat.Vecs[0], i, false)
 
 		bytes, ok := doc_id.([]byte)
 		if ok {
