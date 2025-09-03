@@ -49,38 +49,66 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		return nil
 	}
 
-	partialStates := make([]any, len(group.ctr.result1.AggList))
+	marshaledAggStates := make([][]byte, len(group.ctr.result1.AggList))
 	for i, agg := range group.ctr.result1.AggList {
 		if agg != nil {
-			partial, err := aggexec.MarshalAggFuncExec(agg)
+			marshaledData, err := aggexec.MarshalAggFuncExec(agg)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to marshal aggregator %d: %v", i, err)
 			}
-			partialStates[i] = partial
+			marshaledAggStates[i] = marshaledData
 		}
 	}
 
-	groupVecs := make([]*vector.Vector, 0)
 	totalGroups := 0
 	for _, bat := range group.ctr.result1.ToPopped {
-		if bat != nil && bat.RowCount() > 0 {
+		if bat != nil {
 			totalGroups += bat.RowCount()
-			for _, vec := range bat.Vecs {
-				if vec != nil {
-					groupVecs = append(groupVecs, vec)
+		}
+	}
+
+	if totalGroups == 0 {
+		return nil
+	}
+
+	var groupVecs []*vector.Vector
+	if len(group.ctr.result1.ToPopped) > 0 && group.ctr.result1.ToPopped[0] != nil {
+		numGroupByCols := len(group.ctr.result1.ToPopped[0].Vecs)
+		groupVecs = make([]*vector.Vector, numGroupByCols)
+
+		for i := 0; i < numGroupByCols; i++ {
+			if len(group.ctr.result1.ToPopped[0].Vecs) > i && group.ctr.result1.ToPopped[0].Vecs[i] != nil {
+				groupVecs[i] = vector.NewVec(*group.ctr.result1.ToPopped[0].Vecs[i].GetType())
+			}
+		}
+
+		for _, bat := range group.ctr.result1.ToPopped {
+			if bat != nil && bat.RowCount() > 0 {
+				for i, vec := range bat.Vecs {
+					if i < len(groupVecs) && groupVecs[i] != nil && vec != nil {
+						if err := groupVecs[i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
+							for j := 0; j < len(groupVecs); j++ {
+								if groupVecs[j] != nil {
+									groupVecs[j].Free(proc.Mp())
+								}
+							}
+							return err
+						}
+					}
 				}
 			}
 		}
 	}
 
 	spillData := &SpillableAggState{
-		GroupVectors:  groupVecs,
-		PartialStates: partialStates,
-		GroupCount:    totalGroups,
+		GroupVectors:       groupVecs,
+		MarshaledAggStates: marshaledAggStates,
+		GroupCount:         totalGroups,
 	}
 
 	spillID, err := group.SpillManager.Spill(spillData)
 	if err != nil {
+		spillData.Free(proc.Mp())
 		return err
 	}
 
@@ -137,7 +165,8 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 			return fmt.Errorf("invalid spilled data type")
 		}
 
-		if err = group.ctr.result1.DealPartialResult(spillState.PartialStates); err != nil {
+		if err = group.restoreAndMergeSpilledAggregators(proc, spillState); err != nil {
+			spillData.Free(proc.Mp())
 			return err
 		}
 
@@ -148,5 +177,181 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 	}
 
 	group.ctr.spilledStates = nil
+	return nil
+}
+
+func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spillState *SpillableAggState) error {
+	if len(spillState.MarshaledAggStates) == 0 {
+		return nil
+	}
+
+	if len(group.ctr.result1.AggList) == 0 {
+		aggs := make([]aggexec.AggFuncExec, len(spillState.MarshaledAggStates))
+
+		for i, marshaledState := range spillState.MarshaledAggStates {
+			if len(marshaledState) == 0 {
+				continue
+			}
+
+			aggExpr := group.Aggs[i]
+			agg, err := makeAggExec(proc, aggExpr.GetAggID(), aggExpr.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					if aggs[j] != nil {
+						aggs[j].Free()
+					}
+				}
+				return err
+			}
+
+			if config := aggExpr.GetExtraConfig(); config != nil {
+				if err = agg.SetExtraInformation(config, 0); err != nil {
+					agg.Free()
+					for j := 0; j < i; j++ {
+						if aggs[j] != nil {
+							aggs[j].Free()
+						}
+					}
+					return err
+				}
+			}
+
+			agg, err = aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
+			if err != nil {
+				agg.Free()
+				for j := 0; j < i; j++ {
+					if aggs[j] != nil {
+						aggs[j].Free()
+					}
+				}
+				return err
+			}
+
+			aggs[i] = agg
+		}
+
+		group.ctr.result1.AggList = aggs
+
+		if len(spillState.GroupVectors) > 0 && spillState.GroupCount > 0 {
+			chunkSize := aggexec.GetMinAggregatorsChunkSize(spillState.GroupVectors, aggs)
+
+			for offset := 0; offset < spillState.GroupCount; offset += chunkSize {
+				size := chunkSize
+				if offset+size > spillState.GroupCount {
+					size = spillState.GroupCount - offset
+				}
+
+				bat := getInitialBatchWithSameTypeVecs(spillState.GroupVectors)
+				for i, vec := range spillState.GroupVectors {
+					if vec != nil && i < len(bat.Vecs) {
+						if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
+							bat.Clean(proc.Mp())
+							return err
+						}
+					}
+				}
+				bat.SetRowCount(size)
+				group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, bat)
+			}
+		}
+
+		return nil
+	}
+
+	for _, currentAgg := range group.ctr.result1.AggList {
+		if currentAgg != nil {
+			if err := currentAgg.GroupGrow(spillState.GroupCount); err != nil {
+				return err
+			}
+		}
+	}
+
+	tempAggs := make([]aggexec.AggFuncExec, len(spillState.MarshaledAggStates))
+	defer func() {
+		for _, agg := range tempAggs {
+			if agg != nil {
+				agg.Free()
+			}
+		}
+	}()
+
+	for i, marshaledState := range spillState.MarshaledAggStates {
+		if len(marshaledState) == 0 {
+			continue
+		}
+
+		aggExpr := group.Aggs[i]
+		agg, err := makeAggExec(proc, aggExpr.GetAggID(), aggExpr.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+		if err != nil {
+			return err
+		}
+
+		if config := aggExpr.GetExtraConfig(); config != nil {
+			if err = agg.SetExtraInformation(config, 0); err != nil {
+				agg.Free()
+				return err
+			}
+		}
+
+		agg, err = aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
+		if err != nil {
+			agg.Free()
+			return err
+		}
+
+		tempAggs[i] = agg
+	}
+
+	currentGroupCount := 0
+	for _, bat := range group.ctr.result1.ToPopped {
+		if bat != nil {
+			currentGroupCount += bat.RowCount()
+		}
+	}
+
+	for i, tempAgg := range tempAggs {
+		if tempAgg == nil {
+			continue
+		}
+
+		currentAgg := group.ctr.result1.AggList[i]
+		if currentAgg == nil {
+			continue
+		}
+
+		for spilledGroupIdx := 0; spilledGroupIdx < spillState.GroupCount; spilledGroupIdx++ {
+			currentGroupIdx := currentGroupCount + spilledGroupIdx
+			if err := currentAgg.Merge(tempAgg, currentGroupIdx, spilledGroupIdx); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(spillState.GroupVectors) > 0 && spillState.GroupCount > 0 {
+		chunkSize := group.ctr.result1.ChunkSize
+		if chunkSize == 0 {
+			chunkSize = spillState.GroupCount
+		}
+
+		for offset := 0; offset < spillState.GroupCount; offset += chunkSize {
+			size := chunkSize
+			if offset+size > spillState.GroupCount {
+				size = spillState.GroupCount - offset
+			}
+
+			bat := getInitialBatchWithSameTypeVecs(spillState.GroupVectors)
+			for i, vec := range spillState.GroupVectors {
+				if vec != nil && i < len(bat.Vecs) {
+					if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
+						bat.Clean(proc.Mp())
+						return err
+					}
+				}
+			}
+			bat.SetRowCount(size)
+			group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, bat)
+		}
+	}
+
 	return nil
 }
