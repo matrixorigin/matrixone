@@ -65,6 +65,7 @@ const (
 	SnapshotTidIdx
 	AObjectDelIdx
 	PitrTidIdx
+	IscpTidIdx
 )
 
 const MoTablesPK = "mo_tables_pk"
@@ -99,6 +100,20 @@ const (
 	ColPitrObjId
 	ColPitrLength
 	ColPitrUnit
+)
+
+// iscp schema
+const (
+	ColIscpAccountId uint16 = iota
+	ColIscpTableId
+	ColIscpJobName
+	ColIscpJobId
+	ColIscpJobSpec
+	ColIscpJobState
+	ColIscpWatermark
+	ColIscpJobStatus
+	ColIscpCreateAt
+	ColIscpDropAt
 )
 
 var (
@@ -252,6 +267,85 @@ func (p *PitrInfo) ToTsList() []types.TS {
 	return tsList
 }
 
+// Special table information structure, used to process special tables such as PITR and ISCP
+type specialTableInfo struct {
+	tid        uint64
+	objects    map[objectio.Segmentid]*objectInfo
+	tombstones map[objectio.Segmentid]*objectInfo
+}
+
+func (st *specialTableInfo) init() {
+	st.objects = make(map[objectio.Segmentid]*objectInfo)
+	st.tombstones = make(map[objectio.Segmentid]*objectInfo)
+}
+
+func (st *specialTableInfo) reset() {
+	st.objects = nil
+	st.tombstones = nil
+	st.init()
+}
+
+func (st *specialTableInfo) trim() {
+	for id, info := range st.objects {
+		if !info.deleteAt.IsEmpty() {
+			delete(st.objects, id)
+		}
+	}
+	for id, info := range st.tombstones {
+		if !info.deleteAt.IsEmpty() {
+			delete(st.tombstones, id)
+		}
+	}
+}
+
+func (st *specialTableInfo) getTombstonesStats() []objectio.ObjectStats {
+	tombstonesStats := make([]objectio.ObjectStats, 0)
+	for _, obj := range st.tombstones {
+		tombstonesStats = append(tombstonesStats, obj.stats)
+	}
+	return tombstonesStats
+}
+
+// General object processing functions
+func (st *specialTableInfo) processObjects(
+	ctx context.Context,
+	fs fileservice.FileService,
+	idxes []uint16,
+	ds *BackupDeltaLocDataSource,
+	mp *mpool.MPool,
+	processor func(bat *batch.Batch, r int) error,
+) error {
+	for _, object := range st.objects {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		default:
+		}
+		location := object.stats.ObjectLocation()
+		name := object.stats.ObjectName()
+		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
+			loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
+			blk := objectio.BlockInfo{
+				BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
+				MetaLoc: objectio.ObjectLocation(loc),
+			}
+
+			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
+			if err != nil {
+				return err
+			}
+			defer bat.Clean(mp)
+
+			for r := 0; r < bat.Vecs[0].Length(); r++ {
+				if err := processor(bat, r); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 type SnapshotMeta struct {
 	sync.RWMutex
 
@@ -262,11 +356,8 @@ type SnapshotMeta struct {
 
 	aobjDelTsMap map[types.TS]struct{} // used for filering out transferred tombstones
 
-	pitr struct {
-		tid        uint64
-		objects    map[objectio.Segmentid]*objectInfo
-		tombstones map[objectio.Segmentid]*objectInfo
-	}
+	pitr specialTableInfo
+	iscp specialTableInfo
 
 	// tables records all the table information of mo, the key is account id,
 	// and the map is the mapping of table id and table information.
@@ -298,8 +389,8 @@ func NewSnapshotMeta() *SnapshotMeta {
 		snapshotTableIDs: make(map[uint64]struct{}),
 		tablePKIndex:     make(map[string][]*tableInfo),
 	}
-	meta.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
-	meta.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
+	meta.pitr.init()
+	meta.iscp.init()
 	return meta
 }
 
@@ -351,6 +442,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 	collector := func(
 		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 		_ *map[objectio.Segmentid]*objectInfo,
+		_ *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -379,8 +471,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			moTable[id].deleteAt = deleteTS
 		}
 	}
-	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects(ctx, &tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
+	collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -454,12 +546,20 @@ func (sm *SnapshotMeta) updateTableInfo(
 						zap.Uint64("tid", tid),
 						zap.Uint64("old-tid", sm.pitr.tid),
 					)
-					sm.pitr.objects = nil
-					sm.pitr.tombstones = nil
-					sm.pitr.objects = make(map[objectio.Segmentid]*objectInfo)
-					sm.pitr.tombstones = make(map[objectio.Segmentid]*objectInfo)
+					sm.pitr.reset()
 				}
 				sm.pitr.tid = tid
+			}
+			if dbName == catalog2.MO_CATALOG && name == catalog2.MO_ISCP_LOG {
+				if sm.iscp.tid > 0 && sm.iscp.tid != tid {
+					logutil.Warn(
+						"GC-PANIC-UPDATE-TABLE-P2-ISCP",
+						zap.Uint64("tid", tid),
+						zap.Uint64("old-tid", sm.iscp.tid),
+					)
+					sm.iscp.reset()
+				}
+				sm.iscp.tid = tid
 			}
 			if sm.tables[account] == nil {
 				sm.tables[account] = make(map[uint64]*tableInfo)
@@ -598,10 +698,12 @@ func collectObjects(
 	ctx context.Context,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 	data *CKPReader,
 	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
+		*map[objectio.Segmentid]*objectInfo,
 		*map[objectio.Segmentid]*objectInfo,
 		uint64,
 		objectio.ObjectStats,
@@ -619,7 +721,7 @@ func collectObjects(
 			rowID types.Rowid,
 		) error {
 			if objectType == objType {
-				collector(objects, objects2, table, objectStats, createTS, deleteTS)
+				collector(objects, objects2, objects3, table, objectStats, createTS, deleteTS)
 			}
 			return nil
 		},
@@ -662,13 +764,14 @@ func (sm *SnapshotMeta) Update(
 		return
 	}
 
-	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 {
+	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 && sm.iscp.tid == 0 {
 		return
 	}
 
 	collector := func(
 		objects1 *map[uint64]map[objectio.Segmentid]*objectInfo,
 		objects2 *map[objectio.Segmentid]*objectInfo,
+		objects3 *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -709,6 +812,9 @@ func (sm *SnapshotMeta) Update(
 		if tid == sm.pitr.tid {
 			mapFun(*objects2)
 		}
+		if tid == sm.iscp.tid {
+			mapFun(*objects3)
+		}
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
 		}
@@ -721,6 +827,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
+		&sm.iscp.objects,
 		data,
 		ckputil.ObjectType_Data,
 		collector,
@@ -729,6 +836,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
+		&sm.iscp.tombstones,
 		data,
 		ckputil.ObjectType_Tombstone,
 		collector,
@@ -750,8 +858,14 @@ func (sm *SnapshotMeta) Update(
 			}
 		}
 	}
-	trimList(sm.objects, sm.pitr.objects)
-	trimList(sm.tombstones, sm.pitr.tombstones)
+
+	// Cleaning up common objects and tombstones
+	trimList(sm.objects, nil)
+	trimList(sm.tombstones, nil)
+
+	// Clean up special table objects and tombstones
+	sm.pitr.trim()
+	sm.iscp.trim()
 	return
 }
 
@@ -921,10 +1035,7 @@ func (sm *SnapshotMeta) GetPITR(
 	mp *mpool.MPool,
 ) (*PitrInfo, error) {
 	idxes := []uint16{ColPitrLevel, ColPitrObjId, ColPitrLength, ColPitrUnit}
-	tombstonesStats := make([]objectio.ObjectStats, 0)
-	for _, obj := range sm.pitr.tombstones {
-		tombstonesStats = append(tombstonesStats, obj.stats)
-	}
+	tombstonesStats := sm.pitr.getTombstonesStats()
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
 	pitrInfo := &PitrInfo{
@@ -933,109 +1044,152 @@ func (sm *SnapshotMeta) GetPITR(
 		database: make(map[uint64]types.TS),
 		tables:   make(map[uint64]types.TS),
 	}
-	for _, object := range sm.pitr.objects {
-		select {
-		case <-ctx.Done():
-			return nil, context.Cause(ctx)
-		default:
+
+	processor := func(bat *batch.Batch, r int) error {
+		objIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[1])
+		lengList := vector.MustFixedColWithTypeCheck[uint8](bat.Vecs[2])
+
+		length := lengList[r]
+		val := int(length)
+		unit := bat.Vecs[3].GetStringAt(r)
+		var ts time.Time
+		if unit == PitrUnitYear {
+			ts = AddDate(gcTime, -val, 0, 0)
+		} else if unit == PitrUnitMonth {
+			ts = AddDate(gcTime, 0, -val, 0)
+		} else if unit == PitrUnitDay {
+			ts = gcTime.AddDate(0, 0, -val)
+		} else if unit == PitrUnitHour {
+			ts = gcTime.Add(-time.Duration(val) * time.Hour)
+		} else if unit == PitrUnitMinute {
+			ts = gcTime.Add(-time.Duration(val) * time.Minute)
 		}
-		location := object.stats.ObjectLocation()
-		name := object.stats.ObjectName()
-		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
-			loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
-			blk := objectio.BlockInfo{
-				BlockID: *objectio.BuildObjectBlockid(name, uint16(i)),
-				MetaLoc: objectio.ObjectLocation(loc),
-			}
-
-			bat, _, err := blockio.BlockDataReadBackup(ctx, &blk, ds, idxes, types.TS{}, fs)
-			if err != nil {
-				return nil, err
-			}
-			defer bat.Clean(mp)
-			objIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[1])
-			lengList := vector.MustFixedColWithTypeCheck[uint8](bat.Vecs[2])
-			for r := 0; r < bat.Vecs[0].Length(); r++ {
-				length := lengList[r]
-				val := int(length)
-				unit := bat.Vecs[3].GetStringAt(r)
-				var ts time.Time
-				if unit == PitrUnitYear {
-					ts = AddDate(gcTime, -val, 0, 0)
-				} else if unit == PitrUnitMonth {
-					ts = AddDate(gcTime, 0, -val, 0)
-				} else if unit == PitrUnitDay {
-					ts = gcTime.AddDate(0, 0, -val)
-				} else if unit == PitrUnitHour {
-					ts = gcTime.Add(-time.Duration(val) * time.Hour)
-				} else if unit == PitrUnitMinute {
-					ts = gcTime.Add(-time.Duration(val) * time.Minute)
-				}
-				pitrTS := types.BuildTS(ts.UnixNano(), 0)
-				account := objIDList[r]
-				level := bat.Vecs[0].GetStringAt(r)
-				if level == PitrLevelCluster {
-					if !pitrInfo.cluster.IsEmpty() {
-						logutil.Warn("GC-PANIC-DUP-PIRT-P1",
-							zap.String("level", "cluster"),
-							zap.String("old", pitrInfo.cluster.ToString()),
-							zap.String("new", pitrTS.ToString()),
-						)
-						if pitrInfo.cluster.LT(&pitrTS) {
-							continue
-						}
-					}
-					pitrInfo.cluster = pitrTS
-
-				} else if level == PitrLevelAccount {
-					id := uint32(account)
-					p := pitrInfo.account[id]
-					if !p.IsEmpty() && p.LT(&pitrTS) {
-						continue
-					}
-					pitrInfo.account[id] = pitrTS
-				} else if level == PitrLevelDatabase {
-					id := uint64(account)
-					p := pitrInfo.database[id]
-					if !p.IsEmpty() {
-						logutil.Warn("GC-PANIC-DUP-PIRT-P2",
-							zap.String("level", "database"),
-							zap.Uint64("id", id),
-							zap.String("old", p.ToString()),
-							zap.String("new", pitrTS.ToString()),
-						)
-						if p.LT(&pitrTS) {
-							continue
-						}
-					}
-					pitrInfo.database[id] = pitrTS
-				} else if level == PitrLevelTable {
-					id := uint64(account)
-					p := pitrInfo.tables[id]
-					if !p.IsEmpty() {
-						logutil.Warn("GC-PANIC-DUP-PIRT-P3",
-							zap.String("level", "table"),
-							zap.Uint64("id", id),
-							zap.String("old", p.ToString()),
-							zap.String("new", pitrTS.ToString()),
-						)
-						if p.LT(&pitrTS) {
-							continue
-						}
-					}
-					pitrInfo.tables[id] = pitrTS
-				}
-				// TODO: info to debug
-				logutil.Info(
-					"GC-GetPITR",
-					zap.String("level", level),
-					zap.Uint64("id", account),
-					zap.String("ts", pitrTS.ToString()),
+		pitrTS := types.BuildTS(ts.UnixNano(), 0)
+		account := objIDList[r]
+		level := bat.Vecs[0].GetStringAt(r)
+		if level == PitrLevelCluster {
+			if !pitrInfo.cluster.IsEmpty() {
+				logutil.Warn("GC-PANIC-DUP-PIRT-P1",
+					zap.String("level", "cluster"),
+					zap.String("old", pitrInfo.cluster.ToString()),
+					zap.String("new", pitrTS.ToString()),
 				)
+				if pitrInfo.cluster.LT(&pitrTS) {
+					return nil
+				}
 			}
+			pitrInfo.cluster = pitrTS
+
+		} else if level == PitrLevelAccount {
+			id := uint32(account)
+			p := pitrInfo.account[id]
+			if !p.IsEmpty() && p.LT(&pitrTS) {
+				return nil
+			}
+			pitrInfo.account[id] = pitrTS
+		} else if level == PitrLevelDatabase {
+			id := uint64(account)
+			p := pitrInfo.database[id]
+			if !p.IsEmpty() {
+				logutil.Warn("GC-PANIC-DUP-PIRT-P2",
+					zap.String("level", "database"),
+					zap.Uint64("id", id),
+					zap.String("old", p.ToString()),
+					zap.String("new", pitrTS.ToString()),
+				)
+				if p.LT(&pitrTS) {
+					return nil
+				}
+			}
+			pitrInfo.database[id] = pitrTS
+		} else if level == PitrLevelTable {
+			id := uint64(account)
+			p := pitrInfo.tables[id]
+			if !p.IsEmpty() {
+				logutil.Warn("GC-PANIC-DUP-PIRT-P3",
+					zap.String("level", "table"),
+					zap.Uint64("id", id),
+					zap.String("old", p.ToString()),
+					zap.String("new", pitrTS.ToString()),
+				)
+				if p.LT(&pitrTS) {
+					return nil
+				}
+			}
+			pitrInfo.tables[id] = pitrTS
 		}
+		// TODO: info to debug
+		logutil.Info(
+			"GC-GetPITR",
+			zap.String("level", level),
+			zap.Uint64("id", account),
+			zap.String("ts", pitrTS.ToString()),
+		)
+		return nil
+	}
+
+	err := sm.pitr.processObjects(ctx, fs, idxes, ds, mp, processor)
+	if err != nil {
+		return nil, err
 	}
 	return pitrInfo, nil
+}
+
+func (sm *SnapshotMeta) GetISCP(
+	ctx context.Context,
+	sid string,
+	fs fileservice.FileService,
+	mp *mpool.MPool,
+) (map[uint64]types.TS, error) {
+	idxes := []uint16{ColIscpTableId, ColIscpWatermark, ColIscpDropAt}
+	tombstonesStats := sm.iscp.getTombstonesStats()
+	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
+	tables := make(map[uint64]types.TS)
+
+	processor := func(bat *batch.Batch, r int) error {
+		tableIDList := vector.MustFixedColWithTypeCheck[uint64](bat.Vecs[0])
+		watermarkList := bat.Vecs[1]
+		dropAtList := bat.Vecs[2]
+
+		tableID := tableIDList[r]
+		watermark := watermarkList.GetStringAt(r)
+		dropAtBytes := dropAtList.GetStringAt(r)
+		// Skip deleted jobs
+		if len(dropAtBytes) > 0 {
+			dropAT := types.StringToTS(dropAtBytes)
+			if !dropAT.IsEmpty() {
+				return nil
+			}
+		}
+
+		var iscpTS types.TS
+		if len(watermark) > 0 {
+			iscpTS = types.StringToTS(watermark)
+		} else {
+			iscpTS = types.TS{}
+		}
+
+		// For the same tableID, take the smallest TS
+		existingTS := tables[tableID]
+		if existingTS.IsEmpty() || iscpTS.LT(&existingTS) {
+			tables[tableID] = iscpTS
+		}
+
+		logutil.Info(
+			"GC-GetISCP",
+			zap.Uint64("table", tableID),
+			zap.String("watermark", watermark),
+			zap.String("ts", iscpTS.ToString()),
+		)
+		return nil
+	}
+
+	err := sm.iscp.processObjects(ctx, fs, idxes, ds, mp, processor)
+	if err != nil {
+		return nil, err
+	}
+	return tables, nil
 }
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
@@ -1043,7 +1197,7 @@ func (sm *SnapshotMeta) SetTid(tid uint64) {
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint32, error) {
-	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 {
+	if len(sm.objects) == 0 && len(sm.pitr.objects) == 0 && len(sm.iscp.objects) == 0 {
 		return 0, nil
 	}
 	bat := containers.NewBatch()
@@ -1078,10 +1232,17 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) (uint3
 			appendBatForMap(bat, tid, objectMap)
 		}
 	}
+	appendSpecialObjects := func(
+		bat *containers.Batch,
+		pitrTid uint64, pitrObjects map[objectio.Segmentid]*objectInfo,
+		iscpTid uint64, iscpObjects map[objectio.Segmentid]*objectInfo) {
+		appendBatForMap(bat, pitrTid, pitrObjects)
+		appendBatForMap(bat, iscpTid, iscpObjects)
+	}
 	appendBat(bat, sm.objects)
-	appendBatForMap(bat, sm.pitr.tid, sm.pitr.objects)
+	appendSpecialObjects(bat, sm.pitr.tid, sm.pitr.objects, sm.iscp.tid, sm.iscp.objects)
 	appendBat(deltaBat, sm.tombstones)
-	appendBatForMap(deltaBat, sm.pitr.tid, sm.pitr.tombstones)
+	appendSpecialObjects(deltaBat, sm.pitr.tid, sm.pitr.tombstones, sm.iscp.tid, sm.iscp.tombstones)
 	defer bat.Close()
 	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
@@ -1113,10 +1274,12 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	bat := containers.NewBatch()
 	snapTableBat := containers.NewBatch()
 	pitrTableBat := containers.NewBatch()
+	iscpTableBat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
 		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 		snapTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 		pitrTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
+		iscpTableBat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	appendBat := func(bat *containers.Batch, table *tableInfo) {
 		vector.AppendFixed[uint32](
@@ -1145,6 +1308,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 				appendBat(pitrTableBat, table)
 				continue
 			}
+			if table.tid == sm.iscp.tid {
+				appendBat(iscpTableBat, table)
+				continue
+			}
 
 			if _, ok := sm.snapshotTableIDs[table.tid]; ok {
 				appendBat(snapTableBat, table)
@@ -1154,6 +1321,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	defer bat.Close()
 	defer snapTableBat.Close()
 	defer pitrTableBat.Close()
+	defer iscpTableBat.Close()
 
 	aObjDelTsBat := containers.NewBatch()
 	for i, attr := range aObjectDelSchemaAttr {
@@ -1186,6 +1354,10 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 		return 0, err
 	}
 
+	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(iscpTableBat)); err != nil {
+		return 0, err
+	}
+
 	_, err = writer.WriteEnd(context.Background())
 	if err != nil {
 		return 0, err
@@ -1193,6 +1365,23 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) (
 	stats := writer.GetObjectStats()
 	size := stats.OriginSize()
 	return size, err
+}
+
+// General special table rebuild functions
+func (sm *SnapshotMeta) rebuildSpecialTable(ins *containers.Batch, tableInfo *specialTableInfo, tableName string) {
+	sm.Lock()
+	defer sm.Unlock()
+	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
+		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+	if ins.Length() < 1 {
+		logutil.Warnf("Rebuild%s unexpected length %d", tableName, ins.Length())
+		return
+	}
+	logutil.Infof("Rebuild %s tid %d", tableName, insTIDs[0])
+	for i := 0; i < ins.Length(); i++ {
+		tid := insTIDs[i]
+		tableInfo.tid = tid
+	}
 }
 
 func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
@@ -1265,19 +1454,11 @@ func (sm *SnapshotMeta) RebuildTid(ins *containers.Batch) {
 }
 
 func (sm *SnapshotMeta) RebuildPitr(ins *containers.Batch) {
-	sm.Lock()
-	defer sm.Unlock()
-	insTIDs := vector.MustFixedColWithTypeCheck[uint64](
-		ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
-	if ins.Length() < 1 {
-		logutil.Warnf("RebuildPitr unexpected length %d", ins.Length())
-		return
-	}
-	logutil.Infof("RebuildPitr tid %d", insTIDs[0])
-	for i := 0; i < ins.Length(); i++ {
-		tid := insTIDs[i]
-		sm.pitr.tid = tid
-	}
+	sm.rebuildSpecialTable(ins, &sm.pitr, "Pitr")
+}
+
+func (sm *SnapshotMeta) RebuildIscp(ins *containers.Batch) {
+	sm.rebuildSpecialTable(ins, &sm.iscp, "Iscp")
 }
 
 func (sm *SnapshotMeta) RebuildAObjectDel(ins *containers.Batch) {
@@ -1302,6 +1483,7 @@ func (sm *SnapshotMeta) Rebuild(
 	ins *containers.Batch,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 ) {
 	sm.Lock()
 	defer sm.Unlock()
@@ -1321,6 +1503,20 @@ func (sm *SnapshotMeta) Rebuild(
 				}
 				logutil.Info(
 					"GC-Rebuild-P1",
+					zap.String("object-name", objectStats.ObjectName().String()),
+					zap.String("create-at", createTS.ToString()),
+				)
+			}
+			continue
+		}
+		if tid == sm.iscp.tid {
+			if (*objects3)[objectStats.ObjectName().SegmentId()] == nil {
+				(*objects3)[objectStats.ObjectName().SegmentId()] = &objectInfo{
+					stats:    objectStats,
+					createAt: createTS,
+				}
+				logutil.Info(
+					"GC-Rebuild-ISCP-P1",
 					zap.String("object-name", objectStats.ObjectName().String()),
 					zap.String("create-at", createTS.ToString()),
 				)
@@ -1390,7 +1586,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects)
+	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects, &sm.iscp.objects)
 
 	if len(bs) == 1 {
 		return nil
@@ -1417,7 +1613,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		deltaBat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones)
+	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones, &sm.pitr.tombstones)
 	return nil
 }
 
@@ -1479,6 +1675,8 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 			sm.RebuildTid(bat)
 		} else if id == int(PitrTidIdx) {
 			sm.RebuildPitr(bat)
+		} else if id == int(IscpTidIdx) {
+			sm.RebuildIscp(bat)
 		} else {
 			panic("unknown table info type")
 		}
