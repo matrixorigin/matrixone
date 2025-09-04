@@ -267,10 +267,6 @@ func (p *PitrInfo) ToTsList() []types.TS {
 	return tsList
 }
 
-type IscpInfo struct {
-	tables map[uint64]types.TS
-}
-
 // Special table information structure, used to process special tables such as PITR and ISCP
 type specialTableInfo struct {
 	tid        uint64
