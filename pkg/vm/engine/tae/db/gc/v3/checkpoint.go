@@ -165,12 +165,6 @@ func WithCheckOption(enable bool) CheckpointCleanerOption {
 	}
 }
 
-func WithISCPTablesFunc(f func() (map[uint64]types.TS, error)) CheckpointCleanerOption {
-	return func(c *checkpointCleaner) {
-		c.iscpTablesFunc = f
-	}
-}
-
 type CheckpointCleanerOption func(*checkpointCleaner)
 
 func NewCheckpointCleaner(
@@ -198,12 +192,6 @@ func NewCheckpointCleaner(
 	cleaner.mutation.metaFiles = make(map[string]ioutil.TSRangeFile)
 	cleaner.mutation.snapshotMeta = logtail.NewSnapshotMeta()
 	return cleaner
-}
-
-func (c *checkpointCleaner) UpdateOption(opts ...CheckpointCleanerOption) {
-	for _, opt := range opts {
-		opt(c)
-	}
 }
 
 func (c *checkpointCleaner) Stop() {

@@ -155,7 +155,6 @@ type Cleaner interface {
 
 	// For testing
 	GetTablePK(tableId uint64) string
-	UpdateOption(opts ...CheckpointCleanerOption)
 }
 
 var ObjectTableAttrs []string

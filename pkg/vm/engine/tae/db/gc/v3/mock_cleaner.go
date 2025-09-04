@@ -147,8 +147,6 @@ func (c *MockCleaner) GetTablePK(tableId uint64) string {
 	return ""
 }
 
-func (c *MockCleaner) UpdateOption(_ ...CheckpointCleanerOption) {}
-
 func (c *MockCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {
 	return nil, nil
 }
