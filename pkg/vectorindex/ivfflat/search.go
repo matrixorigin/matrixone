@@ -59,12 +59,14 @@ type IvfflatSearch[T types.RealNumbers] struct {
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
 	idx.Version = idxcfg.Ivfflat.Version
-	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
+	sql := fmt.Sprintf(
+		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		tblcfg.DbName, tblcfg.IndexTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		idxcfg.Ivfflat.Version)
+		idxcfg.Ivfflat.Version,
+	)
 
 	//os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
 	res, err := runSql(proc, sql)
@@ -81,13 +83,14 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		faVec := bat.Vecs[1]
-		for r := range bat.RowCount() {
-			id := vector.GetFixedAtWithTypeCheck[int64](idVec, r)
-			if faVec.IsNull(uint64(r)) {
+		ids := vector.MustFixedColNoTypeCheck[int64](idVec)
+		hasNull := faVec.HasNull()
+		for i, id := range ids {
+			if hasNull && faVec.IsNull(uint64(i)) {
 				//os.Stderr.WriteString("Centroid is NULL\n")
 				continue
 			}
-			val := faVec.GetStringAt(r)
+			val := faVec.GetStringAt(i)
 			vec := types.BytesToArray[T](util.UnsafeStringToBytes(val))
 			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: vec})
 		}
@@ -360,14 +363,18 @@ func (idx *IvfflatSearchIndex[T]) Destroy() {
 	idx.Centroids = nil
 }
 
-func NewIvfflatSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *IvfflatSearch[T] {
+func NewIvfflatSearch[T types.RealNumbers](
+	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig,
+) *IvfflatSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
 	s := &IvfflatSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	return s
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *IvfflatSearch[T]) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *IvfflatSearch[T]) Search(
+	proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig,
+) (keys any, distances []float64, err error) {
 	query, ok := anyquery.([]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")

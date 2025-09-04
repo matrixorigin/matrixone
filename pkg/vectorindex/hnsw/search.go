@@ -60,7 +60,13 @@ type HnswSearch struct {
 }
 
 // load chunk from database
-func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
+func (idx *HnswSearchIndex) loadChunk(
+	ctx context.Context,
+	proc *process.Process,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+	fp *os.File,
+) (stream_closed bool, err error) {
 	var res executor.Result
 	var ok bool
 
@@ -73,23 +79,23 @@ func (idx *HnswSearchIndex) loadChunk(proc *process.Process, stream_chan chan ex
 		return false, err
 	case <-proc.Ctx.Done():
 		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	case <-ctx.Done():
+		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
 	}
 
 	bat := res.Batches[0]
 	defer res.Close()
 
-	for i := 0; i < bat.RowCount(); i++ {
-		chunk_id := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], i)
+	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+	for i, chunkId := range chunkIds {
 		data := bat.Vecs[1].GetRawBytesAt(i)
+		offset := chunkId * vectorindex.MaxChunkSize
 
-		offset := chunk_id * vectorindex.MaxChunkSize
-		_, err = fp.Seek(offset, io.SeekStart)
-		if err != nil {
+		if _, err = fp.Seek(offset, io.SeekStart); err != nil {
 			return false, err
 		}
 
-		_, err = fp.Write(data)
-		if err != nil {
+		if _, err = fp.Write(data); err != nil {
 			return false, err
 		}
 	}
@@ -154,7 +160,9 @@ func (idx *HnswSearchIndex) LoadIndex(
 	// incremental load from database
 	sql_closed := false
 	for !sql_closed {
-		if sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp); err != nil {
+		if sql_closed, err = idx.loadChunk(
+			ctx, proc, stream_chan, error_chan, fp,
+		); err != nil {
 			// notify the producer to stop the sql streaming
 			cancel(err)
 			break
@@ -241,7 +249,9 @@ func (s *HnswSearch) unlock() {
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *HnswSearch) Search(
+	proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig,
+) (keys any, distances []float64, err error) {
 
 	query, ok := anyquery.([]float32)
 	if !ok {
@@ -376,11 +386,13 @@ func (s *HnswSearch) LoadMetadata(proc *process.Process) ([]*HnswSearchIndex, er
 }
 
 // load index from database
-func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswSearchIndex) ([]*HnswSearchIndex, error) {
-
+func (s *HnswSearch) LoadIndex(
+	proc *process.Process, indexes []*HnswSearchIndex,
+) ([]*HnswSearchIndex, error) {
 	for _, idx := range indexes {
-		err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch)
-		if err != nil {
+		if err := idx.LoadIndex(
+			proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -397,8 +409,7 @@ func (s *HnswSearch) Load(proc *process.Process) error {
 
 	if len(indexes) > 0 {
 		// load index model
-		indexes, err = s.LoadIndex(proc, indexes)
-		if err != nil {
+		if indexes, err = s.LoadIndex(proc, indexes); err != nil {
 			return err
 		}
 	}
