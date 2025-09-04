@@ -262,7 +262,7 @@ const (
 	CDCDeleteMOISCPLogSqlTemplate = `DELETE FROM mo_catalog.mo_iscp_log WHERE ` +
 		`drop_at < '%s'`
 	CDCSelectMOISCPLogSqlTemplate        = `SELECT * from mo_catalog.mo_iscp_log`
-	CDCSelectMOISCPLogByTableSqlTemplate = `SELECT drop_at, job_id from mo_catalog.mo_iscp_log WHERE ` +
+	CDCSelectMOISCPLogByTableSqlTemplate = `SELECT drop_at, job_id, job_spec from mo_catalog.mo_iscp_log WHERE ` +
 		`account_id = %d ` +
 		`AND table_id = %d ` +
 		`AND job_name = '%s'`
@@ -436,6 +436,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 		OutputAttrs: []string{
 			"drop_at",
 			"job_id",
+			"job_spec",
 		},
 	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {

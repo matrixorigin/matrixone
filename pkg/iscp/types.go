@@ -199,6 +199,7 @@ type ConsumerInfo struct {
 	DBName       string
 	Columns      []string
 	SrcTable     TableInfo
+	PitrName     string
 }
 
 type TableInfo struct {

@@ -169,6 +169,9 @@ func unregisterJobsByDBName(
 		tableIDs = append(tableIDs, currentIDs...)
 		return true
 	})
+	if len(tableIDs) == 0 {
+		return
+	}
 	tableIDStr := ""
 	for i, tid := range tableIDs {
 		if i != 0 {
@@ -176,7 +179,27 @@ func unregisterJobsByDBName(
 		}
 		tableIDStr += fmt.Sprintf("%d", tid)
 	}
-	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
+	getJobSpecSql := fmt.Sprintf("SELECT job_spec from mo_catalog.mo_iscp_log where account_id = %d and table_id IN (%s) And drop_at is not null", tenantId, tableIDStr)
+	result, err = ExecWithResult(ctxWithSysAccount, getJobSpecSql, cnUUID, txn)
+	if err != nil {
+		return
+	}
+	defer result.Close()
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			jobSpec, err := UnmarshalJobSpec(cols[0].GetBytesAt(i))
+			if err != nil {
+				return false
+			}
+			dropPitrSql := fmt.Sprintf("DROP PITR IF EXISTS `%s` INTERNAL;", jobSpec.PitrName)
+			_, err = ExecWithResult(ctxWithSysAccount, dropPitrSql, cnUUID, txn)
+			if err != nil {
+				return false
+			}
+		}
+		return true
+	})
+	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s) And drop_at is not null", tenantId, tableIDStr)
 	_, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
 	return
 }
@@ -240,7 +263,8 @@ func registerJob(
 		DBName:    jobID.DBName,
 		TableName: jobID.TableName,
 	}
-	exist, dropped, prevID, err := queryIndexLog(
+	jobSpec.PitrName = pitr_name
+	exist, dropped, prevID, _, err := queryIndexLog(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -360,17 +384,7 @@ func updateJobSpec(
 	if err != nil {
 		return
 	}
-	jobSpec.SrcTable = TableInfo{
-		DBID:      dbID,
-		TableID:   tableID,
-		DBName:    jobID.DBName,
-		TableName: jobID.TableName,
-	}
-	jobSpecJson, err = MarshalJobSpec(jobSpec)
-	if err != nil {
-		return
-	}
-	exist, dropped, internalJobID, err := queryIndexLog(
+	exist, dropped, internalJobID, pitrName, err := queryIndexLog(
 		ctx,
 		cnUUID,
 		txn,
@@ -378,6 +392,17 @@ func updateJobSpec(
 		tableID,
 		jobID.JobName,
 	)
+	if err != nil {
+		return
+	}
+	jobSpec.SrcTable = TableInfo{
+		DBID:      dbID,
+		TableID:   tableID,
+		DBName:    jobID.DBName,
+		TableName: jobID.TableName,
+	}
+	jobSpec.PitrName = pitrName
+	jobSpecJson, err = MarshalJobSpec(jobSpec)
 	if err != nil {
 		return
 	}
@@ -440,7 +465,7 @@ func unregisterJob(
 	if err != nil {
 		return
 	}
-	exist, dropped, internalJobID, err := queryIndexLog(
+	exist, dropped, internalJobID, pitrName, err := queryIndexLog(
 		ctxWithSysAccount,
 		cnUUID,
 		txn,
@@ -455,6 +480,11 @@ func unregisterJob(
 		return
 	}
 	ok = true
+	dropPitrSql := fmt.Sprintf("DROP PITR IF EXISTS `%s` INTERNAL;", pitrName)
+	_, err = ExecWithResult(ctxWithSysAccount, dropPitrSql, cnUUID, txn)
+	if err != nil {
+		return
+	}
 	sql := cdc.CDCSQLBuilder.ISCPLogUpdateDropAtSQL(
 		tenantId,
 		tableID,
@@ -513,7 +543,7 @@ func queryIndexLog(
 	tenantId uint32,
 	tableID uint64,
 	jobName string,
-) (exist, dropped bool, prevID uint64, err error) {
+) (exist, dropped bool, prevID uint64, pitrName string, err error) {
 	selectSql := cdc.CDCSQLBuilder.ISCPLogSelectByTableSQL(
 		tenantId,
 		tableID,
@@ -538,6 +568,11 @@ func queryIndexLog(
 			}
 			if ids[i] > prevID {
 				prevID = ids[i]
+				jobSpec, err := UnmarshalJobSpec(cols[0].GetBytesAt(i))
+				if err != nil {
+					return false
+				}
+				pitrName = jobSpec.PitrName
 			}
 		}
 		return true
