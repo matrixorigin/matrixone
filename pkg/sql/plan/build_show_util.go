@@ -48,13 +48,11 @@ func ConstructCreateTableSQL(
 		dbTblName = fmt.Sprintf("`%s`.`%s`", formatStr(schemaName), formatStr(tblName))
 	}
 
-	if tableDef.TableType == catalog.SystemOrdinaryRel {
-		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
-	} else if tableDef.TableType == catalog.SystemExternalRel {
+	if tableDef.TableType == catalog.SystemExternalRel {
 		createStr = fmt.Sprintf("CREATE EXTERNAL TABLE %s (", dbTblName)
 	} else if tableDef.TableType == catalog.SystemClusterRel {
 		createStr = fmt.Sprintf("CREATE CLUSTER TABLE %s (", dbTblName)
-	} else if tblName == catalog.MO_DATABASE || tblName == catalog.MO_TABLES || tblName == catalog.MO_COLUMNS {
+	} else {
 		createStr = fmt.Sprintf("CREATE TABLE %s (", dbTblName)
 	}
 
