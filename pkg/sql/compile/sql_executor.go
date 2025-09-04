@@ -384,6 +384,7 @@ func (exec *txnExecutor) Exec(
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
+	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
 
 	defer c.Release()
 
