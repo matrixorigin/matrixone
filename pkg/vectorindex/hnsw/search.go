@@ -120,9 +120,13 @@ func (idx *HnswSearchIndex) LoadIndex(
 	if fp, err = os.CreateTemp("", "hnswindx"); err != nil {
 		return
 	}
+	fname := fp.Name()
 	defer func() {
-		fp.Close()
-		os.Remove(fp.Name())
+		if fp != nil {
+			fp.Close()
+			fp = nil
+		}
+		os.Remove(fname)
 	}()
 
 	if err = fallocate.Fallocate(fp, 0, idx.Filesize); err != nil {
@@ -177,9 +181,12 @@ func (idx *HnswSearchIndex) LoadIndex(
 		return
 	}
 
+	fp.Close()
+	fp = nil
+
 	// check checksum
 	var chksum string
-	if chksum, err = vectorindex.CheckSum(fp.Name()); err != nil {
+	if chksum, err = vectorindex.CheckSum(fname); err != nil {
 		return
 	}
 	if chksum != idx.Checksum {
@@ -195,7 +202,7 @@ func (idx *HnswSearchIndex) LoadIndex(
 		return
 	}
 
-	if err = usearchidx.Load(fp.Name()); err != nil {
+	if err = usearchidx.Load(fname); err != nil {
 		return
 	}
 
