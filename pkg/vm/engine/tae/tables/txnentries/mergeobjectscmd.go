@@ -34,6 +34,11 @@ type mergeObjectsCmd struct {
 	id          uint32
 }
 
+func (cmd *mergeObjectsCmd) ApproxSize() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
 func newMergeBlocksCmd(
 	tid uint64,
 	droppedObjs, createdObjs []*common.ID,

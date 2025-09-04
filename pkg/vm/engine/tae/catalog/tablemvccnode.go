@@ -58,6 +58,10 @@ func (e *TableMVCCNode) Update(un *TableMVCCNode) {
 	e.TombstoneSchema = GetTombstoneSchema(un.Schema)
 }
 
+func (e *TableMVCCNode) ApproxSize() int64 {
+	return e.Schema.ApproxSize()
+}
+
 func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var schemaBuf []byte
 	if schemaBuf, err = e.Schema.Marshal(); err != nil {

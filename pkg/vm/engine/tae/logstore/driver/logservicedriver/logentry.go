@@ -163,10 +163,10 @@ func (w *LogEntryWriter) SetStartDSN(dsn uint64) {
 	w.Entry.SetStartDSN(dsn)
 }
 
-func (w *LogEntryWriter) Finish() LogEntry {
+func (w *LogEntryWriter) Finish() (LogEntry, error) {
 	for _, e := range w.entries {
 		if err := e.Entry.ExecuteGroupWalPreCallbacks(); err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		w.buf.Reset()
@@ -179,7 +179,7 @@ func (w *LogEntryWriter) Finish() LogEntry {
 	}
 
 	w.Entry.SetFooter(w.Footer)
-	return w.Entry
+	return w.Entry, nil
 }
 
 func (w *LogEntryWriter) IsFinished() bool {

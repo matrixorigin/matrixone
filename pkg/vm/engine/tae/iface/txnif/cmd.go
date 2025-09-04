@@ -29,6 +29,7 @@ type TxnCmd interface {
 	SetReplayTxn(AsyncTxn)
 	VerboseString() string
 	Close()
+	ApproxSize() int64
 }
 
 type CmdFactory func(int16) TxnCmd

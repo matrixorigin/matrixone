@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,6 +42,24 @@ import (
 
 func i82bool(v int8) bool {
 	return v == 1
+}
+
+func (def *ColDef) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += int64(len(def.Name))
+	size += 4 // idx
+	size += 2 // seqNum
+	size += int64(unsafe.Sizeof(def.Type))
+	size += 9 // hidden,phyAddr,NullAble,autoIncr,Primary,sortIdx,SortKey,clusterby,fakePk
+	size += int64(len(def.Comment))
+	size += int64(len(def.Default))
+	size += int64(len(def.OnUpdate))
+	size += int64(len(def.EnumValues))
+
+	return size
 }
 
 type ColDef struct {
@@ -471,6 +490,53 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	}
 	err = s.Finalize(true)
 	return
+}
+
+func (s *Schema) approxSizeOfExtra() int64 {
+	var (
+		size int64
+	)
+
+	if s.Extra == nil {
+		return 0
+	}
+
+	s.Extra.ProtoSize()
+	size += int64(unsafe.Sizeof(apipb.SchemaExtra{}))
+	for i := range s.Extra.DroppedAttrs {
+		size += int64(len(s.Extra.DroppedAttrs[i]))
+	}
+
+	size += int64(len(s.Extra.OldName))
+	size += int64(len(s.Extra.Hints) * 4)
+	size += int64(len(s.Extra.IndexTables) * 8)
+
+	return size
+}
+
+func (s *Schema) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += 4 + 2 + 4 + 4 // max rows, max blocks, version, catalog version
+	size += int64(AccessInfoSize)
+	size += int64(len(s.Name))
+	size += int64(len(s.Comment))
+	size += 1 // partitioned
+	size += int64(len(s.Partition))
+	size += int64(len(s.Createsql))
+	size += int64(len(s.Relkind))
+	size += int64(len(s.View))
+	size += int64(len(s.Constraint))
+	size += s.approxSizeOfExtra()
+	size += 2 // len of colDefs
+
+	for i := range s.ColDefs {
+		size += s.ColDefs[i].ApproxSize()
+	}
+
+	return size
 }
 
 func (s *Schema) Marshal() (buf []byte, err error) {

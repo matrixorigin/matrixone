@@ -59,6 +59,11 @@ type UpdateCmd struct {
 	cmdType uint16
 }
 
+func (c *UpdateCmd) ApproxSize() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
 func NewEmptyCmd(cmdType uint16, version uint16) *UpdateCmd {
 	cmd := &UpdateCmd{}
 	cmd.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, cmd)

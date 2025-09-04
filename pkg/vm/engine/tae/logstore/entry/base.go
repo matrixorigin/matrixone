@@ -235,6 +235,7 @@ type Base struct {
 	printTime bool
 	err       error
 
+	approxPayloadSize   int64
 	preGroupWalCallback []func() error
 }
 
@@ -290,6 +291,14 @@ func (b *Base) WaitDone() error {
 func (b *Base) DoneWithErr(err error) {
 	b.err = err
 	b.wg.Done()
+}
+
+func (b *Base) SetApproxPayloadSize(size int64) {
+	b.approxPayloadSize = size
+}
+
+func (b *Base) GetApproxPayloadSize() int64 {
+	return b.approxPayloadSize
 }
 
 func (b *Base) RegisterGroupWalPreCallbacks(cb func() error) {

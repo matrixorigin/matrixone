@@ -61,6 +61,7 @@ func noopAppendSkipCmd(_ context.Context, skipMap map[uint64]uint64) error {
 
 func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) LogEntry {
 	return func(r logservice.LogRecord) (ret LogEntry) {
+		var err error
 		pos := int(r.Lsn)
 		// [CmdType,PSN,DSN-S,DSN-E,SAFE]
 		spec := d.recordSpecs[pos]
@@ -73,11 +74,14 @@ func mockUnmarshalLogRecordFactor(d *mockDriver) func(r logservice.LogRecord) Lo
 			for i := 0; i < cnt; i++ {
 				e := entry.MockEntryWithPayload(nil)
 				e.DSN = startDSN + uint64(i)
-				if err := writer.AppendEntry(e); err != nil {
+				if err = writer.AppendEntry(e); err != nil {
 					panic(err)
 				}
 			}
-			ret = writer.Finish()
+
+			if ret, err = writer.Finish(); err != nil {
+				panic(err)
+			}
 		case Cmd_SkipDSN:
 			ret = SkipMapToLogEntry(d.skipMap[spec[1]])
 		}

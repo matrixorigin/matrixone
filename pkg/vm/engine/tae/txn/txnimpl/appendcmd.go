@@ -56,6 +56,11 @@ type AppendCmd struct {
 	IsTombstone bool
 }
 
+func (c *AppendCmd) ApproxSize() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
 func NewEmptyAppendCmd() *AppendCmd {
 	cmd := &AppendCmd{}
 	cmd.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, cmd)
