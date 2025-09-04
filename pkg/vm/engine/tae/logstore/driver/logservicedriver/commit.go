@@ -40,7 +40,7 @@ func (d *LogServiceDriver) getCommitter() *groupCommitter {
 	//	d.flushCurrentCommitter()
 	//}
 
-	if len(d.committer.writer.entries) > 30 {
+	if len(d.committer.writer.entries) >= 100 {
 		d.flushCurrentCommitter()
 	}
 
@@ -54,48 +54,6 @@ func (d *LogServiceDriver) flushCurrentCommitter() {
 	d.commitWaitQueue <- d.committer
 	d.committer = getCommitter()
 }
-
-//func (d *LogServiceDriver) onCommitIntents(items ...any) {
-//	for _, item := range items {
-//		e := item.(*entry.Entry)
-//		e.DSN = d.allocateDSN()
-//		d.pending = append(d.pending, e)
-//	}
-//
-//	d.flushPending()
-//}
-//
-//func (d *LogServiceDriver) flushPending() {
-//	entries := d.pending[:]
-//	d.pending = nil
-//
-//	d.splitWorker.Submit(func() {
-//		var committer *groupCommitter
-//		for _, e := range entries {
-//			if committer == nil {
-//				committer = getCommitter()
-//			}
-//
-//			if err := e.Entry.ExecuteGroupWalPreCallbacks(); err != nil {
-//				logutil.Fatal(
-//					"Wal-Cannot-Split",
-//					zap.Error(err),
-//				)
-//			}
-//
-//			committer.AddIntent(e)
-//
-//			if int(committer.writer.Size()) > d.config.ClientBufSize {
-//				d.flushCurrentCommitter(committer)
-//				committer = nil
-//			}
-//		}
-//
-//		if committer != nil {
-//			d.flushCurrentCommitter(committer)
-//		}
-//	})
-//}
 
 func (d *LogServiceDriver) onCommitIntents(items ...any) {
 	for _, item := range items {
@@ -120,12 +78,12 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.writer.SetSafeDSN(d.getCommittedDSNWatermark())
 
 	committer.Add(1)
-	d.appendWorker.Submit(func() {
+	d.worker.Submit(func() {
 		defer committer.Done()
-		if err := committer.Commit(); err != nil {
+		if err2 := committer.Commit(); err2 != nil {
 			logutil.Fatal(
 				"Wal-Cannot-Append",
-				zap.Error(err),
+				zap.Error(err2),
 			)
 		}
 	})

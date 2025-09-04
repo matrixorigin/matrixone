@@ -81,4 +81,7 @@ type Entry interface {
 
 	RegisterGroupWalPreCallbacks(cb func() error)
 	ExecuteGroupWalPreCallbacks() error
+
+	SetApproxPayloadSize(size int64)
+	GetApproxPayloadSize() int64
 }

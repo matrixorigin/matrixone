@@ -64,10 +64,6 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 	logEntry = entry.GetBase()
 	info := &entry.Info{Group: wal.GroupUserTxn}
 	logEntry.SetInfo(info)
-	//logEntry.SetCmdApproxMemSize(mgr.cmd.ApproxMemSize())
-
-	// the wal ordered by the lsn is needed in the replay, so
-	// this allocation cannot be done in the callback.
 
 	logEntry.RegisterGroupWalPreCallbacks(func() error {
 		defer func() {
@@ -106,51 +102,3 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 
 	return
 }
-
-//func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.Entry, err error) {
-//	if mgr.driver == nil {
-//		return
-//	}
-//	t1 := time.Now()
-//	mgr.cmd.SetTxn(txn)
-//	var buf []byte
-//	if buf, err = mgr.cmd.MarshalBinary(); err != nil {
-//		return
-//	}
-//	if len(buf) > 10*mpool.MB {
-//		logutil.Info(
-//			"BIG-TXN",
-//			zap.Int("wal-size", len(buf)),
-//			zap.Uint64("lsn", mgr.lsn),
-//			zap.String("txn", txn.String()),
-//		)
-//	}
-//	logEntry = entry.GetBase()
-//	logEntry.SetType(IOET_WALEntry_TxnRecord)
-//	if err = logEntry.SetPayload(buf); err != nil {
-//		return
-//	}
-//	info := &entry.Info{
-//		Group: wal.GroupUserTxn,
-//	}
-//	logEntry.SetInfo(info)
-//	t2 := time.Now()
-//	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupUserTxn, logEntry)
-//	t3 := time.Now()
-//	if t3.Sub(t1) > time.Millisecond*500 {
-//		logutil.Warn(
-//			"SLOW-LOG",
-//			zap.String("txn", txn.String()),
-//			zap.Duration("make-log-entry-duration", t3.Sub(t1)),
-//		)
-//	}
-//	if t3.Sub(t2) > time.Millisecond*20 {
-//		logutil.Warn(
-//			"SLOW-LOG",
-//			zap.Duration("append-log-entry-duration", t3.Sub(t1)),
-//			zap.String("txn", txn.String()),
-//		)
-//	}
-//	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
-//	return
-//}

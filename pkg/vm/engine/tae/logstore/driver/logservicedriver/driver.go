@@ -91,8 +91,7 @@ type LogServiceDriver struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	appendWorker *ants.Pool
-	splitWorker  *ants.Pool
+	worker *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -100,15 +99,9 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
-	pool1, _ := ants.NewPool(
-		cfg.ClientMaxCount, ants.WithPanicHandler(func(v interface{}) {
-			panic(v)
-		}))
-
-	//pool2, _ := ants.NewPool(
-	//	runtime.NumCPU(), ants.WithPanicHandler(func(v interface{}) {
-	//		panic(v)
-	//	}))
+	pool, _ := ants.NewPool(cfg.ClientMaxCount, ants.WithPanicHandler(func(v interface{}) {
+		panic(v)
+	}))
 
 	d := &LogServiceDriver{
 		clientPool:          newClientPool(cfg),
@@ -116,8 +109,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		sequenceNumberState: newSequenceNumberState(),
 		commitWaitQueue:     make(chan any, 10000),
 		postCommitQueue:     make(chan any, 10000),
-		appendWorker:        pool1,
-		//splitWorker:         pool2,
+		worker:              pool,
 	}
 
 	d.config = *cfg
@@ -147,8 +139,7 @@ func (d *LogServiceDriver) Close() error {
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.appendWorker.Release()
-	d.splitWorker.Release()
+	d.worker.Release()
 	return nil
 }
 

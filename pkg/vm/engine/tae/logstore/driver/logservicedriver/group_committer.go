@@ -74,7 +74,7 @@ func (a *groupCommitter) AddIntent(e *entry.Entry) {
 	}
 }
 
-func (a *groupCommitter) Commit() (err error) {
+func (a *groupCommitter) Commit() error {
 	_, task := gotrace.NewTask(context.Background(), "logservice.append")
 	start := time.Now()
 	defer func() {
@@ -82,12 +82,19 @@ func (a *groupCommitter) Commit() (err error) {
 		task.End()
 	}()
 
-	entry := a.writer.Finish()
+	var (
+		e   LogEntry
+		err error
+	)
 
-	v2.LogTailBytesHistogram.Observe(float64(entry.Size()))
-	defer logSlowAppend(entry)()
+	if e, err = a.writer.Finish(); err != nil {
+		return err
+	}
 
-	//fmt.Println("Size", common.HumanReadableBytes(entry.Size()), entry.GetEntryCount())
+	v2.LogTailBytesHistogram.Observe(float64(e.Size()))
+	defer logSlowAppend(e)()
+
+	//fmt.Println("Size", common.HumanReadableBytes(e.Size()), e.GetEntryCount())
 
 	var (
 		ctx         context.Context
@@ -106,9 +113,10 @@ func (a *groupCommitter) Commit() (err error) {
 	defer timeoutSpan.End()
 
 	a.psn, err = a.client.Append(
-		ctx, entry, moerr.CauseDriverAppender1,
+		ctx, e, moerr.CauseDriverAppender1,
 	)
-	return
+
+	return err
 }
 
 func (a *groupCommitter) PutbackClient() {

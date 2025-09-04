@@ -122,6 +122,11 @@ type TxnStateCmd struct {
 	CommitTs types.TS
 }
 
+func (c *TxnStateCmd) ApproxSize() int64 {
+	//TODO implement me
+	panic("implement me")
+}
+
 type ComposedCmd struct {
 	Cmds []txnif.TxnCmd
 
@@ -283,6 +288,20 @@ func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
 	c.Participants = txn.GetParticipants()
 	c.Memo = txn.GetMemo()
 }
+
+func (c *TxnCmd) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += 2 // type
+	size += 2 // version
+	size += c.ComposedCmd.ApproxSize()
+	size += c.TxnCtx.ApproxSize()
+
+	return size
+}
+
 func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	t := c.GetType()
 	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {
@@ -446,10 +465,6 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	// cmdBuf only buffers the cmds.
 	var cmdBuf bytes.Buffer
 
-	//if cc.LastPos < 0 {
-	//	cc.LastPos = 0
-	//}
-	//prevLastPos := cc.LastPos
 	if _, err = cc.WriteTo(&cmdBuf); err != nil {
 		return
 	}
@@ -464,12 +479,8 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	if _, err = headerBuf.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
-	var length = uint32(len(cc.Cmds))
-	//if cc.LastPos == 0 {
-	//	length = uint32(len(cc.Cmds) - prevLastPos)
-	//} else {
-	//	length = uint32(cc.LastPos - prevLastPos)
-	//}
+
+	length := uint32(len(cc.Cmds))
 	if _, err = headerBuf.Write(types.EncodeUint32(&length)); err != nil {
 		return
 	}
@@ -496,6 +507,23 @@ func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
 	return err
 }
 
+func (cc *ComposedCmd) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += 2 // type
+	size += 2 // version
+	size += 4 // len of cmd
+
+	for i := range cc.Cmds {
+		size += cc.Cmds[i].ApproxSize()
+	}
+
+	return size
+
+}
+
 func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 	for _, cmd := range cc.Cmds {
 		var buf []byte
@@ -503,21 +531,11 @@ func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 		if buf, err = cmd.MarshalBinary(); err != nil {
 			return
 		}
-		// If the size cmd buffer is bigger than the limit, stop push items into
-		// the buffer and update cc.LastPos.
-		// We do the check before write the cmd to writer, there must be cmds
-		// that have not been pushed into the buffer. So do NOT need to set
-		// cc.LastPos to zero.
-		//if n+int64(len(buf))+4 >= cc.CmdBufLimit {
-		//	cc.LastPos += idx
-		//	return
-		//}
 		if sn, err = objectio.WriteBytes(buf, w); err != nil {
 			return
 		}
 		n += sn
 	}
-	//cc.LastPos = 0
 	return
 }
 

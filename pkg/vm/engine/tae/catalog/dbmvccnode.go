@@ -22,6 +22,10 @@ import (
 
 type EmptyMVCCNode struct{}
 
+func (e *EmptyMVCCNode) ApproxSize() int64 {
+	return 0
+}
+
 func NewEmptyEmptyMVCCNode() *EmptyMVCCNode {
 	return &EmptyMVCCNode{}
 }
