@@ -7751,16 +7751,16 @@ func TestIscpMeta(t *testing.T) {
 		if isDropped {
 			data.Vecs[9].Append([]byte(tae.TxnMgr.Now().ToString()), false) // drop_at (not null for dropped jobs)
 		} else {
-			data.Vecs[9].Append([]byte(types.TS{}.ToString()), true) // drop_at (null for active jobs)
+			data.Vecs[9].Append(nil, true) // drop_at (null for active jobs)
 		}
 
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("mo_catalog")
 		rel, _ := database.GetRelationByID(iscpRel.ID())
 		err := rel.Append(context.Background(), data)
-		data.Close()
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
+		data.Close()
 	}
 
 	// Add multiple ISCP records with different watermarks for the same table
