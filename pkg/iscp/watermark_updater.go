@@ -179,7 +179,7 @@ func unregisterJobsByDBName(
 		}
 		tableIDStr += fmt.Sprintf("%d", tid)
 	}
-	getJobSpecSql := fmt.Sprintf("SELECT job_spec from mo_catalog.mo_iscp_log where account_id = %d and table_id IN (%s) And drop_at is not null", tenantId, tableIDStr)
+	getJobSpecSql := fmt.Sprintf("SELECT job_spec from mo_catalog.mo_iscp_log where account_id = %d and table_id IN (%s) And drop_at is null", tenantId, tableIDStr)
 	result, err = ExecWithResult(ctxWithSysAccount, getJobSpecSql, cnUUID, txn)
 	if err != nil {
 		return
@@ -199,7 +199,7 @@ func unregisterJobsByDBName(
 		}
 		return true
 	})
-	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s) And drop_at is not null", tenantId, tableIDStr)
+	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s) And drop_at is null", tenantId, tableIDStr)
 	_, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
 	return
 }
@@ -564,11 +564,16 @@ func queryIndexLog(
 			if cols[0].IsNull(0) {
 				dropped = false
 				prevID = ids[i]
+				jobSpec, err := UnmarshalJobSpec(cols[2].GetBytesAt(i))
+				if err != nil {
+					return false
+				}
+				pitrName = jobSpec.PitrName
 				return false
 			}
 			if ids[i] > prevID {
 				prevID = ids[i]
-				jobSpec, err := UnmarshalJobSpec(cols[0].GetBytesAt(i))
+				jobSpec, err := UnmarshalJobSpec(cols[2].GetBytesAt(i))
 				if err != nil {
 					return false
 				}

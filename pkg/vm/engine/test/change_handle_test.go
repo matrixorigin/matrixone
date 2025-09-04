@@ -1369,11 +1369,7 @@ func TestISCPExecutor1(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
@@ -1525,12 +1521,7 @@ func TestISCPExecutor2(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// create database and table
@@ -1705,12 +1696,7 @@ func TestISCPExecutor3(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
@@ -1915,12 +1901,7 @@ func TestISCPExecutor4(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
@@ -2094,12 +2075,7 @@ func TestISCPExecutor5(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	dbName := "db"
@@ -2234,12 +2210,7 @@ func TestISCPExecutor6(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	account2 := uint32(2)
@@ -2336,12 +2307,7 @@ func TestISCPExecutor7(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// create database and table
@@ -2439,12 +2405,7 @@ func TestISCPExecutor8(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	// create database and table
@@ -2555,12 +2516,7 @@ func TestUpdateJobSpec(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
@@ -2733,12 +2689,7 @@ func TestFlushWatermark(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	defer bat.Close()
@@ -2832,12 +2783,7 @@ func TestGCInMemoryJob(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
@@ -2959,12 +2905,7 @@ func TestIteration(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	cdcExecutor, err := iscp.NewISCPTaskExecutor(
@@ -3077,12 +3018,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		rpcAgent.Close()
 	}()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
 
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
@@ -3249,12 +3185,7 @@ func TestCancelIteration1(t *testing.T) {
 	)
 	defer stub.Reset()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	defer bat.Close()
 
@@ -3361,12 +3292,7 @@ func TestCancelIteration2(t *testing.T) {
 	)
 	defer stub2.Reset()
 
-	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
-	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
-	require.NoError(t, err)
+	err := mock_tables(disttaeEngine, ctxWithTimeout)
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	defer bat.Close()
 

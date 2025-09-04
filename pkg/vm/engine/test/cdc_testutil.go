@@ -33,6 +33,75 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+func mock_tables(de *testutil.TestDisttaeEngine, ctx context.Context) (err error) {
+	err = mock_mo_indexes(de, ctx)
+	if err != nil {
+		return err
+	}
+	err = mock_mo_foreign_keys(de, ctx)
+	if err != nil {
+		return err
+	}
+	err = mock_mo_intra_system_change_propagation_log(de, ctx)
+	if err != nil {
+		return err
+	}
+	err = mock_mo_pitr(de, ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func mock_mo_pitr(
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+) (err error) {
+	sql := `CREATE TABLE mo_catalog.mo_pitr (
+		pitr_id uuid,
+		pitr_name varchar(5000),
+		create_account bigint unsigned,
+		create_time bigint not null,
+		modified_time bigint not null,
+		level varchar(10),
+		account_id bigint unsigned,
+		account_name varchar(300),
+		database_name varchar(5000),
+		table_name varchar(5000),
+		obj_id bigint unsigned,
+		pitr_length tinyint unsigned,
+		pitr_unit varchar(10),
+		pitr_status tinyint unsigned default 1 comment '1: active, 0: inactive',
+		pitr_status_changed_time bigint not null,
+		primary key(pitr_id)
+		)`
+
+	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+
+	exec := v.(executor.SQLExecutor)
+	txn, err := de.NewTxnOperator(ctx, de.Now())
+	if err != nil {
+		return err
+	}
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(txn)
+
+	_, err = exec.Exec(ctx, sql, opts)
+	if err != nil {
+		return err
+	}
+	if err = txn.Commit(ctx); err != nil {
+		return err
+	}
+	return err
+}
+
 func mock_mo_intra_system_change_propagation_log(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
