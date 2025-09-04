@@ -2346,8 +2346,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 
 	// delete from tables => truncate, need keep increment value
-	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish()
-	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish()
+	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
+	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {

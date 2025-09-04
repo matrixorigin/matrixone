@@ -82,6 +82,7 @@ type StatementOption struct {
 	disableLog               bool
 	ignoreForeignKey         bool
 	ignorePublish            bool
+	ignoreCheckExperimental  bool
 	params                   []string
 	alterCopyDedupOpt        *plan.AlterCopyDedupOpt
 	disableDropAutoIncrement bool

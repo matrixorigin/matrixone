@@ -437,7 +437,7 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 					if len(indexflag) > 0 {
 						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
 							return err
-						} else if !ok {
+						} else if !ok && !c.ignoreCheckExperimental {
 							return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", indexflag))
 						}
 					}

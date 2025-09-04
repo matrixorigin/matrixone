@@ -308,6 +308,7 @@ type Compile struct {
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
 	ignorePublish            bool
+	ignoreCheckExperimental  bool
 }
 
 type RemoteReceivRegInfo struct {

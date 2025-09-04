@@ -1308,7 +1308,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//add cluster table attribute
 	if stmt.IsClusterTable {
-		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
+		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok && !defines.IsInternalExecutor(ctx.GetContext()) {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
 		}
 		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())

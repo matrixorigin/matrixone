@@ -366,3 +366,12 @@ func (opts StatementOption) WithIgnorePublish() StatementOption {
 func (opts StatementOption) IgnorePublish() bool {
 	return opts.ignorePublish
 }
+
+func (opts StatementOption) WithIgnoreCheckExperimental() StatementOption {
+	opts.ignoreCheckExperimental = true
+	return opts
+}
+
+func (opts StatementOption) IgnoreCheckExperimental() bool {
+	return opts.ignoreCheckExperimental
+}

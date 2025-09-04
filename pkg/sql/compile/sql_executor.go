@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -36,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -280,6 +280,12 @@ func (exec *txnExecutor) Exec(
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.AlterCopyDedupOpt{}, v)
 	}
+
+	exec.ctx = context.WithValue(
+		exec.ctx,
+		defines.InternalExecutorKey{},
+		true,
+	)
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()

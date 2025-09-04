@@ -169,6 +169,14 @@ type TenantIDKey struct{}
 type UserIDKey struct{}
 type RoleIDKey struct{}
 type NodeIDKey struct{}
+type InternalExecutorKey struct{}
+
+func IsInternalExecutor(ctx context.Context) bool {
+	if v := ctx.Value(InternalExecutorKey{}); v != nil {
+		return v.(bool)
+	}
+	return false
+}
 
 func GetAccountId(ctx context.Context) (uint32, error) {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
