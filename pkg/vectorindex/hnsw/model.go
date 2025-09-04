@@ -230,7 +230,7 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 		chunkid++
 
 		n++
-		if n == 10000 {
+		if n == 2000 {
 			newsql := sql + strings.Join(values, ", ")
 			sqls = append(sqls, newsql)
 			values = values[:0]
