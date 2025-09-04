@@ -42,19 +42,19 @@ var ft_runSql = sqlexec.RunSql
 var ft_runSql_streaming = sqlexec.RunStreamingSql
 
 type fulltextState struct {
-	inited      bool
-	errors      chan error
-	stream_chan chan executor.Result
-	n_result    uint64
-	sacc        *fulltext.SearchAccum
-	limit       uint64
-	nrows       int
-	idx2word    map[int]string
-	agghtab     map[any]uint64
-	aggcnt      []int64
-	mpool       *fulltext.FixedBytePool
-	param       fulltext.FullTextParserParam
-	docLenMap   map[any]int32
+	inited    bool
+	errCh     chan error
+	streamCh  chan executor.Result
+	n_result  uint64
+	sacc      *fulltext.SearchAccum
+	limit     uint64
+	nrows     int
+	idx2word  map[int]string
+	agghtab   map[any]uint64
+	aggcnt    []int64
+	mpool     *fulltext.FixedBytePool
+	param     fulltext.FullTextParserParam
+	docLenMap map[any]int32
 
 	// holding output batch
 	batch *batch.Batch
@@ -81,7 +81,7 @@ func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineF
 
 	for {
 		select {
-		case res, ok := <-u.stream_chan:
+		case res, ok := <-u.streamCh:
 			if !ok {
 				return
 			}
@@ -169,8 +169,8 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 			}
 		}
 		u.batch = tf.createResultBatch()
-		u.errors = make(chan error)
-		u.stream_chan = make(chan executor.Result, 8)
+		u.errCh = make(chan error)
+		u.streamCh = make(chan executor.Result, 8)
 		u.idx2word = make(map[int]string)
 		u.inited = true
 		u.docLenMap = make(map[any]int32)
@@ -240,7 +240,7 @@ func runWordStats(
 		return
 	}
 
-	result, err = ft_runSql_streaming(ctx, proc, sql, u.stream_chan, u.errors)
+	result, err = ft_runSql_streaming(ctx, proc, sql, u.streamCh, u.errCh)
 
 	return
 }
@@ -301,12 +301,12 @@ func groupby(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (
 	var ok bool
 
 	select {
-	case res, ok = <-u.stream_chan:
+	case res, ok = <-u.streamCh:
 		if !ok {
 			// channel closed and evaluate the rest of result
 			return true, nil
 		}
-	case err = <-u.errors:
+	case err = <-u.errCh:
 		return false, err
 	case <-proc.Ctx.Done():
 		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
@@ -493,7 +493,7 @@ func fulltextIndexMatch(
 		// get the statistic of search string ([]Pattern) and store in SearchAccum
 		res, err2 := runWordStats(ctx, u, proc, u.sacc)
 		if err2 != nil {
-			u.errors <- err2
+			u.errCh <- err2
 			return
 		}
 		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
@@ -512,12 +512,20 @@ func fulltextIndexMatch(
 	// wait for the sql streaming to be closed. make sure all the remaining
 	// results in stream_chan are closed.
 	if !sql_closed {
-		for res := range u.stream_chan {
+		for res := range u.streamCh {
 			res.Close()
 		}
 	}
 
 	waiter.Wait()
+
+	if err == nil {
+		// fetch potential remaining errors from error_chan
+		select {
+		case err = <-u.errCh:
+		default:
+		}
+	}
 
 	/*
 		t2 := time.Now()

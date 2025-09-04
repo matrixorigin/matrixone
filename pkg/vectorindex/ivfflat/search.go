@@ -318,6 +318,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		}
 	}
 
+	// fetch potential remaining errors from error_chan
+	// if error is not nil, fast return
+	select {
+	case err = <-error_chan:
+		return
+	default:
+	}
+
 	// check local context cancelled
 	select {
 	case <-proc.Ctx.Done():

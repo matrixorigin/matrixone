@@ -165,6 +165,14 @@ func (idx *HnswSearchIndex) LoadIndex(
 		}
 	}
 
+	if err == nil {
+		// fetch potential remaining errors from error_chan
+		select {
+		case err = <-error_chan:
+		default:
+		}
+	}
+
 	if err != nil {
 		return
 	}
