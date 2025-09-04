@@ -446,6 +446,7 @@ func (sm *SnapshotMeta) updateTableInfo(
 	collector := func(
 		objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 		_ *map[objectio.Segmentid]*objectInfo,
+		_ *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -474,8 +475,8 @@ func (sm *SnapshotMeta) updateTableInfo(
 			moTable[id].deleteAt = deleteTS
 		}
 	}
-	collectObjects(ctx, &objects, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects(ctx, &tombstones, nil, data, ckputil.ObjectType_Tombstone, collector)
+	collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector)
+	collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector)
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -701,10 +702,12 @@ func collectObjects(
 	ctx context.Context,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 	data *CKPReader,
 	objType int8,
 	collector func(
 		*map[uint64]map[objectio.Segmentid]*objectInfo,
+		*map[objectio.Segmentid]*objectInfo,
 		*map[objectio.Segmentid]*objectInfo,
 		uint64,
 		objectio.ObjectStats,
@@ -722,7 +725,7 @@ func collectObjects(
 			rowID types.Rowid,
 		) error {
 			if objectType == objType {
-				collector(objects, objects2, table, objectStats, createTS, deleteTS)
+				collector(objects, objects2, objects3, table, objectStats, createTS, deleteTS)
 			}
 			return nil
 		},
@@ -765,13 +768,14 @@ func (sm *SnapshotMeta) Update(
 		return
 	}
 
-	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 {
+	if len(sm.snapshotTableIDs) == 0 && sm.pitr.tid == 0 && sm.iscp.tid == 0 {
 		return
 	}
 
 	collector := func(
 		objects1 *map[uint64]map[objectio.Segmentid]*objectInfo,
 		objects2 *map[objectio.Segmentid]*objectInfo,
+		objects3 *map[objectio.Segmentid]*objectInfo,
 		tid uint64,
 		stats objectio.ObjectStats,
 		createTS types.TS, deleteTS types.TS,
@@ -813,7 +817,7 @@ func (sm *SnapshotMeta) Update(
 			mapFun(*objects2)
 		}
 		if tid == sm.iscp.tid {
-			mapFun(*objects2)
+			mapFun(*objects3)
 		}
 		if _, ok := sm.snapshotTableIDs[tid]; !ok {
 			return
@@ -827,6 +831,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
+		&sm.iscp.objects,
 		data,
 		ckputil.ObjectType_Data,
 		collector,
@@ -835,6 +840,7 @@ func (sm *SnapshotMeta) Update(
 		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
+		&sm.iscp.tombstones,
 		data,
 		ckputil.ObjectType_Tombstone,
 		collector,
@@ -1152,11 +1158,13 @@ func (sm *SnapshotMeta) GetISCP(
 
 		tableID := tableIDList[r]
 		watermark := watermarkList.GetStringAt(r)
-		dropAtBytes := dropAtList.GetRawBytesAt(r)
-
+		dropAtBytes := dropAtList.GetStringAt(r)
 		// Skip deleted jobs
 		if len(dropAtBytes) > 0 {
-			return nil
+			dropAT := types.StringToTS(dropAtBytes)
+			if !dropAT.IsEmpty() {
+				return nil
+			}
 		}
 
 		var iscpTS types.TS
@@ -1373,7 +1381,7 @@ func (sm *SnapshotMeta) rebuildSpecialTable(ins *containers.Batch, tableInfo *sp
 		logutil.Warnf("Rebuild%s unexpected length %d", tableName, ins.Length())
 		return
 	}
-	logutil.Infof("Rebuild%s tid %d", tableName, insTIDs[0])
+	logutil.Infof("Rebuild %s tid %d", tableName, insTIDs[0])
 	for i := 0; i < ins.Length(); i++ {
 		tid := insTIDs[i]
 		tableInfo.tid = tid
@@ -1479,6 +1487,7 @@ func (sm *SnapshotMeta) Rebuild(
 	ins *containers.Batch,
 	objects *map[uint64]map[objectio.Segmentid]*objectInfo,
 	objects2 *map[objectio.Segmentid]*objectInfo,
+	objects3 *map[objectio.Segmentid]*objectInfo,
 ) {
 	sm.Lock()
 	defer sm.Unlock()
@@ -1505,8 +1514,8 @@ func (sm *SnapshotMeta) Rebuild(
 			continue
 		}
 		if tid == sm.iscp.tid {
-			if (*objects2)[objectStats.ObjectName().SegmentId()] == nil {
-				(*objects2)[objectStats.ObjectName().SegmentId()] = &objectInfo{
+			if (*objects3)[objectStats.ObjectName().SegmentId()] == nil {
+				(*objects3)[objectStats.ObjectName().SegmentId()] = &objectInfo{
 					stats:    objectStats,
 					createAt: createTS,
 				}
@@ -1581,7 +1590,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects)
+	sm.Rebuild(bat, &sm.objects, &sm.pitr.objects, &sm.iscp.objects)
 
 	if len(bs) == 1 {
 		return nil
@@ -1608,7 +1617,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		}
 		deltaBat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
-	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones)
+	sm.Rebuild(deltaBat, &sm.tombstones, &sm.pitr.tombstones, &sm.pitr.tombstones)
 	return nil
 }
 

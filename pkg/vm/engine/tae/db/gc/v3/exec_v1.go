@@ -74,7 +74,6 @@ type CheckpointBasedGCJob struct {
 
 	result struct {
 		vecToGC    *vector.Vector
-		batchToGC  *batch.Batch
 		filesNotGC []objectio.ObjectStats
 	}
 }

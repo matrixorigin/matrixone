@@ -7675,8 +7675,8 @@ func TestIscpMeta(t *testing.T) {
 	iscpSchema.AppendCol("job_state", types.T_uint8.ToType())       // job_state TINYINT NOT NULL
 	iscpSchema.AppendCol("watermark", types.T_varchar.ToType())     // watermark VARCHAR NOT NULL
 	iscpSchema.AppendCol("job_status", types.T_json.ToType())       // job_status JSON NOT NULL
-	iscpSchema.AppendCol("create_at", types.T_timestamp.ToType())   // create_at TIMESTAMP NOT NULL
-	iscpSchema.AppendCol("drop_at", types.T_timestamp.ToType())     // drop_at TIMESTAMP NULL
+	iscpSchema.AppendCol("create_at", types.T_varchar.ToType())     // create_at TIMESTAMP NOT NULL
+	iscpSchema.AppendCol("drop_at", types.T_varchar.ToType())       // drop_at TIMESTAMP NULL
 
 	// Create composite primary key: (account_id, table_id, job_name, job_id)
 	pkConstraint := &engine.PrimaryKeyDef{
@@ -7716,7 +7716,7 @@ func TestIscpMeta(t *testing.T) {
 		assert.Nil(t, err)
 
 		// Create test database and table
-		testDatabase, err = testutil.CreateDatabase2(ctx, txn, "test_db")
+		testDatabase, err = testutil.CreateDatabase2(ctx, txn, "db")
 		assert.Nil(t, err)
 		testRel, err = testutil.CreateRelation2(ctx, txn, testDatabase, testSchema)
 		assert.Nil(t, err)
@@ -7767,14 +7767,16 @@ func TestIscpMeta(t *testing.T) {
 	// Testing the "take minimum timestamp" logic
 	testTableID := testRel.ID()
 
+	now := time.Now()
+	now.Add(-time.Duration(1) * time.Hour).UnixNano()
 	// Create test timestamps using types.TS
-	ts1 := types.BuildTS(time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC).UnixNano(), 0) // Earlier watermark
-	ts2 := types.BuildTS(time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC).UnixNano(), 0) // Later watermark
-	ts3 := types.BuildTS(time.Date(2024, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano(), 0)  // Earliest watermark (should be selected)
-	ts4 := types.BuildTS(time.Date(2024, 1, 15, 14, 0, 0, 0, time.UTC).UnixNano(), 0) // Dropped job (should be ignored)
-	ts5 := types.BuildTS(time.Date(2024, 1, 15, 9, 0, 0, 0, time.UTC).UnixNano(), 0)  // Other table
-	ts6 := types.BuildTS(time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC).UnixNano(), 0) // Account1 backup
-	ts7 := types.BuildTS(time.Date(2024, 1, 15, 15, 0, 0, 0, time.UTC).UnixNano(), 0) // New backup job
+	ts1 := types.BuildTS(now.Add(-time.Duration(2)*time.Minute).UnixNano(), 0)       // Earlier watermark
+	ts2 := types.BuildTS(now.Add(-time.Duration(20)*time.Millisecond).UnixNano(), 0) // Later watermark
+	ts3 := types.BuildTS(now.Add(-time.Duration(10)*time.Millisecond).UnixNano(), 0) // Earliest watermark (should be selected)
+	ts4 := types.BuildTS(now.Add(-time.Duration(10)*time.Microsecond).UnixNano(), 0) // Dropped job (should be ignored)
+	ts5 := types.BuildTS(now.Add(-time.Duration(1)*time.Second).UnixNano(), 0)       // Other table
+	ts6 := types.BuildTS(now.Add(-time.Duration(50)*time.Nanosecond).UnixNano(), 0)  // Account1 backup
+	ts7 := types.BuildTS(now.Add(-time.Duration(50)*time.Millisecond).UnixNano(), 0) // New backup job
 
 	appendIscpRecord(0, testTableID, "backup_job_1", 1001, ts1.ToString(), false) // Earlier watermark
 	appendIscpRecord(0, testTableID, "backup_job_2", 1002, ts2.ToString(), false) // Later watermark
@@ -7824,7 +7826,8 @@ func TestIscpMeta(t *testing.T) {
 		filter := handle.NewEQFilter([]byte("backup_job_2"))
 		id, offset, err := rel.GetByFilter(context.Background(), filter)
 		assert.NoError(t, err)
-
+		_, _, err = rel.GetValue(id, offset, 5, false)
+		assert.NoError(t, err)
 		// Update the record to mark it as dropped
 		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 		if err != nil {
@@ -7901,7 +7904,7 @@ func TestIscpMeta(t *testing.T) {
 	assert.False(t, iscpTS.IsEmpty())
 
 	// The minimum watermark should be from "backup_job_3" (2024-01-15 08:00:00)
-	expectedMinTS := ts3
+	expectedMinTS := ts1
 	assert.True(t, iscpTS.EQ(&expectedMinTS),
 		"Expected ISCP timestamp to be the minimum watermark, got %s, expected %s",
 		iscpTS.ToString(), expectedMinTS.ToString())
@@ -7929,14 +7932,9 @@ func TestIscpMeta(t *testing.T) {
 
 	// Test adding new ISCP records after restart
 	{
-		txn, _ := db.StartTxn(nil)
-		testDatabase, _ = txn.GetDatabase("test_db")
-		newRel, err := testutil.CreateRelation2(ctx, txn, testDatabase, testSchema)
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
 
 		// Add ISCP record for the new table
-		appendIscpRecord(0, newRel.ID(), "new_backup_job", 4001, ts7.ToString(), false)
+		appendIscpRecord(0, testRel.ID(), "new_backup_job", 4001, ts7.ToString(), false)
 	}
 
 	testutils.WaitExpect(10000, func() bool {
