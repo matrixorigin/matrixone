@@ -271,31 +271,6 @@ type IscpInfo struct {
 	tables map[uint64]types.TS
 }
 
-func (i *IscpInfo) IsEmpty() bool {
-	return len(i.tables) == 0
-}
-
-func (i *IscpInfo) GetTS(tableID uint64) (ts types.TS) {
-	return i.tables[tableID]
-}
-
-func (i *IscpInfo) MinTS() (ts types.TS) {
-	for _, t := range i.tables {
-		if ts.IsEmpty() || t.LT(&ts) {
-			ts = t
-		}
-	}
-	return
-}
-
-func (i *IscpInfo) ToTsList() []types.TS {
-	tsList := make([]types.TS, 0, len(i.tables))
-	for _, ts := range i.tables {
-		tsList = append(tsList, ts)
-	}
-	return tsList
-}
-
 // Special table information structure, used to process special tables such as PITR and ISCP
 type specialTableInfo struct {
 	tid        uint64
