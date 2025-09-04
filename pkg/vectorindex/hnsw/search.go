@@ -203,13 +203,22 @@ func LoadMetadata(proc *process.Process, dbname string, metatbl string) ([]*Hnsw
 
 // load index from database
 func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswModel) ([]*HnswModel, error) {
+	var err error
 
 	for _, idx := range indexes {
-		err := idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
+		err = idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
 		if err != nil {
-			return nil, err
+			break
 		}
 	}
+
+	if err != nil {
+		for _, idx := range indexes {
+			idx.Destroy()
+		}
+		return nil, err
+	}
+
 	return indexes, nil
 }
 
