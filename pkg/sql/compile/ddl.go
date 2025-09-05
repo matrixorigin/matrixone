@@ -2389,8 +2389,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
-	fmt.Printf("#### %s\n", createSQL)
-
 	// create table
 	if err = c.runSqlWithAccountIdAndOptions(
 		createSQL,
