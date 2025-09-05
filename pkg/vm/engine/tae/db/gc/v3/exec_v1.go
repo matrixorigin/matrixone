@@ -66,6 +66,7 @@ type CheckpointBasedGCJob struct {
 	sourcer          engine.BaseReader
 	snapshotMeta     *logtail.SnapshotMeta
 	accountSnapshots map[uint32][]types.TS
+	iscpTables       map[uint64]types.TS
 	pitr             *logtail.PitrInfo
 	ts               *types.TS
 	globalCkpLoc     objectio.Location
@@ -84,6 +85,7 @@ func NewCheckpointBasedGCJob(
 	sourcer engine.BaseReader,
 	pitr *logtail.PitrInfo,
 	accountSnapshots map[uint32][]types.TS,
+	iscpTables map[uint64]types.TS,
 	snapshotMeta *logtail.SnapshotMeta,
 	buffer *containers.OneSchemaBatchBuffer,
 	isOwner bool,
@@ -100,6 +102,7 @@ func NewCheckpointBasedGCJob(
 		ts:               ts,
 		globalCkpLoc:     globalCkpLoc,
 		globalCkpVer:     gckpVersion,
+		iscpTables:       iscpTables,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -169,6 +172,7 @@ func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {
 		e.pitr,
 		e.snapshotMeta,
 		transObjects,
+		e.iscpTables,
 	)
 	if err != nil {
 		return err
@@ -318,6 +322,7 @@ func MakeSnapshotAndPitrFineFilter(
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
 	transObjects map[string]map[uint64]*ObjectEntry,
+	iscpTables map[uint64]types.TS,
 ) (
 	filter FilterFn,
 	err error,
@@ -358,6 +363,18 @@ func MakeSnapshotAndPitrFineFilter(
 					if !logtail.ObjectIsSnapshotRefers(
 						entry.stats, pitr, &entry.createTS, &entry.dropTS, snapshots,
 					) {
+						if iscpTables == nil {
+							bm.Add(uint64(i))
+							continue
+						}
+						if iscpTS, ok := iscpTables[entry.table]; ok {
+							if entry.stats.GetCNCreated() || entry.stats.GetAppendable() {
+								if (!entry.dropTS.IsEmpty() && entry.dropTS.LT(&iscpTS)) ||
+									entry.createTS.GT(&iscpTS) {
+									continue
+								}
+							}
+						}
 						bm.Add(uint64(i))
 					}
 					continue
@@ -375,6 +392,18 @@ func MakeSnapshotAndPitrFineFilter(
 			if !logtail.ObjectIsSnapshotRefers(
 				&stats, pitr, &createTS, &deleteTS, snapshots,
 			) {
+				if iscpTables == nil {
+					bm.Add(uint64(i))
+					continue
+				}
+				if iscpTS, ok := iscpTables[tableID]; ok {
+					if stats.GetCNCreated() || stats.GetAppendable() {
+						if (!deleteTS.IsEmpty() && deleteTS.LT(&iscpTS)) ||
+							createTS.GT(&iscpTS) {
+							continue
+						}
+					}
+				}
 				bm.Add(uint64(i))
 			}
 		}

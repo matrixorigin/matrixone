@@ -29,19 +29,46 @@ import (
 )
 
 // give blob
-func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+func mock_runSql_streaming(
+	ctx context.Context,
+	proc *process.Process,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
 	// don't close channel because it may run faster than err_chan
-	//defer close(ch)
+	defer close(ch)
 	err_chan <- moerr.NewInternalErrorNoCtx("sql error")
 	return executor.Result{}, nil
 }
 
-func mock_runSql_streaming_parser_error(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+func mock_runSql_streaming_parser_error(
+	ctx context.Context,
+	proc *process.Process,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
+	defer close(ch)
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")
 }
 
-func mock_runSql_streaming_cancel(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
-	proc.Cancel(moerr.NewInternalErrorNoCtx("user cancel"))
+func mock_runSql_streaming_cancel(
+	ctx context.Context,
+	proc *process.Process,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
+	select {
+	case <-proc.Ctx.Done():
+		close(ch)
+		return executor.Result{}, ctx.Err()
+	case <-ctx.Done():
+		close(ch)
+		return executor.Result{}, ctx.Err()
+	default:
+	}
 	return executor.Result{}, nil
 }
 
@@ -106,6 +133,9 @@ func TestIvfSearchCancel(t *testing.T) {
 
 	idx := &IvfflatSearchIndex[float32]{}
 
+	proc.Cancel(moerr.NewInternalErrorNoCtx("user cancel"))
+
 	_, _, err := idx.Search(proc, idxcfg, tblcfg, v, rt, 4)
-	require.NotNil(t, err)
+	t.Logf("error: %v", err)
+	require.Error(t, err)
 }

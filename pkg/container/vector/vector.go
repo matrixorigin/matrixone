@@ -375,7 +375,7 @@ func GetArrayAt2[T types.RealNumbers](v *Vector, bs []types.Varlena, i int) []T 
 // WARNING: GetAny() return value with any type will cause memory escape to heap which will result in slow GC.
 // If you know the actual type, better use the GetFixedAtWithTypeCheck() to get the values.
 // Only use when you have no choice, e.g. you are dealing with column with any type that don't know in advanced.
-func GetAny(vec *Vector, i int) any {
+func GetAny(vec *Vector, i int, deepCopy bool) any {
 	switch vec.typ.Oid {
 	case types.T_bool:
 		return GetFixedAtNoTypeCheck[bool](vec, i)
@@ -425,7 +425,13 @@ func GetAny(vec *Vector, i int) any {
 		return GetFixedAtNoTypeCheck[types.Blockid](vec, i)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
-		return vec.GetBytesAt(i)
+		ret := vec.GetBytesAt(i)
+		if deepCopy {
+			copied := make([]byte, len(ret))
+			copy(copied, ret)
+			ret = copied
+		}
+		return ret
 	}
 	return nil
 }
