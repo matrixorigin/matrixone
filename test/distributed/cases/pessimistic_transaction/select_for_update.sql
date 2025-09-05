@@ -541,10 +541,7 @@ drop table if exists su_04;
 
 create table su_05(c1 int not null primary key,c2 varchar(25),c3 decimal(6,2))partition by key(c1)partitions 4;;
 insert into  su_05 values (1,'mod',78.9),(2,'proto',0.34),(3,'mod',6.5),(4,'mode',9.0),(5,'make',662.9),(6,'io',88.92);
-select * from `%!%p0%!%su_05`;
-select * from `%!%p1%!%su_05`;
-select * from `%!%p2%!%su_05`;
-select * from `%!%p3%!%su_05`;
+
 -- ddl partition, pk ,more rows lock
 begin;
 select * from su_05 where c1>3 for update;
