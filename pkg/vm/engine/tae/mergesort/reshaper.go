@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -100,7 +101,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					buffer.CleanOnlyData()
 
 					if stats.needNewObject() {
-						if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
+						if err := syncObject(ctx, writer, host); err != nil {
 							return err
 						}
 						writer = nil
@@ -132,7 +133,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		buffer.CleanOnlyData()
 	}
 	if stats.objBlkCnt > 0 {
-		if err := syncObject(ctx, writer, host.GetCommitEntry()); err != nil {
+		if err := syncObject(ctx, writer, host); err != nil {
 			return err
 		}
 		writer = nil
@@ -141,7 +142,11 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	return nil
 }
 
-func syncObject(ctx context.Context, writer *ioutil.BlockWriter, commitEntry *api.MergeCommitEntry) error {
+func syncObject(ctx context.Context, writer *ioutil.BlockWriter, host MergeTaskHost) error {
+	if host.HasBigDelEvent() {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in syncObject %v", host.Name())
+	}
+	commitEntry := host.GetCommitEntry()
 	if _, _, err := writer.Sync(ctx); err != nil {
 		return err
 	}

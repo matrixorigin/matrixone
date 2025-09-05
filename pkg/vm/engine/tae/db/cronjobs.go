@@ -226,7 +226,7 @@ func AddCronJob(db *DB, name string, skipMode bool) (err error) {
 			options.DefaultLockMergePruneInterval,
 			func(ctx context.Context) {
 				db.Runtime.PoolUsageReport()
-				db.Runtime.LockMergeService.Prune()
+				db.Runtime.BigDeleteHinter.Prune()
 			},
 			1,
 		)

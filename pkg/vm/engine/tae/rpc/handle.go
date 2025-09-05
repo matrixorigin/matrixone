@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"os"
 	"reflect"
 	"regexp"
@@ -26,6 +25,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -183,68 +184,6 @@ func (h *Handle) CacheTxnRequest(
 	return nil
 }
 
-func (h *Handle) tryLockMergeForBulkDelete(reqs []any, txn txnif.AsyncTxn) (releaseF []func(), err error) {
-	delM := make(map[uint64]*struct {
-		dbID uint64
-		rows uint64
-	})
-	for _, e := range reqs {
-		if req, ok := e.(*cmd_util.WriteReq); ok && req.Type == cmd_util.EntryDelete {
-			if req.FileName == "" && req.Batch == nil {
-				continue
-			}
-
-			delM[req.TableID] = &struct {
-				dbID uint64
-				rows uint64
-			}{dbID: req.DatabaseId, rows: 0}
-
-			if req.FileName != "" {
-				for _, stats := range req.TombstoneStats {
-					delM[req.TableID].rows += uint64(stats.Rows())
-				}
-			}
-			if req.Batch != nil {
-				delM[req.TableID].rows += uint64(req.Batch.RowCount())
-			}
-		}
-	}
-
-	for id, info := range delM {
-		if info.rows <= h.db.Opts.BulkTomestoneTxnThreshold {
-			continue
-		}
-
-		dbHandle, err := txn.GetDatabaseByID(info.dbID)
-		if err != nil {
-			return nil, err
-		}
-
-		relation, err := dbHandle.GetRelationByID(id)
-		if err != nil {
-			return nil, err
-		}
-
-		err = h.db.MergeScheduler.StopMerge(relation.GetMeta().(*catalog.TableEntry), true, h.db.Runtime)
-		if err != nil {
-			return nil, err
-		}
-		logutil.Info("LockMerge Bulk Delete",
-			zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
-		release := func() {
-			err = h.db.MergeScheduler.StartMerge(h.db.Runtime, id, true)
-			if err != nil {
-				return
-			}
-			logutil.Info("LockMerge Bulk Delete Committed",
-				zap.Uint64("tid", id), zap.Uint64("rows", info.rows), zap.String("txn", txn.String()))
-		}
-		releaseF = append(releaseF, release)
-	}
-
-	return
-}
-
 type txnCommitRequestsIter struct {
 	cursor         int
 	curNorReq      *api.PrecommitWriteCmd
@@ -330,7 +269,7 @@ func (h *Handle) handleRequests(
 	commitRequests *txn.TxnCommitRequest,
 	response *txn.TxnResponse,
 	txnMeta txn.TxnMeta,
-) (releaseF []func(), hasDDL bool, err error) {
+) (bigDelete []uint64, hasDDL bool, err error) {
 
 	var (
 		entry any
@@ -353,6 +292,9 @@ func (h *Handle) handleRequests(
 	if iter = h.newTxnCommitRequestsIter(commitRequests, txnMeta); iter == nil {
 		return
 	}
+
+	bigDelete = make([]uint64, 0)
+	var delM map[uint64]uint64 // tableID -> rows
 
 	for iter.Next() {
 		if entry, err = iter.Entry(); err != nil {
@@ -391,13 +333,18 @@ func (h *Handle) handleRequests(
 				wr = req.(*cmd_util.WriteReq)
 			}
 
+			if delM == nil {
+				delM = make(map[uint64]uint64)
+			}
+
 			if wr.Type == cmd_util.EntryDelete {
-				var f []func()
-				if f, err = h.tryLockMergeForBulkDelete([]any{req}, txn); err != nil {
-					logutil.Warn("failed to lock merging", zap.Error(err))
-					err = nil
-				} else {
-					releaseF = append(releaseF, f...)
+				if wr.FileName != "" {
+					for _, stats := range wr.TombstoneStats {
+						delM[wr.TableID] += uint64(stats.Rows())
+					}
+				}
+				if wr.Batch != nil {
+					delM[wr.TableID] += uint64(wr.Batch.RowCount())
 				}
 			}
 
@@ -433,6 +380,11 @@ func (h *Handle) handleRequests(
 			zap.Int("persisted-tombstones", persistedTombstoneRows),
 			zap.String("txn", txn.String()),
 		)
+	}
+	for tableID, rows := range delM {
+		if rows > h.db.Opts.BulkTomestoneTxnThreshold {
+			bigDelete = append(bigDelete, tableID)
+		}
 	}
 	if len(postFuncs) > 0 {
 		if hasDDL {
@@ -597,7 +549,8 @@ func (h *Handle) HandleCommit(
 		return
 	}
 
-	if releaseF, hasDDL, err = h.handleRequests(
+	var bigDeleteTbls []uint64
+	if bigDeleteTbls, hasDDL, err = h.handleRequests(
 		ctx, txn, commitRequests, response, meta); err != nil {
 		return
 	}
@@ -618,6 +571,9 @@ func (h *Handle) HandleCommit(
 	if cts.PhysicalTime == txnif.UncommitTS.Physical() {
 		panic("bad committs causing hung")
 	}
+	if err == nil && len(bigDeleteTbls) > 0 {
+		h.db.Runtime.BigDeleteHinter.RecordBigDel(bigDeleteTbls, types.TimestampToTS(cts))
+	}
 
 	if moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 		for {
@@ -635,7 +591,7 @@ func (h *Handle) HandleCommit(
 				zap.String("new-txn", txn.GetID()),
 			)
 			//Handle precommit-write command for 1PC
-			releaseF, hasDDL, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
+			bigDeleteTbls, hasDDL, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}
@@ -645,6 +601,9 @@ func (h *Handle) HandleCommit(
 			}
 			err = txn.Commit(ctx)
 			cts = txn.GetCommitTS().ToTimestamp()
+			if err == nil && len(bigDeleteTbls) > 0 {
+				h.db.Runtime.BigDeleteHinter.RecordBigDel(bigDeleteTbls, types.TimestampToTS(cts))
+			}
 			if !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
 			}

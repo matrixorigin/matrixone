@@ -28,10 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"go.uber.org/zap"
 )
@@ -201,35 +199,6 @@ type taskObserver struct {
 
 func (o *taskObserver) OnExecDone(_ any) {
 	o.f()
-}
-
-// legacy interface for big tombstone write
-func (a *MergeScheduler) StopMerge(tblEntry *catalog.TableEntry, reentrant bool, rt *dbutils.Runtime) error {
-	c := new(engine.ConstraintDef)
-	binary := tblEntry.GetLastestSchema(false).Constraint
-	err := c.UnmarshalBinary(binary)
-	if err != nil {
-		return err
-	}
-	indexTableNames := make([]string, 0, len(c.Cts))
-	for _, constraint := range c.Cts {
-		if indices, ok := constraint.(*engine.IndexDef); ok {
-			for _, index := range indices.Indexes {
-				indexTableNames = append(indexTableNames, index.IndexTableName)
-			}
-		}
-	}
-
-	return rt.LockMergeService.LockFromUser(
-		tblEntry.GetID(),
-		tblEntry.GetLastestSchema(false).Name,
-		reentrant,
-		indexTableNames...,
-	)
-}
-
-func (a *MergeScheduler) StartMerge(rt *dbutils.Runtime, tblID uint64, reentrant bool) error {
-	return rt.LockMergeService.UnlockFromUser(tblID, reentrant)
 }
 
 func (a *MergeScheduler) CNActiveObjectsString() string { return "" }

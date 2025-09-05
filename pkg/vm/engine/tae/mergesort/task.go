@@ -51,6 +51,7 @@ type MergeTaskHost interface {
 	HostHintName() string
 	TaskSourceNote() string
 	GetCommitEntry() *api.MergeCommitEntry
+	HasBigDelEvent() bool
 	InitTransferMaps(blkCnt int)
 	GetTransferMaps() api.TransferMaps
 	PrepareNewWriter() *ioutil.BlockWriter
