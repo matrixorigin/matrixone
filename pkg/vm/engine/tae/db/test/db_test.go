@@ -7737,6 +7737,7 @@ func TestIscpMeta(t *testing.T) {
 		}
 
 		data := containers.BuildBatch(attrs, vecTypes, opt)
+		defer data.Close()
 
 		data.Vecs[0].Append(accountID, false)                                   // account_id
 		data.Vecs[1].Append(tableID, false)                                     // table_id
@@ -7760,7 +7761,6 @@ func TestIscpMeta(t *testing.T) {
 		err := rel.Append(context.Background(), data)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
-		data.Close()
 	}
 
 	// Add multiple ISCP records with different watermarks for the same table
