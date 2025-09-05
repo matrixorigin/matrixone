@@ -2323,6 +2323,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
+	if rel.GetTableDef(c.proc.Ctx).TableType == catalog.SystemExternalRel {
+		return nil
+	}
+
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, db, table, lock.LockMode_Exclusive); e != nil {
@@ -2384,6 +2388,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	); err != nil {
 		return err
 	}
+
+	fmt.Printf("#### %s\n", createSQL)
 
 	// create table
 	if err = c.runSqlWithAccountIdAndOptions(
