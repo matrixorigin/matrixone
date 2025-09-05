@@ -22,18 +22,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-
 	"go.uber.org/zap"
 
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -1153,9 +1153,9 @@ func (sm *SnapshotMeta) GetISCP(
 		dropAtList := bat.Vecs[2]
 
 		tableID := tableIDList[r]
-		watermark := watermarkList.GetStringAt(r)
+		watermark := watermarkList.GetBytesAt(r)
 		if !dropAtList.IsNull(uint64(r)) {
-			dropAT := types.StringToTS(dropAtList.GetStringAt(r))
+			dropAT := types.StringToTS(util.UnsafeBytesToString(dropAtList.GetBytesAt(r)))
 			if !dropAT.IsEmpty() {
 				return nil
 			}
@@ -1163,7 +1163,7 @@ func (sm *SnapshotMeta) GetISCP(
 
 		var iscpTS types.TS
 		if len(watermark) > 0 {
-			iscpTS = types.StringToTS(watermark)
+			iscpTS = types.StringToTS(util.UnsafeBytesToString(watermark))
 		} else {
 			iscpTS = types.TS{}
 		}
@@ -1177,8 +1177,7 @@ func (sm *SnapshotMeta) GetISCP(
 		logutil.Info(
 			"GC-GetISCP",
 			zap.Uint64("table", tableID),
-			zap.String("watermark", watermark),
-			zap.String("ts", iscpTS.ToString()),
+			zap.String("watermark", iscpTS.ToString()),
 		)
 		return nil
 	}
