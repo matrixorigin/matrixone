@@ -885,8 +885,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 				// IVF indexDefs are aggregated and handled later
 				if _, ok := multiTableIndexes[indexdef.IndexName]; !ok {
 					multiTableIndexes[indexdef.IndexName] = &MultiTableIndex{
-						IndexAlgo: catalog.ToLower(indexdef.IndexAlgo),
-						IndexDefs: make(map[string]*IndexDef),
+						IndexAlgo:       catalog.ToLower(indexdef.IndexAlgo),
+						IndexAlgoParams: indexdef.IndexAlgoParams,
+						IndexDefs:       make(map[string]*IndexDef),
 					}
 				}
 				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
@@ -896,6 +897,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				if err != nil {
 					return err
 				}
+
 			} else if postdml_flag && indexdef.TableExist && catalog.IsFullTextIndexAlgo(indexdef.IndexAlgo) {
 				// TODO: choose either PostInsertFullTextIndex or PreInsertFullTextIndex
 				err = buildPostInsertFullTextIndex(stmt, ctx, builder, bindCtx, objRef, tableDef, updateColLength, sourceStep, ifInsertFromUniqueColMap, indexdef, idx)
@@ -3505,6 +3507,16 @@ func buildPreInsertMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder,
 
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
+			// skip async
+			var async bool
+			async, err = catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			if async {
+				continue
+			}
+
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			var idxRefs = make([]*ObjectRef, 3)
 			var idxTableDefs = make([]*TableDef, 3)
@@ -3578,6 +3590,15 @@ func buildDeleteMultiTableIndexes(ctx CompilerContext, builder *QueryBuilder, bi
 	for _, multiTableIndex := range multiTableIndexes {
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
+			// skip async
+			var async bool
+			async, err = catalog.IsIndexAsync(multiTableIndex.IndexAlgoParams)
+			if err != nil {
+				return err
+			}
+			if async {
+				continue
+			}
 
 			// Used by pre-insert vector index.
 			var idxRefs = make([]*ObjectRef, 3)
@@ -4238,8 +4259,9 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 				// IVF indexDefs are aggregated and handled later
 				if _, ok := multiTableIndexes[indexdef.IndexName]; !ok {
 					multiTableIndexes[indexdef.IndexName] = &MultiTableIndex{
-						IndexAlgo: catalog.ToLower(indexdef.IndexAlgo),
-						IndexDefs: make(map[string]*IndexDef),
+						IndexAlgo:       catalog.ToLower(indexdef.IndexAlgo),
+						IndexAlgoParams: indexdef.IndexAlgoParams,
+						IndexDefs:       make(map[string]*IndexDef),
 					}
 				}
 				multiTableIndexes[indexdef.IndexName].IndexDefs[catalog.ToLower(indexdef.IndexAlgoTableType)] = indexdef
@@ -4294,6 +4316,15 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 // i.e. delete old rows and then insert new values
 func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef,
 	updateColLength int, sourceStep int32, ifInsertFromUniqueColMap map[string]bool, indexdef *plan.IndexDef, idx int) error {
+
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
 
 	isUpdate := (updateColLength > 0)
 
@@ -4716,6 +4747,15 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx,
 	indexdef *plan.IndexDef, idx int, typMap map[string]plan.Type, posMap map[string]int) error {
 
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
+
 	//isUpdate := delCtx.updateColLength > 0
 	indexObjRef, indexTableDef, err := ctx.ResolveIndexTableByRef(delCtx.objRef, indexdef.IndexTableName, nil)
 	if err != nil {
@@ -4746,6 +4786,15 @@ func buildPreDeleteFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bin
 // build PostDml FullText Index node
 func buildPostDmlFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, indexObjRef *ObjectRef, indexTableDef *TableDef, tableDef *TableDef,
 	sourceStep int32, indexdef *plan.IndexDef, idx int, isDelete, isInsert, isDeleteWithoutFilters bool) error {
+
+	// skip async
+	async, err := catalog.IsIndexAsync(indexdef.IndexAlgoParams)
+	if err != nil {
+		return err
+	}
+	if async {
+		return nil
+	}
 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 	orgPkColPos, _ := getPkPos(tableDef, false)
