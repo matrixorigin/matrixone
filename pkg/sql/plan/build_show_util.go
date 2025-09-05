@@ -204,13 +204,12 @@ func ConstructCreateTableSQL(
 				indexStr += ")"
 
 				if indexdef.IndexAlgoParams != "" {
-					paramMap, err := catalog.IndexParamsStringToMap(indexdef.IndexAlgoParams)
+					params, err := catalog.TryToIndexParams(indexdef.IndexAlgoParams)
 					if err != nil {
 						return "", nil, err
 					}
-					parser, ok := paramMap["parser"]
-					if ok {
-						indexStr += " WITH PARSER " + parser
+					if params.ParserType().IsValid() {
+						indexStr += " WITH PARSER " + params.ParserType().String()
 					}
 				}
 
@@ -241,8 +240,7 @@ func ConstructCreateTableSQL(
 
 				indexStr += ")"
 				if indexdef.IndexAlgoParams != "" {
-					var paramList string
-					paramList, err = catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
+					paramList, err := catalog.MustIndexParams(indexdef.IndexAlgoParams).ToStringList()
 					if err != nil {
 						return "", nil, err
 					}

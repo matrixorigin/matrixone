@@ -17,7 +17,6 @@ package compile
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -184,9 +183,16 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 }
 
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
-func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef, tableDef *plan.TableDef) (string, error) {
+func genInsertMOIndexesSql(
+	eg engine.Engine,
+	proc *process.Process,
+	databaseId string,
+	tableId uint64,
+	ct *engine.ConstraintDef,
+	tableDef *plan.TableDef,
+) (string, error) {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
-	buffer.WriteString("insert into mo_catalog.mo_indexes values")
+	buffer.WriteString("INSERT INTO `mo_catalog`.`mo_indexes` VALUES")
 
 	getOriginName := func(name string) string {
 		if idx, ok := tableDef.Name2ColIndex[name]; ok {
@@ -200,7 +206,9 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 		switch def := constraint.(type) {
 		case *engine.IndexDef:
 			for _, indexDef := range def.Indexes {
-				ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql)
+				ctx, cancelFunc := context.WithTimeoutCause(
+					proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql,
+				)
 				indexId, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 				cancelFunc()
 				if err != nil {
@@ -248,8 +256,12 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "'%s', ", algorithm_table_type)
 
 					//8. algorithm_params
-					var algorithm_params = indexDef.IndexAlgoParams
-					fmt.Fprintf(buffer, "'%s', ", algorithm_params)
+					if len(indexDef.IndexAlgoParams) > 0 {
+						params := catalog.MustIndexParams(indexDef.IndexAlgoParams)
+						fmt.Fprintf(buffer, "'%s', ", params.ToJsonParamString())
+					} else {
+						fmt.Fprintf(buffer, "'%s', ", EMPTY_STRING)
+					}
 
 					// 9. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)
@@ -269,7 +281,12 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					// 14. index vec_options
 					if indexDef.Option != nil {
 						if indexDef.Option.ParserName != "" {
-							fmt.Fprintf(buffer, "'parser=%s,ngram_token_size=%d', ", indexDef.Option.ParserName, indexDef.Option.NgramTokenSize)
+							fmt.Fprintf(
+								buffer,
+								"'parser=%s,ngram_token_size=%d', ",
+								indexDef.Option.ParserName,
+								indexDef.Option.NgramTokenSize,
+							)
 						}
 					} else {
 						fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
@@ -284,7 +301,9 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 				}
 			}
 		case *engine.PrimaryKeyDef:
-			ctx, cancelFunc := context.WithTimeoutCause(proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql2)
+			ctx, cancelFunc := context.WithTimeoutCause(
+				proc.Ctx, time.Second*30, moerr.CauseGenInsertMOIndexesSql2,
+			)
 			index_id, err := eg.AllocateIDByKey(ctx, ALLOCID_INDEX_KEY)
 			cancelFunc()
 			if err != nil {
@@ -369,7 +388,13 @@ func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseI
 }
 
 // makeInsertMultiIndexSQL :Synchronize the index metadata information of the table to the index metadata table
-func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *process.Process, dbSource engine.Database, relation engine.Relation) (string, error) {
+func makeInsertMultiIndexSQL(
+	eng engine.Engine,
+	ctx context.Context,
+	proc *process.Process,
+	dbSource engine.Database,
+	relation engine.Relation,
+) (string, error) {
 	if dbSource == nil || relation == nil {
 		return "", nil
 	}
@@ -402,11 +427,9 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 		return "", nil
 	}
 
-	insertMoIndexesSql, err := genInsertMOIndexesSql(eg, proc, databaseId, tableId, ct, tableDef)
-	if err != nil {
-		return "", err
-	}
-	return insertMoIndexesSql, nil
+	return genInsertMOIndexesSql(
+		eng, proc, databaseId, tableId, ct, tableDef,
+	)
 }
 
 func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation) error {
@@ -439,7 +462,10 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
 							return err
 						} else if !ok {
-							return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", indexflag))
+							return moerr.NewInternalError(
+								c.proc.Ctx,
+								fmt.Sprintf("%s is not enabled", indexflag),
+							)
 						}
 					}
 				}
@@ -506,26 +532,38 @@ func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef
 	return cstrDef
 }
 
-func genInsertIndexTableSqlForFullTextIndex(originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) []string {
-	src_alias := "src"
-	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
-	params := indexDef.IndexAlgoParams
-	tblname := indexDef.IndexTableName
+func genInsertIndexTableSqlForFullTextIndex(
+	originalTableDef *plan.TableDef,
+	indexDef *plan.IndexDef,
+	qryDatabase string,
+) []string {
+	var (
+		params    string
+		src_alias = "src"
+		pkColName = src_alias + "." + originalTableDef.Pkey.PkeyColName
+		tblname   = indexDef.IndexTableName
+		parts     = make([]string, 0, len(indexDef.Parts))
+	)
 
-	parts := make([]string, 0, len(indexDef.Parts))
+	if len(indexDef.IndexAlgoParams) > 0 {
+		params = catalog.MustIndexParams(indexDef.IndexAlgoParams).ToJsonParamString()
+	}
+
 	for _, p := range indexDef.Parts {
 		parts = append(parts, src_alias+"."+p)
 	}
 
 	concat := strings.Join(parts, ",")
 
-	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
+	sql := fmt.Sprintf(
+		insertIntoFullTextIndexTableFormat,
 		qryDatabase, tblname,
 		qryDatabase, originalTableDef.Name,
 		src_alias,
 		params,
 		pkColName,
-		concat)
+		concat,
+	)
 
 	return []string{sql}
 }
@@ -552,8 +590,12 @@ func genDeleteHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexD
 
 }
 
-func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) ([]string, error) {
-	var cfg vectorindex.IndexTableConfig
+func genBuildHnswIndex(
+	proc *process.Process,
+	indexDefs map[string]*plan.IndexDef,
+	qryDatabase string,
+	originalTableDef *plan.TableDef,
+) ([]string, error) {
 	src_alias := "src"
 	pkColName := src_alias + "." + originalTableDef.Pkey.PkeyColName
 
@@ -561,45 +603,59 @@ func genBuildHnswIndex(proc *process.Process, indexDefs map[string]*plan.IndexDe
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
 	}
-	cfg.MetadataTable = idxdef_meta.IndexTableName
+	metadataTable := idxdef_meta.IndexTableName
 
 	idxdef_index, ok := indexDefs[catalog.Hnsw_TblType_Storage]
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
 	}
-	cfg.IndexTable = idxdef_index.IndexTableName
-	cfg.DbName = qryDatabase
-	cfg.SrcTable = originalTableDef.Name
-	cfg.PKey = pkColName
-	cfg.KeyPart = idxdef_index.Parts[0]
+	indexTable := idxdef_index.IndexTableName
+	dbName := qryDatabase
+	srcTable := originalTableDef.Name
+	pKey := pkColName
+	keyPart := idxdef_index.Parts[0]
 	val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
 	if err != nil {
 		return nil, err
 	}
-	cfg.ThreadsBuild = val.(int64)
+	threadsBuild := val.(int64)
 
 	idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
 	if err != nil {
 		return nil, err
 	}
-	cfg.IndexCapacity = idxcap.(int64)
+	indexCapacity := idxcap.(int64)
 
-	params := idxdef_index.IndexAlgoParams
-
-	cfgbytes, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, err
+	paramsStr := idxdef_index.IndexAlgoParams
+	if catalog.IsIndexParamsString(paramsStr) {
+		params := catalog.MustIndexParams(paramsStr)
+		paramsStr = params.ToJsonParamString()
 	}
+
+	cfg := vectorindex.BuildIndexTableCfgV1(
+		dbName,
+		srcTable,
+		metadataTable,
+		indexTable,
+		pKey,
+		keyPart,
+		int64(0),
+		threadsBuild,
+		indexCapacity,
+	)
 
 	part := src_alias + "." + idxdef_index.Parts[0]
 
-	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
-		qryDatabase, originalTableDef.Name,
+	sql := fmt.Sprintf(
+		insertIntoHnswIndexTableFormat,
+		qryDatabase,
+		originalTableDef.Name,
 		src_alias,
-		params,
-		string(cfgbytes),
+		paramsStr,
+		cfg.ToJsonString(),
 		pkColName,
-		part)
+		part,
+	)
 
 	return []string{sql}, nil
 }

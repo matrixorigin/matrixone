@@ -19,6 +19,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +28,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -52,7 +54,12 @@ var (
 	}
 )
 
-func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) hnswCreateTestCase {
+func newHnswCreateTestCase(
+	t *testing.T,
+	m *mpool.MPool,
+	attrs []string,
+	param string,
+) (hnswCreateTestCase, error) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
@@ -62,6 +69,13 @@ func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 				break
 			}
 		}
+	}
+
+	indexParam, err := catalog.IndexAlgoJsonParamStringToIndexParams(
+		"hnsw", param,
+	)
+	if err != nil {
+		return hnswCreateTestCase{}, err
 	}
 
 	ret := hnswCreateTestCase{
@@ -77,10 +91,10 @@ func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param s
 					IsLast:  false,
 				},
 			},
-			Params: []byte(param),
+			Params: []byte(indexParam),
 		},
 	}
-	return ret
+	return ret, nil
 }
 
 func mock_hnsw_runSql(proc *process.Process, sql string) (executor.Result, error) {
@@ -93,14 +107,15 @@ func TestHnswCreate(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 
 	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	ut, err := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	require.NoError(t, err)
 
 	inbat := makeBatchHnswCreate(ut.proc)
 
 	ut.arg.Args = makeConstInputExprsHnswCreate()
 
 	// Prepare
-	err := ut.arg.Prepare(ut.proc)
+	err = ut.arg.Prepare(ut.proc)
 	require.Nil(t, err)
 
 	for i := range ut.arg.ctr.executorsForArgs {
@@ -141,25 +156,10 @@ func TestHnswCreateParamFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 
 	for _, param := range failedparam {
-		ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
-
-		inbat := makeBatchHnswCreate(ut.proc)
-
-		ut.arg.Args = makeConstInputExprsHnswCreate()
-
-		// Prepare
-		err := ut.arg.Prepare(ut.proc)
-		require.Nil(t, err)
-
-		for i := range ut.arg.ctr.executorsForArgs {
-			ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-			require.Nil(t, err)
-		}
-
-		// start
-		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-		require.NotNil(t, err)
-		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
+		_, err := newHnswCreateTestCase(
+			t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param,
+		)
+		require.Error(t, err)
 	}
 
 	/*
@@ -185,7 +185,8 @@ func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 	hnsw_runSql = mock_hnsw_runSql
 	param := "{\"op_type\": \"vector_l2_ops\"}"
 
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	ut, err := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
+	require.NoError(t, err)
 	failbatches := makeBatchHnswCreateFail(ut.proc)
 	for _, b := range failbatches {
 
@@ -227,7 +228,18 @@ func TestHnswCreateIndexTableConfigFail(t *testing.T) {
 
 func makeConstInputExprsHnswCreate() []*plan.Expr {
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__metadata",
+		"__index",
+		"",
+		"",
+		0,
+		0,
+		10000,
+	)
+
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -237,7 +249,7 @@ func makeConstInputExprsHnswCreate() []*plan.Expr {
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{
 					Value: &plan.Literal_Sval{
-						Sval: tblcfg,
+						Sval: string(tblcfg),
 					},
 				},
 			},
@@ -269,8 +281,20 @@ func makeBatchHnswCreate(proc *process.Process) *batch.Batch {
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
 	bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
 
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
+	// Create a proper IndexTableCfgV1 instance
+	tblcfg := vectorindex.BuildIndexTableCfgV1(
+		"db",
+		"src",
+		"__metadata",
+		"__index",
+		"",
+		"",
+		0,
+		0,
+		10000,
+	)
+
+	vector.AppendBytes(bat.Vecs[0], tblcfg, false, proc.Mp())
 	vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
 
 	v := []float32{0, 1, 2}
@@ -342,7 +366,18 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 
 	}
 	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+		// Create a proper IndexTableCfgV1 instance
+		tblcfg := vectorindex.BuildIndexTableCfgV1(
+			"db",
+			"src",
+			"__metadata",
+			"__index",
+			"",
+			"",
+			0,
+			0,
+			10000,
+		)
 		ret := []*plan.Expr{
 			{
 				Typ: plan.Type{
@@ -352,7 +387,7 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{
 						Value: &plan.Literal_Sval{
-							Sval: tblcfg,
+							Sval: string(tblcfg),
 						},
 					},
 				},

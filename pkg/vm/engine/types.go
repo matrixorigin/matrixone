@@ -125,9 +125,12 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 	)
 
 	if tableDef.ViewSql != nil {
-		exeDefs = append(exeDefs, &ViewDef{
-			View: tableDef.ViewSql.View,
-		})
+		exeDefs = append(
+			exeDefs,
+			&ViewDef{
+				View: tableDef.ViewSql.View,
+			},
+		)
 	}
 
 	if tableDef.Partition != nil {
@@ -135,10 +138,13 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		if err != nil {
 			return nil, nil, err
 		}
-		exeDefs = append(exeDefs, &PartitionDef{
-			Partitioned: 1,
-			Partition:   string(bytes),
-		})
+		exeDefs = append(
+			exeDefs,
+			&PartitionDef{
+				Partitioned: 1,
+				Partition:   string(bytes),
+			},
+		)
 	}
 
 	c := PlanDefToCstrDef(tableDef)
@@ -147,9 +153,12 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 	}
 
 	if tableDef.ClusterBy != nil {
-		exeDefs = append(exeDefs, &ClusterByDef{
-			Name: tableDef.ClusterBy.Name,
-		})
+		exeDefs = append(
+			exeDefs,
+			&ClusterByDef{
+				Name: tableDef.ClusterBy.Name,
+			},
+		)
 	}
 
 	return exeDefs, extra, nil

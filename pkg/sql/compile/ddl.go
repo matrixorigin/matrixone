@@ -691,30 +691,29 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
 					switch catalog.ToLower(indexAlgo) {
 					case catalog.MoIndexIvfFlatAlgo.ToString():
-						// 1. Get old AlgoParams
-						newAlgoParamsMap, err := catalog.IndexParamsStringToMap(alterIndex.IndexAlgoParams)
-						if err != nil {
+						oldIndexParams, err := catalog.TryConvertToIndexParams(
+							indexAlgo,
+							alterIndex.IndexAlgoParams,
+						)
+						if err != nil || !oldIndexParams.IsIVFFLAT() {
 							return err
 						}
-						// 2.a update AlgoParams for the index to be re-indexed
-						// NOTE: this will throw error if the algo type is not supported for reindex.
-						// So Step 4. will not be executed if error is thrown here.
-						newAlgoParamsMap[catalog.IndexAlgoParamLists] = fmt.Sprintf("%d", tableAlterIndex.IndexAlgoParamList)
-
-						// 2.b generate new AlgoParams string
-						newAlgoParams, err := catalog.IndexParamsMapToJsonString(newAlgoParamsMap)
-						if err != nil {
-							return err
-						}
+						newIndexParams := oldIndexParams.Clone()
+						newIndexParams.SetIVFFLATList(tableAlterIndex.IndexAlgoParamList)
 
 						// 3.a Update IndexDef and TableDef
-						alterIndex.IndexAlgoParams = newAlgoParams
-						oTableDef.Indexes[i].IndexAlgoParams = newAlgoParams
+						alterIndex.IndexAlgoParams = string(newIndexParams)
+						oTableDef.Indexes[i].IndexAlgoParams = string(newIndexParams)
 
 						// 3.b Update mo_catalog.mo_indexes
-						updateSql := fmt.Sprintf(updateMoIndexesAlgoParams, newAlgoParams, oTableDef.TblId, alterIndex.IndexName)
-						err = c.runSql(updateSql)
-						if err != nil {
+						updateSql := fmt.Sprintf(
+							updateMoIndexesAlgoParams,
+							newIndexParams.ToJsonParamString(),
+							oTableDef.TblId,
+							alterIndex.IndexName,
+						)
+						// PXU TODO: Test
+						if err = c.runSql(updateSql); err != nil {
 							return err
 						}
 
@@ -919,7 +918,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// convert the plan's defs to the execution's defs
 	exeDefs, extra, err := engine.PlanDefsToExeDefs(qry.GetTableDef())
 	if err != nil {
-		c.proc.Error(c.proc.Ctx, "createTable",
+		c.proc.Error(
+			c.proc.Ctx,
+			"create-table-get-exe-defs-failed",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -933,7 +934,13 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		c.proc.Error(
+			c.proc.Ctx,
+			"lock-database-failed",
+			zap.String("databaseName", c.db),
+			zap.Error(err),
+		)
 		return err
 	}
 
@@ -947,7 +954,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
 	if err != nil {
-		c.proc.Error(c.proc.Ctx, "check table relation exists failed",
+		c.proc.Error(
+			c.proc.Ctx,
+			"check-table-relation-exists-failed",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", tblName),
 			zap.Error(err),
@@ -990,7 +999,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		c.proc.Error(c.proc.Ctx, "createTable",
+		c.proc.Error(
+			c.proc.Ctx,
+			"lock-main-table-failed",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1010,11 +1021,16 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	if err = dbSource.Create(
-		context.WithValue(c.proc.Ctx,
-			defines.SqlKey{}, c.sql), tblName,
+		context.WithValue(
+			c.proc.Ctx,
+			defines.SqlKey{}, c.sql,
+		),
+		tblName,
 		append(exeCols, exeDefs...),
 	); err != nil {
-		c.proc.Error(c.proc.Ctx, "createTable",
+		c.proc.Error(
+			c.proc.Ctx,
+			"create-main-table-failed",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1038,7 +1054,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//due to the colId may be changed.
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Info(
+				c.proc.Ctx,
+				"createTable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1049,7 +1067,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		newTableDef, err := newRelation.TableDefs(c.proc.Ctx)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Info(
+				c.proc.Ctx,
+				"create-table-get-table-def-failed",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1187,7 +1207,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 		//due to the colId may be changed.
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Info(
+				c.proc.Ctx,
+				"create-table-get-relation-failed",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1198,7 +1220,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		newTableDef, err := newRelation.TableDefs(c.proc.Ctx)
 		if err != nil {
-			c.proc.Info(c.proc.Ctx, "createTable",
+			c.proc.Info(
+				c.proc.Ctx,
+				"create-table-get-table-def-failed",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1232,8 +1256,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 				if id, has := colNameToId[colReferred]; has {
 					newDef.ForeignCols[j] = id
 				} else {
-					err := moerr.NewInternalErrorf(c.proc.Ctx, "no column %s", colReferred)
-					c.proc.Info(c.proc.Ctx, "createTable",
+					err := moerr.NewInternalErrorf(
+						c.proc.Ctx, "no-column-%s", colReferred,
+					)
+					c.proc.Info(
+						c.proc.Ctx,
+						"create-table-no-column-failed",
 						zap.String("databaseName", c.db),
 						zap.String("tableName", qry.GetTableDef().GetName()),
 						zap.Error(err),
@@ -1245,7 +1273,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 			// add the fk def into the child table
 			childDb, err := c.e.Database(c.proc.Ctx, info.Db, c.proc.GetTxnOperator())
 			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
+				c.proc.Info(
+					c.proc.Ctx,
+					"create-table-get-child-db-failed",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1254,16 +1284,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 			}
 			childTable, err := childDb.Relation(c.proc.Ctx, info.Table, nil)
 			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
+				c.proc.Info(
+					c.proc.Ctx,
+					"create-table-get-child-table-failed",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
 				)
 				return err
 			}
-			err = AddFkeyToRelation(c.proc.Ctx, childTable, newDef)
-			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
+			if err = AddFkeyToRelation(c.proc.Ctx, childTable, newDef); err != nil {
+				c.proc.Error(
+					c.proc.Ctx,
+					"create-table-add-fk-to-child-table-failed",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1271,9 +1304,12 @@ func (s *Scope) CreateTable(c *Compile) error {
 				return err
 			}
 			// add the child table id -- tblId into the current table -- refChildDef
-			err = AddChildTblIdToParentTable(c.proc.Ctx, newRelation, childTable.GetTableID(c.proc.Ctx))
-			if err != nil {
-				c.proc.Info(c.proc.Ctx, "createTable",
+			if err = AddChildTblIdToParentTable(
+				c.proc.Ctx, newRelation, childTable.GetTableID(c.proc.Ctx),
+			); err != nil {
+				c.proc.Error(
+					c.proc.Ctx,
+					"create-table-add-child-table-id-to-parent-table-failed",
 					zap.String("databaseName", c.db),
 					zap.String("tableName", qry.GetTableDef().GetName()),
 					zap.Error(err),
@@ -1286,7 +1322,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 	// build index table
 	main, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 	if err != nil {
-		c.proc.Info(c.proc.Ctx, "createTable",
+		c.proc.Error(
+			c.proc.Ctx,
+			"create-table-get-main-table-failed",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1298,9 +1336,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 	for i, def := range qry.IndexTables {
 		planCols = def.GetCols()
 		exeCols = engine.PlanColsToExeCols(planCols)
-		exeDefs, indexExtra, err = engine.PlanDefsToExeDefs(def)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+		if exeDefs, indexExtra, err = engine.PlanDefsToExeDefs(def); err != nil {
+			c.proc.Error(
+				c.proc.Ctx,
+				"create-table-get-exe-defs-failed",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1310,7 +1349,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 		exists, err := dbSource.RelationExists(c.proc.Ctx, def.Name, nil)
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "check index relation exists failed",
+			c.proc.Error(
+				c.proc.Ctx,
+				"create-table-check-index-relation-exists-failed",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", def.GetName()),
 				zap.Error(err),
@@ -1325,12 +1366,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 		indexExtra.FeatureFlag |= features.IndexTable
 		indexExtra.ParentTableID = main.GetTableID(c.proc.Ctx)
 
-		if err := dbSource.Create(
+		if err = dbSource.Create(
 			context.WithValue(c.proc.Ctx, defines.TableIDKey{}, def.TblId),
 			def.Name,
 			append(exeCols, exeDefs...),
 		); err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Error(
+				c.proc.Ctx,
+				"create-table-create-index-table-failed",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1338,16 +1381,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		err = maybeCreateAutoIncrement(
+		if err = maybeCreateAutoIncrement(
 			c.proc.Ctx,
 			c.proc.GetService(),
 			dbSource,
 			def,
 			c.proc.GetTxnOperator(),
 			nil,
-		)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "create index table for maybeCreateAutoIncrement",
+		); err != nil {
+			c.proc.Error(
+				c.proc.Ctx,
+				"create-table-maybe-create-auto-increment-failed",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.String("index tableName", def.Name),
@@ -1359,7 +1403,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 		var initSQL string
 		switch def.TableType {
 		case catalog.SystemSI_IVFFLAT_TblType_Metadata:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
+			initSQL = fmt.Sprintf(
+				"INSERT INTO `%s`.`%s` (`%s`, `%s`) VALUES('version', '0');",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
@@ -1367,7 +1412,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 
 		case catalog.SystemSI_IVFFLAT_TblType_Centroids:
-			initSQL = fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+			initSQL = fmt.Sprintf(
+				"INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
 				qry.Database,
 				def.Name,
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
@@ -1375,9 +1421,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 				catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 			)
 		}
-		err = c.runSql(initSQL)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "create index table for execute initSQL",
+		if err = c.runSql(initSQL); err != nil {
+			c.proc.Error(
+				c.proc.Ctx,
+				"create-index-table-for-execute-initSQL",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.String("index tableName", def.Name),
@@ -1391,16 +1438,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if checkIndexInitializable(dbName, tblName) {
 		newRelation, err := dbSource.Relation(c.proc.Ctx, tblName, nil)
 		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+			c.proc.Error(
+				c.proc.Ctx,
+				"check-indexes-initializable",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		err = s.checkTableWithValidIndexes(c, newRelation)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+		if err = s.checkTableWithValidIndexes(c, newRelation); err != nil {
+			c.proc.Error(
+				c.proc.Ctx,
+				"check-table-with-valid-indexes",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
@@ -1408,18 +1458,23 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		insertSQL, err := makeInsertMultiIndexSQL(c.e, c.proc.Ctx, c.proc, dbSource, newRelation)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+		var insertSQL string
+		if insertSQL, err = makeInsertMultiIndexSQL(
+			c.e, c.proc.Ctx, c.proc, dbSource, newRelation,
+		); err != nil {
+			c.proc.Error(
+				c.proc.Ctx,
+				"make-insert-multi-index-sql",
 				zap.String("databaseName", c.db),
 				zap.String("tableName", qry.GetTableDef().GetName()),
 				zap.Error(err),
 			)
 			return err
 		}
-		err = c.runSql(insertSQL)
-		if err != nil {
-			c.proc.Error(c.proc.Ctx, "createTable",
+		if err = c.runSql(insertSQL); err != nil {
+			c.proc.Error(
+				c.proc.Ctx,
+				"run-insert-multi-index-sql",
 				zap.String("insertSQL", insertSQL),
 				zap.String("dbName0", dbName),
 				zap.String("tblName0", tblName),
@@ -1431,16 +1486,17 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	err = maybeCreateAutoIncrement(
+	if err = maybeCreateAutoIncrement(
 		c.proc.Ctx,
 		c.proc.GetService(),
 		dbSource,
 		qry.GetTableDef(),
 		c.proc.GetTxnOperator(),
 		nil,
-	)
-	if err != nil {
-		c.proc.Error(c.proc.Ctx, "create table for maybeCreateAutoIncrement",
+	); err != nil {
+		c.proc.Error(
+			c.proc.Ctx,
+			"create-table-for-maybeCreateAutoIncrement",
 			zap.String("databaseName", c.db),
 			zap.String("tableName", qry.GetTableDef().GetName()),
 			zap.Error(err),
@@ -1461,17 +1517,25 @@ func (s *Scope) CreateTable(c *Compile) error {
 		c.getLower(),
 	)
 
-	err = ps.Create(
+	if err = ps.Create(
 		c.proc.Ctx,
 		qry.TableDef.TblId,
 		stmt.(*tree.CreateTable),
 		c.proc.GetTxnOperator(),
-	)
-	if err != nil {
+	); err != nil {
+		c.proc.Error(
+			c.proc.Ctx,
+			"create-table-create-partition-table-failed",
+			zap.String("databaseName", c.db),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
 		return err
 	}
 
-	return shardservice.GetService(c.proc.GetService()).Create(
+	return shardservice.GetService(
+		c.proc.GetService(),
+	).Create(
 		c.proc.Ctx,
 		qry.GetTableDef().TblId,
 		c.proc.GetTxnOperator(),
@@ -2110,7 +2174,9 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 	return oldCt, nil
 }
 
-func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (*engine.ConstraintDef, error) {
+func MakeNewCreateConstraint(
+	oldCt *engine.ConstraintDef, c engine.Constraint,
+) (newCt *engine.ConstraintDef, err error) {
 	// duplication has checked in plan
 	if oldCt == nil {
 		return &engine.ConstraintDef{

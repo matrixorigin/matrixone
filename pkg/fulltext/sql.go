@@ -495,7 +495,13 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 }
 
 // API for generate SQL from pattern
-func PatternToSql(ps []*Pattern, mode int64, idxTable string, parser string, algo FullTextScoreAlgo) (string, error) {
+func PatternToSql(
+	ps []*Pattern,
+	mode int64,
+	idxTable string,
+	parser string,
+	algo FullTextScoreAlgo,
+) (string, error) {
 	sql, err := patternToSql(ps, mode, idxTable, parser)
 	if err != nil {
 		return "", err

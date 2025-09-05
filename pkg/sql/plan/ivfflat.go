@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -63,7 +64,14 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 	}
 
 	colDefs := _getColDefs(ivfBuildIndexColDefs)
-	params, err := builder.getIvfParams(tbl.Func)
+	rawParams, err := builder.getIvfParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	params, err := catalog.TryConvertToIndexParams(
+		catalog.IndexParamAlgoName_IvfFlat,
+		rawParams,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -97,14 +105,26 @@ func (builder *QueryBuilder) buildIvfCreate(tbl *tree.TableFunction, ctx *BindCo
 }
 
 // arg list [param, ivf.IndexTableconfig (JSON), search_vec]
-func (builder *QueryBuilder) buildIvfSearch(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+func (builder *QueryBuilder) buildIvfSearch(
+	tbl *tree.TableFunction,
+	ctx *BindContext,
+	exprs []*plan.Expr,
+	children []int32,
+) (int32, error) {
 	if len(exprs) != 3 {
 		return 0, moerr.NewInvalidInput(builder.GetContext(), "Invalid number of arguments (NARGS != 3).")
 	}
 
 	colDefs := _getColDefs(ivfSearchColDefs)
 
-	params, err := builder.getIvfParams(tbl.Func)
+	rawParams, err := builder.getIvfParams(tbl.Func)
+	if err != nil {
+		return 0, err
+	}
+	params, err := catalog.TryConvertToIndexParams(
+		catalog.IndexParamAlgoName_IvfFlat,
+		rawParams,
+	)
 	if err != nil {
 		return 0, err
 	}

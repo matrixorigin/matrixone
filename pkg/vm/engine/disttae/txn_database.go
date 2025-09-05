@@ -371,21 +371,25 @@ func (db *txnDatabase) Truncate(ctx context.Context, name string) (uint64, error
 	return newId, nil
 }
 
-func (db *txnDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {
+func (db *txnDatabase) Create(
+	ctx context.Context,
+	name string,
+	defs []engine.TableDef,
+) (err error) {
 	if db.op.IsSnapOp() {
-		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
+		err = moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
+		return
 	}
-	txn := db.getTxn()
 
-	var tableId uint64
-	var err error
-	value := ctx.Value(defines.TableIDKey{})
-	if value != nil {
+	var (
+		txn     = db.getTxn()
+		tableId uint64
+	)
+	if value := ctx.Value(defines.TableIDKey{}); value != nil {
 		tableId = value.(uint64)
 	} else {
-		tableId, err = txn.allocateID(ctx)
-		if err != nil {
-			return err
+		if tableId, err = txn.allocateID(ctx); err != nil {
+			return
 		}
 	}
 	txn.tableOps.addCreatedInTxn(tableId, txn.statementID)
@@ -399,24 +403,31 @@ func (db *txnDatabase) createWithID(
 	defs []engine.TableDef,
 	useAlterNote bool,
 	extra *api.SchemaExtra,
-) error {
+) (err error) {
 	if db.op.IsSnapOp() {
-		return moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
+		err = moerr.NewInternalErrorNoCtx("create table in snapshot transaction")
+		return
 	}
 	accountId, userId, roleId, err := getAccessInfo(ctx)
 	if err != nil {
-		return err
+		return
 	}
-	txn := db.getTxn()
-	m := txn.proc.Mp()
+	var (
+		txn  = db.getTxn()
+		mp   = txn.proc.Mp()
+		cols []catalog.Column
+	)
 
 	// 1. inspect and **modify** defs, and construct columns
-	cols, err := catalog.GenColumnsFromDefs(accountId, name, db.databaseName, tableId, db.databaseId, defs)
-	if err != nil {
-		return err
+	if cols, err = catalog.GenColumnsFromDefs(
+		accountId, name, db.databaseName, tableId, db.databaseId, defs,
+	); err != nil {
+		return
 	}
-	tbl := new(txnTable)
-	tbl.eng = txn.engine
+
+	tbl := &txnTable{
+		eng: txn.engine,
+	}
 
 	{ // prepare table information
 		// 2.1 prepare basic table information
@@ -518,7 +529,7 @@ func (db *txnDatabase) createWithID(
 			Version:       tbl.version,
 			ExtraInfo:     api.MustMarshalTblExtra(tbl.extraInfo),
 		}
-		bat, err := catalog.GenCreateTableTuple(arg, m, packer)
+		bat, err := catalog.GenCreateTableTuple(arg, mp, packer)
 		if err != nil {
 			return err
 		}
@@ -529,13 +540,13 @@ func (db *txnDatabase) createWithID(
 		_, err = txn.WriteBatch(INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, txn.tnStores[0])
 		if err != nil {
-			bat.Clean(m)
+			bat.Clean(mp)
 			return err
 		}
 	}
 
 	{ // 4. Write create column batch
-		bat, err := catalog.GenCreateColumnTuples(cols, m, packer)
+		bat, err := catalog.GenCreateColumnTuples(cols, mp, packer)
 		if err != nil {
 			return err
 		}
@@ -547,7 +558,7 @@ func (db *txnDatabase) createWithID(
 			INSERT, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, txn.tnStores[0])
 		if err != nil {
-			bat.Clean(m)
+			bat.Clean(mp)
 			return err
 		}
 	}

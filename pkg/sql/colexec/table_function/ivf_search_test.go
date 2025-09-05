@@ -19,6 +19,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,7 +64,9 @@ var (
 	}
 )
 
-func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) ivfSearchTestCase {
+func newIvfSearchTestCase(
+	t *testing.T, m *mpool.MPool, attrs []string, param string,
+) (ivfSearchTestCase, error) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	colDefs := make([]*plan.ColDef, len(attrs))
 	for i := range attrs {
@@ -73,6 +76,12 @@ func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param st
 				break
 			}
 		}
+	}
+	indexParam, err := catalog.IndexAlgoJsonParamStringToIndexParams(
+		"ivfflat", param,
+	)
+	if err != nil {
+		return ivfSearchTestCase{}, err
 	}
 
 	ret := ivfSearchTestCase{
@@ -88,10 +97,10 @@ func newIvfSearchTestCase(t *testing.T, m *mpool.MPool, attrs []string, param st
 					IsLast:  false,
 				},
 			},
-			Params: []byte(param),
+			Params: []byte(indexParam),
 		},
 	}
-	return ret
+	return ret, nil
 }
 
 func mock_ivf_runSql(proc *process.Process, sql string) (executor.Result, error) {
@@ -99,13 +108,13 @@ func mock_ivf_runSql(proc *process.Process, sql string) (executor.Result, error)
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
 }
 
-func mockVersion(proc *process.Process, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+func mockVersion(proc *process.Process, tblcfg vectorindex.IndexTableCfg) (int64, error) {
 	return 0, nil
 }
 
 type MockIvfSearch[T types.RealNumbers] struct {
 	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Tblcfg vectorindex.IndexTableCfg
 }
 
 func (m *MockIvfSearch[T]) Search(proc *process.Process, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -125,7 +134,10 @@ func (m *MockIvfSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error
 	return nil
 }
 
-func newMockIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
+func newMockIvfAlgoFn(
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableCfg,
+) (veccache.VectorIndexSearchIf, error) {
 	return &MockIvfSearch[float32]{Idxcfg: idxcfg, Tblcfg: tblcfg}, nil
 }
 
@@ -135,24 +147,27 @@ func TestIvfSearch(t *testing.T) {
 	getVersion = mockVersion
 
 	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
-	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	ut, err := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	require.NoError(t, err)
 
 	inbat := makeBatchIvfSearch(ut.proc)
 
 	ut.arg.Args = makeConstInputExprsIvfSearch()
 
 	// Prepare
-	err := ut.arg.Prepare(ut.proc)
+	err = ut.arg.Prepare(ut.proc)
 	require.Nil(t, err)
 
 	for i := range ut.arg.ctr.executorsForArgs {
-		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(
+			ut.proc, []*batch.Batch{inbat}, nil,
+		)
 		require.Nil(t, err)
 	}
 
 	// start
 	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	// first call receive data
 	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
@@ -182,26 +197,8 @@ func TestIvfSearchParamFail(t *testing.T) {
 	getVersion = mockVersion
 
 	for _, param := range failedivfsearchparam {
-		ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
-
-		inbat := makeBatchIvfSearch(ut.proc)
-
-		ut.arg.Args = makeConstInputExprsIvfSearch()
-
-		// Prepare
-		err := ut.arg.Prepare(ut.proc)
-		require.Nil(t, err)
-
-		for i := range ut.arg.ctr.executorsForArgs {
-			ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-			require.Nil(t, err)
-		}
-
-		// start
-		fmt.Println(param)
-		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-		require.NotNil(t, err)
-		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
+		_, err := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+		require.Error(t, err)
 	}
 
 	/*
@@ -228,7 +225,8 @@ func TestIvfSearchIndexTableConfigFail(t *testing.T) {
 	getVersion = mockVersion
 	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"3\"}"
 
-	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	ut, err := newIvfSearchTestCase(t, mpool.MustNewZero(), ivfsearchdefaultAttrs, param)
+	require.NoError(t, err)
 	failbatches := makeBatchIvfSearchFail(ut.proc)
 	for _, b := range failbatches {
 
@@ -270,7 +268,25 @@ func TestIvfSearchIndexTableConfigFail(t *testing.T) {
 
 func makeConstInputExprsIvfSearch() []*plan.Expr {
 
-	tblcfg := fmt.Sprintf(`{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "entries":"__entries", "parttype": %d}`, int32(types.T_array_float32))
+	tblcfg := vectorindex.BuildIVFIndexTableCfgV1(
+		"db",
+		"src",
+		"__metadata",
+		"__index",
+		"",
+		"",
+		0,
+		0,
+		0,
+		"__entries",
+		0,
+		0,
+		0,
+		int32(types.T_array_float32),
+		0,
+		0,
+	)
+
 	ret := []*plan.Expr{
 		{
 			Typ: plan.Type{
@@ -280,7 +296,7 @@ func makeConstInputExprsIvfSearch() []*plan.Expr {
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{
 					Value: &plan.Literal_Sval{
-						Sval: tblcfg,
+						Sval: string(tblcfg),
 					},
 				},
 			},

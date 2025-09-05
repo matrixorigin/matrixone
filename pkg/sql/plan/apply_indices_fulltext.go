@@ -244,11 +244,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		params := idxdef.IndexAlgoParams
 
 		var exprs tree.Exprs
-		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
+		exprs = append(exprs, tree.NewNumVal(params, params, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal(srctblname, srctblname, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal(idxtblname, idxtblname, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal(pattern, pattern, false, tree.P_char))
+		exprs = append(exprs, tree.NewNumVal(mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
 
 		name := tree.NewUnresolvedName(fulltext_func)
 
@@ -329,7 +329,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			last_node_id = curr_ftnode_id
 		}
 		last_ftnode_pkcol = DeepCopyExpr(curr_ftnode_pkcol)
-
 	}
 
 	// JOIN INNER with children (nodeId, FullTextIndexScanId)
