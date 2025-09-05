@@ -403,6 +403,11 @@ func (task *mergeObjectsTask) DoTransfer() bool {
 	return !task.isTombstone && !strings.Contains(task.schema.Comment, pkgcatalog.MO_COMMENT_NO_DEL_HINT)
 }
 
+func (task *mergeObjectsTask) HasBigDelEvent() bool {
+	startTS := task.txn.GetStartTS()
+	return task.rt.BigDeleteHinter.HasBigDelAfter(task.tid, &startTS)
+}
+
 func (task *mergeObjectsTask) Name() string {
 	return fmt.Sprintf("[MT-%d]-%d-%s", task.ID(), task.tid, task.schema.Name)
 }
@@ -415,6 +420,30 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 				zap.String("task", task.Name()),
 				zap.String("phase", phaseDesc),
 				zap.Error(err),
+			)
+			if task.commitEntry == nil || len(task.commitEntry.CreatedObjs) == 0 {
+				return
+			}
+			fs := task.rt.Fs
+			// for io task, dispatch by round robin, scope can be nil
+			task.rt.Scheduler.ScheduleScopedFn(
+				&tasks.Context{},
+				tasks.IOTask, nil,
+				func() error {
+					// TODO: variable as timeout
+					ctx, cancel := context.WithTimeoutCause(
+						context.Background(),
+						2*time.Minute,
+						moerr.CausePrepareRollback2,
+					)
+
+					defer cancel()
+					for _, obj := range task.commitEntry.CreatedObjs {
+						stat := objectio.ObjectStats(obj)
+						_ = fs.Delete(ctx, stat.ObjectName().String())
+					}
+					return nil
+				},
 			)
 		}
 	}()
@@ -432,7 +461,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if task.schema.HasSortKey() {
 		sortkeyPos = task.schema.GetSingleSortKeyIdx()
 	}
-	if task.rt.LockMergeService.IsLockedByUser(task.tid, task.schema.Name) {
+	if task.HasBigDelEvent() {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in exec %v", task.Name())
 	}
 	phaseDesc = "1-DoMergeAndWrite"
