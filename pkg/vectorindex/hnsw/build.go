@@ -133,6 +133,8 @@ func (idx *HnswBuildIndex) SaveToFile() error {
 	return nil
 }
 
+const InsertIndexBatchSize = 2000
+
 // Generate the SQL to update the secondary index tables.
 // 1. store the index file into the index table
 func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
@@ -176,7 +178,7 @@ func (idx *HnswBuildIndex) ToSql(cfg vectorindex.IndexTableConfig) ([]string, er
 		chunkid++
 
 		n++
-		if n == 10000 {
+		if n == InsertIndexBatchSize {
 			newsql := sql + strings.Join(values, ", ")
 			sqls = append(sqls, newsql)
 			values = values[:0]
