@@ -559,3 +559,8 @@ CREATE FULLTEXT INDEX idx_english_text ON example_table (english_text);
 id    english_text    chinese_text    json_data
 2    This is a test.    这是一个测试    {"age": 25, "name": "Bob"}
 2    This is a test.    这是一个测试    {"age": 25, "name": "Bob"}
+create table empty_fulltext(a int primary key, b varchar, c varchar, fulltext `ftc` (c) WITH PARSER ngram);
+insert into empty_fulltext select result, 'so long',null from generate_series(1, 300000) g;
+insert into empty_fulltext values (300001, 'this is the end of our story', null);
+delete from empty_fulltext where b like '%story%';
+drop table empty_fulltext;
