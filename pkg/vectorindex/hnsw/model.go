@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -323,7 +324,11 @@ func (idx *HnswModel) Contains(key int64) (found bool, err error) {
 }
 
 // load chunk from database
-func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor.Result, error_chan chan error, fp *os.File) (stream_closed bool, err error) {
+func (idx *HnswModel) loadChunk(ctx context.Context,
+	proc *process.Process,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+	fp *os.File) (stream_closed bool, err error) {
 	var res executor.Result
 	var ok bool
 
@@ -336,16 +341,18 @@ func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor
 		return false, err
 	case <-proc.Ctx.Done():
 		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	case <-ctx.Done():
+		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
 	}
 
 	bat := res.Batches[0]
 	defer res.Close()
 
-	for i := 0; i < bat.RowCount(); i++ {
-		chunk_id := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[0], i)
+	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+	for i, chunkId := range chunkIds {
 		data := bat.Vecs[1].GetRawBytesAt(i)
 
-		offset := chunk_id * vectorindex.MaxChunkSize
+		offset := chunkId * vectorindex.MaxChunkSize
 		_, err = fp.Seek(offset, io.SeekStart)
 		if err != nil {
 			return false, err
@@ -366,47 +373,67 @@ func (idx *HnswModel) loadChunk(proc *process.Process, stream_chan chan executor
 // 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
 // 4. according to the chunk_id, seek to the offset and write the chunk
 // 5. check the checksum to verify the correctness of the file
-func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64, view bool) error {
+func (idx *HnswModel) LoadIndex(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	nthread int64,
+	view bool) (err error) {
+
+	var (
+		fp          *os.File
+		stream_chan = make(chan executor.Result, 2)
+		error_chan  = make(chan error)
+		fname       string
+	)
 
 	if idx.Index != nil {
 		// index already loaded. ignore
 		return nil
-
 	}
-
-	stream_chan := make(chan executor.Result, 2)
-	error_chan := make(chan error)
 
 	if len(idx.Path) == 0 {
 		// create tempfile for writing
-		fp, err := os.CreateTemp("", "hnsw")
+		fp, err = os.CreateTemp("", "hnsw")
 		if err != nil {
 			return err
 		}
 
+		fname = fp.Name()
+
 		// load index to memory
 		defer func() {
+			if fp != nil {
+				fp.Close()
+				fp = nil
+			}
+
 			if view {
 				// if view == true, remove the file.  right now view equals to read-only model when search.
 				// since model loads into memory anyway, we can safely remove the file after load.
 				// NOTE: when choose to load with usearch.View() mmap(), we cannot remove this file.
 				// for update, we need this file for Load() and unload().
-				os.Remove(fp.Name())
+				if len(fname) > 0 {
+					os.Remove(fname)
+				}
 			}
 		}()
 
 		err = fallocate.Fallocate(fp, 0, idx.FileSize)
 		if err != nil {
-			fp.Close()
 			return err
 		}
 
 		// run streaming sql
 		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+
+		ctx, cancel := context.WithCancelCause(proc.GetTopContext())
+		defer cancel(nil)
+
 		go func() {
-			_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-			if err != nil {
-				error_chan <- err
+			_, err2 := runSql_streaming(ctx, proc, sql, stream_chan, error_chan)
+			if err2 != nil {
+				error_chan <- err2
 				return
 			}
 		}()
@@ -414,15 +441,37 @@ func (idx *HnswModel) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexC
 		// incremental load from database
 		sql_closed := false
 		for !sql_closed {
-			sql_closed, err = idx.loadChunk(proc, stream_chan, error_chan, fp)
+			sql_closed, err = idx.loadChunk(ctx, proc, stream_chan, error_chan, fp)
 			if err != nil {
-				fp.Close()
-				return err
+				// notify the producer to stop the sql streaming
+				cancel(err)
+				break
 			}
+		}
+
+		// wait for the sql streaming to be closed. make sure all the remaining
+		// results in stream_chan are closed.
+		if !sql_closed {
+			for res := range stream_chan {
+				res.Close()
+			}
+		}
+
+		if err == nil {
+			// fetch potential remaining errors from error_chan
+			select {
+			case err = <-error_chan:
+			default:
+			}
+		}
+
+		if err != nil {
+			return
 		}
 
 		idx.Path = fp.Name()
 		fp.Close()
+		fp = nil
 	}
 
 	// check checksum

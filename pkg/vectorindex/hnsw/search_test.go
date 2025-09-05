@@ -15,6 +15,7 @@
 package hnsw
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -46,7 +47,13 @@ func mock_runSql(proc *process.Process, sql string) (executor.Result, error) {
 }
 
 // give blob
-func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+func mock_runSql_streaming(
+	ctx context.Context,
+	proc *process.Process,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
 
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeIndexBatch(proc)}}
@@ -61,7 +68,13 @@ func mock_runSql_2files(proc *process.Process, sql string) (executor.Result, err
 }
 
 // give blob
-func mock_runSql_streaming_2files(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
+func mock_runSql_streaming_2files(
+	ctx context.Context,
+	proc *process.Process,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
 
 	fmt.Printf("SQL %s\n", sql)
 	idx := 0
