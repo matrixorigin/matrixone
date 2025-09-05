@@ -36,9 +36,14 @@ func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
 }
 
 func (d *LogServiceDriver) getCommitter() *groupCommitter {
-	if int(d.committer.writer.Size()) > d.config.ClientBufSize {
+	if int(d.committer.writer.ApproxSize()) > d.config.ClientBufSize {
 		d.flushCurrentCommitter()
 	}
+
+	if len(d.committer.writer.entries) >= d.config.ClientMaxEntryCount {
+		d.flushCurrentCommitter()
+	}
+
 	return d.committer
 }
 
@@ -75,10 +80,10 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.Add(1)
 	d.workers.Submit(func() {
 		defer committer.Done()
-		if err := committer.Commit(); err != nil {
+		if err2 := committer.Commit(); err2 != nil {
 			logutil.Fatal(
 				"Wal-Cannot-Append",
-				zap.Error(err),
+				zap.Error(err2),
 			)
 		}
 	})

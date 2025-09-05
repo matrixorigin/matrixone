@@ -125,15 +125,15 @@ type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) 
 
 type TxnManager struct {
 	sm.ClosedState
-	PreparingSM     sm.StateMachine
-	FlushQueue      sm.Queue
-	IdAlloc         *common.TxnIDAllocator
-	MaxCommittedTS  atomic.Pointer[types.TS]
-	TxnStoreFactory TxnStoreFactory
-	TxnFactory      TxnFactory
-	Exception       *atomic.Value
-	CommitListener  *batchTxnCommitListener
-	workers         *ants.Pool
+	walAndApplyQueue sm.Queue
+	applyQueue       sm.Queue
+	IdAlloc          *common.TxnIDAllocator
+	MaxCommittedTS   atomic.Pointer[types.TS]
+	TxnStoreFactory  TxnStoreFactory
+	TxnFactory       TxnFactory
+	Exception        *atomic.Value
+	CommitListener   *batchTxnCommitListener
+	workers          *ants.Pool
 
 	heartbeatJob atomic.Pointer[tasks.CancelableJob]
 
@@ -187,10 +187,10 @@ func NewTxnManager(
 	}
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
-	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
-	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
-	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
-	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
+
+	const batSize = 1000
+	mgr.walAndApplyQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onWalAndApply)
+	mgr.applyQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onApply)
 
 	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
 	return mgr
@@ -451,11 +451,6 @@ func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
 	return res
 }
 
-func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
-	_, err = mgr.PreparingSM.EnqueueCheckpoint(op)
-	return
-}
-
 func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err := exp.(error)
@@ -478,7 +473,7 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	if op.Txn.GetStore().IsOffline() {
 		panic("offline txn should not be here")
 	}
-	_, err = mgr.PreparingSM.EnqueueReceived(op)
+	_, err = mgr.walAndApplyQueue.Enqueue(op)
 	return
 }
 
@@ -591,7 +586,7 @@ func (mgr *TxnManager) onPrepare2PC(op *OpTxn, ts types.TS) {
 	mgr.onPrepare(op, ts)
 }
 
-func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
+func (mgr *TxnManager) on1PCApply(op *OpTxn) {
 	var err error
 	var isAbort bool
 	switch op.Op {
@@ -610,7 +605,7 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	mgr.OnCommitTxn(op.Txn)
 	// Here to change the txn state and
 	// broadcast the rollback or commit event to all waiting threads
-	_ = op.Txn.WaitDone(err, isAbort)
+	_ = op.Txn.DoneApply(err, isAbort)
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 	if mgr.GetTxnSkipFlags().Skip(TxnFlag_Heartbeat) && txn.GetStore().IsHeartbeat() {
@@ -623,7 +618,7 @@ func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 		}
 	}
 }
-func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
+func (mgr *TxnManager) on2PCApply(op *OpTxn) {
 	var err error
 	var isAbort bool
 	switch op.Op {
@@ -640,131 +635,83 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	}
 	// Here to change the txn state and
 	// broadcast the rollback event to all waiting threads
-	_ = op.Txn.WaitDone(err, isAbort)
+	_ = op.Txn.DoneApply(err, isAbort)
+}
+
+func (mgr *TxnManager) preWal(op *OpTxn) bool {
+	// Idempotent check
+	if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
+		op.Txn.DoneApply(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
+		return false
+	}
+
+	// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
+	//   		   2. push the AppendNode into the MVCCHandle of block
+	mgr.onPrePrepare(op)
+
+	//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
+	//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
+	//   which would be changed in the future if txn is 2PC.
+	//2. Set transaction's state to Preparing or Rollbacking if op.Op is OpRollback.
+	ts := mgr.onBindPrepareTimeStamp(op)
+
+	if op.Txn.Is2PC() {
+		mgr.onPrepare2PC(op, ts)
+	} else {
+		mgr.onPrepare1PC(op, ts)
+	}
+	if !op.Txn.IsReplay() {
+		if !mgr.prevPrepareTSInPreparing.IsEmpty() {
+			prepareTS := op.Txn.GetPrepareTS()
+			if prepareTS.LT(&mgr.prevPrepareTSInPreparing) {
+				panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPreparing.ToString()))
+			}
+		}
+		mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
+	}
+
+	return true
+}
+
+func (mgr *TxnManager) onWal(op *OpTxn) bool {
+	if op.Txn.GetError() != nil {
+		return false
+	}
+
+	if op.Op != OpCommit && op.Op != OpPrepare {
+		return false
+	}
+
+	if err := op.Txn.PrepareWAL(); err != nil {
+		panic(err)
+	}
+
+	if !op.Txn.IsReplay() {
+		if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
+			prepareTS := op.Txn.GetPrepareTS()
+			if prepareTS.LT(&mgr.prevPrepareTSInPrepareWAL) {
+				panic(fmt.Sprintf(
+					"timestamp rollback current %v, previous %v",
+					op.Txn.GetPrepareTS().ToString(),
+					mgr.prevPrepareTSInPrepareWAL.ToString()))
+			}
+		}
+		mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
+	}
+
+	return true
 }
 
 // 1PC and 2PC
-// dequeuePreparing the commit of 1PC txn and prepare of 2PC txn
-// must both enter into this queue for conflict check.
-// OpCommit : the commit of 1PC txn
-// OpPrepare: the prepare of 2PC txn
-// OPRollback:the rollback of 2PC or 1PC
-func (mgr *TxnManager) dequeuePreparing(items ...any) {
+func (mgr *TxnManager) onApply(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		store := op.Txn.GetStore()
-		store.TriggerTrace(txnif.TracePreparing)
-
-		// Idempotent check
-		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
-			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
-			continue
-		}
-
-		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
-		//   		   2. push the AppendNode into the MVCCHandle of block
-		mgr.onPrePrepare(op)
-
-		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
-		//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
-		//   which would be changed in the future if txn is 2PC.
-		//2. Set transaction's state to Preparing or Rollbacking if op.Op is OpRollback.
-		ts := mgr.onBindPrepareTimeStamp(op)
-
-		if op.Txn.Is2PC() {
-			mgr.onPrepare2PC(op, ts)
-		} else {
-			mgr.onPrepare1PC(op, ts)
-		}
-		if !op.Txn.IsReplay() {
-			if !mgr.prevPrepareTSInPreparing.IsEmpty() {
-				prepareTS := op.Txn.GetPrepareTS()
-				if prepareTS.LT(&mgr.prevPrepareTSInPreparing) {
-					panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPreparing.ToString()))
-				}
-			}
-			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
-		}
-
-		store.TriggerTrace(txnif.TracePrepareWalWait)
-		if err := mgr.EnqueueFlushing(op); err != nil {
-			panic(err)
-		}
-	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[dequeuePreparing]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
-}
-
-func (mgr *TxnManager) onPrepareWAL(items ...any) {
-	now := time.Now()
-
-	for _, item := range items {
-		op := item.(*OpTxn)
-		store := op.Txn.GetStore()
-		store.TriggerTrace(txnif.TracePrepareWal)
-		var t1, t2, t3, t4, t5 time.Time
-		t1 = time.Now()
-		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
-			if err := op.Txn.PrepareWAL(); err != nil {
-				panic(err)
-			}
-
-			t2 = time.Now()
-
-			if !op.Txn.IsReplay() {
-				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
-					prepareTS := op.Txn.GetPrepareTS()
-					if prepareTS.LT(&mgr.prevPrepareTSInPrepareWAL) {
-						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
-					}
-				}
-				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
-			}
-
-			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-			t3 = time.Now()
-		}
-
-		t4 = time.Now()
-		store.TriggerTrace(txnif.TracePreapredWait)
-		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
-			panic(err)
-		}
-		t5 = time.Now()
-
-		if t5.Sub(t1) > time.Second {
-			logutil.Warn(
-				"SLOW-LOG",
-				zap.String("txn", op.Txn.String()),
-				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
-				zap.Duration("end-prepare-duration", t3.Sub(t2)),
-				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
-			)
-		}
-	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[prepareWAL]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
-}
-
-// 1PC and 2PC
-func (mgr *TxnManager) dequeuePrepared(items ...any) {
-	now := time.Now()
-	for _, item := range items {
-		op := item.(*OpTxn)
-		store := op.Txn.GetStore()
-		store.TriggerTrace(txnif.TracePrepared)
+		store.TriggerTrace(txnif.TraceOnApply)
 		mgr.workers.Submit(func() {
-			//Notice that WaitPrepared do nothing when op is OpRollback
-			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
+			//Notice that WaitWalAndTail do nothing when op is OpRollback
+			if err := op.Txn.WaitWalAndTail(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
 			}
@@ -775,14 +722,14 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 			}
 
 			if op.Is2PC() {
-				mgr.on2PCPrepared(op)
+				mgr.on2PCApply(op)
 			} else {
-				mgr.on1PCPrepared(op)
+				mgr.on1PCApply(op)
 			}
 		})
 	}
 	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[dequeuePrepared]",
+		logutil.Debug("[onApply]",
 			common.NameSpaceField("txns"),
 			common.CountField(len(items)),
 			common.DurationField(time.Since(now)))
@@ -859,8 +806,8 @@ func (mgr *TxnManager) ResetHeartbeat() {
 func (mgr *TxnManager) Start(ctx context.Context) {
 	isReplayMode := mgr.IsReplayMode()
 	isWriteMode := mgr.IsWriteMode()
-	mgr.FlushQueue.Start()
-	mgr.PreparingSM.Start()
+	mgr.applyQueue.Start()
+	mgr.walAndApplyQueue.Start()
 	mgr.ResetHeartbeat()
 	logutil.Info(
 		"TxnManager-Started",
@@ -873,8 +820,8 @@ func (mgr *TxnManager) Stop() {
 	isReplayMode := mgr.IsReplayMode()
 	isWriteMode := mgr.IsWriteMode()
 	mgr.StopHeartbeat()
-	mgr.PreparingSM.Stop()
-	mgr.FlushQueue.Stop()
+	mgr.walAndApplyQueue.Stop()
+	mgr.applyQueue.Stop()
 	mgr.OnException(sm.ErrClose)
 	mgr.workers.Release()
 	logutil.Info(
@@ -882,4 +829,75 @@ func (mgr *TxnManager) Stop() {
 		zap.Bool("is-replay-mode", isReplayMode),
 		zap.Bool("is-write-mode", isWriteMode),
 	)
+}
+
+/*
+overview:
+
+	 ---------------------------------------------
+	| txn op --> pre wal --> on wal --> post wal |
+	---------------------------------------------
+
+details:
+
+			            [------ on wal --------------]
+			pre wal ==> parallel marshal ==> flush wal        \\
+																	==> apply ==> done apply(commit/rollback) ==> push logtail
+			                             ==> collect logtail  //
+	                                         (wait marshal)			   [---------- post wal (wait flush) --------------------]
+*/
+func (mgr *TxnManager) onWalAndApply(items ...any) {
+	now := time.Now()
+
+	for _, item := range items {
+		t1 := time.Now()
+		op := item.(*OpTxn)
+
+		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
+		// get things done before the writing ahead log
+		if !mgr.preWal(op) {
+			continue
+		}
+		t2 := time.Now()
+
+		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
+		// getting the wal ready and getting the wal flush down
+		inWal := mgr.onWal(op)
+
+		t3 := time.Now()
+
+		op.Txn.GetStore().TriggerTrace(txnif.TracePostWal)
+		// waiting the wal done and do some things
+		mgr.postWal(op, inWal)
+
+		if dur := time.Since(t1); dur > time.Second {
+			logutil.Warn(
+				"SLOW-LOG",
+				zap.String("txn", op.Txn.String()),
+				zap.Duration("pre-wal-duration", t2.Sub(t1)),
+				zap.Duration("on-wal-duration", t3.Sub(t2)),
+				zap.Duration("post-wal-duration", time.Since(t3)),
+			)
+		}
+	}
+
+	common.DoIfDebugEnabled(func() {
+		logutil.Debug("[onWalAndApply]",
+			common.NameSpaceField("txns"),
+			common.DurationField(time.Since(now)),
+			common.CountField(len(items)))
+	})
+}
+
+func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {
+	if inWal {
+		// logtail collecting and pushing
+		// happened only when op really in the wal process
+		mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+	}
+
+	// waiting for all things done and then to apply this commit/rollback
+	if _, err := mgr.applyQueue.Enqueue(op); err != nil {
+		panic(err)
+	}
 }

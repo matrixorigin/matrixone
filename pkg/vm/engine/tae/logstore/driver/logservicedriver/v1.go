@@ -260,12 +260,22 @@ func newRecordEntry() *v1Record {
 
 func (r *v1Record) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.V1Meta.addr[e.DSN] = uint64(r.payloadSize)
-	r.payloadSize += uint64(e.GetSize())
+	//r.V1Meta.addr[e.DSN] = uint64(r.payloadSize)
+	//r.payloadSize += uint64(e.GetSize())
 }
 
 func (r *v1Record) prepareRecord() (size int) {
 	var err error
+
+	for i := range r.entries {
+		if err = r.entries[i].Entry.ExecuteGroupWalPreCallbacks(); err != nil {
+			return
+		}
+
+		r.V1Meta.addr[r.entries[i].DSN] = uint64(r.payloadSize)
+		r.payloadSize += uint64(r.entries[i].GetSize())
+	}
+
 	r.payload, err = r.Marshal()
 	if err != nil {
 		panic(err)

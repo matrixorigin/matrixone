@@ -152,6 +152,19 @@ func (tree *Tree) Merge(ot *Tree) {
 	}
 }
 
+func (tree *Tree) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += 4 // len of tables
+	for i := range tree.Tables {
+		size += tree.Tables[i].ApproxSize()
+	}
+
+	return size
+}
+
 func (tree *Tree) WriteTo(w io.Writer) (n int64, err error) {
 	cnt := uint32(len(tree.Tables))
 	if _, err = w.Write(types.EncodeUint32(&cnt)); err != nil {
@@ -199,6 +212,16 @@ func NewTableTree(dbID, id uint64) *TableRecord {
 		DbID: dbID,
 		ID:   id,
 	}
+}
+
+func (ttree *TableRecord) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += 8 + 8 // dbId, tblId
+
+	return size
 }
 
 func (ttree *TableRecord) WriteTo(w io.Writer) (n int64, err error) {

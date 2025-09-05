@@ -149,8 +149,12 @@ type txnStore struct {
 	writeOps   atomic.Uint32
 	tracer     *txnTracer
 
-	wg        sync.WaitGroup
 	isOffline bool
+
+	wait struct {
+		tailCollect sync.WaitGroup
+		cmdMarshal  sync.WaitGroup
+	}
 }
 
 var TxnStoreFactory = func(
@@ -158,11 +162,10 @@ var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Store,
 	rt *dbutils.Runtime,
-	maxMessageSize uint64,
 ) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
 		isOffline := false
-		return newStore(ctx, catalog, driver, rt, isOffline, maxMessageSize)
+		return newStore(ctx, catalog, driver, rt, isOffline)
 	}
 }
 
@@ -172,14 +175,13 @@ func newStore(
 	driver wal.Store,
 	rt *dbutils.Runtime,
 	isOffline bool,
-	maxMessageSize uint64,
 ) *txnStore {
 	return &txnStore{
 		ctx:       ctx,
 		rt:        rt,
 		dbs:       make(map[uint64]*txnDB),
 		catalog:   catalog,
-		cmdMgr:    newCommandManager(driver, maxMessageSize),
+		cmdMgr:    newCommandManager(driver),
 		driver:    driver,
 		isOffline: isOffline,
 		logs:      make([]entry.Entry, 0),
@@ -569,12 +571,34 @@ func (store *txnStore) ObserveTxn(
 		}
 	}
 }
-func (store *txnStore) AddWaitEvent(cnt int) {
-	store.wg.Add(cnt)
+
+func (store *txnStore) WaitEvent(typ int) {
+	switch typ {
+	case txnif.TailCollecting:
+		store.wait.tailCollect.Wait()
+	case txnif.WalPreparing:
+		store.wait.cmdMarshal.Wait()
+	}
 }
-func (store *txnStore) DoneWaitEvent(cnt int) {
-	store.wg.Add(-cnt)
+
+func (store *txnStore) AddEvent(typ int) {
+	switch typ {
+	case txnif.TailCollecting:
+		store.wait.tailCollect.Add(1)
+	case txnif.WalPreparing:
+		store.wait.cmdMarshal.Add(1)
+	}
 }
+func (store *txnStore) DoneEvent(typ int) {
+	//store.wg.Add(-cnt)
+	switch typ {
+	case txnif.TailCollecting:
+		store.wait.tailCollect.Add(-1)
+	case txnif.WalPreparing:
+		store.wait.cmdMarshal.Add(-1)
+	}
+}
+
 func (store *txnStore) DropDatabaseByID(id uint64) (h handle.Database, err error) {
 	if err = store.WantWrite("DropDatabaseByID"); err != nil {
 		return
@@ -754,9 +778,9 @@ func (store *txnStore) ApplyRollback() (err error) {
 	return
 }
 
-func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
+func (store *txnStore) WaitWalAndTail(ctx context.Context) (err error) {
 	for _, db := range store.dbs {
-		if err = db.WaitPrepared(); err != nil {
+		if err = db.WaitWal(); err != nil {
 			return
 		}
 	}
@@ -768,7 +792,8 @@ func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 			e.Free()
 		}
 	})
-	store.wg.Wait()
+
+	store.WaitEvent(txnif.TailCollecting)
 	return
 }
 
@@ -859,15 +884,12 @@ func (store *txnStore) PrepareWAL() (err error) {
 	}
 
 	// Apply the record from the command list.
-	// Split the commands by max message size.
-	for store.cmdMgr.cmd.MoreCmds() {
-		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn)
-		if err != nil {
-			return err
-		}
-		if logEntry != nil {
-			store.logs = append(store.logs, logEntry)
-		}
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store)
+	if err != nil {
+		return err
+	}
+	if logEntry != nil {
+		store.logs = append(store.logs, logEntry)
 	}
 
 	t1 := time.Now()

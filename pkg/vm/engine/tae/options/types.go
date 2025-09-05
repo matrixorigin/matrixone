@@ -16,8 +16,9 @@ package options
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -71,13 +72,11 @@ type Options struct {
 	CatalogCfg    *CatalogCfg
 
 	BulkTomestoneTxnThreshold uint64
-	// MaxMessageSize is the size of max message which is sent to log-service.
-	MaxMessageSize       uint64
-	TransferTableTTL     time.Duration
-	IncrementalDedup     bool
-	IsStandalone         bool
-	EnableApplyTableData bool
-	GCTimeCheckerFactory func(any) func(*types.TS) bool
+	TransferTableTTL          time.Duration
+	IncrementalDedup          bool
+	IsStandalone              bool
+	EnableApplyTableData      bool
+	GCTimeCheckerFactory      func(any) func(*types.TS) bool
 
 	Fs                fileservice.FileService                  `toml:"-"`
 	LocalFs           fileservice.FileService                  `toml:"-"`

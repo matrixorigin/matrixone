@@ -78,6 +78,20 @@ func NewEmptyTxnCtx() *TxnCtx {
 	return ctx
 }
 
+func (ctx *TxnCtx) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += int64(len(ctx.ID))
+	size += 2 * int64(types.TxnTsSize) // start ts, prepare ts
+	size += 4                          // len of participants
+	size += 8 * int64(len(ctx.Participants))
+	size += ctx.Memo.ApproxSize()
+
+	return size
+}
+
 func (ctx *TxnCtx) IsReplay() bool { return false }
 func (ctx *TxnCtx) GetMemo() *txnif.TxnMemo {
 	return ctx.Memo
