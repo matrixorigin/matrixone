@@ -984,7 +984,7 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 	tsVec := data.Vecs[len(data.Vecs)-1]
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](tsVec)
 	for i := 0; i < pkVec.Length(); i++ {
-		pkVal := vector.GetAny(pkVec, i)
+		pkVal := vector.GetAny(pkVec, i, false)
 		if _, ok := pkVal.([]byte); ok {
 			pkVal = string(pkVal.([]byte))
 		}
@@ -1000,7 +1000,7 @@ func filterBatch(data, tombstone *batch.Batch, primarySeqnum int) (err error) {
 	tsVec = tombstone.Vecs[1]
 	timestamps = vector.MustFixedColWithTypeCheck[types.TS](tsVec)
 	for i := 0; i < pkVec.Length(); i++ {
-		pkVal := vector.GetAny(pkVec, i)
+		pkVal := vector.GetAny(pkVec, i, false)
 		if _, ok := pkVal.([]byte); ok {
 			pkVal = string(pkVal.([]byte))
 		}

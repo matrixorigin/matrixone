@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"context"
 	"math/rand"
 	"testing"
 
@@ -118,8 +119,13 @@ func fake_runSql(proc *process.Process, sql string) (executor.Result, error) {
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeCountBatchFT(proc)}}, nil
 }
 
-func fake_runSql_streaming(proc *process.Process, sql string, ch chan executor.Result, err_chan chan error) (executor.Result, error) {
-
+func fake_runSql_streaming(
+	ctx context.Context,
+	proc *process.Process,
+	sql string,
+	ch chan executor.Result,
+	err_chan chan error,
+) (executor.Result, error) {
 	defer close(ch)
 	res := executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeTextBatchFT(proc)}}
 	ch <- res
