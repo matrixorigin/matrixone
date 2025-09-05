@@ -131,7 +131,7 @@ func (u *tokenizeState) start(tf *TableFunction, proc *process.Process, nthRow i
 	vlen := len(tf.ctr.argVecs)
 
 	idVec := tf.ctr.argVecs[0]
-	id := vector.GetAny(idVec, nthRow)
+	id := vector.GetAny(idVec, nthRow, true)
 
 	isnull := false
 	for i := 1; i < vlen; i++ {

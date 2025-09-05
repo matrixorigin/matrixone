@@ -15,6 +15,8 @@
 package sqlexec
 
 import (
+	"context"
+
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -49,14 +51,19 @@ func RunSql(proc *process.Process, sql string) (executor.Result, error) {
 }
 
 // run SQL in WithStreaming() and pass the channel to SQL executor
-func RunStreamingSql(proc *process.Process, sql string, stream_chan chan executor.Result, error_chan chan error) (executor.Result, error) {
+func RunStreamingSql(
+	ctx context.Context,
+	proc *process.Process,
+	sql string,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		panic("missing lock service")
 	}
 
 	//-------------------------------------------------------
-	topContext := proc.GetTopContext()
 	accountId, err := defines.GetAccountId(proc.Ctx)
 	if err != nil {
 		return executor.Result{}, err
@@ -72,5 +79,5 @@ func RunStreamingSql(proc *process.Process, sql string, stream_chan chan executo
 		WithTimeZone(proc.GetSessionInfo().TimeZone).
 		WithAccountID(accountId).
 		WithStreaming(stream_chan, error_chan)
-	return exec.Exec(topContext, sql, opts)
+	return exec.Exec(ctx, sql, opts)
 }
