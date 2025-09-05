@@ -535,7 +535,7 @@ func queryIndexLog(
 		dropped = true
 		ids := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 		for i := 0; i < rows; i++ {
-			if cols[0].IsNull(0) {
+			if cols[0].IsNull(uint64(i)) {
 				dropped = false
 				prevID = ids[i]
 				return false
