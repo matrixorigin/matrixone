@@ -26,15 +26,17 @@ import (
 )
 
 const (
-	DefaultMaxClient     = 100
-	DefaultClientBufSize = 2 * mpool.MB
-	DefaultMaxTimeout    = time.Minute * 3
-	DefaultOneTryTimeout = time.Minute
+	DefaultMaxClient           = 100
+	DefaultClientBufSize       = 2 * mpool.MB
+	DefaultMaxTimeout          = time.Minute * 3
+	DefaultOneTryTimeout       = time.Minute
+	DefaultClientMaxEntryCount = 50
 )
 
 type Config struct {
-	ClientMaxCount int
-	ClientBufSize  int
+	ClientMaxCount      int
+	ClientBufSize       int
+	ClientMaxEntryCount int
 
 	MaxTimeout time.Duration
 
@@ -139,6 +141,9 @@ func (cfg *Config) fillDefaults() {
 	}
 	if cfg.MaxTimeout <= 0 {
 		cfg.MaxTimeout = DefaultMaxTimeout
+	}
+	if cfg.ClientMaxEntryCount <= 0 {
+		cfg.ClientMaxEntryCount = DefaultClientMaxEntryCount
 	}
 }
 

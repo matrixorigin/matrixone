@@ -27,7 +27,7 @@ import (
 func TestComposedCmd(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	composed := txnbase.NewComposedCmd(0)
+	composed := txnbase.NewComposedCmd()
 	defer composed.Close()
 
 	schema := catalog.MockSchema(1, 0)

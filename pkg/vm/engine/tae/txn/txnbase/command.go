@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -83,7 +82,7 @@ func init() {
 		},
 		nil,
 		func(b []byte) (any, error) {
-			txnEntry := NewComposedCmd(0)
+			txnEntry := NewComposedCmd()
 			err := txnEntry.UnmarshalBinary(b)
 			return txnEntry, err
 		},
@@ -152,14 +151,9 @@ func NewBaseCustomizedCmd(id uint32, impl txnif.TxnCmd) *BaseCustomizedCmd {
 	}
 }
 
-func NewComposedCmd(maxSize uint64) *ComposedCmd {
-	if maxSize < CmdBufReserved {
-		maxSize = math.MaxInt64
-	}
+func NewComposedCmd() *ComposedCmd {
 	return &ComposedCmd{
 		Cmds: make([]txnif.TxnCmd, 0),
-		//CmdBufLimit: int64(maxSize - CmdBufReserved),
-		//LastPos:     -1, // init value.
 	}
 }
 
@@ -254,9 +248,9 @@ func (c *TxnStateCmd) VerboseString() string {
 func (c *TxnStateCmd) Close() {
 }
 
-func NewTxnCmd(maxMessageSize uint64) *TxnCmd {
+func NewTxnCmd() *TxnCmd {
 	return &TxnCmd{
-		ComposedCmd: NewComposedCmd(maxMessageSize),
+		ComposedCmd: NewComposedCmd(),
 		TxnCtx:      NewEmptyTxnCtx(),
 	}
 }
@@ -410,7 +404,7 @@ func (c *TxnCmd) MarshalBinary() (buf []byte, err error) {
 	return
 }
 func (c *TxnCmd) UnmarshalBinaryWithVersion(buf []byte, ver uint16) (err error) {
-	c.ComposedCmd = NewComposedCmd(0)
+	c.ComposedCmd = NewComposedCmd()
 	composeedCmdBufLength := types.DecodeUint32(buf[:4])
 	n := 4
 	cmd, err := BuildCommandFrom(buf[n : n+int(composeedCmdBufLength)])
