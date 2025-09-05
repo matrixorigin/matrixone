@@ -392,8 +392,7 @@ func (entry *flushTableTailEntry) IsAborted() bool { return false }
 type flushTableTailCmd struct{}
 
 func (cmd *flushTableTailCmd) ApproxSize() int64 {
-	//TODO implement me
-	panic("implement me")
+	return 4
 }
 
 func (cmd *flushTableTailCmd) GetType() uint16 { return IOET_WALTxnCommand_FlushTableTail }

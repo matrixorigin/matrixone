@@ -110,9 +110,10 @@ func NewManager(
 		nowClock: nowClock,
 	}
 
-	mgr.orderedList = make([]*txnWithLogtails, 1000)
+	const batSize = 100
+	mgr.orderedList = make([]*txnWithLogtails, batSize*2)
 	mgr.collectPool, _ = ants.NewPool(runtime.NumCPU())
-	mgr.logtailQueue = sm.NewSafeQueue(10000, 100, mgr.onTxnLogTails)
+	mgr.logtailQueue = sm.NewSafeQueue(batSize*batSize, batSize, mgr.onTxnLogTails)
 
 	return mgr
 }
@@ -124,10 +125,6 @@ type txnWithLogtails struct {
 }
 
 func (mgr *Manager) onTxnLogTails(items ...any) {
-	if len(mgr.orderedList) < len(items) {
-		mgr.orderedList = make([]*txnWithLogtails, len(items))
-	}
-
 	for i, item := range items {
 		txn := item.(txnif.AsyncTxn)
 		if txn.IsReplay() {

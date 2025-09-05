@@ -543,10 +543,6 @@ func (cc *ComposedCmd) AddCmd(cmd txnif.TxnCmd) {
 	cc.Cmds = append(cc.Cmds, cmd)
 }
 
-//func (cc *ComposedCmd) MoreCmds() bool {
-//	return cc.LastPos != 0
-//}
-
 func (cc *ComposedCmd) ToString(prefix string) string {
 	s := fmt.Sprintf("%sComposedCmd: Cnt=%d", prefix, len(cc.Cmds))
 	for _, cmd := range cc.Cmds {

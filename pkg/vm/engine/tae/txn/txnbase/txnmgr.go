@@ -188,8 +188,9 @@ func NewTxnManager(
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
 
-	mgr.walAndApplyQueue = sm.NewSafeQueue(20000, 1000, mgr.onWalAndApply)
-	mgr.applyQueue = sm.NewSafeQueue(20000, 1000, mgr.onApply)
+	const batSize = 1000
+	mgr.walAndApplyQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onWalAndApply)
+	mgr.applyQueue = sm.NewSafeQueue(20*batSize, batSize, mgr.onApply)
 
 	mgr.workers, _ = ants.NewPool(runtime.GOMAXPROCS(0))
 	return mgr
@@ -819,8 +820,8 @@ func (mgr *TxnManager) Stop() {
 	isReplayMode := mgr.IsReplayMode()
 	isWriteMode := mgr.IsWriteMode()
 	mgr.StopHeartbeat()
-	mgr.applyQueue.Stop()
 	mgr.walAndApplyQueue.Stop()
+	mgr.applyQueue.Stop()
 	mgr.OnException(sm.ErrClose)
 	mgr.workers.Release()
 	logutil.Info(
@@ -831,9 +832,14 @@ func (mgr *TxnManager) Stop() {
 }
 
 /*
-		  ---------------------------------------------
-		 | txn op --> pre wal --> on wal --> post wal |
-		 ---------------------------------------------
+overview:
+
+	 ---------------------------------------------
+	| txn op --> pre wal --> on wal --> post wal |
+	---------------------------------------------
+
+details:
+
 			            [------ on wal --------------]
 			pre wal ==> parallel marshal ==> flush wal        \\
 																	==> apply ==> done apply(commit/rollback) ==> push logtail
@@ -844,6 +850,7 @@ func (mgr *TxnManager) onWalAndApply(items ...any) {
 	now := time.Now()
 
 	for _, item := range items {
+		t1 := time.Now()
 		op := item.(*OpTxn)
 
 		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
@@ -851,14 +858,27 @@ func (mgr *TxnManager) onWalAndApply(items ...any) {
 		if !mgr.preWal(op) {
 			continue
 		}
+		t2 := time.Now()
 
 		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
 		// getting the wal ready and getting the wal flush down
 		inWal := mgr.onWal(op)
 
+		t3 := time.Now()
+
 		op.Txn.GetStore().TriggerTrace(txnif.TracePostWal)
 		// waiting the wal done and do some things
 		mgr.postWal(op, inWal)
+
+		if dur := time.Since(t1); dur > time.Second {
+			logutil.Warn(
+				"SLOW-LOG",
+				zap.String("txn", op.Txn.String()),
+				zap.Duration("pre-wal-duration", t2.Sub(t1)),
+				zap.Duration("on-wal-duration", t3.Sub(t2)),
+				zap.Duration("post-wal-duration", time.Now().Sub(t3)),
+			)
+		}
 	}
 
 	common.DoIfDebugEnabled(func() {

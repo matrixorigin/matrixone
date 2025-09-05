@@ -94,8 +94,6 @@ func (a *groupCommitter) Commit() error {
 	v2.LogTailBytesHistogram.Observe(float64(e.Size()))
 	defer logSlowAppend(e)()
 
-	//fmt.Println("Size", common.HumanReadableBytes(e.Size()), e.GetEntryCount())
-
 	var (
 		ctx         context.Context
 		timeoutSpan trace.Span

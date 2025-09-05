@@ -36,11 +36,11 @@ func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
 }
 
 func (d *LogServiceDriver) getCommitter() *groupCommitter {
-	//if int(d.committer.writer.Size()) > d.config.ClientBufSize {
-	//	d.flushCurrentCommitter()
-	//}
+	if int(d.committer.writer.ApproxSize()) > d.config.ClientBufSize {
+		d.flushCurrentCommitter()
+	}
 
-	if len(d.committer.writer.entries) >= 100 {
+	if len(d.committer.writer.entries) >= 50 {
 		d.flushCurrentCommitter()
 	}
 
@@ -78,7 +78,7 @@ func (d *LogServiceDriver) asyncCommit(committer *groupCommitter) {
 	committer.writer.SetSafeDSN(d.getCommittedDSNWatermark())
 
 	committer.Add(1)
-	d.worker.Submit(func() {
+	d.workers.Submit(func() {
 		defer committer.Done()
 		if err2 := committer.Commit(); err2 != nil {
 			logutil.Fatal(
