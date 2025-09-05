@@ -139,14 +139,18 @@ func (s *Scope) handleFullTextIndexTable(
 	} else if !ok {
 		return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
 	}
-	if len(indexInfo.GetIndexTables()) != 1 {
-		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-	}
 
-	def := indexInfo.GetIndexTables()[0]
-	err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
-	if err != nil {
-		return err
+	// create hidden tables
+	if indexInfo != nil {
+		if len(indexInfo.GetIndexTables()) != 1 {
+			return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
+		}
+
+		def := indexInfo.GetIndexTables()[0]
+		err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
+		if err != nil {
+			return err
+		}
 	}
 
 	insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
