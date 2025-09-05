@@ -40,7 +40,7 @@ func (d *LogServiceDriver) getCommitter() *groupCommitter {
 		d.flushCurrentCommitter()
 	}
 
-	if len(d.committer.writer.entries) >= 50 {
+	if len(d.committer.writer.entries) >= d.config.ClientMaxEntryCount {
 		d.flushCurrentCommitter()
 	}
 

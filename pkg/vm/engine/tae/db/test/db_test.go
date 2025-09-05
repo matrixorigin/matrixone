@@ -10363,7 +10363,7 @@ func TestSplitCommand(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.MaxMessageSize = txnbase.CmdBufReserved + 2*1024
+	//opts.MaxMessageSize = txnbase.CmdBufReserved + 2*1024
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)

@@ -632,7 +632,6 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		db.Catalog,
 		db.Wal,
 		db.Runtime,
-		db.Opts.MaxMessageSize,
 	)
 
 	txnFactory := txnimpl.TxnFactory(db.Catalog)

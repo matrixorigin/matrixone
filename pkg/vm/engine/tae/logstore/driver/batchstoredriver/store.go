@@ -170,7 +170,7 @@ func (bs *baseStore) onEntries(entries ...any) {
 		// }
 		var err error
 		appender := bs.file.GetAppender()
-		
+
 		if err = e.Entry.ExecuteGroupWalPreCallbacks(); err != nil {
 			panic(err)
 		}

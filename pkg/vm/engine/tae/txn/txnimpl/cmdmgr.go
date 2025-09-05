@@ -33,9 +33,9 @@ type commandManager struct {
 	driver wal.Store
 }
 
-func newCommandManager(driver wal.Store, maxMessageSize uint64) *commandManager {
+func newCommandManager(driver wal.Store) *commandManager {
 	return &commandManager{
-		cmd:    txnbase.NewTxnCmd(maxMessageSize),
+		cmd:    txnbase.NewTxnCmd(),
 		driver: driver,
 	}
 }

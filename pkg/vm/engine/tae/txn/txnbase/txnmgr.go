@@ -876,7 +876,7 @@ func (mgr *TxnManager) onWalAndApply(items ...any) {
 				zap.String("txn", op.Txn.String()),
 				zap.Duration("pre-wal-duration", t2.Sub(t1)),
 				zap.Duration("on-wal-duration", t3.Sub(t2)),
-				zap.Duration("post-wal-duration", time.Now().Sub(t3)),
+				zap.Duration("post-wal-duration", time.Since(t3)),
 			)
 		}
 	}

@@ -162,11 +162,10 @@ var TxnStoreFactory = func(
 	catalog *catalog.Catalog,
 	driver wal.Store,
 	rt *dbutils.Runtime,
-	maxMessageSize uint64,
 ) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
 		isOffline := false
-		return newStore(ctx, catalog, driver, rt, isOffline, maxMessageSize)
+		return newStore(ctx, catalog, driver, rt, isOffline)
 	}
 }
 
@@ -176,14 +175,13 @@ func newStore(
 	driver wal.Store,
 	rt *dbutils.Runtime,
 	isOffline bool,
-	maxMessageSize uint64,
 ) *txnStore {
 	return &txnStore{
 		ctx:       ctx,
 		rt:        rt,
 		dbs:       make(map[uint64]*txnDB),
 		catalog:   catalog,
-		cmdMgr:    newCommandManager(driver, maxMessageSize),
+		cmdMgr:    newCommandManager(driver),
 		driver:    driver,
 		isOffline: isOffline,
 		logs:      make([]entry.Entry, 0),
