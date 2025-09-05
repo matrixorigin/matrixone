@@ -420,7 +420,7 @@ func (exec *txnExecutor) Exec(
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
 				// our current internal sql will never read too much data.
-				rows, err := bat.Clone(exec.s.mp, true)
+				rows, err := bat.Clone(exec.s.mp, streaming)
 				if err != nil {
 					return err
 				}
