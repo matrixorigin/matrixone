@@ -1154,10 +1154,8 @@ func (sm *SnapshotMeta) GetISCP(
 
 		tableID := tableIDList[r]
 		watermark := watermarkList.GetStringAt(r)
-		dropAtBytes := dropAtList.GetStringAt(r)
-		// Skip deleted jobs
-		if len(dropAtBytes) > 0 {
-			dropAT := types.StringToTS(dropAtBytes)
+		if !dropAtList.IsNull(uint64(r)) {
+			dropAT := types.StringToTS(dropAtList.GetStringAt(r))
 			if !dropAT.IsEmpty() {
 				return nil
 			}
