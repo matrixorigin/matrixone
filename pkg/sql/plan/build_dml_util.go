@@ -2690,7 +2690,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
-		JoinType:    plan.Node_RIGHT,
+		JoinType:    plan.Node_INNER,
 		Children:    []int32{ivfScanId, lastNodeId},
 		OnList:      joinConds,
 		ProjectList: projectList,
@@ -4664,7 +4664,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		sid := builder.compCtx.GetProcess().GetService()
 		lastNodeId = builder.appendNode(&plan.Node{
 			NodeType:               plan.Node_JOIN,
-			JoinType:               plan.Node_RIGHT,
+			JoinType:               plan.Node_INNER,
 			Children:               []int32{idxScanId, lastNodeId},
 			OnList:                 []*Expr{joinCond},
 			ProjectList:            projectList,

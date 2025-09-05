@@ -447,3 +447,15 @@ CREATE TABLE example_table (id INT PRIMARY KEY,english_text TEXT, chinese_text T
 INSERT INTO example_table (id, english_text, chinese_text, json_data) VALUES(1, 'Hello, world!', '你好世界', '{"name": "Alice", "age": 30}'),(2, 'This is a test.', '这是一个测试', '{"name": "Bob", "age": 25}'),(3, 'Full-text search is powerful.', '全文搜索很强大', '{"name": "Charlie", "age": 35}');
 CREATE FULLTEXT INDEX idx_english_text ON example_table (english_text);
 (with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) union all (with t as (SELECT * FROM example_table WHERE MATCH(english_text) AGAINST('+test' IN BOOLEAN MODE)) select * from t) ;
+
+create table empty_fulltext(a int primary key, b varchar, c varchar, fulltext `ftc` (c) WITH PARSER ngram);
+insert into empty_fulltext select result, 'so long',null from generate_series(1, 300000) g;
+insert into empty_fulltext values (300001, 'this is the end of our story', null);
+-- big enough to trigger remote delete
+delete from empty_fulltext where b like '%story%';
+drop table empty_fulltext;
+
+
+
+
+
