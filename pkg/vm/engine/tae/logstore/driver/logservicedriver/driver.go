@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
@@ -80,7 +79,6 @@ type LogServiceDriver struct {
 
 	clientPool *clientPool
 	committer  *groupCommitter
-	pending    []*entry.Entry
 
 	commitLoop      sm.Queue
 	commitWaitQueue chan any
@@ -91,7 +89,7 @@ type LogServiceDriver struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	worker *ants.Pool
+	workers *ants.Pool
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
@@ -109,7 +107,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		sequenceNumberState: newSequenceNumberState(),
 		commitWaitQueue:     make(chan any, 10000),
 		postCommitQueue:     make(chan any, 10000),
-		worker:              pool,
+		workers:             pool,
 	}
 
 	d.config = *cfg
@@ -139,7 +137,7 @@ func (d *LogServiceDriver) Close() error {
 	d.truncateQueue.Stop()
 	close(d.commitWaitQueue)
 	close(d.postCommitQueue)
-	d.worker.Release()
+	d.workers.Release()
 	return nil
 }
 

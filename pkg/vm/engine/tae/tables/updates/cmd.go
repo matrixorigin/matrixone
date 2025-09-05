@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -57,11 +58,6 @@ type UpdateCmd struct {
 	dest    *common.ID
 	append  *AppendNode
 	cmdType uint16
-}
-
-func (c *UpdateCmd) ApproxSize() int64 {
-	//TODO implement me
-	panic("implement me")
 }
 
 func NewEmptyCmd(cmdType uint16, version uint16) *UpdateCmd {
@@ -156,6 +152,15 @@ func (c *UpdateCmd) VerboseString() string {
 }
 
 func (c *UpdateCmd) GetType() uint16 { return c.cmdType }
+
+func (c *UpdateCmd) ApproxSize() int64 {
+	size := 2 + 2 + 4 + common.IDSize // type, version, id, dest
+	if c.GetType() == IOET_WALTxnCommand_AppendNode {
+		size += int64(catalog.AppendNodeApproxSize)
+	}
+
+	return size
+}
 
 func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64

@@ -15,14 +15,15 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"go.uber.org/zap"
 )
 
 type commandManager struct {
@@ -64,6 +65,7 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 	logEntry = entry.GetBase()
 	info := &entry.Info{Group: wal.GroupUserTxn}
 	logEntry.SetInfo(info)
+	logEntry.SetApproxPayloadSize(mgr.cmd.ApproxSize())
 
 	logEntry.RegisterGroupWalPreCallbacks(func() error {
 		defer func() {
@@ -73,19 +75,11 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 		var (
 			err2 error
 			buf  []byte
+			t1   = time.Now()
 		)
 
 		if buf, err2 = mgr.cmd.MarshalBinary(); err2 != nil {
 			return err2
-		}
-
-		if len(buf) > 10*mpool.MB {
-			logutil.Info(
-				"BIG-TXN",
-				zap.Int("wal-size", len(buf)),
-				zap.Uint64("lsn", mgr.lsn),
-				zap.String("txn", store.txn.String()),
-			)
 		}
 
 		logEntry.SetType(IOET_WALEntry_TxnRecord)
@@ -93,12 +87,40 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 			return err2
 		}
 
-		logutil.Debugf("Marshal Command LSN=%d, Size=%d", mgr.lsn, len(buf))
+		logutil.Debugf("Marshal Command LSN=%d, Size=%d", info.GroupLSN, len(buf))
+
+		if len(buf) > 10*mpool.MB {
+			logutil.Info(
+				"BIG-TXN",
+				zap.Int("wal-size", len(buf)),
+				zap.Uint64("lsn", info.GroupLSN),
+				zap.String("txn", store.txn.String()),
+			)
+		}
+
+		if dur := time.Since(t1); dur >= time.Millisecond*500 {
+			logutil.Warn(
+				"SlOW-LOG",
+				zap.Int("wal-size", len(buf)),
+				zap.Uint64("lsn", mgr.lsn),
+				zap.String("txn", store.txn.String()),
+				zap.Duration("marshal-log-entry-duration", dur),
+			)
+		}
 
 		return nil
 	})
 
+	t2 := time.Now()
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupUserTxn, logEntry)
+	if dur := time.Since(t2); dur >= time.Millisecond*20 {
+		logutil.Warn(
+			"SlOW-LOG",
+			zap.Uint64("lsn", mgr.lsn),
+			zap.String("txn", store.txn.String()),
+			zap.Duration("append-log-entry-duration", dur),
+		)
+	}
 
 	return
 }

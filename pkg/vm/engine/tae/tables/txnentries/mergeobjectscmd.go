@@ -34,11 +34,6 @@ type mergeObjectsCmd struct {
 	id          uint32
 }
 
-func (cmd *mergeObjectsCmd) ApproxSize() int64 {
-	//TODO implement me
-	panic("implement me")
-}
-
 func newMergeBlocksCmd(
 	tid uint64,
 	droppedObjs, createdObjs []*common.ID,
@@ -54,6 +49,10 @@ func newMergeBlocksCmd(
 }
 
 func (cmd *mergeObjectsCmd) GetType() uint16 { return IOET_WALTxnCommand_Merge }
+
+func (cmd *mergeObjectsCmd) ApproxSize() int64 {
+	return 4
+}
 
 func (cmd *mergeObjectsCmd) WriteTo(w io.Writer) (n int64, err error) {
 	typ := IOET_WALTxnCommand_Merge

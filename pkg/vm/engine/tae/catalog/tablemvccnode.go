@@ -94,6 +94,10 @@ func (node *TableNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
+func (node *TableNode) ApproxSize() int64 {
+	return 0
+}
+
 func (node *TableNode) ReadFrom(r io.Reader) (n int64, err error) {
 	// do not readFrom, inherit from mvvcnode in replay phrase
 	// reference: function onReplayCreateTable and onReplayUpdateTable

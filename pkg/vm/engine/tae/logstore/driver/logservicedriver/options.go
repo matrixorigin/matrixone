@@ -27,7 +27,7 @@ import (
 
 const (
 	DefaultMaxClient     = 100
-	DefaultClientBufSize = mpool.MB
+	DefaultClientBufSize = 2 * mpool.MB
 	DefaultMaxTimeout    = time.Minute * 3
 	DefaultOneTryTimeout = time.Minute
 )

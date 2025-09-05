@@ -78,6 +78,19 @@ func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+func (node *DBNode) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += AccessInfoSize
+	size += int64(len(node.name))
+	size += int64(len(node.datType))
+	size += int64(len(node.createSql))
+
+	return size
+}
+
 func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	if sn, err = objectio.WriteString(node.name, w); err != nil {

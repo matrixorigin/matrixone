@@ -98,6 +98,7 @@ func init() {
 type Node interface {
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
+	ApproxSize() int64
 }
 
 type EntryCommand[T BaseNode[T], N Node] struct {
@@ -236,7 +237,7 @@ func (cmd *EntryCommand[T, N]) ApproxSize() int64 {
 	size += 2 // version
 	size += int64(common.IDSize)
 	size += cmd.mvccNode.ApproxSize()
-	//size += cmd.node.ApproxSize()
+	size += cmd.node.ApproxSize()
 
 	return size
 }

@@ -147,7 +147,8 @@ func TestAppendSkipCmd2(t *testing.T) {
 		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
 		writer.SetSafeDSN(appended[i])
-		entry := writer.Finish()
+		entry, err := writer.Finish()
+		assert.NoError(t, err)
 		_, err = client.Append(
 			context.Background(),
 			entry,
@@ -277,7 +278,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 		writer.SetSafeDSN(appended[i])
 		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entry := writer.Finish()
+		entry, err := writer.Finish()
+		assert.NoError(t, err)
 		_, err = client.Append(
 			context.Background(),
 			entry,
@@ -340,7 +342,8 @@ func TestAppendSkipCmd4(t *testing.T) {
 		writer.SetSafeDSN(appended[i])
 		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entry := writer.Finish()
+		entry, err := writer.Finish()
+		assert.NoError(t, err)
 		_, err = client.Append(
 			context.Background(),
 			entry,
@@ -413,7 +416,8 @@ func TestAppendSkipCmd5(t *testing.T) {
 		writer.SetSafeDSN(appended[i])
 		err := writer.AppendEntry(entries[i])
 		assert.NoError(t, err)
-		entry := writer.Finish()
+		entry, err := writer.Finish()
+		assert.NoError(t, err)
 		_, err = client.Append(
 			context.Background(),
 			entry,
