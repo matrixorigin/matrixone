@@ -132,6 +132,15 @@ func (s *memStorage) Create(
 	return nil
 }
 
+func (s *memStorage) Truncate(
+	ctx context.Context,
+	oldTableID uint64,
+	newTableID uint64,
+	txnOp client.TxnOperator,
+) error {
+	return nil
+}
+
 func (s *memStorage) Delete(
 	ctx context.Context,
 	metadata partition.PartitionMetadata,

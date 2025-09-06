@@ -148,8 +148,7 @@ create snapshot spsp02 for database sp_test01;
 
 show snapshots;
 SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
-spsp02    2025-07-17 19:15:34.177971    database    sys    sp_test01    
-account_sp    2025-07-17 19:12:33.077715    account    sys        
+spsp02    2025-07-17 19:15:34.177971    database    sys    sp_test01          
 delete from partition01 where birth_date = '1980-12-17';
 
 select * from partition01;

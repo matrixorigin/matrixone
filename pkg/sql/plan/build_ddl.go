@@ -1308,37 +1308,41 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 	//add cluster table attribute
 	if stmt.IsClusterTable {
-		if _, ok := colMap[util.GetClusterTableAttributeName()]; ok {
+		internal := defines.IsInternalExecutor(ctx.GetContext())
+		_, has := colMap[util.GetClusterTableAttributeName()]
+		if has && !internal {
 			return moerr.NewInvalidInput(ctx.GetContext(), "the attribute account_id in the cluster table can not be defined directly by the user")
 		}
-		colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
-		if err != nil {
-			return err
-		}
-		colDef := &ColDef{
-			Name:    util.GetClusterTableAttributeName(),
-			Alg:     plan.CompressType_Lz4,
-			Typ:     colType,
-			NotNull: true,
-			Default: &plan.Default{
-				Expr: &Expr{
-					Expr: &plan.Expr_Lit{
-						Lit: &Const{
-							Isnull: false,
-							Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
+		if !has {
+			colType, err := getTypeFromAst(ctx.GetContext(), util.GetClusterTableAttributeType())
+			if err != nil {
+				return err
+			}
+			colDef := &ColDef{
+				Name:    util.GetClusterTableAttributeName(),
+				Alg:     plan.CompressType_Lz4,
+				Typ:     colType,
+				NotNull: true,
+				Default: &plan.Default{
+					Expr: &Expr{
+						Expr: &plan.Expr_Lit{
+							Lit: &Const{
+								Isnull: false,
+								Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
+							},
+						},
+						Typ: plan.Type{
+							Id:          colType.Id,
+							NotNullable: true,
 						},
 					},
-					Typ: plan.Type{
-						Id:          colType.Id,
-						NotNullable: true,
-					},
+					NullAbility: false,
 				},
-				NullAbility: false,
-			},
-			Comment: "the account_id added by the mo",
+				Comment: "the account_id added by the mo",
+			}
+			colMap[util.GetClusterTableAttributeName()] = colDef
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 		}
-		colMap[util.GetClusterTableAttributeName()] = colDef
-		createTable.TableDef.Cols = append(createTable.TableDef.Cols, colDef)
 	}
 
 	pkeyName := ""

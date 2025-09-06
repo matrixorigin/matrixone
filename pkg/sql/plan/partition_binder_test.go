@@ -16,12 +16,13 @@ package plan
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestBuildPartitionDefs(t *testing.T) {
@@ -66,6 +67,59 @@ func TestConstructRangeExpression(t *testing.T) {
 
 	_, err = binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
 	require.NoError(t, err)
+}
+
+func TestConstructRangeExpressionWithMaxValue(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t3 ( a int NOT NULL AUTO_INCREMENT, key_num int NOT NULL DEFAULT '0', hiredate date NOT NULL, PRIMARY KEY (a), KEY key_num (key_num) ) PARTITION BY RANGE COLUMNS(a) ( PARTITION p0 VALUES LESS THAN(10), PARTITION p1 VALUES LESS THAN(20), PARTITION p2 VALUES LESS THAN(30), PARTITION p3 VALUES LESS THAN(MAXVALUE) );"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.RangeType)
+
+	binder := newTestPartitionBinder()
+
+	// Test p0: a < 10
+	expr0, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
+	require.NoError(t, err)
+	require.NotNil(t, expr0)
+
+	// Test p1: 10 <= a < 20
+	expr1, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 1)
+	require.NoError(t, err)
+	require.NotNil(t, expr1)
+
+	// Test p2: 20 <= a < 30
+	expr2, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 2)
+	require.NoError(t, err)
+	require.NotNil(t, expr2)
+
+	// Test p3: a >= 30 (MAXVALUE partition)
+	expr3, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 3)
+	require.NoError(t, err)
+	require.NotNil(t, expr3)
+
+	// Verify that the MAXVALUE partition expression is different from regular partitions
+	// The MAXVALUE partition should generate "a >= 30" instead of "30 <= a < MAXVALUE"
+	require.NotEqual(t, expr2, expr3, "MAXVALUE partition should generate different expression")
+}
+
+func TestConstructRangeExpressionWithMaxValueFirstPartition(t *testing.T) {
+	ctx := context.Background()
+	sql := "create table t4 ( a int NOT NULL ) PARTITION BY RANGE COLUMNS(a) ( PARTITION p0 VALUES LESS THAN(MAXVALUE) );"
+	ast, err := mysql.ParseOne(ctx, sql, 1)
+	require.NoError(t, err)
+
+	option := ast.(*tree.CreateTable).PartitionOption
+	method := option.PartBy.PType.(*tree.RangeType)
+
+	binder := newTestPartitionBinder()
+
+	// Test p0: all values (MAXVALUE partition)
+	expr0, err := binder.constructRangeExpression(ctx, option, method.ColumnList[0], 0)
+	require.NoError(t, err)
+	require.NotNil(t, expr0)
 }
 
 func TestConstructHashExpression(t *testing.T) {

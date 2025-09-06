@@ -1,4 +1,4 @@
-// Copyright 2021-2025 Matrix Origin
+// Copyright 2025 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package features
+package v4_0_0
 
-const (
-	Partitioned = 1 << iota
-	IndexTable  = 1 << iota
-	Partition   = 1 << iota
+import (
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 )
 
-func IsPartitioned(f uint64) bool {
-	return f&Partitioned != 0
-}
-
-func IsIndexTable(f uint64) bool {
-	return f&IndexTable != 0
-}
-
-func IsPartition(f uint64) bool {
-	return f&Partition != 0
+var clusterUpgEntries = []versions.UpgradeEntry{
+	enablePartitionMetadata,
+	enablePartitionTables,
 }

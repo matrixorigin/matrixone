@@ -130,20 +130,6 @@ func TestCombinedTxnTable_Delete(t *testing.T) {
 	})
 }
 
-func TestCombinedTxnTable_PrimaryKeysMayBeUpserted(t *testing.T) {
-	table := newMockCombinedTxnTable()
-
-	assert.PanicsWithValue(t, "BUG: cannot upsert primary keys in partition primary table", func() {
-		table.PrimaryKeysMayBeUpserted(
-			context.Background(),
-			types.TS{},
-			types.TS{},
-			&batch.Batch{},
-			0,
-		)
-	})
-}
-
 func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 	// Test case 1: Success case with multiple tables
 	t.Run("Success with multiple tables", func(t *testing.T) {

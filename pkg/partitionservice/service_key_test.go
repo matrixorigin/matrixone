@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCreateHash(t *testing.T) {
+func TestCreateKey(t *testing.T) {
 	num := uint64(2)
 	tableID := uint64(1)
 	columns := []string{"a"}
@@ -50,16 +50,16 @@ func TestCreateHash(t *testing.T) {
 				s *Service,
 				store PartitionStorage,
 			) {
-				def := newTestTablePartitionDefine(1, columns, []types.T{v}, num, partition.PartitionMethod_Hash)
+				def := newTestTablePartitionDefine(1, columns, []types.T{v}, num, partition.PartitionMethod_Key)
 				memStore := store.(*memStorage)
 				memStore.addUncommittedTable(def)
 
-				stmt := newTestHashOption(t, columns[0], num)
+				stmt := newTestKeyOption(t, columns[0], num)
 				assert.NoError(t, s.Create(ctx, tableID, stmt, txnOp))
 
 				v, ok := memStore.uncommitted[tableID]
 				assert.True(t, ok)
-				assert.Equal(t, "hash (`"+columns[0]+"`)", v.metadata.Description)
+				assert.Equal(t, "key algorithm = 2 (`"+columns[0]+"`)", v.metadata.Description)
 				assert.Equal(t, 2, len(v.partitions))
 				for _, p := range v.partitions {
 					assert.NotEqual(t, 0, p.PartitionID)
@@ -69,9 +69,7 @@ func TestCreateHash(t *testing.T) {
 	}
 }
 
-func TestGetMetadataByHashType(t *testing.T) {
-	num := uint64(2)
-	columns := []string{"c1"}
+func TestGetMetadataByKeyType(t *testing.T) {
 	runTestPartitionServiceTest(
 		func(
 			ctx context.Context,
@@ -79,34 +77,23 @@ func TestGetMetadataByHashType(t *testing.T) {
 			s *Service,
 			store PartitionStorage,
 		) {
-			def := newTestTablePartitionDefine(1, columns, []types.T{types.T_date}, num, partition.PartitionMethod_Hash)
-			stmt := newTestHashOption(t, "c1", 1)
+			def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{types.T_int32}, 1, partition.PartitionMethod_Key)
+			stmt := newTestKeyOption(t, "c1", 1)
+			method := stmt.PartitionOption.PartBy.PType.(*tree.KeyType)
 
-			_, err := s.getMetadataByHashType(stmt.PartitionOption, def)
-			require.NoError(t, err)
+			columns := method.ColumnList
+			method.ColumnList = nil
+			_, err := s.getMetadataByKeyType(stmt.PartitionOption, def)
+			require.Error(t, err)
 
-			def = newTestTablePartitionDefine(1, columns, []types.T{types.T_int32}, num, partition.PartitionMethod_Hash)
-			method := stmt.PartitionOption.PartBy.PType.(*tree.HashType)
-			stmt.PartitionOption.PartBy.Num = 0
-			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
-			require.NoError(t, err)
-			stmt.PartitionOption.PartBy.Num = 1
-
-			columns, _ := method.Expr.(*tree.UnresolvedName)
-			columns.NumParts = 0
-			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
-			require.NoError(t, err)
-
-			columns.NumParts = 1
-			stmt.PartitionOption.PartBy.Num = 1
-			method.Expr = tree.NewMaxValue()
-			_, err = s.getMetadataByHashType(stmt.PartitionOption, def)
+			method.ColumnList = append(columns, columns[0])
+			_, err = s.getMetadataByKeyType(stmt.PartitionOption, def)
 			require.NoError(t, err)
 		},
 	)
 }
 
-func newTestHashOption(
+func newTestKeyOption(
 	t *testing.T,
 	column string,
 	num uint64,
@@ -114,7 +101,7 @@ func newTestHashOption(
 	return getCreateTableStatement(
 		t,
 		fmt.Sprintf(
-			"create table t(%s int) partition by hash(%s) partitions %d",
+			"create table t(%s int) partition by key(%s) partitions %d",
 			column,
 			column,
 			num,
