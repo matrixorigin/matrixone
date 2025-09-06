@@ -20,8 +20,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
