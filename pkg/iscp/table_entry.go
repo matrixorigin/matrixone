@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 func tableInfoLess(a, b *TableEntry) bool {
@@ -38,13 +38,11 @@ func NewTableEntry(
 	accountID uint32,
 	dbID, tableID uint64,
 	dbName, tableName string,
-	tableDef *plan.TableDef,
 ) *TableEntry {
 	return &TableEntry{
 		exec:      exec,
 		accountID: accountID,
-		tableDef:  tableDef,
-		jobs:      make(map[string]*JobEntry),
+		jobs:      make(map[JobKey]*JobEntry),
 		dbID:      dbID,
 		tableID:   tableID,
 		dbName:    dbName,
@@ -58,20 +56,25 @@ func (t *TableEntry) AddOrUpdateSinker(
 	jobID uint64,
 	watermark types.TS,
 	state int8,
-) (newCreate bool, err error) {
+	dropAt types.Timestamp,
+) (newCreate bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	jobEntry, ok := t.jobs[jobName]
+	key := JobKey{
+		JobName: jobName,
+		JobID:   jobID,
+	}
+	jobEntry, ok := t.jobs[key]
 	if !ok || jobEntry.jobID < jobID {
 		newCreate = true
-		jobEntry = NewJobEntry(t, jobName, jobSpec, jobID, watermark, state)
-		t.jobs[jobName] = jobEntry
+		jobEntry = NewJobEntry(t, jobName, jobSpec, jobID, watermark, state, dropAt)
+		t.jobs[key] = jobEntry
 		return
 	}
 	if jobEntry.jobID > jobID {
 		return
 	}
-	jobEntry.update(jobSpec, watermark, state)
+	jobEntry.update(jobSpec, watermark, state, dropAt)
 	return
 }
 
@@ -80,7 +83,7 @@ func (t *TableEntry) GetWatermark(jobName string) (watermark types.TS, ok bool) 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, sinker := range t.jobs {
-		if sinker.jobName == jobName {
+		if sinker.jobName == jobName && sinker.dropAt == 0 {
 			return sinker.watermark, true
 		}
 	}
@@ -93,17 +96,34 @@ func (t *TableEntry) IsEmpty() bool {
 	return len(t.jobs) == 0
 }
 
-func (t *TableEntry) DeleteSinker(
-	jobName string,
-) (isEmpty bool, err error) {
+func (t *TableEntry) gcInMemoryJob(threshold time.Duration) (isEmpty bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, ok := t.jobs[jobName]
-	if !ok {
-		return false, moerr.NewInternalErrorNoCtx("sinker not found")
+	jobsToDelete := make([]JobKey, 0)
+	now := time.Now()
+	for _, jobEntry := range t.jobs {
+		loc := now.Location()
+		if jobEntry.dropAt != 0 && uint64(now.Unix())-uint64(threshold) >= uint64(jobEntry.dropAt.ToDatetime(loc).UnixTimestamp(loc)) {
+			jobsToDelete = append(
+				jobsToDelete,
+				JobKey{
+					JobName: jobEntry.jobName,
+					JobID:   jobEntry.jobID,
+				},
+			)
+		}
 	}
-	delete(t.jobs, jobName)
-	return len(t.jobs) == 0, nil
+	for _, jobName := range jobsToDelete {
+		delete(t.jobs, jobName)
+	}
+	if len(jobsToDelete) != 0 {
+		logutil.Info(
+			"ISCP-Task gc in memory job",
+			zap.Uint64("table", t.tableID),
+			zap.Any("jobsToDelete", jobsToDelete),
+		)
+	}
+	return len(t.jobs) == 0
 }
 
 func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.TS) {
@@ -112,6 +132,9 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 	candidates := make([]*JobEntry, 0, len(t.jobs))
 	for _, sinker := range t.jobs {
 		if !sinker.IsInitedAndFinished() {
+			continue
+		}
+		if sinker.dropAt != 0 {
 			continue
 		}
 		candidates = append(candidates, sinker)
@@ -168,8 +191,11 @@ func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, jobName := range iter.jobNames {
-		jobEntry := t.jobs[jobName]
+	for i, jobName := range iter.jobNames {
+		jobEntry := t.jobs[JobKey{
+			JobName: jobName,
+			JobID:   iter.jobIDs[i],
+		}]
 		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
 	}
 }

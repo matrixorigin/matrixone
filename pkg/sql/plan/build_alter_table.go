@@ -21,6 +21,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -54,7 +55,6 @@ func skipPkDedup(old, new *TableDef) bool {
 
 func skipUniqueIdxDedup(old, new *TableDef) map[string]bool {
 	var skip map[string]bool
-
 	// In spite of the O(n^2) complexity,
 	// it's rare for a table to have enough indexes to cause
 	// meaningful performance degradation.
@@ -133,7 +133,21 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		AlgorithmType:  plan.AlterTable_COPY,
 	}
 
-	unsupportedErrorFmt := "unsupported alter option in copy mode: %s"
+	var (
+		pkAffected bool
+
+		affectedCols        = make([]string, 0, len(tableDef.Indexes))
+		unsupportedErrorFmt = "unsupported alter option in copy mode: %s"
+		hasFakePK           = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
+	)
+
+	affectedAllIdxCols := func() {
+		hasFakePK = false
+		affectedCols = affectedCols[:0]
+		for _, idxDef := range tableDef.Indexes {
+			affectedCols = append(affectedCols, idxDef.IndexName)
+		}
+	}
 
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
@@ -141,6 +155,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			switch optionAdd := option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
+				affectedAllIdxCols()
 			default:
 				// column adding is handled in *tree.AlterAddCol
 				// various indexes\fks adding are handled in inplace mode.
@@ -150,26 +165,36 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
-				err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
+				affectedAllIdxCols()
 			default:
 				// various indexes\fks dropping are handled in inplace mode.
 				return nil, moerr.NewInvalidInputf(ctx,
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
 		case *tree.AlterAddCol:
-			err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
+			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
-			err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			pkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
-			err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableRenameColumnClause:
 			err = RenameColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.OldColumnName.ColName())
 		case *tree.AlterTableAlterColumnClause:
-			err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
+			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
+			affectedCols = append(affectedCols, option.ColumnName.String())
 		case *tree.AlterTableOrderByColumnClause:
 			err = OrderByColumn(cctx, alterTablePlan, option, alterTableCtx)
+			for _, order := range option.AlterOrderByList {
+				affectedCols = append(affectedCols, order.Column.ColName())
+			}
 		default:
 			return nil, moerr.NewInvalidInputf(ctx,
 				unsupportedErrorFmt, formatTreeNode(option))
@@ -183,21 +208,36 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err != nil {
 		return nil, err
 	}
+
 	alterTablePlan.CreateTmpTableSql = createTmpDdl
 
-	dedupOpt := &plan.AlterCopyDedupOpt{
+	if pkAffected {
+		affectedAllIdxCols()
+	}
+
+	alterTablePlan.AffectedCols = affectedCols
+
+	opt := &plan.AlterCopyOpt{
 		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef),
 		TargetTableName:    copyTableDef.Name,
 		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef),
 	}
 
-	alterTablePlan.DedupOpt = dedupOpt
-	logutil.Info("alter copy dedup opt",
+	opt.SkipIndexesCopy = make(map[string]bool)
+	for _, idxCol := range tableDef.Indexes {
+		if slices.Index(affectedCols, idxCol.IndexName) == -1 {
+			opt.SkipIndexesCopy[idxCol.IndexName] = true
+		}
+	}
+
+	alterTablePlan.Options = opt
+	logutil.Info("alter copy option",
 		zap.Any("originPk", tableDef.Pkey),
 		zap.Any("copyPk", copyTableDef.Pkey),
-		zap.Any("dedupOpt", dedupOpt))
+		zap.Strings("affectedCols", affectedCols),
+		zap.Any("option", opt))
 
-	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx)
+	insertTmpDml, err := buildAlterInsertDataSQL(cctx, alterTableCtx, hasFakePK)
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +259,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	}, nil
 }
 
-func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (string, error) {
+var ID atomic.Int64
+
+func buildAlterInsertDataSQL(
+	ctx CompilerContext,
+	alterCtx *AlterTableContext,
+	hasFakePK bool,
+) (string, error) {
+
 	schemaName := alterCtx.schemaName
 	originTableName := alterCtx.originTableName
 	copyTableName := alterCtx.copyTableName
@@ -248,9 +295,30 @@ func buildAlterInsertDataSQL(ctx CompilerContext, alterCtx *AlterTableContext) (
 		}
 	}
 
+	if hasFakePK {
+		// why select fake pk col here?
+		// we want to clone unaffected indexes to avoid deep copy table.
+		// but if the primary table has tombstones, the re-generated fake pk column
+		// will be mismatched with these index tables, the shallow copy won't work.
+		// so we need to select these fake pks into the new table.
+		//
+		// example:
+		// create table t1(a int, b int, index(b));
+		// insert into t1 select *, * from generate_series(1,1000*100)g;
+		// delete from t1 where a = 1;
+		// alter table t1 add column c int;
+		// delete from t1 where a = 2;
+		// fails, cannot find this row by join index table and the primary table.
+		//
+		str := fmt.Sprintf(", `%s`", catalog.FakePrimaryKeyColName)
+		insertBuffer.WriteString(str)
+		selectBuffer.WriteString(str)
+	}
+
 	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
 		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
 		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
+
 	return insertSQL, nil
 }
 

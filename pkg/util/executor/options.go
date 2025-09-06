@@ -168,13 +168,13 @@ func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
 	return opts
 }
 
-func (opts StatementOption) WithAlterCopyDedupOpt(dedupOpt *plan.AlterCopyDedupOpt) StatementOption {
-	opts.alterCopyDedupOpt = dedupOpt
+func (opts StatementOption) WithAlterCopyOpt(opt *plan.AlterCopyOpt) StatementOption {
+	opts.alterCopyOpt = opt
 	return opts
 }
 
-func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyDedupOpt {
-	return opts.alterCopyDedupOpt
+func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
+	return opts.alterCopyOpt
 }
 
 func (opts StatementOption) AccountID() uint32 {

@@ -70,7 +70,7 @@ func NewCDCDao(
 
 func (t *CDCDao) MustGetTaskService() taskservice.TaskService {
 	if t.ts == nil && t.ses != nil {
-		t.ts = getPu(t.ses.GetService()).TaskService
+		t.ts = getPu(t.ses.GetService()).GetTaskService()
 	}
 	if t.ts == nil {
 		panic("taskService is nil")

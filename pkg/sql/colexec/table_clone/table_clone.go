@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -235,9 +236,17 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 		// the src table is a publication
 		tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, uint32(tc.Ctx.SrcObjDef.PubInfo.TenantId))
 
-	} else if tc.Ctx.ScanSnapshot != nil && tc.Ctx.ScanSnapshot.Tenant != nil {
-		// the source data may be coming from a different account.
-		tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, tc.Ctx.ScanSnapshot.Tenant.TenantID)
+	} else if tc.Ctx.ScanSnapshot != nil {
+		if tc.Ctx.ScanSnapshot.Tenant != nil {
+			// the source data may be coming from a different account.
+			tc.Ctx.SrcCtx = defines.AttachAccountId(tc.Ctx.SrcCtx, tc.Ctx.ScanSnapshot.Tenant.TenantID)
+		}
+
+		// without setting this scan ts, we could read the newly created table !!!
+		if tc.Ctx.ScanSnapshot.TS != nil {
+			txnOp = proc.GetTxnOperator().CloneSnapshotOp(*tc.Ctx.ScanSnapshot.TS)
+			proc.SetCloneTxnOperator(txnOp)
+		}
 	}
 
 	txnOp = proc.GetCloneTxnOperator()

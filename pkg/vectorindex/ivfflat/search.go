@@ -19,9 +19,11 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -57,12 +59,14 @@ type IvfflatSearch[T types.RealNumbers] struct {
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
 
 	idx.Version = idxcfg.Ivfflat.Version
-	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
+	sql := fmt.Sprintf(
+		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d",
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		tblcfg.DbName, tblcfg.IndexTable,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		idxcfg.Ivfflat.Version)
+		idxcfg.Ivfflat.Version,
+	)
 
 	//os.Stderr.WriteString(fmt.Sprintf("Load Index SQL = %s\n", sql))
 	res, err := runSql(proc, sql)
@@ -79,13 +83,15 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		faVec := bat.Vecs[1]
-		for r := range bat.RowCount() {
-			id := vector.GetFixedAtWithTypeCheck[int64](idVec, r)
-			if faVec.IsNull(uint64(r)) {
+		ids := vector.MustFixedColNoTypeCheck[int64](idVec)
+		hasNull := faVec.HasNull()
+		for i, id := range ids {
+			if hasNull && faVec.IsNull(uint64(i)) {
 				//os.Stderr.WriteString("Centroid is NULL\n")
 				continue
 			}
-			vec := types.BytesToArray[T](faVec.GetBytesAt(r))
+			val := faVec.GetStringAt(i)
+			vec := types.BytesToArray[T](util.UnsafeStringToBytes(val))
 			idx.Centroids = append(idx.Centroids, Centroid[T]{Id: id, Vec: vec})
 		}
 	}
@@ -95,12 +101,20 @@ func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *process.Process, idxcfg vector
 }
 
 // load chunk from database
-func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *process.Process,
-	query []T, distfn metric.DistanceFunction[T], heap *vectorindex.SearchResultSafeHeap,
-	stream_chan chan executor.Result, error_chan chan error) (stream_closed bool, err error) {
+func (idx *IvfflatSearchIndex[T]) searchEntries(
+	ctx context.Context,
+	proc *process.Process,
+	query []T,
+	distfn metric.DistanceFunction[T],
+	heap *vectorindex.SearchResultSafeHeap,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+) (stream_closed bool, err error) {
 
-	var res executor.Result
-	var ok bool
+	var (
+		ok  bool
+		res executor.Result
+	)
 
 	select {
 	case res, ok = <-stream_chan:
@@ -111,16 +125,16 @@ func (idx *IvfflatSearchIndex[T]) searchEntries(lctx context.Context, proc *proc
 		return false, err
 	case <-proc.Ctx.Done():
 		return false, proc.Ctx.Err()
-	case <-lctx.Done():
+	case <-ctx.Done():
 		// local context cancelled. something went wrong with other threads
-		return false, context.Cause(lctx)
+		return false, context.Cause(ctx)
 	}
 
 	bat := res.Batches[0]
 	defer res.Close()
 
 	for i := 0; i < bat.RowCount(); i++ {
-		pk := vector.GetAny(bat.Vecs[0], i)
+		pk := vector.GetAny(bat.Vecs[0], i, true)
 		if bat.Vecs[1].IsNull(uint64(i)) {
 			continue
 		}
@@ -191,13 +205,17 @@ func (idx *IvfflatSearchIndex[T]) findCentroids(proc *process.Process, query []T
 }
 
 // Call usearch.Search
-func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, rt vectorindex.RuntimeConfig, nthread int64) (keys any, distances []float64, err error) {
+func (idx *IvfflatSearchIndex[T]) Search(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	query []T,
+	rt vectorindex.RuntimeConfig,
+	nthread int64,
+) (keys any, distances []float64, err error) {
 
 	stream_chan := make(chan executor.Result, nthread)
 	error_chan := make(chan error, nthread)
-	lctx := context.Background()
-	lctx, cancel := context.WithCancelCause(lctx)
-	defer cancel(nil)
 
 	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
 	if err != nil {
@@ -217,7 +235,8 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 		instr += strconv.FormatInt(c, 10)
 	}
 
-	sql := fmt.Sprintf("SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+	sql := fmt.Sprintf(
+		"SELECT `%s`, `%s` FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
 		tblcfg.DbName, tblcfg.EntriesTable,
@@ -228,80 +247,134 @@ func (idx *IvfflatSearchIndex[T]) Search(proc *process.Process, idxcfg vectorind
 	)
 	//os.Stderr.WriteString(sql)
 
-	var wg sync.WaitGroup
+	var (
+		wg          sync.WaitGroup
+		ctx, cancel = context.WithCancelCause(proc.GetTopContext())
+	)
+	defer cancel(nil)
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, err := runSql_streaming(proc, sql, stream_chan, error_chan)
-		if err != nil {
-			// send multiple errors to stop the nworker threads
-			cancel(err)
+		if _, err2 := runSql_streaming(
+			ctx, proc, sql, stream_chan, error_chan,
+		); err2 != nil {
+			// consumer notify the producer to stop the sql streaming
+			cancel(err2)
 			return
 		}
 	}()
 
-	heap := vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
+	var (
+		gStreamClosed atomic.Bool
+		heap          = vectorindex.NewSearchResultSafeHeap(int(rt.Probe * 1000))
+	)
 
 	for n := int64(0); n < nthread; n++ {
-
 		wg.Add(1)
-
 		go func() {
 			defer wg.Done()
 
 			// brute force search with selected centroids
-			sql_closed := false
-			var err2 error
-			for !sql_closed {
-				sql_closed, err2 = idx.searchEntries(lctx, proc, query, distfn, heap, stream_chan, error_chan)
-				if err2 != nil {
+			var (
+				streamClosed = false
+				err2         error
+			)
+			for !streamClosed {
+				if streamClosed, err2 = idx.searchEntries(
+					ctx, proc, query, distfn, heap, stream_chan, error_chan,
+				); err2 != nil {
+					// consumer notify the producer to stop the sql streaming
 					cancel(err2)
-					return
+					break
 				}
+			}
+			// in case stream is not closed and there are some errors during
+			// searchEntries, we need to wait for the stream_chan to be closed.
+			// Otherwise, some remaining results in stream_chan will not be
+			// closed (memory leak).
+			// For example:
+			// 1. Producer send one batch into stream_chan
+			// 2. Consumer fetch one batch from stream_chan and then encounter an error
+			// 3. Producer is still sending batches into stream_chan
+			// 4. Consumer break the consume loop and then return
+			// 5. Some remaining results in stream_chan will not be closed (memory leak).
+
+			// Right Steps:
+			// 1. Producer send one batch into stream_chan
+			// 2. Consumer fetch one batch from stream_chan and then encounter an error
+			// 3. Producer send one batch into stream_chan
+			// 4. Consumer notify the producer to stop streaming
+			// 5. Consumer fetch the remaining batches from stream_chan until the stream_chan is closed.
+			if streamClosed {
+				gStreamClosed.Store(true)
 			}
 		}()
 	}
 
 	wg.Wait()
 
-	// check local context cancelled
+	// close the stream_chan if it is not closed
+	if !gStreamClosed.Load() {
+		for res := range stream_chan {
+			res.Close()
+		}
+	}
+
+	// fetch potential remaining errors from error_chan
+	// if error is not nil, fast return
 	select {
-	case <-proc.Ctx.Done():
-		return nil, nil, proc.Ctx.Err()
-	case <-lctx.Done():
-		err := context.Cause(lctx)
-		return nil, nil, err
+	case err = <-error_chan:
+		return
 	default:
 	}
 
-	resid := make([]any, 0, rt.Limit)
-	resdist := make([]float64, 0, rt.Limit)
-	n := heap.Len()
+	// check local context cancelled
+	select {
+	case <-proc.Ctx.Done():
+		err = proc.Ctx.Err()
+		return
+	case <-ctx.Done():
+		err = context.Cause(ctx)
+		return
+	default:
+	}
+
+	distances = make([]float64, 0, rt.Limit)
+	var (
+		resid = make([]any, 0, rt.Limit)
+		n     = heap.Len()
+	)
 	for i := 0; i < int(rt.Limit) && i < n; i++ {
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResultAnyKey)
 		if !ok {
-			return nil, nil, moerr.NewInternalError(proc.Ctx, "ivf search: heap return key is not any")
+			err = moerr.NewInternalError(proc.Ctx, "ivf search: heap return key is not any")
+			return
 		}
 		resid = append(resid, sr.Id)
-		resdist = append(resdist, sr.Distance)
+		distances = append(distances, sr.Distance)
 	}
 
-	return resid, resdist, nil
+	return resid, distances, nil
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {
 	idx.Centroids = nil
 }
 
-func NewIvfflatSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *IvfflatSearch[T] {
+func NewIvfflatSearch[T types.RealNumbers](
+	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig,
+) *IvfflatSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
 	s := &IvfflatSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	return s
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *IvfflatSearch[T]) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *IvfflatSearch[T]) Search(
+	proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig,
+) (keys any, distances []float64, err error) {
 	query, ok := anyquery.([]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfSearch: query not match with index type")

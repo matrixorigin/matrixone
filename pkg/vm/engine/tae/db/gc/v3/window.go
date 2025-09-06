@@ -123,6 +123,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	accountSnapshots map[uint32][]types.TS,
 	pitrs *logtail.PitrInfo,
 	snapshotMeta *logtail.SnapshotMeta,
+	iscpTables map[uint64]types.TS,
 	buffer *containers.OneSchemaBatchBuffer,
 	cacheSize int,
 	estimateRows int,
@@ -141,6 +142,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 		sourcer,
 		pitrs,
 		accountSnapshots,
+		iscpTables,
 		snapshotMeta,
 		buffer,
 		false,
@@ -383,15 +385,17 @@ func collectMapData(
 	if len(objects) == 0 {
 		return nil
 	}
+	rows := 0
 	for _, tables := range objects {
 		for _, entry := range tables {
 			err := addObjectToBatch(bat, entry.stats, entry, mp)
 			if err != nil {
 				return err
 			}
+			rows++
 		}
 	}
-	batch.SetLength(bat, len(objects))
+	batch.SetLength(bat, rows)
 	return nil
 }
 
@@ -448,8 +452,9 @@ func loader(
 	mp *mpool.MPool,
 ) error {
 	for id := uint32(0); id < stats.BlkCnt(); id++ {
-		stats.ObjectLocation().SetID(uint16(id))
-		data, _, err := ioutil.LoadOneBlock(cxt, fs, stats.ObjectLocation(), objectio.SchemaData)
+		location := stats.ObjectLocation()
+		location.SetID(uint16(id))
+		data, _, err := ioutil.LoadOneBlock(cxt, fs, location, objectio.SchemaData)
 		if err != nil {
 			return err
 		}

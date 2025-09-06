@@ -4104,7 +4104,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			// update new column info to copy_table_def
-			err := updateNewColumnInTableDef(
+			_, err := updateNewColumnInTableDef(
 				ctx,
 				alterTable.CopyTableDef,
 				FindColumn(tableDef.Cols, opt.NewColumn.Name.ColName()),

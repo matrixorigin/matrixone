@@ -115,6 +115,9 @@ type checkpointCleaner struct {
 		snapshotMeta *logtail.SnapshotMeta
 		replayDone   bool
 	}
+
+	// iscpTablesFunc is an optional function to provide the ISCP tables for testing.
+	iscpTablesFunc func() (map[uint64]types.TS, error)
 }
 
 func WithCanGCCacheSize(
@@ -1154,6 +1157,7 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		err                         error
 		softDuration, mergeDuration time.Duration
 		extraErrMsg                 string
+		iscp                        map[uint64]types.TS
 	)
 
 	defer func() {
@@ -1178,12 +1182,17 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 	// [t100, t400] [f10, f11]
 	// Also, it will update the GC metadata
 	scannedWindow := c.GetScannedWindowLocked()
+	iscp, err = c.ISCPTables()
+	if err != nil {
+		return nil, err
+	}
 	if filesToGC, metafile, err = scannedWindow.ExecuteGlobalCheckpointBasedGC(
 		ctx,
 		gckp,
 		accountSnapshots,
 		pitrs,
 		c.mutation.snapshotMeta,
+		iscp,
 		memoryBuffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1345,12 +1354,17 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		zap.String("task", c.TaskNameLocked()),
 		zap.Int("files-count", len(mergeWindow.files)),
 	)
+	iscp, err := c.ISCPTables()
+	if err != nil {
+		return err
+	}
 	if _, _, err = mergeWindow.ExecuteGlobalCheckpointBasedGC(
 		c.ctx,
 		gCkp,
 		accoutSnapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		iscp,
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1373,6 +1387,7 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		accoutSnapshots,
 		pitr,
 		c.mutation.snapshotMeta,
+		iscp,
 		buffer,
 		c.config.canGCCacheSize,
 		c.config.estimateRows,
@@ -1834,6 +1849,13 @@ func (c *checkpointCleaner) GetTablePK(tid uint64) string {
 	c.mutation.Lock()
 	defer c.mutation.Unlock()
 	return c.mutation.snapshotMeta.GetTablePK(tid)
+}
+
+func (c *checkpointCleaner) ISCPTables() (map[uint64]types.TS, error) {
+	if c.iscpTablesFunc != nil {
+		return c.iscpTablesFunc()
+	}
+	return c.mutation.snapshotMeta.GetISCP(c.ctx, c.sid, c.fs, c.mp)
 }
 
 func (c *checkpointCleaner) GetDetails(ctx context.Context) (map[uint32]*TableStats, error) {

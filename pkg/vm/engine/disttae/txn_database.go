@@ -167,7 +167,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		return nil, err
 	}
 	if rel == nil {
-		err := moerr.NewNoSuchTable(ctx, db.databaseName, name)
+		err = moerr.NewNoSuchTable(ctx, db.databaseName, name)
 		return nil, err
 	}
 	return rel, nil

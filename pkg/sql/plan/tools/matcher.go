@@ -293,7 +293,7 @@ func (matcher *ExprMatcher) GetAssignedVar(node *plan2.Node, aliases UnorderedMa
 				}
 			} else {
 				res = &VarRef{
-					Name: expr.String(),
+					Name: expr.ExprString(),
 					Type: expr.GetTyp(),
 				}
 			}
@@ -435,7 +435,7 @@ func (matcher *AggrFuncMatcher) GetAssignedVar(node *plan2.Node, aliases Unorder
 				}
 			} else {
 				res = &VarRef{
-					Name: expr.String(),
+					Name: expr.ExprString(),
 					Type: expr.GetTyp(),
 				}
 			}
