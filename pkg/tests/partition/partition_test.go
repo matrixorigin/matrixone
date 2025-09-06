@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -170,17 +169,6 @@ func runPartitionClusterTestWithReuse(
 		new, err := embed.NewCluster(
 			embed.WithCNCount(3),
 			embed.WithTesting(),
-			embed.WithPreStart(
-				func(op embed.ServiceOperator) {
-					op.Adjust(
-						func(sc *embed.ServiceConfig) {
-							if op.ServiceType() == metadata.ServiceType_CN {
-								sc.CN.PartitionService.Enable = true
-							}
-						},
-					)
-				},
-			),
 		)
 		require.NoError(t, err)
 		require.NoError(t, new.Start())

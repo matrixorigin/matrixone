@@ -8,10 +8,6 @@ level = "info"
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 18000
 
-[cn.partitionservice]
-enable = true
-
-
 [malloc]
 check-fraction = 65536
 enable-metrics = true

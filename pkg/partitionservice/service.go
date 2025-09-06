@@ -59,7 +59,7 @@ func (s *Service) Create(
 	stmt *tree.CreateTable,
 	txnOp client.TxnOperator,
 ) error {
-	if !s.cfg.Enable {
+	if s.cfg.Disable {
 		return nil
 	}
 
@@ -95,7 +95,7 @@ func (s *Service) Truncate(
 	newTableID uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if !s.cfg.Enable {
+	if s.cfg.Disable {
 		return nil
 	}
 
@@ -112,7 +112,7 @@ func (s *Service) Delete(
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if !s.cfg.Enable {
+	if s.cfg.Disable {
 		return nil
 	}
 
@@ -157,7 +157,7 @@ func (s *Service) GetPartitionMetadata(
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) (partition.PartitionMetadata, error) {
-	if !s.cfg.Enable {
+	if s.cfg.Disable {
 		return partition.PartitionMetadata{}, nil
 	}
 
@@ -165,7 +165,7 @@ func (s *Service) GetPartitionMetadata(
 }
 
 func (s *Service) Enabled() bool {
-	return s.cfg.Enable
+	return !s.cfg.Disable
 }
 
 func (s *Service) getMetadata(
