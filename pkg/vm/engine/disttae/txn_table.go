@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -2015,13 +2014,6 @@ func (tbl *txnTable) BuildShardingReaders(
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
 ) (ps *logtailreplay.PartitionState, err error) {
-	return tbl.getPartitionStateWithTs(ctx, tbl.db.op.SnapshotTS())
-}
-func (tbl *txnTable) getPartitionStateWithTs(
-	ctx context.Context,
-	ts timestamp.Timestamp,
-) (ps *logtailreplay.PartitionState, err error) {
-
 	defer func() {
 		if tbl.tableId == catalog.MO_COLUMNS_ID {
 			logutil.Info("open partition state for mo_columns",
@@ -2075,7 +2067,7 @@ func (tbl *txnTable) getPartitionStateWithTs(
 			return nil, err
 		}
 
-	} else if ps != nil && ps.CanServe(types.TimestampToTS(ts)) {
+	} else if ps != nil && ps.CanServe(types.TimestampToTS(tbl.db.op.SnapshotTS())) {
 		return
 	}
 
@@ -2089,7 +2081,7 @@ func (tbl *txnTable) getPartitionStateWithTs(
 		zap.String("table-name", tbl.tableName),
 		zap.Uint64("table-id", tbl.tableId),
 		zap.String("txn", tbl.db.op.Txn().DebugString()),
-		zap.Any("ts", ts),
+		zap.Any("ts", tbl.db.op.SnapshotTS()),
 		zap.String("ps", fmt.Sprintf("%p", ps)),
 		zap.String("start", start.ToString()),
 		zap.String("end", end.ToString()),
@@ -2108,7 +2100,7 @@ func (tbl *txnTable) getPartitionStateWithTs(
 	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
 		ctx,
 		tbl,
-		types.TimestampToTS(ts))
+		types.TimestampToTS(tbl.db.op.SnapshotTS()))
 
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {

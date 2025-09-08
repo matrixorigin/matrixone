@@ -29,8 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
 )
 
@@ -110,34 +112,85 @@ func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (dat
 }
 
 func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
-	if h.currentPSTo.IsEmpty() {
-		h.currentPSFrom = h.fromTs
-	} else {
-		if h.currentPSTo.GE(&h.toTs) {
-			return true, nil
-		}
-		h.currentChangeHandle.Close()
-		h.currentPSFrom = h.currentPSTo.Next()
+	if h.currentPSTo.EQ(&h.toTs) {
+		return true, nil
 	}
-	state, err := h.tbl.getPartitionStateWithTs(ctx, h.currentPSFrom.Prev().ToTimestamp())
+	state, err := h.tbl.getPartitionState(ctx)
 	if err != nil {
 		return
 	}
-	h.currentPSTo = state.GetEnd()
-	if h.currentPSTo.GT(&h.toTs) {
+	var nextFrom types.TS
+	if h.currentPSFrom.IsEmpty() {
+		nextFrom = h.fromTs
+	} else {
+		nextFrom = h.currentPSTo.Next()
+	}
+	stateStart := state.GetStart()
+	if stateStart.LT(&nextFrom) {
+		h.currentPSTo = h.toTs
+		h.currentPSFrom = nextFrom
+		h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
+			ctx,
+			state,
+			h.currentPSFrom,
+			h.currentPSTo,
+			h.skipDeletes,
+			objectio.BlockMaxRows,
+			h.primarySeqnum,
+			h.mp,
+			h.fs,
+		)
+		if err != nil {
+			return
+		}
+		return
+	}
+
+	response, err := RequestSnapshotRead(ctx, h.tbl, &nextFrom)
+	if err != nil {
+		return
+	}
+	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	var checkpointEntries []*checkpoint.CheckpointEntry
+	minTS := types.MaxTs()
+	maxTS := types.TS{}
+	if ok && resp.Succeed && len(resp.Entries) > 0 {
+		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
+		entries := resp.Entries
+		for _, entry := range entries {
+			start := types.TimestampToTS(*entry.Start)
+			end := types.TimestampToTS(*entry.End)
+			if start.LT(&minTS) {
+				minTS = start
+			}
+			if end.GT(&maxTS) {
+				maxTS = end
+			}
+			entryType := entry.EntryType
+			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
+			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+			checkpointEntries = append(checkpointEntries, checkpointEntry)
+		}
+	}
+	h.currentPSFrom = minTS
+	if h.fromTs.GT(&minTS) {
+		h.currentPSFrom = h.fromTs
+	}
+	h.currentPSTo = maxTS
+	if h.toTs.LT(&maxTS) {
 		h.currentPSTo = h.toTs
 	}
-	if !h.currentPSFrom.EQ(&h.fromTs) || !h.currentPSTo.EQ(&h.toTs) {
-		logutil.Info("ChangesHandle-Split change handles",
-			zap.String("from", h.fromTs.ToString()),
-			zap.String("to", h.toTs.ToString()),
-			zap.String("ps from", h.currentPSFrom.ToString()),
-			zap.String("ps to", h.currentPSTo.ToString()),
-		)
-	}
-	h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
+	logutil.Info("ChangesHandle-Split change handles",
+		zap.String("from", h.fromTs.ToString()),
+		zap.String("to", h.toTs.ToString()),
+		zap.String("ps from", h.currentPSFrom.ToString()),
+		zap.String("ps to", h.currentPSTo.ToString()),
+	)
+	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
 		ctx,
-		state,
+		h.tbl.tableId,
+		h.tbl.proc.Load().GetService(),
+		checkpointEntries,
 		h.currentPSFrom,
 		h.currentPSTo,
 		h.skipDeletes,
