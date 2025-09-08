@@ -102,7 +102,7 @@ func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry
 			logutil.Warn(
 				"SlOW-LOG",
 				zap.Int("wal-size", len(buf)),
-				zap.Uint64("lsn", mgr.lsn),
+				zap.Uint64("lsn", info.GroupLSN),
 				zap.String("txn", store.txn.String()),
 				zap.Duration("marshal-log-entry-duration", dur),
 			)
