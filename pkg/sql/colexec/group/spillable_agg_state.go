@@ -133,7 +133,7 @@ func (s *SpillableAggState) EstimateSize() int64 {
 	size := int64(0)
 	for _, vec := range s.GroupVectors {
 		if vec != nil {
-			size += int64(vec.Size())
+			size += int64(vec.Allocated())
 		}
 	}
 	for _, aggState := range s.MarshaledAggStates {
