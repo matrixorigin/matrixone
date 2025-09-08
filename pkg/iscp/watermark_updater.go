@@ -277,6 +277,7 @@ func registerJob(
 	)
 	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
+		return
 	}
 	result.Close()
 	return

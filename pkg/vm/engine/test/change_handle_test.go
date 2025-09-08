@@ -46,7 +46,6 @@ import (
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
