@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,21 +58,25 @@ func ExecuteIteration(
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	rel, txnOp, err := getRelation(
-		cnEngine,
-		cnTxnClient,
-		iterCtx.accountID,
-		iterCtx.tableID,
-	)
+
+	nowTs := cnEngine.LatestLogtailAppliedTime()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"iscp iteration",
+		0)
+	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
 		defer txnOp.Commit(ctx)
 	}
 	if err != nil {
 		return
 	}
-	tableDef := rel.CopyTableDef(ctx)
-	dbName := tableDef.DbName
-	tableName := tableDef.Name
+	err = cnEngine.New(ctx, txnOp)
+	if err != nil {
+		return
+	}
+
 	jobSpecs, err := GetJobSpecs(
 		ctx,
 		cnUUID,
@@ -83,6 +88,20 @@ func ExecuteIteration(
 	)
 	if err != nil {
 		return
+	}
+	dbName := jobSpecs[0].ConsumerInfo.SrcTable.DBName
+	tableName := jobSpecs[0].ConsumerInfo.SrcTable.TableName
+	db, err := cnEngine.Database(ctx, dbName, txnOp)
+	if err != nil {
+		return
+	}
+	rel, err := db.Relation(ctx, tableName, nil)
+	if err != nil {
+		return
+	}
+	tableDef := rel.CopyTableDef(ctx)
+	if rel.GetTableID(ctx) != iterCtx.tableID {
+		return moerr.NewInternalErrorNoCtx("table id mismatch")
 	}
 
 	if iterCtx.fromTS.IsEmpty() {
@@ -104,6 +123,14 @@ func ExecuteIteration(
 	}
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "collectChanges" {
 		err = moerr.NewInternalErrorNoCtx(msg)
+	}
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iteration:") {
+		strs := strings.Split(msg, ":")
+		for i := 1; i < len(strs); i++ {
+			if strs[i] == tableName {
+				err = moerr.NewInternalErrorNoCtx(msg)
+			}
+		}
 	}
 	if err != nil {
 		return
@@ -147,6 +174,7 @@ func ExecuteIteration(
 			continue
 		}
 		dataRetrievers[i] = NewDataRetriever(
+			ctx,
 			iterCtx.accountID,
 			iterCtx.tableID,
 			iterCtx.jobNames[i],
@@ -289,6 +317,11 @@ func ExecuteIteration(
 				watermark = status.To
 			}
 			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				err = FlushJobStatusOnIterationState(
 					ctx,
 					cnUUID,
@@ -312,7 +345,7 @@ func ExecuteIteration(
 	return nil
 }
 
-func FlushJobStatusOnIterationState(
+var FlushJobStatusOnIterationState = func(
 	ctx context.Context,
 	cnUUID string,
 	cnEngine engine.Engine,
@@ -395,14 +428,15 @@ func FlushStatus(
 		statusJson,
 		state,
 	)
-	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
+	result.Close()
 	return
 }
 
-func GetJobSpecs(
+var GetJobSpecs = func(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
@@ -442,39 +476,6 @@ func GetJobSpecs(
 	return
 }
 
-func getRelation(
-	cnEngine engine.Engine,
-	cnTxnClient client.TxnClient,
-	accountID uint32,
-	tableID uint64,
-) (rel engine.Relation, txnOp client.TxnOperator, err error) {
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountID)
-	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
-
-	nowTs := cnEngine.LatestLogtailAppliedTime()
-	createByOpt := client.WithTxnCreateBy(
-		0,
-		"",
-		"iscp iteration",
-		0)
-	txnOp, err = cnTxnClient.New(ctx, nowTs, createByOpt)
-	if err != nil {
-		return
-	}
-	err = cnEngine.New(ctx, txnOp)
-	if err != nil {
-		return
-	}
-	if _, _, rel, err = cdc.GetRelationById(ctx, cnEngine, txnOp, tableID); err != nil {
-		return
-	}
-	return
-}
-
 // TODO
 func isPermanentError(err error) bool {
 	return err.Error() == "permanent error"
@@ -494,4 +495,15 @@ func (status *JobStatus) SetError(err error) {
 
 func (status *JobStatus) PermanentlyFailed() bool {
 	return status.ErrorCode >= PermanentErrorThreshold
+}
+
+func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jobIDs []uint64, fromTS types.TS, toTS types.TS) *IterationContext {
+	return &IterationContext{
+		accountID: accountID,
+		tableID:   tableID,
+		jobNames:  jobNames,
+		jobIDs:    jobIDs,
+		fromTS:    fromTS,
+		toTS:      toTS,
+	}
 }

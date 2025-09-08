@@ -65,7 +65,7 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 		returnStr += "{'verify': 'skip gc check, cost is high'}"
 		return
 	}
-	buffer := MakeGCWindowBuffer(mpool.MB)
+	buffer := MakeGCWindowBuffer(32 * mpool.MB)
 	defer buffer.Close(mp)
 	bat := buffer.Fetch()
 	defer buffer.Putback(bat, mp)
@@ -203,14 +203,17 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 
 	// Collect all checkpoint files
 	var ckpObjectCount int
-	ckps := c.cleaner.checkpointCli.GetAllGlobalCheckpoints()
-	ckps = append(ckps, c.cleaner.checkpointCli.GetAllIncrementalCheckpoints()...)
+	checkpoints := c.cleaner.checkpointCli.GetAllGlobalCheckpoints()
+	checkpoints = append(checkpoints, c.cleaner.checkpointCli.GetAllIncrementalCheckpoints()...)
 
 	compacted := c.cleaner.checkpointCli.GetCompacted()
 	if compacted != nil {
-		ckps = append(ckps, compacted)
+		checkpoints = append(checkpoints, compacted)
 	}
-	for _, ckp := range ckps {
+	for _, ckp := range checkpoints {
+		if !ckp.IsFinished() {
+			continue
+		}
 		var files []string
 		files, err = getCheckpointLocation(ctx, ckp, c.cleaner.fs)
 		if err != nil {

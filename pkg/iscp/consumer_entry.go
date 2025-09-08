@@ -37,6 +37,7 @@ func NewJobEntry(
 	jobID uint64,
 	watermark types.TS,
 	state int8,
+	dropAt types.Timestamp,
 ) *JobEntry {
 	jobEntry := &JobEntry{
 		tableInfo: tableInfo,
@@ -45,14 +46,18 @@ func NewJobEntry(
 		jobSpec:   &jobSpec.TriggerSpec,
 		watermark: watermark,
 		state:     state,
+		dropAt:    dropAt,
 	}
 	return jobEntry
 }
 
-func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8) {
+func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8, dropAt types.Timestamp) {
 	if jobSpec.GetType() != jobEntry.jobSpec.GetType() && watermark.LT(&jobEntry.watermark) {
 		jobEntry.jobSpec = &jobSpec.TriggerSpec
 		return
+	}
+	if dropAt != 0 {
+		jobEntry.dropAt = dropAt
 	}
 	if jobEntry.persistedWatermark.EQ(&watermark) {
 		return
@@ -64,6 +69,7 @@ func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int
 	jobEntry.persistedWatermark = watermark
 	jobEntry.watermark = watermark
 	jobEntry.state = state
+	jobEntry.dropAt = dropAt
 }
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {
@@ -107,7 +113,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		statusJson,
 		ISCPJobState_Completed,
 	)
-	_, err = ExecWithResult(
+	result, err := ExecWithResult(
 		ctx,
 		sql,
 		jobEntry.tableInfo.exec.cnUUID,
@@ -118,7 +124,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 			"ISCP-Task flush watermark failed",
 			zap.String("job", jobEntry.jobName),
 			zap.String("table", jobEntry.tableInfo.tableName),
-			zap.String("account", jobEntry.tableInfo.dbName),
+			zap.String("database", jobEntry.tableInfo.dbName),
 			zap.Uint64("tableID", jobEntry.tableInfo.tableID),
 			zap.Uint64("jobID", jobEntry.jobID),
 			zap.String("watermark", jobEntry.watermark.ToString()),
@@ -127,6 +133,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		)
 		return
 	}
+	result.Close()
 	jobEntry.persistedWatermark = jobEntry.watermark
 	return
 }
@@ -144,10 +151,12 @@ func (jobEntry *JobEntry) StringLocked() string {
 		stateStr = "C"
 	}
 	return fmt.Sprintf(
-		"Index[%s]%s,%v[%v]",
+		"Index[%s-%d]%s,%v[%v]%v",
 		jobEntry.jobName,
+		jobEntry.jobID,
 		jobEntry.watermark.ToString(),
 		jobEntry.jobSpec,
 		stateStr,
+		jobEntry.dropAt,
 	)
 }

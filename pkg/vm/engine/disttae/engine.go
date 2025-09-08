@@ -632,6 +632,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		e.hakeeper,
 		e.us,
 		nil,
+		nil,
 	)
 	txn := NewTxnWorkSpace(e, proc)
 	op.AddWorkspace(txn)

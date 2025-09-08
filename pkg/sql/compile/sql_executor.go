@@ -20,6 +20,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -45,16 +47,17 @@ import (
 )
 
 type sqlExecutor struct {
-	addr      string
-	eng       engine.Engine
-	mp        *mpool.MPool
-	txnClient client.TxnClient
-	fs        fileservice.FileService
-	ls        lockservice.LockService
-	qc        qclient.QueryClient
-	hakeeper  logservice.CNHAKeeperClient
-	us        udf.Service
-	buf       *buffer.Buffer
+	addr        string
+	eng         engine.Engine
+	mp          *mpool.MPool
+	txnClient   client.TxnClient
+	fs          fileservice.FileService
+	ls          lockservice.LockService
+	qc          qclient.QueryClient
+	hakeeper    logservice.CNHAKeeperClient
+	us          udf.Service
+	buf         *buffer.Buffer
+	taskservice taskservice.TaskService
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -67,22 +70,24 @@ func NewSQLExecutor(
 	qc qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	us udf.Service,
+	taskService taskservice.TaskService,
 ) executor.SQLExecutor {
 	v, ok := runtime.ServiceRuntime(qc.ServiceID()).GetGlobalVariables(runtime.LockService)
 	if !ok {
 		panic("missing lock service")
 	}
 	return &sqlExecutor{
-		addr:      addr,
-		eng:       eng,
-		txnClient: txnClient,
-		fs:        fs,
-		ls:        v.(lockservice.LockService),
-		qc:        qc,
-		hakeeper:  hakeeper,
-		us:        us,
-		mp:        mp,
-		buf:       buffer.New(),
+		addr:        addr,
+		eng:         eng,
+		txnClient:   txnClient,
+		fs:          fs,
+		ls:          v.(lockservice.LockService),
+		qc:          qc,
+		hakeeper:    hakeeper,
+		us:          us,
+		mp:          mp,
+		buf:         buffer.New(),
+		taskservice: taskService,
 	}
 }
 
@@ -271,7 +276,7 @@ func (exec *txnExecutor) Exec(
 
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
-			defines.AlterCopyDedupOpt{}, v)
+			defines.AlterCopyOpt{}, v)
 	}
 
 	receiveAt := time.Now()
@@ -312,6 +317,7 @@ func (exec *txnExecutor) Exec(
 		exec.s.hakeeper,
 		exec.s.us,
 		nil,
+		exec.s.taskservice,
 	)
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
@@ -414,7 +420,7 @@ func (exec *txnExecutor) Exec(
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
 				// our current internal sql will never read too much data.
-				rows, err := bat.Dup(exec.s.mp)
+				rows, err := bat.Clone(exec.s.mp, true)
 				if err != nil {
 					return err
 				}
@@ -425,6 +431,9 @@ func (exec *txnExecutor) Exec(
 						case <-proc.Ctx.Done():
 							err_chan <- moerr.NewInternalError(proc.Ctx, "context cancelled")
 							return moerr.NewInternalError(proc.Ctx, "context cancelled")
+						case <-exec.ctx.Done():
+							err_chan <- exec.ctx.Err()
+							return exec.ctx.Err()
 						default:
 							time.Sleep(1 * time.Millisecond)
 						}
@@ -503,6 +512,7 @@ func (exec *txnExecutor) LockTable(table string) error {
 		exec.s.hakeeper,
 		exec.s.us,
 		nil,
+		exec.s.taskservice,
 	)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf

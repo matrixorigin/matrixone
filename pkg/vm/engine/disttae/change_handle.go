@@ -326,7 +326,9 @@ func (h *CheckpointChangesHandle) Next(
 	return
 }
 func (h *CheckpointChangesHandle) Close() error {
-	h.reader.Close()
+	if h.reader != nil {
+		h.reader.Close()
+	}
 	return nil
 }
 func (h *CheckpointChangesHandle) initReader(ctx context.Context) (err error) {

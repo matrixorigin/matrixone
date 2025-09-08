@@ -187,11 +187,13 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 	createTableSql := srcCreateSql[:tableStart] + " " + newTablePart + srcCreateSql[tableEnd:]
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	_, err := s.internalSqlExecutor.Exec(ctx, createDBSql, executor.Options{})
+	result, err := s.internalSqlExecutor.Exec(ctx, createDBSql, executor.Options{})
+	result.Close()
 	if err != nil {
 		return err
 	}
-	_, err = s.internalSqlExecutor.Exec(ctx, createTableSql, executor.Options{})
+	result, err = s.internalSqlExecutor.Exec(ctx, createTableSql, executor.Options{})
+	result.Close()
 	return err
 }
 
@@ -244,6 +246,10 @@ func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) er
 
 }
 func (s *interalSqlConsumer) consumeData(ctx context.Context, dataType int8, iscpData *ISCPData, txn executor.TxnExecutor) (noMoreData bool, err error) {
+	if iscpData == nil {
+		noMoreData = true
+		return
+	}
 	defer iscpData.Done()
 	if iscpData.err != nil {
 		return false, iscpData.err
@@ -421,14 +427,19 @@ func (s *interalSqlConsumer) tryFlushSqlBuf(txn executor.TxnExecutor, sqlBuffer 
 		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
 		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
-		_, err = s.internalSqlExecutor.Exec(ctx, string(sqlBuffer), executor.Options{})
+		var result executor.Result
+		result, err = s.internalSqlExecutor.Exec(ctx, string(sqlBuffer), executor.Options{})
+		result.Close()
 		if err != nil {
 			logutil.Errorf("iscp interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
 			panic(err)
 		}
 		return
 	}
-	if _, err := txn.Exec(string(sqlBuffer), executor.StatementOption{}); err != nil {
+	var result executor.Result
+	result, err = txn.Exec(string(sqlBuffer), executor.StatementOption{})
+	result.Close()
+	if err != nil {
 		logutil.Errorf("iscp interalSqlConsumer(%v) send sql failed, err: %v, sql: %s", s.tableInfo.Name, err, sqlBuffer[:])
 		// record error
 		panic(err)

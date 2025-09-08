@@ -302,10 +302,10 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 stage_id    stage_name    url    stage_credentials    stage_status    created_time    comment
-1    stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage        disabled    2025-07-19 05:50:45    
+1    stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage        in_use    2025-07-19 05:50:45    
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select * from t1 into outfile 'stage://stage01/local_stage_table20.csv';
 truncate t1;
 load data infile 'stage://stage01/local_stage_table20.csv' into table t1 fields terminated by ',' ignore 1 lines;
@@ -434,7 +434,7 @@ id    ti    si    bi    fl    dl    de    ch    vch    dd    dt
 9    8    4    9    9849.312    9849312.0    9849    see you    subquery    2022-04-28    2022-04-28 22:40:11
 show stages;
 STAGE_NAME    URL    STATUS    COMMENT
-stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    DISABLED    
+stage01    file:////Users/fengttt/m/matrixone/test/distributed/resources/into_outfile/stage    in_use    
 select * from vtab32;
 id    vecf32_3    vecf32_5
 1    null    null

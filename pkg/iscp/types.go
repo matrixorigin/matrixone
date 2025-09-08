@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -114,15 +113,14 @@ type JobStatus struct {
 // Intra-System Change Propagation Task Executor
 // iscp executor manages iterations, updates watermarks, and updates the iscp table.
 type ISCPTaskExecutor struct {
-	tables         *btree.BTreeG[*TableEntry]
-	tableMu        sync.RWMutex
-	packer         *types.Packer
-	mp             *mpool.MPool
-	cnUUID         string
-	txnEngine      engine.Engine
-	cnTxnClient    client.TxnClient
-	iscpLogTableID uint64
-	iscpLogWm      types.TS
+	tables      *btree.BTreeG[*TableEntry]
+	tableMu     sync.RWMutex
+	packer      *types.Packer
+	mp          *mpool.MPool
+	cnUUID      string
+	txnEngine   engine.Engine
+	cnTxnClient client.TxnClient
+	iscpLogWm   types.TS
 
 	rpcHandleFn func(
 		ctx context.Context,
@@ -152,18 +150,23 @@ type JobEntry struct {
 	watermark          types.TS
 	persistedWatermark types.TS
 	state              int8
+	dropAt             types.Timestamp
+}
+
+type JobKey struct {
+	JobName string
+	JobID   uint64
 }
 
 // Intra-System Change Propagation Table Entry
 type TableEntry struct {
 	exec      *ISCPTaskExecutor
-	tableDef  *plan.TableDef
 	accountID uint32
 	dbID      uint64
 	tableID   uint64
 	tableName string
 	dbName    string
-	jobs      map[string]*JobEntry
+	jobs      map[JobKey]*JobEntry
 	mu        sync.RWMutex
 }
 
@@ -195,6 +198,14 @@ type ConsumerInfo struct {
 	TableName    string
 	DBName       string
 	Columns      []string
+	SrcTable     TableInfo
+}
+
+type TableInfo struct {
+	DBName    string
+	DBID      uint64
+	TableName string
+	TableID   uint64
 }
 
 type Consumer interface {

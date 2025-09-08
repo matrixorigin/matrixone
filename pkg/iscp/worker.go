@@ -91,23 +91,58 @@ func (w *worker) Submit(iteration *IterationContext) error {
 }
 
 func (w *worker) onItem(iterCtx *IterationContext) {
-	for {
-		err := ExecuteIteration(
-			w.ctx,
-			w.cnUUID,
-			w.cnEngine,
-			w.cnTxnClient,
-			iterCtx,
-			w.mp,
-		)
-		if err == nil {
-			break
+	err := retry(
+		func() error {
+			err := ExecuteIteration(
+				w.ctx,
+				w.cnUUID,
+				w.cnEngine,
+				w.cnTxnClient,
+				iterCtx,
+				w.mp,
+			)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task execute iteration failed",
+					zap.Uint64("tableID", iterCtx.tableID),
+					zap.Any("iterCtx", iterCtx.jobNames),
+					zap.Error(err),
+				)
+			}
+			return err
+		},
+		DefaultRetryTimes,
+	)
+	if err != nil {
+		statuses := make([]*JobStatus, len(iterCtx.jobNames))
+		for i := range statuses {
+			statuses[i] = &JobStatus{
+				ErrorMsg: err.Error(),
+			}
 		}
-		logutil.Error(
-			"ISCP-Task execute iteration failed",
-			zap.Any("iterCtx", iterCtx.jobNames),
-			zap.Error(err),
-		)
+		for {
+			select {
+			case <-w.ctx.Done():
+				return
+			default:
+			}
+			err = FlushJobStatusOnIterationState(
+				w.ctx,
+				w.cnUUID,
+				w.cnEngine,
+				w.cnTxnClient,
+				iterCtx.accountID,
+				iterCtx.tableID,
+				iterCtx.jobNames,
+				iterCtx.jobIDs,
+				statuses,
+				iterCtx.fromTS,
+				ISCPJobState_Completed,
+			)
+			if err == nil {
+				break
+			}
+		}
 	}
 }
 

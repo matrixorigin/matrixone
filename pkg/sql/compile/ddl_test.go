@@ -792,3 +792,78 @@ func TestIsExperimentalEnabled(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, enabled)
 }
+
+func Test_isValidFrequency(t *testing.T) {
+	cases := []struct {
+		in string
+		ok bool
+	}{
+		{"1h", true},
+		{"2m", true},
+		{"60m", true},
+		{"0h", false},
+		{"00m", false},
+		{"-1h", false},
+		{"1d", false},
+		{"h", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isValidFrequency(c.in); got != c.ok {
+			t.Fatalf("isValidFrequency(%q)=%v, want %v", c.in, got, c.ok)
+		}
+	}
+}
+
+func Test_transformIntoHours(t *testing.T) {
+	cases := []struct {
+		in    string
+		hours int64
+	}{
+		{"1h", 1},
+		{"2h", 2},
+		{"60m", 1},
+		{"61m", 2},
+		{"120m", 2},
+		{"", 0},
+	}
+	for _, c := range cases {
+		if got := transformIntoHours(c.in); got != c.hours {
+			t.Fatalf("transformIntoHours(%q)=%d, want %d", c.in, got, c.hours)
+		}
+	}
+}
+
+func Test_CDCStrToTime(t *testing.T) {
+	// valid RFC3339
+	if _, err := CDCStrToTime("2025-01-02T03:04:05Z", time.UTC); err != nil {
+		t.Fatalf("CDCStrToTime valid RFC3339 failed: %v", err)
+	}
+	// valid time.DateTime in local tz
+	if _, err := CDCStrToTime("2025-01-02 03:04:05", time.Local); err != nil {
+		t.Fatalf("CDCStrToTime valid time.DateTime failed: %v", err)
+	}
+	// empty string -> zero, nil error
+	if ts, err := CDCStrToTime("", time.UTC); err != nil || !ts.IsZero() {
+		t.Fatalf("CDCStrToTime empty got ts=%v err=%v", ts, err)
+	}
+}
+
+func Test_toHours(t *testing.T) {
+	cases := []struct {
+		val  int64
+		unit string
+		want int64
+	}{
+		{1, "h", 1},
+		{2, "d", 48},
+		{1, "mo", 24 * 30},
+		{1, "y", 24 * 365},
+		{5, "unknown", 5},
+	}
+	for _, c := range cases {
+		if got := toHours(c.val, c.unit); got != c.want {
+			t.Fatalf("toHours(%d,%q)=%d, want %d", c.val, c.unit, got, c.want)
+		}
+	}
+}
