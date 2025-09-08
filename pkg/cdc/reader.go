@@ -253,7 +253,6 @@ func (reader *tableReader) Run(
 				zap.Duration("frequency", reader.frequency),
 			)
 		}
-		logutil.Infof("lalala read")
 		if err = reader.readTable(ctx, ar); err != nil {
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 			return
