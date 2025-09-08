@@ -346,6 +346,29 @@ func (st *specialTableInfo) processObjects(
 	return nil
 }
 
+func (st *specialTableInfo) clone() *specialTableInfo {
+	clone := &specialTableInfo{
+		tid:        st.tid,
+		objects:    make(map[objectio.Segmentid]*objectInfo),
+		tombstones: make(map[objectio.Segmentid]*objectInfo),
+	}
+	for id, info := range st.objects {
+		clone.objects[id] = &objectInfo{
+			stats:    info.stats,
+			createAt: info.createAt,
+			deleteAt: info.deleteAt,
+		}
+	}
+	for id, info := range st.tombstones {
+		clone.tombstones[id] = &objectInfo{
+			stats:    info.stats,
+			createAt: info.createAt,
+			deleteAt: info.deleteAt,
+		}
+	}
+	return clone
+}
+
 type SnapshotMeta struct {
 	sync.RWMutex
 
@@ -1035,9 +1058,13 @@ func (sm *SnapshotMeta) GetPITR(
 	mp *mpool.MPool,
 ) (*PitrInfo, error) {
 	idxes := []uint16{ColPitrLevel, ColPitrObjId, ColPitrLength, ColPitrUnit}
-	tombstonesStats := sm.pitr.getTombstonesStats()
+
+	sm.RLock()
+	pitrClone := sm.pitr.clone()
+	sm.RUnlock()
+
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
+	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, pitrClone.getTombstonesStats())
 	pitrInfo := &PitrInfo{
 		cluster:  types.TS{},
 		account:  make(map[uint32]types.TS),
@@ -1128,7 +1155,7 @@ func (sm *SnapshotMeta) GetPITR(
 		return nil
 	}
 
-	err := sm.pitr.processObjects(ctx, fs, idxes, ds, mp, processor)
+	err := pitrClone.processObjects(ctx, fs, idxes, ds, mp, processor)
 	if err != nil {
 		return nil, err
 	}
@@ -1142,9 +1169,13 @@ func (sm *SnapshotMeta) GetISCP(
 	mp *mpool.MPool,
 ) (map[uint64]types.TS, error) {
 	idxes := []uint16{ColIscpTableId, ColIscpWatermark, ColIscpDropAt}
-	tombstonesStats := sm.iscp.getTombstonesStats()
+
+	sm.RLock()
+	iscpClone := sm.iscp.clone()
+	sm.RUnlock()
+
 	checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, tombstonesStats)
+	ds := NewSnapshotDataSource(ctx, fs, checkpointTS, iscpClone.getTombstonesStats())
 	tables := make(map[uint64]types.TS)
 
 	processor := func(bat *batch.Batch, r int) error {
@@ -1155,10 +1186,7 @@ func (sm *SnapshotMeta) GetISCP(
 		tableID := tableIDList[r]
 		watermark := watermarkList.GetBytesAt(r)
 		if !dropAtList.IsNull(uint64(r)) {
-			dropAT := types.StringToTS(util.UnsafeBytesToString(dropAtList.GetBytesAt(r)))
-			if !dropAT.IsEmpty() {
-				return nil
-			}
+			return nil
 		}
 
 		var iscpTS types.TS
@@ -1182,7 +1210,7 @@ func (sm *SnapshotMeta) GetISCP(
 		return nil
 	}
 
-	err := sm.iscp.processObjects(ctx, fs, idxes, ds, mp, processor)
+	err := iscpClone.processObjects(ctx, fs, idxes, ds, mp, processor)
 	if err != nil {
 		return nil, err
 	}
