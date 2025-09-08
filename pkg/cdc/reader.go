@@ -172,7 +172,9 @@ func (reader *tableReader) Run(
 		zap.Uint64("account-id", reader.accountId),
 		zap.String("task-id", reader.taskId),
 	)
-	detector.cdcStateManager.AddActiveRunner(reader.info)
+	if detector != nil && detector.cdcStateManager != nil {
+		detector.cdcStateManager.AddActiveRunner(reader.info)
+	}
 
 	var err error
 	reader.wg.Add(1)
@@ -203,7 +205,9 @@ func (reader *tableReader) Run(
 		}
 		reader.Close()
 		reader.runningReaders.Delete(key)
-		detector.cdcStateManager.RemoveActiveRunner(reader.info)
+		if detector != nil && detector.cdcStateManager != nil {
+			detector.cdcStateManager.RemoveActiveRunner(reader.info)
+		}
 		logutil.Info(
 			"CDC-TableReader-RunEnd",
 			zap.String("info", reader.info.String()),
@@ -396,8 +400,10 @@ func (reader *tableReader) readTableWithTxn(
 		toTs = reader.endTs
 	}
 
-	detector.cdcStateManager.UpdateActiveRunner(reader.info, fromTs, toTs, true)
-	defer detector.cdcStateManager.UpdateActiveRunner(reader.info, fromTs, toTs, false)
+	if detector != nil && detector.cdcStateManager != nil {
+		detector.cdcStateManager.UpdateActiveRunner(reader.info, fromTs, toTs, true)
+		defer detector.cdcStateManager.UpdateActiveRunner(reader.info, fromTs, toTs, false)
+	}
 	start := time.Now()
 	changes, err = CollectChanges(ctx, rel, fromTs, toTs, reader.mp)
 
