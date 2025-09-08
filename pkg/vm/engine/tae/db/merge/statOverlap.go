@@ -142,7 +142,7 @@ func MakePointEventsSortedMap(
 		return nil, 0, 0, moerr.NewInternalError(ctx, "no valid intervals with initialized zonemaps")
 	}
 
-	events := btree.NewBTreeG[*pointEvent](func(a *pointEvent, b *pointEvent) bool {
+	events := btree.NewBTreeG(func(a *pointEvent, b *pointEvent) bool {
 		return compute.Compare(a.val, b.val, typ, scale, scale) < 0
 	})
 
