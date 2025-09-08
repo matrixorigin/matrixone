@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -363,7 +364,39 @@ func (e *Engine) GetLatestCatalogCache() *cache.CatalogCache {
 	return e.catalog.Load()
 }
 
-func requestSnapshotRead(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+func GetSnapshotReadFnWithHandler(
+	handleFn func(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *cmd_util.SnapshotReadReq,
+		resp *cmd_util.SnapshotReadResp,
+	) (func(), error),
+) func(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+	return func(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
+		req := &cmd_util.SnapshotReadReq{}
+		payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+			ts := snapshot.ToTimestamp()
+			req.Snapshot = &ts
+
+			return req.MarshalBinary()
+		}
+		tableProc := tbl.proc.Load()
+		proc := process.NewTopProcess(ctx, tableProc.GetMPool(),
+			tableProc.Base.TxnClient, tableProc.GetTxnOperator(),
+			tableProc.Base.FileService, tableProc.Base.LockService,
+			tableProc.Base.QueryClient, tableProc.Base.Hakeeper,
+			tableProc.Base.UdfService, tableProc.Base.Aicm,
+			tableProc.Base.TaskService,
+		)
+		resp = &cmd_util.SnapshotReadResp{}
+		payload(0, "", proc)
+		handleFn(ctx, txn.TxnMeta{}, req, resp.(*cmd_util.SnapshotReadResp))
+		return
+
+	}
+}
+
+var RequestSnapshotRead = func(ctx context.Context, tbl *txnTable, snapshot *types.TS) (resp any, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 		req := cmd_util.SnapshotReadReq{}
@@ -412,7 +445,7 @@ func (e *Engine) getOrCreateSnapPartBy(
 	ctx context.Context,
 	tbl *txnTable,
 	ts types.TS) (*logtailreplay.PartitionState, error) {
-	response, err := requestSnapshotRead(ctx, tbl, &ts)
+	response, err := RequestSnapshotRead(ctx, tbl, &ts)
 	if err != nil {
 		return nil, err
 	}

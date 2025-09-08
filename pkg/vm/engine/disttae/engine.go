@@ -213,6 +213,20 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 	return
 }
 
+// for UT
+func (e *Engine) ForceGC(ctx context.Context, ts types.TS) {
+	parts := make(map[[2]uint64]*logtailreplay.Partition)
+	e.Lock()
+	for ids, part := range e.partitions {
+		parts[ids] = part
+	}
+	e.Unlock()
+	for ids, part := range parts {
+		part.Truncate(ctx, ids, ts)
+	}
+	e.catalog.Load().GC(ts.ToTimestamp())
+}
+
 func (e *Engine) AcquireQuota(v int64) (int64, bool) {
 	left, ok := e.config.memThrottler.Acquire(v)
 	if ok {
