@@ -788,9 +788,11 @@ func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	defer txn.Commit(ctx)
 	gcTime := time.Now().Add(-cleanupThreshold)
 	iscpLogGCSql := cdc.CDCSQLBuilder.ISCPLogGCSQL(gcTime)
-	if _, err = ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn); err != nil {
+	result, err := ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn)
+	if err != nil {
 		return err
 	}
+	result.Close()
 	logutil.Info(
 		"ISCP-Task GC",
 		zap.Any("gcTime", gcTime),
