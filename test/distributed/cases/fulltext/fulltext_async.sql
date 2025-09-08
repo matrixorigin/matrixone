@@ -14,7 +14,7 @@ insert into src values (0, 'color is red', 't1'), (1, 'car is yellow', 'crazy ca
 (9, 'NOT INCLUDED BODY', NULL),
 (10, NULL, NULL);
 
-select sleep(30);
+select sleep(45);
 
 select * from src where match(body, title) against('red');
 

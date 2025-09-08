@@ -237,6 +237,8 @@ func (c *IndexConsumer) processISCPData(ctx context.Context, data *ISCPData, dat
 }
 
 func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
+	logutil.Infof("ISCP Task: IndexConsumer.Consume START")
+
 	noMoreData := false
 	errch := make(chan error, 2)
 	c.sqlBufSendCh = make(chan []byte)
