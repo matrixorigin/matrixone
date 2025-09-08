@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -34,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -1020,7 +1020,6 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), mp)
 		assert.NoError(t, err)
 		totalRows := 0
-		handle.(*logtailreplay.ChangeHandler).LogThreshold = time.Microsecond
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if data == nil && tombstone == nil {
@@ -1418,7 +1417,7 @@ func TestPartitionChangesHandle(t *testing.T) {
 		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
 		require.Nil(t, err)
 
-		handle, err := rel.CollectChanges(ctx, t1.Prev(), t2.Next(), true, mp)
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), t2.Next(), mp)
 		assert.NoError(t, err)
 		var totalRows int
 		for {
