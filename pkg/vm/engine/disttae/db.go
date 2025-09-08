@@ -386,6 +386,7 @@ func GetSnapshotReadFnWithHandler(
 			tableProc.Base.FileService, tableProc.Base.LockService,
 			tableProc.Base.QueryClient, tableProc.Base.Hakeeper,
 			tableProc.Base.UdfService, tableProc.Base.Aicm,
+			tableProc.Base.TaskService,
 		)
 		resp = &cmd_util.SnapshotReadResp{}
 		payload(0, "", proc)

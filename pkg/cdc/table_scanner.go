@@ -28,10 +28,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+)
+
+const (
+	DefaultSlowThreshold = 10 * time.Minute
+	DefaultPrintInterval = 5 * time.Minute
 )
 
 var (
@@ -56,6 +62,7 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 			SubscribedDbNames:    make(map[string][]string),
 			CallBackTableName:    make(map[string][]string),
 			SubscribedTableNames: make(map[string][]string),
+			cdcStateManager:      NewCDCStateManager(),
 		}
 		detector.scanTableFn = detector.scanTable
 	})
@@ -66,6 +73,79 @@ var GetTableDetector = func(cnUUID string) *TableDetector {
 type TblMap map[string]*DbTableInfo
 
 type TableCallback func(map[uint32]TblMap) error
+
+type TableIterationState struct {
+	CreateAt time.Time
+	EndAt    time.Time
+	FromTs   types.TS
+	ToTs     types.TS
+}
+type CDCStateManager struct {
+	activeRunners map[DbTableInfo]*TableIterationState
+	mu            sync.RWMutex
+}
+
+func NewCDCStateManager() *CDCStateManager {
+	return &CDCStateManager{
+		activeRunners: make(map[DbTableInfo]*TableIterationState),
+		mu:            sync.RWMutex{},
+	}
+}
+
+func (s *CDCStateManager) AddActiveRunner(tblInfo *DbTableInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.activeRunners[*tblInfo] = &TableIterationState{
+		CreateAt: time.Now(),
+		EndAt:    time.Now(),
+		FromTs:   types.TS{},
+		ToTs:     types.TS{},
+	}
+}
+
+func (s *CDCStateManager) RemoveActiveRunner(tblInfo *DbTableInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.activeRunners, *tblInfo)
+}
+
+func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs types.TS, start bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if start {
+		s.activeRunners[*tblInfo].CreateAt = time.Now()
+		s.activeRunners[*tblInfo].FromTs = fromTs
+		s.activeRunners[*tblInfo].ToTs = toTs
+		s.activeRunners[*tblInfo].EndAt = time.Time{}
+	} else {
+		s.activeRunners[*tblInfo].EndAt = time.Now()
+	}
+}
+
+func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	slowRunners := ""
+	now := time.Now()
+	for info, state := range s.activeRunners {
+		if state.EndAt.Equal(time.Time{}) && state.CreateAt.Before(now.Add(-slowThreshold)) {
+			slowRunners = fmt.Sprintf(
+				"%s, %v-%v %v->%v %v",
+				slowRunners,
+				info.SourceDbName,
+				info.SourceTblName,
+				state.FromTs.ToString(),
+				state.ToTs.ToString(),
+				time.Since(state.CreateAt),
+			)
+		}
+	}
+	logutil.Info(
+		"CDC-State",
+		zap.Any("active runner count", len(s.activeRunners)),
+		zap.Any("slow runners", slowRunners),
+	)
+}
 
 type TableDetector struct {
 	sync.Mutex
@@ -91,9 +171,10 @@ type TableDetector struct {
 	scanTableFn func() error
 
 	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
-	handling bool
-	lastMp   map[uint32]TblMap
-	mu       sync.Mutex
+	handling        bool
+	lastMp          map[uint32]TblMap
+	mu              sync.Mutex
+	cdcStateManager *CDCStateManager
 }
 
 func (s *TableDetector) Register(id string, accountId uint32, dbs []string, tables []string, cb TableCallback) {
@@ -205,6 +286,9 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 	retryTicker := time.NewTicker(retryTickerDuration)
 	defer retryTicker.Stop()
 
+	printStateTicker := time.NewTicker(DefaultPrintInterval)
+	defer printStateTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,6 +313,8 @@ func (s *TableDetector) scanTableLoop(ctx context.Context) {
 			}
 
 			go s.processCallback(ctx, lastMp)
+		case <-printStateTicker.C:
+			s.cdcStateManager.PrintActiveRunners(DefaultSlowThreshold)
 		}
 	}
 }
