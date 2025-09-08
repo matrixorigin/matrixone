@@ -81,13 +81,13 @@ type TableIterationState struct {
 	ToTs     types.TS
 }
 type CDCStateManager struct {
-	activeRunners map[DbTableInfo]*TableIterationState
+	activeRunners map[string]*TableIterationState
 	mu            sync.RWMutex
 }
 
 func NewCDCStateManager() *CDCStateManager {
 	return &CDCStateManager{
-		activeRunners: make(map[DbTableInfo]*TableIterationState),
+		activeRunners: make(map[string]*TableIterationState),
 		mu:            sync.RWMutex{},
 	}
 }
@@ -95,7 +95,8 @@ func NewCDCStateManager() *CDCStateManager {
 func (s *CDCStateManager) AddActiveRunner(tblInfo *DbTableInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.activeRunners[*tblInfo] = &TableIterationState{
+	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
+	s.activeRunners[key] = &TableIterationState{
 		CreateAt: time.Now(),
 		EndAt:    time.Now(),
 		FromTs:   types.TS{},
@@ -106,19 +107,21 @@ func (s *CDCStateManager) AddActiveRunner(tblInfo *DbTableInfo) {
 func (s *CDCStateManager) RemoveActiveRunner(tblInfo *DbTableInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.activeRunners, *tblInfo)
+	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
+	delete(s.activeRunners, key)
 }
 
 func (s *CDCStateManager) UpdateActiveRunner(tblInfo *DbTableInfo, fromTs, toTs types.TS, start bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	key := GenDbTblKey(tblInfo.SourceDbName, tblInfo.SourceTblName)
 	if start {
-		s.activeRunners[*tblInfo].CreateAt = time.Now()
-		s.activeRunners[*tblInfo].FromTs = fromTs
-		s.activeRunners[*tblInfo].ToTs = toTs
-		s.activeRunners[*tblInfo].EndAt = time.Time{}
+		s.activeRunners[key].CreateAt = time.Now()
+		s.activeRunners[key].FromTs = fromTs
+		s.activeRunners[key].ToTs = toTs
+		s.activeRunners[key].EndAt = time.Time{}
 	} else {
-		s.activeRunners[*tblInfo].EndAt = time.Now()
+		s.activeRunners[key].EndAt = time.Now()
 	}
 }
 
@@ -130,10 +133,9 @@ func (s *CDCStateManager) PrintActiveRunners(slowThreshold time.Duration) {
 	for info, state := range s.activeRunners {
 		if state.EndAt.Equal(time.Time{}) && state.CreateAt.Before(now.Add(-slowThreshold)) {
 			slowRunners = fmt.Sprintf(
-				"%s, %v-%v %v->%v %v",
+				"%s, %v %v->%v %v",
 				slowRunners,
-				info.SourceDbName,
-				info.SourceTblName,
+				info,
 				state.FromTs.ToString(),
 				state.ToTs.ToString(),
 				time.Since(state.CreateAt),
