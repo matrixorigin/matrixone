@@ -1551,7 +1551,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 	waiter.Wait()
 	_ = txn.gcObjsByStats(dirtyObject...)
-	
+
 	return nil
 }
 

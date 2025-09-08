@@ -738,7 +738,7 @@ func gcFiles(e *Engine, names ...string) error {
 }
 
 func (txn *Transaction) gcObjsByStats(sl ...objectio.ObjectStats) (err error) {
-	var names []string
+	names := make([]string, 0, len(sl))
 
 	defer func() {
 		if err != nil {
