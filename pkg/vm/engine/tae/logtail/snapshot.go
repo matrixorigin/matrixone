@@ -1155,10 +1155,7 @@ func (sm *SnapshotMeta) GetISCP(
 		tableID := tableIDList[r]
 		watermark := watermarkList.GetBytesAt(r)
 		if !dropAtList.IsNull(uint64(r)) {
-			dropAT := types.StringToTS(util.UnsafeBytesToString(dropAtList.GetBytesAt(r)))
-			if !dropAT.IsEmpty() {
-				return nil
-			}
+			return nil
 		}
 
 		var iscpTS types.TS
