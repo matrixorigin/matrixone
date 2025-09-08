@@ -18,7 +18,4 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 )
 
-var clusterUpgEntries = []versions.UpgradeEntry{
-	enablePartitionMetadata,
-	enablePartitionTables,
-}
+var clusterUpgEntries = []versions.UpgradeEntry{}
