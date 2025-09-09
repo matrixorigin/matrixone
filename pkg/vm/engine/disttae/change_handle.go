@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -82,6 +83,9 @@ func NewPartitionChangesHandle(
 		fs:            tbl.getTxn().engine.fs,
 	}
 	end, err := handle.getNextChangeHandle(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if end {
 		panic(fmt.Sprintf("logic error: from %s to %s", from.ToString(), to.ToString()))
 	}
@@ -172,6 +176,9 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			checkpointEntries = append(checkpointEntries, checkpointEntry)
 		}
 	}
+	if nextFrom.LT(&minTS) {
+		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
+	}
 	h.currentPSFrom = minTS
 	if h.fromTs.GT(&minTS) {
 		h.currentPSFrom = h.fromTs
@@ -186,6 +193,10 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		zap.String("ps from", h.currentPSFrom.ToString()),
 		zap.String("ps to", h.currentPSTo.ToString()),
 	)
+	if h.currentChangeHandle != nil {
+		h.currentChangeHandle.Close()
+		h.currentChangeHandle = nil
+	}
 	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
 		ctx,
 		h.tbl.tableId,
@@ -206,8 +217,10 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 }
 
 func (h *PartitionChangesHandle) Close() error {
-	h.currentChangeHandle.Close()
-	h.currentChangeHandle = nil
+	if h.currentChangeHandle != nil {
+		h.currentChangeHandle.Close()
+		h.currentChangeHandle = nil
+	}
 	return nil
 }
 

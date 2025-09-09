@@ -434,9 +434,12 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
-		"iscp iteration",
+		"iscp apply iscp log",
 		0)
 	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
+	if txnOp != nil {
+		defer txnOp.Commit(ctx)
+	}
 	if err != nil {
 		return
 	}
@@ -455,7 +458,6 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	if err != nil {
 		return
 	}
-	defer txnOp.Commit(ctx)
 	changes, err := CollectChanges(ctx, rel, from, to, exec.mp)
 	if err != nil {
 		return
