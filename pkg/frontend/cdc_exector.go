@@ -471,6 +471,14 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		if !exec.matchAnyPattern(key, newTableInfo) {
 			continue
 		}
+		hasError, err := exec.getTableErrMsg(ctx, newTableInfo)
+		if err != nil {
+			logutil.Errorf("cdc task %s get table err msg for table %s failed, err: %v", exec.spec.TaskName, key, err)
+			return err
+		}
+		if hasError {
+			continue
+		}
 
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
@@ -482,6 +490,24 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		}
 	}
 	return nil
+}
+
+func (exec *CDCTaskExecutor) getTableErrMsg(ctx context.Context, tbl *cdc.DbTableInfo) (hasError bool, err error) {
+	accId := exec.spec.Accounts[0].GetId()
+	sql := cdc.CDCSQLBuilder.GetTableErrMsgSQL(uint64(accId), exec.spec.TaskId, tbl.SourceDbName, tbl.SourceTblName)
+	res := exec.ie.Query(ctx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return false,res.Error()
+	} else if res.RowCount() < 1 {
+		return false, nil
+	}
+
+	errMsg, err := res.GetString(ctx, 0, 0)
+	if err != nil {
+		return false, err
+	}
+	hasError = errMsg != ""
+	return
 }
 
 func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {
