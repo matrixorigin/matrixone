@@ -39,6 +39,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -538,6 +540,24 @@ func NewBaseHandler(state *PartitionState, changesHandle *ChangeHandler, start, 
 	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, p, mp)
 	return
 }
+
+func NewBaseHandlerWithObjEntries(
+	ctx context.Context,
+	changesHandle *ChangeHandler,
+	start, end types.TS,
+	aobj, cnObj []*objectio.ObjectEntry,
+	tombstone bool,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (p *baseHandle, err error) {
+	p = &baseHandle{
+		skipTS:        make(map[types.TS]struct{}),
+		changesHandle: changesHandle,
+	}
+	p.aobjHandle = NewAObjectHandle(ctx, p, tombstone, start, end, aobj, fs, mp)
+	p.cnObjectHandle = NewCNObjectHandle(tombstone, cnObj, fs, p, mp)
+	return
+}
 func (p *baseHandle) init(ctx context.Context, quick bool, mp *mpool.MPool) (err error) {
 	err = p.aobjHandle.init(ctx, quick)
 	if err != nil {
@@ -720,6 +740,104 @@ type ChangeHandler struct {
 	minTS      types.TS
 
 	LogThreshold time.Duration
+}
+
+func NewChangesHandlerWithCheckpointEntries(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	checkpoints []*checkpoint.CheckpointEntry,
+	start, end types.TS,
+	maxRow uint32,
+	primarySeqnum int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (changeHandle *ChangeHandler, err error) {
+	changeHandle = &ChangeHandler{
+		coarseMaxRow:  int(maxRow),
+		start:         start,
+		end:           end,
+		fs:            fs,
+		minTS:         start,
+		LogThreshold:  LogThreshold,
+		primarySeqnum: primarySeqnum,
+		mp:            mp,
+		scheduler:     tasks.NewParallelJobScheduler(LoadParallism),
+	}
+	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj, err := getObjectsFromCheckpointEntries(ctx, tid, sid, checkpoints, mp, fs)
+	if err != nil {
+		return
+	}
+	changeHandle.dataHandle, err = NewBaseHandlerWithObjEntries(ctx, changeHandle, start, end, dataAobj, dataCNObj, false, mp, fs)
+	if err != nil {
+		return
+	}
+	if err = changeHandle.dataHandle.init(ctx, changeHandle.quick, mp); err != nil {
+		return
+	}
+	changeHandle.tombstoneHandle, err = NewBaseHandlerWithObjEntries(ctx, changeHandle, start, end, tombstoneAobj, tombstoneCNObj, true, mp, fs)
+	if err != nil {
+		return
+	}
+	if err = changeHandle.tombstoneHandle.init(ctx, changeHandle.quick, mp); err != nil {
+		return
+	}
+	return changeHandle, nil
+}
+
+func getObjectsFromCheckpointEntries(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	checkpoint []*checkpoint.CheckpointEntry,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (
+	dataAobj, dataCNObj, tombstoneAobj, tombstoneCNObj []*objectio.ObjectEntry,
+	err error,
+) {
+	dataAobj = make([]*objectio.ObjectEntry, 0)
+	dataCNObj = make([]*objectio.ObjectEntry, 0)
+	tombstoneAobj = make([]*objectio.ObjectEntry, 0)
+	tombstoneCNObj = make([]*objectio.ObjectEntry, 0)
+	readers := make([]*logtail.CKPReader, 0)
+	for _, entry := range checkpoint {
+		reader := logtail.NewCKPReaderWithTableID_V2(entry.GetVersion(), entry.GetLocation(), tid, mp, fs)
+		readers = append(readers, reader)
+		ioutil.Prefetch(sid, fs, entry.GetLocation())
+	}
+	for _, reader := range readers {
+		if err = reader.ReadMeta(ctx); err != nil {
+			return
+		}
+		reader.PrefetchData(sid)
+	}
+
+	for _, reader := range readers {
+		if err = reader.ConsumeCheckpointWithTableID(
+			ctx,
+			func(ctx context.Context, obj objectio.ObjectEntry, isTombstone bool) (err error) {
+				if obj.GetAppendable() {
+					if isTombstone {
+						tombstoneAobj = append(tombstoneAobj, &obj)
+					} else {
+						dataAobj = append(dataAobj, &obj)
+					}
+				}
+				if obj.GetCNCreated() {
+					if isTombstone {
+						tombstoneCNObj = append(tombstoneCNObj, &obj)
+					} else {
+						dataCNObj = append(dataCNObj, &obj)
+					}
+				}
+				return
+			},
+		); err != nil {
+			return
+		}
+	}
+	return
 }
 
 func NewChangesHandler(
