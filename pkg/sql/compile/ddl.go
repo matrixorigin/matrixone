@@ -2744,9 +2744,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	ps := partitionservice.GetService(c.proc.GetService())
-	if rel == nil ||
+	extr := rel.GetExtraInfo()
+	if extr == nil ||
 		!ps.Enabled() ||
-		!features.IsPartitioned(rel.GetExtraInfo().FeatureFlag) {
+		!features.IsPartitioned(extr.FeatureFlag) {
 		return nil
 	}
 
