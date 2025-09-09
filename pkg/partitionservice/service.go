@@ -89,24 +89,6 @@ func (s *Service) Create(
 	)
 }
 
-func (s *Service) Truncate(
-	ctx context.Context,
-	oldTableID uint64,
-	newTableID uint64,
-	txnOp client.TxnOperator,
-) error {
-	if s.cfg.Disable {
-		return nil
-	}
-
-	return s.store.Truncate(
-		ctx,
-		oldTableID,
-		newTableID,
-		txnOp,
-	)
-}
-
 func (s *Service) Delete(
 	ctx context.Context,
 	tableID uint64,

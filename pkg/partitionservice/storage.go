@@ -275,15 +275,6 @@ func (s *Storage) Create(
 	)
 }
 
-func (s *Storage) Truncate(
-	ctx context.Context,
-	oldTableID uint64,
-	newTableID uint64,
-	txnOp client.TxnOperator,
-) error {
-	return nil
-}
-
 func (s *Storage) Delete(
 	ctx context.Context,
 	metadata partition.PartitionMetadata,
@@ -341,8 +332,7 @@ func (s *Storage) Delete(
 					executor.StatementOption{}.
 						WithIgnoreForeignKey().
 						WithIgnorePublish().
-						WithIgnoreForeignKey().
-						WithDisableLock(),
+						WithIgnoreForeignKey(),
 				)
 				if err != nil {
 					return err

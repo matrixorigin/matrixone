@@ -63,13 +63,6 @@ type PartitionService interface {
 		txnOp client.TxnOperator,
 	) error
 
-	Truncate(
-		ctx context.Context,
-		oldTableID uint64,
-		newTableID uint64,
-		txnOp client.TxnOperator,
-	) error
-
 	Delete(
 		ctx context.Context,
 		tableID uint64,
@@ -99,13 +92,6 @@ type PartitionStorage interface {
 		def *plan.TableDef,
 		stmt *tree.CreateTable,
 		metadata partition.PartitionMetadata,
-		txnOp client.TxnOperator,
-	) error
-
-	Truncate(
-		ctx context.Context,
-		oldTableID uint64,
-		newTableID uint64,
 		txnOp client.TxnOperator,
 	) error
 
