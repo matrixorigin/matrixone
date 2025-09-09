@@ -1801,10 +1801,6 @@ func TestGCFiles(t *testing.T) {
 		err error
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
-
 	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
 	defer p.Close()
 
