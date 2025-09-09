@@ -268,6 +268,7 @@ func (c *Compile) clear() {
 	c.adjustTableExtraFunc = nil
 	c.disableDropAutoIncrement = false
 	c.keepAutoIncrement = 0
+	c.disableLock = false
 
 	if c.lockMeta != nil {
 		c.lockMeta.clear(c.proc)

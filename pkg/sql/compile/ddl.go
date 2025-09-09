@@ -2497,8 +2497,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	var err error
 	var isTemp bool
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-		return err
+	if !c.disableLock {
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return err
+		}
 	}
 
 	tblID := qry.GetTableId()
@@ -2529,7 +2531,11 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+	if !c.disableLock &&
+		!isTemp &&
+		!isView &&
+		!isSource &&
+		c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -2737,7 +2743,13 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	return partitionservice.GetService(c.proc.GetService()).Delete(
+	ps := partitionservice.GetService(c.proc.GetService())
+	if !ps.Enabled() ||
+		!features.IsPartitioned(rel.GetExtraInfo().FeatureFlag) {
+		return nil
+	}
+
+	return ps.Delete(
 		c.proc.Ctx,
 		tblID,
 		c.proc.GetTxnOperator(),

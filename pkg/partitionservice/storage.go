@@ -340,7 +340,9 @@ func (s *Storage) Delete(
 					),
 					executor.StatementOption{}.
 						WithIgnoreForeignKey().
-						WithIgnorePublish(),
+						WithIgnorePublish().
+						WithIgnoreForeignKey().
+						WithDisableLock(),
 				)
 				if err != nil {
 					return err

@@ -87,6 +87,7 @@ type StatementOption struct {
 	alterCopyOpt             *plan.AlterCopyOpt
 	disableDropAutoIncrement bool
 	keepAutoIncrement        uint64
+	disableLock              bool
 }
 
 // Result exec sql result

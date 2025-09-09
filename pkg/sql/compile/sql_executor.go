@@ -385,6 +385,7 @@ func (exec *txnExecutor) Exec(
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
+	c.disableLock = statementOption.DisableLock()
 
 	defer c.Release()
 

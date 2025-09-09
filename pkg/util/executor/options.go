@@ -375,3 +375,12 @@ func (opts StatementOption) WithIgnoreCheckExperimental() StatementOption {
 func (opts StatementOption) IgnoreCheckExperimental() bool {
 	return opts.ignoreCheckExperimental
 }
+
+func (opts StatementOption) WithDisableLock() StatementOption {
+	opts.disableLock = true
+	return opts
+}
+
+func (opts StatementOption) DisableLock() bool {
+	return opts.disableLock
+}
