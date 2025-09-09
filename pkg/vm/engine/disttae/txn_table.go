@@ -2011,9 +2011,11 @@ func (tbl *txnTable) BuildShardingReaders(
 ) ([]engine.Reader, error) {
 	panic("Not Support")
 }
+
 func (tbl *txnTable) getPartitionState(
 	ctx context.Context,
 ) (ps *logtailreplay.PartitionState, err error) {
+
 	defer func() {
 		if tbl.tableId == catalog.MO_COLUMNS_ID {
 			logutil.Info("open partition state for mo_columns",
@@ -2081,7 +2083,6 @@ func (tbl *txnTable) getPartitionState(
 		zap.String("table-name", tbl.tableName),
 		zap.Uint64("table-id", tbl.tableId),
 		zap.String("txn", tbl.db.op.Txn().DebugString()),
-		zap.Any("ts", tbl.db.op.SnapshotTS()),
 		zap.String("ps", fmt.Sprintf("%p", ps)),
 		zap.String("start", start.ToString()),
 		zap.String("end", end.ToString()),
@@ -2100,7 +2101,7 @@ func (tbl *txnTable) getPartitionState(
 	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
 		ctx,
 		tbl,
-		types.TimestampToTS(tbl.db.op.SnapshotTS()))
+		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
 
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {
