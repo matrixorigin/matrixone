@@ -27,6 +27,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
@@ -329,4 +330,23 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	tblInfo = accountMap["db1.tbl1"]
 	assert.Equal(t, uint64(1002), tblInfo.SourceTblId)
 	assert.True(t, tblInfo.IdChanged)
+}
+
+func TestTableScanner_PrintActiveRunners(t *testing.T) {
+	cdcStateManager := NewCDCStateManager()
+	tableInfo := &DbTableInfo{
+		SourceDbId:      1,
+		SourceDbName:    "db1",
+		SourceTblId:     1001,
+		SourceTblName:   "tbl1",
+		SourceCreateSql: "create table tbl1 (a int)",
+		IdChanged:       false,
+	}
+	cdcStateManager.AddActiveRunner(tableInfo)
+	cdcStateManager.PrintActiveRunners(0)
+	cdcStateManager.UpdateActiveRunner(tableInfo, types.BuildTS(1, 1), types.BuildTS(2, 2), true)
+	cdcStateManager.PrintActiveRunners(0)
+	cdcStateManager.UpdateActiveRunner(tableInfo, types.BuildTS(1, 1), types.BuildTS(2, 2), false)
+	cdcStateManager.PrintActiveRunners(0)
+	assert.Equal(t, 1, len(cdcStateManager.activeRunners))
 }
