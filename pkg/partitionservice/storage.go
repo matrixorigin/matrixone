@@ -338,7 +338,9 @@ func (s *Storage) Delete(
 						"drop table `%s`",
 						p.PartitionTableName,
 					),
-					executor.StatementOption{},
+					executor.StatementOption{}.
+						WithIgnoreForeignKey().
+						WithIgnorePublish(),
 				)
 				if err != nil {
 					return err
