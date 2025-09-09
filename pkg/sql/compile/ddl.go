@@ -947,8 +947,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-		return err
+	if !c.disableLock {
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return err
+		}
 	}
 
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -1003,13 +1005,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		c.proc.Error(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.Error(err),
-		)
-		return err
+	if !c.disableLock {
+		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			c.proc.Error(c.proc.Ctx, "createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
 	}
 
 	if len(qry.IndexTables) > 0 {

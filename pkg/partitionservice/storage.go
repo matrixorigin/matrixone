@@ -371,7 +371,10 @@ func (s *Storage) createPartitionTable(
 		)
 		res, err := txn.Exec(
 			sql,
-			executor.StatementOption{},
+			executor.StatementOption{}.
+				WithDisableLock().
+				WithIgnoreForeignKey().
+				WithIgnorePublish(),
 		)
 		if err != nil {
 			return err
