@@ -322,23 +322,23 @@ func (s *Storage) Delete(
 			}
 			res.Close()
 
-			txn.Use(metadata.DatabaseName)
-			for _, p := range metadata.Partitions {
-				res, err = txn.Exec(
-					fmt.Sprintf(
-						"drop table `%s`",
-						p.PartitionTableName,
-					),
-					executor.StatementOption{}.
-						WithIgnoreForeignKey().
-						WithIgnorePublish().
-						WithIgnoreForeignKey(),
-				)
-				if err != nil {
-					return err
-				}
-				res.Close()
-			}
+			// txn.Use(metadata.DatabaseName)
+			// for _, p := range metadata.Partitions {
+			// 	res, err = txn.Exec(
+			// 		fmt.Sprintf(
+			// 			"drop table `%s`",
+			// 			p.PartitionTableName,
+			// 		),
+			// 		executor.StatementOption{}.
+			// 			WithIgnoreForeignKey().
+			// 			WithIgnorePublish().
+			// 			WithIgnoreForeignKey(),
+			// 	)
+			// 	if err != nil {
+			// 		return err
+			// 	}
+			// 	res.Close()
+			// }
 			return nil
 		},
 		opts,
