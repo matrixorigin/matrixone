@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"regexp"
 	"strings"
 	"time"
@@ -60,12 +59,6 @@ func getBackExecutor(
 	}
 
 	deferred = func(err2 error) error {
-		if err2 != nil {
-			if strings.Contains(err2.Error(), injectedError) {
-				err2 = moerr.NewInternalErrorNoCtx(injectedError)
-			}
-		}
-
 		err2 = finishTxn(ctx, bh, err2)
 		return err2
 	}
@@ -140,9 +133,9 @@ func handleCloneTable(
 
 		defer func() {
 			if deferred != nil {
-				if r := recover(); r != nil {
-					err = moerr.ConvertPanicError(ctx, r)
-				}
+				//if r := recover(); r != nil {
+				//	err = moerr.ConvertPanicError(reqCtx, r)
+				//}
 				err = deferred(err)
 			}
 		}()
@@ -233,11 +226,7 @@ func handleCloneTable(
 	if faultInjected, _ = objectio.LogCNCloneFailedInjected(
 		stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
 	); faultInjected {
-		if rand.Intn(10)%2 == 0 {
-			err = moerr.NewInternalErrorNoCtx(injectedError)
-			return
-		}
-		panic(injectedError)
+		err = moerr.NewInternalErrorNoCtx(injectedError)
 	}
 
 	return
@@ -289,9 +278,9 @@ func handleCloneDatabase(
 
 	defer func() {
 		if deferred != nil {
-			if r := recover(); r != nil {
-				err = moerr.ConvertPanicError(reqCtx, r)
-			}
+			//if r := recover(); r != nil {
+			//	err = moerr.ConvertPanicError(reqCtx, r)
+			//}
 			err = deferred(err)
 		}
 	}()
