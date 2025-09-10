@@ -193,8 +193,7 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 				continue
 			}
 
-			aggExpr := group.Aggs[i]
-			agg, err := makeAggExec(proc, aggExpr.GetAggID(), aggExpr.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+			agg, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
 			if err != nil {
 				for j := 0; j < i; j++ {
 					if aggs[j] != nil {
@@ -204,6 +203,7 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 				return err
 			}
 
+			aggExpr := group.Aggs[i]
 			if config := aggExpr.GetExtraConfig(); config != nil {
 				if err = agg.SetExtraInformation(config, 0); err != nil {
 					agg.Free()
@@ -214,17 +214,6 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 					}
 					return err
 				}
-			}
-
-			agg, err = aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
-			if err != nil {
-				agg.Free()
-				for j := 0; j < i; j++ {
-					if aggs[j] != nil {
-						aggs[j].Free()
-					}
-				}
-				return err
 			}
 
 			aggs[i] = agg
@@ -280,23 +269,17 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			continue
 		}
 
-		aggExpr := group.Aggs[i]
-		agg, err := makeAggExec(proc, aggExpr.GetAggID(), aggExpr.IsDistinct(), group.ctr.aggregateEvaluate[i].Typ...)
+		agg, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
 		if err != nil {
 			return err
 		}
 
+		aggExpr := group.Aggs[i]
 		if config := aggExpr.GetExtraConfig(); config != nil {
 			if err = agg.SetExtraInformation(config, 0); err != nil {
 				agg.Free()
 				return err
 			}
-		}
-
-		agg, err = aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
-		if err != nil {
-			agg.Free()
-			return err
 		}
 
 		tempAggs[i] = agg
