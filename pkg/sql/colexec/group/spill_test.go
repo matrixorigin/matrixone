@@ -38,7 +38,7 @@ func TestSpill(t *testing.T) {
 
 	g, src := getGroupOperatorWithInputs(datas)
 	g.NeedEval = true
-	g.SpillThreshold = 100
+	g.SpillThreshold = 10
 	g.Exprs = []*plan.Expr{newColumnExpression(0)}
 	g.Aggs = []aggexec.AggFuncExecExpression{
 		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{newColumnExpression(1)}, nil),
@@ -48,7 +48,7 @@ func TestSpill(t *testing.T) {
 	require.NoError(t, g.Prepare(proc))
 
 	require.NotNil(t, g.SpillManager)
-	require.Equal(t, int64(100), g.SpillThreshold)
+	require.Equal(t, int64(10), g.SpillThreshold)
 
 	r, err := g.Call(proc)
 	require.NoError(t, err)
