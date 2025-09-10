@@ -947,6 +947,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	tblName := qry.GetTableDef().GetName()
 
+	// TODO: ### delete
+	if dbName == "vecdb2" {
+		st := time.Now()
+		defer func() {
+			c.proc.Info(c.proc.Ctx, "#### create table cost",
+				zap.String("db", dbName),
+				zap.String("table", tblName),
+				zap.Duration("cost", time.Since(st)),
+			)
+		}()
+	}
+
 	if !c.disableLock {
 		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
 			return err
@@ -2310,6 +2322,18 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	db := truncate.GetDatabase()
 	table := truncate.GetTable()
 
+	// TODO: ### delete
+	if db == "vecdb2" {
+		st := time.Now()
+		defer func() {
+			c.proc.Info(c.proc.Ctx, "#### truncate table cost",
+				zap.String("db", db),
+				zap.String("table", table),
+				zap.Duration("cost", time.Since(st)),
+			)
+		}()
+	}
+
 	c.db = db
 
 	accountID, err := defines.GetAccountId(c.proc.Ctx)
@@ -2492,6 +2516,19 @@ func (s *Scope) DropTable(c *Compile) error {
 			return nil
 		}
 	}
+
+	// TODO: ### delete
+	if dbName == "vecdb2" {
+		st := time.Now()
+		defer func() {
+			c.proc.Info(c.proc.Ctx, "#### drop table cost",
+				zap.String("db", dbName),
+				zap.String("table", tblName),
+				zap.Duration("cost", time.Since(st)),
+			)
+		}()
+	}
+
 	var isSource = false
 	if qry.TableDef != nil {
 		isSource = qry.TableDef.TableType == catalog.SystemSourceRel
