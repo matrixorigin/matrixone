@@ -38,14 +38,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	testutil2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
@@ -1026,7 +1025,6 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
-		handle.(*logtailreplay.ChangeHandler).LogThreshold = time.Microsecond
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if data == nil && tombstone == nil {
@@ -1347,6 +1345,103 @@ func TestChangesHandle7(t *testing.T) {
 	}
 }
 
+func TestPartitionChangesHandle(t *testing.T) {
+	/*
+		t1 insert 1 row
+		force ckp
+		force ckp
+		t2 insert 1 row
+		ps.gc t1.next
+		collect[t1, now]
+	*/
+
+	catalog.SetupDefines("")
+
+	var (
+		accountId    = catalog.System_Account
+		tableName    = "test1"
+		databaseName = "db1"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+	schema := catalog2.MockSchemaAll(20, 0)
+	schema.Name = tableName
+	bat := catalog2.MockBatch(schema, 2)
+	defer bat.Close()
+	bats := bat.Split(2)
+
+	ssStub := gostub.Stub(
+		&disttae.RequestSnapshotRead,
+		disttae.GetSnapshotReadFnWithHandler(
+			taeHandler.GetRPCHandle().HandleSnapshotRead,
+		),
+	)
+	defer ssStub.Reset()
+	// insert 1 row
+	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	_, _, err := disttaeEngine.CreateDatabaseAndTable(ctx, databaseName, tableName, schema)
+	require.NoError(t, err)
+	txn, rel := testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[0]))
+	require.Nil(t, txn.Commit(ctx))
+	t1 := txn.GetCommitTS()
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
+	require.Nil(t, txn.Commit(ctx))
+
+	// force ckp
+	now := taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+	now = taeHandler.GetDB().TxnMgr.Now()
+	taeHandler.GetDB().ForceCheckpoint(ctx, now)
+
+	// insert 1 row
+
+	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
+	require.Nil(t, rel.Append(ctx, bats[1]))
+	require.Nil(t, txn.Commit(ctx))
+	t2 := txn.GetCommitTS()
+
+	err = disttaeEngine.SubscribeTable(ctx, id.DbID, id.TableID, databaseName, tableName, false)
+	require.Nil(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+	mp := common.DebugAllocator
+
+	disttaeEngine.Engine.ForceGC(ctx, t1.Next())
+	{
+		_, rel, _, err := disttaeEngine.GetTable(ctx, databaseName, tableName)
+		require.Nil(t, err)
+
+		handle, err := rel.CollectChanges(ctx, t1.Prev(), t2.Next(), true, mp)
+		assert.NoError(t, err)
+		var totalRows int
+		for {
+			data, tombstone, hint, err := handle.Next(ctx, mp)
+			if data == nil && tombstone == nil {
+				break
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
+			assert.Nil(t, tombstone)
+			t.Log(data.Attrs)
+			totalRows += data.Vecs[0].Length()
+			data.Clean(mp)
+		}
+		assert.Equal(t, totalRows, 2)
+		assert.NoError(t, handle.Close())
+	}
+}
 func TestISCPExecutor1(t *testing.T) {
 	catalog.SetupDefines("")
 

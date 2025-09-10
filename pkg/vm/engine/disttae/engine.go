@@ -17,10 +17,11 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -211,6 +212,20 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
 	}
 	return
+}
+
+// for UT
+func (e *Engine) ForceGC(ctx context.Context, ts types.TS) {
+	parts := make(map[[2]uint64]*logtailreplay.Partition)
+	e.Lock()
+	for ids, part := range e.partitions {
+		parts[ids] = part
+	}
+	e.Unlock()
+	for ids, part := range parts {
+		part.Truncate(ctx, ids, ts)
+	}
+	e.catalog.Load().GC(ts.ToTimestamp())
 }
 
 func (e *Engine) AcquireQuota(v int64) (int64, bool) {
