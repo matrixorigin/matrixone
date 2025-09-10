@@ -64,6 +64,8 @@ const (
 
 	FJ_CNFlushSmallObjs     = "fj/cn/flush_small_objs"
 	FJ_CNSubscribeTableFail = "fj/cn/subscribe_table_fail"
+
+	FJ_CNCLONEFailed = "fj/cn/clone_fails"
 )
 
 const (
@@ -185,6 +187,14 @@ func LogCNFlushSmallObjsInjected(args ...string) (bool, int) {
 
 	ok, level := checkLoggingArgs(int(iarg), sarg, args...)
 	return ok, level
+}
+
+func LogCNCloneFailedInjected(args ...string) (bool, int) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_CNCLONEFailed)
+	if !injected {
+		return false, 0
+	}
+	return checkLoggingArgs(int(iarg), sarg, args...)
 }
 
 func LogCNSubscribeTableFailInjected(args ...string) (bool, int) {

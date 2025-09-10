@@ -1,0 +1,59 @@
+drop database if exists test;
+begin;
+create database test clone system;
+show create database test;
+Database    Create Database
+test    CREATE DATABASE `test`
+commit;
+show create database test;
+Database    Create Database
+test    CREATE DATABASE `test`
+drop database test;
+begin;
+create database test clone system;
+show create database test;
+Database    Create Database
+test    CREATE DATABASE `test`
+rollback;
+show create database test;
+Unknown database test
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/cn/clone_fails',':::','echo',40,'test.rawlog');
+add_fault_point(fj/cn/clone_fails, :::, echo, 40, test.rawlog)
+true
+create database test clone system;
+internal error: injected table clone error
+show create database test;
+Unknown database test
+select disable_fault_injection();
+disable_fault_injection()
+true
+create database test;
+begin;
+create table test.t1 clone system.rawlog;
+commit;
+show tables from test;
+Tables_in_test
+t1
+drop table test.t1;
+begin;
+create table test.t1 clone system.rawlog;
+rollback;
+show tables from test;
+Tables_in_test
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/cn/clone_fails',':::','echo',40,'test.t1');
+add_fault_point(fj/cn/clone_fails, :::, echo, 40, test.t1)
+true
+create table test.t1 clone system.rawlog;
+internal error: injected table clone error
+select disable_fault_injection();
+disable_fault_injection()
+true
+show tables from test;
+Tables_in_test
+drop database test;
