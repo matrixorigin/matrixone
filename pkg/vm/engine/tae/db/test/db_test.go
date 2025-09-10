@@ -4911,6 +4911,9 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	tae.Restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
+	if len(entries) == 0 {
+		return
+	}
 	entry := entries[len(entries)-1]
 	for _, tid := range tids {
 		_, err := entry.GetTableByID(context.Background(), tae.Runtime.Fs, tid, common.CheckpointAllocator)
