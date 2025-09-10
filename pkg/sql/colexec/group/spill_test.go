@@ -74,6 +74,8 @@ func TestSpill(t *testing.T) {
 			require.Equal(t, expectedGroups[i], groups[i])
 			require.Equal(t, expectedCounts[i], counts[i])
 		}
+
+		final.Clean(proc.Mp())
 	}
 
 	r, err = g.Call(proc)
@@ -135,6 +137,8 @@ func TestSpillMultipleCycles(t *testing.T) {
 		require.Equal(t, int64(1), groupCounts[4])
 		require.Equal(t, int64(1), groupCounts[5])
 		require.Equal(t, int64(1), groupCounts[6])
+
+		final.Clean(proc.Mp())
 	}
 
 	g.Free(proc, false, nil)
