@@ -50,16 +50,25 @@ func getBackExecutor(
 
 	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
 		bh = ses.GetShareTxnBackgroundExec(ctx, false)
-		return bh, nil, nil
+		bh.ClearExecResultSet()
+		return bh, func(err error) error {
+			bh.Close()
+			return nil
+		}, nil
 	}
 
 	bh = ses.GetBackgroundExec(ctx)
+	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, "begin"); err != nil {
-		return nil, nil, err
+		return nil, func(err error) error {
+			bh.Close()
+			return nil
+		}, err
 	}
 
 	deferred = func(err2 error) error {
 		err2 = finishTxn(ctx, bh, err2)
+		bh.Close()
 		return err2
 	}
 
