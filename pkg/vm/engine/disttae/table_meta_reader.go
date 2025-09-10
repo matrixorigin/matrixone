@@ -17,8 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -33,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
 
@@ -125,7 +122,7 @@ func (r *TableMetaReader) Read(
 		seqnums  []uint16
 		colTypes []types.Type
 
-		logs1, logs2 = zap.Skip(), zap.Skip()
+		logs []zap.Field
 
 		isTombstone = r.state == tombstoneMetaState
 	)
@@ -142,14 +139,16 @@ func (r *TableMetaReader) Read(
 			r.state = endState
 		}
 
-		logutil.Info("TableMetaReader",
-			zap.String("table",
-				fmt.Sprintf("%s(%d)-%s(%d)-%s",
-					r.table.db.databaseName, r.table.db.databaseId,
-					r.table.tableName, r.table.tableId,
-					r.GetTxnInfo())),
-			zap.String("state", stateStr),
-			zap.Error(err), logs1, logs2)
+		logs = append(logs, zap.String("table",
+			fmt.Sprintf("%s(%d)-%s(%d)-%s",
+				r.table.db.databaseName, r.table.db.databaseId,
+				r.table.tableName, r.table.tableId,
+				r.GetTxnInfo())))
+
+		logs = append(logs, zap.String("state", stateStr))
+		logs = append(logs, zap.Error(err))
+
+		logutil.Info("TableMetaReader", logs...)
 	}()
 
 	outBatch.CleanOnlyData()
@@ -165,17 +164,11 @@ func (r *TableMetaReader) Read(
 		seqnums, colTypes, attrs, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(r.table.tableDef)
 	}
 
-	// step1
-	if logs1, err = r.collectVisibleObjs(
+	if logs, err = r.collect(
 		ctx, mp, outBatch, isTombstone, seqnums, attrs, colTypes,
 	); err != nil {
 		return false, err
 	}
-
-	// step2
-	logs2, err = r.collectVisibleInMemRows(
-		ctx, mp, outBatch, isTombstone, seqnums, attrs, colTypes,
-	)
 
 	return false, err
 }
@@ -190,7 +183,7 @@ func (r *TableMetaReader) GetOrderBy() []*plan.OrderBySpec {
 func (r *TableMetaReader) SetFilterZM(zoneMap objectio.ZoneMap) {
 }
 
-func (r *TableMetaReader) collectVisibleInMemRows(
+func (r *TableMetaReader) collect(
 	ctx context.Context,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
@@ -198,47 +191,167 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 	seqnums []uint16,
 	attrs []string,
 	colTypes []types.Type,
-) (log zap.Field, err error) {
+) (logs []zap.Field, err error) {
 
 	var (
-		iter logtailreplay.RowsIter
-		sl   []objectio.ObjectStats
-
-		s3Writer  *colexec.CNS3Writer
-		rowsBatch *batch.Batch
-
-		tmpBat *batch.Batch
+		iter       objectio.ObjectIter
+		objRelData readutil.ObjListRelData
 
 		objCnt, blkCnt, rowCnt int
+
+		log1, log2, log3 zap.Field
 	)
 
 	defer func() {
 		if iter != nil {
 			iter.Close()
 		}
+	}()
+
+	if iter, err = r.pState.NewObjectsIter(
+		r.snapshot, true, isTombstone,
+	); err != nil {
+		return nil, err
+	}
+
+	for iter.Next() {
+		obj := iter.Entry()
+
+		// if the obj is created by CN, the data commit time equals to the obj.CreateTime
+		if obj.GetCNCreated() || !obj.GetAppendable() {
+			objCnt++
+			blkCnt += int(obj.ObjectStats.BlkCnt())
+			rowCnt += int(obj.ObjectStats.Rows())
+
+			if err = colexec.ExpandObjectStatsToBatch(
+				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
+				return nil, err
+			}
+		} else {
+			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).
+			// so there may exist rows which commitTS > snapshot, we need to scan all rows to filter them out.
+			objRelData.AppendObj(&obj.ObjectStats)
+		}
+	}
+
+	log1 = zap.String("collect-naobjs",
+		fmt.Sprintf("%d-%d-%d", objCnt, blkCnt, rowCnt),
+	)
+	logs = append(logs, log1)
+
+	if isTombstone {
+		if log2, err = r.collectTombstoneOfAObjsAndInMem(
+			ctx, mp, outBatch, seqnums, attrs, colTypes, objRelData,
+		); err != nil {
+			return nil, err
+		}
+
+		logs = append(logs, log2)
+	} else {
+		if log3, err = r.collectDataOfAObjsAndInMem(
+			ctx, mp, outBatch, seqnums, attrs, colTypes, objRelData,
+		); err != nil {
+			return nil, err
+		}
+
+		logs = append(logs, log3)
+	}
+
+	outBatch.SetRowCount(outBatch.Vecs[0].Length())
+
+	return logs, nil
+}
+
+func (r *TableMetaReader) collectDataOfAObjsAndInMem(
+	ctx context.Context,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+	seqnums []uint16,
+	attrs []string,
+	colTypes []types.Type,
+	objRelData readutil.ObjListRelData,
+) (log zap.Field, err error) {
+
+	var (
+		dataReader engine.Reader
+		s3Writer   *colexec.CNS3Writer
+
+		objCnt, blkCnt, rowCnt int
+	)
+
+	defer func() {
+		dataReader.Close()
+		s3Writer.Close()
+	}()
+
+	s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
+
+	source := &LocalDisttaeDataSource{
+		table:           r.table,
+		pState:          r.pState,
+		fs:              r.fs,
+		ctx:             ctx,
+		mp:              mp,
+		snapshotTS:      r.snapshot,
+		rangeSlice:      objRelData.GetBlockInfoSlice(),
+		tombstonePolicy: engine.Policy_SkipUncommitedInMemory,
+	}
+
+	dataReader = readutil.SimpleReaderWithDataSource(
+		ctx, r.fs,
+		source, r.snapshot.ToTimestamp(),
+		readutil.WithColumns(seqnums, colTypes),
+	)
+
+	if objCnt, blkCnt, rowCnt, err = readWriteHelper(
+		ctx, dataReader, outBatch, mp, attrs, colTypes, s3Writer,
+	); err != nil {
+		return zap.Skip(), err
+	}
+
+	log = zap.String("collect-aobj-inmem",
+		fmt.Sprintf("%d-%d-%d", objCnt, blkCnt, rowCnt),
+	)
+
+	return log, nil
+}
+
+func (r *TableMetaReader) collectTombstoneOfAObjsAndInMem(
+	ctx context.Context,
+	mp *mpool.MPool,
+	outBatch *batch.Batch,
+	seqnums []uint16,
+	attrs []string,
+	colTypes []types.Type,
+	objRelData readutil.ObjListRelData,
+) (log zap.Field, err error) {
+
+	var (
+		rowsBatch *batch.Batch
+		s3Writer  *colexec.CNS3Writer
+
+		iter            logtailreplay.RowsIter
+		tombstoneReader engine.Reader
+
+		objCnt, blkCnt, rowCnt int
+	)
+
+	s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
+
+	defer func() {
+		iter.Close()
+		s3Writer.Close()
+
+		if tombstoneReader != nil {
+			tombstoneReader.Close()
+		}
 
 		if rowsBatch != nil {
 			rowsBatch.Clean(mp)
 		}
-
-		if s3Writer != nil {
-			s3Writer.Close()
-		}
 	}()
 
-	writeS3 := func() error {
-		if s3Writer == nil {
-			if isTombstone {
-				s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
-			} else {
-				s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
-			}
-		}
-
-		return s3Writer.Write(ctx, rowsBatch)
-	}
-
-	iter = r.pState.NewRowsIter(r.snapshot, nil, isTombstone)
+	iter = r.pState.NewRowsIter(r.snapshot, nil, true)
 	for iter.Next() {
 		if rowsBatch == nil {
 			rowsBatch = batch.New(attrs)
@@ -250,167 +363,68 @@ func (r *TableMetaReader) collectVisibleInMemRows(
 
 		entry := iter.Entry()
 
-		for i := range rowsBatch.Attrs {
-			idx := 2 + seqnums[i]
-			if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
-				entry.Batch.Attrs[idx] == "" /*drop column*/ {
-				err = vector.AppendAny(
-					rowsBatch.Vecs[i],
-					nil,
-					true,
-					mp)
-			} else {
-				if isTombstone {
-					// for tombstones in the mem rows: del_row_id, commit_ts, pk, row_id.
-					// expected: del_row_id and pk.
-					idx -= 2
-					if idx == 1 {
-						idx = 2
-					}
-				}
-
-				err = rowsBatch.Vecs[i].UnionOne(
-					entry.Batch.Vecs[int(idx)],
-					entry.Offset,
-					mp,
-				)
-			}
-			if err != nil {
-				return zap.Skip(), err
-			}
+		// tombstones in the mem rows: del_row_id, commit_ts, pk, row_id.
+		// expected: del_row_id and pk.
+		if err = rowsBatch.Vecs[0].UnionOne(entry.Batch.Vecs[0], entry.Offset, mp); err != nil {
+			return zap.Skip(), err
 		}
 
-		rowsBatch.SetRowCount(rowsBatch.Vecs[0].Length())
-
-		if rowsBatch.RowCount() >= options.DefaultBlockMaxRows {
-			if err = writeS3(); err != nil {
-				return zap.Skip(), err
-			}
-
-			rowsBatch.CleanOnlyData()
-		}
-	}
-
-	if rowsBatch == nil {
-		return zap.Skip(), nil
-	}
-
-	if rowsBatch.RowCount() > 0 {
-		if err = writeS3(); err != nil {
+		if err = rowsBatch.Vecs[1].UnionOne(entry.Batch.Vecs[2], entry.Offset, mp); err != nil {
 			return zap.Skip(), err
 		}
 	}
 
-	if sl, err = s3Writer.Sync(ctx); err != nil {
+	if rowsBatch != nil {
+		rowsBatch.SetRowCount(rowsBatch.Vecs[0].Length())
+		if err = s3Writer.Write(ctx, rowsBatch); err != nil {
+			return zap.Skip(), err
+		}
+	}
+
+	if objRelData.DataCnt() != 0 {
+		tombstoneReader = readutil.SimpleMultiObjectsReader(
+			ctx, r.fs, objRelData.Objlist, r.snapshot.ToTimestamp(),
+			readutil.WithColumns(seqnums, colTypes),
+		)
+	}
+
+	if objCnt, blkCnt, rowCnt, err = readWriteHelper(
+		ctx, tombstoneReader, outBatch, mp, attrs, colTypes, s3Writer,
+	); err != nil {
 		return zap.Skip(), err
 	}
 
-	if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
-		return zap.Skip(), err
-	}
-
-	if _, err = outBatch.Append(ctx, mp, tmpBat); err != nil {
-		return zap.Skip(), err
-	}
-
-	for _, s := range sl {
-		objCnt++
-		blkCnt += int(s.BlkCnt())
-		rowCnt += int(s.Rows())
-	}
-
-	log = zap.String("collectVisibleInMemRows",
-		fmt.Sprintf("%d-%d-%d", objCnt, blkCnt, rowCnt))
+	log = zap.String("collect-aobj-inmem",
+		fmt.Sprintf("%d-%d-%d", objCnt, blkCnt, rowCnt),
+	)
 
 	return log, nil
 }
 
-func (r *TableMetaReader) collectVisibleObjs(
+func readWriteHelper(
 	ctx context.Context,
-	mp *mpool.MPool,
+	reader engine.Reader,
 	outBatch *batch.Batch,
-	isTombstone bool,
-	seqnums []uint16,
+	mp *mpool.MPool,
 	attrs []string,
 	colTypes []types.Type,
-) (log zap.Field, err error) {
+	s3Writer *colexec.CNS3Writer,
+) (objCnt, blkCnt, rowCnt int, err error) {
 
 	var (
-		stop bool
-		sl   []objectio.ObjectStats
-
-		iter       objectio.ObjectIter
-		dataReader engine.Reader
-
-		s3Writer  *colexec.CNS3Writer
+		stop      bool
+		sl        []objectio.ObjectStats
+		tmpBat    *batch.Batch
 		dataBatch *batch.Batch
-
-		tmpBat *batch.Batch
-
-		objRelData readutil.ObjListRelData
-
-		newObjCnt, newBlkCnt, newRowCnt    int
-		copyObjCnt, copyBlkCnt, copyRowCnt int
 	)
 
 	defer func() {
 		if dataBatch != nil {
 			dataBatch.Clean(mp)
 		}
-
-		if s3Writer != nil {
-			s3Writer.Close()
-		}
-
-		if iter != nil {
-			iter.Close()
-		}
 	}()
 
-	if iter, err = r.pState.NewObjectsIter(
-		r.snapshot, true, isTombstone,
-	); err != nil {
-		return zap.Skip(), err
-	}
-
-	for iter.Next() {
-		obj := iter.Entry()
-
-		// if the obj is created by CN, the data commit time equals to the obj.CreateTime
-		if obj.GetCNCreated() || !obj.GetAppendable() {
-			copyObjCnt++
-			copyBlkCnt += int(obj.ObjectStats.BlkCnt())
-			copyRowCnt += int(obj.ObjectStats.Rows())
-
-			if err = colexec.ExpandObjectStatsToBatch(
-				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
-				return zap.Skip(), err
-			}
-		} else {
-			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).
-			// so there may exist rows which commitTS > snapshot, we need to scan all rows to filter them out.
-			objRelData.AppendObj(&obj.ObjectStats)
-		}
-	}
-
-	readData := func() (err error) {
-		source := &LocalDisttaeDataSource{
-			table:           r.table,
-			pState:          r.pState,
-			fs:              r.fs,
-			ctx:             ctx,
-			mp:              mp,
-			snapshotTS:      r.snapshot,
-			rangeSlice:      objRelData.GetBlockInfoSlice(),
-			tombstonePolicy: engine.Policy_SkipUncommitedInMemory,
-		}
-
-		dataReader = readutil.SimpleReaderWithDataSource(
-			ctx, r.fs,
-			source, r.snapshot.ToTimestamp(),
-			readutil.WithColumns(seqnums, colTypes),
-		)
-
+	if reader != nil {
 		dataBatch = batch.New(attrs)
 		dataBatch.Attrs = attrs
 		for i := 0; i < len(dataBatch.Attrs); i++ {
@@ -418,9 +432,9 @@ func (r *TableMetaReader) collectVisibleObjs(
 		}
 
 		for {
-			stop, err = dataReader.Read(ctx, attrs, nil, mp, dataBatch)
-			if err != nil {
-				return err
+			dataBatch.CleanOnlyData()
+			if stop, err = reader.Read(ctx, attrs, nil, mp, dataBatch); err != nil {
+				return
 			}
 
 			if stop {
@@ -429,110 +443,29 @@ func (r *TableMetaReader) collectVisibleObjs(
 
 			if dataBatch.RowCount() > 0 {
 				if err = s3Writer.Write(ctx, dataBatch); err != nil {
-					return err
+					return
 				}
 			}
 		}
-
-		return nil
 	}
 
-	readTombstone := func() (err error) {
-		// all appendable objects are created by TN
-		var (
-			commit    []types.TS
-			release   func()
-			blkInfo   *objectio.BlockInfo
-			blkSlice  objectio.BlockInfoSlice
-			qualified = objectio.GetReusableBitmap()
-
-			bat          = batch.New(objectio.TombstoneAttrs_TN_Created)
-			cacheVectors = containers.NewVectors(len(objectio.TombstoneAttrs_TN_Created))
-		)
-
-		defer func() {
-			if release != nil {
-				release()
-			}
-
-			qualified.Release()
-		}()
-
-		blkSlice = objRelData.GetBlockInfoSlice()
-		for i := 0; i < blkSlice.Len(); i++ {
-			blkInfo = blkSlice.Get(i)
-
-			if _, release, err = ioutil.ReadDeletes(
-				ctx, blkInfo.MetaLocation()[:], r.fs, false, cacheVectors, &colTypes[1],
-			); err != nil {
-				return err
-			}
-
-			commit = vector.MustFixedColWithTypeCheck[types.TS](&cacheVectors[2])
-			for j := range commit {
-				if commit[j].LE(&r.snapshot) {
-					qualified.Add(uint64(j))
-				}
-			}
-
-			for j := range cacheVectors {
-				bat.Vecs[j] = &cacheVectors[j]
-			}
-
-			bat.SetRowCount(bat.Vecs[0].Length())
-			bat.ShrinkByMask(qualified.Bitmap(), false, 0)
-
-			if bat.RowCount() > 0 {
-				if err = s3Writer.Write(ctx, bat); err != nil {
-					return err
-				}
-			}
-
-			release()
-			release = nil
-			qualified.Clear()
-		}
-
-		return nil
+	if sl, err = s3Writer.Sync(ctx); err != nil {
+		return
 	}
 
-	if objRelData.DataCnt() > 0 {
-		if isTombstone {
-			s3Writer = colexec.NewCNS3TombstoneWriter(mp, r.fs, colTypes[1], -1)
-			if err = readTombstone(); err != nil {
-				return zap.Skip(), err
-			}
-		} else {
-			s3Writer = colexec.NewCNS3DataWriter(mp, r.fs, r.table.tableDef, -1, false)
-			if err = readData(); err != nil {
-				return zap.Skip(), err
-			}
-		}
-
-		if sl, err = s3Writer.Sync(ctx); err != nil {
-			return zap.Skip(), err
-		}
-
-		if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
-			return zap.Skip(), err
-		}
-
-		if _, err = outBatch.Append(ctx, mp, tmpBat); err != nil {
-			return zap.Skip(), err
-		}
-
-		for _, s := range sl {
-			newObjCnt++
-			newBlkCnt += int(s.BlkCnt())
-			newRowCnt += int(s.Rows())
-		}
+	if tmpBat, err = s3Writer.FillBlockInfoBat(); err != nil {
+		return
 	}
 
-	outBatch.SetRowCount(outBatch.Vecs[0].Length())
+	if _, err = outBatch.Append(ctx, mp, tmpBat); err != nil {
+		return
+	}
 
-	log = zap.String("collectVisibleObjs",
-		fmt.Sprintf("copy(%d-%d-%d), new(%d-%d-%d)",
-			copyObjCnt, copyBlkCnt, copyRowCnt, newObjCnt, newBlkCnt, newRowCnt))
+	for _, s := range sl {
+		objCnt++
+		blkCnt += int(s.BlkCnt())
+		rowCnt += int(s.Rows())
+	}
 
-	return log, nil
+	return
 }
