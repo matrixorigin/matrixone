@@ -20,10 +20,13 @@ import (
 	"math"
 	"math/bits"
 	"math/rand"
+	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 var (
@@ -279,6 +282,19 @@ func GatherLayerZeroMergeTasks(ctx context.Context,
 			)
 		}
 		objs := make([]*objectio.ObjectStats, 0, stats.Count)
+		typ := objList[0].SortKeyZoneMap().GetType()
+		scale := objList[0].SortKeyZoneMap().GetScale()
+		if typ != types.T_any {
+			sort.Slice(objList, func(i, j int) bool {
+				return compute.Compare(
+					objList[i].SortKeyZoneMap().GetMinBuf(),
+					objList[j].SortKeyZoneMap().GetMinBuf(),
+					typ,
+					scale,
+					scale,
+				) < 0
+			})
+		}
 		for _, obj := range objList {
 			if IsValidLayerZeroSmallObj(obj, opts) {
 				objs = append(objs, obj)
