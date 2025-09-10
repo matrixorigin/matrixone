@@ -177,7 +177,8 @@ func unregisterJobsByDBName(
 		tableIDStr += fmt.Sprintf("%d", tid)
 	}
 	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
-	_, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
+	result, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
+	result.Close()
 	return
 }
 
@@ -274,10 +275,11 @@ func registerJob(
 		ISCPJobState_Completed,
 		string(jobStatusJson),
 	)
-	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
+	result.Close()
 	return
 }
 
@@ -392,7 +394,8 @@ func updateJobSpec(
 		internalJobID,
 		jobSpecJson,
 	)
-	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result.Close()
 	return
 }
 func unregisterJob(
@@ -461,10 +464,11 @@ func unregisterJob(
 		jobID.JobName,
 		internalJobID,
 	)
-	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
+	result.Close()
 	return
 }
 
