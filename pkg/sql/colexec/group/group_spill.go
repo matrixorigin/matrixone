@@ -112,6 +112,8 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		return err
 	}
 
+	spillData.Free(proc.Mp())
+
 	group.ctr.spilledStates = append(group.ctr.spilledStates, spillID)
 
 	for _, agg := range group.ctr.result1.AggList {
