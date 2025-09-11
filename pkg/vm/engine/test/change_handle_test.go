@@ -1619,6 +1619,7 @@ func TestISCPExecutor1(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -1780,6 +1781,7 @@ func TestISCPExecutor2(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -1799,6 +1801,7 @@ func TestISCPExecutor2(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.False(t, ok)
 	assert.NoError(t, err)
@@ -1855,6 +1858,7 @@ func TestISCPExecutor2(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -1952,6 +1956,7 @@ func TestISCPExecutor3(t *testing.T) {
 				DBName:    "srcdb",
 				TableName: "src_table",
 			},
+			false,
 		)
 		assert.True(t, ok)
 		assert.NoError(t, err)
@@ -2162,6 +2167,7 @@ func TestISCPExecutor4(t *testing.T) {
 				DBName:    "srcdb",
 				TableName: "src_table",
 			},
+			false,
 		)
 		assert.True(t, ok)
 		assert.NoError(t, err)
@@ -2350,6 +2356,7 @@ func TestISCPExecutor5(t *testing.T) {
 				DBName:    dbName,
 				TableName: tableName,
 			},
+			false,
 		)
 		assert.True(t, ok)
 		assert.NoError(t, err)
@@ -2484,6 +2491,7 @@ func TestISCPExecutor6(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -2586,6 +2594,7 @@ func TestISCPExecutor7(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -2689,6 +2698,7 @@ func TestISCPExecutor8(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -2801,6 +2811,7 @@ func TestUpdateJobSpec(t *testing.T) {
 			DBName:    dbName,
 			TableName: tableName,
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -2978,6 +2989,7 @@ func TestFlushWatermark(t *testing.T) {
 			DBName:    dbName,
 			TableName: tableName,
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -3079,6 +3091,7 @@ func TestGCInMemoryJob(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
+		false,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
@@ -3205,6 +3218,7 @@ func TestIteration(t *testing.T) {
 				DBName:    "srcdb",
 				TableName: tableName,
 			},
+			false,
 		)
 		assert.True(t, ok)
 		assert.NoError(t, err)
@@ -3329,6 +3343,7 @@ func TestDropJobsByDBName(t *testing.T) {
 				DBName:    "srcdb",
 				TableName: tableName,
 			},
+			false,
 		)
 		assert.True(t, ok)
 		assert.NoError(t, err)
@@ -3585,4 +3600,113 @@ func TestCancelIteration2(t *testing.T) {
 	close(cancelCh)
 	wg.Wait()
 
+}
+
+func TestStartFromNow(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// create database and table
+
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	bats := bat.Split(10)
+	defer bat.Close()
+
+	// append 1 row
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[0]))
+	require.Nil(t, err)
+
+	txn.Commit(ctxWithTimeout)
+
+	// init cdc executor
+	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		&iscp.ISCPExecutorOption{
+			GCInterval:             time.Hour,
+			GCTTL:                  time.Hour,
+			SyncTaskInterval:       time.Millisecond * 100,
+			FlushWatermarkInterval: time.Millisecond * 100,
+			RetryTimes:             1,
+		},
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+
+	fault.Enable()
+	defer fault.Disable()
+
+	rmFn, err := objectio.InjectCDCExecutor("changesNext")
+	require.NoError(t, err)
+	defer rmFn()
+
+	// register cdc job
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	ok, err := iscp.RegisterJob(
+		ctx, "", txn, "pitr",
+		&iscp.JobSpec{
+			ConsumerInfo: iscp.ConsumerInfo{
+				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+			},
+		},
+		&iscp.JobID{
+			JobName:   "hnsw_idx",
+			DBName:    "srcdb",
+			TableName: "src_table",
+		},
+		true,
+	)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit(ctxWithTimeout))
+
+	now := taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
+			return ok && ts.GE(&now)
+		},
+	)
+	ts, ok := cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
+	assert.True(t, ok)
+	assert.True(t, ts.GE(&now))
 }

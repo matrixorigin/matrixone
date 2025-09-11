@@ -282,6 +282,8 @@ type Workspace interface {
 
 	// debug & test
 	PPString() string
+
+	SetCloneTxn(snapshot int64)
 }
 
 // TxnOverview txn overview include meta and status
