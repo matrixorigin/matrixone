@@ -227,6 +227,12 @@ func (r *TableMetaReader) collect(
 				mp, isTombstone, outBatch, true, obj.ObjectStats); err != nil {
 				return nil, err
 			}
+
+			txnId := r.table.db.getTxn().op.Txn().ID
+			r.table.db.getEng().cloneTxnCache.AddSharedFile(
+				txnId, obj.ObjectStats.ObjectName().String(),
+			)
+
 		} else {
 			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).
 			// so there may exist rows which commitTS > snapshot, we need to scan all rows to filter them out.
