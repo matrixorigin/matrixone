@@ -319,6 +319,9 @@ func (m *merger[T]) pushNewElem(ctx context.Context, objIdx uint32) error {
 }
 
 func (m *merger[T]) syncObject(ctx context.Context) error {
+	if m.host.HasBigDelEvent() {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in syncObject %v", m.host.Name())
+	}
 	if _, _, err := m.writer.Sync(ctx); err != nil {
 		return err
 	}

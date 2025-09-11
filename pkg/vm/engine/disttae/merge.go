@@ -151,6 +151,10 @@ func newCNMergeTask(
 	}, nil
 }
 
+func (t *cnMergeTask) HasBigDelEvent() bool {
+	return false
+}
+
 func (t *cnMergeTask) TaskSourceNote() string {
 	return ""
 }
