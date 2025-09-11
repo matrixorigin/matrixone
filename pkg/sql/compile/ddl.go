@@ -2518,13 +2518,15 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// TODO: ### delete
+	st := time.Now()
+	var costs []time.Duration
 	if dbName == "vecdb2" {
-		st := time.Now()
 		defer func() {
 			c.proc.Info(c.proc.Ctx, "#### drop table cost",
 				zap.String("db", dbName),
 				zap.String("table", tblName),
 				zap.Duration("cost", time.Since(st)),
+				zap.Any("costs", costs),
 			)
 		}()
 	}
@@ -2543,6 +2545,9 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 	}
+
+	// cost 0
+	costs = append(costs, time.Since(st))
 
 	tblID := qry.GetTableId()
 	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -2572,6 +2577,9 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
+	// cost 1
+	costs = append(costs, time.Since(st))
+
 	if !c.disableLock &&
 		!isTemp &&
 		!isView &&
@@ -2598,12 +2606,18 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
+	// cost 2
+	costs = append(costs, time.Since(st))
+
 	// if dbSource is a pub, update tableList
 	if !c.ignorePublish {
 		if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
 			return err
 		}
 	}
+
+	// cost 3
+	costs = append(costs, time.Since(st))
 
 	if len(qry.UpdateFkSqls) > 0 {
 		for _, sql := range qry.UpdateFkSqls {
@@ -2645,6 +2659,9 @@ func (s *Scope) DropTable(c *Compile) error {
 			return err
 		}
 	}
+
+	// cost 4
+	costs = append(costs, time.Since(st))
 
 	// delete all index objects record of the table in mo_catalog.mo_indexes
 	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {
@@ -2704,6 +2721,10 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {
 			return err
 		}
+
+		// cost 5
+		costs = append(costs, time.Since(st))
+
 		for _, name := range qry.IndexTableNames {
 			if err = maybeDeleteAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, name, c.proc.GetTxnOperator()); err != nil {
 				return err
@@ -2714,6 +2735,9 @@ func (s *Scope) DropTable(c *Compile) error {
 			}
 
 		}
+
+		// cost 6
+		costs = append(costs, time.Since(st))
 
 		if dbName != catalog.MO_CATALOG && tblName != catalog.MO_INDEXES {
 			tblDef := rel.GetTableDef(c.proc.Ctx)
@@ -2735,6 +2759,9 @@ func (s *Scope) DropTable(c *Compile) error {
 				}
 			}
 
+			// cost 7
+			costs = append(costs, time.Since(st))
+
 			if err := shardservice.GetService(c.proc.GetService()).Delete(
 				c.proc.Ctx,
 				rel.GetTableID(c.proc.Ctx),
@@ -2742,6 +2769,9 @@ func (s *Scope) DropTable(c *Compile) error {
 			); err != nil {
 				return err
 			}
+
+			// cost 8
+			costs = append(costs, time.Since(st))
 		}
 	}
 
@@ -2775,6 +2805,9 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
+	// cost 9
+	costs = append(costs, time.Since(st))
+
 	sql := fmt.Sprintf(
 		"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
 		accountID, tblID,
@@ -2783,6 +2816,9 @@ func (s *Scope) DropTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+
+	// cost 10
+	costs = append(costs, time.Since(st))
 
 	ps := partitionservice.GetService(c.proc.GetService())
 	extr := rel.GetExtraInfo()
