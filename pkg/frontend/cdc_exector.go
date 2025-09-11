@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"regexp"
-	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -512,7 +512,12 @@ var GetTableErrMsg = func(
 	if err != nil {
 		return false, err
 	}
-	hasError = errMsg != ""
+	if errMsg == "" {
+		return false, nil
+	}
+	if strings.HasPrefix(errMsg, cdc.RetryableErrorPrefix) {
+		return false, nil
+	}
 	return
 }
 

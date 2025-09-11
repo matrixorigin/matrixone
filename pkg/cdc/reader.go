@@ -35,6 +35,8 @@ import (
 var _ Reader = new(tableReader)
 var _ TableReader = new(tableReader)
 
+var RetryableErrorPrefix = "retryable error:"
+
 const (
 	DefaultFrequency = 200 * time.Millisecond
 )
@@ -177,6 +179,7 @@ func (reader *tableReader) Run(
 	}
 
 	var err error
+	var retryable bool
 	reader.wg.Add(1)
 	defer func() {
 		defer reader.wg.Done()
@@ -190,6 +193,9 @@ func (reader *tableReader) Run(
 
 		if err != nil {
 			errMsg := err.Error()
+			if retryable {
+				errMsg = RetryableErrorPrefix + errMsg
+			}
 			if err = reader.wMarkUpdater.UpdateWatermarkErrMsg(
 				ctx,
 				&wKey,
@@ -259,7 +265,7 @@ func (reader *tableReader) Run(
 				zap.Duration("frequency", reader.frequency),
 			)
 		}
-		if err = reader.readTable(ctx, ar); err != nil {
+		if retryable, err = reader.readTable(ctx, ar); err != nil {
 			logutil.Errorf("cdc tableReader(%v) failed, err: %v", reader.info, err)
 			return
 		}
@@ -294,16 +300,20 @@ var readTableWithTxn = func(
 	txnOp client.TxnOperator,
 	packer *types.Packer,
 	ar *ActiveRoutine,
-) (err error) {
-	return reader.readTableWithTxn(ctx, txnOp, packer, ar)
+) (retryable bool, err error) {
+	err = retry(ctx, ar, func() error {
+		retryable, err = reader.readTableWithTxn(ctx, txnOp, packer, ar)
+		return err
+	}, CDCDefaultRetryTimes, CDCDefaultRetryDuration)
+	return
 }
 
-func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (err error) {
+func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (retryable bool, err error) {
 	//step1 : create an txnOp
 	txnOp, err := GetTxnOp(ctx, reader.cnEngine, reader.cnTxnClient, "readMultipleTables")
 
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() {
 		FinishTxnOp(ctx, err, txnOp, reader.cnEngine)
@@ -315,7 +325,7 @@ func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (er
 	}()
 
 	if err = GetTxn(ctx, reader.cnEngine, txnOp); err != nil {
-		return err
+		return false, err
 	}
 
 	var packer *types.Packer
@@ -323,9 +333,10 @@ func (reader *tableReader) readTable(ctx context.Context, ar *ActiveRoutine) (er
 	defer put.Put()
 
 	//step2 : read table
-	err = readTableWithTxn(reader, ctx, txnOp, packer, ar)
+	retryable, err = readTableWithTxn(reader, ctx, txnOp, packer, ar)
 	// if stale read, try to reset watermark
 	if moerr.IsMoErrCode(err, moerr.ErrStaleRead) {
+		retryable = true
 		if !reader.noFull && !reader.startTs.IsEmpty() {
 			err = moerr.NewInternalErrorf(ctx, "cdc tableReader(%v) stale read, and startTs(%v) is set, end", reader.info, reader.startTs)
 			return
@@ -368,12 +379,14 @@ func (reader *tableReader) readTableWithTxn(
 	txnOp client.TxnOperator,
 	packer *types.Packer,
 	ar *ActiveRoutine,
-) (err error) {
+) (retryable bool, err error) {
 	var rel engine.Relation
 	var changes engine.ChangesHandle
 
 	//step1 : get relation
 	if _, _, rel, err = GetRelationById(ctx, reader.cnEngine, txnOp, reader.info.SourceTblId); err != nil {
+		// truncate table
+		retryable = true
 		return
 	}
 

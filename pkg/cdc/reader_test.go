@@ -663,7 +663,7 @@ func Test_tableReader_readTable(t *testing.T) {
 	stub6 := gostub.Stub(&readTableWithTxn, func(*tableReader, context.Context, client.TxnOperator, *types.Packer, *ActiveRoutine) error {
 		return nil
 	})
-	err := reader.readTable(ctx, ar)
+	_, err := reader.readTable(ctx, ar)
 	assert.NoError(t, err)
 	stub6.Reset()
 
@@ -671,7 +671,7 @@ func Test_tableReader_readTable(t *testing.T) {
 	stub7 := gostub.Stub(&readTableWithTxn, func(*tableReader, context.Context, client.TxnOperator, *types.Packer, *ActiveRoutine) error {
 		return moerr.NewInternalErrorNoCtx("")
 	})
-	err = reader.readTable(ctx, ar)
+	_, err = reader.readTable(ctx, ar)
 	assert.Error(t, err)
 	stub7.Reset()
 
@@ -679,7 +679,7 @@ func Test_tableReader_readTable(t *testing.T) {
 	stub8 := gostub.Stub(&readTableWithTxn, func(*tableReader, context.Context, client.TxnOperator, *types.Packer, *ActiveRoutine) error {
 		return moerr.NewErrStaleReadNoCtx("", "")
 	})
-	err = reader.readTable(ctx, ar)
+	_, err = reader.readTable(ctx, ar)
 	assert.NoError(t, err)
 	stub8.Reset()
 }
@@ -756,12 +756,12 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 	})
 	defer collectChangesStub.Reset()
 
-	err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
+	_, err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
 	assert.NoError(t, err)
 
 	ts := types.BuildTS(50, 0)
 	reader.wMarkUpdater.UpdateWatermarkOnly(context.Background(), &key, &ts)
-	err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
+	_, err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
 	assert.NoError(t, err)
 }
 
