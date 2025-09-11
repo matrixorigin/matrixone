@@ -1103,7 +1103,7 @@ func (ctc CloneTxnCache) IsSharedFile(txnId []byte, name string) bool {
 	if !exist {
 		return false
 	}
-	
+
 	_, exist = item.sharedFiles.Get(name)
 	return exist
 }
