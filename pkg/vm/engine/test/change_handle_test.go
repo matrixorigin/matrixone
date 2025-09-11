@@ -112,23 +112,36 @@ func TestGetErrorMsg(t *testing.T) {
 	require.NoError(t, err)
 
 	ie.setError(moerr.NewInternalErrorNoCtx("debug"))
-	
+
 	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
 	require.False(t, hasError)
 	require.Error(t, err)
-	
+
 	ie.setError(nil)
 	ie.setStringError(moerr.NewInternalErrorNoCtx("debug"))
-	
+
 	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
 	require.False(t, hasError)
 	require.Error(t, err)
+
+	ie.setStringError(nil)
+
+	insert_sql = cdc.CDCSQLBuilder.InsertWatermarkSQL(uint64(accountId), taskID, "test_db", "test_table", cdc.RetryableErrorPrefix+"debug")
+	err = exec_sql(disttaeEngine, ctxWithTimeout, insert_sql)
+	require.NoError(t, err)
+
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.NoError(t, err)
 }
 
 func TestChangesHandle1(t *testing.T) {

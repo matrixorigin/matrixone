@@ -931,7 +931,7 @@ func (s *mysqlSink) Send(ctx context.Context, ar *ActiveRoutine, sqlBuf []byte, 
 	if !needRetry {
 		return f()
 	}
-	return s.retry(ctx, ar, f)
+	return retry(ctx, ar, f, s.retryTimes, s.retryDuration)
 }
 
 func (s *mysqlSink) SendBegin(ctx context.Context) (err error) {
@@ -964,11 +964,11 @@ func (s *mysqlSink) connect() (err error) {
 	return err
 }
 
-func (s *mysqlSink) retry(ctx context.Context, ar *ActiveRoutine, fn func() error) (err error) {
+func retry(ctx context.Context, ar *ActiveRoutine, fn func() error, retryTimes int, retryDuration time.Duration) (err error) {
 	needRetry := func(retry int, startTime time.Time) bool {
 		// retryTimes == -1 means retry forever
 		// do not exceed retryTimes and retryDuration
-		return (s.retryTimes == -1 || retry < s.retryTimes) && time.Since(startTime) < s.retryDuration
+		return (retryTimes == -1 || retry < retryTimes) && time.Since(startTime) < retryDuration
 	}
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
 		select {
@@ -992,7 +992,7 @@ func (s *mysqlSink) retry(ctx context.Context, ar *ActiveRoutine, fn func() erro
 
 		logutil.Errorf("cdc mysqlSink retry failed, err: %v", err)
 		v2.CdcMysqlSinkErrorCounter.Inc()
-		time.Sleep(time.Second)
+		time.Sleep(time.Second * time.Duration(2^retry))
 	}
 	return moerr.NewInternalError(ctx, "cdc mysqlSink retry exceed retryTimes or retryDuration")
 }
