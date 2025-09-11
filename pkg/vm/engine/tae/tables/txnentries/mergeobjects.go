@@ -88,6 +88,11 @@ func NewMergeObjectsEntry(
 		taskName:      taskName,
 	}
 
+	startTS := entry.txn.GetStartTS()
+	if entry.rt.BigDeleteHinter.HasBigDelAfter(entry.relation.ID(), &startTS) {
+		return nil, moerr.NewInternalErrorNoCtxf("LockMerge give up in NewMergeObjectsEntry %v", entry.taskName)
+	}
+
 	if !entry.skipTransfer && totalCreatedBlkCnt > 0 {
 		entry.delTbls = make(map[types.Objectid]map[uint16]struct{})
 		entry.collectTs = rt.Now()
@@ -422,6 +427,12 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		)
 		return
 	}
+
+	startTS := entry.txn.GetStartTS()
+	if entry.rt.BigDeleteHinter.HasBigDelAfter(entry.relation.ID(), &startTS) {
+		return moerr.NewInternalErrorNoCtxf("LockMerge give up in queue %v", entry.taskName)
+	}
+
 	// phase 2 transfer
 	ctx := context.Background()
 	transCnt, stat, err := entry.collectDelsAndTransfer(ctx, entry.collectTs, entry.txn.GetPrepareTS().Prev())
@@ -429,9 +440,6 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		return nil
 	}
 
-	if entry.rt.LockMergeService.IsLockedByUser(entry.relation.ID(), entry.relation.Schema(false).(*catalog.Schema).Name) {
-		return moerr.NewInternalErrorNoCtxf("LockMerge give up in queue %v", entry.taskName)
-	}
 	inst1 := time.Now()
 
 	total := time.Since(inst)
