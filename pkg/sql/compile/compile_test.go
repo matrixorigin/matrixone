@@ -101,6 +101,8 @@ func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
 type Ws struct {
 }
 
+func (w *Ws) SetCloneTxn(snapshot int64) {}
+
 func (w *Ws) Readonly() bool {
 	return false
 }
