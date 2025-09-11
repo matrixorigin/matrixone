@@ -756,12 +756,12 @@ func Test_tableReader_readTableWithTxn(t *testing.T) {
 	})
 	defer collectChangesStub.Reset()
 
-	_, err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
+	_, _, err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
 	assert.NoError(t, err)
 
 	ts := types.BuildTS(50, 0)
 	reader.wMarkUpdater.UpdateWatermarkOnly(context.Background(), &key, &ts)
-	_, err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
+	_, _, err = reader.readTableWithTxn(context.Background(), nil, packer, NewCdcActiveRoutine())
 	assert.NoError(t, err)
 }
 
