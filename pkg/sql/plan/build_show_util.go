@@ -207,10 +207,13 @@ func ConstructCreateTableSQL(
 				if indexdef.IndexAlgoParams != "" {
 					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
 					if err != nil {
-						return "", nil, err
+						// value not exists
+						continue
 					}
+
 					parser, err := val.StrictString()
 					if err != nil {
+						// value exists but not string type
 						return "", nil, err
 					}
 
