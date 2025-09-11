@@ -16,6 +16,7 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -72,11 +72,13 @@ func TestGetErrorMsg(t *testing.T) {
 
 	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
 	require.NoError(t, err)
-	err = exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoCdcWatermarkDDL)
+	res, err := execSql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoCdcWatermarkDDL)
+	defer res.Close()
 	require.NoError(t, err)
 	taskID := uuid.New().String()
 	insert_sql := cdc.CDCSQLBuilder.InsertWatermarkSQL(uint64(accountId), taskID, "test_db", "test_table", "1000")
-	err = exec_sql(disttaeEngine, ctxWithTimeout, insert_sql)
+	res, err = execSql(disttaeEngine, ctxWithTimeout, insert_sql)
+	defer res.Close()
 	require.NoError(t, err)
 
 	ie := &mockCDCIE{de: disttaeEngine}
@@ -88,7 +90,8 @@ func TestGetErrorMsg(t *testing.T) {
 	require.NoError(t, err)
 
 	values := fmt.Sprintf("(%d, '%s', '%s', '%s', '%s')", accountId, taskID, "test_db", "test_table", "error_msg")
-	err = exec_sql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
+	res, err = execSql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
+	defer res.Close()
 	require.NoError(t, err)
 
 	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{

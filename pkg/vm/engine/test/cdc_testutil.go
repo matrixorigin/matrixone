@@ -16,23 +16,13 @@ package test
 
 import (
 	"context"
-	"fmt"
-	"testing"
-	"time"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
-	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type internalExecResult struct {
@@ -102,43 +92,11 @@ func (m *mockCDCIE) ApplySessionOverride(options internalExecutor.SessionOverrid
 	panic("implement me")
 }
 
-func mock_mo_intra_system_change_propagation_log(
-	de *testutil.TestDisttaeEngine,
-	ctx context.Context,
-) (err error) {
-	sql := frontend.MoCatalogMoISCPLogDDL
-
-	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		panic("missing lock service")
-	}
-
-	exec := v.(executor.SQLExecutor)
-	txn, err := de.NewTxnOperator(ctx, de.Now())
-	if err != nil {
-		return err
-	}
-	opts := executor.Options{}.
-		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
-		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
-		WithDisableIncrStatement().
-		WithTxn(txn)
-
-	_, err = exec.Exec(ctx, sql, opts)
-	if err != nil {
-		return err
-	}
-	if err = txn.Commit(ctx); err != nil {
-		return err
-	}
-	return err
-}
-
-func exec_sql(
+func execSql(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
 	sql string,
-) (err error) {
+) (res executor.Result, err error) {
 
 	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -146,11 +104,11 @@ func exec_sql(
 	}
 
 	exec := v.(executor.SQLExecutor)
-	_, err = exec.Exec(ctx, sql, executor.Options{})
+	res, err = exec.Exec(ctx, sql, executor.Options{})
 	if err != nil {
-		return err
+		return
 	}
-	return nil
+	return
 }
 func mock_mo_indexes(
 	de *testutil.TestDisttaeEngine,
