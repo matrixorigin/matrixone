@@ -785,6 +785,7 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 	jobID uint64,
 	jobSpec string,
 	jobState int8,
+	watermark types.TS,
 	jobStatus string,
 ) string {
 	return fmt.Sprintf(
@@ -795,7 +796,7 @@ func (b cdcSQLBuilder) ISCPLogInsertSQL(
 		jobID,
 		jobSpec,
 		jobState,
-		types.TS{}.ToString(),
+		watermark.ToString(),
 		jobStatus,
 	)
 }
