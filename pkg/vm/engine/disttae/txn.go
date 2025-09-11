@@ -1826,6 +1826,11 @@ func (txn *Transaction) delTransaction() {
 		return
 	}
 
+	if txn.isCloneTxn {
+		txn.engine.cloneTxnCache.DeleteTxn(txn.op.Txn().ID)
+		txn.isCloneTxn = false
+	}
+
 	for i := range txn.writes {
 		if txn.writes[i].bat == nil {
 			continue
