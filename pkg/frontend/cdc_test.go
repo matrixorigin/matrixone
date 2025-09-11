@@ -18,13 +18,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"github.com/stretchr/testify/require"
 	"regexp"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/stretchr/testify/require"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
@@ -2779,6 +2780,11 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 
 	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
 	defer stub2.Reset()
+
+	stub3 := gostub.Stub(&GetTableErrMsg, func(context.Context, uint32, ie.InternalExecutor, string, *cdc.DbTableInfo) (bool, error) {
+		return false, nil
+	})
+	defer stub3.Reset()
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
