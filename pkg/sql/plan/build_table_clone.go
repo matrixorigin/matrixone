@@ -140,6 +140,8 @@ func buildCloneTable(
 		return nil, err
 	}
 
+	ctx.GetProcess().GetTxnOperator().GetWorkspace().SetCloneTxn(bindCtx.snapshot.TS.PhysicalTime)
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

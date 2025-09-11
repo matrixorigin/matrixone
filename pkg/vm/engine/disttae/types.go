@@ -51,10 +51,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
 
@@ -274,6 +276,8 @@ type Engine struct {
 	dynamicCtx
 	// for test only.
 	skipConsume bool
+
+	cloneTxnCache *CloneTxnCache
 }
 
 func (e *Engine) SetService(svr string) {
@@ -378,11 +382,17 @@ type Transaction struct {
 
 	adjustCount int
 
-	haveDDL atomic.Bool
+	haveDDL    atomic.Bool
+	isCloneTxn bool
 
 	writeWorkspaceThreshold      uint64
 	commitWorkspaceThreshold     uint64
 	extraWriteWorkspaceThreshold uint64 // acquired from engine quota
+}
+
+func (txn *Transaction) SetCloneTxn(snapshot int64) {
+	txn.isCloneTxn = true
+	txn.engine.cloneTxnCache.AddTxn(txn.op.Txn().ID, snapshot)
 }
 
 type Summary struct {
@@ -706,13 +716,20 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	//	return nil
 }
 
-func gcFiles(e *Engine, names ...string) error {
+func gcFiles(txn *Transaction, names ...string) error {
+	if txn.isCloneTxn {
+		names = readutil.RemoveIf(names, func(name string) bool {
+			ok := txn.engine.cloneTxnCache.IsSharedFile(txn.op.Txn().ID, name)
+			return ok
+		})
+	}
+
 	//gc the objects asynchronously.
 	//TODO:: to handle the failure when CN is down.
 	step := GCBatchOfFileCount
 	if len(names) > 0 && len(names) < step {
-		if err := e.gcPool.Submit(func() {
-			if err := e.fs.Delete(context.Background(), names...); err != nil {
+		if err := txn.engine.gcPool.Submit(func() {
+			if err := txn.engine.fs.Delete(context.Background(), names...); err != nil {
 				logutil.Warnf("failed to delete objects:%v, err:%v", names, err)
 			}
 		}); err != nil {
@@ -728,9 +745,9 @@ func gcFiles(e *Engine, names ...string) error {
 		}
 		start := i
 		end := i + step
-		if err := e.gcPool.Submit(func() {
+		if err := txn.engine.gcPool.Submit(func() {
 			//notice that the closure can't capture the loop variable i, so we need to use start and end.
-			if err := e.fs.Delete(context.Background(), names[start:end]...); err != nil {
+			if err := txn.engine.fs.Delete(context.Background(), names[start:end]...); err != nil {
 				logutil.Warnf("failed to delete objects:%v, err:%v", names[i:i+step], err)
 			}
 		}); err != nil {
@@ -759,7 +776,7 @@ func (txn *Transaction) GCObjsByStats(sl ...objectio.ObjectStats) (err error) {
 		names = append(names, stats.ObjectName().String())
 	}
 
-	return gcFiles(txn.engine, names...)
+	return gcFiles(txn, names...)
 }
 
 // [start, end]
@@ -804,7 +821,7 @@ func (txn *Transaction) GCObjsByIdxRange(start, end int) (err error) {
 		}
 	}
 
-	return gcFiles(txn.engine, objsName...)
+	return gcFiles(txn, objsName...)
 }
 
 func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
@@ -1069,4 +1086,67 @@ type txnTable struct {
 type blockSortHelper struct {
 	blk *objectio.BlockInfo
 	zm  index.ZM
+}
+
+type CloneTxnCache struct {
+	items *btree.BTreeG[cloneTxnItem]
+}
+
+func newCloneTxnCache() *CloneTxnCache {
+	return &CloneTxnCache{
+		items: btree.NewBTreeG(cloneTxnItem.Less),
+	}
+}
+
+func (ctc CloneTxnCache) IsSharedFile(txnId []byte, name string) bool {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return false
+	}
+	
+	_, exist = item.sharedFiles.Get(name)
+	return exist
+}
+
+func (ctc CloneTxnCache) DeleteTxn(txnId []byte) {
+	ctc.items.Delete(cloneTxnItem{txnID: txnId})
+}
+
+func (ctc CloneTxnCache) AddSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.sharedFiles.Set(name)
+	ctc.items.Set(item)
+}
+
+func (ctc CloneTxnCache) AddTxn(txnId []byte, snapshot int64) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if exist {
+		if item.snapTS > snapshot {
+			item.snapTS = snapshot
+			ctc.items.Set(item)
+		}
+		return
+	}
+
+	item = cloneTxnItem{
+		txnID:       txnId,
+		snapTS:      snapshot,
+		sharedFiles: btree.NewBTreeG(func(a, b string) bool { return a < b }),
+	}
+
+	ctc.items.Set(item)
+}
+
+type cloneTxnItem struct {
+	txnID       []byte
+	snapTS      int64
+	sharedFiles *btree.BTreeG[string]
+}
+
+func (cti cloneTxnItem) Less(other cloneTxnItem) bool {
+	return types.Uuid(cti.txnID).Lt(types.Uuid(other.txnID))
 }
