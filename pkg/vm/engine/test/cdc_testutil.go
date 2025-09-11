@@ -21,6 +21,7 @@ import (
 	"time"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -29,9 +30,77 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+type internalExecResult struct {
+	affectedRows uint64
+	batch        *batch.Batch
+	err          error
+}
+
+func (res *internalExecResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
+	return 0, nil
+}
+
+func (res *internalExecResult) Error() error {
+	return res.err
+}
+
+func (res *internalExecResult) ColumnCount() uint64 {
+	return 1
+}
+
+func (res *internalExecResult) Column(ctx context.Context, i uint64) (name string, typ uint8, signed bool, err error) {
+	return "test", 1, true, nil
+}
+
+func (res *internalExecResult) RowCount() uint64 {
+	if res.batch == nil {
+		return 0
+	}
+	return uint64(res.batch.RowCount())
+}
+
+func (res *internalExecResult) Row(ctx context.Context, i uint64) ([]interface{}, error) {
+	return nil, nil
+}
+
+func (res *internalExecResult) Value(ctx context.Context, ridx uint64, cidx uint64) (interface{}, error) {
+	return nil, nil
+}
+
+func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cid uint64) (float64, error) {
+	return 0.0, nil
+}
+func (res *internalExecResult) GetString(ctx context.Context, ridx uint64, cid uint64) (string, error) {
+	return res.batch.Vecs[cid].GetStringAt(int(ridx)), nil
+}
+
+type mockCDCIE struct {
+	de *testutil.TestDisttaeEngine
+}
+
+func (m *mockCDCIE) Exec(ctx context.Context, s string, options internalExecutor.SessionOverrideOptions) error {
+	panic("implement me")
+}
+
+func (m *mockCDCIE) Query(ctx context.Context, s string, options internalExecutor.SessionOverrideOptions) internalExecutor.InternalExecResult {
+	res, err := execSql(m.de, ctx, s)
+	var bat *batch.Batch
+	if len(res.Batches) > 0 {
+		bat = res.Batches[0]
+	}
+	return &internalExecResult{
+		batch: bat,
+		err:   err,
+	}
+}
+func (m *mockCDCIE) ApplySessionOverride(options internalExecutor.SessionOverrideOptions) {
+	panic("implement me")
+}
 
 func mock_mo_intra_system_change_propagation_log(
 	de *testutil.TestDisttaeEngine,
@@ -65,6 +134,24 @@ func mock_mo_intra_system_change_propagation_log(
 	return err
 }
 
+func exec_sql(
+	de *testutil.TestDisttaeEngine,
+	ctx context.Context,
+	sql string,
+) (err error) {
+
+	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+
+	exec := v.(executor.SQLExecutor)
+	_, err = exec.Exec(ctx, sql, executor.Options{})
+	if err != nil {
+		return err
+	}
+	return nil
+}
 func mock_mo_indexes(
 	de *testutil.TestDisttaeEngine,
 	ctx context.Context,
