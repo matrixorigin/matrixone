@@ -36,9 +36,9 @@ import (
 )
 
 type internalExecResult struct {
-	affectedRows uint64
-	batch        *batch.Batch
-	err          error
+	batch     *batch.Batch
+	err       error
+	stringErr error
 }
 
 func (res *internalExecResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
@@ -76,11 +76,24 @@ func (res *internalExecResult) GetFloat64(ctx context.Context, ridx uint64, cid 
 	return 0.0, nil
 }
 func (res *internalExecResult) GetString(ctx context.Context, ridx uint64, cid uint64) (string, error) {
+	if res.stringErr != nil {
+		return "", res.stringErr
+	}
 	return res.batch.Vecs[cid].GetStringAt(int(ridx)), nil
 }
 
 type mockCDCIE struct {
-	de *testutil.TestDisttaeEngine
+	de        *testutil.TestDisttaeEngine
+	err       error
+	stringErr error
+}
+
+func (m *mockCDCIE) setError(err error) {
+	m.err = err
+}
+
+func (m *mockCDCIE) setStringError(err error) {
+	m.stringErr = err
 }
 
 func (m *mockCDCIE) Exec(ctx context.Context, s string, options internalExecutor.SessionOverrideOptions) error {
@@ -88,10 +101,23 @@ func (m *mockCDCIE) Exec(ctx context.Context, s string, options internalExecutor
 }
 
 func (m *mockCDCIE) Query(ctx context.Context, s string, options internalExecutor.SessionOverrideOptions) internalExecutor.InternalExecResult {
+	if m.err != nil {
+		return &internalExecResult{
+			batch: nil,
+			err:   m.err,
+		}
+	}
 	res, err := execSql(m.de, ctx, s)
 	var bat *batch.Batch
 	if len(res.Batches) > 0 {
 		bat = res.Batches[0]
+	}
+	if m.stringErr != nil {
+		return &internalExecResult{
+			batch:     bat,
+			err:       err,
+			stringErr: m.stringErr,
+		}
 	}
 	return &internalExecResult{
 		batch: bat,

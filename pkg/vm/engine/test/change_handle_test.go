@@ -66,6 +66,7 @@ func TestGetErrorMsg(t *testing.T) {
 	defer cancel()
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
 
 	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
 	defer func() {
@@ -79,12 +80,20 @@ func TestGetErrorMsg(t *testing.T) {
 	err = exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoCdcWatermarkDDL)
 	require.NoError(t, err)
 	taskID := uuid.New().String()
+
+	ie := &mockCDCIE{de: disttaeEngine}
+	hasError, err := frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.NoError(t, err)
 	insert_sql := cdc.CDCSQLBuilder.InsertWatermarkSQL(uint64(accountId), taskID, "test_db", "test_table", "1000")
 	err = exec_sql(disttaeEngine, ctxWithTimeout, insert_sql)
 	require.NoError(t, err)
 
-	ie := &mockCDCIE{de: disttaeEngine}
-	hasError, err := frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+	ie = &mockCDCIE{de: disttaeEngine}
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
 		SourceDbName:  "test_db",
 		SourceTblName: "test_table",
 	})
@@ -101,6 +110,25 @@ func TestGetErrorMsg(t *testing.T) {
 	})
 	require.True(t, hasError)
 	require.NoError(t, err)
+
+	ie.setError(moerr.NewInternalErrorNoCtx("debug"))
+	
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.Error(t, err)
+	
+	ie.setError(nil)
+	ie.setStringError(moerr.NewInternalErrorNoCtx("debug"))
+	
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.Error(t, err)
 }
 
 func TestChangesHandle1(t *testing.T) {
