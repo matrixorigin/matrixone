@@ -17,11 +17,13 @@ package frontend
 import (
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -518,6 +520,7 @@ var GetTableErrMsg = func(
 	if strings.HasPrefix(errMsg, cdc.RetryableErrorPrefix) {
 		return false, nil
 	}
+	hasError = true
 	return
 }
 
