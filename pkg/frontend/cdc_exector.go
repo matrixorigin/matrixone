@@ -519,6 +519,7 @@ var GetTableErrMsg = func(
 	if strings.HasPrefix(errMsg, cdc.RetryableErrorPrefix) {
 		return false, nil
 	}
+	hasError = true
 	return
 }
 
