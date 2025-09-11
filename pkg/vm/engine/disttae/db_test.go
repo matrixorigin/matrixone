@@ -64,5 +64,5 @@ func Test_requestSnapshotRead_Smoke(t *testing.T) {
 	// ensure compatibility with requestSnapshotRead API which uses timestamp.Timestamp
 	_ = timestamp.Timestamp{}
 
-	_, _ = requestSnapshotRead(ctx, tbl, &ts)
+	_, _ = RequestSnapshotRead(ctx, tbl, &ts)
 }

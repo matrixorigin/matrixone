@@ -113,7 +113,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		statusJson,
 		ISCPJobState_Completed,
 	)
-	_, err = ExecWithResult(
+	result, err := ExecWithResult(
 		ctx,
 		sql,
 		jobEntry.tableInfo.exec.cnUUID,
@@ -133,6 +133,7 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		)
 		return
 	}
+	result.Close()
 	jobEntry.persistedWatermark = jobEntry.watermark
 	return
 }

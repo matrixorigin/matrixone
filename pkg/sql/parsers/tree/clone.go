@@ -17,6 +17,7 @@ package tree
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
@@ -82,14 +83,16 @@ type CloneTable struct {
 
 	Sql      string
 	StmtType CloneStmtType
+
+	stmtKind StmtKind
 }
 
 func (node *CloneTable) StmtKind() StmtKind {
-	if len(string(node.ToAccountName)) != 0 {
-		return frontendStatusTyp
-	}
+	return node.stmtKind
+}
 
-	return defaultStatusTyp
+func (node *CloneTable) FlipStmtKind() {
+	node.stmtKind = defaultStatusTyp
 }
 
 func (node *CloneTable) Format(ctx *FmtCtx) {
@@ -101,7 +104,9 @@ func (node *CloneTable) GetStatementType() string { return "CREATE TABLE CLONE" 
 func (node *CloneTable) GetQueryType() string     { return QueryTypeOth }
 
 func NewCloneTable() *CloneTable {
-	return reuse.Alloc[CloneTable](nil)
+	clone := reuse.Alloc[CloneTable](nil)
+	clone.stmtKind = frontendStatusTyp
+	return clone
 }
 
 func (node *CloneTable) TypeName() string { return "tree.CloneTable" }

@@ -49,6 +49,8 @@ type testWorkspace struct {
 	reportErr1 bool
 }
 
+func (txn *testWorkspace) SetCloneTxn(snapshot int64) {}
+
 func (txn *testWorkspace) Readonly() bool {
 	panic("implement me")
 }

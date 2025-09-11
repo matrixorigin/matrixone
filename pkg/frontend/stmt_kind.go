@@ -229,7 +229,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.SetVar:
 		return true, nil
-	case *tree.CloneTable:
+	case *tree.CloneTable, *tree.CloneDatabase:
 		return true, nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
