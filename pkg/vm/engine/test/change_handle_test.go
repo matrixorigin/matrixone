@@ -131,8 +131,8 @@ func TestGetErrorMsg(t *testing.T) {
 
 	ie.setStringError(nil)
 
-	insert_sql = cdc.CDCSQLBuilder.InsertWatermarkSQL(uint64(accountId), taskID, "test_db", "test_table", cdc.RetryableErrorPrefix+"debug")
-	res, err = execSql(disttaeEngine, ctxWithTimeout, insert_sql)
+	values = fmt.Sprintf("(%d, '%s', '%s', '%s', '%s')", accountId, taskID, "test_db", "test_table", cdc.RetryableErrorPrefix+"debug")
+	res, err = execSql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
 	defer res.Close()
 	require.NoError(t, err)
 
