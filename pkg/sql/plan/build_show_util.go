@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -204,12 +205,16 @@ func ConstructCreateTableSQL(
 				indexStr += ")"
 
 				if indexdef.IndexAlgoParams != "" {
-					paramMap, err := catalog.IndexParamsStringToMap(indexdef.IndexAlgoParams)
+					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
 					if err != nil {
 						return "", nil, err
 					}
-					parser, ok := paramMap["parser"]
-					if ok {
+					parser, err := val.StrictString()
+					if err != nil {
+						return "", nil, err
+					}
+
+					if len(parser) > 0 {
 						indexStr += " WITH PARSER " + parser
 					}
 				}

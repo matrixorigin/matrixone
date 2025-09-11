@@ -15,8 +15,7 @@
 package plan
 
 import (
-	"encoding/json"
-
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -64,13 +63,12 @@ func (builder *QueryBuilder) checkValidHnswDistFn(nodeID int32, projNode, sortNo
 
 	idxdef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	val, err := sonic.Get([]byte(idxdef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
 	if err != nil {
 		return false
 	}
-
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
+	optype, err := val.StrictString()
+	if err != nil {
 		return false
 	}
 
@@ -131,7 +129,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, projNode
 		IndexTable:    idxdef.IndexTableName,
 		ThreadsSearch: val.(int64)}
 
-	cfgbytes, err := json.Marshal(tblcfg)
+	cfgbytes, err := sonic.Marshal(tblcfg)
 	if err != nil {
 		return nodeID, err
 	}
