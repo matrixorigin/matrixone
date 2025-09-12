@@ -164,6 +164,7 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 
 		spillState, ok := spillData.(*SpillableAggState)
 		if !ok {
+			spillData.Free(proc.Mp())
 			return fmt.Errorf("invalid spilled data type")
 		}
 

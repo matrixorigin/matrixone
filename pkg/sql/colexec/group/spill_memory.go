@@ -53,6 +53,7 @@ func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableDat
 
 	data := &SpillableAggState{}
 	if err := data.Deserialize(serialized, mp); err != nil {
+		data.Free(mp)
 		return nil, err
 	}
 	return data, nil
