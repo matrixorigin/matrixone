@@ -938,6 +938,12 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 			case *plan.Literal_EnumVal:
 				veccol := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 				veccol[i] = types.Enum(val.EnumVal)
+			case *plan.Literal_VecVal:
+				sval := val.VecVal
+				err = vector.SetStringAt(vec, i, sval, proc.Mp())
+				if err != nil {
+					return nil, err
+				}
 			default:
 				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.GetValue()))
 			}
