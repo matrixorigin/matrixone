@@ -443,7 +443,7 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 	}
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %T", row[w.partsPos[0]]))
+		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
 	}
 
 	if v == nil {
@@ -463,7 +463,7 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 	}
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %T", row[w.partsPos[0]]))
+		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
 	}
 
 	if v == nil {
