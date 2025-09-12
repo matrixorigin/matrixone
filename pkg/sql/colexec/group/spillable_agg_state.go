@@ -74,7 +74,7 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (s *SpillableAggState) Deserialize(data []byte) error {
+func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 	buf := bytes.NewReader(data)
 
 	var groupCount int32
@@ -104,7 +104,7 @@ func (s *SpillableAggState) Deserialize(data []byte) error {
 		}
 
 		vec := vector.NewVec(types.T_any.ToType())
-		if err := vec.UnmarshalBinary(vecBytes); err != nil {
+		if err := vec.UnmarshalBinaryWithCopy(vecBytes, mp); err != nil {
 			return err
 		}
 		s.GroupVectors[i] = vec
