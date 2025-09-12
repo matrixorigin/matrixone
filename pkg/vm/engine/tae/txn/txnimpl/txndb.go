@@ -422,7 +422,7 @@ func (db *txnDB) ApplyRollback() (err error) {
 	return
 }
 
-func (db *txnDB) WaitPrepared() (err error) {
+func (db *txnDB) WaitWal() (err error) {
 	for _, table := range db.tables {
 		table.WaitSynced()
 	}
