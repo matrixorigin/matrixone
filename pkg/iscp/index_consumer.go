@@ -368,7 +368,10 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, upsertIter *atomicBatchR
 
 	}
 
-	c.sqlWriter.Insert(ctx, c.rowdata)
+	err = c.sqlWriter.Insert(ctx, c.rowdata)
+	if err != nil {
+		return err
+	}
 
 	if c.sqlWriter.Full() {
 		// send SQL
@@ -398,7 +401,10 @@ func (c *IndexConsumer) sinkDelete(ctx context.Context, deleteIter *atomicBatchR
 
 	}
 
-	c.sqlWriter.Delete(ctx, c.rowdelete)
+	err = c.sqlWriter.Delete(ctx, c.rowdelete)
+	if err != nil {
+		return err
+	}
 
 	if c.sqlWriter.Full() {
 		// send SQL
@@ -423,8 +429,8 @@ func (c *IndexConsumer) sendSql(writer IndexSqlWriter) error {
 	}
 
 	c.sqlBufSendCh <- sql
-	os.Stderr.WriteString(string(sql))
-	os.Stderr.WriteString("\n")
+	//os.Stderr.WriteString(string(sql))
+	//os.Stderr.WriteString("\n")
 
 	// reset
 	writer.Reset()
