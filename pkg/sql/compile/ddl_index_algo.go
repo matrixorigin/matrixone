@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -228,11 +229,16 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	cfg.DataSize = totalCnt
 
 	// 1.a algo params
-	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+	listsval, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamLists)
 	if err != nil {
 		return err
 	}
-	centroidParamsLists, err := strconv.Atoi(params[catalog.IndexAlgoParamLists])
+	centroidParamsListsStr, err := listsval.StrictString()
+	if err != nil {
+		return err
+	}
+
+	centroidParamsLists, err := strconv.Atoi(centroidParamsListsStr)
 	if err != nil {
 		return err
 	}
@@ -319,13 +325,13 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	centroidsTableName string) error {
 
 	// 1.a algo params
-	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+	val, err := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
 	if err != nil {
 		return err
 	}
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("vector optype not found")
+	optype, err := val.StrictString()
+	if err != nil {
+		return err
 	}
 
 	// 1. Original table's pkey name and value
