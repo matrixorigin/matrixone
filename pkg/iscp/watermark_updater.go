@@ -103,10 +103,11 @@ func RegisterJob(
 	pitr_name string,
 	jobSpec *JobSpec,
 	jobID *JobID,
+	startFromNow bool,
 ) (ok bool, err error) {
 	return ok, retry(
 		func() error {
-			ok, err = registerJob(ctx, cnUUID, txn, pitr_name, jobSpec, jobID)
+			ok, err = registerJob(ctx, cnUUID, txn, pitr_name, jobSpec, jobID, startFromNow)
 			return err
 		},
 		DefaultRetryTimes,
@@ -181,7 +182,9 @@ func unregisterJobsByDBName(
 		updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
 		_, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
 	}
-
+	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
+	result, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
+	result.Close()
 	return
 }
 
@@ -192,9 +195,14 @@ func registerJob(
 	pitr_name string,
 	jobSpec *JobSpec,
 	jobID *JobID,
+	startFromNow bool,
 ) (ok bool, err error) {
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	startTs := types.TS{}
+	if startFromNow {
+		startTs = types.TimestampToTS(txn.SnapshotTS())
+	}
 	defer cancel()
 	var tenantId uint32
 	var tableID uint64
@@ -217,6 +225,7 @@ func registerJob(
 			zap.Uint64("jobID", internalJobID),
 			zap.Bool("create new", ok),
 			zap.Bool("dropped", dropped),
+			zap.String("startTs", startTs.ToString()),
 			zap.Error(err),
 		)
 	}()
@@ -276,12 +285,14 @@ func registerJob(
 		internalJobID,
 		jobSpecJson,
 		ISCPJobState_Completed,
+		startTs,
 		string(jobStatusJson),
 	)
-	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
+	result.Close()
 	return
 }
 
@@ -396,7 +407,8 @@ func updateJobSpec(
 		internalJobID,
 		jobSpecJson,
 	)
-	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result.Close()
 	return
 }
 func unregisterJob(
@@ -465,10 +477,11 @@ func unregisterJob(
 		jobID.JobName,
 		internalJobID,
 	)
-	_, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
+	result.Close()
 	return
 }
 

@@ -434,9 +434,12 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	createByOpt := client.WithTxnCreateBy(
 		0,
 		"",
-		"iscp iteration",
+		"iscp apply iscp log",
 		0)
 	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
+	if txnOp != nil {
+		defer txnOp.Commit(ctx)
+	}
 	if err != nil {
 		return
 	}
@@ -455,7 +458,6 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	if err != nil {
 		return
 	}
-	defer txnOp.Commit(ctx)
 	changes, err := CollectChanges(ctx, rel, from, to, exec.mp)
 	if err != nil {
 		return
@@ -465,6 +467,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	for {
 		var insertData, deleteData *batch.Batch
 		insertData, deleteData, _, err = changes.Next(ctx, exec.mp)
+		if err != nil {
+			return
+		}
 		if insertData == nil && deleteData == nil {
 			break
 		}
@@ -788,9 +793,11 @@ func (exec *ISCPTaskExecutor) GC(cleanupThreshold time.Duration) (err error) {
 	defer txn.Commit(ctx)
 	gcTime := time.Now().Add(-cleanupThreshold)
 	iscpLogGCSql := cdc.CDCSQLBuilder.ISCPLogGCSQL(gcTime)
-	if _, err = ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn); err != nil {
+	result, err := ExecWithResult(ctx, iscpLogGCSql, exec.cnUUID, txn)
+	if err != nil {
 		return err
 	}
+	result.Close()
 	logutil.Info(
 		"ISCP-Task GC",
 		zap.Any("gcTime", gcTime),

@@ -16,8 +16,11 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,8 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"go.uber.org/zap"
 )
 
 const DefaultLoadParallism = 20
@@ -43,20 +49,204 @@ func (tbl *txnTable) CollectChanges(
 	if from.IsEmpty() {
 		return NewCheckpointChangesHandle(ctx, tbl, to, mp)
 	}
-	state, err := tbl.getPartitionState(ctx)
+	return NewPartitionChangesHandle(ctx, tbl, from, to, skipDeletes, mp)
+}
+
+type PartitionChangesHandle struct {
+	currentChangeHandle engine.ChangesHandle
+	currentPSFrom       types.TS
+	currentPSTo         types.TS
+	closeMu             sync.Mutex
+	handleIdx           int
+
+	fromTs types.TS
+	toTs   types.TS
+	tbl    *txnTable
+
+	skipDeletes   bool
+	primarySeqnum int
+	mp            *mpool.MPool
+	fs            fileservice.FileService
+}
+
+func NewPartitionChangesHandle(
+	ctx context.Context,
+	tbl *txnTable,
+	from, to types.TS,
+	skipDeletes bool,
+	mp *mpool.MPool,
+) (*PartitionChangesHandle, error) {
+	handle := &PartitionChangesHandle{
+		tbl:           tbl,
+		fromTs:        from,
+		toTs:          to,
+		skipDeletes:   skipDeletes,
+		primarySeqnum: tbl.primarySeqnum,
+		mp:            mp,
+		fs:            tbl.getTxn().engine.fs,
+	}
+	end, err := handle.getNextChangeHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return logtailreplay.NewChangesHandler(
-		ctx,
-		state,
-		from, to,
-		skipDeletes,
-		objectio.BlockMaxRows,
-		tbl.primarySeqnum,
-		mp,
-		tbl.getTxn().engine.fs,
+	if end {
+		panic(fmt.Sprintf("logic error: from %s to %s", from.ToString(), to.ToString()))
+	}
+	return handle, err
+}
+
+func (h *PartitionChangesHandle) Next(ctx context.Context, mp *mpool.MPool) (data, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	for {
+		data, tombstone, hint, err = h.currentChangeHandle.Next(ctx, mp)
+		if err != nil {
+			return
+		}
+		if data != nil || tombstone != nil {
+			return
+		}
+		var end bool
+		end, err = h.getNextChangeHandle(
+			ctx,
+		)
+		if err != nil {
+			return
+		}
+		if end {
+			return
+		}
+	}
+
+}
+
+func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end bool, err error) {
+	if h.currentPSTo.EQ(&h.toTs) {
+		return true, nil
+	}
+	state, err := h.tbl.getPartitionState(ctx)
+	if err != nil {
+		return
+	}
+	var nextFrom types.TS
+	if h.currentPSFrom.IsEmpty() {
+		nextFrom = h.fromTs
+	} else {
+		nextFrom = h.currentPSTo.Next()
+	}
+	stateStart := state.GetStart()
+	if stateStart.LT(&nextFrom) {
+		h.currentPSTo = h.toTs
+		h.currentPSFrom = nextFrom
+		if h.handleIdx != 0 {
+			err = h.closeCurrentChangeHandle()
+			if err != nil {
+				return
+			}
+			logutil.Info("ChangesHandle-Split change handles",
+				zap.String("from", h.fromTs.ToString()),
+				zap.String("to", h.toTs.ToString()),
+				zap.String("ps from", h.currentPSFrom.ToString()),
+				zap.String("ps to", h.currentPSTo.ToString()),
+				zap.Int("handle idx", h.handleIdx),
+			)
+		}
+		h.handleIdx++
+		h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
+			ctx,
+			state,
+			h.currentPSFrom,
+			h.currentPSTo,
+			h.skipDeletes,
+			objectio.BlockMaxRows,
+			h.primarySeqnum,
+			h.mp,
+			h.fs,
+		)
+		if err != nil {
+			return
+		}
+		return
+	}
+
+	response, err := RequestSnapshotRead(ctx, h.tbl, &nextFrom)
+	if err != nil {
+		return
+	}
+	resp, ok := response.(*cmd_util.SnapshotReadResp)
+	var checkpointEntries []*checkpoint.CheckpointEntry
+	minTS := types.MaxTs()
+	maxTS := types.TS{}
+	if ok && resp.Succeed && len(resp.Entries) > 0 {
+		checkpointEntries = make([]*checkpoint.CheckpointEntry, 0, len(resp.Entries))
+		entries := resp.Entries
+		for _, entry := range entries {
+			start := types.TimestampToTS(*entry.Start)
+			end := types.TimestampToTS(*entry.End)
+			if start.LT(&minTS) {
+				minTS = start
+			}
+			if end.GT(&maxTS) {
+				maxTS = end
+			}
+			entryType := entry.EntryType
+			checkpointEntry := checkpoint.NewCheckpointEntry("", start, end, checkpoint.EntryType(entryType))
+			checkpointEntry.SetLocation(entry.Location1, entry.Location2)
+			checkpointEntries = append(checkpointEntries, checkpointEntry)
+		}
+	}
+	if nextFrom.LT(&minTS) {
+		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
+	}
+	h.currentPSFrom = minTS
+	if h.fromTs.GT(&minTS) {
+		h.currentPSFrom = h.fromTs
+	}
+	h.currentPSTo = maxTS
+	if h.toTs.LT(&maxTS) {
+		h.currentPSTo = h.toTs
+	}
+	logutil.Info("ChangesHandle-Split change handles",
+		zap.String("from", h.fromTs.ToString()),
+		zap.String("to", h.toTs.ToString()),
+		zap.String("ps from", h.currentPSFrom.ToString()),
+		zap.String("ps to", h.currentPSTo.ToString()),
+		zap.Int("handle idx", h.handleIdx),
 	)
+	h.handleIdx++
+	err = h.closeCurrentChangeHandle()
+	if err != nil {
+		return
+	}
+	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
+		ctx,
+		h.tbl.tableId,
+		h.tbl.proc.Load().GetService(),
+		checkpointEntries,
+		h.currentPSFrom,
+		h.currentPSTo,
+		h.skipDeletes,
+		objectio.BlockMaxRows,
+		h.primarySeqnum,
+		h.mp,
+		h.fs,
+	)
+	if err != nil {
+		return
+	}
+	return false, nil
+}
+
+func (h *PartitionChangesHandle) Close() error {
+	return h.closeCurrentChangeHandle()
+}
+
+func (h *PartitionChangesHandle) closeCurrentChangeHandle() (err error) {
+	h.closeMu.Lock()
+	defer h.closeMu.Unlock()
+	if h.currentChangeHandle != nil {
+		err = h.currentChangeHandle.Close()
+		h.currentChangeHandle = nil
+	}
+	return
 }
 
 type CheckpointChangesHandle struct {

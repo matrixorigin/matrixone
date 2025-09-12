@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1791,6 +1792,68 @@ func Test_CNTransferTombstoneObjects(t *testing.T) {
 			})
 
 			res.Close()
+		}
+	}
+}
+
+func TestGCFiles(t *testing.T) {
+	var (
+		err error
+	)
+
+	p := testutil.InitEnginePack(testutil.TestOptions{}, t)
+	defer p.Close()
+
+	var (
+		pool  *ants.Pool
+		files = make([]objectio.ObjectStats, 3)
+	)
+
+	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x1})
+	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x2})
+	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x3})
+
+	op := p.StartCNTxn()
+	txn := op.GetWorkspace().(*disttae.Transaction)
+
+	txn.GetProc()
+
+	for j := 0; j < 2; j++ {
+		if j == 1 {
+			pool, err = ants.NewPool(0, ants.WithNonblocking(true))
+			require.NoError(t, err)
+			p.D.Engine.ResetGCWorkerPool(pool)
+			pool.Release()
+		}
+
+		err = txn.GCObjsByStats(files...)
+		if j == 1 {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+
+		for i := range files {
+			objectio.SetObjectStatsBlkCnt(&files[i], 1)
+			objectio.SetObjectStatsRowCnt(&files[i], 1)
+			bat := colexec.AllocCNS3ResultBat(false, false)
+			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
+			err = txn.WriteFile(
+				disttae.INSERT,
+				0, 0, 0,
+				"", "", "0x1",
+				bat, disttae.DNStore{},
+			)
+
+			require.NoError(t, err)
+			bat.Clean(p.Mp)
+		}
+
+		err = txn.GCObjsByIdxRange(0, len(files)-1)
+		if j == 1 {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
 		}
 	}
 }

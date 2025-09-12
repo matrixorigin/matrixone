@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -160,6 +160,8 @@ func New(
 		v2.TxnExtraWorkspaceQuotaGauge.Set(float64(e.config.memThrottler.Available()))
 	}
 
+	e.cloneTxnCache = newCloneTxnCache()
+
 	logutil.Info(
 		"INIT-ENGINE-CONFIG",
 		zap.Int("InsertEntryMaxCount", e.config.insertEntryMaxCount),
@@ -176,7 +178,10 @@ func (e *Engine) Close() error {
 	if e.gcPool != nil {
 		_ = e.gcPool.ReleaseTimeout(time.Second * 3)
 	}
+
 	e.dynamicCtx.Close()
+	e.cloneTxnCache = nil
+
 	return nil
 }
 
@@ -211,6 +216,20 @@ func (e *Engine) SetWorkspaceThreshold(commitThreshold, writeThreshold uint64) (
 		e.config.writeWorkspaceThreshold = writeThreshold * mpool.MB
 	}
 	return
+}
+
+// for UT
+func (e *Engine) ForceGC(ctx context.Context, ts types.TS) {
+	parts := make(map[[2]uint64]*logtailreplay.Partition)
+	e.Lock()
+	for ids, part := range e.partitions {
+		parts[ids] = part
+	}
+	e.Unlock()
+	for ids, part := range parts {
+		part.Truncate(ctx, ids, ts)
+	}
+	e.catalog.Load().GC(ts.ToTimestamp())
 }
 
 func (e *Engine) AcquireQuota(v int64) (int64, bool) {

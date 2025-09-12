@@ -432,10 +432,11 @@ func FlushStatus(
 		statusJson,
 		state,
 	)
-	_, err = ExecWithResult(ctx, sql, cnUUID, txn)
+	result, err := ExecWithResult(ctx, sql, cnUUID, txn)
 	if err != nil {
 		return
 	}
+	result.Close()
 	return
 }
 
