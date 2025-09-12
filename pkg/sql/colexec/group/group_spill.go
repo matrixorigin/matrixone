@@ -78,7 +78,7 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 
 		for i := 0; i < numGroupByCols; i++ {
 			if len(group.ctr.result1.ToPopped[0].Vecs) > i && group.ctr.result1.ToPopped[0].Vecs[i] != nil {
-				groupVecs[i] = vector.NewVec(*group.ctr.result1.ToPopped[0].Vecs[i].GetType())
+				groupVecs[i] = vector.NewOffHeapVecWithType(*group.ctr.result1.ToPopped[0].Vecs[i].GetType())
 			}
 		}
 

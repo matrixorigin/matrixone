@@ -103,7 +103,7 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 			return err
 		}
 
-		vec := vector.NewVec(types.T_any.ToType())
+		vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
 		if err := vec.UnmarshalBinaryWithCopy(vecBytes, mp); err != nil {
 			vec.Free(mp)
 			return err
