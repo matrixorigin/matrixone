@@ -38,6 +38,11 @@ var (
 	ErrTxnNeedRetry  = moerr.NewTAENeedRetryNoCtx()
 )
 
+const (
+	TailCollecting = iota
+	WalPreparing
+)
+
 type Txn2PC interface {
 	Freeze(ctx context.Context) error
 	PrepareRollback() error
@@ -129,8 +134,8 @@ type TxnWriter interface {
 }
 
 type TxnAsyncer interface {
-	WaitDone(error, bool) error
-	WaitPrepared(ctx context.Context) error
+	DoneApply(error, bool) error
+	WaitWalAndTail(ctx context.Context) error
 }
 
 type TxnTest interface {
@@ -256,7 +261,6 @@ type TxnStore interface {
 	Tracer
 	Txn2PC
 	TxnUnsafe
-	WaitPrepared(ctx context.Context) error
 	BindTxn(AsyncTxn, bool)
 	GetLSN() uint64
 	GetContext() context.Context
@@ -322,6 +326,11 @@ type TxnStore interface {
 	IsHeartbeat() bool
 	UpdateObjectStats(*common.ID, *objectio.ObjectStats, bool) error
 	FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error
+
+	WaitWalAndTail(ctx context.Context) error
+	DoneEvent(typ int)
+	AddEvent(typ int)
+	WaitEvent(typ int)
 }
 
 type TxnEntry interface {

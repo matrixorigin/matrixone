@@ -114,9 +114,8 @@ const (
 
 const (
 	TraceStart = iota
-	TracePreparing
-	TracePrepareWalWait
-	TracePrepareWal
-	TracePreapredWait
-	TracePrepared
+	TracePreWal
+	TraceOnWal
+	TracePostWal
+	TraceOnApply
 )

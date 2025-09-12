@@ -85,6 +85,14 @@ type PartitionState struct {
 	shared *sharedStates
 }
 
+func (p *PartitionState) GetStart() types.TS {
+	return p.start
+}
+
+func (p *PartitionState) GetEnd() types.TS {
+	return p.end
+}
+
 func (p *PartitionState) LogEntry(entry *api.Entry, msg string) {
 	data, _ := batch.ProtoBatchToBatch(entry.Bat)
 	logutil.Info(

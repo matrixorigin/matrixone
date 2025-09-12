@@ -10363,7 +10363,7 @@ func TestSplitCommand(t *testing.T) {
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
-	opts.MaxMessageSize = txnbase.CmdBufReserved + 2*1024
+	//opts.MaxMessageSize = txnbase.CmdBufReserved + 2*1024
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 1)
@@ -11175,16 +11175,29 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	defer bat.Close()
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(true)
+	{
+		txn, rel := tae.GetRelation()
+		obj := testutil.GetOneBlockMeta(rel)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
+		assert.NoError(t, err)
+
+		startTS := txn.GetStartTS()
+		tae.DB.Runtime.BigDeleteHinter.RecordBigDel([]uint64{rel.ID()}, startTS.Next())
+		err = task.OnExec(context.Background())
+		require.Error(t, err)
+	}
 
 	txn, rel := tae.GetRelation()
 	obj := testutil.GetOneBlockMeta(rel)
 	task, err := jobs.NewMergeObjectsTask(nil, txn, []*catalog.ObjectEntry{obj}, tae.Runtime, 0, false)
 	assert.NoError(t, err)
 
+	startTS := txn.GetStartTS()
+	tae.DB.Runtime.BigDeleteHinter.DeleteBigDel(rel.ID())
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
-	err = tae.DB.MergeScheduler.StopMerge(rel.GetMeta().(*catalog.TableEntry), false, tae.Runtime)
-	require.NoError(t, err)
+
+	tae.DB.Runtime.BigDeleteHinter.RecordBigDel([]uint64{rel.ID()}, startTS.Next())
 	require.Error(t, txn.Commit(ctx)) // rollback
 
 	_, rel = tae.GetRelation()

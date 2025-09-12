@@ -1,0 +1,76 @@
+select enable_fault_injection();
+enable_fault_injection()
+true
+drop database if exists test;
+drop database if exists srcdb;
+create database srcdb;
+create table srcdb.t1(a int);
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'srcdb.t1');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, srcdb.t1)
+true
+insert into srcdb.t1 select * from generate_series(200000)g;
+select disable_fault_injection();
+disable_fault_injection()
+true
+begin;
+create database test clone srcdb;
+show create database test;
+Database    Create Database
+test    CREATE DATABASE `test`
+commit;
+show create database test;
+Database    Create Database
+test    CREATE DATABASE `test`
+drop database test;
+begin;
+create database test clone srcdb;
+show create database test;
+Database    Create Database
+test    CREATE DATABASE `test`
+rollback;
+show create database test;
+Unknown database test
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/cn/clone_fails',':::','echo',40,'test.t1');
+add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, test.t1)
+true
+create database test clone srcdb;
+internal error: injected table clone error
+show create database test;
+Unknown database test
+select disable_fault_injection();
+disable_fault_injection()
+true
+create database test;
+begin;
+create table test.t1 clone srcdb.t1;
+commit;
+show tables from test;
+Tables_in_test
+t1
+drop table test.t1;
+begin;
+create table test.t1 clone srcdb.t1;
+rollback;
+show tables from test;
+Tables_in_test
+select enable_fault_injection();
+enable_fault_injection()
+true
+select add_fault_point('fj/cn/clone_fails',':::','echo',40,'test.t1');
+add_fault_point(fj/cn/clone_fails, :::, echo, 40, test.t1)
+true
+create table test.t1 clone srcdb.t1;
+internal error: injected table clone error
+select disable_fault_injection();
+disable_fault_injection()
+true
+show tables from test;
+Tables_in_test
+select count(*) from srcdb.t1 where a mod 100 = 0;
+count(*)
+2000
+drop database test;
+drop database srcdb;

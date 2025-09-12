@@ -411,6 +411,8 @@ func doComQueryInBack(
 				s.FromAccount = input.opAccount
 				s.ToAccountId = input.toAccount
 				s.IsRestoreByTS = s.IsRestoreByTS || input.isRestoreByTs
+
+				s.FlipStmtKind()
 			}
 		}
 
