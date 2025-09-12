@@ -157,7 +157,7 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 	}
 
 	for _, spillID := range group.ctr.spilledStates {
-		spillData, err := group.SpillManager.Retrieve(spillID)
+		spillData, err := group.SpillManager.Retrieve(spillID, proc.Mp())
 		if err != nil {
 			return err
 		}

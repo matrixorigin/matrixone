@@ -17,6 +17,8 @@ package group
 import (
 	"fmt"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 )
 
 type MemorySpillManager struct {
@@ -43,14 +45,14 @@ func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	return id, nil
 }
 
-func (m *MemorySpillManager) Retrieve(id SpillID) (SpillableData, error) {
+func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableData, error) {
 	serialized, exists := m.data[id]
 	if !exists {
 		return nil, fmt.Errorf("spill data not found: %s", id)
 	}
 
 	data := &SpillableAggState{}
-	if err := data.Deserialize(serialized); err != nil {
+	if err := data.Deserialize(serialized, mp); err != nil {
 		return nil, err
 	}
 	return data, nil

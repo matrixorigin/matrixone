@@ -20,14 +20,14 @@ type SpillID string
 
 type SpillableData interface {
 	Serialize() ([]byte, error)
-	Deserialize(data []byte) error
+	Deserialize(data []byte, mp *mpool.MPool) error
 	EstimateSize() int64
 	Free(mp *mpool.MPool)
 }
 
 type SpillManager interface {
 	Spill(data SpillableData) (SpillID, error)
-	Retrieve(id SpillID) (SpillableData, error)
+	Retrieve(id SpillID, mp *mpool.MPool) (SpillableData, error)
 	Delete(id SpillID) error
 	Free()
 }
