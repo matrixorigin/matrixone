@@ -154,6 +154,16 @@ const (
 		"account_id = %d AND " +
 		"task_id = '%s'"
 
+	CDCGetTableErrMsgSqlTemplate = "SELECT " +
+		"err_msg " +
+		"FROM " +
+		"`mo_catalog`.`mo_cdc_watermark` " +
+		"WHERE " +
+		"account_id = %d AND " +
+		"task_id = '%s' AND " +
+		"db_name = '%s' AND " +
+		"table_name = '%s'"
+
 	CDCGetWatermarkWhereSqlTemplate = "SELECT " +
 		"%s " +
 		"FROM " +
@@ -287,27 +297,28 @@ const (
 	CDCInsertWatermarkSqlTemplate_Idx               = 7
 	CDCGetWatermarkSqlTemplate_Idx                  = 8
 	CDCGetTableWatermarkSQL_Idx                     = 9
-	CDCUpdateWatermarkSQL_Idx                       = 10
-	CDCUpdateWatermarkErrMsgSQL_Idx                 = 11
-	CDCDeleteWatermarkSqlTemplate_Idx               = 12
-	CDCDeleteWatermarkByTableSqlTemplate_Idx        = 13
-	CDCGetDataKeySQL_Idx                            = 14
-	CDCCollectTableInfoSqlTemplate_Idx              = 15
-	CDCGetWatermarkWhereSqlTemplate_Idx             = 16
-	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 17
-	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 18
+	CDCGetTableErrMsgSQL_Idx                        = 10
+	CDCUpdateWatermarkSQL_Idx                       = 11
+	CDCUpdateWatermarkErrMsgSQL_Idx                 = 12
+	CDCDeleteWatermarkSqlTemplate_Idx               = 13
+	CDCDeleteWatermarkByTableSqlTemplate_Idx        = 14
+	CDCGetDataKeySQL_Idx                            = 15
+	CDCCollectTableInfoSqlTemplate_Idx              = 16
+	CDCGetWatermarkWhereSqlTemplate_Idx             = 17
+	CDCOnDuplicateUpdateWatermarkTemplate_Idx       = 18
+	CDCOnDuplicateUpdateWatermarkErrMsgTemplate_Idx = 19
 
-	CDCInsertMOISCPLogSqlTemplate_Idx        = 19
-	CDCUpdateMOISCPLogSqlTemplate_Idx        = 20
-	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx  = 21
-	CDCDeleteMOISCPLogSqlTemplate_Idx        = 22
-	CDCSelectMOISCPLogSqlTemplate_Idx        = 23
-	CDCSelectMOISCPLogByTableSqlTemplate_Idx = 24
-	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx = 25
+	CDCInsertMOISCPLogSqlTemplate_Idx        = 20
+	CDCUpdateMOISCPLogSqlTemplate_Idx        = 21
+	CDCUpdateMOISCPLogDropAtSqlTemplate_Idx  = 22
+	CDCDeleteMOISCPLogSqlTemplate_Idx        = 23
+	CDCSelectMOISCPLogSqlTemplate_Idx        = 24
+	CDCSelectMOISCPLogByTableSqlTemplate_Idx = 25
+	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx = 26
 
-	CDCGetTableIDTemplate_Idx = 26
+	CDCGetTableIDTemplate_Idx = 27
 
-	CDCSqlTemplateCount = 27
+	CDCSqlTemplateCount = 28
 )
 
 var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
@@ -371,6 +382,12 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 		SQL: CDCGetTableWatermarkSqlTemplate,
 		OutputAttrs: []string{
 			"watermark",
+		},
+	},
+	CDCGetTableErrMsgSQL_Idx: {
+		SQL: CDCGetTableErrMsgSqlTemplate,
+		OutputAttrs: []string{
+			"err_msg",
 		},
 	},
 	CDCUpdateWatermarkSQL_Idx: {
@@ -689,6 +706,21 @@ func (b cdcSQLBuilder) GetTableWatermarkSQL(
 ) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCGetTableWatermarkSQL_Idx].SQL,
+		accountId,
+		taskId,
+		dbName,
+		tableName,
+	)
+}
+
+func (b cdcSQLBuilder) GetTableErrMsgSQL(
+	accountId uint64,
+	taskId string,
+	dbName string,
+	tableName string,
+) string {
+	return fmt.Sprintf(
+		CDCSQLTemplates[CDCGetTableErrMsgSQL_Idx].SQL,
 		accountId,
 		taskId,
 		dbName,
