@@ -105,6 +105,7 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 
 		vec := vector.NewVec(types.T_any.ToType())
 		if err := vec.UnmarshalBinaryWithCopy(vecBytes, mp); err != nil {
+			vec.Free(mp)
 			return err
 		}
 		s.GroupVectors[i] = vec
