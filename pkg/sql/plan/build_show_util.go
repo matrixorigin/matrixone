@@ -206,36 +206,33 @@ func ConstructCreateTableSQL(
 
 				if indexdef.IndexAlgoParams != "" {
 					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
-					if err != nil {
-						// value not exists
-						continue
-					}
+					// ignore err != nil --> value not found
+					if err == nil {
+						parser, err := val.StrictString()
+						if err != nil {
+							// value exists but not string type
+							return "", nil, err
+						}
 
-					parser, err := val.StrictString()
-					if err != nil {
-						// value exists but not string type
-						return "", nil, err
-					}
-
-					if len(parser) > 0 {
-						indexStr += " WITH PARSER " + parser
+						if len(parser) > 0 {
+							indexStr += " WITH PARSER " + parser
+						}
 					}
 
 					val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
-					if err != nil {
-						// value not exists
-						continue
+					// ignore err != nil --> value not found
+					if err == nil {
+						async, err := val.StrictString()
+						if err != nil {
+							// value exists but not string type
+							return "", nil, err
+						}
+
+						if async == "true" {
+							indexStr += " ASYNC"
+						}
 					}
 
-					async, err := val.StrictString()
-					if err != nil {
-						// value exists but not string type
-						return "", nil, err
-					}
-
-					if async == "true" {
-						indexStr += " ASYNC"
-					}
 				}
 
 			} else {
