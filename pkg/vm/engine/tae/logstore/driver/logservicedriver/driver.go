@@ -109,6 +109,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 		postCommitQueue:     make(chan any, 10000),
 		workers:             pool,
 	}
+
 	d.config = *cfg
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
