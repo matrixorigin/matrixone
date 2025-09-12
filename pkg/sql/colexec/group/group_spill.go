@@ -17,6 +17,7 @@ package group
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -72,13 +73,17 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 	}
 
 	var groupVecs []*vector.Vector
+	var groupVecTypes []types.Type
 	if len(group.ctr.result1.ToPopped) > 0 && group.ctr.result1.ToPopped[0] != nil {
 		numGroupByCols := len(group.ctr.result1.ToPopped[0].Vecs)
 		groupVecs = make([]*vector.Vector, numGroupByCols)
+		groupVecTypes = make([]types.Type, numGroupByCols)
 
 		for i := 0; i < numGroupByCols; i++ {
 			if len(group.ctr.result1.ToPopped[0].Vecs) > i && group.ctr.result1.ToPopped[0].Vecs[i] != nil {
-				groupVecs[i] = vector.NewOffHeapVecWithType(*group.ctr.result1.ToPopped[0].Vecs[i].GetType())
+				vecType := *group.ctr.result1.ToPopped[0].Vecs[i].GetType()
+				groupVecs[i] = vector.NewOffHeapVecWithType(vecType)
+				groupVecTypes[i] = vecType
 			}
 		}
 
@@ -102,6 +107,7 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 
 	spillData := &SpillableAggState{
 		GroupVectors:       groupVecs,
+		GroupVectorTypes:   groupVecTypes,
 		MarshaledAggStates: marshaledAggStates,
 		GroupCount:         totalGroups,
 	}
