@@ -21,17 +21,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -49,6 +52,97 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 )
+
+func TestGetErrorMsg(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = exec_sql(disttaeEngine, ctxWithTimeout, frontend.MoCatalogMoCdcWatermarkDDL)
+	require.NoError(t, err)
+	taskID := uuid.New().String()
+
+	ie := &mockCDCIE{de: disttaeEngine}
+	hasError, err := frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.NoError(t, err)
+	insert_sql := cdc.CDCSQLBuilder.InsertWatermarkSQL(uint64(accountId), taskID, "test_db", "test_table", "1000")
+	err = exec_sql(disttaeEngine, ctxWithTimeout, insert_sql)
+	require.NoError(t, err)
+
+	ie = &mockCDCIE{de: disttaeEngine}
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.NoError(t, err)
+
+	values := fmt.Sprintf("(%d, '%s', '%s', '%s', '%s')", accountId, taskID, "test_db", "test_table", "error_msg")
+	err = exec_sql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
+	require.NoError(t, err)
+
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.True(t, hasError)
+	require.NoError(t, err)
+
+	ie.setError(moerr.NewInternalErrorNoCtx("debug"))
+
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.Error(t, err)
+
+	ie.setError(nil)
+	ie.setStringError(moerr.NewInternalErrorNoCtx("debug"))
+
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.Error(t, err)
+
+	ie.setStringError(nil)
+
+	values = fmt.Sprintf("(%d, '%s', '%s', '%s', '%s')", accountId, taskID, "test_db", "test_table", cdc.RetryableErrorPrefix+"debug")
+	err = exec_sql(disttaeEngine, ctxWithTimeout, cdc.CDCSQLBuilder.OnDuplicateUpdateWatermarkErrMsgSQL(values))
+	require.NoError(t, err)
+
+	hasError, err = frontend.GetTableErrMsg(ctxWithTimeout, accountId, ie, taskID, &cdc.DbTableInfo{
+		SourceDbName:  "test_db",
+		SourceTblName: "test_table",
+	})
+	require.False(t, hasError)
+	require.NoError(t, err)
+}
 
 func TestChangesHandle1(t *testing.T) {
 	catalog.SetupDefines("")

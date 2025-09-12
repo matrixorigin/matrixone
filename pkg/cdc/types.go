@@ -46,7 +46,7 @@ const (
 const (
 	CDCDefaultSendSqlTimeout                 = "10m"
 	CDCDefaultRetryTimes                     = -1
-	CDCDefaultRetryDuration                  = 30 * time.Minute
+	CDCDefaultRetryDuration                  = 10 * time.Minute
 	CDCDefaultTaskExtra_InitSnapshotSplitTxn = true
 	CDCDefaultTaskExtra_MaxSQLLen            = 4 * 1024 * 1024
 )
