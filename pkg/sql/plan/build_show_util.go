@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -204,17 +205,35 @@ func ConstructCreateTableSQL(
 				indexStr += ")"
 
 				if indexdef.IndexAlgoParams != "" {
-					paramMap, err := catalog.IndexParamsStringToMap(indexdef.IndexAlgoParams)
+					val, err := sonic.Get([]byte(indexdef.IndexAlgoParams), "parser")
 					if err != nil {
+						// value not exists
+						continue
+					}
+
+					parser, err := val.StrictString()
+					if err != nil {
+						// value exists but not string type
 						return "", nil, err
 					}
-					parser, ok := paramMap["parser"]
-					if ok {
+
+					if len(parser) > 0 {
 						indexStr += " WITH PARSER " + parser
 					}
 
-					async, ok := paramMap[catalog.Async]
-					if ok && async == "true" {
+					val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
+					if err != nil {
+						// value not exists
+						continue
+					}
+
+					async, err := val.StrictString()
+					if err != nil {
+						// value exists but not string type
+						return "", nil, err
+					}
+
+					if async == "true" {
 						indexStr += " ASYNC"
 					}
 				}

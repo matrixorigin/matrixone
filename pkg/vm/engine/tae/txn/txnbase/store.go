@@ -184,3 +184,8 @@ func (store *NoopTxnStore) UpdateObjectStats(*common.ID, *objectio.ObjectStats, 
 func (store *NoopTxnStore) FillInWorkspaceDeletes(id *common.ID, deletes **nulls.Nulls, deleteStartOffset uint64) error {
 	return nil
 }
+
+func (store *NoopTxnStore) DoneEvent(typ int)                        {}
+func (store *NoopTxnStore) AddEvent(typ int)                         {}
+func (store *NoopTxnStore) WaitEvent(typ int)                        {}
+func (store *NoopTxnStore) WaitWalAndTail(ctx context.Context) error { return nil }

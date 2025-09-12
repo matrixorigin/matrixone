@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bytedance/sonic"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
@@ -1987,13 +1988,12 @@ func appendPreInsertSkVectorPlan(builder *QueryBuilder, bindCtx *BindContext, ta
 	// get optype
 	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	val, err := sonic.Get([]byte(idxdef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
 	if err != nil {
 		return -1, err
 	}
-
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
+	optype, err := val.StrictString()
+	if err != nil {
 		return -1, err
 	}
 
@@ -2692,7 +2692,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
-		JoinType:    plan.Node_RIGHT,
+		JoinType:    plan.Node_INNER,
 		Children:    []int32{ivfScanId, lastNodeId},
 		OnList:      joinConds,
 		ProjectList: projectList,
@@ -4695,7 +4695,7 @@ func buildDeleteRowsFullTextIndex(ctx CompilerContext, builder *QueryBuilder, bi
 		sid := builder.compCtx.GetProcess().GetService()
 		lastNodeId = builder.appendNode(&plan.Node{
 			NodeType:               plan.Node_JOIN,
-			JoinType:               plan.Node_RIGHT,
+			JoinType:               plan.Node_INNER,
 			Children:               []int32{idxScanId, lastNodeId},
 			OnList:                 []*Expr{joinCond},
 			ProjectList:            projectList,

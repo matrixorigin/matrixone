@@ -15,15 +15,15 @@
 package plan
 
 import (
-	"encoding/json"
+	"fmt"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -64,13 +64,12 @@ func (builder *QueryBuilder) checkValidIvfflatDistFn(nodeID int32, projNode, sor
 
 	idxdef := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
 
-	params, err := catalog.IndexParamsStringToMap(idxdef.IndexAlgoParams)
+	val, err := sonic.Get([]byte(idxdef.IndexAlgoParams), catalog.IndexAlgoParamOpType)
 	if err != nil {
 		return false
 	}
-
-	optype, ok := params[catalog.IndexAlgoParamOpType]
-	if !ok {
+	optype, err := val.StrictString()
+	if err != nil {
 		return false
 	}
 
@@ -140,23 +139,39 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, projN
 		}
 	}
 
-	tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
-		SrcTable:      scanNode.TableDef.Name,
-		MetadataTable: metadef.IndexTableName,
-		IndexTable:    idxdef.IndexTableName,
-		ThreadsSearch: val.(int64),
-		EntriesTable:  entriesdef.IndexTableName,
-		Nprobe:        uint(nprobe),
-		PKeyType:      pkType.Id,
-		PKey:          scanNode.TableDef.Pkey.PkeyColName,
-		KeyPart:       keypart,
-		KeyPartType:   partType.Id}
+	/*
+		tblcfg := vectorindex.IndexTableConfig{DbName: scanNode.ObjRef.SchemaName,
+			SrcTable:      scanNode.TableDef.Name,
+			MetadataTable: metadef.IndexTableName,
+			IndexTable:    idxdef.IndexTableName,
+			ThreadsSearch: val.(int64),
+			EntriesTable:  entriesdef.IndexTableName,
+			Nprobe:        uint(nprobe),
+			PKeyType:      pkType.Id,
+			PKey:          scanNode.TableDef.Pkey.PkeyColName,
+			KeyPart:       keypart,
+			KeyPartType:   partType.Id}
 
-	cfgbytes, err := json.Marshal(tblcfg)
-	if err != nil {
-		return nodeID, err
-	}
-	tblcfgstr := string(cfgbytes)
+		cfgbytes, err := sonic.Marshal(tblcfg)
+		if err != nil {
+			return nodeID, err
+		}
+		tblcfgstr := string(cfgbytes)
+	*/
+
+	tblcfgstr := fmt.Sprintf(`{"db": "%s", "src": "%s", "metadata":"%s", "index":"%s", "threads_search": %d,
+			"entries": "%s", "nprobe" : %d, "pktype" : %d, "pkey" : "%s", "part" : "%s", "parttype" : %d}`,
+		scanNode.ObjRef.SchemaName,
+		scanNode.TableDef.Name,
+		metadef.IndexTableName,
+		idxdef.IndexTableName,
+		val.(int64),
+		entriesdef.IndexTableName,
+		uint(nprobe),
+		pkType.Id,
+		scanNode.TableDef.Pkey.PkeyColName,
+		keypart,
+		partType.Id)
 
 	var childNode *plan.Node
 	orderExpr := sortNode.OrderBy[0].Expr
