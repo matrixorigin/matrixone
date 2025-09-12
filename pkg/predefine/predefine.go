@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/robfig/cron/v3"
 )
+
 const (
 	sysAccountID   = 0
 	sysAccountName = "sys"
@@ -144,11 +145,11 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 	}
 	return sql, nil
 }
-func GenISCPTaskCheckSQL() (string) {
+func GenISCPTaskCheckSQL() string {
 	return fmt.Sprintf("select * from %s.sys_daemon_task where task_metadata_executor = %d", catalog.MOTaskDB, task.TaskCode_ISCPExecutor)
 }
 
-func GenInitISCPTaskSQL() (string) {
+func GenInitISCPTaskSQL() string {
 	option := task.TaskOptions{
 		MaxRetryTimes: 10,
 		RetryInterval: int64(time.Second * 10),
