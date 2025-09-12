@@ -226,17 +226,6 @@ func (s *service) startTaskRunner() {
 		s.logger.Error("start task runner failed",
 			zap.Error(err))
 	}
-	if err := s.initAsyncTasks(); err != nil {
-		s.logger.Error("init async tasks failed", zap.Error(err))
-	}
-}
-
-func (s *service) initAsyncTasks() error {
-	ts, ok := s.task.holder.Get()
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("task service not ok")
-	}
-	return frontend.AddISCPTaskIfNotExists(context.Background(), ts)
 }
 
 func (s *service) GetTaskRunner() taskservice.TaskRunner {
