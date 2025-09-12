@@ -836,6 +836,12 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 			vec, err = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
 		case *plan.Literal_EnumVal:
 			vec, err = vector.NewConstFixed(constEnumType, types.Enum(val.EnumVal), 1, proc.Mp())
+		case *plan.Literal_VecVal:
+			if typ.Oid == types.T_array_float32 {
+				vec, err = vector.NewConstArray(typ, types.BytesToArray[float32]([]byte(val.VecVal)), 1, proc.Mp())
+			} else if typ.Oid == types.T_array_float64 {
+				vec, err = vector.NewConstArray(typ, types.BytesToArray[float64]([]byte(val.VecVal)), 1, proc.Mp())
+			}
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
