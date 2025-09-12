@@ -25,6 +25,7 @@ import (
 
 type SpillableAggState struct {
 	GroupVectors       []*vector.Vector
+	GroupVectorTypes   []types.Type
 	MarshaledAggStates [][]byte
 	GroupCount         int
 }
@@ -39,7 +40,24 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 	if err := binary.Write(buf, binary.LittleEndian, int32(len(s.GroupVectors))); err != nil {
 		return nil, err
 	}
-	for _, vec := range s.GroupVectors {
+
+	if err := binary.Write(buf, binary.LittleEndian, int32(len(s.GroupVectorTypes))); err != nil {
+		return nil, err
+	}
+	for _, typ := range s.GroupVectorTypes {
+		typBytes, err := typ.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		if err := binary.Write(buf, binary.LittleEndian, int32(len(typBytes))); err != nil {
+			return nil, err
+		}
+		if _, err := buf.Write(typBytes); err != nil {
+			return nil, err
+		}
+	}
+
+	for i, vec := range s.GroupVectors {
 		if vec == nil {
 			if err := binary.Write(buf, binary.LittleEndian, int32(0)); err != nil {
 				return nil, err
@@ -56,6 +74,10 @@ func (s *SpillableAggState) Serialize() ([]byte, error) {
 		}
 		if _, err := buf.Write(vecBytes); err != nil {
 			return nil, err
+		}
+
+		if i >= len(s.GroupVectorTypes) {
+			s.GroupVectorTypes = append(s.GroupVectorTypes, *vec.GetType())
 		}
 	}
 
@@ -87,6 +109,26 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 	if err := binary.Read(buf, binary.LittleEndian, &groupVecCount); err != nil {
 		return err
 	}
+
+	var groupVecTypeCount int32
+	if err := binary.Read(buf, binary.LittleEndian, &groupVecTypeCount); err != nil {
+		return err
+	}
+	s.GroupVectorTypes = make([]types.Type, groupVecTypeCount)
+	for i := 0; i < int(groupVecTypeCount); i++ {
+		var size int32
+		if err := binary.Read(buf, binary.LittleEndian, &size); err != nil {
+			return err
+		}
+		typBytes := make([]byte, size)
+		if _, err := buf.Read(typBytes); err != nil {
+			return err
+		}
+		if err := s.GroupVectorTypes[i].UnmarshalBinary(typBytes); err != nil {
+			return err
+		}
+	}
+
 	s.GroupVectors = make([]*vector.Vector, groupVecCount)
 	for i := 0; i < int(groupVecCount); i++ {
 		var size int32
@@ -103,7 +145,14 @@ func (s *SpillableAggState) Deserialize(data []byte, mp *mpool.MPool) error {
 			return err
 		}
 
-		vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
+		var vecType types.Type
+		if i < len(s.GroupVectorTypes) {
+			vecType = s.GroupVectorTypes[i]
+		} else {
+			vecType = types.T_any.ToType()
+		}
+
+		vec := vector.NewOffHeapVecWithType(vecType)
 		if err := vec.UnmarshalBinaryWithCopy(vecBytes, mp); err != nil {
 			vec.Free(mp)
 			return err
@@ -150,5 +199,6 @@ func (s *SpillableAggState) Free(mp *mpool.MPool) {
 		}
 	}
 	s.GroupVectors = nil
+	s.GroupVectorTypes = nil
 	s.MarshaledAggStates = nil
 }
