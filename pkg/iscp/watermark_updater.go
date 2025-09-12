@@ -180,11 +180,9 @@ func unregisterJobsByDBName(
 			tableIDStr += fmt.Sprintf("%d", tid)
 		}
 		updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
-		_, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
+		result, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
+		result.Close()
 	}
-	updateDropAtSql := fmt.Sprintf("UPDATE mo_catalog.mo_iscp_log SET drop_at = now() WHERE account_id = %d AND table_id IN (%s)", tenantId, tableIDStr)
-	result, err = ExecWithResult(ctxWithSysAccount, updateDropAtSql, cnUUID, txn)
-	result.Close()
 	return
 }
 
