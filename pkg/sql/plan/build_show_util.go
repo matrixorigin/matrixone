@@ -220,6 +220,11 @@ func ConstructCreateTableSQL(
 					if len(parser) > 0 {
 						indexStr += " WITH PARSER " + parser
 					}
+
+					async, ok := paramMap[catalog.Async]
+					if ok && async == "true" {
+						indexStr += " ASYNC"
+					}
 				}
 
 			} else {

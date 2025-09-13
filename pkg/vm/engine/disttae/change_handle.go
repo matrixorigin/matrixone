@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -55,6 +56,8 @@ type PartitionChangesHandle struct {
 	currentChangeHandle engine.ChangesHandle
 	currentPSFrom       types.TS
 	currentPSTo         types.TS
+	closeMu             sync.Mutex
+	handleIdx           int
 
 	fromTs types.TS
 	toTs   types.TS
@@ -133,6 +136,20 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if stateStart.LT(&nextFrom) {
 		h.currentPSTo = h.toTs
 		h.currentPSFrom = nextFrom
+		if h.handleIdx != 0 {
+			err = h.closeCurrentChangeHandle()
+			if err != nil {
+				return
+			}
+			logutil.Info("ChangesHandle-Split change handles",
+				zap.String("from", h.fromTs.ToString()),
+				zap.String("to", h.toTs.ToString()),
+				zap.String("ps from", h.currentPSFrom.ToString()),
+				zap.String("ps to", h.currentPSTo.ToString()),
+				zap.Int("handle idx", h.handleIdx),
+			)
+		}
+		h.handleIdx++
 		h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
 			ctx,
 			state,
@@ -192,10 +209,12 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		zap.String("to", h.toTs.ToString()),
 		zap.String("ps from", h.currentPSFrom.ToString()),
 		zap.String("ps to", h.currentPSTo.ToString()),
+		zap.Int("handle idx", h.handleIdx),
 	)
-	if h.currentChangeHandle != nil {
-		h.currentChangeHandle.Close()
-		h.currentChangeHandle = nil
+	h.handleIdx++
+	err = h.closeCurrentChangeHandle()
+	if err != nil {
+		return
 	}
 	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
 		ctx,
@@ -217,11 +236,17 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 }
 
 func (h *PartitionChangesHandle) Close() error {
+	return h.closeCurrentChangeHandle()
+}
+
+func (h *PartitionChangesHandle) closeCurrentChangeHandle() (err error) {
+	h.closeMu.Lock()
+	defer h.closeMu.Unlock()
 	if h.currentChangeHandle != nil {
-		h.currentChangeHandle.Close()
+		err = h.currentChangeHandle.Close()
 		h.currentChangeHandle = nil
 	}
-	return nil
+	return
 }
 
 type CheckpointChangesHandle struct {

@@ -20,11 +20,16 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/robfig/cron/v3"
+)
+const (
+	sysAccountID   = 0
+	sysAccountName = "sys"
 )
 
 // genInitCronTaskSQL Generate `insert` statement for creating system cron tasks, which works on the `mo_task`.`sys_cron_task` table.
@@ -138,4 +143,76 @@ func GenInitCronTaskSQL(codes ...int32) (string, error) {
 		}
 	}
 	return sql, nil
+}
+func GenISCPTaskCheckSQL() (string) {
+	return fmt.Sprintf("select * from %s.sys_daemon_task where task_metadata_executor = %d", catalog.MOTaskDB, task.TaskCode_ISCPExecutor)
+}
+
+func GenInitISCPTaskSQL() (string) {
+	option := task.TaskOptions{
+		MaxRetryTimes: 10,
+		RetryInterval: int64(time.Second * 10),
+		DelayDuration: 0,
+		Concurrency:   0,
+	}
+	j, err := json.Marshal(option)
+	if err != nil {
+		panic(err)
+	}
+	taskID := uuid.Must(uuid.NewV7())
+	details := &task.Details{
+		AccountID: sysAccountID,
+		Account:   sysAccountName,
+		Details: &task.Details_ISCP{
+			ISCP: &task.ISCPDetails{
+				TaskName: "iscp",
+				TaskId:   taskID.String(),
+			},
+		},
+	}
+	detailStr, err := details.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	sql := fmt.Sprintf(
+		`INSERT INTO %s.sys_daemon_task (
+			task_metadata_id,
+			task_metadata_executor,
+			task_metadata_context,
+			task_metadata_option,
+			account_id,
+			account,
+			task_type,
+			task_status,
+			create_at,
+			update_at,
+			details
+		)
+		SELECT 
+			'%s' AS task_metadata_id,
+			%d AS task_metadata_executor,
+			NULL AS task_metadata_context,
+			'%s' AS task_metadata_option,
+			%d AS account_id,
+			'%s' AS account,
+			'%s' AS task_type,
+			0 AS task_status,
+			NOW() AS create_at,
+			NOW() AS update_at,
+			'%s' AS details
+		FROM DUAL
+		WHERE NOT EXISTS (
+			SELECT 1 FROM mo_task.sys_daemon_task WHERE task_metadata_executor = %d
+		);`,
+		catalog.MOTaskDB,
+		taskID.String(),
+		task.TaskCode_ISCPExecutor,
+		string(j),
+		sysAccountID,
+		sysAccountName,
+		task.TaskType_ISCP.String(),
+		detailStr,
+		task.TaskCode_ISCPExecutor,
+	)
+	return sql
 }
