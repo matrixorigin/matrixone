@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -154,15 +155,29 @@ func (p *PartitionBinder) constructRangeExpression(
 		condition2 = valuesLessThan.ValueList[0]
 	}
 
+	// Check if condition1 is MAXVALUE
+	_, isMaxValue := condition1.(*tree.MaxValue)
+
 	// col < p0
 	// p0 <= col < p1
 	// p1 <= col < p2
+	// p2 <= col (for MAXVALUE partition)
 	if position == 0 {
-		expr = tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+		if isMaxValue {
+			// First partition with MAXVALUE: all values go here
+			expr = tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+		} else {
+			expr = tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+		}
 	} else {
-		left := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, column, condition2)
-		right := tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
-		expr = tree.NewAndExpr(left, right)
+		if isMaxValue {
+			// Last partition with MAXVALUE: column >= condition2
+			expr = tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, column, condition2)
+		} else {
+			left := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, column, condition2)
+			right := tree.NewComparisonExpr(tree.LESS_THAN, column, condition1)
+			expr = tree.NewAndExpr(left, right)
+		}
 	}
 
 	planExpr, err := p.BindExpr(expr, 0, false)
@@ -198,14 +213,22 @@ func (p *PartitionBinder) constructHashExpression(
 ) (*plan.Expr, error) {
 
 	var expr tree.Expr
-	// expr % num
+	// 1) hash(column)
+	// function name should be provided as unresolved column name token
+	hashName := tree.NewUnresolvedColName("hash_partition")
+	expr = &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(hashName),
+		Exprs: tree.Exprs{hashType.Expr},
+	}
+	// 2) hash(column) % num
 	name := tree.NewUnresolvedColName("%")
+	// hash() returns uint64, keep modulo constant as uint64 to avoid cross-type issues
 	arg2 := tree.NewNumVal(num, fmt.Sprintf("%d", num), false, tree.P_uint64)
 	expr = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: tree.Exprs{hashType.Expr, arg2},
+		Exprs: tree.Exprs{expr, arg2},
 	}
-	// expr % num = partition
+	// 3) hash(column) % num = position
 	name = tree.NewUnresolvedColName("=")
 	arg2 = tree.NewNumVal(position, fmt.Sprintf("%d", position), false, tree.P_uint64)
 	expr = &tree.FuncExpr{
@@ -228,13 +251,22 @@ func (p *PartitionBinder) constructKeyExpression(
 ) (*plan.Expr, error) {
 
 	var expr tree.Expr
+	// 1) hash(column)
+	// function name should be provided as unresolved column name token
+	hashName := tree.NewUnresolvedColName("hash_partition")
+	expr = &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(hashName),
+		Exprs: tree.Exprs{keyType.ColumnList[0]},
+	}
+	// 2) hash(column) % num
 	name := tree.NewUnresolvedColName("%")
+	// hash() returns uint64, keep modulo constant as uint64 to avoid cross-type issues
 	arg2 := tree.NewNumVal(num, fmt.Sprintf("%d", num), false, tree.P_uint64)
 	expr = &tree.FuncExpr{
 		Func:  tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: tree.Exprs{keyType.ColumnList[0], arg2},
+		Exprs: tree.Exprs{expr, arg2},
 	}
-
+	// 3) hash(column) % num = position
 	name = tree.NewUnresolvedColName("=")
 	arg2 = tree.NewNumVal(position, fmt.Sprintf("%d", position), false, tree.P_uint64)
 	expr = &tree.FuncExpr{

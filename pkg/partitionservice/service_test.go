@@ -89,7 +89,7 @@ func runTestPartitionServiceTest(
 	defer close()
 
 	store := newMemPartitionStorage()
-	s := NewService(Config{Enable: true}, store)
+	s := NewService(Config{}, store)
 	fn(ctx, txnOp, s, store)
 }
 

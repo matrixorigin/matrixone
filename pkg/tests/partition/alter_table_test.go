@@ -33,6 +33,7 @@ import (
 func TestAlterPartitionTableWithAddColumn(t *testing.T) {
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
+		func(c embed.Cluster) int32 { return 0 },
 		"create table %s (c int comment 'abc', b int) partition by hash(c) partitions 2",
 		partition.PartitionMethod_Hash,
 		func(idx int, p partition.Partition) {
@@ -96,6 +97,7 @@ func TestAlterPartitionTableWithAddColumn(t *testing.T) {
 func TestAlterPartitionTableWithDropColumn(t *testing.T) {
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
+		func(c embed.Cluster) int32 { return 0 },
 		"create table %s (c int comment 'abc', b int) partition by hash(c) partitions 2",
 		partition.PartitionMethod_Hash,
 		func(idx int, p partition.Partition) {
@@ -157,6 +159,7 @@ func TestAlterPartitionTableWithAddIndex(t *testing.T) {
 	var indexes []uint64
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
+		func(c embed.Cluster) int32 { return 0 },
 		"create table %s (c int comment 'abc', b int) partition by hash(c) partitions 2",
 		partition.PartitionMethod_Hash,
 		func(idx int, p partition.Partition) {
@@ -226,6 +229,7 @@ func TestAlterPartitionTableWithDropIndex(t *testing.T) {
 	var indexes []uint64
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
+		func(c embed.Cluster) int32 { return 0 },
 		"create table %s (c int comment 'abc', b int) partition by hash(c) partitions 2",
 		partition.PartitionMethod_Hash,
 		func(idx int, p partition.Partition) {

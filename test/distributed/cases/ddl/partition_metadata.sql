@@ -3,36 +3,6 @@ drop database if exists db1;
 create database db1;
 use db1;
 
-drop table if exists lc;
-CREATE TABLE lc (
-                    a INT NULL,
-                    b INT NULL
-)
-    PARTITION BY LIST COLUMNS(a,b) (
-	PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
-	PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
-	PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
-	PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
-);
-
-select
-    table_catalog,
-    table_schema,
-    table_name,
-    partition_name,
-    partition_ordinal_position,
-    partition_method,
-    partition_expression,
-    partition_description,
-    table_rows,
-    avg_row_length,
-    data_length,
-    max_data_length,
-    partition_comment
-from information_schema.partitions
-where table_name = 'lc' and table_schema = 'db1';
-drop table lc;
-
 drop table if exists client_firms;
 CREATE TABLE client_firms (
                               id   INT,

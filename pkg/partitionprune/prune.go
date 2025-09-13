@@ -15,7 +15,9 @@
 package partitionprune
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -44,6 +46,9 @@ func Prune(
 	metadata partition.PartitionMetadata,
 	partitionIndex int32,
 ) (partitionservice.PruneResult, error) {
+	expect := bat.RowCount()
+	actual := 0
+
 	// Initialize an array of batches, one for each partition
 	bats := make([]*batch.Batch, len(metadata.Partitions))
 
@@ -55,6 +60,12 @@ func Prune(
 			return partitionservice.PruneResult{}, err
 		}
 		bats[i] = res
+		actual += res.RowCount()
+	}
+
+	if expect != actual {
+		return partitionservice.PruneResult{},
+			moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
 	}
 
 	// Return the result containing all partitioned batches and their metadata
@@ -91,6 +102,13 @@ func PrunePartitionByExpr(
 
 	// Handle partition expression
 	expr := partition.Expr
+	if bat.Vecs[0].GetType().Oid == types.T_Rowid {
+		expr = partition.ExprWithRowID
+		if partitionIndex != -1 {
+			partitionIndex++
+		}
+	}
+
 	if partitionIndex != -1 {
 		// If partitionIndex is specified, create a deep copy of the expression
 		// and adjust column positions accordingly

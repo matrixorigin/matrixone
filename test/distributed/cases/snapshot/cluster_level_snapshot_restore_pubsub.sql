@@ -249,7 +249,6 @@ select count(*) from index02;
 drop database if exists db10;
 create database db10;
 use db10;
--- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -268,7 +267,6 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
--- @bvt:issue
 -- @session
 
 drop snapshot if exists sp05;
@@ -343,7 +341,6 @@ select count(*) from index02;
 drop database if exists db10;
 create database db10;
 use db10;
--- @bvt:issue#16438
 drop table if exists index03;
 create table index03 (
                          emp_no      int             not null,
@@ -362,7 +359,6 @@ create table index03 (
 
 insert into index03 values (9001,'1980-12-17', 'SMITH', 'CLERK', 'F', '2008-12-17'),
                            (9002,'1981-02-20', 'ALLEN', 'SALESMAN', 'F', '2008-02-20');
--- @bvt:issue
 -- @session
 
 drop snapshot if exists sp05;

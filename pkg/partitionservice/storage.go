@@ -16,15 +16,16 @@ package partitionservice
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -179,12 +180,9 @@ func (s *Storage) GetMetadata(
 				) bool {
 					found = true
 					for i := 0; i < rows; i++ {
-						bs, err := base64.StdEncoding.DecodeString(executor.GetStringRows(cols[5])[i])
-						if err != nil {
-							panic(err)
-						}
+						v := []byte(executor.GetStringRows(cols[5])[i])
 						expr := &plan.Expr{}
-						err = expr.Unmarshal(bs)
+						err = expr.Unmarshal(v)
 						if err != nil {
 							panic(err)
 						}
@@ -198,6 +196,7 @@ func (s *Storage) GetMetadata(
 								Position:           executor.GetFixedRows[uint32](cols[3])[i],
 								ExprStr:            executor.GetStringRows(cols[4])[i],
 								Expr:               expr,
+								ExprWithRowID:      getExprWithRowID(v),
 							},
 						)
 					}
@@ -235,7 +234,14 @@ func (s *Storage) Create(
 
 	opts := executor.Options{}.
 		WithTxn(txnOp).
-		WithAccountID(accountID)
+		WithAccountID(accountID).
+		WithAdjustTableExtraFunc(
+			func(extra *api.SchemaExtra) error {
+				extra.ParentTableID = def.TblId
+				extra.FeatureFlag |= features.Partition
+				return nil
+			},
+		)
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	}
@@ -323,7 +329,10 @@ func (s *Storage) Delete(
 						"drop table `%s`",
 						p.PartitionTableName,
 					),
-					executor.StatementOption{},
+					executor.StatementOption{}.
+						WithIgnoreForeignKey().
+						WithIgnorePublish().
+						WithIgnoreForeignKey(),
 				)
 				if err != nil {
 					return err
@@ -352,7 +361,10 @@ func (s *Storage) createPartitionTable(
 		)
 		res, err := txn.Exec(
 			sql,
-			executor.StatementOption{},
+			executor.StatementOption{}.
+				WithDisableLock().
+				WithIgnoreForeignKey().
+				WithIgnorePublish(),
 		)
 		if err != nil {
 			return err
@@ -375,7 +387,6 @@ func (s *Storage) createPartitionTable(
 	if err != nil {
 		return err
 	}
-	escapeExpr := base64.StdEncoding.EncodeToString(bs)
 
 	// add partition metadata to mo_catalog.mo_partitions
 	addPartitionMetadata := func() error {
@@ -393,28 +404,31 @@ func (s *Storage) createPartitionTable(
 			)
 			values
 			(
-				%d,
-				'%s', 
-				%d, 
-				'%s', 
-				%d, 
-				'%s',
-				'%s'
+				?,
+				?, 
+				?, 
+				?, 
+				?, 
+				?,
+				?
 			)`,
 			catalog.MO_CATALOG,
 			catalog.MOPartitionTables,
-			partition.PartitionID,
-			partition.PartitionTableName,
-			metadata.TableID,
-			partition.Name,
-			partition.Position,
-			partition.ExprStr,
-			escapeExpr,
 		)
 
 		res, err := txn.Exec(
 			sql,
-			executor.StatementOption{},
+			executor.StatementOption{}.WithParams(
+				[]string{
+					fmt.Sprintf("%d", partition.PartitionID),
+					partition.PartitionTableName,
+					fmt.Sprintf("%d", metadata.TableID),
+					partition.Name,
+					fmt.Sprintf("%d", partition.Position),
+					partition.ExprStr,
+					string(bs),
+				},
+			),
 		)
 		if err != nil {
 			return err
@@ -538,4 +552,29 @@ func getInsertMetadataSQL(
 		metadata.Description,
 		len(metadata.Partitions),
 	)
+}
+
+func getExprWithRowID(v []byte) *plan.Expr {
+	e := &plan.Expr{}
+	err := e.Unmarshal(v)
+	if err != nil {
+		panic(err)
+	}
+	resetPosWithRowID(e)
+	return e
+}
+
+func resetPosWithRowID(expr *plan.Expr) {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			switch col := e.F.Args[i].Expr.(type) {
+			case *plan.Expr_Col:
+				col.Col.ColPos++
+				return
+			case *plan.Expr_F:
+				resetPosWithRowID(e.F.Args[i])
+			}
+		}
+	}
 }

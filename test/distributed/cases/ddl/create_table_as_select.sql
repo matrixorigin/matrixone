@@ -1037,7 +1037,6 @@ drop table row01;
 drop table row02;
 drop table row03;
 
--- @bvt:issue#16438
 drop table if exists dense_rank01;
 create table dense_rank01 (id integer, sex char(1));
 insert into dense_rank01 values (1, 'm');
@@ -1054,7 +1053,6 @@ select * from dense_rank03;
 drop table dense_rank01;
 drop table dense_rank02;
 drop table dense_rank03;
--- @bvt:issue
 
 -- combine with pub-sub table
 drop table if exists test01;

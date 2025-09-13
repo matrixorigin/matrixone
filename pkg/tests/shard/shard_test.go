@@ -16,7 +16,6 @@ package shard
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -66,7 +66,6 @@ func runShardClusterTestWithReuse(
 					op.Adjust(
 						func(sc *embed.ServiceConfig) {
 							if op.ServiceType() == metadata.ServiceType_CN {
-								sc.CN.PartitionService.Enable = true
 								sc.CN.ShardService.Enable = true
 								sc.CN.HAKeeper.HeatbeatInterval.Duration = time.Second
 							} else if op.ServiceType() == metadata.ServiceType_TN {

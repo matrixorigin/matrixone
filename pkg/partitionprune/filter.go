@@ -416,6 +416,9 @@ func mustReplaceColPos(expr *plan.Expr, pos int32) {
 		for i := range e.F.Args {
 			switch col := e.F.Args[i].Expr.(type) {
 			case *plan.Expr_Col:
+				if pos == -1 {
+					pos = col.Col.ColPos + 1
+				}
 				col.Col.ColPos = pos
 				return
 			case *plan.Expr_F:

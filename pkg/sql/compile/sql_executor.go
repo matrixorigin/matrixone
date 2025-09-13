@@ -20,8 +20,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
-
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -37,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -181,17 +180,20 @@ func (s *sqlExecutor) getCompileContext(
 
 func (s *sqlExecutor) adjustOptions(
 	ctx context.Context,
-	opts executor.Options) (context.Context, executor.Options, error) {
+	opts executor.Options,
+) (context.Context, executor.Options, error) {
+	if ctx.Value(defines.TenantIDKey{}) == nil {
+		ctx = context.WithValue(
+			ctx,
+			defines.TenantIDKey{},
+			uint32(0))
+	}
+
 	if opts.HasAccountID() {
 		ctx = context.WithValue(
 			ctx,
 			defines.TenantIDKey{},
 			opts.AccountID())
-	} else if ctx.Value(defines.TenantIDKey{}) == nil {
-		ctx = context.WithValue(
-			ctx,
-			defines.TenantIDKey{},
-			uint32(0))
 	}
 
 	if !opts.HasExistsTxn() {
@@ -278,6 +280,12 @@ func (exec *txnExecutor) Exec(
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.AlterCopyOpt{}, v)
 	}
+
+	exec.ctx = context.WithValue(
+		exec.ctx,
+		defines.InternalExecutorKey{},
+		true,
+	)
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
@@ -371,8 +379,15 @@ func (exec *txnExecutor) Exec(
 		receiveAt,
 	)
 	c.SetOriginSQL(sql)
-	defer c.Release()
+	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
+	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
+	c.ignorePublish = statementOption.IgnorePublish()
+	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
+	c.disableLock = statementOption.DisableLock()
+
+	defer c.Release()
 
 	if prepared {
 		c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {

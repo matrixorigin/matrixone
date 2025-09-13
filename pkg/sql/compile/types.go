@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -302,6 +303,13 @@ type Compile struct {
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
 	ncpu int
+
+	adjustTableExtraFunc     func(*api.SchemaExtra) error
+	disableDropAutoIncrement bool
+	keepAutoIncrement        uint64
+	ignorePublish            bool
+	ignoreCheckExperimental  bool
+	disableLock              bool
 }
 
 type RemoteReceivRegInfo struct {

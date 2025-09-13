@@ -16,6 +16,7 @@ package testutils
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -66,18 +67,34 @@ func CreateTestDatabase(
 	name string,
 	cn embed.ServiceOperator,
 ) {
+	CreateTestDatabaseWithAccount(
+		t,
+		0,
+		name,
+		cn,
+	)
+}
+
+func CreateTestDatabaseWithAccount(
+	t *testing.T,
+	account int32,
+	name string,
+	cn embed.ServiceOperator,
+) {
 	sql := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseCreateTestDatabase)
 	defer cancel()
+
+	ctx = defines.AttachAccountId(ctx, uint32(account))
 	res, err := sql.Exec(
 		ctx,
 		fmt.Sprintf("create database %s", name),
-		executor.Options{},
+		executor.Options{}.WithAccountID(uint32(account)),
 	)
 	require.NoError(t, moerr.AttachCause(ctx, err))
 	res.Close()
 
-	WaitDatabaseCreated(t, name, cn)
+	WaitDatabaseCreatedWithAccount(t, account, name, cn)
 }
 
 func WaitTableCreated(
@@ -86,8 +103,24 @@ func WaitTableCreated(
 	name string,
 	cn embed.ServiceOperator,
 ) {
+	WaitTableCreatedWithAccount(
+		t,
+		0,
+		db,
+		name,
+		cn,
+	)
+}
+
+func WaitTableCreatedWithAccount(
+	t *testing.T,
+	account int32,
+	db string,
+	name string,
+	cn embed.ServiceOperator,
+) {
 	for {
-		if TableExists(t, db, name, cn) {
+		if TableExistsWithAccount(t, account, db, name, cn) {
 			return
 		}
 		time.Sleep(time.Millisecond * 100)
@@ -114,8 +147,22 @@ func WaitDatabaseCreated(
 	name string,
 	cn embed.ServiceOperator,
 ) {
+	WaitDatabaseCreatedWithAccount(
+		t,
+		0,
+		name,
+		cn,
+	)
+}
+
+func WaitDatabaseCreatedWithAccount(
+	t *testing.T,
+	account int32,
+	name string,
+	cn embed.ServiceOperator,
+) {
 	for {
-		if DBExists(t, name, cn) {
+		if DBExistsWithAccount(t, account, name, cn) {
 			return
 
 		}
@@ -138,6 +185,23 @@ func ExecSQL(
 	)
 }
 
+func ExecSQLWithAccount(
+	t *testing.T,
+	account int32,
+	db string,
+	cn embed.ServiceOperator,
+	sql ...string,
+) timestamp.Timestamp {
+	return ExecSQLWithReadResultAndAccount(
+		t,
+		account,
+		db,
+		cn,
+		nil,
+		sql...,
+	)
+}
+
 func ExecSQLWithReadResult(
 	t *testing.T,
 	db string,
@@ -145,9 +209,27 @@ func ExecSQLWithReadResult(
 	reader func(int, string, executor.Result),
 	sql ...string,
 ) timestamp.Timestamp {
+	return ExecSQLWithReadResultAndAccount(
+		t,
+		0,
+		db,
+		cn,
+		reader,
+		sql...,
+	)
+}
+
+func ExecSQLWithReadResultAndAccount(
+	t *testing.T,
+	account int32,
+	db string,
+	cn embed.ServiceOperator,
+	reader func(int, string, executor.Result),
+	sql ...string,
+) timestamp.Timestamp {
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	ctx, cancel := context.WithTimeoutCause(
-		defines.AttachAccountId(context.Background(), 0),
+		defines.AttachAccountId(context.Background(), uint32(account)),
 		time.Second*60,
 		moerr.CauseExecSQL,
 	)
@@ -172,6 +254,7 @@ func ExecSQLWithReadResult(
 		},
 		executor.Options{}.
 			WithDatabase(db).
+			WithAccountID(uint32(account)).
 			WithResolveVariableFunc(
 				func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 					if varName == "sql_mode" {
@@ -194,9 +277,27 @@ func ExecSQLWithMinCommittedTS(
 	min timestamp.Timestamp,
 	sql ...string,
 ) timestamp.Timestamp {
+	return ExecSQLWithMinCommittedTSAndAccount(
+		t,
+		0,
+		db,
+		cn,
+		min,
+		sql...,
+	)
+}
+
+func ExecSQLWithMinCommittedTSAndAccount(
+	t *testing.T,
+	account int32,
+	db string,
+	cn embed.ServiceOperator,
+	min timestamp.Timestamp,
+	sql ...string,
+) timestamp.Timestamp {
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	ctx, cancel := context.WithTimeoutCause(
-		defines.AttachAccountId(context.Background(), 0),
+		defines.AttachAccountId(context.Background(), uint32(account)),
 		time.Second*60,
 		moerr.CauseExecSQLWithMinCommittedTS,
 	)
@@ -216,7 +317,10 @@ func ExecSQLWithMinCommittedTS(
 			}
 			return nil
 		},
-		executor.Options{}.WithDatabase(db).WithMinCommittedTS(min),
+		executor.Options{}.
+			WithDatabase(db).
+			WithAccountID(uint32(account)).
+			WithMinCommittedTS(min),
 	)
 
 	require.NoError(t, moerr.AttachCause(ctx, err), sql)
@@ -266,14 +370,25 @@ func DBExists(
 	name string,
 	cn embed.ServiceOperator,
 ) bool {
+	return DBExistsWithAccount(t, 0, name, cn)
+}
+
+func DBExistsWithAccount(
+	t *testing.T,
+	account int32,
+	name string,
+	cn embed.ServiceOperator,
+) bool {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseDBExists)
 	defer cancel()
+
+	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	res, err := exec.Exec(
 		ctx,
 		"show databases",
-		executor.Options{},
+		executor.Options{}.WithAccountID(uint32(account)),
 	)
 	require.NoError(t, moerr.AttachCause(ctx, err))
 
@@ -286,14 +401,32 @@ func TableExists(
 	name string,
 	cn embed.ServiceOperator,
 ) bool {
+	return TableExistsWithAccount(
+		t,
+		0,
+		db,
+		name,
+		cn,
+	)
+}
+
+func TableExistsWithAccount(
+	t *testing.T,
+	account int32,
+	db string,
+	name string,
+	cn embed.ServiceOperator,
+) bool {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 10*time.Second, moerr.CauseTableExists)
 	defer cancel()
+
+	ctx = defines.AttachAccountId(ctx, uint32(account))
 
 	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 	res, err := exec.Exec(
 		ctx,
 		"show tables",
-		executor.Options{}.WithDatabase(db),
+		executor.Options{}.WithDatabase(db).WithAccountID(uint32(account)),
 	)
 	require.NoError(t, moerr.AttachCause(ctx, err))
 
@@ -371,4 +504,50 @@ func ReadCount(
 
 type ctlResult struct {
 	Result string `json:"result"`
+}
+
+func CreateAccount(
+	t *testing.T,
+	c embed.Cluster,
+	accountName string,
+	password string,
+) int32 {
+	accountName = strings.ToLower(accountName)
+
+	cn0, err := c.GetCNService(0)
+	require.NoError(t, err)
+
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+		cn0.GetServiceConfig().CN.Frontend.Port,
+	)
+
+	db, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(
+		fmt.Sprintf(
+			"create account %s ADMIN_NAME 'root' IDENTIFIED BY '%s'",
+			accountName,
+			password,
+		))
+	require.NoError(t, err)
+
+	accountID := int32(-1)
+	ExecSQLWithReadResult(
+		t,
+		"mo_catalog",
+		cn0,
+		func(i int, s string, r executor.Result) {
+			r.ReadRows(
+				func(rows int, cols []*vector.Vector) bool {
+					accountID = executor.GetFixedRows[int32](cols[0])[0]
+					return true
+				},
+			)
+		},
+		"select account_id from mo_account where account_name = '"+accountName+"' and admin_name = 'root'",
+	)
+	require.NotEqual(t, int32(-1), accountID)
+	return accountID
 }

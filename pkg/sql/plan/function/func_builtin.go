@@ -1179,6 +1179,118 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
+// builtInHashPartition mirrors builtInHash but returns uint64 so downstream modulo results are non-negative.
+func builtInHashPartition(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	fillStringGroupStr := func(keys [][]byte, vec *vector.Vector, n int, start int) {
+		if vec.IsConst() {
+			area := vec.GetArea()
+			vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
+			data := vs[0].GetByteSlice(area)
+			if vec.IsConstNull() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(1))
+				}
+			} else {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], data...)
+				}
+			}
+		} else {
+			area := vec.GetArea()
+			vs := vector.MustFixedColWithTypeCheck[types.Varlena](vec)
+			if !vec.GetNulls().Any() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+				}
+			} else {
+				nsp := vec.GetNulls()
+				for i := 0; i < n; i++ {
+					hasNull := nsp.Contains(uint64(i + start))
+					if hasNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						keys[i] = append(keys[i], byte(0))
+						keys[i] = append(keys[i], vs[i+start].GetByteSlice(area)...)
+					}
+				}
+			}
+		}
+	}
+
+	fillGroupStr := func(keys [][]byte, vec *vector.Vector, n int, sz int, start int) {
+		if vec.IsConst() {
+			data := vec.GetData()[:vec.GetType().Size]
+			if vec.IsConstNull() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(1))
+				}
+			} else {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], data...)
+				}
+			}
+		} else {
+			data := vec.GetData()[:(n+start)*sz]
+			if !vec.GetNulls().Any() {
+				for i := 0; i < n; i++ {
+					keys[i] = append(keys[i], byte(0))
+					keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+				}
+			} else {
+				nsp := vec.GetNulls()
+				for i := 0; i < n; i++ {
+					isNull := nsp.Contains(uint64(i + start))
+					if isNull {
+						keys[i] = append(keys[i], byte(1))
+					} else {
+						keys[i] = append(keys[i], byte(0))
+						keys[i] = append(keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
+					}
+				}
+			}
+		}
+	}
+
+	encodeHashKeys := func(keys [][]byte, vecs []*vector.Vector, start, count int) {
+		for _, vec := range vecs {
+			if vec.GetType().IsFixedLen() {
+				fillGroupStr(keys, vec, count, vec.GetType().TypeSize(), start)
+			} else {
+				fillStringGroupStr(keys, vec, count, start)
+			}
+		}
+		for i := 0; i < count; i++ {
+			if l := len(keys[i]); l < 16 {
+				keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
+			}
+		}
+	}
+
+	keys := make([][]byte, hashmap.UnitLimit)
+	states := make([][3]uint64, hashmap.UnitLimit)
+	rs := vector.MustFunctionResult[uint64](result)
+
+	for i := 0; i < length; i += hashmap.UnitLimit {
+		n := length - i
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
+		}
+		for j := 0; j < n; j++ {
+			keys[j] = keys[j][:0]
+		}
+		// reuse the same encoder as builtInHash
+		encodeHashKeys(keys, parameters, i, n)
+		hashtable.BytesBatchGenHashStates(&keys[0], &states[0], n)
+		for j := 0; j < n; j++ {
+			rs.AppendMustValue(states[j][0])
+		}
+	}
+	return nil
+}
+
 // BuiltInSerial have a similar function named SerialWithCompacted in the index_util
 // Serial func is used by users, the function make true when input vec have ten
 // rows, the output vec is ten rows, when the vectors have null value, the output
