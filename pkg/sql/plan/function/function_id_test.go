@@ -400,7 +400,9 @@ var predefinedFunids = map[int]int{
 	LLM_CHAT:      347,
 	LLM_EMBEDDING: 348,
 
-	FUNCTION_END_NUMBER: 349,
+	HNSW_CDC_UPDATE: 349,
+
+	FUNCTION_END_NUMBER: 350,
 }
 
 func Test_funids(t *testing.T) {
