@@ -467,6 +467,9 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	for {
 		var insertData, deleteData *batch.Batch
 		insertData, deleteData, _, err = changes.Next(ctx, exec.mp)
+		if err != nil {
+			return
+		}
 		if insertData == nil && deleteData == nil {
 			break
 		}
