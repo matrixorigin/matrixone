@@ -110,6 +110,14 @@ func (c *AppendCmd) Close() {
 	c.Data = nil
 }
 func (c *AppendCmd) GetType() uint16 { return IOET_WALTxnCommand_Append }
+
+func (c *AppendCmd) ApproxSize() int64 {
+	size := int64(2 + 2 + 4 + 4 + types.TxnTsSize + 1) // type, version, id, len, ts, isTombstone
+	size += int64(len(c.Infos)) * AppendInfoSize
+	size += int64(c.Data.ApproxSize())
+	return size
+}
+
 func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	t := c.GetType()
 	if _, err = w.Write(types.EncodeUint16(&t)); err != nil {

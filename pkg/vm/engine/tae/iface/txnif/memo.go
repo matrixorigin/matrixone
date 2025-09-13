@@ -53,6 +53,17 @@ func (memo *TxnMemo) GetDirty() *model.Tree {
 	return memo.Tree
 }
 
+func (memo *TxnMemo) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += memo.Tree.ApproxSize()
+	size += 1 // catalog changed
+
+	return size
+}
+
 func (memo *TxnMemo) WriteTo(w io.Writer) (n int64, err error) {
 	var tmpn int64
 	if tmpn, err = memo.Tree.WriteTo(w); err != nil {

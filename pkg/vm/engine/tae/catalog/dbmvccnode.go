@@ -22,6 +22,10 @@ import (
 
 type EmptyMVCCNode struct{}
 
+func (e *EmptyMVCCNode) ApproxSize() int64 {
+	return 0
+}
+
 func NewEmptyEmptyMVCCNode() *EmptyMVCCNode {
 	return &EmptyMVCCNode{}
 }
@@ -72,6 +76,19 @@ func (node *DBNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += sn
 	return
+}
+
+func (node *DBNode) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += AccessInfoSize
+	size += int64(len(node.name))
+	size += int64(len(node.datType))
+	size += int64(len(node.createSql))
+
+	return size
 }
 
 func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
