@@ -35,6 +35,8 @@ func TestSpill(t *testing.T) {
 		}),
 		nil,
 	}
+	afterDataCreation := proc.Mp().CurrNB()
+	t.Logf("After data creation: %d bytes allocated", afterDataCreation-before)
 
 	g, src := getGroupOperatorWithInputs(datas)
 	g.NeedEval = true
@@ -45,7 +47,12 @@ func TestSpill(t *testing.T) {
 	}
 
 	require.NoError(t, src.Prepare(proc))
+	afterSrcPrepare := proc.Mp().CurrNB()
+	t.Logf("After src prepare: %d bytes allocated", afterSrcPrepare-before)
+
 	require.NoError(t, g.Prepare(proc))
+	afterGroupPrepare := proc.Mp().CurrNB()
+	t.Logf("After group prepare: %d bytes allocated", afterGroupPrepare-before)
 
 	require.NotNil(t, g.SpillManager)
 	require.Equal(t, int64(10), g.SpillThreshold)
@@ -53,6 +60,8 @@ func TestSpill(t *testing.T) {
 	r, err := g.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, r.Batch)
+	afterFirstCall := proc.Mp().CurrNB()
+	t.Logf("After first call: %d bytes allocated", afterFirstCall-before)
 
 	if final := r.Batch; final != nil {
 		require.Equal(t, 0, len(final.Aggs))
@@ -79,9 +88,17 @@ func TestSpill(t *testing.T) {
 	r, err = g.Call(proc)
 	require.NoError(t, err)
 	require.Nil(t, r.Batch)
+	afterSecondCall := proc.Mp().CurrNB()
+	t.Logf("After second call: %d bytes allocated", afterSecondCall-before)
 
 	g.Free(proc, false, nil)
+	afterGroupFree := proc.Mp().CurrNB()
+	t.Logf("After group free: %d bytes allocated", afterGroupFree-before)
+
 	src.Free(proc, false, nil)
+	afterSrcFree := proc.Mp().CurrNB()
+	t.Logf("After src free: %d bytes allocated", afterSrcFree-before)
+
 	require.Equal(t, before, proc.Mp().CurrNB())
 }
 
