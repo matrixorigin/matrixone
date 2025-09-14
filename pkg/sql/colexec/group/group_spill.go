@@ -17,6 +17,7 @@ package group
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -79,6 +80,15 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		groupVecs = make([]*vector.Vector, numGroupByCols)
 		groupVecTypes = make([]types.Type, numGroupByCols)
 
+		cleanupVecs := func() {
+			for i := range groupVecs {
+				if groupVecs[i] != nil {
+					groupVecs[i].Free(proc.Mp())
+					groupVecs[i] = nil
+				}
+			}
+		}
+
 		for i := 0; i < numGroupByCols; i++ {
 			if len(group.ctr.result1.ToPopped[0].Vecs) > i && group.ctr.result1.ToPopped[0].Vecs[i] != nil {
 				vecType := *group.ctr.result1.ToPopped[0].Vecs[i].GetType()
@@ -92,11 +102,7 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 				for i, vec := range bat.Vecs {
 					if i < len(groupVecs) && groupVecs[i] != nil && vec != nil {
 						if err := groupVecs[i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
-							for j := 0; j < len(groupVecs); j++ {
-								if groupVecs[j] != nil {
-									groupVecs[j].Free(proc.Mp())
-								}
-							}
+							cleanupVecs()
 							return err
 						}
 					}
@@ -196,6 +202,15 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 
 	if len(group.ctr.result1.AggList) == 0 {
 		aggs := make([]aggexec.AggFuncExec, len(spillState.MarshaledAggStates))
+		defer func() {
+			if group.ctr.result1.AggList == nil {
+				for _, agg := range aggs {
+					if agg != nil {
+						agg.Free()
+					}
+				}
+			}
+		}()
 
 		for i, marshaledState := range spillState.MarshaledAggStates {
 			if len(marshaledState) == 0 {
@@ -204,11 +219,6 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 
 			agg, err := aggexec.UnmarshalAggFuncExec(aggexec.NewSimpleAggMemoryManager(proc.Mp()), marshaledState)
 			if err != nil {
-				for j := 0; j < i; j++ {
-					if aggs[j] != nil {
-						aggs[j].Free()
-					}
-				}
 				return err
 			}
 
@@ -216,11 +226,6 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			if config := aggExpr.GetExtraConfig(); config != nil {
 				if err = agg.SetExtraInformation(config, 0); err != nil {
 					agg.Free()
-					for j := 0; j < i; j++ {
-						if aggs[j] != nil {
-							aggs[j].Free()
-						}
-					}
 					return err
 				}
 			}
@@ -232,6 +237,7 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 
 		if len(spillState.GroupVectors) > 0 && spillState.GroupCount > 0 {
 			chunkSize := aggexec.GetMinAggregatorsChunkSize(spillState.GroupVectors, aggs)
+			batchesToAdd := make([]*batch.Batch, 0)
 
 			for offset := 0; offset < spillState.GroupCount; offset += chunkSize {
 				size := chunkSize
@@ -240,17 +246,24 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 				}
 
 				bat := getInitialBatchWithSameTypeVecs(spillState.GroupVectors)
+				success := true
 				for i, vec := range spillState.GroupVectors {
 					if vec != nil && i < len(bat.Vecs) {
 						if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
 							bat.Clean(proc.Mp())
+							for _, b := range batchesToAdd {
+								b.Clean(proc.Mp())
+							}
 							return err
 						}
 					}
 				}
-				bat.SetRowCount(size)
-				group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, bat)
+				if success {
+					bat.SetRowCount(size)
+					batchesToAdd = append(batchesToAdd, bat)
+				}
 			}
+			group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, batchesToAdd...)
 		}
 
 		return nil
@@ -325,6 +338,7 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			chunkSize = spillState.GroupCount
 		}
 
+		batchesToAdd := make([]*batch.Batch, 0)
 		for offset := 0; offset < spillState.GroupCount; offset += chunkSize {
 			size := chunkSize
 			if offset+size > spillState.GroupCount {
@@ -332,17 +346,24 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			}
 
 			bat := getInitialBatchWithSameTypeVecs(spillState.GroupVectors)
+			success := true
 			for i, vec := range spillState.GroupVectors {
 				if vec != nil && i < len(bat.Vecs) {
 					if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
 						bat.Clean(proc.Mp())
+						for _, b := range batchesToAdd {
+							b.Clean(proc.Mp())
+						}
 						return err
 					}
 				}
 			}
-			bat.SetRowCount(size)
-			group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, bat)
+			if success {
+				bat.SetRowCount(size)
+				batchesToAdd = append(batchesToAdd, bat)
+			}
 		}
+		group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, batchesToAdd...)
 	}
 
 	return nil
