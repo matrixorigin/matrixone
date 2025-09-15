@@ -17,11 +17,13 @@ package frontend
 import (
 	"context"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -471,6 +473,14 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		if !exec.matchAnyPattern(key, newTableInfo) {
 			continue
 		}
+		hasError, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
+		if err != nil {
+			logutil.Errorf("cdc task %s get table err msg for table %s failed, err: %v", exec.spec.TaskName, key, err)
+			return err
+		}
+		if hasError {
+			continue
+		}
 
 		logutil.Infof("cdc task find new table: %s", newTableInfo)
 		if err = exec.addExecPipelineForTable(ctx, newTableInfo, txnOp); err != nil {
@@ -482,6 +492,36 @@ func (exec *CDCTaskExecutor) handleNewTables(allAccountTbls map[uint32]cdc.TblMa
 		}
 	}
 	return nil
+}
+
+var GetTableErrMsg = func(
+	ctx context.Context,
+	accountId uint32,
+	ieExecutor ie.InternalExecutor,
+	taskId string,
+	tbl *cdc.DbTableInfo) (
+	hasError bool, err error,
+) {
+	sql := cdc.CDCSQLBuilder.GetTableErrMsgSQL(uint64(accountId), taskId, tbl.SourceDbName, tbl.SourceTblName)
+	res := ieExecutor.Query(ctx, sql, ie.SessionOverrideOptions{})
+	if res.Error() != nil {
+		return false, res.Error()
+	} else if res.RowCount() < 1 {
+		return false, nil
+	}
+
+	errMsg, err := res.GetString(ctx, 0, 0)
+	if err != nil {
+		return false, err
+	}
+	if errMsg == "" {
+		return false, nil
+	}
+	if strings.HasPrefix(errMsg, cdc.RetryableErrorPrefix) {
+		return false, nil
+	}
+	hasError = true
+	return
 }
 
 func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {
