@@ -502,6 +502,7 @@ var GetTableErrMsg = func(
 	tbl *cdc.DbTableInfo) (
 	hasError bool, err error,
 ) {
+	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	sql := cdc.CDCSQLBuilder.GetTableErrMsgSQL(uint64(accountId), taskId, tbl.SourceDbName, tbl.SourceTblName)
 	res := ieExecutor.Query(ctx, sql, ie.SessionOverrideOptions{})
 	if res.Error() != nil {
