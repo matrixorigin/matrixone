@@ -202,8 +202,8 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 	}
 	h.currentPSFrom = minTS
-	if h.fromTs.GT(&minTS) {
-		h.currentPSFrom = h.fromTs
+	if nextFrom.GT(&minTS) {
+		h.currentPSFrom = nextFrom
 	}
 	h.currentPSTo = maxTS
 	if h.toTs.LT(&maxTS) {
