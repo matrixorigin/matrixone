@@ -407,6 +407,13 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		decimalValue.A = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B0_63)
 		decimalValue.B = int64(vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].B64_127)
 		return &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: decimalValue}}
+	case types.T_array_float32, types.T_array_float64:
+		data := vec.GetStringAt(int(row))
+		return &plan.Literal{
+			Value: &plan.Literal_VecVal{
+				VecVal: data,
+			},
+		}
 	default:
 		return nil
 	}
