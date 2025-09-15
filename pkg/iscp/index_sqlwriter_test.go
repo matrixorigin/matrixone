@@ -141,7 +141,7 @@ func newTestFulltextTableDef2Parts(pkName string, pkType types.T, vecColName str
 	}
 }
 
-func TestNewFulltextSqlWriter(t *testing.T) {
+func TestNewFulltextSqlWriterUpsert(t *testing.T) {
 	var ctx context.Context
 
 	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
@@ -157,6 +157,53 @@ func TestNewFulltextSqlWriter(t *testing.T) {
 
 	row = []any{int64(2000), nil, nil}
 	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	fmt.Println(string(bytes))
+
+}
+func TestNewFulltextSqlWriterInsert(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+
+	row := []any{int64(1000), []uint8("hello world"), nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), nil, nil}
+	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	fmt.Println(string(bytes))
+
+}
+
+func TestNewFulltextSqlWriterDelete(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestFulltextTableDef("id", types.T_int64, "body", types.T_varchar, 256)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIndexSqlWriter("fulltext", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+
+	row := []any{int64(1000), []uint8("hello world"), nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), nil, nil}
+	err = writer.Delete(ctx, row)
 	require.Nil(t, err)
 
 	bytes, err := writer.ToSql()
@@ -215,7 +262,7 @@ func TestNewHnswSqlWriter(t *testing.T) {
 	fmt.Println(string(bytes))
 }
 
-func TestNewIvfflatSqlWriter(t *testing.T) {
+func TestNewIvfflatSqlWriterInsert(t *testing.T) {
 	var ctx context.Context
 
 	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
@@ -234,6 +281,58 @@ func TestNewIvfflatSqlWriter(t *testing.T) {
 
 	row = []any{int64(3000), []float64{5, 6, 7}, nil}
 	err = writer.Insert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	fmt.Println(string(bytes))
+}
+
+func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+	row := []any{int64(1000), []float64{1, 2, 3}, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), []float64{5, 6, 7}, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float64{5, 6, 7}, nil}
+	err = writer.Upsert(ctx, row)
+	require.Nil(t, err)
+
+	bytes, err := writer.ToSql()
+	require.Nil(t, err)
+	fmt.Println(string(bytes))
+}
+
+func TestNewIvfflatSqlWriterDelete(t *testing.T) {
+	var ctx context.Context
+
+	tabledef := newTestIvfflatTableDef("pk", types.T_int64, "vec", types.T_array_float64, 3)
+	consumerInfo := newTestConsumerInfo()
+	jobID := newTestJobID()
+
+	writer, err := NewIvfflatSqlWriter("ivfflat", jobID, consumerInfo, tabledef, tabledef.Indexes)
+	require.Nil(t, err)
+	row := []any{int64(1000), []float64{1, 2, 3}, nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(2000), []float64{5, 6, 7}, nil}
+	err = writer.Delete(ctx, row)
+	require.Nil(t, err)
+
+	row = []any{int64(3000), []float64{5, 6, 7}, nil}
+	err = writer.Delete(ctx, row)
 	require.Nil(t, err)
 
 	bytes, err := writer.ToSql()
