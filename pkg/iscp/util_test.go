@@ -28,20 +28,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-/*
-func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []any, rowIndex int) error {
-
-}
-
-func convertColIntoSql(
-	ctx context.Context,
-	data any,
-	typ *types.Type,
-	sqlBuff []byte) ([]byte, error) {
-
-}
-*/
-
 func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string) {
 
 	i := 0
