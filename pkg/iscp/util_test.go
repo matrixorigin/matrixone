@@ -45,7 +45,7 @@ func convertColIntoSql(
 func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string) {
 
 	i := 0
-	nvec := 12
+	nvec := 15
 
 	bat := batch.NewWithSize(nvec)
 	res := make([]string, nvec)
@@ -158,6 +158,33 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		v := types.Enum(uint16(1))
 		vector.AppendFixed[types.Enum](bat.Vecs[i], v, false, proc.Mp())
 		res[i] = "'1'"
+		i += 1
+	}
+
+	{
+		// rowid
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_Rowid, types.RowidSize, 0))
+		v := types.Rowid([types.RowidSize]byte{})
+		vector.AppendFixed[types.Rowid](bat.Vecs[i], v, false, proc.Mp())
+		res[i] = "'00000000-0000-0000-0000-000000000000-0-0-0'"
+		i += 1
+	}
+
+	{
+		// blockid
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_Blockid, types.BlockidSize, 0))
+		v := types.Blockid([types.BlockidSize]byte{})
+		vector.AppendFixed[types.Blockid](bat.Vecs[i], v, false, proc.Mp())
+		res[i] = "'00000000-0000-0000-0000-000000000000-0-0'"
+		i += 1
+	}
+
+	{
+		// TS
+		bat.Vecs[i] = vector.NewVec(types.New(types.T_TS, types.TxnTsSize, 0))
+		v := types.TS([types.TxnTsSize]byte{})
+		vector.AppendFixed[types.TS](bat.Vecs[i], v, false, proc.Mp())
+		res[i] = "'0-0'"
 		i += 1
 	}
 
