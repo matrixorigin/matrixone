@@ -171,6 +171,7 @@ type BaseNode[T any] interface {
 	Update(vun T)
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error)
+	ApproxSize() int64
 }
 
 type MVCCNode[T BaseNode[T]] struct {
@@ -261,6 +262,18 @@ func (e *MVCCNode[T]) PrepareCommit() (err error) {
 	}
 	err = e.EntryMVCCNode.PrepareCommit()
 	return
+}
+
+func (e *MVCCNode[T]) ApproxSize() int64 {
+	var (
+		size int64
+	)
+
+	size += int64(EntryMVCCNodeSize)
+	size += int64(types.TxnTsSize) * 3 // txn mvcc node
+	size += e.BaseNode.ApproxSize()
+
+	return size
 }
 
 func (e *MVCCNode[T]) WriteTo(w io.Writer) (n int64, err error) {

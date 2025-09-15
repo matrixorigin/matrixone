@@ -65,7 +65,11 @@ func Test_LogEntry1(t *testing.T) {
 	}
 	dsn := uint64(100)
 	writer.SetStartDSN(dsn)
-	e = writer.Finish()
+
+	var err error
+	e, err = writer.Finish()
+	assert.Nil(t, err)
+
 	assert.Equal(t, uint32(10), e.GetEntryCount())
 	assert.Equal(t, dsn, e.GetStartDSN())
 	footer = e.GetFooter()
@@ -86,7 +90,8 @@ func Test_LogEntry1(t *testing.T) {
 
 	assert.False(t, writer.IsFinished())
 	writer.SetStartDSN(dsn)
-	e = writer.Finish()
+	e, err = writer.Finish()
+	assert.Nil(t, err)
 	assert.True(t, writer.IsFinished())
 
 	assert.Equal(t, uint32(10), e.GetEntryCount())

@@ -160,7 +160,7 @@ func generateCmdPayload(param parameter, loc objectio.Location) ([]byte, error) 
 		if err != nil {
 			return err
 		}
-		txnCmd := txnbase.NewTxnCmd(1024 * 10)
+		txnCmd := txnbase.NewTxnCmd()
 		txnCmd.AddCmd(cmd)
 		data, err := txnCmd.MarshalBinary()
 		if err != nil {
@@ -180,6 +180,7 @@ func generateCmdPayload(param parameter, loc objectio.Location) ([]byte, error) 
 		drEntry := driverEntry.NewEntry(baseEntry)
 		// prepare write, set the info buf
 		drEntry.Entry.PrepareWrite()
+		drEntry.Entry.ExecuteGroupWalPreCallbacks()
 
 		me := newMockEntry()
 		me.V1Meta.SetType(param.cmdType)
@@ -214,6 +215,7 @@ func generateCkpPayload(data []byte) ([]byte, error) {
 	drEntry := driverEntry.NewEntry(baseEntry)
 	// prepare write, set the info buf
 	drEntry.Entry.PrepareWrite()
+	drEntry.Entry.ExecuteGroupWalPreCallbacks()
 
 	me := newMockEntry()
 	me.V1Meta.SetType(logservicedriver.Cmd_Normal)
