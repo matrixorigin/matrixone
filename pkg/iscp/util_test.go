@@ -174,7 +174,7 @@ func mockUtilVector(t *testing.T, proc *process.Process) (*batch.Batch, []string
 		i += 1
 	}
 
-	_ = i
+	require.Equal(t, nvec, i)
 
 	bat.SetRowCount(1)
 	return bat, res
