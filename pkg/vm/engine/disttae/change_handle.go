@@ -198,13 +198,10 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			checkpointEntries = append(checkpointEntries, checkpointEntry)
 		}
 	}
-	if nextFrom.LT(&minTS) {
+	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
 		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 	}
-	h.currentPSFrom = minTS
-	if nextFrom.GT(&minTS) {
-		h.currentPSFrom = nextFrom
-	}
+	h.currentPSFrom = nextFrom
 	h.currentPSTo = maxTS
 	if h.toTs.LT(&maxTS) {
 		h.currentPSTo = h.toTs
