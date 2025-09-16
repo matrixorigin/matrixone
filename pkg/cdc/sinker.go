@@ -970,6 +970,7 @@ func retry(ctx context.Context, ar *ActiveRoutine, fn func() error, retryTimes i
 		// do not exceed retryTimes and retryDuration
 		return (retryTimes == -1 || retry < retryTimes) && time.Since(startTime) < retryDuration
 	}
+	dur := time.Second
 	for retry, startTime := 0, time.Now(); needRetry(retry, startTime); retry++ {
 		select {
 		case <-ctx.Done():
@@ -992,7 +993,8 @@ func retry(ctx context.Context, ar *ActiveRoutine, fn func() error, retryTimes i
 
 		logutil.Errorf("CDC-MySQLSink retry failed, err: %v", err)
 		v2.CdcMysqlSinkErrorCounter.Inc()
-		time.Sleep(time.Second * time.Duration(2^retry))
+		time.Sleep(dur)
+		dur *= 2
 	}
 	return moerr.NewInternalError(ctx, "CDC-MySQLSink retry exceed retryTimes or retryDuration")
 }
