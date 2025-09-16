@@ -3430,10 +3430,15 @@ func TestCancelIteration1(t *testing.T) {
 		func(
 			context.Context,
 			string,
+			client.TxnClient,
+			engine.Engine,
 			client.TxnOperator,
 			uint32,
 			uint64,
 			[]string,
+			[]uint64,
+			types.TS,
+			[]*iscp.JobStatus,
 			[]uint64,
 		) (jobSpec []*iscp.JobSpec, err error) {
 			cancelCh <- struct{}{}
@@ -3517,10 +3522,15 @@ func TestCancelIteration2(t *testing.T) {
 		func(
 			context.Context,
 			string,
+			client.TxnClient,
+			engine.Engine,
 			client.TxnOperator,
 			uint32,
 			uint64,
 			[]string,
+			[]uint64,
+			types.TS,
+			[]*iscp.JobStatus,
 			[]uint64,
 		) (jobSpec []*iscp.JobSpec, err error) {
 			return []*iscp.JobSpec{

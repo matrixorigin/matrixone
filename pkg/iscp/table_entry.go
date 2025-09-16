@@ -51,6 +51,7 @@ func NewTableEntry(
 	}
 }
 func (t *TableEntry) AddOrUpdateSinker(
+	ctx context.Context,
 	jobName string,
 	jobSpec *JobSpec,
 	jobStatus *JobStatus,
@@ -75,7 +76,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	if jobEntry.jobID > jobID {
 		return
 	}
-	jobEntry.update(jobSpec, jobStatus, watermark, state, dropAt)
+	jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
 	return
 }
 

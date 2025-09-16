@@ -52,7 +52,17 @@ func NewJobEntry(
 	return jobEntry
 }
 
-func (jobEntry *JobEntry) update(jobSpec *JobSpec, jobStatus *JobStatus, watermark types.TS, state int8, dropAt types.Timestamp) {
+func (jobEntry *JobEntry) update(
+	ctx context.Context,
+	jobSpec *JobSpec,
+	jobStatus *JobStatus,
+	watermark types.TS,
+	state int8,
+	dropAt types.Timestamp,
+) {
+	if jobEntry.state == ISCPJobState_Error {
+		return
+	}
 	jobEntry.jobSpec = &jobSpec.TriggerSpec
 	jobEntry.dropAt = dropAt
 	needApply := false
@@ -66,7 +76,20 @@ func (jobEntry *JobEntry) update(jobSpec *JobSpec, jobStatus *JobStatus, waterma
 		if jobEntry.watermark.GT(&watermark) {
 			errMsg := fmt.Sprintf("watermark %v > %v, current state %d, incoming state %d, job %d-%v-%d",
 				watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
-			panic(errMsg)
+			FlushPermanentErrorMessage(
+				ctx,
+				jobEntry.tableInfo.exec.cnUUID,
+				jobEntry.tableInfo.exec.txnEngine,
+				jobEntry.tableInfo.exec.cnTxnClient,
+				jobEntry.tableInfo.accountID,
+				jobEntry.tableInfo.tableID,
+				[]string{jobEntry.jobName},
+				[]uint64{jobEntry.jobID},
+				[]uint64{jobStatus.LSN},
+				[]*JobStatus{jobStatus},
+				watermark,
+				errMsg,
+			)
 		}
 		jobEntry.currentLSN = jobStatus.LSN
 		jobEntry.persistedWatermark = watermark
@@ -87,7 +110,20 @@ func (jobEntry *JobEntry) UpdateWatermark(
 		return
 	}
 	if !jobEntry.watermark.EQ(&from) {
-		panic("logic error")
+		FlushPermanentErrorMessage(
+			jobEntry.tableInfo.exec.ctx,
+			jobEntry.tableInfo.exec.cnUUID,
+			jobEntry.tableInfo.exec.txnEngine,
+			jobEntry.tableInfo.exec.cnTxnClient,
+			jobEntry.tableInfo.accountID,
+			jobEntry.tableInfo.tableID,
+			[]string{jobEntry.jobName},
+			[]uint64{jobEntry.jobID},
+			[]uint64{jobEntry.currentLSN},
+			[]*JobStatus{{}},
+			jobEntry.watermark,
+			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), jobEntry.watermark.ToString()),
+		)
 	}
 	jobEntry.watermark = to
 }

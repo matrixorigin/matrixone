@@ -16,6 +16,7 @@ package iscp
 
 import (
 	"context"
+	"errors"
 
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -165,6 +167,7 @@ func NewISCPTaskExecutor(
 		tableMu:     sync.RWMutex{},
 		option:      option,
 		mp:          mp,
+		jobsToInit:  make([]*InitWatermark, 0),
 	}
 	return exec, nil
 }
@@ -562,6 +565,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 			)
 		}
 	}
+	exec.flushStartWatermark()
 
 	return
 }
@@ -623,6 +627,54 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 	return
 }
 
+func (exec *ISCPTaskExecutor) flushStartWatermark() (err error) {
+	ctx := context.WithValue(exec.ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	txnWriter, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp iteration")
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, txnWriter.Rollback(ctx))
+		} else {
+			err = txnWriter.Commit(ctx)
+		}
+		if err != nil {
+			logutil.Error(
+				"ISCP-Task flush start watermark failed",
+				zap.Error(err),
+			)
+		} else {
+			exec.jobsToInit = make([]*InitWatermark, 0)
+		}
+	}()
+	emptyJobStatus := &JobStatus{LSN: 1}
+	statusJson, err := MarshalJobStatus(emptyJobStatus)
+	if err != nil {
+		return
+	}
+	for _, job := range exec.jobsToInit {
+		sql := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
+			job.AccountID,
+			job.TableID,
+			job.JobName,
+			job.JobID,
+			job.Watermark,
+			statusJson,
+			ISCPJobState_Completed,
+		)
+		var result executor.Result
+		result, err = ExecWithResult(ctx, sql, exec.cnUUID, txnWriter)
+		if err != nil {
+			return
+		}
+		result.Close()
+	}
+	return
+}
+
 func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	accountID uint32,
 	tableID uint64,
@@ -639,6 +691,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	var newCreate bool
 
 	var watermark types.TS
+	var needInit bool
 	defer func() {
 		if !newCreate && dropAt == 0 || notPrint {
 			return
@@ -651,11 +704,13 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.Uint64("jobID", jobID),
 			zap.String("watermark", watermark.ToString()),
 			zap.Bool("newcreate", newCreate),
+			zap.Bool("needInit", needInit),
 			zap.String("dropAt", dropAt.String()),
 		)
 	}()
 	if watermarkStr == specialTS.ToString() {
 		watermark = commitTS
+		needInit = true
 	} else {
 		watermark = types.StringToTS(watermarkStr)
 	}
@@ -683,7 +738,19 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		)
 		exec.setTable(table)
 	}
-	newCreate = table.AddOrUpdateSinker(jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	if needInit {
+		state = ISCPJobState_Pending
+	}
+	newCreate = table.AddOrUpdateSinker(exec.ctx, jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
+	if needInit {
+		exec.jobsToInit = append(exec.jobsToInit, &InitWatermark{
+			AccountID: accountID,
+			TableID:   tableID,
+			JobName:   jobName,
+			JobID:     jobID,
+			Watermark: watermark,
+		})
+	}
 }
 
 func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
