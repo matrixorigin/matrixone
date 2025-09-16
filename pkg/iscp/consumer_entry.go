@@ -40,13 +40,14 @@ func NewJobEntry(
 	dropAt types.Timestamp,
 ) *JobEntry {
 	jobEntry := &JobEntry{
-		tableInfo: tableInfo,
-		jobName:   jobName,
-		jobID:     jobID,
-		jobSpec:   &jobSpec.TriggerSpec,
-		watermark: watermark,
-		state:     state,
-		dropAt:    dropAt,
+		tableInfo:          tableInfo,
+		jobName:            jobName,
+		jobID:              jobID,
+		jobSpec:            &jobSpec.TriggerSpec,
+		watermark:          watermark,
+		persistedWatermark: watermark,
+		state:              state,
+		dropAt:             dropAt,
 	}
 	return jobEntry
 }

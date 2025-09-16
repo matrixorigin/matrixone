@@ -3792,7 +3792,7 @@ func TestApplyISCPLog(t *testing.T) {
 			DBName:    "srcdb",
 			TableName: "src_table",
 		},
-		false,
+		true,
 	)
 	assert.True(t, ok)
 	assert.NoError(t, err)
