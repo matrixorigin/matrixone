@@ -16,6 +16,22 @@ package v4_0_0
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/predefine"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var clusterUpgEntries = []versions.UpgradeEntry{}
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_mo_iscp_task,
+}
+
+var upg_mo_iscp_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysDaemonTask,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    predefine.GenInitISCPTaskSQL(),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		ok, err := versions.CheckTableDataExist(txn, accountId, predefine.GenISCPTaskCheckSQL())
+		return ok, err
+	},
+}

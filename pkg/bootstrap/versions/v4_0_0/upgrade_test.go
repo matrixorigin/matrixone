@@ -16,10 +16,12 @@ package v4_0_0
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -28,7 +30,23 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func mockTenantUpgrade(t *testing.T) {
+	drop_mo_retention := versions.UpgradeEntry{
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_retention",
+		UpgType:   versions.DROP_TABLE,
+		UpgSql:    fmt.Sprintf("drop table if exists %s.%s", catalog.MO_CATALOG, "mo_retention"),
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, "mo_retention")
+			return !exist, err
+		},
+	}
+	tenantUpgEntries = append(tenantUpgEntries, drop_mo_retention)
+}
+
 func Test_Upgrade(t *testing.T) {
+	mockTenantUpgrade(t)
+
 	sid := ""
 	runtime.RunTest(
 		sid,

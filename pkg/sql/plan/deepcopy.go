@@ -862,6 +862,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			pc.Value = &plan.Literal_UpdateVal{UpdateVal: c.UpdateVal}
 		case *plan.Literal_EnumVal:
 			pc.Value = &plan.Literal_EnumVal{EnumVal: c.EnumVal}
+		case *plan.Literal_VecVal:
+			pc.Value = &plan.Literal_VecVal{VecVal: c.VecVal}
 		}
 
 		newExpr.Expr = &plan.Expr_Lit{
