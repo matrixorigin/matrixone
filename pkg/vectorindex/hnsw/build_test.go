@@ -54,7 +54,7 @@ func TestBuildMulti(t *testing.T) {
 		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
+	build, err := NewHnswBuild[float32](proc, uid, 1, idxcfg, tblcfg)
 
 	require.Nil(t, err)
 	defer build.Destroy()
@@ -101,7 +101,7 @@ func TestBuildMulti(t *testing.T) {
 
 	fmt.Printf("model search\n")
 	// load index file and search
-	search := NewHnswSearch(idxcfg, tblcfg)
+	search := NewHnswSearch[float32](idxcfg, tblcfg)
 	defer search.Destroy()
 
 	// test Contains with no indexes
@@ -111,9 +111,9 @@ func TestBuildMulti(t *testing.T) {
 
 	fmt.Printf("load model from files\n")
 	// load index
-	search.Indexes = make([]*HnswModel, len(indexes))
+	search.Indexes = make([]*HnswModel[float32], len(indexes))
 	for i, idx := range indexes {
-		sidx := &HnswModel{}
+		sidx := &HnswModel[float32]{}
 		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
 		require.Nil(t, err)
 
@@ -175,7 +175,7 @@ func TestBuildIndex(t *testing.T) {
 	idxcfg.Usearch.Metric = 100
 	//tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 
-	idx, err := NewHnswModelForBuild("abc-0", idxcfg, 1, MaxIndexCapacity)
+	idx, err := NewHnswModelForBuild[float32]("abc-0", idxcfg, 1, MaxIndexCapacity)
 	require.Nil(t, err)
 
 	empty, err := idx.Empty()
@@ -211,7 +211,7 @@ func TestBuildSingleThread(t *testing.T) {
 		IndexCapacity: MaxIndexCapacity}
 
 	uid := fmt.Sprintf("%s:%d:%d", "localhost", 1, 0)
-	build, err := NewHnswBuild(proc, uid, 1, idxcfg, tblcfg)
+	build, err := NewHnswBuild[float32](proc, uid, 1, idxcfg, tblcfg)
 	require.Nil(t, err)
 	defer build.Destroy()
 
@@ -264,7 +264,7 @@ func TestBuildSingleThread(t *testing.T) {
 
 	fmt.Printf("model search\n")
 	// load index file and search
-	search := NewHnswSearch(idxcfg, tblcfg)
+	search := NewHnswSearch[float32](idxcfg, tblcfg)
 	defer search.Destroy()
 
 	fmt.Printf("threads search %d\n", search.ThreadsSearch)
@@ -275,9 +275,9 @@ func TestBuildSingleThread(t *testing.T) {
 
 	fmt.Printf("load model from files\n")
 	// load index
-	search.Indexes = make([]*HnswModel, len(indexes))
+	search.Indexes = make([]*HnswModel[float32], len(indexes))
 	for i, idx := range indexes {
-		sidx := &HnswModel{}
+		sidx := &HnswModel[float32]{}
 		sidx.Index, err = usearch.NewIndex(idxcfg.Usearch)
 		require.Nil(t, err)
 

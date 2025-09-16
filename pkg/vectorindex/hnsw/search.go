@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -32,25 +33,25 @@ var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
-type HnswSearch struct {
+type HnswSearch[T types.RealNumbers] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*HnswModel
+	Indexes       []*HnswModel[T]
 	Concurrency   atomic.Int64
 	Mutex         sync.Mutex
 	Cond          *sync.Cond
 	ThreadsSearch int64
 }
 
-func NewHnswSearch(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch {
+func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
-	s := &HnswSearch{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
+	s := &HnswSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	s.Cond = sync.NewCond(&s.Mutex)
 	return s
 }
 
 // acquire lock from a usearch threads
-func (s *HnswSearch) lock() {
+func (s *HnswSearch[T]) lock() {
 	// check max threads
 	s.Cond.L.Lock()
 	defer s.Cond.L.Unlock()
@@ -61,15 +62,15 @@ func (s *HnswSearch) lock() {
 }
 
 // release a lock from a usearch threads
-func (s *HnswSearch) unlock() {
+func (s *HnswSearch[T]) unlock() {
 	s.Concurrency.Add(-1)
 	s.Cond.Signal()
 }
 
 // Search the hnsw index (implement VectorIndexSearch.Search)
-func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+func (s *HnswSearch[T]) Search(proc *process.Process, anyquery any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
 
-	query, ok := anyquery.([]float32)
+	query, ok := anyquery.([]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query is not []float32")
 	}
@@ -138,7 +139,7 @@ func (s *HnswSearch) Search(proc *process.Process, anyquery any, rt vectorindex.
 	return reskeys, resdistances, nil
 }
 
-func (s *HnswSearch) Contains(key int64) (bool, error) {
+func (s *HnswSearch[T]) Contains(key int64) (bool, error) {
 	if len(s.Indexes) == 0 {
 		return false, nil
 	}
@@ -158,7 +159,7 @@ func (s *HnswSearch) Contains(key int64) (bool, error) {
 }
 
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
-func (s *HnswSearch) Destroy() {
+func (s *HnswSearch[T]) Destroy() {
 	// destroy index
 	for _, idx := range s.Indexes {
 		idx.Index.Destroy()
@@ -167,7 +168,7 @@ func (s *HnswSearch) Destroy() {
 }
 
 // load metadata from database
-func LoadMetadata(proc *process.Process, dbname string, metatbl string) ([]*HnswModel, error) {
+func LoadMetadata[T types.RealNumbers](proc *process.Process, dbname string, metatbl string) ([]*HnswModel[T], error) {
 
 	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
 	res, err := runSql(proc, sql)
@@ -181,7 +182,7 @@ func LoadMetadata(proc *process.Process, dbname string, metatbl string) ([]*Hnsw
 		total += bat.RowCount()
 	}
 
-	indexes := make([]*HnswModel, 0, total)
+	indexes := make([]*HnswModel[T], 0, total)
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		chksumVec := bat.Vecs[1]
@@ -193,7 +194,7 @@ func LoadMetadata(proc *process.Process, dbname string, metatbl string) ([]*Hnsw
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 
-			idx := &HnswModel{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			idx := &HnswModel[T]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
 			indexes = append(indexes, idx)
 		}
 	}
@@ -202,7 +203,7 @@ func LoadMetadata(proc *process.Process, dbname string, metatbl string) ([]*Hnsw
 }
 
 // load index from database
-func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswModel) ([]*HnswModel, error) {
+func (s *HnswSearch[T]) LoadIndex(proc *process.Process, indexes []*HnswModel[T]) ([]*HnswModel[T], error) {
 	var err error
 
 	for _, idx := range indexes {
@@ -223,9 +224,9 @@ func (s *HnswSearch) LoadIndex(proc *process.Process, indexes []*HnswModel) ([]*
 }
 
 // load index from database (implement VectorIndexSearch.LoadFromDatabase)
-func (s *HnswSearch) Load(proc *process.Process) error {
+func (s *HnswSearch[T]) Load(proc *process.Process) error {
 	// load metadata
-	indexes, err := LoadMetadata(proc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	indexes, err := LoadMetadata[T](proc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
@@ -244,7 +245,7 @@ func (s *HnswSearch) Load(proc *process.Process) error {
 }
 
 // check config and update some parameters such as ef_search
-func (s *HnswSearch) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
+func (s *HnswSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
 
 	return nil
 }

@@ -46,7 +46,7 @@ const (
 var runTxn = sqlexec.RunTxn
 var runCatalogSql = sqlexec.RunSql
 
-func CdcSync(proc *process.Process, db string, tbl string, vectype int32, dimension int32, cdc *vectorindex.VectorIndexCdc[float32]) error {
+func CdcSync[T types.RealNumbers](proc *process.Process, db string, tbl string, vectype int32, dimension int32, cdc *vectorindex.VectorIndexCdc[T]) error {
 
 	if vectype != int32(types.T_array_float32) {
 		return moerr.NewInternalError(proc.Ctx, "vector type is not []float32")
@@ -180,7 +180,7 @@ func CdcSync(proc *process.Process, db string, tbl string, vectype int32, dimens
 	//os.Stderr.WriteString(fmt.Sprintf("idxcfg: %v\n", idxcfg))
 
 	// load metadata
-	indexes, err := LoadMetadata(proc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
+	indexes, err := LoadMetadata[T](proc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func CdcSync(proc *process.Process, db string, tbl string, vectype int32, dimens
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
 	ts := time.Now().Unix()
-	sync := &HnswSync{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, cdc: cdc, uid: uid, ts: ts}
+	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, cdc: cdc, uid: uid, ts: ts}
 	defer sync.destroy()
 	err = sync.run(proc)
 	if err != nil {
@@ -202,28 +202,28 @@ func CdcSync(proc *process.Process, db string, tbl string, vectype int32, dimens
 	return nil
 }
 
-type HnswSync struct {
-	indexes []*HnswModel
+type HnswSync[T types.RealNumbers] struct {
+	indexes []*HnswModel[T]
 	idxcfg  vectorindex.IndexConfig
 	tblcfg  vectorindex.IndexTableConfig
-	cdc     *vectorindex.VectorIndexCdc[float32]
+	cdc     *vectorindex.VectorIndexCdc[T]
 	uid     string
 	ts      int64
 	ninsert atomic.Int32
 	ndelete atomic.Int32
 	nupdate atomic.Int32
-	current *HnswModel
-	last    *HnswModel
+	current *HnswModel[T]
+	last    *HnswModel[T]
 }
 
-func (s *HnswSync) destroy() {
+func (s *HnswSync[T]) destroy() {
 	for _, m := range s.indexes {
 		m.Destroy()
 	}
 	s.indexes = nil
 }
 
-func (s *HnswSync) checkContains(proc *process.Process) (maxcap uint, midx []int, err error) {
+func (s *HnswSync[T]) checkContains(proc *process.Process) (maxcap uint, midx []int, err error) {
 	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
 
 	maxcap = uint(s.tblcfg.IndexCapacity)
@@ -297,7 +297,7 @@ func (s *HnswSync) checkContains(proc *process.Process) (maxcap uint, midx []int
 	return maxcap, midx, nil
 }
 
-func (s *HnswSync) insertAllInParallel(proc *process.Process, maxcap uint) error {
+func (s *HnswSync[T]) insertAllInParallel(proc *process.Process, maxcap uint) error {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	err_chan := make(chan error, s.tblcfg.ThreadsBuild)
@@ -343,14 +343,14 @@ func (s *HnswSync) insertAllInParallel(proc *process.Process, maxcap uint) error
 	return nil
 }
 
-func (s *HnswSync) setupModel(proc *process.Process, maxcap uint) error {
+func (s *HnswSync[T]) setupModel(proc *process.Process, maxcap uint) error {
 
-	s.current = (*HnswModel)(nil)
-	s.last = (*HnswModel)(nil)
+	s.current = (*HnswModel[T])(nil)
+	s.last = (*HnswModel[T])(nil)
 	if len(s.indexes) == 0 {
 		// create a new model and do insert
 		id := s.getModelId()
-		newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
 		if err != nil {
 			return err
 		}
@@ -364,7 +364,7 @@ func (s *HnswSync) setupModel(proc *process.Process, maxcap uint) error {
 			//os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
 			id := s.getModelId()
 			// model is already full, create a new model for insert
-			newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+			newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
 			if err != nil {
 				return err
 			}
@@ -382,7 +382,7 @@ func (s *HnswSync) setupModel(proc *process.Process, maxcap uint) error {
 	return nil
 }
 
-func (s *HnswSync) sequentialUpdate(proc *process.Process, maxcap uint, midx []int) error {
+func (s *HnswSync[T]) sequentialUpdate(proc *process.Process, maxcap uint, midx []int) error {
 
 	for i, row := range s.cdc.Data {
 
@@ -454,7 +454,7 @@ func (s *HnswSync) sequentialUpdate(proc *process.Process, maxcap uint, midx []i
 	return nil
 }
 
-func (s *HnswSync) run(proc *process.Process) error {
+func (s *HnswSync[T]) run(proc *process.Process) error {
 	var err error
 
 	start := time.Now()
@@ -522,7 +522,7 @@ func (s *HnswSync) run(proc *process.Process) error {
 	return nil
 }
 
-func (s *HnswSync) runSqls(proc *process.Process, sqls []string) error {
+func (s *HnswSync[T]) runSqls(proc *process.Process, sqls []string) error {
 	/*
 		for _, s := range sqls {
 			os.Stderr.WriteString(fmt.Sprintf("sql : %s\n", s))
@@ -546,13 +546,13 @@ func (s *HnswSync) runSqls(proc *process.Process, sqls []string) error {
 	return nil
 }
 
-func (s *HnswSync) getModelId() string {
+func (s *HnswSync[T]) getModelId() string {
 	id := fmt.Sprintf("%s:%d", s.uid, s.ts)
 	s.ts++
 	return id
 }
 
-func (s *HnswSync) getCurrentModel(proc *process.Process, idx int) (*HnswModel, error) {
+func (s *HnswSync[T]) getCurrentModel(proc *process.Process, idx int) (*HnswModel[T], error) {
 	m := s.indexes[idx]
 	if s.current != m {
 		// check current == last, if not, safe to unload
@@ -565,7 +565,7 @@ func (s *HnswSync) getCurrentModel(proc *process.Process, idx int) (*HnswModel, 
 	return s.current, nil
 }
 
-func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint) (*HnswModel, error) {
+func (s *HnswSync[T]) getLastModel(proc *process.Process, maxcap uint) (*HnswModel[T], error) {
 
 	full, err := s.last.Full()
 	if err != nil {
@@ -580,7 +580,7 @@ func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint) (*HnswModel,
 
 		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
 		if err != nil {
 			return nil, err
 		}
@@ -592,7 +592,7 @@ func (s *HnswSync) getLastModel(proc *process.Process, maxcap uint) (*HnswModel,
 	return s.last, nil
 }
 
-func (s *HnswSync) getLastModelAndIncrForSync(proc *process.Process, maxcap uint, mu *sync.Mutex) (*HnswModel, bool, error) {
+func (s *HnswSync[T]) getLastModelAndIncrForSync(proc *process.Process, maxcap uint, mu *sync.Mutex) (*HnswModel[T], bool, error) {
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -601,7 +601,7 @@ func (s *HnswSync) getLastModelAndIncrForSync(proc *process.Process, maxcap uint
 	if full {
 		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild(id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
+		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap)
 		if err != nil {
 			return nil, false, err
 		}
@@ -621,7 +621,7 @@ func (s *HnswSync) getLastModelAndIncrForSync(proc *process.Process, maxcap uint
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (s *HnswSync) ToSql(ts int64) ([]string, error) {
+func (s *HnswSync[T]) ToSql(ts int64) ([]string, error) {
 
 	if len(s.indexes) == 0 {
 		return []string{}, nil

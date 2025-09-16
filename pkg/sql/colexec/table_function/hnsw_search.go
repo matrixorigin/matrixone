@@ -50,7 +50,7 @@ type hnswSearchState struct {
 var newHnswAlgo = newHnswAlgoFn
 
 func newHnswAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	return hnsw.NewHnswSearch(idxcfg, tblcfg)
+	return hnsw.NewHnswSearch[float32](idxcfg, tblcfg)
 }
 
 func (u *hnswSearchState) end(tf *TableFunction, proc *process.Process) error {

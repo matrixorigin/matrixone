@@ -23,17 +23,18 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type HnswBuild struct {
+type HnswBuild[T types.RealNumbers] struct {
 	uid      string
 	cfg      vectorindex.IndexConfig
 	tblcfg   vectorindex.IndexTableConfig
-	indexes  []*HnswModel
+	indexes  []*HnswModel[T]
 	nthread  int
-	add_chan chan AddItem
+	add_chan chan AddItem[T]
 	err_chan chan error
 	wg       sync.WaitGroup
 	once     sync.Once
@@ -41,14 +42,14 @@ type HnswBuild struct {
 	count    atomic.Int64
 }
 
-type AddItem struct {
+type AddItem[T types.RealNumbers] struct {
 	key int64
-	vec []float32
+	vec []T
 }
 
 // create HsnwBuild struct
-func NewHnswBuild(proc *process.Process, uid string, nworker int32,
-	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild, err error) {
+func NewHnswBuild[T types.RealNumbers](proc *process.Process, uid string, nworker int32,
+	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild[T], err error) {
 
 	// estimate the number of worker threads
 	nthread := 0
@@ -64,16 +65,16 @@ func NewHnswBuild(proc *process.Process, uid string, nworker int32,
 		nthread = 1
 	}
 
-	info = &HnswBuild{
+	info = &HnswBuild[T]{
 		uid:     uid,
 		cfg:     cfg,
 		tblcfg:  tblcfg,
-		indexes: make([]*HnswModel, 0, 16),
+		indexes: make([]*HnswModel[T], 0, 16),
 		nthread: int(nthread),
 	}
 
 	if nthread > 1 {
-		info.add_chan = make(chan AddItem, nthread*4)
+		info.add_chan = make(chan AddItem[T], nthread*4)
 		info.err_chan = make(chan error, nthread)
 
 		// create multi-threads worker for add
@@ -98,8 +99,8 @@ func NewHnswBuild(proc *process.Process, uid string, nworker int32,
 	return info, nil
 }
 
-func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, err error) {
-	var res AddItem
+func (h *HnswBuild[T]) addFromChannel(proc *process.Process) (stream_closed bool, err error) {
+	var res AddItem[T]
 	var ok bool
 
 	select {
@@ -120,7 +121,7 @@ func (h *HnswBuild) addFromChannel(proc *process.Process) (stream_closed bool, e
 	return false, nil
 }
 
-func (h *HnswBuild) CloseAndWait() {
+func (h *HnswBuild[T]) CloseAndWait() {
 	if h.nthread > 1 {
 		h.once.Do(func() {
 			close(h.add_chan)
@@ -130,7 +131,7 @@ func (h *HnswBuild) CloseAndWait() {
 }
 
 // destroy
-func (h *HnswBuild) Destroy() error {
+func (h *HnswBuild[T]) Destroy() error {
 
 	var errs error
 
@@ -146,7 +147,7 @@ func (h *HnswBuild) Destroy() error {
 	return errs
 }
 
-func (h *HnswBuild) Add(key int64, vec []float32) error {
+func (h *HnswBuild[T]) Add(key int64, vec []T) error {
 	if h.nthread > 1 {
 
 		select {
@@ -155,29 +156,29 @@ func (h *HnswBuild) Add(key int64, vec []float32) error {
 		default:
 		}
 		// copy the []float32 slice.
-		h.add_chan <- AddItem{key, append(make([]float32, 0, len(vec)), vec...)}
+		h.add_chan <- AddItem[T]{key, append(make([]T, 0, len(vec)), vec...)}
 		return nil
 	} else {
 		return h.addVector(key, vec)
 	}
 }
 
-func (h *HnswBuild) createIndexUniqueKey(id int64) string {
+func (h *HnswBuild[T]) createIndexUniqueKey(id int64) string {
 	return fmt.Sprintf("%s:%d", h.uid, id)
 }
 
-func (h *HnswBuild) getIndexForAddSync() (idx *HnswModel, save_idx *HnswModel, err error) {
+func (h *HnswBuild[T]) getIndexForAddSync() (idx *HnswModel[T], save_idx *HnswModel[T], err error) {
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 	return h.getIndexForAdd()
 }
 
-func (h *HnswBuild) getIndexForAdd() (idx *HnswModel, save_idx *HnswModel, err error) {
+func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[T], err error) {
 
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswModelForBuild(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -192,7 +193,7 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswModel, save_idx *HnswModel, err e
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswModelForBuild(h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
+			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.tblcfg.IndexCapacity))
 			if err != nil {
 				return nil, nil, err
 			}
@@ -209,10 +210,10 @@ func (h *HnswBuild) getIndexForAdd() (idx *HnswModel, save_idx *HnswModel, err e
 // add vector to the build
 // it will check the current index is full and add the vector to available index
 // sync version for multi-thread
-func (h *HnswBuild) addVectorSync(key int64, vec []float32) error {
+func (h *HnswBuild[T]) addVectorSync(key int64, vec []T) error {
 	var err error
-	var idx *HnswModel
-	var save_idx *HnswModel
+	var idx *HnswModel[T]
+	var save_idx *HnswModel[T]
 
 	idx, save_idx, err = h.getIndexForAddSync()
 	if err != nil {
@@ -233,10 +234,10 @@ func (h *HnswBuild) addVectorSync(key int64, vec []float32) error {
 // add vector to the build
 // it will check the current index is full and add the vector to available index
 // single-threaded version.
-func (h *HnswBuild) addVector(key int64, vec []float32) error {
+func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 	var err error
-	var idx *HnswModel
-	var save_idx *HnswModel
+	var idx *HnswModel[T]
+	var save_idx *HnswModel[T]
 
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
@@ -259,7 +260,7 @@ func (h *HnswBuild) addVector(key int64, vec []float32) error {
 // generate SQL to update the secondary index tables
 // 1. sync the metadata table
 // 2. sync the index file to index table
-func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
+func (h *HnswBuild[T]) ToInsertSql(ts int64) ([]string, error) {
 
 	h.CloseAndWait()
 
@@ -299,6 +300,6 @@ func (h *HnswBuild) ToInsertSql(ts int64) ([]string, error) {
 	return sqls, nil
 }
 
-func (h *HnswBuild) GetIndexes() []*HnswModel {
+func (h *HnswBuild[T]) GetIndexes() []*HnswModel[T] {
 	return h.indexes
 }

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
@@ -43,12 +44,12 @@ func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 }
 */
 
-func doModelSearchTest(t *testing.T, idx *HnswModel, key uint64, v []float32) {
+func doModelSearchTest[T types.RealNumbers](t *testing.T, idx *HnswModel[T], key uint64, v []T) {
 	keys, distances, err := idx.Search(v, 4)
 	require.Nil(t, err)
 	require.Equal(t, len(keys), 4)
 	require.Equal(t, keys[0], key)
-	require.Equal(t, distances[0], float32(0))
+	require.Equal(t, distances[0], T(0))
 	fmt.Printf("%v %v\n", keys, distances)
 
 }
@@ -65,7 +66,7 @@ func TestModel(t *testing.T) {
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
 
-	models, err := LoadMetadata(proc, "db", "meta")
+	models, err := LoadMetadata[float32](proc, "db", "meta")
 	require.Nil(t, err)
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
@@ -79,7 +80,7 @@ func TestModel(t *testing.T) {
 	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, false)
 	require.Nil(t, err)
 
-	doModelSearchTest(t, idx, 0, fp32a)
+	doModelSearchTest[float32](t, idx, 0, fp32a)
 
 	require.Equal(t, idx.Dirty.Load(), false)
 
@@ -89,7 +90,7 @@ func TestModel(t *testing.T) {
 	err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, false)
 	require.Nil(t, err)
 
-	doModelSearchTest(t, idx, 0, fp32a)
+	doModelSearchTest[float32](t, idx, 0, fp32a)
 
 	var found bool
 	found, err = idx.Contains(0)
@@ -125,7 +126,7 @@ func TestModel(t *testing.T) {
 		err = idx.LoadIndex(proc, idxcfg, tblcfg, 0, false)
 		require.Nil(t, err)
 
-		doModelSearchTest(t, idx, uint64(key), v)
+		doModelSearchTest[float32](t, idx, uint64(key), v)
 
 		key += 1
 		v[0] += 1
@@ -174,7 +175,7 @@ func TestModelNil(t *testing.T) {
 	var err error
 	var tblcfg vectorindex.IndexTableConfig
 
-	idx := HnswModel{}
+	idx := HnswModel[float32]{}
 	err = idx.SaveToFile()
 	require.Nil(t, err)
 

@@ -26,6 +26,7 @@ import (
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -35,7 +36,7 @@ import (
 )
 
 // HnswModel struct - This structure shares with Search, Build and Sync
-type HnswModel struct {
+type HnswModel[T types.RealNumbers] struct {
 	Id       string
 	Index    *usearch.Index
 	Path     string
@@ -55,9 +56,9 @@ type HnswModel struct {
 }
 
 // New HnswModel struct
-func NewHnswModelForBuild(id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint) (*HnswModel, error) {
+func NewHnswModelForBuild[T types.RealNumbers](id string, cfg vectorindex.IndexConfig, nthread int, max_capacity uint) (*HnswModel[T], error) {
 	var err error
-	idx := &HnswModel{}
+	idx := &HnswModel[T]{}
 
 	idx.Id = id
 
@@ -86,7 +87,7 @@ func NewHnswModelForBuild(id string, cfg vectorindex.IndexConfig, nthread int, m
 }
 
 // Destroy the struct
-func (idx *HnswModel) Destroy() error {
+func (idx *HnswModel[T]) Destroy() error {
 	if idx.Index != nil {
 		err := idx.Index.Destroy()
 		if err != nil {
@@ -108,7 +109,7 @@ func (idx *HnswModel) Destroy() error {
 }
 
 // Save the index to file
-func (idx *HnswModel) SaveToFile() error {
+func (idx *HnswModel[T]) SaveToFile() error {
 
 	if idx.Index == nil {
 		// index is nil. ignore
@@ -179,7 +180,7 @@ func (idx *HnswModel) SaveToFile() error {
 
 // Generate the SQL to update the secondary index tables.
 // 1. store the index file into the index table
-func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 
 	err := idx.SaveToFile()
 	if err != nil {
@@ -249,7 +250,7 @@ func (idx *HnswModel) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) 
 	return sqls, nil
 }
 
-func (idx *HnswModel) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *HnswModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
 
 	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.IndexTable, catalog.Hnsw_TblCol_Storage_Index_Id, idx.Id)
@@ -261,7 +262,7 @@ func (idx *HnswModel) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, e
 }
 
 // is the index empty
-func (idx *HnswModel) Empty() (bool, error) {
+func (idx *HnswModel[T]) Empty() (bool, error) {
 	if idx.Index == nil {
 		return false, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -274,7 +275,7 @@ func (idx *HnswModel) Empty() (bool, error) {
 }
 
 // check the index is full, i.e. 10K vectors
-func (idx *HnswModel) Full() (bool, error) {
+func (idx *HnswModel[T]) Full() (bool, error) {
 	if idx.Index == nil {
 		return false, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -286,27 +287,38 @@ func (idx *HnswModel) Full() (bool, error) {
 }
 
 // add vector to the index
-func (idx *HnswModel) Add(key int64, vec []float32) error {
+func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
 	idx.Dirty.Store(true)
 	idx.Len.Add(1)
-	return idx.Index.Add(uint64(key), vec)
+
+	switch v := any(vec).(type) {
+	case []float32:
+		return idx.Index.Add(uint64(key), v)
+	default:
+		return moerr.NewInternalErrorNoCtx("invalid vector type")
+	}
 }
 
 // add vector without increment the counter.  concurrency add will increment the counter before Add
-func (idx *HnswModel) AddWithoutIncr(key int64, vec []float32) error {
+func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
 	idx.Dirty.Store(true)
 	//idx.Len.Add(1)
-	return idx.Index.Add(uint64(key), vec)
+	switch v := any(vec).(type) {
+	case []float32:
+		return idx.Index.Add(uint64(key), v)
+	default:
+		return moerr.NewInternalErrorNoCtx("invalid vector type")
+	}
 }
 
 // remove key
-func (idx *HnswModel) Remove(key int64) error {
+func (idx *HnswModel[T]) Remove(key int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -316,7 +328,7 @@ func (idx *HnswModel) Remove(key int64) error {
 }
 
 // contains key
-func (idx *HnswModel) Contains(key int64) (found bool, err error) {
+func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 	if idx.Index == nil {
 		return false, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -324,7 +336,7 @@ func (idx *HnswModel) Contains(key int64) (found bool, err error) {
 }
 
 // load chunk from database
-func (idx *HnswModel) loadChunk(ctx context.Context,
+func (idx *HnswModel[T]) loadChunk(ctx context.Context,
 	proc *process.Process,
 	stream_chan chan executor.Result,
 	error_chan chan error,
@@ -373,7 +385,7 @@ func (idx *HnswModel) loadChunk(ctx context.Context,
 // 3. SELECT chunk_id, data from index_table WHERE index_id = id.  Result will be out of order
 // 4. according to the chunk_id, seek to the offset and write the chunk
 // 5. check the checksum to verify the correctness of the file
-func (idx *HnswModel) LoadIndex(
+func (idx *HnswModel[T]) LoadIndex(
 	proc *process.Process,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
@@ -535,7 +547,7 @@ func (idx *HnswModel) LoadIndex(
 }
 
 // unload
-func (idx *HnswModel) Unload() error {
+func (idx *HnswModel[T]) Unload() error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -565,9 +577,14 @@ func (idx *HnswModel) Unload() error {
 }
 
 // Call usearch.Search
-func (idx *HnswModel) Search(query []float32, limit uint) (keys []usearch.Key, distances []float32, err error) {
+func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
-	return idx.Index.Search(query, limit)
+	switch v := any(query).(type) {
+	case []float32:
+		return idx.Index.Search(v, limit)
+	default:
+		return nil, nil, moerr.NewInternalErrorNoCtx("invalid vector type")
+	}
 }

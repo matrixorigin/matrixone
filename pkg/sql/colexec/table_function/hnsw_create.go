@@ -37,7 +37,7 @@ var hnsw_runSql = sqlexec.RunSql
 
 type hnswCreateState struct {
 	inited bool
-	build  *hnsw.HnswBuild
+	build  *hnsw.HnswBuild[float32]
 	param  vectorindex.HnswParam
 	tblcfg vectorindex.IndexTableConfig
 	idxcfg vectorindex.IndexConfig
@@ -196,7 +196,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		u.idxcfg.Type = "hnsw"
 
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
-		u.build, err = hnsw.NewHnswBuild(proc, uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+		u.build, err = hnsw.NewHnswBuild[float32](proc, uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
 		if err != nil {
 			return err
 		}

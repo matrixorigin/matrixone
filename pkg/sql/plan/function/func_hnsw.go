@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -64,19 +65,26 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 			return moerr.NewInvalidInput(proc.Ctx, "cdc is null")
 		}
 
-		var cdc vectorindex.VectorIndexCdc[float32]
-		err := json.Unmarshal([]byte(cdcstr), &cdc)
-		if err != nil {
-			return moerr.NewInvalidInput(proc.Ctx, "cdc is not json object")
+		switch typ {
+		case int32(types.T_array_float32):
+			var cdc vectorindex.VectorIndexCdc[float32]
+			err := json.Unmarshal([]byte(cdcstr), &cdc)
+			if err != nil {
+				return moerr.NewInvalidInput(proc.Ctx, "cdc is not json object")
+			}
+
+			logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
+			// hnsw sync
+			//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
+			err = hnsw.CdcSync[float32](proc, string(dbname), string(tblname), typ, dim, &cdc)
+			if err != nil {
+				return err
+			}
+			logutil.Infof("hnsw_cdc_update: END db=%s, table=%s\n", dbname, tblname)
+		default:
+			return moerr.NewInvalidInput(proc.Ctx, "invalid vector type")
+
 		}
-		logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
-		// hnsw sync
-		//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
-		err = hnsw.CdcSync(proc, string(dbname), string(tblname), typ, dim, &cdc)
-		if err != nil {
-			return err
-		}
-		logutil.Infof("hnsw_cdc_update: END db=%s, table=%s\n", dbname, tblname)
 	}
 
 	return nil
