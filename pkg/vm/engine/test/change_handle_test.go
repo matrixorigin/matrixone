@@ -3478,7 +3478,7 @@ func TestCancelIteration1(t *testing.T) {
 			"",
 			disttaeEngine.Engine,
 			disttaeEngine.GetTxnClient(),
-			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, types.TS{}, types.TS{}),
+			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, []uint64{1}, types.TS{}, types.TS{}),
 			common.DebugAllocator,
 		)
 		assert.Error(t, err)
@@ -3550,6 +3550,7 @@ func TestCancelIteration2(t *testing.T) {
 			uint64,
 			[]string,
 			[]uint64,
+			[]uint64,
 			[]*iscp.JobStatus,
 			types.TS,
 			int8,
@@ -3590,7 +3591,7 @@ func TestCancelIteration2(t *testing.T) {
 			"",
 			disttaeEngine.Engine,
 			disttaeEngine.GetTxnClient(),
-			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, types.TS{}, types.TS{}),
+			iscp.NewIterationContext(accountId, tableID, []string{"job1"}, []uint64{1}, []uint64{1}, types.TS{}, types.TS{}),
 			common.DebugAllocator,
 		)
 		assert.NoError(t, err)

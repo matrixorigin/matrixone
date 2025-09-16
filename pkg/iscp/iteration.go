@@ -180,6 +180,7 @@ func ExecuteIteration(
 			iterCtx.jobNames[i],
 			iterCtx.jobIDs[i],
 			statuses[i],
+			iterCtx.lsn[i],
 			typ,
 		)
 		defer dataRetrievers[i].Close()
@@ -194,6 +195,7 @@ func ExecuteIteration(
 		iterCtx.tableID,
 		iterCtx.jobNames,
 		iterCtx.jobIDs,
+		iterCtx.lsn,
 		statuses,
 		iterCtx.fromTS,
 		ISCPJobState_Running,
@@ -331,6 +333,7 @@ func ExecuteIteration(
 					iterCtx.tableID,
 					[]string{iterCtx.jobNames[i]},
 					[]uint64{iterCtx.jobIDs[i]},
+					[]uint64{iterCtx.lsn[i]},
 					[]*JobStatus{status},
 					watermark,
 					state,
@@ -354,6 +357,7 @@ var FlushJobStatusOnIterationState = func(
 	tableID uint64,
 	jobNames []string,
 	jobIDs []uint64,
+	lsns []uint64,
 	jobStatuses []*JobStatus,
 	watermark types.TS,
 	state int8,
@@ -384,6 +388,7 @@ var FlushJobStatusOnIterationState = func(
 		}
 	}()
 	for i := range jobNames {
+		jobStatuses[i].LSN = lsns[i]
 		err = FlushStatus(
 			ctx,
 			cnUUID,
@@ -497,12 +502,13 @@ func (status *JobStatus) PermanentlyFailed() bool {
 	return status.ErrorCode >= PermanentErrorThreshold
 }
 
-func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jobIDs []uint64, fromTS types.TS, toTS types.TS) *IterationContext {
+func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jobIDs []uint64, lsn []uint64, fromTS types.TS, toTS types.TS) *IterationContext {
 	return &IterationContext{
 		accountID: accountID,
 		tableID:   tableID,
 		jobNames:  jobNames,
 		jobIDs:    jobIDs,
+		lsn:       lsn,
 		fromTS:    fromTS,
 		toTS:      toTS,
 	}

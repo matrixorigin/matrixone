@@ -87,6 +87,7 @@ type IterationContext struct {
 	tableID   uint64
 	jobNames  []string
 	jobIDs    []uint64
+	lsn       []uint64
 	fromTS    types.TS
 	toTS      types.TS
 }
@@ -101,6 +102,7 @@ type ISCPData struct {
 }
 
 type JobStatus struct {
+	LSN       uint64
 	TaskID    uint64
 	From      types.TS
 	To        types.TS
@@ -151,6 +153,7 @@ type JobEntry struct {
 	persistedWatermark types.TS
 	state              int8
 	dropAt             types.Timestamp
+	currentLSN         uint64
 }
 
 type JobKey struct {

@@ -52,26 +52,27 @@ func NewJobEntry(
 	return jobEntry
 }
 
-func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8, dropAt types.Timestamp) {
-	if jobSpec.GetType() != jobEntry.jobSpec.GetType() && watermark.LT(&jobEntry.watermark) {
-		jobEntry.jobSpec = &jobSpec.TriggerSpec
-		return
-	}
-	if dropAt != 0 {
-		jobEntry.dropAt = dropAt
-	}
-	if jobEntry.persistedWatermark.EQ(&watermark) {
-		return
-	}
-	if watermark.LT(&jobEntry.watermark) {
-		panic(fmt.Sprintf("watermark %v < %v, current state %d, incoming state %d, job %d-%v-%d, presisted %v",
-			watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID, jobEntry.persistedWatermark.ToString()))
-	}
+func (jobEntry *JobEntry) update(jobSpec *JobSpec, jobStatus *JobStatus, watermark types.TS, state int8, dropAt types.Timestamp) {
 	jobEntry.jobSpec = &jobSpec.TriggerSpec
-	jobEntry.persistedWatermark = watermark
-	jobEntry.watermark = watermark
-	jobEntry.state = state
 	jobEntry.dropAt = dropAt
+	needApply := false
+	if jobEntry.currentLSN < jobStatus.LSN {
+		needApply = true
+	}
+	if jobEntry.state < state {
+		needApply = true
+	}
+	if needApply {
+		if jobEntry.watermark.GT(&watermark) {
+			errMsg := fmt.Sprintf("watermark %v > %v, current state %d, incoming state %d, job %d-%v-%d",
+				watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
+			panic(errMsg)
+		}
+		jobEntry.currentLSN = jobStatus.LSN
+		jobEntry.persistedWatermark = watermark
+		jobEntry.watermark = watermark
+		jobEntry.state = state
+	}
 }
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {

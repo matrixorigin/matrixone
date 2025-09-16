@@ -497,6 +497,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 		jobStateVector := insertData.Vecs[5]
 		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
 		watermarkVector := insertData.Vecs[6]
+		jobStatusVector := insertData.Vecs[7]
 		dropAtVector := insertData.Vecs[9]
 		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
 		commitTSVector := insertData.Vecs[11]
@@ -553,7 +554,8 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 				jobIDs[job.offset],
 				states[job.offset],
 				watermarkVector.GetStringAt(job.offset),
-				jobSpecVector.GetBytesAt(job.offset),
+				[]byte(jobSpecVector.GetStringAt(job.offset)),
+				[]byte(jobStatusVector.GetStringAt(job.offset)),
 				dropAt,
 				commitTSs[job.offset],
 				notPrint,
@@ -629,6 +631,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	state int8,
 	watermarkStr string,
 	jobSpecStr []byte,
+	jobStatusStr []byte,
 	dropAt types.Timestamp,
 	commitTS types.TS,
 	notPrint bool,
@@ -660,6 +663,10 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	if err != nil {
 		panic(err)
 	}
+	jobStatus, err := UnmarshalJobStatus(jobStatusStr)
+	if err != nil {
+		panic(err)
+	}
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
@@ -676,7 +683,7 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 		)
 		exec.setTable(table)
 	}
-	newCreate = table.AddOrUpdateSinker(jobName, jobSpec, jobID, watermark, state, dropAt)
+	newCreate = table.AddOrUpdateSinker(jobName, jobSpec, jobStatus, jobID, watermark, state, dropAt)
 }
 
 func (exec *ISCPTaskExecutor) GCInMemoryJob(threshold time.Duration) {
@@ -719,6 +726,7 @@ func (exec *ISCPTaskExecutor) getCandidateTables() ([]*IterationContext, []*Tabl
 	}
 	return iterations, tables, fromTSs
 }
+
 func (exec *ISCPTaskExecutor) getDirtyTables(
 	ctx context.Context,
 	candidateTables []*TableEntry,
