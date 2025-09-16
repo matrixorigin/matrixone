@@ -176,6 +176,7 @@ type HnswCdcParam struct {
 	IndexTbl  string    `json:"index"`
 	Params    HnswParam `json:"params"`
 	Dimension int32     `json:"dimension"`
+	VecType   int32     `json:"type"`
 }
 
 // nthread == 0, result will return NumCPU - 1

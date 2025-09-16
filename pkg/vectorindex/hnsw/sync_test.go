@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -77,7 +78,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 		}
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -105,7 +106,7 @@ func TestSyncUpsert(t *testing.T) {
 		}
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -130,7 +131,7 @@ func TestSyncDelete(t *testing.T) {
 		key += 1
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -164,7 +165,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -190,7 +191,7 @@ func TestSyncUpdate(t *testing.T) {
 		key += 1
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -224,7 +225,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -253,7 +254,7 @@ func TestSyncAddOneModel(t *testing.T) {
 		}
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -278,7 +279,7 @@ func TestSyncDelete2Files(t *testing.T) {
 		key += 1
 	}
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -306,7 +307,7 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 	rand.Seed(uint64(time.Now().UnixNano()))
 	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -335,7 +336,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 	rand.Seed(uint64(time.Now().UnixNano()))
 	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }
 
@@ -365,6 +366,6 @@ func TestSyncUpdateInsertShuffle2Files(t *testing.T) {
 	rand.Seed(uint64(time.Now().UnixNano()))
 	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	err := CdcSync(proc, "db", "src", 3, &cdc)
+	err := CdcSync(proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
 	require.Nil(t, err)
 }

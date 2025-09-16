@@ -273,7 +273,7 @@ func TestHnswSnapshot(t *testing.T) {
 		sqls := consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls
 		require.Equal(t, len(sqls), 1)
 		sql := sqls[0]
-		require.Equal(t, string(sql), `SELECT hnsw_cdc_update('test_db', 'test_tbl', 2, '{"cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}');`)
+		require.Equal(t, string(sql), `SELECT hnsw_cdc_update('test_db', 'test_tbl', 224, 2, '{"cdc":[{"t":"U","pk":1,"v":[0.1,0.2]},{"t":"U","pk":2,"v":[0.3,0.4]}]}');`)
 
 		//fmt.Printf("Consume %p %v\n", consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls, consumer.(*IndexConsumer).exec.(*MockSQLExecutor).sqls)
 	})

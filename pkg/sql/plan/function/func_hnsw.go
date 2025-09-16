@@ -27,14 +27,15 @@ import (
 
 func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 
-	if len(ivecs) != 4 {
-		return moerr.NewInvalidInput(proc.Ctx, "number of arguments != 4")
+	if len(ivecs) != 5 {
+		return moerr.NewInvalidInput(proc.Ctx, "number of arguments != 5")
 	}
 
 	dbVec := vector.GenerateFunctionStrParameter(ivecs[0])
 	tblVec := vector.GenerateFunctionStrParameter(ivecs[1])
-	dimVec := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
-	cdcVec := vector.GenerateFunctionStrParameter(ivecs[3])
+	typeVec := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[2])
+	dimVec := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[3])
+	cdcVec := vector.GenerateFunctionStrParameter(ivecs[4])
 
 	for i := uint64(0); i < uint64(length); i++ {
 		dbname, isnull := dbVec.GetStrValue(i)
@@ -46,6 +47,11 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		if isnull {
 			return moerr.NewInvalidInput(proc.Ctx, "table name is null")
 
+		}
+
+		typ, isnull := typeVec.GetValue(i)
+		if isnull {
+			return moerr.NewInvalidInput(proc.Ctx, "type is null")
 		}
 
 		dim, isnull := dimVec.GetValue(i)
@@ -66,7 +72,7 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
 		// hnsw sync
 		//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
-		err = hnsw.CdcSync(proc, string(dbname), string(tblname), dim, &cdc)
+		err = hnsw.CdcSync(proc, string(dbname), string(tblname), typ, dim, &cdc)
 		if err != nil {
 			return err
 		}

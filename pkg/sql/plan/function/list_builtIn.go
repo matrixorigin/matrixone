@@ -7040,7 +7040,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int32, types.T_varchar},
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int32, types.T_int32, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},

@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -45,7 +46,11 @@ const (
 var runTxn = sqlexec.RunTxn
 var runCatalogSql = sqlexec.RunSql
 
-func CdcSync(proc *process.Process, db string, tbl string, dimension int32, cdc *vectorindex.VectorIndexCdc[float32]) error {
+func CdcSync(proc *process.Process, db string, tbl string, vectype int32, dimension int32, cdc *vectorindex.VectorIndexCdc[float32]) error {
+
+	if vectype != int32(types.T_array_float32) {
+		return moerr.NewInternalError(proc.Ctx, "vector type is not []float32")
+	}
 
 	accountId, err := defines.GetAccountId(proc.Ctx)
 	if err != nil {

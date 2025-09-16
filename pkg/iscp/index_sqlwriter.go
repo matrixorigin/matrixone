@@ -415,6 +415,7 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 		Table:     info.TableName,
 		Params:    hnswparam,
 		Dimension: tabledef.Cols[w.partsPos[0]].Typ.Width,
+		VecType:   tabledef.Cols[w.partsPos[0]].Typ.Id,
 	}
 
 	return w, nil
@@ -494,7 +495,7 @@ func (w *HnswSqlWriter[T]) ToSql() ([]byte, error) {
 		return nil, err
 	}
 	// pad extra space at the front and send SQL
-	sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.Dimension, js)
+	sql := fmt.Sprintf("SELECT hnsw_cdc_update('%s', '%s', %d, %d, '%s');", w.meta.DbName, w.meta.Table, w.meta.VecType, w.meta.Dimension, js)
 
 	return []byte(sql), nil
 }
