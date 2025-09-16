@@ -64,7 +64,8 @@ func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int
 		return
 	}
 	if watermark.LT(&jobEntry.watermark) {
-		panic(fmt.Sprintf("watermark %v < %v, current state %d, incoming state %d, job %v", watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.jobName))
+		panic(fmt.Sprintf("watermark %v < %v, current state %d, incoming state %d, job %d-%v-%d, presisted %v",
+			watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID, jobEntry.persistedWatermark.ToString()))
 	}
 	jobEntry.jobSpec = &jobSpec.TriggerSpec
 	jobEntry.persistedWatermark = watermark

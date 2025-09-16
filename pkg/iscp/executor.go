@@ -458,6 +458,10 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 	if err != nil {
 		return
 	}
+	return exec.applyISCPLogWithRel(ctx, rel, from, to, false)
+}
+
+func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engine.Relation, from, to types.TS, notPrint bool) (err error) {
 	changes, err := CollectChanges(ctx, rel, from, to, exec.mp)
 	if err != nil {
 		return
@@ -530,6 +534,18 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 			if !dropAtVector.IsNull(uint64(job.offset)) {
 				dropAt = dropAts[job.offset]
 			}
+			watermark := watermarkVector.GetStringAt(job.offset)
+			if watermark == specialTS.ToString() && from.IsEmpty() {
+				logutil.Error(
+					"ISCP-Task apply special watermark",
+					zap.Uint32("accountID", accountIDs[job.offset]),
+					zap.Uint64("tableID", tableIDs[job.offset]),
+					zap.String("jobname", jobNameVector.GetStringAt(job.offset)),
+					zap.Uint64("jobid", jobIDs[job.offset]),
+					zap.String("watermark", watermark),
+					zap.String("commitTS", commitTSs[job.offset].ToString()),
+				)
+			}
 			exec.addOrUpdateJob(
 				accountIDs[job.offset],
 				tableIDs[job.offset],
@@ -539,6 +555,8 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 				watermarkVector.GetStringAt(job.offset),
 				jobSpecVector.GetBytesAt(job.offset),
 				dropAt,
+				commitTSs[job.offset],
+				notPrint,
 			)
 		}
 	}
@@ -547,67 +565,59 @@ func (exec *ISCPTaskExecutor) applyISCPLog(ctx context.Context, from, to types.T
 }
 
 func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
-	jobCount := 0
-	defer func() {
-		var logger func(msg string, fields ...zap.Field)
-		if err != nil {
-			logger = logutil.Error
-		} else {
-			logger = logutil.Info
-		}
-		logger(
-			"ISCP-Task replay",
-			zap.Int("jobCount", jobCount),
-			zap.Error(err),
-		)
-	}()
-	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
-	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp replay")
-	if err != nil {
-		return
-	}
-
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
-	defer txn.Commit(ctx)
-	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
+
+	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
+	var oldWmThreshold types.TS
+	defer func() {
+		logutil.Info(
+			"ISCP-Task replay iscp log",
+			zap.String("oldWmThreshold", oldWmThreshold.ToString()),
+			zap.Any("nowTs", nowTs),
+		)
+	}()
+	createByOpt := client.WithTxnCreateBy(
+		0,
+		"",
+		"replay iscp log",
+		0)
+	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
+	if txnOp != nil {
+		defer txnOp.Commit(ctx)
+	}
 	if err != nil {
 		return
 	}
-	defer result.Close()
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		accountIDVector := cols[0]
-		accountIDs := vector.MustFixedColWithTypeCheck[uint32](accountIDVector)
-		tableIDVector := cols[1]
-		tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
-		jobNameVector := cols[2]
-		jobIDVector := cols[3]
-		jobIDs := vector.MustFixedColWithTypeCheck[uint64](jobIDVector)
-		jobSpecVector := cols[4]
-		jobStateVector := cols[5]
-		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
-		watermarkVector := cols[6]
-		dropAtVector := cols[9]
-		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
-		for i := 0; i < rows; i++ {
-			if !dropAtVector.IsNull(uint64(i)) {
-				continue
-			}
-			jobCount++
-			exec.addOrUpdateJob(
-				accountIDs[i],
-				tableIDs[i],
-				jobNameVector.GetStringAt(i),
-				jobIDs[i],
-				states[i],
-				watermarkVector.GetStringAt(i),
-				jobSpecVector.GetBytesAt(i),
-				dropAts[i],
-			)
-		}
-		return true
-	})
-	exec.iscpLogWm = types.TimestampToTS(txn.SnapshotTS())
+	err = exec.txnEngine.New(ctx, txnOp)
+	if err != nil {
+		return
+	}
+	db, err := exec.txnEngine.Database(ctx, catalog.MO_CATALOG, txnOp)
+	if err != nil {
+		return
+	}
+	rel, err := db.Relation(ctx, MOISCPLogTableName, nil)
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+	}
+	if err != nil {
+		return
+	}
+	oldWmThreshold, err = disttae.GetPartitionStateStart(ctx, rel)
+	if err != nil {
+		return
+	}
+	err = exec.applyISCPLogWithRel(ctx, rel, types.TS{}, oldWmThreshold, true)
+	if err != nil {
+		return
+	}
+	err = exec.applyISCPLogWithRel(ctx, rel, oldWmThreshold.Next(), types.TimestampToTS(nowTs), true)
+	if err != nil {
+		return
+	}
+	exec.iscpLogWm = types.TimestampToTS(nowTs)
 	return
 }
 
@@ -620,11 +630,14 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	watermarkStr string,
 	jobSpecStr []byte,
 	dropAt types.Timestamp,
+	commitTS types.TS,
+	notPrint bool,
 ) {
 	var newCreate bool
 
+	var watermark types.TS
 	defer func() {
-		if !newCreate && dropAt == 0 {
+		if !newCreate && dropAt == 0 || notPrint {
 			return
 		}
 		logutil.Info(
@@ -633,16 +646,20 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 			zap.Uint64("tableID", tableID),
 			zap.String("jobName", jobName),
 			zap.Uint64("jobID", jobID),
-			zap.String("watermark", watermarkStr),
+			zap.String("watermark", watermark.ToString()),
 			zap.Bool("newcreate", newCreate),
 			zap.String("dropAt", dropAt.String()),
 		)
 	}()
+	if watermarkStr == specialTS.ToString() {
+		watermark = commitTS
+	} else {
+		watermark = types.StringToTS(watermarkStr)
+	}
 	jobSpec, err := UnmarshalJobSpec(jobSpecStr)
 	if err != nil {
 		panic(err)
 	}
-	watermark := types.StringToTS(watermarkStr)
 	var table *TableEntry
 	table, ok := exec.getTable(accountID, tableID)
 	if !ok {
