@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -284,14 +285,18 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 
 func IsIndexAsync(indexAlgoParams string) (bool, error) {
 	if len(indexAlgoParams) > 0 {
-		param, err := IndexParamsStringToMap(indexAlgoParams)
+		val, err := sonic.Get([]byte(indexAlgoParams), Async)
+		if err != nil {
+			// key not exist
+			return false, nil
+		}
+
+		async, err := val.StrictString()
 		if err != nil {
 			return false, err
 		}
-		v, ok := param[Async]
-		if ok {
-			return v == "true", nil
-		}
+
+		return async == "true", nil
 	}
 	return false, nil
 }
