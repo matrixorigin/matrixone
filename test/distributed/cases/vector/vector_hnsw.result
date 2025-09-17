@@ -53,7 +53,7 @@ show create table vector_index_03;
 Table    Create Table
 vector_index_03    CREATE TABLE `vector_index_03` (\n  `a` bigint NOT NULL,\n  `b` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `add` USING hnsw (`b`) op_type 'vector_l2_ops' \n)
 create index idx02 using hnsw on vector_index_03(a) op_type "vector_l2_ops";
-not supported: HNSW only supports VECF32 column types
+not supported: HNSW only supports VECF32 and VECF64 column types
 create index idx02 using hnsw on vector_index_03(c) op_type "vector_l2_ops";
 invalid input: column 'c' is not exist
 create index idx02 using hnsw on vector_index_03(b) op_type "vector_l2_ops";

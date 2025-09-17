@@ -2627,7 +2627,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, existedIndexes []*plan.IndexDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
 
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
-		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext index")
+		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for hnsw index")
 	}
 
 	if colMap[pkeyName].Typ.Id != int32(types.T_int64) {
@@ -2648,8 +2648,8 @@ func buildHnswSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colM
 		if _, ok := colMap[name]; !ok {
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
-		if colMap[name].Typ.Id != int32(types.T_array_float32) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 column types")
+		if colMap[name].Typ.Id != int32(types.T_array_float32) && colMap[name].Typ.Id != int32(types.T_array_float64) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 and VECF64 column types")
 		}
 
 		if len(existedIndexes) > 0 {

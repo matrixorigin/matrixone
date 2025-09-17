@@ -48,10 +48,6 @@ var runCatalogSql = sqlexec.RunSql
 
 func CdcSync[T types.RealNumbers](proc *process.Process, db string, tbl string, vectype int32, dimension int32, cdc *vectorindex.VectorIndexCdc[T]) error {
 
-	if vectype != int32(types.T_array_float32) {
-		return moerr.NewInternalError(proc.Ctx, "vector type is not []float32")
-	}
-
 	accountId, err := defines.GetAccountId(proc.Ctx)
 	if err != nil {
 		return err
