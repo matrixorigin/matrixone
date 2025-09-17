@@ -157,13 +157,7 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 	}
 
 	if group.ctr.result1.IsEmpty() {
-		aggs, err := group.generateAggExec(proc)
-		if err != nil {
-			return err
-		}
-		if err = group.ctr.result1.InitWithGroupBy(
-			proc.Mp(),
-			aggexec.GetMinAggregatorsChunkSize(group.ctr.groupByEvaluate.Vec, aggs), aggs, group.ctr.groupByEvaluate.Vec, 0); err != nil {
+		if err := group.ctr.result1.InitWithGroupBy(proc.Mp(), 0, nil, group.ctr.groupByEvaluate.Vec, 0); err != nil {
 			return err
 		}
 	}
