@@ -517,6 +517,10 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 		}
 		jobMap := make(map[jobName]job)
 		for i := 0; i < insertData.RowCount(); i++ {
+			commitTS := commitTSs[0]
+			if len(commitTSs) > 1 {
+				commitTS = commitTSs[i]
+			}
 			jobName := jobName{
 				accountID: accountIDs[i],
 				tableID:   tableIDs[i],
@@ -524,16 +528,21 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 				jobID:     jobIDs[i],
 			}
 			if job, ok := jobMap[jobName]; ok {
-				if job.ts.GT(&commitTSs[i]) {
+				if job.ts.GT(&commitTS) {
 					continue
 				}
 			}
 			jobMap[jobName] = job{
-				ts:     commitTSs[i],
+				ts:     commitTS,
 				offset: i,
 			}
 		}
 		for _, job := range jobMap {
+
+			commitTS := commitTSs[0]
+			if len(commitTSs) > 1 {
+				commitTS = commitTSs[job.offset]
+			}
 			var dropAt types.Timestamp
 			if !dropAtVector.IsNull(uint64(job.offset)) {
 				dropAt = dropAts[job.offset]
@@ -547,7 +556,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 					zap.String("jobname", jobNameVector.GetStringAt(job.offset)),
 					zap.Uint64("jobid", jobIDs[job.offset]),
 					zap.String("watermark", watermark),
-					zap.String("commitTS", commitTSs[job.offset].ToString()),
+					zap.String("commitTS", commitTS.ToString()),
 				)
 			}
 			exec.addOrUpdateJob(
@@ -560,7 +569,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 				[]byte(jobSpecVector.GetStringAt(job.offset)),
 				[]byte(jobStatusVector.GetStringAt(job.offset)),
 				dropAt,
-				commitTSs[job.offset],
+				commitTS,
 				notPrint,
 			)
 		}
@@ -615,9 +624,11 @@ func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	err = exec.applyISCPLogWithRel(ctx, rel, types.TS{}, oldWmThreshold, true)
-	if err != nil {
-		return
+	if !oldWmThreshold.IsEmpty() {
+		err = exec.applyISCPLogWithRel(ctx, rel, types.TS{}, oldWmThreshold, true)
+		if err != nil {
+			return
+		}
 	}
 	err = exec.applyISCPLogWithRel(ctx, rel, oldWmThreshold.Next(), types.TimestampToTS(nowTs), true)
 	if err != nil {
