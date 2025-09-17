@@ -417,12 +417,15 @@ const (
 	LLM_CHAT      = 347
 	LLM_EMBEDDING = 348
 
+	// hash partition function
+	HASH_PARTITION = 349
+
 	// hnsw function
-	HNSW_CDC_UPDATE = 349
+	HNSW_CDC_UPDATE = 350
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 350
+	FUNCTION_END_NUMBER = 351
 )
 
 // functionIdRegister is what function we have registered already.
@@ -653,6 +656,7 @@ var functionIdRegister = map[string]int32{
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
 	"hash_value":                     HASH,
+	"hash_partition":                 HASH_PARTITION,
 	"bin":                            BIN,
 	"datediff":                       DATEDIFF,
 	"timestampdiff":                  TIMESTAMPDIFF,

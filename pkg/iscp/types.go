@@ -89,6 +89,7 @@ type IterationContext struct {
 	tableID   uint64
 	jobNames  []string
 	jobIDs    []uint64
+	lsn       []uint64
 	fromTS    types.TS
 	toTS      types.TS
 }
@@ -103,6 +104,7 @@ type ISCPData struct {
 }
 
 type JobStatus struct {
+	LSN       uint64
 	TaskID    uint64
 	From      types.TS
 	To        types.TS
@@ -110,6 +112,14 @@ type JobStatus struct {
 	EndAt     types.TS
 	ErrorCode int
 	ErrorMsg  string
+}
+
+type InitWatermark struct {
+	AccountID uint32
+	TableID   uint64
+	JobName   string
+	JobID     uint64
+	Watermark types.TS
 }
 
 // Intra-System Change Propagation Task Executor
@@ -153,6 +163,7 @@ type JobEntry struct {
 	persistedWatermark types.TS
 	state              int8
 	dropAt             types.Timestamp
+	currentLSN         uint64
 }
 
 type JobKey struct {

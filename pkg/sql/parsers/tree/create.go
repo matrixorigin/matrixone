@@ -3536,9 +3536,9 @@ type RangeType struct {
 }
 
 func (node *RangeType) Format(ctx *FmtCtx) {
-	ctx.WriteString("range")
+	ctx.WriteString("range ")
 	if node.ColumnList != nil {
-		prefix := " columns ("
+		prefix := "columns ("
 		for _, c := range node.ColumnList {
 			ctx.WriteString(prefix)
 			c.Format(ctx)
@@ -3579,9 +3579,9 @@ type ListType struct {
 }
 
 func (node *ListType) Format(ctx *FmtCtx) {
-	ctx.WriteString("list")
+	ctx.WriteString("list ")
 	if node.ColumnList != nil {
-		prefix := " columns ("
+		prefix := "columns ("
 		for _, c := range node.ColumnList {
 			ctx.WriteString(prefix)
 			c.Format(ctx)

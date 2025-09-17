@@ -14,6 +14,36 @@
 
 package v4_0_0
 
-import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+import (
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+)
 
-var tenantUpgEntries = []versions.UpgradeEntry{}
+var tenantUpgEntries = []versions.UpgradeEntry{
+	enablePartitionMetadata,
+	enablePartitionTables,
+}
+
+var enablePartitionMetadata = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOPartitionMetadata,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    partitionservice.PartitionTableMetadataSQL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, partitionservice.PartitionTableMetadataSQL)
+		return exist, err
+	},
+}
+
+var enablePartitionTables = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOPartitionTables,
+	UpgType:   versions.CREATE_NEW_TABLE,
+	UpgSql:    partitionservice.PartitionTablesSQL,
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, partitionservice.PartitionTablesSQL)
+		return exist, err
+	},
+}

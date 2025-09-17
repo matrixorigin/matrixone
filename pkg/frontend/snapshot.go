@@ -122,6 +122,9 @@ var (
 
 		catalog.MO_SNAPSHOTS: 1,
 		catalog.MO_PITR:      1,
+
+		catalog.MOPartitionMetadata: 1,
+		catalog.MOPartitionTables:   1,
 	}
 )
 

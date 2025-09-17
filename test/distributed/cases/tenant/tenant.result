@@ -28,6 +28,8 @@ account_id    relname    relkind
 0    mo_locks    v
 0    mo_merge_settings    r
 0    mo_mysql_compatibility_mode    r
+0    mo_partition_metadata    r
+0    mo_partition_tables    r
 0    mo_pitr    r
 0    mo_pubs    r
 0    mo_role    r
