@@ -558,61 +558,70 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 }
 
 func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	defer cancel()
-
-	nowTs := exec.txnEngine.LatestLogtailAppliedTime()
-	var oldWmThreshold types.TS
+	jobCount := 0
 	defer func() {
-		logutil.Info(
-			"ISCP-Task replay iscp log",
-			zap.String("oldWmThreshold", oldWmThreshold.ToString()),
-			zap.Any("nowTs", nowTs),
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"ISCP-Task replay",
+			zap.Int("jobCount", jobCount),
+			zap.Error(err),
 		)
 	}()
-	createByOpt := client.WithTxnCreateBy(
-		0,
-		"",
-		"replay iscp log",
-		0)
-	txnOp, err := exec.cnTxnClient.New(ctx, nowTs, createByOpt)
-	if txnOp != nil {
-		defer txnOp.Commit(ctx)
-	}
+	sql := cdc.CDCSQLBuilder.ISCPLogSelectSQL()
+	txn, err := getTxn(ctx, exec.txnEngine, exec.cnTxnClient, "iscp replay")
 	if err != nil {
 		return
 	}
-	err = exec.txnEngine.New(ctx, txnOp)
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	defer txn.Commit(ctx)
+	result, err := ExecWithResult(ctx, sql, exec.cnUUID, txn)
 	if err != nil {
 		return
 	}
-	db, err := exec.txnEngine.Database(ctx, catalog.MO_CATALOG, txnOp)
-	if err != nil {
-		return
-	}
-	rel, err := db.Relation(ctx, MOISCPLogTableName, nil)
-	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "applyISCPLog" {
-		err = moerr.NewInternalErrorNoCtx(msg)
-	}
-	if err != nil {
-		return
-	}
-	oldWmThreshold, err = disttae.GetPartitionStateStart(ctx, rel)
-	if err != nil {
-		return
-	}
-	if !oldWmThreshold.IsEmpty() {
-		err = exec.applyISCPLogWithRel(ctx, rel, types.TS{}, oldWmThreshold, true)
-		if err != nil {
-			return
+	defer result.Close()
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		accountIDVector := cols[0]
+		accountIDs := vector.MustFixedColWithTypeCheck[uint32](accountIDVector)
+		tableIDVector := cols[1]
+		tableIDs := vector.MustFixedColWithTypeCheck[uint64](tableIDVector)
+		jobNameVector := cols[2]
+		jobIDVector := cols[3]
+		jobIDs := vector.MustFixedColWithTypeCheck[uint64](jobIDVector)
+		jobSpecVector := cols[4]
+		jobStateVector := cols[5]
+		states := vector.MustFixedColWithTypeCheck[int8](jobStateVector)
+		watermarkVector := cols[6]
+		jobStatusVector := cols[7]
+		dropAtVector := cols[9]
+		dropAts := vector.MustFixedColWithTypeCheck[types.Timestamp](dropAtVector)
+		for i := 0; i < rows; i++ {
+			if !dropAtVector.IsNull(uint64(i)) {
+				continue
+			}
+			jobCount++
+			exec.addOrUpdateJob(
+				accountIDs[i],
+				tableIDs[i],
+				jobNameVector.GetStringAt(i),
+				jobIDs[i],
+				states[i],
+				watermarkVector.GetStringAt(i),
+				[]byte(jobSpecVector.GetStringAt(i)),
+				[]byte(jobStatusVector.GetStringAt(i)),
+				dropAts[i],
+				true,
+			)
 		}
-	}
-	err = exec.applyISCPLogWithRel(ctx, rel, oldWmThreshold.Next(), types.TimestampToTS(nowTs), true)
-	if err != nil {
-		return
-	}
-	exec.iscpLogWm = types.TimestampToTS(nowTs)
+		return true
+	})
+	exec.iscpLogWm = types.TimestampToTS(txn.SnapshotTS())
 	return
 }
 
