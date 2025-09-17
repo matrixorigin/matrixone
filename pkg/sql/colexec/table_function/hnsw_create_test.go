@@ -500,5 +500,54 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 		failBatches = append(failBatches, failBatch{ret, bat})
 
 	}
+	{
+		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
+		ret := []*plan.Expr{
+			{
+				Typ: plan.Type{
+					Id:    int32(types.T_varchar),
+					Width: 512,
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_Sval{
+							Sval: tblcfg,
+						},
+					},
+				},
+			},
+			{
+
+				Typ: plan.Type{
+					Id: int32(types.T_int64),
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_I64Val{
+							I64Val: 1,
+						},
+					},
+				},
+			},
+
+			plan2.MakePlan2Vecf32ConstExprWithType("[0,1]", 3),
+		}
+
+		bat := batch.NewWithSize(3)
+
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 8, 0))         // pkid int64
+		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
+
+		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
+		vector.AppendFixed(bat.Vecs[1], int32(1), false, proc.Mp())
+
+		v := []float32{0, 1, 2}
+		vector.AppendArray(bat.Vecs[2], v, false, proc.Mp())
+
+		bat.SetRowCount(1)
+
+		failBatches = append(failBatches, failBatch{ret, bat})
+	}
 	return failBatches
 }

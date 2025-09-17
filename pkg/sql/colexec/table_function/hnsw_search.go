@@ -218,47 +218,34 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 
 	switch u.idxcfg.Usearch.Quantization {
 	case usearch.F32:
-		f32a := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
-		if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
-			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(f32a)))
-		}
-
-		algo := newHnswAlgo(u.idxcfg, u.tblcfg)
-
-		var keys any
-		keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
-		if err != nil {
-			return err
-		}
-
-		var ok bool
-		u.keys, ok = keys.([]int64)
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "keys is not []int64")
-		}
-		return nil
+		return runHnswSearch[float32](proc, u, faVec, nthRow)
 	case usearch.F64:
-		f64a := types.BytesToArray[float64](faVec.GetBytesAt(nthRow))
-		if uint(len(f64a)) != u.idxcfg.Usearch.Dimensions {
-			return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(f64a)))
-		}
-
-		algo := newHnswAlgo(u.idxcfg, u.tblcfg)
-
-		var keys any
-		keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f64a, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
-		if err != nil {
-			return err
-		}
-
-		var ok bool
-		u.keys, ok = keys.([]int64)
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "keys is not []int64")
-		}
-		return nil
+		return runHnswSearch[float64](proc, u, faVec, nthRow)
 	default:
 		// should not go here
 		panic("invalid Quantization")
 	}
+}
+
+func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchState, faVec *vector.Vector, nthRow int) (err error) {
+
+	fa := types.BytesToArray[T](faVec.GetBytesAt(nthRow))
+	if uint(len(fa)) != u.idxcfg.Usearch.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(fa)))
+	}
+
+	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
+
+	var keys any
+	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, fa, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
+	if err != nil {
+		return err
+	}
+
+	var ok bool
+	u.keys, ok = keys.([]int64)
+	if !ok {
+		return moerr.NewInternalError(proc.Ctx, "keys is not []int64")
+	}
+	return nil
 }

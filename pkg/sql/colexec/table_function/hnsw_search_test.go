@@ -31,7 +31,9 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type hnswSearchTestCase struct {
@@ -414,5 +416,60 @@ func makeBatchHnswSearchFail(proc *process.Process) []failBatch {
 		failBatches = append(failBatches, failBatch{ret, bat})
 
 	}
+	{
+		// vector type dimension is 3 but value dimension is 2
+
+		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index"}`
+		ret := []*plan.Expr{
+			{
+
+				Typ: plan.Type{
+					Id: int32(types.T_int64),
+				},
+				Expr: &plan.Expr_Lit{
+					Lit: &plan.Literal{
+						Value: &plan.Literal_Sval{
+							Sval: tblcfg,
+						},
+					},
+				},
+			},
+
+			plan2.MakePlan2Vecf32ConstExprWithType("[0,1]", 3),
+		}
+
+		bat := batch.NewWithSize(2)
+
+		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))         // index table config
+		bat.Vecs[1] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
+
+		vector.AppendFixed[int64](bat.Vecs[0], int64(1), false, proc.Mp())
+
+		v := []float32{0, 1, 2}
+		vector.AppendArray[float32](bat.Vecs[1], v, false, proc.Mp())
+
+		bat.SetRowCount(1)
+
+		failBatches = append(failBatches, failBatch{ret, bat})
+
+	}
+
 	return failBatches
+}
+
+func TestNewHnswAlgoFn(t *testing.T) {
+	var idxcfg vectorindex.IndexConfig
+	var tblcfg vectorindex.IndexTableConfig
+
+	idxcfg.Usearch.Quantization = usearch.F32
+	algo := newHnswAlgoFn(idxcfg, tblcfg)
+	require.NotNil(t, algo)
+
+	idxcfg.Usearch.Quantization = usearch.F64
+	algo = newHnswAlgoFn(idxcfg, tblcfg)
+	require.NotNil(t, algo)
+
+	// invalid I8 quantization in MO
+	idxcfg.Usearch.Quantization = usearch.I8
+	assert.Panics(t, func() { newHnswAlgoFn(idxcfg, tblcfg) }, "panic")
 }
