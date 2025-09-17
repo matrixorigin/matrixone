@@ -66,7 +66,6 @@ type IndexTableConfig struct {
 type HnswParam struct {
 	M              string `json:"m"`
 	EfConstruction string `json:"ef_construction"`
-	Quantization   string `json:"quantization"`
 	OpType         string `json:"op_type"`
 	EfSearch       string `json:"ef_search"`
 	Async          string `json:"async"`

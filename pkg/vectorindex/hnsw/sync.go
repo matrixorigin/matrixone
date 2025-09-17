@@ -136,13 +136,9 @@ func CdcSync[T types.RealNumbers](proc *process.Process, db string, tbl string, 
 
 	idxcfg.Usearch.Dimensions = uint(dimension)
 
-	if len(param.Quantization) > 0 {
-		var ok bool
-		idxcfg.Usearch.Quantization, ok = vectorindex.QuantizationValid(param.Quantization)
-		if !ok {
-			return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
-
-		}
+	idxcfg.Usearch.Quantization, err = QuantizationToUsearch(vectype)
+	if err != nil {
+		return err
 	}
 
 	if len(param.M) > 0 {

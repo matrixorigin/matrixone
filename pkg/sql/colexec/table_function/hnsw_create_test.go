@@ -130,7 +130,6 @@ func TestHnswCreate(t *testing.T) {
 
 var failedparam []string = []string{"{",
 	"{\"op_type\": \"vector_cos_ops\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"quantization\":\"invalid\"}",
 	"{\"op_type\": \"vector_l2_ops\", \"m\":\"notnumber\"}",
 	"{\"op_type\": \"vector_l2_ops\", \"ef_construction\":\"notnumber\"}",
 	"{\"op_type\": \"vector_l2_ops\"}, \"ef_search\":\"notnumber\"",

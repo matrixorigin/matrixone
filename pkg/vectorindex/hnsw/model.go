@@ -26,6 +26,7 @@ import (
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -294,12 +295,20 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 	idx.Dirty.Store(true)
 	idx.Len.Add(1)
 
-	switch v := any(vec).(type) {
-	case []float32:
-		return idx.Index.Add(uint64(key), v)
-	default:
-		return moerr.NewInternalErrorNoCtx("invalid vector type")
+	if vec == nil {
+		return moerr.NewInternalErrorNoCtx("usearch query is nil")
 	}
+
+	dim, err := idx.Index.Dimensions()
+	if err != nil {
+		return err
+	}
+
+	if uint(len(vec)) != dim {
+		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
+	}
+
+	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
 }
 
 // add vector without increment the counter.  concurrency add will increment the counter before Add
@@ -309,12 +318,21 @@ func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 	}
 	idx.Dirty.Store(true)
 	//idx.Len.Add(1)
-	switch v := any(vec).(type) {
-	case []float32:
-		return idx.Index.Add(uint64(key), v)
-	default:
-		return moerr.NewInternalErrorNoCtx("invalid vector type")
+
+	if vec == nil {
+		return moerr.NewInternalErrorNoCtx("usearch query is nil")
 	}
+
+	dim, err := idx.Index.Dimensions()
+	if err != nil {
+		return err
+	}
+
+	if uint(len(vec)) != dim {
+		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
+	}
+
+	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
 }
 
 // remove key
@@ -581,10 +599,19 @@ func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, dist
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
-	switch v := any(query).(type) {
-	case []float32:
-		return idx.Index.Search(v, limit)
-	default:
-		return nil, nil, moerr.NewInternalErrorNoCtx("invalid vector type")
+
+	if query == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("usearch query is nil")
 	}
+
+	dim, err := idx.Index.Dimensions()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if uint(len(query)) != dim {
+		return nil, nil, moerr.NewInternalErrorNoCtx("usearch dimension not match")
+	}
+
+	return idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
 }

@@ -20,25 +20,8 @@ import (
 	"encoding/hex"
 	"io"
 	"os"
-	"strings"
 	"sync"
-
-	usearch "github.com/unum-cloud/usearch/golang"
 )
-
-/*
-quantization := map[string]usearch.Quantization{"BF16": usearch.BF16, "F16": usearch.F16,
-
-	"F32": usearch.F32, "F64": usearch.F64, "I8": usearch.I8, "B1": usearch.B1}
-*/
-func QuantizationValid(a string) (usearch.Quantization, bool) {
-	q := strings.ToUpper(a)
-	// we can only support below quantization
-	quantization := map[string]usearch.Quantization{"F16": usearch.F16,
-		"F32": usearch.F32, "I8": usearch.I8}
-	r, ok := quantization[q]
-	return r, ok
-}
 
 // get the checksum of the file
 func CheckSum(path string) (string, error) {

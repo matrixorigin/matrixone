@@ -120,14 +120,6 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 			}
 		}
 
-		if len(u.param.Quantization) > 0 {
-			var ok bool
-			u.idxcfg.Usearch.Quantization, ok = vectorindex.QuantizationValid(u.param.Quantization)
-			if !ok {
-				return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
-			}
-		}
-
 		if len(u.param.M) > 0 {
 			val, err := strconv.Atoi(u.param.M)
 			if err != nil {
@@ -189,9 +181,15 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		if f32aVec.GetType().Oid != types.T_array_float32 {
 			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
 		}
-		dimension := f32aVec.GetType().Width
+		// quantization
+		u.idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(int32(f32aVec.GetType().Oid))
+		if err != nil {
+			return err
+		}
 
 		// dimension
+		dimension := f32aVec.GetType().Width
+
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
 		u.idxcfg.Type = "hnsw"
 

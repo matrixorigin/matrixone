@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -114,15 +113,6 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[HnswEfSearch]; ok {
 		res += fmt.Sprintf(" %s = %s ", HnswEfSearch, val)
-	}
-
-	if val, ok := result[HnswQuantization]; ok {
-		val = ToLower(val)
-		_, ok := vectorindex.QuantizationValid(val)
-		if !ok {
-			return "", moerr.NewInternalErrorNoCtxf("invalid quantization '%s'", val)
-		}
-		res += fmt.Sprintf(" %s '%s' ", HnswQuantization, val)
 	}
 
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
@@ -251,12 +241,6 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			if idx.IndexOption.HnswEfSearch < 0 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid ef_search. hnsw.ef_search must be > 0")
 			}
-			if len(idx.IndexOption.HnswQuantization) > 0 {
-				_, ok := vectorindex.QuantizationValid(idx.IndexOption.HnswQuantization)
-				if !ok {
-					return nil, moerr.NewInternalErrorNoCtx("invalid hnsw quantization.")
-				}
-			}
 
 			// hnswM or HnswEfConstruction == 0, use usearch default value
 			if idx.IndexOption.HnswM > 0 {
@@ -267,10 +251,6 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			}
 			if idx.IndexOption.HnswEfSearch > 0 {
 				res[HnswEfSearch] = strconv.FormatInt(idx.IndexOption.HnswEfSearch, 10)
-			}
-
-			if len(idx.IndexOption.HnswQuantization) > 0 {
-				res[HnswQuantization] = idx.IndexOption.HnswQuantization
 			}
 
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
