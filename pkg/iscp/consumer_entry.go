@@ -40,36 +40,62 @@ func NewJobEntry(
 	dropAt types.Timestamp,
 ) *JobEntry {
 	jobEntry := &JobEntry{
-		tableInfo: tableInfo,
-		jobName:   jobName,
-		jobID:     jobID,
-		jobSpec:   &jobSpec.TriggerSpec,
-		watermark: watermark,
-		state:     state,
-		dropAt:    dropAt,
+		tableInfo:          tableInfo,
+		jobName:            jobName,
+		jobID:              jobID,
+		jobSpec:            &jobSpec.TriggerSpec,
+		watermark:          watermark,
+		persistedWatermark: watermark,
+		state:              state,
+		dropAt:             dropAt,
 	}
 	return jobEntry
 }
 
-func (jobEntry *JobEntry) update(jobSpec *JobSpec, watermark types.TS, state int8, dropAt types.Timestamp) {
-	if jobSpec.GetType() != jobEntry.jobSpec.GetType() && watermark.LT(&jobEntry.watermark) {
-		jobEntry.jobSpec = &jobSpec.TriggerSpec
+func (jobEntry *JobEntry) update(
+	ctx context.Context,
+	jobSpec *JobSpec,
+	jobStatus *JobStatus,
+	watermark types.TS,
+	state int8,
+	dropAt types.Timestamp,
+) {
+	if jobEntry.state == ISCPJobState_Error {
 		return
-	}
-	if dropAt != 0 {
-		jobEntry.dropAt = dropAt
-	}
-	if jobEntry.persistedWatermark.EQ(&watermark) {
-		return
-	}
-	if watermark.LT(&jobEntry.watermark) {
-		panic(fmt.Sprintf("watermark %v < %v, current state %d, incoming state %d, job %v", watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.jobName))
 	}
 	jobEntry.jobSpec = &jobSpec.TriggerSpec
-	jobEntry.persistedWatermark = watermark
-	jobEntry.watermark = watermark
-	jobEntry.state = state
 	jobEntry.dropAt = dropAt
+	needApply := false
+	if jobEntry.currentLSN < jobStatus.LSN {
+		needApply = true
+	}
+	if jobEntry.state < state {
+		needApply = true
+	}
+	if needApply {
+		if jobEntry.watermark.GT(&watermark) {
+			errMsg := fmt.Sprintf("watermark %v > %v, current state %d, incoming state %d, job %d-%v-%d",
+				watermark.ToString(), jobEntry.watermark.ToString(), jobEntry.state, state, jobEntry.tableInfo.tableID, jobEntry.jobName, jobEntry.jobID)
+			FlushPermanentErrorMessage(
+				ctx,
+				jobEntry.tableInfo.exec.cnUUID,
+				jobEntry.tableInfo.exec.txnEngine,
+				jobEntry.tableInfo.exec.cnTxnClient,
+				jobEntry.tableInfo.accountID,
+				jobEntry.tableInfo.tableID,
+				[]string{jobEntry.jobName},
+				[]uint64{jobEntry.jobID},
+				[]uint64{jobStatus.LSN},
+				[]*JobStatus{jobStatus},
+				watermark,
+				errMsg,
+			)
+		}
+		jobEntry.currentLSN = jobStatus.LSN
+		jobEntry.persistedWatermark = watermark
+		jobEntry.watermark = watermark
+		jobEntry.state = state
+	}
 }
 
 func (jobEntry *JobEntry) IsInitedAndFinished() bool {
@@ -84,7 +110,20 @@ func (jobEntry *JobEntry) UpdateWatermark(
 		return
 	}
 	if !jobEntry.watermark.EQ(&from) {
-		panic("logic error")
+		FlushPermanentErrorMessage(
+			jobEntry.tableInfo.exec.ctx,
+			jobEntry.tableInfo.exec.cnUUID,
+			jobEntry.tableInfo.exec.txnEngine,
+			jobEntry.tableInfo.exec.cnTxnClient,
+			jobEntry.tableInfo.accountID,
+			jobEntry.tableInfo.tableID,
+			[]string{jobEntry.jobName},
+			[]uint64{jobEntry.jobID},
+			[]uint64{jobEntry.currentLSN},
+			[]*JobStatus{{}},
+			jobEntry.watermark,
+			fmt.Sprintf("update watermark failed, from %v, current %v", from.ToString(), jobEntry.watermark.ToString()),
+		)
 	}
 	jobEntry.watermark = to
 }

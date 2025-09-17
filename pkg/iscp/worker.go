@@ -135,6 +135,7 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 				iterCtx.tableID,
 				iterCtx.jobNames,
 				iterCtx.jobIDs,
+				iterCtx.lsn,
 				statuses,
 				iterCtx.fromTS,
 				ISCPJobState_Completed,
