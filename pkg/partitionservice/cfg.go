@@ -18,6 +18,6 @@ package partitionservice
 type Config struct {
 	// ServiceID service id
 	ServiceID string `toml:"-"`
-	// Enable enable shard service
-	Enable bool `toml:"enable"`
+	// Disable disable partition service
+	Disable bool `toml:"disable"`
 }

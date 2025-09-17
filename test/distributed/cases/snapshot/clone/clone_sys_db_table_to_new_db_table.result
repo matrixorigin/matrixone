@@ -142,6 +142,8 @@ mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
+mo_partition_metadata
+mo_partition_tables
 mo_pitr
 mo_pubs
 mo_role
@@ -189,6 +191,8 @@ mo_iscp_log
 mo_locks
 mo_merge_settings
 mo_mysql_compatibility_mode
+mo_partition_metadata
+mo_partition_tables
 mo_pitr
 mo_pubs
 mo_role

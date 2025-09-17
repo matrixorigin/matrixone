@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -53,6 +54,7 @@ func (opts Options) WithDatabase(database string) Options {
 // WithAccountID execute sql in account
 func (opts Options) WithAccountID(accountID uint32) Options {
 	opts.accountID = accountID
+	opts.hasAccountID = true
 	return opts
 }
 
@@ -88,7 +90,7 @@ func (opts Options) AccountID() uint32 {
 
 // HasAccountID returns true if account is set
 func (opts Options) HasAccountID() bool {
-	return opts.accountID > 0
+	return opts.hasAccountID
 }
 
 // MinCommittedTS returns min committed ts
@@ -162,6 +164,7 @@ func (opts StatementOption) WaitPolicy() lock.WaitPolicy {
 // WithAccountID execute sql in account
 func (opts StatementOption) WithAccountID(accountID uint32) StatementOption {
 	opts.accountId = accountID
+	opts.hasAccountID = true
 	return opts
 }
 
@@ -179,7 +182,7 @@ func (opts StatementOption) AccountID() uint32 {
 }
 
 func (opts StatementOption) HasAccountID() bool {
-	return opts.accountId > 0
+	return opts.hasAccountID
 }
 
 func (opts StatementOption) WithRoleID(roleID uint32) StatementOption {
@@ -321,4 +324,63 @@ func (opts Options) WithForceRebuildPlan() Options {
 
 func (opts Options) ForceRebuildPlan() bool {
 	return opts.forceRebuildPlan
+}
+
+func (opts Options) WithAdjustTableExtraFunc(
+	fn func(*api.SchemaExtra) error,
+) Options {
+	opts.adjustTableExtraFunc = fn
+	return opts
+}
+
+func (opts Options) AdjustTableExtraFunc() func(*api.SchemaExtra) error {
+	if opts.adjustTableExtraFunc == nil {
+		return func(*api.SchemaExtra) error { return nil }
+	}
+	return opts.adjustTableExtraFunc
+}
+
+func (opts StatementOption) DisableDropIncrStatement() bool {
+	return opts.disableDropAutoIncrement
+}
+
+func (opts StatementOption) WithDisableDropIncrStatement() StatementOption {
+	opts.disableDropAutoIncrement = true
+	return opts
+}
+
+func (opts StatementOption) KeepAutoIncrement() uint64 {
+	return opts.keepAutoIncrement
+}
+
+func (opts StatementOption) WithKeepAutoIncrement(keep uint64) StatementOption {
+	opts.keepAutoIncrement = keep
+	return opts
+}
+
+func (opts StatementOption) WithIgnorePublish() StatementOption {
+	opts.ignorePublish = true
+	return opts
+}
+
+func (opts StatementOption) IgnorePublish() bool {
+	return opts.ignorePublish
+}
+
+func (opts StatementOption) WithIgnoreCheckExperimental() StatementOption {
+	opts.ignoreCheckExperimental = true
+	return opts
+}
+
+func (opts StatementOption) IgnoreCheckExperimental() bool {
+	return opts.ignoreCheckExperimental
+}
+
+func (opts StatementOption) WithDisableLock() StatementOption {
+	opts.disableLock = true
+	return opts
+}
+
+func (opts StatementOption) DisableLock() bool {
+	return opts.disableLock
 }

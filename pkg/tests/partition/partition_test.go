@@ -16,13 +16,12 @@ package partition
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -37,6 +36,7 @@ var (
 
 func runPartitionTableCreateAndDeleteTestsWithAware(
 	t *testing.T,
+	prepare func(c embed.Cluster) int32,
 	sql string,
 	method partition.PartitionMethod,
 	validPartition func(idx int, p partition.Partition),
@@ -46,14 +46,17 @@ func runPartitionTableCreateAndDeleteTestsWithAware(
 	runPartitionClusterTest(
 		t,
 		func(c embed.Cluster) {
+			account := prepare(c)
+
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
 
 			db := testutils.GetDatabaseName(t)
-			testutils.CreateTestDatabase(t, db, cn)
+			testutils.CreateTestDatabaseWithAccount(t, account, db, cn)
 
-			testutils.ExecSQLWithReadResult(
+			testutils.ExecSQLWithReadResultAndAccount(
 				t,
+				account,
 				db,
 				cn,
 				func(i int, s string, r executor.Result) {
@@ -64,7 +67,7 @@ func runPartitionTableCreateAndDeleteTestsWithAware(
 
 			metadata := getMetadata(
 				t,
-				0,
+				uint32(account),
 				db,
 				t.Name(),
 				cn,
@@ -78,21 +81,22 @@ func runPartitionTableCreateAndDeleteTestsWithAware(
 				require.NotEqual(t, uint64(0), p.PartitionID)
 				require.Equal(t, metadata.TableID, p.PrimaryTableID)
 				require.Equal(t, uint32(idx), p.Position)
-				require.Equal(t, fmt.Sprintf("%s_%s", metadata.TableName, p.Name), p.PartitionTableName)
+				require.Equal(t, partitionservice.GetPartitionTableName(metadata.TableName, p.Name), p.PartitionTableName)
 				validPartition(idx, p)
 			}
 
 			beforeDrop(db, t.Name(), cn, metadata)
 
-			testutils.ExecSQL(
+			testutils.ExecSQLWithAccount(
 				t,
+				account,
 				db,
 				cn,
 				fmt.Sprintf("drop table %s", t.Name()),
 			)
 			metadata = getMetadata(
 				t,
-				0,
+				uint32(account),
 				db,
 				t.Name(),
 				cn,
@@ -100,7 +104,7 @@ func runPartitionTableCreateAndDeleteTestsWithAware(
 			require.Equal(t, partition.PartitionMetadata{}, metadata)
 
 			for _, name := range tables {
-				require.False(t, testutils.TableExists(t, db, name, cn))
+				require.False(t, testutils.TableExistsWithAccount(t, account, db, name, cn))
 			}
 
 			afterDrop(cn, metadata)
@@ -114,8 +118,25 @@ func runPartitionTableCreateAndDeleteTests(
 	method partition.PartitionMethod,
 	validPartition func(idx int, p partition.Partition),
 ) {
+	runPartitionTableCreateAndDeleteTestsWithPrepare(
+		t,
+		func(c embed.Cluster) int32 { return 0 },
+		sql,
+		method,
+		validPartition,
+	)
+}
+
+func runPartitionTableCreateAndDeleteTestsWithPrepare(
+	t *testing.T,
+	prepare func(c embed.Cluster) int32,
+	sql string,
+	method partition.PartitionMethod,
+	validPartition func(idx int, p partition.Partition),
+) {
 	runPartitionTableCreateAndDeleteTestsWithAware(
 		t,
+		prepare,
 		sql,
 		method,
 		validPartition,
@@ -148,17 +169,6 @@ func runPartitionClusterTestWithReuse(
 		new, err := embed.NewCluster(
 			embed.WithCNCount(3),
 			embed.WithTesting(),
-			embed.WithPreStart(
-				func(op embed.ServiceOperator) {
-					op.Adjust(
-						func(sc *embed.ServiceConfig) {
-							if op.ServiceType() == metadata.ServiceType_CN {
-								sc.CN.PartitionService.Enable = true
-							}
-						},
-					)
-				},
-			),
 		)
 		require.NoError(t, err)
 		require.NoError(t, new.Start())
