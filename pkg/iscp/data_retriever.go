@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -31,6 +32,15 @@ func MarshalJobStatus(status *JobStatus) (string, error) {
 	return string(jsonBytes), nil
 }
 
+func UnmarshalJobStatus(jsonByte []byte) (*JobStatus, error) {
+	byteJson := types.DecodeJson(jsonByte)
+	var jobStatus JobStatus
+	err := json.Unmarshal([]byte(byteJson.String()), &jobStatus)
+	if err != nil {
+		return nil, err
+	}
+	return &jobStatus, nil
+}
 func NewISCPData(
 	noMoreData bool,
 	insertBatch *AtomicBatch,
@@ -79,6 +89,7 @@ type DataRetrieverImpl struct {
 	jobName   string
 	status    *JobStatus
 	jobID     uint64
+	lsn       uint64
 
 	typ          int8
 	insertDataCh chan *ISCPData
@@ -96,6 +107,7 @@ func NewDataRetriever(
 	jobName string,
 	jobID uint64,
 	status *JobStatus,
+	lsn uint64,
 	dataType int8,
 ) *DataRetrieverImpl {
 	ctx, cancel := context.WithCancel(ctx)
@@ -105,6 +117,7 @@ func NewDataRetriever(
 		jobName:      jobName,
 		jobID:        jobID,
 		status:       status,
+		lsn:          lsn,
 		insertDataCh: make(chan *ISCPData, 1),
 		typ:          dataType,
 		ctx:          ctx,
@@ -130,6 +143,7 @@ func (r *DataRetrieverImpl) UpdateWatermark(exec executor.TxnExecutor, opts exec
 	if err != nil {
 		return err
 	}
+	r.status.LSN = r.lsn
 	updateWatermarkSQL := cdc.CDCSQLBuilder.ISCPLogUpdateResultSQL(
 		r.accountID,
 		r.tableID,

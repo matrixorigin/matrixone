@@ -35,9 +35,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"go.uber.org/zap"
+	"sync"
 )
 
 const DefaultLoadParallism = 20
+
+func GetPartitionStateStart(
+	ctx context.Context,
+	rel engine.Relation,
+) (types.TS, error) {
+	var tbl *txnTable
+	var ok bool
+	if tbl, ok = rel.(*txnTable); !ok {
+		tbl = rel.(*txnTableDelegate).origin
+	}
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return types.TS{}, err
+	}
+	return state.GetStart(), nil
+}
 
 func (tbl *txnTable) CollectChanges(
 	ctx context.Context,
@@ -55,6 +72,8 @@ type PartitionChangesHandle struct {
 	currentChangeHandle engine.ChangesHandle
 	currentPSFrom       types.TS
 	currentPSTo         types.TS
+	closeMu             sync.Mutex
+	handleIdx           int
 
 	fromTs types.TS
 	toTs   types.TS
@@ -133,6 +152,20 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	if stateStart.LT(&nextFrom) {
 		h.currentPSTo = h.toTs
 		h.currentPSFrom = nextFrom
+		if h.handleIdx != 0 {
+			err = h.closeCurrentChangeHandle()
+			if err != nil {
+				return
+			}
+			logutil.Info("ChangesHandle-Split change handles",
+				zap.String("from", h.fromTs.ToString()),
+				zap.String("to", h.toTs.ToString()),
+				zap.String("ps from", h.currentPSFrom.ToString()),
+				zap.String("ps to", h.currentPSTo.ToString()),
+				zap.Int("handle idx", h.handleIdx),
+			)
+		}
+		h.handleIdx++
 		h.currentChangeHandle, err = logtailreplay.NewChangesHandler(
 			ctx,
 			state,
@@ -150,7 +183,12 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		return
 	}
 
-	response, err := RequestSnapshotRead(ctx, h.tbl, &nextFrom)
+	logutil.Info("ChangesHandle-Split request snapshot read",
+		zap.String("from", nextFrom.ToString()),
+	)
+	ctxWithDeadline, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	response, err := RequestSnapshotRead(ctxWithDeadline, h.tbl, &nextFrom)
 	if err != nil {
 		return
 	}
@@ -176,13 +214,10 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 			checkpointEntries = append(checkpointEntries, checkpointEntry)
 		}
 	}
-	if nextFrom.LT(&minTS) {
+	if nextFrom.LT(&minTS) || nextFrom.GT(&maxTS) {
 		return false, moerr.NewErrStaleReadNoCtx(minTS.ToString(), nextFrom.ToString())
 	}
-	h.currentPSFrom = minTS
-	if h.fromTs.GT(&minTS) {
-		h.currentPSFrom = h.fromTs
-	}
+	h.currentPSFrom = nextFrom
 	h.currentPSTo = maxTS
 	if h.toTs.LT(&maxTS) {
 		h.currentPSTo = h.toTs
@@ -192,10 +227,12 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 		zap.String("to", h.toTs.ToString()),
 		zap.String("ps from", h.currentPSFrom.ToString()),
 		zap.String("ps to", h.currentPSTo.ToString()),
+		zap.Int("handle idx", h.handleIdx),
 	)
-	if h.currentChangeHandle != nil {
-		h.currentChangeHandle.Close()
-		h.currentChangeHandle = nil
+	h.handleIdx++
+	err = h.closeCurrentChangeHandle()
+	if err != nil {
+		return
 	}
 	h.currentChangeHandle, err = logtailreplay.NewChangesHandlerWithCheckpointEntries(
 		ctx,
@@ -215,13 +252,18 @@ func (h *PartitionChangesHandle) getNextChangeHandle(ctx context.Context) (end b
 	}
 	return false, nil
 }
-
 func (h *PartitionChangesHandle) Close() error {
+	return h.closeCurrentChangeHandle()
+}
+
+func (h *PartitionChangesHandle) closeCurrentChangeHandle() (err error) {
+	h.closeMu.Lock()
+	defer h.closeMu.Unlock()
 	if h.currentChangeHandle != nil {
-		h.currentChangeHandle.Close()
+		err = h.currentChangeHandle.Close()
 		h.currentChangeHandle = nil
 	}
-	return nil
+	return
 }
 
 type CheckpointChangesHandle struct {

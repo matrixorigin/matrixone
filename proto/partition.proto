@@ -51,4 +51,5 @@ message Partition {
     uint32    Position           = 5;
     string    ExprStr            = 6;
     plan.Expr Expr               = 7;
+    plan.Expr ExprWithRowID      = 8;
 }

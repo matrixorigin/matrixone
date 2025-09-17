@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
@@ -105,6 +106,8 @@ func init() {
 	initSQLs = append(initSQLs, trace.InitSQLs...)
 
 	initSQLs = append(initSQLs, shardservice.InitSQLs...)
+
+	initSQLs = append(initSQLs, partitionservice.InitSQLs...)
 }
 
 type service struct {

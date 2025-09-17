@@ -51,8 +51,10 @@ func NewTableEntry(
 	}
 }
 func (t *TableEntry) AddOrUpdateSinker(
+	ctx context.Context,
 	jobName string,
 	jobSpec *JobSpec,
+	jobStatus *JobStatus,
 	jobID uint64,
 	watermark types.TS,
 	state int8,
@@ -74,7 +76,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	if jobEntry.jobID > jobID {
 		return
 	}
-	jobEntry.update(jobSpec, watermark, state, dropAt)
+	jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
 	return
 }
 
@@ -148,6 +150,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				accountID: t.accountID,
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
+				lsn:       []uint64{sinker.currentLSN + 1},
 				fromTS:    types.TS{},
 				toTS:      types.TS{},
 			})
@@ -163,6 +166,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
+					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
 					foundIteration = true
 					break
 				}
@@ -174,6 +178,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				accountID: t.accountID,
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
+				lsn:       []uint64{sinker.currentLSN + 1},
 				fromTS:    from,
 				toTS:      to,
 			})

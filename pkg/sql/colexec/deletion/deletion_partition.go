@@ -16,6 +16,7 @@ package deletion
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/partitionprune"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
@@ -160,7 +161,6 @@ func (op *PartitionDelete) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-	*op = PartitionDelete{}
 }
 
 func (op *PartitionDelete) Release() {

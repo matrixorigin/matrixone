@@ -77,13 +77,19 @@ func ExecuteIteration(
 		return
 	}
 
+	statuses := make([]*JobStatus, len(iterCtx.jobNames))
 	jobSpecs, err := GetJobSpecs(
 		ctx,
 		cnUUID,
+		cnTxnClient,
+		cnEngine,
 		txnOp,
 		iterCtx.accountID,
 		iterCtx.tableID,
 		iterCtx.jobNames,
+		iterCtx.lsn,
+		iterCtx.fromTS,
+		statuses,
 		iterCtx.jobIDs,
 	)
 	if err != nil {
@@ -107,16 +113,15 @@ func ExecuteIteration(
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
 	}
-	statuses := make([]*JobStatus, len(jobSpecs))
+
 	startAt := types.BuildTS(time.Now().UnixNano(), 0)
-	for i := range jobSpecs {
+	for i := range iterCtx.jobNames {
 		statuses[i] = &JobStatus{
 			From: iterCtx.fromTS,
 			To:   iterCtx.toTS,
 		}
 		statuses[i].StartAt = startAt
 	}
-
 	changes, err := CollectChanges(ctx, rel, iterCtx.fromTS, iterCtx.toTS, mp)
 	if err != nil {
 		return
@@ -183,6 +188,7 @@ func ExecuteIteration(
 			iterCtx.jobNames[i],
 			iterCtx.jobIDs[i],
 			statuses[i],
+			iterCtx.lsn[i],
 			typ,
 		)
 		defer dataRetrievers[i].Close()
@@ -197,6 +203,7 @@ func ExecuteIteration(
 		iterCtx.tableID,
 		iterCtx.jobNames,
 		iterCtx.jobIDs,
+		iterCtx.lsn,
 		statuses,
 		iterCtx.fromTS,
 		ISCPJobState_Running,
@@ -335,6 +342,7 @@ func ExecuteIteration(
 					iterCtx.tableID,
 					[]string{iterCtx.jobNames[i]},
 					[]uint64{iterCtx.jobIDs[i]},
+					[]uint64{iterCtx.lsn[i]},
 					[]*JobStatus{status},
 					watermark,
 					state,
@@ -358,6 +366,7 @@ var FlushJobStatusOnIterationState = func(
 	tableID uint64,
 	jobNames []string,
 	jobIDs []uint64,
+	lsns []uint64,
 	jobStatuses []*JobStatus,
 	watermark types.TS,
 	state int8,
@@ -388,6 +397,7 @@ var FlushJobStatusOnIterationState = func(
 		}
 	}()
 	for i := range jobNames {
+		jobStatuses[i].LSN = lsns[i]
 		err = FlushStatus(
 			ctx,
 			cnUUID,
@@ -443,10 +453,15 @@ func FlushStatus(
 var GetJobSpecs = func(
 	ctx context.Context,
 	cnUUID string,
+	cnTxnClient client.TxnClient,
+	cnEngine engine.Engine,
 	txn client.TxnOperator,
 	tenantId uint32,
 	tableID uint64,
 	jobName []string,
+	lsns []uint64,
+	watermark types.TS,
+	jobStatuses []*JobStatus,
 	jobIDs []uint64,
 ) (jobSpec []*JobSpec, err error) {
 	var buf bytes.Buffer
@@ -455,7 +470,7 @@ var GetJobSpecs = func(
 		if i > 0 {
 			buf.WriteString(" OR")
 		}
-		buf.WriteString(fmt.Sprintf(" account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d",
+		buf.WriteString(fmt.Sprintf(" (account_id = %d AND table_id = %d AND job_name = '%s' AND job_id = %d)",
 			tenantId, tableID, jobName, jobIDs[i]))
 	}
 	sql := buf.String()
@@ -467,7 +482,21 @@ var GetJobSpecs = func(
 	jobSpec = make([]*JobSpec, len(jobName))
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		if rows != len(jobName) {
-			panic(fmt.Sprintf("invalid rows %d, expected %d", rows, len(jobName)))
+			errMsg := fmt.Sprintf("invalid rows %d, expected %d", rows, len(jobName))
+			FlushPermanentErrorMessage(
+				ctx,
+				cnUUID,
+				cnEngine,
+				cnTxnClient,
+				tenantId,
+				tableID,
+				jobName,
+				jobIDs,
+				lsns,
+				jobStatuses,
+				watermark,
+				errMsg,
+			)
 		}
 		for i := 0; i < rows; i++ {
 			jobSpec[i], err = UnmarshalJobSpec(cols[0].GetBytesAt(i))
@@ -478,6 +507,46 @@ var GetJobSpecs = func(
 		return true
 	})
 	return
+}
+
+func FlushPermanentErrorMessage(
+	ctx context.Context,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	accountID uint32,
+	tableID uint64,
+	jobNames []string,
+	jobIDs []uint64,
+	lsns []uint64,
+	jobStatuses []*JobStatus,
+	watermark types.TS,
+	errMsg string,
+) (err error) {
+	logutil.Error(
+		"ISCP-Task Flush Permanent Error Message",
+		zap.Uint32("accountID", accountID),
+		zap.Uint64("tableID", tableID),
+		zap.Strings("jobNames", jobNames),
+		zap.Any("jobIDs", jobIDs),
+		zap.String("errMsg", errMsg),
+	)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	return FlushJobStatusOnIterationState(
+		ctx,
+		cnUUID,
+		cnEngine,
+		cnTxnClient,
+		accountID,
+		tableID,
+		jobNames,
+		jobIDs,
+		lsns,
+		jobStatuses,
+		watermark,
+		ISCPJobState_Error,
+	)
 }
 
 // TODO
@@ -501,12 +570,13 @@ func (status *JobStatus) PermanentlyFailed() bool {
 	return status.ErrorCode >= PermanentErrorThreshold
 }
 
-func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jobIDs []uint64, fromTS types.TS, toTS types.TS) *IterationContext {
+func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jobIDs []uint64, lsn []uint64, fromTS types.TS, toTS types.TS) *IterationContext {
 	return &IterationContext{
 		accountID: accountID,
 		tableID:   tableID,
 		jobNames:  jobNames,
 		jobIDs:    jobIDs,
+		lsn:       lsn,
 		fromTS:    fromTS,
 		toTS:      toTS,
 	}

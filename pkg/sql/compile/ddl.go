@@ -55,6 +55,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -151,6 +152,13 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		if err != nil {
 			return err
 		}
+
+		if features.IsPartition(t.GetExtraInfo().FeatureFlag) ||
+			features.IsIndexTable(t.GetExtraInfo().FeatureFlag) {
+			ignoreTables = append(ignoreTables, r)
+			continue
+		}
+
 		defs, err := t.TableDefs(c.proc.Ctx)
 		if err != nil {
 			return err
@@ -166,7 +174,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
-	deleteTables := make([]string, 0, len(relations)-len(ignoreTables))
+	deleteTables := make([]string, 0, len(relations))
 	for _, r := range relations {
 		isIndexTable := false
 		for _, d := range ignoreTables {
@@ -941,14 +949,22 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	if c.adjustTableExtraFunc != nil {
+		if err := c.adjustTableExtraFunc(extra); err != nil {
+			return err
+		}
+	}
+
 	dbName := c.db
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
 	tblName := qry.GetTableDef().GetName()
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-		return err
+	if !c.disableLock {
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return err
+		}
 	}
 
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -1003,13 +1019,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 	}
 
-	if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		c.proc.Error(c.proc.Ctx, "createTable",
-			zap.String("databaseName", c.db),
-			zap.String("tableName", qry.GetTableDef().GetName()),
-			zap.Error(err),
-		)
-		return err
+	if !c.disableLock {
+		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			c.proc.Error(c.proc.Ctx, "createTable",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return err
+		}
 	}
 
 	if len(qry.IndexTables) > 0 {
@@ -1460,14 +1478,28 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	}
 
-	err = maybeCreateAutoIncrement(
-		c.proc.Ctx,
-		c.proc.GetService(),
-		dbSource,
-		qry.GetTableDef(),
-		c.proc.GetTxnOperator(),
-		nil,
-	)
+	if c.keepAutoIncrement == 0 {
+		err = maybeCreateAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			dbSource,
+			qry.GetTableDef(),
+			c.proc.GetTxnOperator(),
+			nil,
+		)
+	} else {
+		err = maybeResetAutoIncrement(
+			c.proc.Ctx,
+			c.proc.GetService(),
+			dbSource,
+			qry.GetTableDef().GetName(),
+			c.keepAutoIncrement,
+			main.GetTableID(c.proc.Ctx),
+			true,
+			c.proc.GetTxnOperator(),
+		)
+	}
+
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "create table for maybeCreateAutoIncrement",
 			zap.String("databaseName", c.db),
@@ -2319,56 +2351,42 @@ func (s *Scope) getFkDefs(c *Compile, fkRelation engine.Relation) (*engine.Forei
 	return oldFkeys, oldRefChild, nil
 }
 
-// Truncation operations cannot be performed if the session holds an active table lock.
 func (s *Scope) TruncateTable(c *Compile) error {
-	var dbSource engine.Database
-	var rel engine.Relation
-	var err error
-	var isTemp bool
-	var newId uint64
-
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
 	s.ScopeAnalyzer.Start()
 	defer s.ScopeAnalyzer.Stop()
 
-	accountId, err := defines.GetAccountId(c.proc.Ctx)
+	truncate := s.Plan.GetDdl().GetTruncateTable()
+	oldID := truncate.GetTableId()
+	db := truncate.GetDatabase()
+	table := truncate.GetTable()
+
+	c.db = db
+
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
 		return err
 	}
 
-	tqry := s.Plan.GetDdl().GetTruncateTable()
-	dbName := tqry.GetDatabase()
-	tblName := tqry.GetTable()
-	oldId := tqry.GetTableId()
-	keepAutoIncrement := false
-	affectedRows := uint64(0)
+	dbSource, err := c.e.Database(c.proc.Ctx, db, c.proc.GetTxnOperator())
+	if err != nil {
+		return convertDBEOB(c.proc.Ctx, err, db)
+	}
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+	rel, err := dbSource.Relation(c.proc.Ctx, table, nil)
+	if err != nil {
 		return err
 	}
-	dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
-	if err != nil {
-		return convertDBEOB(c.proc.Ctx, err, dbName)
+
+	if rel.GetTableDef(c.proc.Ctx).TableType == catalog.SystemExternalRel {
+		return nil
 	}
 
-	if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
-		var e error // avoid contamination of error messages
-		dbSource, e = c.e.Database(c.proc.Ctx, defines.TEMPORARY_DBNAME, c.proc.GetTxnOperator())
-		if e != nil {
-			return err
-		}
-		rel, e = dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, tblName), nil)
-		if e != nil {
-			return err
-		}
-		isTemp = true
-	}
-
-	if !isTemp && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
-		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
+		if e := lockMoTable(c, db, table, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -2376,7 +2394,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
-		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, false); e != nil {
+		if e := lockTable(c.proc.Ctx, c.e, c.proc, rel, db, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return e
@@ -2388,77 +2406,62 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
-	if tqry.IsDelete {
-		keepAutoIncrement = true
-		affectedRows, err = rel.Rows(c.proc.Ctx)
+	// delete from tables => truncate, need keep increment value
+	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
+	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
+	if truncate.IsDelete {
+		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {
 			return err
 		}
+
+		c.addAffectedRows(rows)
+		dropOpts = dropOpts.WithDisableDropIncrStatement()
+		createOpts = createOpts.WithKeepAutoIncrement(oldID)
 	}
 
-	// TODO: HNSWCDC drop CDC task with old table Id before truncate index table
-	if !isTemp {
-		tabledef := rel.GetTableDef(c.proc.Ctx)
-		e := DropAllIndexCdcTasks(c, tabledef, dbName, tblName)
-		if e != nil {
-			return e
-		}
-	}
-
-	if isTemp {
-		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
-		_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, tblName))
-		newId = rel.GetTableID(c.proc.Ctx)
-	} else {
-		newId, err = dbSource.Truncate(c.proc.Ctx, tblName)
-	}
-
+	r, err := c.runSqlWithResult(
+		fmt.Sprintf("show create table `%s`.`%s`", db, table),
+		int32(accountID),
+	)
 	if err != nil {
 		return err
 	}
+	defer r.Close()
 
-	// Truncate Index Tables if needed
-	for _, name := range tqry.IndexTableNames {
-		var err error
-		var oldIndexId, newIndexId uint64
-		var idxtblname string
-		if isTemp {
-			indexrel, err := dbSource.Relation(c.proc.Ctx, engine.GetTempTableName(dbName, name), nil)
-			if err != nil {
-				return err
-			}
-			idxtblname = engine.GetTempTableName(dbName, name)
-			oldIndexId = indexrel.GetTableID(c.proc.Ctx)
-			newIndexId = oldIndexId
-			_, err = dbSource.Truncate(c.proc.Ctx, engine.GetTempTableName(dbName, name))
-			if err != nil {
-				return err
-			}
-		} else {
-			indexrel, err := dbSource.Relation(c.proc.Ctx, name, nil)
-			if err != nil {
-				return err
-			}
-			idxtblname = name
-			oldIndexId = indexrel.GetTableID(c.proc.Ctx)
-			newIndexId, err = dbSource.Truncate(c.proc.Ctx, name)
-			if err != nil {
-				return err
-			}
-		}
+	createSQL := ""
+	r.ReadRows(
+		func(rows int, cols []*vector.Vector) bool {
+			createSQL = executor.GetStringRows(cols[1])[0]
+			return true
+		},
+	)
 
-		// only non-temporary table can insert into mo_catalog tables so auto increment is not working on temp table
-		if !isTemp {
-			if err = maybeResetAutoIncrement(c.proc.Ctx, c.proc.GetService(), dbSource, idxtblname,
-				oldIndexId, newIndexId, keepAutoIncrement, c.proc.GetTxnOperator()); err != nil {
-				return err
-			}
-		}
-
+	// drop table
+	if err = c.runSqlWithAccountIdAndOptions(
+		fmt.Sprintf("drop table `%s`.`%s`", db, table),
+		int32(accountID),
+		dropOpts,
+	); err != nil {
+		return err
 	}
 
-	// update tableDef of foreign key's table with new table id
-	for _, ftblId := range tqry.ForeignTbl {
+	// create table
+	if err = c.runSqlWithAccountIdAndOptions(
+		createSQL,
+		int32(accountID),
+		createOpts,
+	); err != nil {
+		return err
+	}
+
+	rel, err = dbSource.Relation(c.proc.Ctx, table, nil)
+	if err != nil {
+		return err
+	}
+	newID := rel.GetTableID(c.proc.Ctx)
+
+	for _, ftblId := range truncate.ForeignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), ftblId)
 		if err != nil {
 			return err
@@ -2470,8 +2473,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		for _, ct := range oldCt.Cts {
 			if def, ok := ct.(*engine.RefChildTableDef); ok {
 				for idx, refTable := range def.Tables {
-					if refTable == oldId {
-						def.Tables[idx] = newId
+					if refTable == oldID {
+						def.Tables[idx] = newID
 						break
 					}
 				}
@@ -2482,62 +2485,8 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-
 	}
 
-	if isTemp {
-		oldId = rel.GetTableID(c.proc.Ctx)
-	}
-
-	// check if contains any auto_increment column(include __mo_fake_pk_col), if so, reset the auto_increment value
-	tblDef := rel.GetTableDef(c.proc.Ctx)
-	var containAuto bool
-	for _, col := range tblDef.Cols {
-		if col.Typ.AutoIncr {
-			containAuto = true
-			break
-		}
-	}
-	if containAuto {
-		err = incrservice.GetAutoIncrementService(c.proc.GetService()).Reset(
-			c.proc.Ctx,
-			oldId,
-			newId,
-			keepAutoIncrement,
-			c.proc.GetTxnOperator())
-		if err != nil {
-			return err
-		}
-	}
-
-	// update index information in mo_catalog.mo_indexes
-	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newId, oldId)
-	err = c.runSql(updateSql)
-	if err != nil {
-		return err
-	}
-
-	// update merge settings in mo_catalog.mo_merge_settings
-	updateMergeSettingsSql := fmt.Sprintf(updateMoMergeSettings, newId, accountId, oldId)
-	err = c.runSqlWithSystemTenant(updateMergeSettingsSql)
-	if err != nil {
-		c.proc.Error(c.proc.Ctx, "update mo_catalog.mo_merge_settings for truncate table",
-			zap.Uint64("origin table id", oldId),
-			zap.Uint64("copy table id", newId),
-			zap.Error(err))
-		return err
-	}
-
-	// TODO: HNSWCDC create CDC task with new table Id
-	if !isTemp {
-		tabledef := rel.GetTableDef(c.proc.Ctx)
-		e := CreateAllIndexCdcTasks(c, tabledef.Indexes, dbName, tblName)
-		if e != nil {
-			return e
-		}
-	}
-
-	c.addAffectedRows(uint64(affectedRows))
 	return nil
 }
 
@@ -2605,8 +2554,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	var err error
 	var isTemp bool
 
-	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
-		return err
+	if !c.disableLock {
+		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+			return err
+		}
 	}
 
 	tblID := qry.GetTableId()
@@ -2637,7 +2588,11 @@ func (s *Scope) DropTable(c *Compile) error {
 		isTemp = true
 	}
 
-	if !isTemp && !isView && !isSource && c.proc.GetTxnOperator().Txn().IsPessimistic() {
+	if !c.disableLock &&
+		!isTemp &&
+		!isView &&
+		!isSource &&
+		c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var err error
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
@@ -2660,8 +2615,10 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// if dbSource is a pub, update tableList
-	if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
-		return err
+	if !c.ignorePublish {
+		if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
+			return err
+		}
 	}
 
 	if len(qry.UpdateFkSqls) > 0 {
@@ -2789,7 +2746,7 @@ func (s *Scope) DropTable(c *Compile) error {
 					break
 				}
 			}
-			if containAuto {
+			if containAuto && !c.disableDropAutoIncrement {
 				// When drop table 'mo_catalog.mo_indexes', there is no need to delete the auto increment data
 				err := incrservice.GetAutoIncrementService(c.proc.GetService()).Delete(
 					c.proc.Ctx,
@@ -2849,7 +2806,15 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 
-	return partitionservice.GetService(c.proc.GetService()).Delete(
+	ps := partitionservice.GetService(c.proc.GetService())
+	extr := rel.GetExtraInfo()
+	if extr == nil ||
+		!ps.Enabled() ||
+		!features.IsPartitioned(extr.FeatureFlag) {
+		return nil
+	}
+
+	return ps.Delete(
 		c.proc.Ctx,
 		tblID,
 		c.proc.GetTxnOperator(),
