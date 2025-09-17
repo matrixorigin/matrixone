@@ -16,4 +16,7 @@ select * from src where match(body, title) against('red');
 id    body    title
 0    color is red    t1
 3    blue is not red    colorful
+show create table src;
+Table    Create Table
+src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) ASYNC\n)
 drop table src;

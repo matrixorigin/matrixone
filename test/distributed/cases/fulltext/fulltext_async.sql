@@ -18,4 +18,6 @@ select sleep(30);
 
 select * from src where match(body, title) against('red');
 
+show create table src;
+
 drop table src;
