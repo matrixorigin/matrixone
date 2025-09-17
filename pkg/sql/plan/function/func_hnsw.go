@@ -81,6 +81,21 @@ func hnswCdcUpdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 			logutil.Infof("hnsw_cdc_update: END db=%s, table=%s\n", dbname, tblname)
+		case int32(types.T_array_float64):
+			var cdc vectorindex.VectorIndexCdc[float64]
+			err := json.Unmarshal([]byte(cdcstr), &cdc)
+			if err != nil {
+				return moerr.NewInvalidInput(proc.Ctx, "cdc is not json object")
+			}
+
+			logutil.Infof("hnsw_cdc_update: START db=%s, table=%s\n", dbname, tblname)
+			// hnsw sync
+			//os.Stderr.WriteString(fmt.Sprintf("db=%s, table=%s, dim=%d, json=%s\n", dbname, tblname, dim, cdcstr))
+			err = hnsw.CdcSync[float64](proc, string(dbname), string(tblname), typ, dim, &cdc)
+			if err != nil {
+				return err
+			}
+			logutil.Infof("hnsw_cdc_update: END db=%s, table=%s\n", dbname, tblname)
 		default:
 			return moerr.NewInvalidInput(proc.Ctx, "invalid vector type")
 

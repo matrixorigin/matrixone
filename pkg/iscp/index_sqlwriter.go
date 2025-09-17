@@ -333,23 +333,12 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	return []byte(sql), nil
 }
 
-// Implementation of HNSW Sql writer
-func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
-	w := &HnswSqlWriter[float32]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[float32]()}
+func NewGenericHnswSqlWriter[T types.RealNumbers](algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
 
-	// check the tabledef and indexdef
-	if len(tabledef.Pkey.Names) != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
-	}
-
-	if len(indexdef) != 2 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 2 secondary tables")
-	}
-
+	// get the first indexdef as they are the same
 	idxdef := indexdef[0]
-	if len(idxdef.Parts) != 1 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
-	}
+
+	w := &HnswSqlWriter[T]{tabledef: tabledef, indexdef: indexdef, jobID: jobID, info: info, cdc: vectorindex.NewVectorIndexCdc[T]()}
 
 	paramstr := idxdef.IndexAlgoParams
 	var meta, storage string
@@ -392,10 +381,6 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 		w.partsType[i] = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 	}
 
-	if w.partsType[0].Oid != types.T_array_float32 {
-		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: part is not vecf32")
-	}
-
 	w.srcPos = make([]int32, nparts+1)
 	w.srcType = make([]*types.Type, nparts+1)
 
@@ -419,6 +404,37 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 	}
 
 	return w, nil
+}
+
+// Implementation of HNSW Sql writer
+func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+
+	// check the tabledef and indexdef
+	if len(tabledef.Pkey.Names) != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
+	}
+
+	if len(indexdef) != 2 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 2 secondary tables")
+	}
+
+	idxdef := indexdef[0]
+	if len(idxdef.Parts) != 1 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one vector part")
+	}
+
+	// check vector column type and create IndexSqlWriter
+	vecpos := tabledef.Name2ColIndex[idxdef.Parts[0]]
+	vectype := tabledef.Cols[vecpos].Typ
+
+	switch vectype.Id {
+	case int32(types.T_array_float32):
+		return NewGenericHnswSqlWriter[float32](algo, jobID, info, tabledef, indexdef)
+	case int32(types.T_array_float64):
+		return NewGenericHnswSqlWriter[float64](algo, jobID, info, tabledef, indexdef)
+	default:
+		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: part is not vecf32 or vecf64")
+	}
 }
 
 func (w *HnswSqlWriter[T]) Reset() {
