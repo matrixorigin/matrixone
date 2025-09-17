@@ -144,6 +144,61 @@ func TestGetErrorMsg(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestFlushErrorMsg(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+
+	spec := iscp.JobSpec{}
+	specStr, err := iscp.MarshalJobSpec(&spec)
+	require.NoError(t, err)
+	status := iscp.JobStatus{}
+	statusStr, err := iscp.MarshalJobStatus(&status)
+	require.NoError(t, err)
+	sql := cdc.CDCSQLBuilder.ISCPLogInsertSQL(uint32(accountId), 1, "test", 1, specStr, 2, types.TS{}, statusStr)
+	err = exec_sql(disttaeEngine, ctxWithTimeout, sql)
+	require.NoError(t, err)
+	err = iscp.FlushPermanentErrorMessage(
+		ctx,
+		"",
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		uint32(accountId),
+		1,
+		[]string{"test"},
+		[]uint64{1},
+		[]uint64{1},
+		[]*iscp.JobStatus{{}},
+		types.TS{},
+		"test",
+	)
+	require.NoError(t, err)
+}
+
 func TestChangesHandle1(t *testing.T) {
 	catalog.SetupDefines("")
 
