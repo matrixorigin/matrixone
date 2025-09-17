@@ -558,6 +558,7 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 					zap.String("watermark", watermark),
 					zap.String("commitTS", commitTS.ToString()),
 				)
+				continue
 			}
 			exec.addOrUpdateJob(
 				accountIDs[job.offset],

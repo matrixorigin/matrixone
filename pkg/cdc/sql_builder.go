@@ -315,7 +315,8 @@ const (
 	CDCSelectMOISCPLogSqlTemplate_Idx        = 24
 	CDCSelectMOISCPLogByTableSqlTemplate_Idx = 25
 	CDCUpdateMOISCPLogJobSpecSqlTemplate_Idx = 26
-	CDCGetTableIDTemplate_Idx                = 27
+
+	CDCGetTableIDTemplate_Idx = 27
 
 	CDCSqlTemplateCount = 28
 )
