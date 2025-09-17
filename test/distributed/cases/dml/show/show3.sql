@@ -1,4 +1,3 @@
--- @skip:issue#16438
 set global enable_privilege_cache = off;
 --success
 create table t1 (a int, b int, c int) COMMENT='before cluster by' PARTITION BY hash(a+b) PARTITIONS 2  CLUSTER BY (a,b);

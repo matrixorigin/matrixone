@@ -93,8 +93,8 @@ func newTxnTable(
 	ps := process.GetPartitionService()
 	if ps.Enabled() && item.IsIndexTable() {
 		_, _, r, err := eng.GetRelationById(
-			process.Ctx,
-			process.GetTxnOperator(),
+			ctx,
+			db.op,
 			item.ExtraInfo.ParentTableID,
 		)
 		if err != nil && !strings.Contains(err.Error(), "can not find table by id") {
@@ -114,7 +114,7 @@ func newTxnTable(
 				metadata, err := ps.GetPartitionMetadata(
 					ctx,
 					item.Id,
-					process.GetTxnOperator(),
+					db.op,
 				)
 				if err != nil {
 					return nil, err

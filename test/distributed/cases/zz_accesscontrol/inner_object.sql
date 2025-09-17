@@ -131,7 +131,6 @@ create database sys_db1;
 create table sys_db1.sys_t1(c1 char);
 create view sys_db1.sys_v1  as select * from sys_db1.sys_t1;
 
--- @bvt:issue#16438
 create table sys_db1.test01 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -146,14 +145,12 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
--- @bvt:issue
 
 -- @session:id=3&user=ac_1:admin&password=111
 create database ac_db;
 create table ac_db.ac_t1(c1 int);
 create view ac_db.ac_v1  as select * from ac_db.ac_t1;
 
--- @bvt:issue#16438
 create table ac_db.test02 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -168,13 +165,10 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
--- @bvt:issue
 
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='ac_t1';
 
--- @bvt:issue#16438
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="ac_db" and table_name='test02';
--- @bvt:issue
 
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="sys_db1";
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;
@@ -230,7 +224,6 @@ create database user_db;
 create table user_db.user_t1(c1 int,c2 varchar);
 create view user_db.sysuser_v1  as select * from user_db.user_t1;
 
--- @bvt:issue#16438
 create table user_db.test02 (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -245,13 +238,11 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
--- @bvt:issue
 -- @session
 -- @session:id=5&user=ac_1:ac_user:ac_role&password=123456
 create database acuser_db;
 create table acuser_db.acuser_t1(c1 int,c2 varchar);
 create view acuser_db.acuser_v1  as select * from acuser_db.acuser_t1;
--- @bvt:issue#16438
 create table acuser_db.test (
 emp_no      int             not null,
 birth_date  date            not null,
@@ -266,7 +257,6 @@ partition p02 values less than (200001),
 partition p03 values less than (300001),
 partition p04 values less than (400001)
 );
--- @bvt:issue
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="acuser_db" and table_name='acuser_t1';
 select table_catalog,table_schema,table_name,column_name from information_schema.columns where table_schema="user_db";
 select count(*),table_name, column_name  from information_schema.columns group by table_name, column_name having count(*)>1;

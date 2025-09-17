@@ -17,17 +17,22 @@ package partitionservice
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (s *Service) getMetadataByHashType(
+func (s *Service) getMetadataByKeyType(
 	option *tree.PartitionOption,
 	def *plan.TableDef,
 ) (partition.PartitionMetadata, error) {
-	method := option.PartBy.PType.(*tree.HashType)
+	method := option.PartBy.PType.(*tree.KeyType)
+
+	if len(method.ColumnList) == 0 {
+		return partition.PartitionMetadata{}, moerr.NewNotSupportedNoCtx("none-column is not supported in KEY partition")
+	}
 
 	ctx := tree.NewFmtCtx(
 		dialect.MYSQL,
@@ -36,9 +41,9 @@ func (s *Service) getMetadataByHashType(
 	)
 	method.Format(ctx)
 
-	pm := partition.PartitionMethod_Hash
+	pm := partition.PartitionMethod_Key
 	if method.Linear {
-		pm = partition.PartitionMethod_LinearHash
+		pm = partition.PartitionMethod_LinearKey
 	}
 
 	metadata := partition.PartitionMetadata{

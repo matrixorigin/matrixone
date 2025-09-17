@@ -16,7 +16,6 @@ package partitionservice
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +35,8 @@ type Service struct {
 
 	mu struct {
 		sync.RWMutex
+		// FIXME: MVCC cache instead. Alter table add/drop partition. Or delete cache if main table has ddl while
+		// log tail applied.
 		tables map[uint64]metadataCache
 	}
 }
@@ -58,7 +59,7 @@ func (s *Service) Create(
 	stmt *tree.CreateTable,
 	txnOp client.TxnOperator,
 ) error {
-	if !s.cfg.Enable {
+	if s.cfg.Disable {
 		return nil
 	}
 
@@ -93,7 +94,7 @@ func (s *Service) Delete(
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) error {
-	if !s.cfg.Enable {
+	if s.cfg.Disable {
 		return nil
 	}
 
@@ -138,7 +139,7 @@ func (s *Service) GetPartitionMetadata(
 	tableID uint64,
 	txnOp client.TxnOperator,
 ) (partition.PartitionMetadata, error) {
-	if !s.cfg.Enable {
+	if s.cfg.Disable {
 		return partition.PartitionMetadata{}, nil
 	}
 
@@ -146,7 +147,7 @@ func (s *Service) GetPartitionMetadata(
 }
 
 func (s *Service) Enabled() bool {
-	return s.cfg.Enable
+	return !s.cfg.Disable
 }
 
 func (s *Service) getMetadata(
@@ -164,6 +165,11 @@ func (s *Service) getMetadata(
 	switch method.(type) {
 	case *tree.HashType:
 		return s.getMetadataByHashType(
+			option,
+			def,
+		)
+	case *tree.KeyType:
+		return s.getMetadataByKeyType(
 			option,
 			def,
 		)
@@ -238,7 +244,7 @@ func (s *Service) getManualPartitions(
 			metadata.Partitions,
 			partition.Partition{
 				Name:               p.Name.String(),
-				PartitionTableName: fmt.Sprintf("%s_%s", def.Name, p.Name.String()),
+				PartitionTableName: GetPartitionTableName(def.Name, p.Name.String()),
 				Position:           uint32(i),
 				ExprStr:            applyPartitionComment(p),
 				Expr:               def.Partition.PartitionDefs[i].Def,
@@ -258,4 +264,11 @@ func newMetadataCache(
 	return metadataCache{
 		metadata: metadata,
 	}
+}
+
+func GetPartitionTableName(
+	tableName string,
+	partitionName string,
+) string {
+	return "%!%" + partitionName + "%!%" + tableName
 }

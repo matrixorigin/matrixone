@@ -24,6 +24,7 @@ import (
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_iscp_task,
 }
+
 var upg_mo_iscp_task = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSysDaemonTask,
