@@ -146,9 +146,8 @@ type ISCPTaskExecutor struct {
 	worker Worker
 	wg     sync.WaitGroup
 
-	running    bool
-	runningMu  sync.Mutex
-	jobsToInit []*InitWatermark
+	running   bool
+	runningMu sync.Mutex
 }
 
 // Intra-System Change Propagation Job Entry

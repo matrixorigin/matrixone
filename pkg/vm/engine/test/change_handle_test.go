@@ -3859,7 +3859,7 @@ func TestApplyISCPLog(t *testing.T) {
 }
 
 func TestISCPReplay(t *testing.T) {
-	
+
 	catalog.SetupDefines("")
 
 	// idAllocator := common.NewIdAllocator(1000)
@@ -3893,7 +3893,7 @@ func TestISCPReplay(t *testing.T) {
 	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
 	bats := bat.Split(10)
 	defer bat.Close()
-	
+
 	// append 1 row
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
 	require.Nil(t, err)

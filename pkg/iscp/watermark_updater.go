@@ -33,8 +33,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var specialTS = types.BuildTS(424242, 0)
-
 func MarshalJobSpec(jobSpec *JobSpec) (string, error) {
 	jsonBytes, err := json.Marshal(jobSpec)
 	if err != nil {
@@ -198,7 +196,7 @@ func registerJob(
 	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
 	startTs := types.TS{}
 	if startFromNow {
-		startTs = specialTS
+		startTs = types.TimestampToTS(txn.SnapshotTS())
 	}
 	defer cancel()
 	var tenantId uint32
