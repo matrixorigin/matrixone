@@ -29,6 +29,6 @@ func TestQuantization(t *testing.T) {
 	q, err = QuantizationToUsearch(int32(types.T_array_float64))
 	require.Nil(t, err)
 	require.Equal(t, q, usearch.F64)
-	q, err = QuantizationToUsearch(int32(types.T_varchar))
+	_, err = QuantizationToUsearch(int32(types.T_varchar))
 	require.NotNil(t, err)
 }
