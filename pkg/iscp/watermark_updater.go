@@ -100,14 +100,13 @@ func RegisterJob(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
-	pitr_name string,
 	jobSpec *JobSpec,
 	jobID *JobID,
 	startFromNow bool,
 ) (ok bool, err error) {
 	return ok, retry(
 		func() error {
-			ok, err = registerJob(ctx, cnUUID, txn, pitr_name, jobSpec, jobID, startFromNow)
+			ok, err = registerJob(ctx, cnUUID, txn, jobSpec, jobID, startFromNow)
 			return err
 		},
 		DefaultRetryTimes,
@@ -158,8 +157,8 @@ func unregisterJobsByDBName(
 	if tenantId, err = defines.GetAccountId(ctx); err != nil {
 		return
 	}
-	GetTIDsSql := fmt.Sprintf("SELECT rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s'", tenantId, dbName)
-	result, err := ExecWithResult(ctxWithSysAccount, GetTIDsSql, cnUUID, txn)
+	getTIDsSql := fmt.Sprintf("SELECT rel_id from mo_catalog.mo_tables where account_id = %d and reldatabase = '%s'", tenantId, dbName)
+	result, err := ExecWithResult(ctxWithSysAccount, getTIDsSql, cnUUID, txn)
 	if err != nil {
 		return
 	}
@@ -187,7 +186,6 @@ func registerJob(
 	ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator,
-	pitr_name string,
 	jobSpec *JobSpec,
 	jobID *JobID,
 	startFromNow bool,
@@ -305,6 +303,100 @@ func UnregisterJob(
 		},
 		DefaultRetryTimes,
 	)
+}
+
+func RenameSrcTable(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbID, tbID uint64,
+	oldTableName, newTableName string,
+) (err error) {
+	return retry(
+		func() error {
+			return renameSrcTable(ctx, cnUUID, txn, dbID, tbID, oldTableName, newTableName)
+		},
+		DefaultRetryTimes,
+	)
+}
+
+func renameSrcTable(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	dbID, tableID uint64,
+	oldTableName, newTableName string,
+) (err error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	defer cancel()
+	var tenantId uint32
+	jobNames := make([]string, 0)
+	jobIDs := make([]uint64, 0)
+	defer func() {
+		var logger func(msg string, fields ...zap.Field)
+		if err != nil {
+			logger = logutil.Error
+		} else {
+			logger = logutil.Info
+		}
+		logger(
+			"ISCP-Task rename src table",
+			zap.Uint32("tenantID", tenantId),
+			zap.Uint64("dbID", dbID),
+			zap.Uint64("tableID", tableID),
+			zap.String("oldTableName", oldTableName),
+			zap.String("newTableName", newTableName),
+			zap.Any("jobNames", jobNames),
+			zap.Error(err),
+		)
+	}()
+	if tenantId, err = defines.GetAccountId(ctx); err != nil {
+		return
+	}
+	selectJobSql := fmt.Sprintf("SELECT job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND table_id = %d", tenantId, tableID)
+	result, err := ExecWithResult(ctxWithSysAccount, selectJobSql, cnUUID, txn)
+	defer result.Close()
+	jobSpecStrs := make([]string, 0)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		currentJobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+		for i := 0; i < rows; i++ {
+			jobNames = append(jobNames, cols[0].GetStringAt(i))
+			jobIDs = append(jobIDs, currentJobIDs[i])
+			jobSpecStr := cols[2].GetStringAt(i)
+			var jobSpec *JobSpec
+			jobSpec, err = UnmarshalJobSpec([]byte(jobSpecStr))
+			if err != nil {
+				return false
+			}
+			jobSpec.ConsumerInfo.TableName = newTableName
+			jobSpec.ConsumerInfo.SrcTable.TableName = newTableName
+			var newJobSpecStr string
+			newJobSpecStr, err = MarshalJobSpec(jobSpec)
+			if err != nil {
+				return false
+			}
+			jobSpecStrs = append(jobSpecStrs, newJobSpecStr)
+		}
+		return true
+	})
+	if err != nil {
+		return
+	}
+	for i := 0; i < len(jobNames); i++ {
+		sql := cdc.CDCSQLBuilder.ISCPLogUpdateJobSpecSQL(
+			tenantId,
+			tableID,
+			jobNames[i],
+			jobIDs[i],
+			jobSpecStrs[i])
+		result, err = ExecWithResult(ctxWithSysAccount, sql, cnUUID, txn)
+		if err != nil {
+			return
+		}
+		result.Close()
+	}
+	return
 }
 
 func UpdateJobSpec(
