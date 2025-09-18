@@ -54,6 +54,9 @@ type HnswModel[T types.RealNumbers] struct {
 	Dirty atomic.Bool
 	View  bool
 	Len   atomic.Int64
+
+	// view memory byffer for search
+	buffer []byte
 }
 
 // New HnswModel struct
@@ -106,6 +109,11 @@ func (idx *HnswModel[T]) Destroy() error {
 			}
 		}
 	}
+
+	if idx.buffer != nil {
+		idx.buffer = nil
+	}
+
 	return nil
 }
 
@@ -114,6 +122,11 @@ func (idx *HnswModel[T]) SaveToFile() error {
 
 	if idx.Index == nil {
 		// index is nil. ignore
+		return nil
+	}
+
+	if idx.buffer != nil {
+		// model is in memory buffer. ignore
 		return nil
 	}
 
@@ -351,6 +364,163 @@ func (idx *HnswModel[T]) Contains(key int64) (found bool, err error) {
 		return false, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
 	return idx.Index.Contains(uint64(key))
+}
+
+// load chunk from database
+func (idx *HnswModel[T]) loadChunkFromBuffer(ctx context.Context,
+	proc *process.Process,
+	stream_chan chan executor.Result,
+	error_chan chan error,
+	buffer []byte) (stream_closed bool, err error) {
+	var res executor.Result
+	var ok bool
+
+	select {
+	case res, ok = <-stream_chan:
+		if !ok {
+			return true, nil
+		}
+	case err = <-error_chan:
+		return false, err
+	case <-proc.Ctx.Done():
+		return false, moerr.NewInternalError(proc.Ctx, "context cancelled")
+	case <-ctx.Done():
+		return false, moerr.NewInternalErrorf(ctx, "context cancelled: %v", ctx.Err())
+	}
+
+	bat := res.Batches[0]
+	defer res.Close()
+
+	chunkIds := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+	for i, chunkId := range chunkIds {
+		data := bat.Vecs[1].GetRawBytesAt(i)
+		offset := chunkId * vectorindex.MaxChunkSize
+		copy(buffer[offset:], data)
+	}
+	return false, nil
+}
+
+func (idx *HnswModel[T]) LoadIndexFromBuffer(
+	proc *process.Process,
+	idxcfg vectorindex.IndexConfig,
+	tblcfg vectorindex.IndexTableConfig,
+	nthread int64,
+	view bool) (err error) {
+
+	var (
+		stream_chan = make(chan executor.Result, 2)
+		error_chan  = make(chan error)
+	)
+
+	if idx.Index != nil {
+		// index already loaded. ignore
+		return nil
+	}
+
+	if !view {
+		return moerr.NewInternalError(proc.Ctx, "LoadIndexFromBuffer only enable when view = true")
+	}
+	idx.View = true
+
+	if idx.buffer == nil {
+		// model buffer is nil
+
+		idx.buffer = make([]byte, idx.FileSize)
+		defer func() {
+			if err != nil {
+				// release buffer when error
+				idx.Destroy()
+			}
+		}()
+
+		// run streaming sql
+		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+
+		ctx, cancel := context.WithCancelCause(proc.GetTopContext())
+		defer cancel(nil)
+
+		go func() {
+			_, err2 := runSql_streaming(ctx, proc, sql, stream_chan, error_chan)
+			if err2 != nil {
+				error_chan <- err2
+				return
+			}
+		}()
+
+		// incremental load from database
+		sql_closed := false
+		for !sql_closed {
+			sql_closed, err = idx.loadChunkFromBuffer(ctx, proc, stream_chan, error_chan, idx.buffer)
+			if err != nil {
+				// notify the producer to stop the sql streaming
+				cancel(err)
+				break
+			}
+		}
+
+		// wait for the sql streaming to be closed. make sure all the remaining
+		// results in stream_chan are closed.
+		if !sql_closed {
+			for res := range stream_chan {
+				res.Close()
+			}
+		}
+
+		if err == nil {
+			// fetch potential remaining errors from error_chan
+			select {
+			case err = <-error_chan:
+			default:
+			}
+		}
+
+		if err != nil {
+			return
+		}
+
+	}
+
+	chksum := vectorindex.CheckSumFromBuffer(idx.buffer)
+	if chksum != idx.Checksum {
+		return moerr.NewInternalError(proc.Ctx, "Checksum mismatch with the index file")
+	}
+
+	usearchidx, err := usearch.NewIndex(idxcfg.Usearch)
+	if err != nil {
+		return err
+	}
+
+	err = usearchidx.ChangeThreadsSearch(uint(nthread))
+	if err != nil {
+		return err
+	}
+
+	err = usearchidx.ChangeThreadsAdd(uint(nthread))
+	if err != nil {
+		return err
+	}
+
+	err = usearchidx.ViewBuffer(idx.buffer, uint(idx.FileSize))
+	if err != nil {
+		return err
+	}
+
+	// always get the number of item and capacity when model loaded.
+	idx.Index = usearchidx
+	idxLen, err := idx.Index.Len()
+	if err != nil {
+		return err
+	}
+	idx.Len.Store(int64(idxLen))
+
+	logutil.Debugf("HnswModel.LoadIndex idx %s, len = %d\n", idx.Id, idxLen)
+
+	idx.MaxCapacity, err = idx.Index.Capacity()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // load chunk from database

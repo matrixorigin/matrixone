@@ -207,7 +207,7 @@ func (s *HnswSearch[T]) LoadIndex(proc *process.Process, indexes []*HnswModel[T]
 	var err error
 
 	for _, idx := range indexes {
-		err = idx.LoadIndex(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
+		err = idx.LoadIndexFromBuffer(proc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true)
 		if err != nil {
 			break
 		}

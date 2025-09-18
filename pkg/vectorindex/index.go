@@ -18,6 +18,7 @@ import (
 	"container/heap"
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -38,6 +39,11 @@ func CheckSum(path string) (string, error) {
 	chksum := hex.EncodeToString(h.Sum(nil))
 
 	return chksum, nil
+}
+
+func CheckSumFromBuffer(b []byte) string {
+	chksum := fmt.Sprintf("%x", md5.Sum(b))
+	return chksum
 }
 
 // Priority Queue/Heap structure for getting N-Best results from multiple mini-indexes
