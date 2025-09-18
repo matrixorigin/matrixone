@@ -20,6 +20,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 
@@ -321,6 +322,7 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
+	defer runtime.KeepAlive(vec)
 	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
 }
 
@@ -345,6 +347,7 @@ func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
+	defer runtime.KeepAlive(vec)
 	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
 }
 
@@ -783,5 +786,6 @@ func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, dist
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
+	defer runtime.KeepAlive(query)
 	return idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
 }
