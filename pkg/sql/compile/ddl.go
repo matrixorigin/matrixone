@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -881,6 +882,27 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
+	}
+
+	// post alter table rename -- AlterKind_RenameTable to update iscp job
+	for _, req := range reqs {
+		if req.Kind == api.AlterKind_RenameTable {
+			op, ok := req.Operation.(*api.AlterTableReq_RenameTable)
+			if ok {
+				/*
+					iscp.RenameSrcTable(c.proc.Ctx,
+						c.proc.GetService(),
+						c.proc.GetTxnOperator(),
+						req.DbId,
+						req.TableId,
+						op.RenameTable.OldName,
+						op.RenameTable.NewName)
+				*/
+
+				os.Stderr.WriteString(fmt.Sprintf("Rename Table did %d tid %d, old %s, new %s\n",
+					req.DbId, req.TableId, op.RenameTable.OldName, op.RenameTable.NewName))
+			}
+		}
 	}
 
 	// remove refChildTbls for drop foreign key clause
