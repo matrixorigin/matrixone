@@ -356,6 +356,9 @@ func renameSrcTable(
 	}
 	selectJobSql := fmt.Sprintf("SELECT job_name, job_id, job_spec FROM mo_catalog.mo_iscp_log WHERE account_id = %d AND table_id = %d", tenantId, tableID)
 	result, err := ExecWithResult(ctxWithSysAccount, selectJobSql, cnUUID, txn)
+	if err != nil {
+		return
+	}
 	defer result.Close()
 	jobSpecStrs := make([]string, 0)
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
