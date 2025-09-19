@@ -25,24 +25,31 @@ import (
 )
 
 func (group *Group) shouldSpill() bool {
-	return group.ctr.currentMemUsage > group.SpillThreshold && len(group.ctr.result1.AggList) > 0
+	return group.SpillThreshold > 0 &&
+		group.ctr.currentMemUsage > group.SpillThreshold &&
+		len(group.ctr.result1.AggList) > 0 &&
+		len(group.ctr.result1.ToPopped) > 0
 }
 
 func (group *Group) updateMemoryUsage(proc *process.Process) {
 	usage := int64(0)
+
 	if !group.ctr.hr.IsEmpty() && group.ctr.hr.Hash != nil {
 		usage += int64(group.ctr.hr.Hash.Size())
 	}
+
 	for _, bat := range group.ctr.result1.ToPopped {
 		if bat != nil {
 			usage += int64(bat.Size())
 		}
 	}
+
 	for _, agg := range group.ctr.result1.AggList {
 		if agg != nil {
 			usage += agg.Size()
 		}
 	}
+
 	group.ctr.currentMemUsage = usage
 }
 
@@ -80,15 +87,6 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		groupVecs = make([]*vector.Vector, numGroupByCols)
 		groupVecTypes = make([]types.Type, numGroupByCols)
 
-		cleanupVecs := func() {
-			for i := range groupVecs {
-				if groupVecs[i] != nil {
-					groupVecs[i].Free(proc.Mp())
-					groupVecs[i] = nil
-				}
-			}
-		}
-
 		for i := 0; i < numGroupByCols; i++ {
 			if len(group.ctr.result1.ToPopped[0].Vecs) > i && group.ctr.result1.ToPopped[0].Vecs[i] != nil {
 				vecType := *group.ctr.result1.ToPopped[0].Vecs[i].GetType()
@@ -102,7 +100,11 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 				for i, vec := range bat.Vecs {
 					if i < len(groupVecs) && groupVecs[i] != nil && vec != nil {
 						if err := groupVecs[i].UnionBatch(vec, 0, vec.Length(), nil, proc.Mp()); err != nil {
-							cleanupVecs()
+							for j := range groupVecs {
+								if groupVecs[j] != nil {
+									groupVecs[j].Free(proc.Mp())
+								}
+							}
 							return err
 						}
 					}
@@ -123,8 +125,6 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		spillData.Free(proc.Mp())
 		return err
 	}
-
-	spillData.Free(proc.Mp())
 
 	group.ctr.spilledStates = append(group.ctr.spilledStates, spillID)
 
