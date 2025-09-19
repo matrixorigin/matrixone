@@ -153,6 +153,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
+		u.idxcfg.OpType = u.param.OpType
 		u.idxcfg.Usearch.Metric = metrictype
 
 		if len(u.param.EfConstruction) > 0 {
@@ -209,7 +210,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		dimension := faVec.GetType().Width
 
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
-		u.idxcfg.Type = "hnsw"
+		u.idxcfg.Type = vectorindex.HNSW
 
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
 

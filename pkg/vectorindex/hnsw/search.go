@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -133,6 +134,7 @@ func (s *HnswSearch[T]) Search(proc *process.Process, anyquery any, rt vectorind
 			return nil, nil, moerr.NewInternalError(proc.Ctx, "heap return key is not int64")
 		}
 		reskeys = append(reskeys, sr.Id)
+		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, s.Idxcfg.OpType, s.Idxcfg.Usearch.Metric)
 		resdistances = append(resdistances, sr.Distance)
 	}
 

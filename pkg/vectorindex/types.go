@@ -34,6 +34,11 @@ const (
 )
 
 const (
+	HNSW    = "HNSW"
+	IVFFLAT = "IVFFLAT"
+)
+
+const (
 	CDC_INSERT = "I"
 	CDC_UPSERT = "U"
 	CDC_DELETE = "D"
@@ -91,6 +96,7 @@ type IvfflatIndexConfig struct {
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
 type IndexConfig struct {
 	Type    string
+	OpType  string
 	Usearch usearch.IndexConfig
 	Ivfflat IvfflatIndexConfig
 }
