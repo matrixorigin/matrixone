@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
@@ -46,10 +45,6 @@ func CreateCdcTask(c *Compile, spec *iscp.JobSpec, job *iscp.JobID) (bool, error
 func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
 	logutil.Infof("Delete Index Task %v", job)
 	return UnregisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), job)
-}
-
-func getIndexPitrName(dbname string, tablename string) string {
-	return fmt.Sprintf("__mo_idxpitr_%s_%s", dbname, tablename)
 }
 
 func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
