@@ -9,9 +9,10 @@ from contextlib import asynccontextmanager
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, MoCtlError
+from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, MoCtlError, RestoreError
 from .snapshot import SnapshotManager, SnapshotQueryBuilder, CloneManager, Snapshot, SnapshotLevel
 from .moctl import MoCtlManager
+from .restore import RestoreManager
 
 
 class AsyncResultSet:
@@ -176,6 +177,88 @@ class AsyncCloneManager:
         await self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
 
 
+class AsyncRestoreManager:
+    """Async manager for restore operations"""
+    
+    def __init__(self, client):
+        self.client = client
+    
+    async def restore_cluster(self, snapshot_name: str) -> bool:
+        """Restore entire cluster from snapshot asynchronously"""
+        try:
+            sql = f"RESTORE CLUSTER FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
+            result = await self.client.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}")
+    
+    async def restore_tenant(self, 
+                           snapshot_name: str, 
+                           account_name: str,
+                           to_account: Optional[str] = None) -> bool:
+        """Restore tenant from snapshot asynchronously"""
+        try:
+            if to_account:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
+                      f"TO ACCOUNT {self.client._escape_identifier(to_account)}")
+            else:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}")
+            
+            result = await self.client.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
+    
+    async def restore_database(self, 
+                             snapshot_name: str, 
+                             account_name: str,
+                             database_name: str,
+                             to_account: Optional[str] = None) -> bool:
+        """Restore database from snapshot asynchronously"""
+        try:
+            if to_account:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
+                      f"TO ACCOUNT {self.client._escape_identifier(to_account)}")
+            else:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}")
+            
+            result = await self.client.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}")
+    
+    async def restore_table(self, 
+                          snapshot_name: str, 
+                          account_name: str,
+                          database_name: str,
+                          table_name: str,
+                          to_account: Optional[str] = None) -> bool:
+        """Restore table from snapshot asynchronously"""
+        try:
+            if to_account:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"TABLE {self.client._escape_identifier(table_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
+                      f"TO ACCOUNT {self.client._escape_identifier(to_account)}")
+            else:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"TABLE {self.client._escape_identifier(table_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}")
+            
+            result = await self.client.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}")
+
+
 class AsyncMoCtlManager:
     """Async mo_ctl manager"""
     
@@ -257,6 +340,7 @@ class AsyncClient:
         self._snapshots = AsyncSnapshotManager(self)
         self._clone = AsyncCloneManager(self)
         self._moctl = AsyncMoCtlManager(self)
+        self._restore = AsyncRestoreManager(self)
     
     async def connect(self, 
                      host: str, 
@@ -410,6 +494,11 @@ class AsyncClient:
         """Get async mo_ctl manager"""
         return self._moctl
     
+    @property
+    def restore(self) -> AsyncRestoreManager:
+        """Get async restore manager"""
+        return self._restore
+    
     async def __aenter__(self):
         return self
     
@@ -423,9 +512,10 @@ class AsyncTransactionWrapper:
     def __init__(self, connection, client):
         self.connection = connection
         self.client = client
-        # Create snapshot and clone managers that use this transaction
+        # Create snapshot, clone, and restore managers that use this transaction
         self.snapshots = AsyncTransactionSnapshotManager(client, self)
         self.clone = AsyncTransactionCloneManager(client, self)
+        self.restore = AsyncTransactionRestoreManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None
@@ -527,6 +617,89 @@ class AsyncTransactionSnapshotManager(AsyncSnapshotManager):
     async def delete(self, name: str) -> None:
         """Delete snapshot within transaction asynchronously"""
         return await super().delete(name)
+
+
+class AsyncTransactionRestoreManager(AsyncRestoreManager):
+    """Async restore manager for use within transactions"""
+    
+    def __init__(self, client, transaction_wrapper):
+        super().__init__(client)
+        self.transaction_wrapper = transaction_wrapper
+    
+    async def restore_cluster(self, snapshot_name: str) -> bool:
+        """Restore cluster within transaction asynchronously"""
+        try:
+            sql = f"RESTORE CLUSTER FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
+            result = await self.transaction_wrapper.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}")
+    
+    async def restore_tenant(self, 
+                           snapshot_name: str, 
+                           account_name: str,
+                           to_account: Optional[str] = None) -> bool:
+        """Restore tenant within transaction asynchronously"""
+        try:
+            if to_account:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
+                      f"TO ACCOUNT {self.client._escape_identifier(to_account)}")
+            else:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}")
+            
+            result = await self.transaction_wrapper.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
+    
+    async def restore_database(self, 
+                             snapshot_name: str, 
+                             account_name: str,
+                             database_name: str,
+                             to_account: Optional[str] = None) -> bool:
+        """Restore database within transaction asynchronously"""
+        try:
+            if to_account:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
+                      f"TO ACCOUNT {self.client._escape_identifier(to_account)}")
+            else:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}")
+            
+            result = await self.transaction_wrapper.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}")
+    
+    async def restore_table(self, 
+                          snapshot_name: str, 
+                          account_name: str,
+                          database_name: str,
+                          table_name: str,
+                          to_account: Optional[str] = None) -> bool:
+        """Restore table within transaction asynchronously"""
+        try:
+            if to_account:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"TABLE {self.client._escape_identifier(table_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
+                      f"TO ACCOUNT {self.client._escape_identifier(to_account)}")
+            else:
+                sql = (f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
+                      f"DATABASE {self.client._escape_identifier(database_name)} "
+                      f"TABLE {self.client._escape_identifier(table_name)} "
+                      f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}")
+            
+            result = await self.transaction_wrapper.execute(sql)
+            return result is not None
+        except Exception as e:
+            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}")
 
 
 class AsyncTransactionCloneManager(AsyncCloneManager):

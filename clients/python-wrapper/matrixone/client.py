@@ -8,9 +8,10 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError
+from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, RestoreError
 from .snapshot import SnapshotManager, SnapshotQueryBuilder, CloneManager, Snapshot, SnapshotLevel
 from .moctl import MoCtlManager
+from .restore import RestoreManager, TransactionRestoreManager
 
 
 class Client:
@@ -45,6 +46,7 @@ class Client:
         self._snapshots = SnapshotManager(self)
         self._clone = CloneManager(self)
         self._moctl = MoCtlManager(self)
+        self._restore = RestoreManager(self)
     
     def connect(self, 
                 host: str, 
@@ -373,6 +375,11 @@ class Client:
         """Get mo_ctl manager"""
         return self._moctl
     
+    @property
+    def restore(self) -> RestoreManager:
+        """Get restore manager"""
+        return self._restore
+    
     def __enter__(self):
         return self
     
@@ -431,9 +438,10 @@ class TransactionWrapper:
     def __init__(self, connection, client):
         self.connection = connection
         self.client = client
-        # Create snapshot and clone managers that use this transaction
+        # Create snapshot, clone, and restore managers that use this transaction
         self.snapshots = TransactionSnapshotManager(client, self)
         self.clone = TransactionCloneManager(client, self)
+        self.restore = TransactionRestoreManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None

@@ -15,10 +15,12 @@ from .exceptions import (
     ConfigurationError,
     SnapshotError,
     CloneError,
-    MoCtlError
+    MoCtlError,
+    RestoreError
 )
 from .snapshot import Snapshot, SnapshotManager, SnapshotQueryBuilder, CloneManager, SnapshotLevel
 from .moctl import MoCtlManager
+from .restore import RestoreManager
 
 __version__ = "0.1.0"
 __all__ = [
@@ -32,10 +34,12 @@ __all__ = [
     "SnapshotError",
     "CloneError",
     "MoCtlError",
+    "RestoreError",
     "Snapshot",
     "SnapshotManager",
     "SnapshotQueryBuilder",
     "CloneManager",
     "SnapshotLevel",
-    "MoCtlManager"
+    "MoCtlManager",
+    "RestoreManager"
 ]

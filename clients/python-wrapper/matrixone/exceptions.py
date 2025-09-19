@@ -36,3 +36,8 @@ class CloneError(MatrixOneError):
 class MoCtlError(MatrixOneError):
     """Raised when mo_ctl operations fail"""
     pass
+
+
+class RestoreError(MatrixOneError):
+    """Raised when restore operations fail"""
+    pass
