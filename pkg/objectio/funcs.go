@@ -148,38 +148,49 @@ func ReadOneBlockWithMeta(
 	}
 
 	var filledEntries []fileservice.IOEntry
+	putFillHolder := func(i int, seqnum uint16) {
+		if filledEntries == nil {
+			filledEntries = make([]fileservice.IOEntry, len(seqnums))
+		}
+		filledEntries[i] = fileservice.IOEntry{
+			Size: int64(seqnum), // a marker, it can not be zero
+		}
+	}
+
 	blkmeta := meta.GetBlockMeta(uint32(blk))
 	maxSeqnum := blkmeta.GetMaxSeqnum()
 	for i, seqnum := range seqnums {
 		// special columns
 		if seqnum >= SEQNUM_UPPER {
 			metaColCnt := blkmeta.GetMetaColumnCount()
-			// read appendable block file, the last columns is commits and abort
-			if seqnum == SEQNUM_COMMITTS {
+			switch seqnum {
+			case SEQNUM_COMMITTS:
 				seqnum = metaColCnt - 1
-			} else if seqnum == SEQNUM_ABORT {
+			case SEQNUM_ABORT:
 				panic("not support")
-			} else {
+			default:
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
+			// if the last column is not commits, do not read it
+			//  1. created by cn
+			//  2. old version tn nonappendable block
 			col := blkmeta.ColumnMeta(seqnum)
-			ext := col.Location()
-			ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
-				Offset:      int64(ext.Offset()),
-				Size:        int64(ext.Length()),
-				ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
-			})
+			if col.DataType() != uint8(types.T_TS) {
+				putFillHolder(i, seqnum)
+			} else {
+				ext := col.Location()
+				ioVec.Entries = append(ioVec.Entries, fileservice.IOEntry{
+					Offset:      int64(ext.Offset()),
+					Size:        int64(ext.Length()),
+					ToCacheData: factory(int64(ext.OriginSize()), ext.Alg()),
+				})
+			}
 			continue
 		}
 
 		// need fill vector
 		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
-			if filledEntries == nil {
-				filledEntries = make([]fileservice.IOEntry, len(seqnums))
-			}
-			filledEntries[i] = fileservice.IOEntry{
-				Size: int64(seqnum), // a marker, it can not be zero
-			}
+			putFillHolder(i, seqnum)
 			continue
 		}
 
