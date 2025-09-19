@@ -303,6 +303,10 @@ func (idx *HnswModel[T]) Full() (bool, error) {
 
 // add vector to the index
 func (idx *HnswModel[T]) Add(key int64, vec []T) error {
+	if idx.View {
+		return moerr.NewInternalErrorNoCtx("usearch Add not support when readonly view = true")
+	}
+
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -328,6 +332,10 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 
 // add vector without increment the counter.  concurrency add will increment the counter before Add
 func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
+	if idx.View {
+		return moerr.NewInternalErrorNoCtx("usearch Add not support when readonly view = true")
+	}
+
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -353,6 +361,10 @@ func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 
 // remove key
 func (idx *HnswModel[T]) Remove(key int64) error {
+	if idx.View {
+		return moerr.NewInternalErrorNoCtx("usearch Remove not support when readonly view = true")
+	}
+
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -739,6 +751,10 @@ func (idx *HnswModel[T]) LoadIndex(
 
 // unload
 func (idx *HnswModel[T]) Unload() error {
+	if idx.View {
+		return moerr.NewInternalErrorNoCtx("Unload not support when View = true")
+	}
+
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
