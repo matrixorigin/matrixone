@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -316,6 +317,10 @@ func (s *HnswSearch) Search(
 			return nil, nil, moerr.NewInternalError(proc.Ctx, "heap return key is not int64")
 		}
 		reskeys = append(reskeys, sr.Id)
+		if s.Idxcfg.Usearch.Metric == usearch.L2sq {
+			// distance functino of L2Distance is l2sq so sqrt at the end
+			sr.Distance = math.Sqrt(sr.Distance)
+		}
 		resdistances = append(resdistances, sr.Distance)
 	}
 
