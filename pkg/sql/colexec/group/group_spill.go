@@ -156,12 +156,6 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 		return nil
 	}
 
-	if group.ctr.result1.IsEmpty() {
-		if err := group.ctr.result1.InitWithGroupBy(proc.Mp(), 0, nil, group.ctr.groupByEvaluate.Vec, 0); err != nil {
-			return err
-		}
-	}
-
 	for _, spillID := range group.ctr.spilledStates {
 		spillData, err := group.SpillManager.Retrieve(spillID, proc.Mp())
 		if err != nil {
