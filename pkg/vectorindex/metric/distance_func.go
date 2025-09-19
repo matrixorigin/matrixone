@@ -24,40 +24,13 @@ import (
 )
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	switch any(v1).(type) {
-	case []float32:
-		_v1 := any(v1).([]float32)
-		_v2 := any(v2).([]float32)
-
-		diff := blas32.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float32, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas32.Nrm2(diff)), nil
-
-	case []float64:
-		_v1 := any(v1).([]float64)
-		_v2 := any(v2).([]float64)
-
-		diff := blas64.Vector{
-			N:    len(_v1),
-			Inc:  1,
-			Data: make([]float64, len(_v1)),
-		}
-
-		for i := range _v1 {
-			diff.Data[i] = _v1[i] - _v2[i]
-		}
-		return T(blas64.Nrm2(diff)), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L2Distance type not supported")
+	var sumOfSquares T
+	for i := range v1 {
+		diff := v1[i] - v2[i]
+		sumOfSquares += diff * diff
 	}
 
+	return T(math.Sqrt(float64(sumOfSquares))), nil
 }
 
 func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (T, error) {
