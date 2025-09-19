@@ -26,10 +26,10 @@ import (
 )
 
 /* CDC APIs */
-func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, pitr_name string, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
+func RegisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
 	//dummyurl := "mysql://root:111@127.0.0.1:6001"
 	// sql = fmt.Sprintf("CREATE CDC `%s` '%s' 'indexsync' '%s' '%s.%s' {'Level'='table'};", cdcname, dummyurl, dummyurl, qryDatabase, srctbl)
-	return iscp.RegisterJob(ctx, cnUUID, txn, pitr_name, spec, job, true)
+	return iscp.RegisterJob(ctx, cnUUID, txn, spec, job, true)
 }
 
 func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {
@@ -37,10 +37,10 @@ func UnregisterJob(ctx context.Context, cnUUID string, txn client.TxnOperator, j
 }
 
 /* start here */
-func CreateCdcTask(c *Compile, pitr_name string, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
+func CreateCdcTask(c *Compile, spec *iscp.JobSpec, job *iscp.JobID) (bool, error) {
 	logutil.Infof("Create Index Task %v", spec)
 
-	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), pitr_name, spec, job)
+	return RegisterJob(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator(), spec, job)
 }
 
 func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
@@ -50,32 +50,6 @@ func DeleteCdcTask(c *Compile, job *iscp.JobID) (bool, error) {
 
 func getIndexPitrName(dbname string, tablename string) string {
 	return fmt.Sprintf("__mo_idxpitr_%s_%s", dbname, tablename)
-}
-
-func CreateIndexPitr(c *Compile, dbname string, tablename string) (string, error) {
-	var sql string
-	pitr_name := getIndexPitrName(dbname, tablename)
-	sql = fmt.Sprintf("CREATE PITR IF NOT EXISTS `%s` FOR TABLE `%s` `%s` range 2 'h' INTERNAL;", pitr_name, dbname, tablename)
-	logutil.Infof("Create Index Pitr %s. sql: %s:", pitr_name, sql)
-	err := c.runSql(sql)
-	if err != nil {
-		return pitr_name, err
-	}
-
-	return pitr_name, nil
-}
-
-func DeleteIndexPitr(c *Compile, dbname string, tablename string) error {
-	pitr_name := getIndexPitrName(dbname, tablename)
-	// remove pitr
-	sql := fmt.Sprintf("DROP PITR IF EXISTS `%s` INTERNAL;", pitr_name)
-	logutil.Infof("Delete Index Pitr %s: %s", pitr_name, sql)
-	err := c.runSql(sql)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func checkValidIndexCdcByIndexdef(idx *plan.IndexDef) (bool, error) {
@@ -121,12 +95,6 @@ func checkValidIndexCdc(tableDef *plan.TableDef, indexname string) (bool, error)
 func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname string, sinker_type int8) error {
 	var err error
 
-	// create table pitr if not exists and return pitr_name
-	pitr_name, err := CreateIndexPitr(c, dbname, tablename)
-	if err != nil {
-		return err
-	}
-
 	spec := &iscp.JobSpec{
 		ConsumerInfo: iscp.ConsumerInfo{ConsumerType: sinker_type,
 			DBName:    dbname,
@@ -136,7 +104,7 @@ func CreateIndexCdcTask(c *Compile, dbname string, tablename string, indexname s
 	job := &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(indexname)}
 
 	// create index cdc task
-	ok, err := CreateCdcTask(c, pitr_name, spec, job)
+	ok, err := CreateCdcTask(c, spec, job)
 	if err != nil {
 		return err
 	}
@@ -172,40 +140,12 @@ func DropIndexCdcTask(c *Compile, tableDef *plan.TableDef, dbname string, tablen
 		return err
 	}
 
-	// remove pitr if no index uses the pitr
-	hasCdcIndex := false
-	for _, idx := range tableDef.Indexes {
-		if idx.IndexName == indexname {
-			// skip same index name. don't count
-			continue
-		}
-
-		valid, err := checkValidIndexCdcByIndexdef(idx)
-		if err != nil {
-			return err
-		}
-
-		if valid {
-			hasCdcIndex = true
-			break
-		}
-	}
-
-	if !hasCdcIndex {
-		// remove pitr
-		err = DeleteIndexPitr(c, dbname, tablename)
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 // drop all cdc tasks according to tableDef
 func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, tablename string) error {
 	idxmap := make(map[string]bool)
-	hasindex := false
 	for _, idx := range tabledef.Indexes {
 
 		_, ok := idxmap[idx.IndexName]
@@ -220,17 +160,12 @@ func DropAllIndexCdcTasks(c *Compile, tabledef *plan.TableDef, dbname string, ta
 
 		if valid {
 			idxmap[idx.IndexName] = true
-			hasindex = true
+			//hasindex = true
 			_, e := DeleteCdcTask(c, &iscp.JobID{DBName: dbname, TableName: tablename, JobName: genCdcTaskJobID(idx.IndexName)})
 			if e != nil {
 				return e
 			}
 		}
-	}
-
-	// remove pitr
-	if hasindex {
-		return DeleteIndexPitr(c, dbname, tablename)
 	}
 	return nil
 }
