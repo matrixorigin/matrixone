@@ -150,6 +150,9 @@ func TestModelFromBuffer(t *testing.T) {
 	err = idx.Add(int64(0), fp32a)
 	require.NotNil(t, err)
 
+	err = idx.AddWithoutIncr(int64(0), fp32a)
+	require.NotNil(t, err)
+
 	err = idx.Remove(int64(0))
 	require.NotNil(t, err)
 }
@@ -190,6 +193,9 @@ func TestModelFromFileViewTrue(t *testing.T) {
 	require.NotNil(t, err)
 
 	err = idx.Add(int64(0), fp32a)
+	require.NotNil(t, err)
+
+	err = idx.AddWithoutIncr(int64(0), fp32a)
 	require.NotNil(t, err)
 
 	err = idx.Remove(int64(0))
