@@ -41,3 +41,8 @@ class MoCtlError(MatrixOneError):
 class RestoreError(MatrixOneError):
     """Raised when restore operations fail"""
     pass
+
+
+class PitrError(MatrixOneError):
+    """Raised when PITR operations fail"""
+    pass

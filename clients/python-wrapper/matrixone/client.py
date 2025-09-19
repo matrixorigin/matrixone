@@ -8,10 +8,11 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, RestoreError
+from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, RestoreError, PitrError
 from .snapshot import SnapshotManager, SnapshotQueryBuilder, CloneManager, Snapshot, SnapshotLevel
 from .moctl import MoCtlManager
 from .restore import RestoreManager, TransactionRestoreManager
+from .pitr import PitrManager, TransactionPitrManager
 
 
 class Client:
@@ -47,6 +48,7 @@ class Client:
         self._clone = CloneManager(self)
         self._moctl = MoCtlManager(self)
         self._restore = RestoreManager(self)
+        self._pitr = PitrManager(self)
     
     def connect(self, 
                 host: str, 
@@ -380,6 +382,11 @@ class Client:
         """Get restore manager"""
         return self._restore
     
+    @property
+    def pitr(self) -> PitrManager:
+        """Get PITR manager"""
+        return self._pitr
+    
     def __enter__(self):
         return self
     
@@ -438,10 +445,11 @@ class TransactionWrapper:
     def __init__(self, connection, client):
         self.connection = connection
         self.client = client
-        # Create snapshot, clone, and restore managers that use this transaction
+        # Create snapshot, clone, restore, and PITR managers that use this transaction
         self.snapshots = TransactionSnapshotManager(client, self)
         self.clone = TransactionCloneManager(client, self)
         self.restore = TransactionRestoreManager(client, self)
+        self.pitr = TransactionPitrManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None
