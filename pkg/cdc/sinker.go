@@ -109,17 +109,20 @@ var NewSinker = func(
 		dbTblInfo.IdChanged = false
 	}
 	// create table
-	newTableDef := *tableDef
-	newTableDef.DbName = dbTblInfo.SinkDbName
-	newTableDef.Name = dbTblInfo.SinkTblName
-	newTableDef.Fkeys = nil
-	newTableDef.Partition = nil
-	if newTableDef.TableType == catalog.SystemClusterRel {
-		return nil, moerr.NewInternalErrorNoCtx("cluster table is not supported")
-	}
-	createSql, _, err := plan.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
-	if err != nil {
-		return nil, err
+	var createSql string
+	if tableDef != nil {
+		newTableDef := *tableDef
+		newTableDef.DbName = dbTblInfo.SinkDbName
+		newTableDef.Name = dbTblInfo.SinkTblName
+		newTableDef.Fkeys = nil
+		newTableDef.Partition = nil
+		if newTableDef.TableType == catalog.SystemClusterRel {
+			return nil, moerr.NewInternalErrorNoCtx("cluster table is not supported")
+		}
+		createSql, _, err = plan.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 	err = sink.Send(ctx, ar, []byte(padding+createSql), false)
 	if err != nil {
