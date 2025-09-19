@@ -8,11 +8,13 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, RestoreError, PitrError
+from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, RestoreError, PitrError, PubSubError
 from .snapshot import SnapshotManager, SnapshotQueryBuilder, CloneManager, Snapshot, SnapshotLevel
 from .moctl import MoCtlManager
 from .restore import RestoreManager, TransactionRestoreManager
 from .pitr import PitrManager, TransactionPitrManager
+from .pubsub import PubSubManager, TransactionPubSubManager
+from .account import AccountManager, TransactionAccountManager
 
 
 class Client:
@@ -49,6 +51,8 @@ class Client:
         self._moctl = MoCtlManager(self)
         self._restore = RestoreManager(self)
         self._pitr = PitrManager(self)
+        self._pubsub = PubSubManager(self)
+        self._account = AccountManager(self)
     
     def connect(self, 
                 host: str, 
@@ -110,6 +114,14 @@ class Client:
         if self._engine:
             self._engine.dispose()
             self._engine = None
+    
+    def _escape_identifier(self, identifier: str) -> str:
+        """Escapes an identifier to prevent SQL injection."""
+        return f"`{identifier}`"
+    
+    def _escape_string(self, value: str) -> str:
+        """Escapes a string value for SQL queries."""
+        return f"'{value}'"
     
     def execute(self, sql: str, params: Optional[Tuple] = None) -> 'ResultSet':
         """
@@ -387,6 +399,16 @@ class Client:
         """Get PITR manager"""
         return self._pitr
     
+    @property
+    def pubsub(self) -> PubSubManager:
+        """Get publish-subscribe manager"""
+        return self._pubsub
+    
+    @property
+    def account(self) -> AccountManager:
+        """Get account manager"""
+        return self._account
+    
     def __enter__(self):
         return self
     
@@ -445,11 +467,13 @@ class TransactionWrapper:
     def __init__(self, connection, client):
         self.connection = connection
         self.client = client
-        # Create snapshot, clone, restore, and PITR managers that use this transaction
+        # Create snapshot, clone, restore, PITR, pubsub, and account managers that use this transaction
         self.snapshots = TransactionSnapshotManager(client, self)
         self.clone = TransactionCloneManager(client, self)
         self.restore = TransactionRestoreManager(client, self)
         self.pitr = TransactionPitrManager(client, self)
+        self.pubsub = TransactionPubSubManager(client, self)
+        self.account = TransactionAccountManager(self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None

@@ -46,3 +46,13 @@ class RestoreError(MatrixOneError):
 class PitrError(MatrixOneError):
     """Raised when PITR operations fail"""
     pass
+
+
+class PubSubError(MatrixOneError):
+    """Raised when publish-subscribe operations fail"""
+    pass
+
+
+class AccountError(MatrixOneError):
+    """Raised when account management operations fail"""
+    pass

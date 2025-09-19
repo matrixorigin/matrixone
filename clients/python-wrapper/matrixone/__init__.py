@@ -17,12 +17,16 @@ from .exceptions import (
     CloneError,
     MoCtlError,
     RestoreError,
-    PitrError
+    PitrError,
+    PubSubError,
+    AccountError
 )
 from .snapshot import Snapshot, SnapshotManager, SnapshotQueryBuilder, CloneManager, SnapshotLevel
 from .moctl import MoCtlManager
 from .restore import RestoreManager
 from .pitr import PitrManager, Pitr
+from .pubsub import PubSubManager, Publication, Subscription
+from .account import AccountManager, Account, User, Role, Grant, TransactionAccountManager
 
 __version__ = "0.1.0"
 __all__ = [
@@ -38,6 +42,7 @@ __all__ = [
     "MoCtlError",
     "RestoreError",
     "PitrError",
+    "PubSubError",
     "Snapshot",
     "SnapshotManager",
     "SnapshotQueryBuilder",
@@ -46,5 +51,15 @@ __all__ = [
     "MoCtlManager",
     "RestoreManager",
     "PitrManager",
-    "Pitr"
+    "Pitr",
+    "PubSubManager",
+    "Publication",
+    "Subscription",
+    "AccountError",
+    "AccountManager",
+    "Account",
+    "User",
+    "Role",
+    "Grant",
+    "TransactionAccountManager"
 ]
