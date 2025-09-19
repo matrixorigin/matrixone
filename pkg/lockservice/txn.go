@@ -47,6 +47,9 @@ type activeTxn struct {
 	lockHolders    map[uint32]*tableLockHolder
 	remoteService  string
 	deadlockFound  bool
+
+	// test-only hook: called before lockAdded; return non-nil to abort
+	beforeLockAdded func(txnID []byte, locks [][]byte) error
 }
 
 func newActiveTxn(
@@ -96,6 +99,12 @@ func (txn *activeTxn) lockAdded(
 	locks [][]byte,
 	logger *log.MOLogger,
 ) error {
+
+	if txn.beforeLockAdded != nil {
+		if err := txn.beforeLockAdded(txn.txnID, locks); err != nil {
+			return err
+		}
+	}
 
 	// only in the lockservice node where the transaction was
 	// initiated will it be holds all locks. A remote transaction
