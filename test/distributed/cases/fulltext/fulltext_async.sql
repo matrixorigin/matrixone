@@ -20,4 +20,6 @@ select * from src where match(body, title) against('red');
 
 show create table src;
 
-drop table src;
+alter table src rename to src1;
+
+drop table src1;

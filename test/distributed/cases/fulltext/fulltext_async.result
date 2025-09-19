@@ -19,4 +19,5 @@ id    body    title
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`) ASYNC\n)
-drop table src;
+alter table src rename to src1;
+drop table src1;
