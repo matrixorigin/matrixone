@@ -17,6 +17,7 @@ package ivfflat
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -353,6 +354,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			return
 		}
 		resid = append(resid, sr.Id)
+		if metric.MetricType(idxcfg.Ivfflat.Metric) == metric.Metric_L2Distance {
+			// distance functino of L2Distance is l2sq so sqrt at the end
+			sr.Distance = math.Sqrt(sr.Distance)
+		}
 		distances = append(distances, sr.Distance)
 	}
 
