@@ -353,6 +353,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			return
 		}
 		resid = append(resid, sr.Id)
+		sr.Distance = metric.DistanceTransformIvfflat(sr.Distance, idxcfg.OpType, metric.MetricType(idxcfg.Ivfflat.Metric))
 		distances = append(distances, sr.Distance)
 	}
 

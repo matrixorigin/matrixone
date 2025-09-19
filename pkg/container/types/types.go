@@ -557,6 +557,10 @@ func (t Type) DescString() string {
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
 	case T_decimal128:
 		return fmt.Sprintf("DECIMAL(%d,%d)", t.Width, t.Scale)
+	case T_array_float32:
+		return fmt.Sprintf("VECF32(%d)", t.Width)
+	case T_array_float64:
+		return fmt.Sprintf("VECF64(%d)", t.Width)
 	}
 	return t.Oid.String()
 }
