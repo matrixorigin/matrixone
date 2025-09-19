@@ -37,6 +37,20 @@ import (
 	"github.com/tidwall/btree"
 )
 
+func mockTableDef() *plan.TableDef {
+	return &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{
+				Name: "pk",
+				Typ:  plan.Type{Id: int32(types.T_uint64)},
+				Default: &plan.Default{
+					NullAbility: false,
+				},
+			},
+		},
+	}
+}
+
 func TestNewSinker(t *testing.T) {
 	type args struct {
 		sinkUri          UriInfo
@@ -62,7 +76,7 @@ func TestNewSinker(t *testing.T) {
 				},
 				dbTblInfo:        &DbTableInfo{},
 				watermarkUpdater: nil,
-				tableDef:         nil,
+				tableDef:         mockTableDef(),
 				retryTimes:       0,
 				retryDuration:    0,
 				ar:               NewCdcActiveRoutine(),
@@ -82,7 +96,7 @@ func TestNewSinker(t *testing.T) {
 					SourceCreateSql: "create table t1 (a int, b int, c int)",
 				},
 				watermarkUpdater: nil,
-				tableDef:         nil,
+				tableDef:         mockTableDef(),
 				retryTimes:       0,
 				retryDuration:    0,
 				ar:               NewCdcActiveRoutine(),
@@ -100,7 +114,7 @@ func TestNewSinker(t *testing.T) {
 					IdChanged:       true,
 				},
 				watermarkUpdater: nil,
-				tableDef:         nil,
+				tableDef:         mockTableDef(),
 				retryTimes:       0,
 				retryDuration:    0,
 				ar:               NewCdcActiveRoutine(),

@@ -32,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/mysql"
 )
@@ -109,19 +109,21 @@ var NewSinker = func(
 		dbTblInfo.IdChanged = false
 	}
 	// create table
-	createSql := strings.TrimSpace(dbTblInfo.SourceCreateSql)
-	if len(createSql) < len(createTableIfNotExists) || !strings.EqualFold(createSql[:len(createTableIfNotExists)], createTableIfNotExists) {
-		createSql = createTableIfNotExists + createSql[len(createTable):]
+	var createSql string
+	if tableDef != nil {
+		newTableDef := *tableDef
+		newTableDef.DbName = dbTblInfo.SinkDbName
+		newTableDef.Name = dbTblInfo.SinkTblName
+		newTableDef.Fkeys = nil
+		newTableDef.Partition = nil
+		if newTableDef.TableType == catalog.SystemClusterRel {
+			return nil, moerr.NewInternalErrorNoCtx("cluster table is not supported")
+		}
+		createSql, _, err = plan.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
-	tableStart := len(createTableIfNotExists)
-	tableEnd := strings.Index(createSql, "(")
-	newTablePart := ""
-	if dbTblInfo.SinkDbName != "" {
-		newTablePart = dbTblInfo.SinkDbName + "." + dbTblInfo.SinkTblName
-	} else {
-		newTablePart = dbTblInfo.SinkTblName
-	}
-	createSql = createSql[:tableStart] + " " + newTablePart + createSql[tableEnd:]
 	err = sink.Send(ctx, ar, []byte(padding+createSql), false)
 	if err != nil {
 		return nil, err
