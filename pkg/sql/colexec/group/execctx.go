@@ -49,7 +49,7 @@ func (hr *ResHashRelated) BuildHashTable(
 	}
 
 	if isStrHash {
-		h, err := hashmap.NewStrHashMap(keyNullable)
+		h, err := hashmap.NewStrMap(keyNullable)
 		if err != nil {
 			return err
 		}

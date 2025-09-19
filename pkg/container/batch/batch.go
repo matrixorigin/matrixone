@@ -414,7 +414,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 
 	for i, vec := range bat.Vecs {
 		if vec != nil {
-			bat.SetVector(int32(i), nil)
+			bat.ReplaceVector(vec, nil, i)
 			vec.Free(m)
 		}
 	}

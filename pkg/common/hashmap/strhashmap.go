@@ -31,7 +31,7 @@ func init() {
 	}
 }
 
-func NewStrHashMap(hasNull bool) (*StrHashMap, error) {
+func NewStrMap(hasNull bool) (*StrHashMap, error) {
 	mp := &hashtable.StringHashMap{}
 	if err := mp.Init(nil); err != nil {
 		return nil, err
