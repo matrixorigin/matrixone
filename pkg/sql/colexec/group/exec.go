@@ -68,7 +68,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		group.SpillManager = NewMemorySpillManager()
 	}
 	if group.SpillThreshold <= 0 {
-		group.SpillThreshold = 128 * 1024 * 1024
+		group.SpillThreshold = 64 * 1024 * 1024
 	}
 
 	return group.PrepareProjection(proc)

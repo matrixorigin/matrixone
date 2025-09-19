@@ -169,11 +169,11 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 		}
 
 		if err = group.restoreAndMergeSpilledAggregators(proc, spillState); err != nil {
-			spillData.Free(proc.Mp())
+			spillState.Free(proc.Mp())
 			return err
 		}
 
-		spillData.Free(proc.Mp())
+		spillState.Free(proc.Mp())
 		if err = group.SpillManager.Delete(spillID); err != nil {
 			return err
 		}
@@ -210,11 +210,13 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 				return err
 			}
 
-			aggExpr := group.Aggs[i]
-			if config := aggExpr.GetExtraConfig(); config != nil {
-				if err = agg.SetExtraInformation(config, 0); err != nil {
-					agg.Free()
-					return err
+			if i < len(group.Aggs) {
+				aggExpr := group.Aggs[i]
+				if config := aggExpr.GetExtraConfig(); config != nil {
+					if err = agg.SetExtraInformation(config, 0); err != nil {
+						agg.Free()
+						return err
+					}
 				}
 			}
 
@@ -237,7 +239,6 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 				}
 
 				bat := getInitialBatchWithSameTypeVecs(spillState.GroupVectors)
-				success := true
 				for i, vec := range spillState.GroupVectors {
 					if vec != nil && i < len(bat.Vecs) {
 						if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
@@ -249,10 +250,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 						}
 					}
 				}
-				if success {
-					bat.SetRowCount(size)
-					batchesToAdd = append(batchesToAdd, bat)
-				}
+				bat.SetRowCount(size)
+				batchesToAdd = append(batchesToAdd, bat)
 			}
 			group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, batchesToAdd...)
 		}
@@ -287,11 +286,13 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			return err
 		}
 
-		aggExpr := group.Aggs[i]
-		if config := aggExpr.GetExtraConfig(); config != nil {
-			if err = agg.SetExtraInformation(config, 0); err != nil {
-				agg.Free()
-				return err
+		if i < len(group.Aggs) {
+			aggExpr := group.Aggs[i]
+			if config := aggExpr.GetExtraConfig(); config != nil {
+				if err = agg.SetExtraInformation(config, 0); err != nil {
+					agg.Free()
+					return err
+				}
 			}
 		}
 
@@ -337,7 +338,6 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			}
 
 			bat := getInitialBatchWithSameTypeVecs(spillState.GroupVectors)
-			success := true
 			for i, vec := range spillState.GroupVectors {
 				if vec != nil && i < len(bat.Vecs) {
 					if err := bat.Vecs[i].UnionBatch(vec, int64(offset), size, nil, proc.Mp()); err != nil {
@@ -349,10 +349,8 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 					}
 				}
 			}
-			if success {
-				bat.SetRowCount(size)
-				batchesToAdd = append(batchesToAdd, bat)
-			}
+			bat.SetRowCount(size)
+			batchesToAdd = append(batchesToAdd, bat)
 		}
 		group.ctr.result1.ToPopped = append(group.ctr.result1.ToPopped, batchesToAdd...)
 	}
