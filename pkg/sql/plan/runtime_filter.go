@@ -54,11 +54,8 @@ func GetInFilterCardLimitOnPK(
 
 func mustRuntimeFilter(n *plan.Node) bool {
 	switch n.JoinType {
-	case plan.Node_INDEX:
+	case plan.Node_INDEX, plan.Node_DEDUP:
 		return true
-
-	case plan.Node_DEDUP:
-		return !n.IsRightJoin
 	}
 	return false
 }
@@ -96,11 +93,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	if node.JoinType == plan.Node_ANTI && !node.IsRightJoin {
-		return
-	}
-
-	if node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+	if node.JoinType == plan.Node_ANTI && !node.BuildOnLeft {
 		return
 	}
 

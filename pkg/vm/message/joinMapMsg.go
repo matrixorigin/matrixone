@@ -200,13 +200,6 @@ func (jm *JoinMap) Size() int64 {
 	}
 }
 
-func (jm *JoinMap) PreAlloc(n uint64) error {
-	if jm.ihm != nil {
-		return jm.ihm.PreAlloc(n)
-	}
-	return jm.shm.PreAlloc(n)
-}
-
 type JoinMapMsg struct {
 	JoinMapPtr *JoinMap
 	IsShuffle  bool

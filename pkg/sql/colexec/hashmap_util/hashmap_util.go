@@ -215,7 +215,7 @@ func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, nee
 		}
 		itr = hb.IntHashMap.NewIterator()
 	} else {
-		if hb.StrHashMap, err = hashmap.NewStrHashMap(false); err != nil {
+		if hb.StrHashMap, err = hashmap.NewStrMap(false); err != nil {
 			return err
 		}
 		itr = hb.StrHashMap.NewIterator()
