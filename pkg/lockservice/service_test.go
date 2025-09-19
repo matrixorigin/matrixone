@@ -4201,9 +4201,9 @@ func TestLeakWaiterForErr(t *testing.T) {
 			_ = os.Setenv("mo_reuse_enable_checker", "true")
 
 			tableID := uint64(20)
-			row8 := [][]byte{[]byte{8}}
-			row5 := [][]byte{[]byte{5}}
-			row2 := [][]byte{[]byte{2}}
+			row8 := [][]byte{{8}}
+			row5 := [][]byte{{5}}
+			row2 := [][]byte{{2}}
 			rng19 := newTestRows(1, 9)
 
 			txn1 := []byte("rt1")
