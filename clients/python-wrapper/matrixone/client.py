@@ -46,6 +46,7 @@ class Client:
         self._connection = None
         self._engine = None
         self._connection_params = {}
+        self._login_info = None
         self._snapshots = SnapshotManager(self)
         self._clone = CloneManager(self)
         self._moctl = MoCtlManager(self)
@@ -63,25 +64,35 @@ class Client:
                 ssl_mode: str = "preferred",
                 ssl_ca: Optional[str] = None,
                 ssl_cert: Optional[str] = None,
-                ssl_key: Optional[str] = None) -> None:
+                ssl_key: Optional[str] = None,
+                account: Optional[str] = None,
+                role: Optional[str] = None) -> None:
         """
         Connect to MatrixOne database
         
         Args:
             host: Database host
             port: Database port
-            user: Username
+            user: Username or login info in format "user", "account#user", or "account#user#role"
             password: Password
             database: Database name
             ssl_mode: SSL mode (disabled, preferred, required)
             ssl_ca: SSL CA certificate path
             ssl_cert: SSL client certificate path
             ssl_key: SSL client key path
+            account: Optional account name (will be combined with user if user doesn't contain '#')
+            role: Optional role name (will be combined with user if user doesn't contain '#')
         """
+        # Build final login info based on user parameter and optional account/role
+        final_user, parsed_info = self._build_login_info(user, account, role)
+        
+        # Store parsed info for later use
+        self._login_info = parsed_info
+        
         self._connection_params = {
             'host': host,
             'port': port,
-            'user': user,
+            'user': final_user,
             'password': password,
             'database': database,
             'charset': self.charset,
@@ -115,6 +126,11 @@ class Client:
             self._engine.dispose()
             self._engine = None
     
+    def get_login_info(self) -> Optional[dict]:
+        """Get parsed login information"""
+        return self._login_info
+    
+    
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
         return f"`{identifier}`"
@@ -122,6 +138,75 @@ class Client:
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
+    
+    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+        """
+        Build final login info based on user parameter and optional account/role
+        
+        Args:
+            user: Username or login info in format "user", "account#user", or "account#user#role"
+            account: Optional account name
+            role: Optional role name
+            
+        Returns:
+            tuple: (final_user_string, parsed_info_dict)
+            
+        Rules:
+        1. If user contains '#', it's already in format "account#user" or "account#user#role"
+           - If account or role is also provided, raise error (conflict)
+        2. If user doesn't contain '#', combine with optional account/role:
+           - No account/role: use user as-is
+           - Only role: use "sys#user#role"
+           - Only account: use "account#user"
+           - Both: use "account#user#role"
+        """
+        # Check if user already contains login format
+        if '#' in user:
+            # User is already in format "account#user" or "account#user#role"
+            if account is not None or role is not None:
+                raise ValueError(f"Conflict: user parameter '{user}' already contains account/role info, "
+                               f"but account='{account}' and role='{role}' are also provided. "
+                               f"Use either user format or separate account/role parameters, not both.")
+            
+            # Parse the existing format
+            parts = user.split('#')
+            if len(parts) == 2:
+                # "account#user" format
+                final_account, final_user, final_role = parts[0], parts[1], None
+            elif len(parts) == 3:
+                # "account#user#role" format
+                final_account, final_user, final_role = parts[0], parts[1], parts[2]
+            else:
+                raise ValueError(f"Invalid user format: '{user}'. Expected 'user', 'account#user', or 'account#user#role'")
+            
+            final_user_string = user
+            
+        else:
+            # User is just a username, combine with optional account/role
+            if account is None and role is None:
+                # No account/role provided, use user as-is
+                final_account, final_user, final_role = "sys", user, None
+                final_user_string = user
+            elif account is None and role is not None:
+                # Only role provided, use sys account
+                final_account, final_user, final_role = "sys", user, role
+                final_user_string = f"sys#{user}#{role}"
+            elif account is not None and role is None:
+                # Only account provided, no role
+                final_account, final_user, final_role = account, user, None
+                final_user_string = f"{account}#{user}"
+            else:
+                # Both account and role provided
+                final_account, final_user, final_role = account, user, role
+                final_user_string = f"{account}#{user}#{role}"
+        
+        parsed_info = {
+            'account': final_account,
+            'user': final_user,
+            'role': final_role
+        }
+        
+        return final_user_string, parsed_info
     
     def execute(self, sql: str, params: Optional[Tuple] = None) -> 'ResultSet':
         """

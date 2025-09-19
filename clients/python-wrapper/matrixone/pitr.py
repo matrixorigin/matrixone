@@ -210,7 +210,7 @@ class PitrManager:
             
             sql = (f"CREATE PITR {self._client._escape_identifier(name)} "
                    f"FOR TABLE {self._client._escape_identifier(database_name)} "
-                   f"TABLE {self._client._escape_identifier(table_name)} "
+                   f"{self._client._escape_identifier(table_name)} "
                    f"RANGE {range_value} '{range_unit}'")
             
             result = self._client.execute(sql)

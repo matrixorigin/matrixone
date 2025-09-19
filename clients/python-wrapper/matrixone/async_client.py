@@ -92,34 +92,55 @@ class AsyncSnapshotManager:
     
     async def get(self, name: str) -> Snapshot:
         """Get snapshot asynchronously"""
-        sql = "SELECT name, level, created_at, database_name, table_name, description FROM mo_snapshots WHERE name = %s"
+        # Use mo_catalog.mo_snapshots table like sync client
+        sql = """
+            SELECT sname, ts, level, account_name, database_name, table_name
+            FROM mo_catalog.mo_snapshots
+            WHERE sname = %s
+        """
         result = await self.client.execute(sql, (name,))
         
         if not result.rows:
             raise SnapshotError(f"Snapshot '{name}' not found")
         
         row = result.rows[0]
-        # Convert level string to enum
-        try:
-            level = SnapshotLevel(row[1].lower())
-        except ValueError:
-            level = row[1]  # Fallback to string for backward compatibility
+        # Convert timestamp to datetime
+        from datetime import datetime
+        timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
         
-        return Snapshot(row[0], level, row[2], row[3], row[4], row[5])
+        # Convert level string to enum
+        level_str = row[2]
+        try:
+            level = SnapshotLevel(level_str.lower())
+        except ValueError:
+            level = level_str  # Fallback to string for backward compatibility
+        
+        return Snapshot(row[0], level, timestamp, row[4], row[5], None)
     
     async def list(self) -> List[Snapshot]:
         """List all snapshots asynchronously"""
-        sql = "SELECT name, level, created_at, database_name, table_name, description FROM mo_snapshots ORDER BY created_at DESC"
+        # Use mo_catalog.mo_snapshots table like sync client
+        sql = """
+            SELECT sname, ts, level, account_name, database_name, table_name
+            FROM mo_catalog.mo_snapshots
+            ORDER BY ts DESC
+        """
         result = await self.client.execute(sql)
         
         snapshots = []
         for row in result.rows:
-            try:
-                level = SnapshotLevel(row[1].lower())
-            except ValueError:
-                level = row[1]  # Fallback to string for backward compatibility
+            # Convert timestamp to datetime
+            from datetime import datetime
+            timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
             
-            snapshots.append(Snapshot(row[0], level, row[2], row[3], row[4], row[5]))
+            # Convert level string to enum
+            level_str = row[2]
+            try:
+                level = SnapshotLevel(level_str.lower())
+            except ValueError:
+                level = level_str  # Fallback to string for backward compatibility
+            
+            snapshots.append(Snapshot(row[0], level, timestamp, row[4], row[5], None))
         
         return snapshots
     
@@ -501,7 +522,7 @@ class AsyncPitrManager:
             
             sql = (f"CREATE PITR {self.client._escape_identifier(name)} "
                    f"FOR TABLE {self.client._escape_identifier(database_name)} "
-                   f"TABLE {self.client._escape_identifier(table_name)} "
+                   f"{self.client._escape_identifier(table_name)} "
                    f"RANGE {range_value} '{range_unit}'")
             
             result = await self.client.execute(sql)
@@ -1043,6 +1064,7 @@ class AsyncClient:
         
         self._connection = None
         self._connection_params = {}
+        self._login_info = None
         self._snapshots = AsyncSnapshotManager(self)
         self._clone = AsyncCloneManager(self)
         self._moctl = AsyncMoCtlManager(self)
@@ -1056,22 +1078,32 @@ class AsyncClient:
                      port: int, 
                      user: str, 
                      password: str, 
-                     database: str = None):
+                     database: str = None,
+                     account: Optional[str] = None,
+                     role: Optional[str] = None):
         """
         Connect to MatrixOne database asynchronously
         
         Args:
             host: Database host
             port: Database port
-            user: Username
+            user: Username or login info in format "user", "account#user", or "account#user#role"
             password: Password
             database: Database name
+            account: Optional account name (will be combined with user if user doesn't contain '#')
+            role: Optional role name (will be combined with user if user doesn't contain '#')
         """
         try:
+            # Build final login info based on user parameter and optional account/role
+            final_user, parsed_info = self._build_login_info(user, account, role)
+            
+            # Store parsed info for later use
+            self._login_info = parsed_info
+            
             self._connection_params = {
                 'host': host,
                 'port': port,
-                'user': user,
+                'user': final_user,
                 'password': password,
                 'db': database,  # aiomysql uses 'db' instead of 'database'
                 'charset': self.charset,
@@ -1094,6 +1126,80 @@ class AsyncClient:
             elif hasattr(self._connection, 'ensure_closed'):
                 await self._connection.ensure_closed()
             self._connection = None
+    
+    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+        """
+        Build final login info based on user parameter and optional account/role
+        
+        Args:
+            user: Username or login info in format "user", "account#user", or "account#user#role"
+            account: Optional account name
+            role: Optional role name
+            
+        Returns:
+            tuple: (final_user_string, parsed_info_dict)
+            
+        Rules:
+        1. If user contains '#', it's already in format "account#user" or "account#user#role"
+           - If account or role is also provided, raise error (conflict)
+        2. If user doesn't contain '#', combine with optional account/role:
+           - No account/role: use user as-is
+           - Only role: use "sys#user#role"
+           - Only account: use "account#user"
+           - Both: use "account#user#role"
+        """
+        # Check if user already contains login format
+        if '#' in user:
+            # User is already in format "account#user" or "account#user#role"
+            if account is not None or role is not None:
+                raise ValueError(f"Conflict: user parameter '{user}' already contains account/role info, "
+                               f"but account='{account}' and role='{role}' are also provided. "
+                               f"Use either user format or separate account/role parameters, not both.")
+            
+            # Parse the existing format
+            parts = user.split('#')
+            if len(parts) == 2:
+                # "account#user" format
+                final_account, final_user, final_role = parts[0], parts[1], None
+            elif len(parts) == 3:
+                # "account#user#role" format
+                final_account, final_user, final_role = parts[0], parts[1], parts[2]
+            else:
+                raise ValueError(f"Invalid user format: '{user}'. Expected 'user', 'account#user', or 'account#user#role'")
+            
+            final_user_string = user
+            
+        else:
+            # User is just a username, combine with optional account/role
+            if account is None and role is None:
+                # No account/role provided, use user as-is
+                final_account, final_user, final_role = "sys", user, None
+                final_user_string = user
+            elif account is None and role is not None:
+                # Only role provided, use sys account
+                final_account, final_user, final_role = "sys", user, role
+                final_user_string = f"sys#{user}#{role}"
+            elif account is not None and role is None:
+                # Only account provided, no role
+                final_account, final_user, final_role = account, user, None
+                final_user_string = f"{account}#{user}"
+            else:
+                # Both account and role provided
+                final_account, final_user, final_role = account, user, role
+                final_user_string = f"{account}#{user}#{role}"
+        
+        parsed_info = {
+            'account': final_account,
+            'user': final_user,
+            'role': final_role
+        }
+        
+        return final_user_string, parsed_info
+    
+    def get_login_info(self) -> Optional[dict]:
+        """Get parsed login information"""
+        return self._login_info
+    
     
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
@@ -1635,7 +1741,7 @@ class AsyncTransactionPitrManager(AsyncPitrManager):
             
             sql = (f"CREATE PITR {self.client._escape_identifier(name)} "
                    f"FOR TABLE {self.client._escape_identifier(database_name)} "
-                   f"TABLE {self.client._escape_identifier(table_name)} "
+                   f"{self.client._escape_identifier(table_name)} "
                    f"RANGE {range_value} '{range_unit}'")
             
             result = await self.transaction_wrapper.execute(sql)

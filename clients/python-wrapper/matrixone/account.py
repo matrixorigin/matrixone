@@ -129,10 +129,21 @@ class AccountManager:
         except Exception as e:
             raise AccountError(f"Failed to create account '{account_name}': {e}")
     
-    def drop_account(self, account_name: str) -> None:
-        """Drop an account"""
+    def drop_account(self, account_name: str, if_exists: bool = False) -> None:
+        """
+        Drop an account
+        
+        Args:
+            account_name: Name of the account to drop
+            if_exists: If True, add IF EXISTS clause to avoid errors when account doesn't exist
+        """
         try:
-            sql = f"DROP ACCOUNT {self._client._escape_identifier(account_name)}"
+            sql_parts = ["DROP ACCOUNT"]
+            if if_exists:
+                sql_parts.append("IF EXISTS")
+            sql_parts.append(self._client._escape_identifier(account_name))
+            
+            sql = " ".join(sql_parts)
             self._client.execute(sql)
         except Exception as e:
             raise AccountError(f"Failed to drop account '{account_name}': {e}")
@@ -246,10 +257,20 @@ class AccountManager:
         except Exception as e:
             raise AccountError(f"Failed to create user '{user_name}': {e}")
     
-    def drop_user(self, user_name: str, host: str = '%') -> None:
-        """Drop a user"""
+    def drop_user(self, user_name: str, host: str = '%', if_exists: bool = False) -> None:
+        """
+        Drop a user
+        
+        Args:
+            user_name: Name of the user to drop
+            host: Host of the user (default: '%')
+            if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
+        """
         try:
-            sql_parts = [f"DROP USER {self._client._escape_identifier(user_name)}"]
+            sql_parts = ["DROP USER"]
+            if if_exists:
+                sql_parts.append("IF EXISTS")
+            sql_parts.append(self._client._escape_identifier(user_name))
             
             if host != '%':
                 sql_parts.append(f"@{self._client._escape_string(host)}")
@@ -368,10 +389,21 @@ class AccountManager:
         except Exception as e:
             raise AccountError(f"Failed to create role '{role_name}': {e}")
     
-    def drop_role(self, role_name: str) -> None:
-        """Drop a role"""
+    def drop_role(self, role_name: str, if_exists: bool = False) -> None:
+        """
+        Drop a role
+        
+        Args:
+            role_name: Name of the role to drop
+            if_exists: If True, add IF EXISTS clause to avoid errors when role doesn't exist
+        """
         try:
-            sql = f"DROP ROLE {self._client._escape_identifier(role_name)}"
+            sql_parts = ["DROP ROLE"]
+            if if_exists:
+                sql_parts.append("IF EXISTS")
+            sql_parts.append(self._client._escape_identifier(role_name))
+            
+            sql = " ".join(sql_parts)
             self._client.execute(sql)
         except Exception as e:
             raise AccountError(f"Failed to drop role '{role_name}': {e}")
