@@ -63,6 +63,14 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroup(proc); err != nil {
 		return err
 	}
+
+	if group.SpillManager == nil {
+		group.SpillManager = NewMemorySpillManager()
+	}
+	if group.SpillThreshold <= 0 {
+		group.SpillThreshold = 64 * 1024 * 1024
+	}
+
 	return group.PrepareProjection(proc)
 }
 
@@ -188,6 +196,12 @@ func (group *Group) callToGetFinalResult(proc *process.Process) (*batch.Batch, e
 
 	for {
 		if group.ctr.state == vm.Eval {
+			if len(group.ctr.spilledStates) > 0 {
+				if err := group.mergeSpilledResults(proc); err != nil {
+					return nil, err
+				}
+			}
+
 			if group.ctr.result1.IsEmpty() {
 				group.ctr.state = vm.End
 				return nil, nil
@@ -245,7 +259,6 @@ func (group *Group) consumeBatchToGetFinalResult(
 
 	switch group.ctr.mtyp {
 	case H0:
-		// without group by.
 		if group.ctr.result1.IsEmpty() {
 			if err := group.generateInitialResult1WithoutGroupBy(proc); err != nil {
 				return err
@@ -260,7 +273,6 @@ func (group *Group) consumeBatchToGetFinalResult(
 		}
 
 	default:
-		// with group by.
 		if group.ctr.result1.IsEmpty() {
 			err := group.ctr.hr.BuildHashTable(false, group.ctr.mtyp == HStr, group.ctr.keyNullable, group.PreAllocSize)
 			if err != nil {
@@ -313,6 +325,11 @@ func (group *Group) consumeBatchToGetFinalResult(
 				}
 			}
 		}
+	}
+
+	group.updateMemoryUsage(proc)
+	if group.shouldSpill() {
+		return group.spillPartialResults(proc)
 	}
 
 	return nil
