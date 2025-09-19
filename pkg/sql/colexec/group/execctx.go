@@ -123,7 +123,7 @@ type GroupResultBuffer struct {
 }
 
 func (buf *GroupResultBuffer) IsEmpty() bool {
-	return cap(buf.ToPopped) == 0
+	return len(buf.ToPopped) == 0
 }
 
 func (buf *GroupResultBuffer) InitOnlyAgg(chunkSize int, aggList []aggexec.AggFuncExec) {
