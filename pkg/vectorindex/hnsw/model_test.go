@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -59,7 +60,8 @@ func mock_runSql_streaming_error(
 
 	defer func() {
 		err_chan <- moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
-		defer close(ch)
+		time.Sleep(10 * time.Millisecond)
+		close(ch)
 	}()
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("mock_runSql_streaming_error")
 }
