@@ -286,7 +286,7 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 	var distanceFunction DistanceFunction[T]
 	switch metric {
 	case Metric_L2Distance:
-		distanceFunction = L2DistanceSq[T]
+		distanceFunction = L2Distance[T]
 	case Metric_InnerProduct:
 		distanceFunction = InnerProduct[T]
 	case Metric_CosineDistance:
