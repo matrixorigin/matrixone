@@ -221,10 +221,13 @@ func (group *Group) restoreAndMergeSpilledAggregators(proc *process.Process, spi
 			aggs[i] = agg
 		}
 
+		chunkSize := aggexec.GetMinAggregatorsChunkSize(spillState.GroupVectors, aggs)
+		aggexec.SyncAggregatorsToChunkSize(aggs, chunkSize)
+		group.ctr.result1.ChunkSize = chunkSize
+
 		group.ctr.result1.AggList = aggs
 
 		if len(spillState.GroupVectors) > 0 && spillState.GroupCount > 0 {
-			chunkSize := aggexec.GetMinAggregatorsChunkSize(spillState.GroupVectors, aggs)
 			batchesToAdd := make([]*batch.Batch, 0)
 
 			for offset := 0; offset < spillState.GroupCount; offset += chunkSize {
