@@ -1,0 +1,3 @@
+PyMySQL>=1.0.2
+aiomysql>=0.2.0
+SQLAlchemy>=2.0.0
