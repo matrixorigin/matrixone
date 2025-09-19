@@ -1663,7 +1663,7 @@ func TestISCPExecutor1(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -1825,7 +1825,7 @@ func TestISCPExecutor2(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err = iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -1845,7 +1845,7 @@ func TestISCPExecutor2(t *testing.T) {
 	// register duplicate job
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
-	ok, err = iscp.RegisterJob(ctx, "", txn, "pitr",
+	ok, err = iscp.RegisterJob(ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -1902,7 +1902,7 @@ func TestISCPExecutor2(t *testing.T) {
 	// register job again
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
-	ok, err = iscp.RegisterJob(ctx, "", txn, "pitr",
+	ok, err = iscp.RegisterJob(ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -2000,7 +2000,7 @@ func TestISCPExecutor3(t *testing.T) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
-			ctx, "", txn, "pitr",
+			ctx, "", txn,
 			&iscp.JobSpec{
 				ConsumerInfo: iscp.ConsumerInfo{
 					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -2211,7 +2211,7 @@ func TestISCPExecutor4(t *testing.T) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
-			ctx, "", txn, "pitr",
+			ctx, "", txn,
 			&iscp.JobSpec{
 				ConsumerInfo: iscp.ConsumerInfo{
 					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -2400,7 +2400,7 @@ func TestISCPExecutor5(t *testing.T) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
-			ctx, "", txn, "pitr",
+			ctx, "", txn,
 			&iscp.JobSpec{
 				ConsumerInfo: iscp.ConsumerInfo{
 					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -2535,7 +2535,7 @@ func TestISCPExecutor6(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctxAccountID2, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctxAccountID2, "", txn, "pitr",
+		ctxAccountID2, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -2638,7 +2638,7 @@ func TestISCPExecutor7(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -2742,7 +2742,7 @@ func TestISCPExecutor8(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -2855,7 +2855,7 @@ func TestUpdateJobSpec(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -3033,7 +3033,7 @@ func TestFlushWatermark(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -3135,7 +3135,7 @@ func TestGCInMemoryJob(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -3262,7 +3262,7 @@ func TestIteration(t *testing.T) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
-			ctx, "", txn, "pitr",
+			ctx, "", txn,
 			&iscp.JobSpec{
 				ConsumerInfo: iscp.ConsumerInfo{
 					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -3387,7 +3387,7 @@ func TestDropJobsByDBName(t *testing.T) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
-			ctx, "", txn, "pitr",
+			ctx, "", txn,
 			&iscp.JobSpec{
 				ConsumerInfo: iscp.ConsumerInfo{
 					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -3747,7 +3747,7 @@ func TestStartFromNow(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -3847,7 +3847,7 @@ func TestApplyISCPLog(t *testing.T) {
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
 	ok, err := iscp.RegisterJob(
-		ctx, "", txn, "pitr",
+		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
 				ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -3985,7 +3985,7 @@ func TestISCPReplay(t *testing.T) {
 		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 		require.NoError(t, err)
 		ok, err := iscp.RegisterJob(
-			ctx, "", txn, "pitr",
+			ctx, "", txn,
 			&iscp.JobSpec{
 				ConsumerInfo: iscp.ConsumerInfo{
 					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
@@ -4008,4 +4008,144 @@ func TestISCPReplay(t *testing.T) {
 	}
 	cdcExecutor.Stop()
 	cdcExecutor.Start()
+}
+
+func TestRenameSrcTable(t *testing.T) {
+	catalog.SetupDefines("")
+
+	// idAllocator := common.NewIdAllocator(1000)
+
+	var (
+		accountId = catalog.System_Account
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, accountId)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+
+	disttaeEngine, taeHandler, rpcAgent, _ := testutil.CreateEngines(ctx, testutil.TestOptions{}, t)
+	defer func() {
+		disttaeEngine.Close(ctx)
+		taeHandler.Close(true)
+		rpcAgent.Close()
+	}()
+
+	err := mock_mo_indexes(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_foreign_keys(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	err = mock_mo_intra_system_change_propagation_log(disttaeEngine, ctxWithTimeout)
+	require.NoError(t, err)
+	t.Log(taeHandler.GetDB().Catalog.SimplePPString(3))
+
+	// create database and table
+
+	bats := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
+	defer bats.Close()
+
+	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
+	require.Nil(t, err)
+
+	tableID := rel.GetTableID(ctxWithTimeout)
+
+	txn.Commit(ctxWithTimeout)
+
+	// init cdc executor
+	opts := &iscp.ISCPExecutorOption{
+		GCInterval:             time.Hour,
+		GCTTL:                  time.Hour,
+		SyncTaskInterval:       time.Millisecond * 100,
+		FlushWatermarkInterval: time.Hour,
+		RetryTimes:             1,
+	}
+	opts.GCTTL = time.Hour
+	cdcExecutor, err := iscp.NewISCPTaskExecutor(
+		ctxWithTimeout,
+		disttaeEngine.Engine,
+		disttaeEngine.GetTxnClient(),
+		"",
+		opts,
+		common.DebugAllocator,
+	)
+	require.NoError(t, err)
+	cdcExecutor.SetRpcHandleFn(taeHandler.GetRPCHandle().HandleGetChangedTableList)
+
+	cdcExecutor.Start()
+	defer cdcExecutor.Stop()
+	registerFn := func(indexName string) {
+		txn, err := disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+		require.NoError(t, err)
+		ok, err := iscp.RegisterJob(
+			ctx, "", txn,
+			&iscp.JobSpec{
+				ConsumerInfo: iscp.ConsumerInfo{
+					ConsumerType: int8(iscp.ConsumerType_CNConsumer),
+				},
+			},
+			&iscp.JobID{
+				JobName:   indexName,
+				DBName:    "srcdb",
+				TableName: "src_table",
+			},
+			false,
+		)
+		assert.True(t, ok)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(ctxWithTimeout))
+	}
+	for i := 0; i < 10; i++ {
+		registerFn(fmt.Sprintf("hnsw_idx_%d", i))
+	}
+
+	now := taeHandler.GetDB().TxnMgr.Now()
+	testutils.WaitExpect(
+		4000,
+		func() bool {
+			for i := 0; i < 10; i++ {
+				ts, ok := cdcExecutor.GetWatermark(accountId, tableID, fmt.Sprintf("hnsw_idx_%d", i))
+				if !ok || !ts.GE(&now) {
+					return false
+				}
+			}
+			return true
+		},
+	)
+	for i := 0; i < 10; i++ {
+		ts, ok := cdcExecutor.GetWatermark(accountId, tableID, fmt.Sprintf("hnsw_idx_%d", i))
+		assert.True(t, ok)
+		assert.True(t, ts.GE(&now))
+	}
+
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	iscp.RenameSrcTable(
+		ctxWithTimeout,
+		"",
+		txn,
+		rel.GetDBID(ctxWithTimeout),
+		tableID,
+		"src_table",
+		"src_table_new",
+	)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctxWithTimeout))
+	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
+	require.NoError(t, err)
+	selectJobSql := fmt.Sprintf("SELECT job_spec FROM `mo_catalog`.`mo_iscp_log` WHERE account_id = %d AND table_id = %d", accountId, tableID)
+	execResult, err := iscp.ExecWithResult(ctxWithTimeout, selectJobSql, "", txn)
+	require.NoError(t, err)
+	defer execResult.Close()
+	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		require.Equal(t, 10, rows)
+		for i := 0; i < rows; i++ {
+			jobSpec, err := iscp.UnmarshalJobSpec(cols[0].GetBytesAt(i))
+			require.NoError(t, err)
+			require.Equal(t, "src_table_new", jobSpec.SrcTable.TableName)
+			require.Equal(t, "src_table_new", jobSpec.TableName)
+		}
+		return true
+	})
+	require.NoError(t, txn.Commit(ctxWithTimeout))
 }
