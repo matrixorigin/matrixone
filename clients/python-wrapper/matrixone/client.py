@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, RestoreError, PitrError, PubSubError
+from .exceptions import ConnectionError, QueryError, ConfigurationError, SnapshotError, CloneError, RestoreError, PitrError, PubSubError, VersionError
 from .snapshot import SnapshotManager, SnapshotQueryBuilder, CloneManager, Snapshot, SnapshotLevel
 from .moctl import MoCtlManager
 from .restore import RestoreManager, TransactionRestoreManager
@@ -16,6 +16,7 @@ from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
 from .account import AccountManager, TransactionAccountManager
 from .logger import MatrixOneLogger, create_default_logger
+from .version import VersionManager, get_version_manager
 
 
 class Client:
@@ -82,6 +83,10 @@ class Client:
         self._pitr = PitrManager(self)
         self._pubsub = PubSubManager(self)
         self._account = AccountManager(self)
+        
+        # Initialize version manager
+        self._version_manager = get_version_manager()
+        self._backend_version = None
     
     def connect(self, 
                 host: str, 
@@ -142,6 +147,13 @@ class Client:
         try:
             self._connection = pymysql.connect(**self._connection_params)
             self.logger.log_connection(host, port, final_user, database, success=True)
+            
+            # Try to detect backend version after successful connection
+            try:
+                self._detect_backend_version()
+            except Exception as e:
+                self.logger.warning(f"Failed to detect backend version: {e}")
+                
         except Exception as e:
             self.logger.log_connection(host, port, final_user, database, success=False)
             self.logger.log_error(e, context="Connection")
@@ -601,6 +613,174 @@ class Client:
                 raise QueryError("Failed to get git version information")
         except Exception as e:
             raise QueryError(f"Failed to get git version: {e}")
+    
+    def _detect_backend_version(self) -> None:
+        """
+        Detect backend version and set it in version manager
+        
+        This method attempts to get the MatrixOne version from the backend
+        and sets it in the version manager for compatibility checking.
+        
+        Handles two version formats:
+        1. "8.0.30-MatrixOne-v" (development version, highest priority)
+        2. "8.0.30-MatrixOne-v3.0.0" (release version)
+        """
+        try:
+            # Try to get version using version() function
+            result = self.execute("SELECT version()")
+            if result.rows:
+                version_string = result.rows[0][0]
+                version = self._parse_matrixone_version(version_string)
+                if version:
+                    self.set_backend_version(version)
+                    self.logger.info(f"Detected backend version: {version} (from: {version_string})")
+                    return
+            
+            # Fallback: try git_version()
+            result = self.execute("SELECT git_version()")
+            if result.rows:
+                git_version = result.rows[0][0]
+                version = self._parse_matrixone_version(git_version)
+                if version:
+                    self.set_backend_version(version)
+                    self.logger.info(f"Detected backend version from git: {version} (from: {git_version})")
+                    return
+                    
+        except Exception as e:
+            self.logger.warning(f"Could not detect backend version: {e}")
+    
+    def _parse_matrixone_version(self, version_string: str) -> Optional[str]:
+        """
+        Parse MatrixOne version string to extract semantic version
+        
+        Handles formats:
+        1. "8.0.30-MatrixOne-v" -> "999.0.0" (development version, highest)
+        2. "8.0.30-MatrixOne-v3.0.0" -> "3.0.0" (release version)
+        3. "MatrixOne 3.0.1" -> "3.0.1" (fallback format)
+        
+        Args:
+            version_string: Raw version string from MatrixOne
+            
+        Returns:
+            Semantic version string or None if parsing fails
+        """
+        import re
+        
+        if not version_string:
+            return None
+        
+        # Pattern 1: Development version "8.0.30-MatrixOne-v" (v后面为空)
+        dev_pattern = r'(\d+\.\d+\.\d+)-MatrixOne-v$'
+        dev_match = re.search(dev_pattern, version_string.strip())
+        if dev_match:
+            # Development version - assign highest version number
+            return "999.0.0"
+        
+        # Pattern 2: Release version "8.0.30-MatrixOne-v3.0.0" (v后面有版本号)
+        release_pattern = r'(\d+\.\d+\.\d+)-MatrixOne-v(\d+\.\d+\.\d+)'
+        release_match = re.search(release_pattern, version_string.strip())
+        if release_match:
+            # Extract the semantic version part
+            semantic_version = release_match.group(2)
+            return semantic_version
+        
+        # Pattern 3: Fallback format "MatrixOne 3.0.1"
+        fallback_pattern = r'(\d+\.\d+\.\d+)'
+        fallback_match = re.search(fallback_pattern, version_string)
+        if fallback_match:
+            return fallback_match.group(1)
+        
+        self.logger.warning(f"Could not parse version string: {version_string}")
+        return None
+    
+    def set_backend_version(self, version: str) -> None:
+        """
+        Manually set the backend version
+        
+        Args:
+            version: Version string in format "major.minor.patch" (e.g., "3.0.1")
+        """
+        self._version_manager.set_backend_version(version)
+        self._backend_version = version
+        self.logger.info(f"Backend version set to: {version}")
+    
+    def get_backend_version(self) -> Optional[str]:
+        """
+        Get current backend version
+        
+        Returns:
+            Version string or None if not set
+        """
+        backend_version = self._version_manager.get_backend_version()
+        return str(backend_version) if backend_version else None
+    
+    def is_feature_available(self, feature_name: str) -> bool:
+        """
+        Check if a feature is available in current backend version
+        
+        Args:
+            feature_name: Name of the feature to check
+            
+        Returns:
+            True if feature is available, False otherwise
+        """
+        return self._version_manager.is_feature_available(feature_name)
+    
+    def get_feature_info(self, feature_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get feature requirement information
+        
+        Args:
+            feature_name: Name of the feature
+            
+        Returns:
+            Feature information dictionary or None if not found
+        """
+        requirement = self._version_manager.get_feature_info(feature_name)
+        if requirement:
+            return {
+                'feature_name': requirement.feature_name,
+                'min_version': str(requirement.min_version) if requirement.min_version else None,
+                'max_version': str(requirement.max_version) if requirement.max_version else None,
+                'description': requirement.description,
+                'alternative': requirement.alternative
+            }
+        return None
+    
+    def check_version_compatibility(self, required_version: str, operator: str = ">=") -> bool:
+        """
+        Check if current backend version is compatible with required version
+        
+        Args:
+            required_version: Required version string (e.g., "3.0.1")
+            operator: Comparison operator (">=", ">", "<=", "<", "==", "!=")
+            
+        Returns:
+            True if compatible, False otherwise
+        """
+        return self._version_manager.is_version_compatible(required_version, operator=operator)
+    
+    def get_version_hint(self, feature_name: str, error_context: str = "") -> str:
+        """
+        Get helpful hint message for version-related errors
+        
+        Args:
+            feature_name: Name of the feature
+            error_context: Additional context for the error
+            
+        Returns:
+            Helpful hint message
+        """
+        return self._version_manager.get_version_hint(feature_name, error_context)
+    
+    def is_development_version(self) -> bool:
+        """
+        Check if current backend is a development version
+        
+        Returns:
+            True if backend is development version (999.x.x), False otherwise
+        """
+        return self._version_manager.is_development_version()
     
     def __enter__(self):
         return self

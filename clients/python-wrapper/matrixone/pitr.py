@@ -5,7 +5,8 @@ Provides Point-in-Time Recovery functionality for MatrixOne
 
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
-from .exceptions import PitrError
+from .exceptions import PitrError, VersionError
+from .version import requires_version
 
 
 class Pitr:
@@ -57,6 +58,12 @@ class PitrManager:
         """Initialize PitrManager with client connection"""
         self._client = client
     
+    @requires_version(
+        min_version="1.0.0",
+        feature_name="pitr_cluster_level",
+        description="Cluster-level Point-in-Time Recovery functionality",
+        alternative="Use snapshot restore instead"
+    )
     def create_cluster_pitr(self, 
                            name: str, 
                            range_value: int = 1, 

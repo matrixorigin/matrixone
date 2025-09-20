@@ -56,3 +56,8 @@ class PubSubError(MatrixOneError):
 class AccountError(MatrixOneError):
     """Raised when account management operations fail"""
     pass
+
+
+class VersionError(MatrixOneError):
+    """Raised when version compatibility check fails"""
+    pass

@@ -9,7 +9,8 @@ from enum import Enum
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from .exceptions import SnapshotError, ConnectionError, QueryError, CloneError
+from .exceptions import SnapshotError, ConnectionError, QueryError, CloneError, VersionError
+from .version import requires_version
 
 
 class SnapshotLevel(Enum):
@@ -50,6 +51,12 @@ class SnapshotManager:
     def __init__(self, client):
         self.client = client
     
+    @requires_version(
+        min_version="1.0.0",
+        feature_name="snapshot_creation",
+        description="Snapshot creation functionality",
+        alternative="Use backup/restore operations instead"
+    )
     def create(self, name: str, level: Union[str, SnapshotLevel], database: Optional[str] = None, 
                table: Optional[str] = None, description: Optional[str] = None,
                executor=None) -> Snapshot:
@@ -372,6 +379,12 @@ class CloneManager:
     def __init__(self, client):
         self.client = client
     
+    @requires_version(
+        min_version="1.0.0",
+        feature_name="database_cloning",
+        description="Database cloning functionality",
+        alternative="Use CREATE DATABASE and data migration instead"
+    )
     def clone_database(self, target_db: str, source_db: str, 
                       snapshot_name: Optional[str] = None, 
                       if_not_exists: bool = False, executor=None) -> None:
