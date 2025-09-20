@@ -257,24 +257,21 @@ class AccountManager:
         except Exception as e:
             raise AccountError(f"Failed to create user '{user_name}': {e}")
     
-    def drop_user(self, user_name: str, host: str = '%', if_exists: bool = False) -> None:
+    def drop_user(self, user_name: str, if_exists: bool = False) -> None:
         """
-        Drop a user
+        Drop a user according to MatrixOne DROP USER syntax:
+        DROP USER [IF EXISTS] user [, user] ...
         
         Args:
             user_name: Name of the user to drop
-            host: Host of the user (default: '%')
             if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
         """
         try:
             sql_parts = ["DROP USER"]
             if if_exists:
                 sql_parts.append("IF EXISTS")
+            
             sql_parts.append(self._client._escape_identifier(user_name))
-            
-            if host != '%':
-                sql_parts.append(f"@{self._client._escape_string(host)}")
-            
             sql = " ".join(sql_parts)
             self._client.execute(sql)
             
@@ -283,7 +280,6 @@ class AccountManager:
     
     def alter_user(self, 
                   user_name: str,
-                  host: str = '%',
                   password: Optional[str] = None,
                   comment: Optional[str] = None,
                   lock: Optional[bool] = None,
@@ -291,9 +287,6 @@ class AccountManager:
         """Alter a user"""
         try:
             sql_parts = [f"ALTER USER {self._client._escape_identifier(user_name)}"]
-            
-            if host != '%':
-                sql_parts.append(f"@{self._client._escape_string(host)}")
             
             if password is not None:
                 sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")

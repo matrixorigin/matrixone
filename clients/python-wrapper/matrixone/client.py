@@ -494,6 +494,65 @@ class Client:
         """Get account manager"""
         return self._account
     
+    def version(self) -> str:
+        """
+        Get MatrixOne server version
+        
+        Returns:
+            str: MatrixOne server version string
+            
+        Raises:
+            ConnectionError: If not connected to MatrixOne
+            QueryError: If version query fails
+            
+        Example:
+            >>> client = Client()
+            >>> client.connect('localhost', 6001, 'root', '111', 'test')
+            >>> version = client.version()
+            >>> print(f"MatrixOne version: {version}")
+        """
+        if not self._connection:
+            raise ConnectionError("Not connected to MatrixOne")
+        
+        try:
+            result = self.execute("SELECT VERSION()")
+            if result.rows:
+                return result.rows[0][0]
+            else:
+                raise QueryError("Failed to get version information")
+        except Exception as e:
+            raise QueryError(f"Failed to get version: {e}")
+    
+    def git_version(self) -> str:
+        """
+        Get MatrixOne git version information
+        
+        Returns:
+            str: MatrixOne git version string
+            
+        Raises:
+            ConnectionError: If not connected to MatrixOne
+            QueryError: If git version query fails
+            
+        Example:
+            >>> client = Client()
+            >>> client.connect('localhost', 6001, 'root', '111', 'test')
+            >>> git_version = client.git_version()
+            >>> print(f"MatrixOne git version: {git_version}")
+        """
+        if not self._connection:
+            raise ConnectionError("Not connected to MatrixOne")
+        
+        try:
+            # Use MatrixOne's built-in git_version() function
+            result = self.execute("SELECT git_version()")
+            if result.rows:
+                return result.rows[0][0]
+            else:
+                raise QueryError("Failed to get git version information")
+        except Exception as e:
+            raise QueryError(f"Failed to get git version: {e}")
+    
     def __enter__(self):
         return self
     

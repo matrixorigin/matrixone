@@ -432,15 +432,16 @@ class PubSubManager:
     def _row_to_publication(self, row: tuple) -> Publication:
         """Convert database row to Publication object"""
         # Expected columns: publication, database, tables, sub_account, subscribed_accounts, create_time, update_time, comments
+        # Based on MatrixOne official documentation: https://docs.matrixorigin.cn/en/v25.2.2.2/MatrixOne/Reference/SQL-Reference/Other/SHOW-Statements/show-publications/
         return Publication(
-            name=row[0],
-            database=row[1],
-            tables=row[2],
-            sub_account=row[3],
-            subscribed_accounts=row[4],
-            created_time=row[5] if len(row) > 5 else None,
-            update_time=row[6] if len(row) > 6 else None,
-            comments=row[7] if len(row) > 7 else None
+            name=row[0],                    # publication
+            database=row[1],                # database
+            tables=row[2],                  # tables
+            sub_account=row[3],             # sub_account
+            subscribed_accounts=row[4],     # subscribed_accounts
+            created_time=row[5] if len(row) > 5 else None,  # create_time
+            update_time=row[6] if len(row) > 6 else None,   # update_time
+            comments=row[7] if len(row) > 7 else None       # comments
         )
     
     def _row_to_subscription(self, row: tuple) -> Subscription:
@@ -532,25 +533,26 @@ class TransactionPubSubManager(PubSubManager):
                          database: Optional[str] = None) -> List[Publication]:
         """List publications within transaction"""
         try:
-            conditions = []
-            
-            if account:
-                conditions.append(f"pub_account = {self._client._escape_string(account)}")
-            if database:
-                conditions.append(f"pub_database = {self._client._escape_string(database)}")
-            
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-            
-            sql = f"SHOW PUBLICATIONS{where_clause}"
+            # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
+            sql = "SHOW PUBLICATIONS"
             result = self._transaction_wrapper.execute(sql)
             
             if not result or not result.rows:
                 return []
             
-            return [self._row_to_publication(row) for row in result.rows]
+            publications = []
+            for row in result.rows:
+                pub = self._row_to_publication(row)
+                
+                # Apply filters
+                if account and account not in pub.sub_account:
+                    continue
+                if database and pub.database != database:
+                    continue
+                    
+                publications.append(pub)
+            
+            return publications
             
         except Exception as e:
             raise PubSubError(f"Failed to list publications: {e}")
@@ -614,14 +616,19 @@ class TransactionPubSubManager(PubSubManager):
     def get_subscription(self, name: str) -> Subscription:
         """Get subscription within transaction"""
         try:
-            sql = f"SHOW SUBSCRIPTIONS WHERE sub_name = {self._client._escape_string(name)}"
+            # SHOW SUBSCRIPTIONS doesn't support WHERE clause, so we need to list all and filter
+            sql = "SHOW SUBSCRIPTIONS"
             result = self._transaction_wrapper.execute(sql)
             
             if not result or not result.rows:
                 raise PubSubError(f"Subscription '{name}' not found")
             
-            row = result.rows[0]
-            return self._row_to_subscription(row)
+            # Find subscription with matching name
+            for row in result.rows:
+                if row[6] == name:  # sub_name is in 7th column (index 6)
+                    return self._row_to_subscription(row)
+            
+            raise PubSubError(f"Subscription '{name}' not found")
             
         except Exception as e:
             raise PubSubError(f"Failed to get subscription '{name}': {e}")

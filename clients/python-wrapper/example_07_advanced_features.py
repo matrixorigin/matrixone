@@ -7,9 +7,10 @@ This example demonstrates advanced MatrixOne features:
 2. Clone operations
 3. Point-in-Time Recovery (PITR)
 4. MoCTL integration
-5. Performance monitoring
-6. Advanced error handling
-7. Custom configurations
+5. Version information retrieval
+6. Performance monitoring
+7. Advanced error handling
+8. Custom configurations
 
 This example shows the complete advanced capabilities of MatrixOne.
 """
@@ -320,10 +321,16 @@ def demo_moctl_integration():
         # Example 3: Basic System Information (fallback for unavailable mo_ctl methods)
         logger.info("\n📊 Basic System Information")
         try:
-            result = client.execute("SELECT VERSION(), @@version_comment")
-            logger.info(f"   📊 MatrixOne version: {result.rows[0]}")
+            version = client.version()
+            logger.info(f"   📊 MatrixOne version: {version}")
         except Exception as e:
             logger.error(f"   ❌ Get version failed: {e}")
+        
+        try:
+            git_version = client.git_version()
+            logger.info(f"   📊 MatrixOne git version: {git_version}")
+        except Exception as e:
+            logger.error(f"   ❌ Get git version failed: {e}")
         
         try:
             result = client.execute("SHOW DATABASES")
@@ -357,6 +364,205 @@ def demo_moctl_integration():
         
     except Exception as e:
         logger.error(f"❌ MoCTL integration failed: {e}")
+
+
+def demo_version_information():
+    """Demonstrate comprehensive version information retrieval"""
+    logger.info("🚀 MatrixOne Version Information Demo")
+    logger.info("=" * 60)
+    
+    client = Client()
+    
+    try:
+        # Connect to MatrixOne
+        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        logger.info("✅ Connected to MatrixOne")
+        
+        # Get server version
+        logger.info("\n📊 Getting Server Version")
+        try:
+            version = client.version()
+            logger.info(f"   ✅ MatrixOne Version: {version}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get version: {e}")
+        
+        # Get git version
+        logger.info("\n📊 Getting Git Version")
+        try:
+            git_version = client.git_version()
+            logger.info(f"   ✅ MatrixOne Git Version: {git_version}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get git version: {e}")
+        
+        # Get detailed version information
+        logger.info("\n📊 Getting Detailed Version Information")
+        try:
+            result = client.execute("SELECT VERSION(), @@version_comment, @@version_compile_machine, @@version_compile_os")
+            if result.rows:
+                row = result.rows[0]
+                logger.info(f"   📋 Version: {row[0]}")
+                logger.info(f"   📋 Version Comment: {row[1]}")
+                logger.info(f"   📋 Compile Machine: {row[2]}")
+                logger.info(f"   📋 Compile OS: {row[3]}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get detailed version info: {e}")
+        
+        # Get all version-related variables
+        logger.info("\n📊 Getting All Version Variables")
+        try:
+            result = client.execute("SHOW VARIABLES LIKE 'version%'")
+            logger.info("   📋 Version Variables:")
+            for row in result.rows:
+                logger.info(f"     - {row[0]}: {row[1]}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get version variables: {e}")
+        
+        # Version comparison and compatibility checking
+        logger.info("\n📊 Version Comparison and Compatibility")
+        try:
+            version = client.version()
+            logger.info(f"   📋 Current MatrixOne Version: {version}")
+            
+            # Parse version components
+            try:
+                # Extract version number from string like "8.0.30-MatrixOne-v"
+                version_parts = version.split('-')[0].split('.')
+                major = int(version_parts[0])
+                minor = int(version_parts[1])
+                patch = int(version_parts[2])
+                
+                logger.info(f"   📋 Major Version: {major}")
+                logger.info(f"   📋 Minor Version: {minor}")
+                logger.info(f"   📋 Patch Version: {patch}")
+                
+                # Check compatibility
+                if major >= 8:
+                    logger.info("   ✅ Compatible with MatrixOne 8.x+")
+                else:
+                    logger.warning("   ⚠️ Older version detected")
+                    
+                if minor >= 0:
+                    logger.info("   ✅ Minor version is acceptable")
+                    
+            except Exception as e:
+                logger.error(f"   ❌ Failed to parse version: {e}")
+                
+        except Exception as e:
+            logger.error(f"   ❌ Version comparison failed: {e}")
+        
+        client.disconnect()
+        logger.info("✅ Disconnected from MatrixOne")
+        
+    except Exception as e:
+        logger.error(f"❌ Version information demo failed: {e}")
+
+
+async def demo_async_version_information():
+    """Demonstrate asynchronous version information retrieval"""
+    logger.info("\n🚀 MatrixOne Async Version Information Demo")
+    logger.info("=" * 60)
+    
+    client = AsyncClient()
+    
+    try:
+        # Connect to MatrixOne
+        await client.connect("127.0.0.1", 6001, "root", "111", "test")
+        logger.info("✅ Connected to MatrixOne (async)")
+        
+        # Get server version
+        logger.info("\n📊 Getting Server Version (async)")
+        try:
+            version = await client.version()
+            logger.info(f"   ✅ MatrixOne Version: {version}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get version: {e}")
+        
+        # Get git version
+        logger.info("\n📊 Getting Git Version (async)")
+        try:
+            git_version = await client.git_version()
+            logger.info(f"   ✅ MatrixOne Git Version: {git_version}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get git version: {e}")
+        
+        # Get detailed version information
+        logger.info("\n📊 Getting Detailed Version Information (async)")
+        try:
+            result = await client.execute("SELECT VERSION(), @@version_comment, @@version_compile_machine, @@version_compile_os")
+            if result.rows:
+                row = result.rows[0]
+                logger.info(f"   📋 Version: {row[0]}")
+                logger.info(f"   📋 Version Comment: {row[1]}")
+                logger.info(f"   📋 Compile Machine: {row[2]}")
+                logger.info(f"   📋 Compile OS: {row[3]}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get detailed version info: {e}")
+        
+        # Get all version-related variables
+        logger.info("\n📊 Getting All Version Variables (async)")
+        try:
+            result = await client.execute("SHOW VARIABLES LIKE 'version%'")
+            logger.info("   📋 Version Variables:")
+            for row in result.rows:
+                logger.info(f"     - {row[0]}: {row[1]}")
+        except Exception as e:
+            logger.error(f"   ❌ Failed to get version variables: {e}")
+        
+        await client.disconnect()
+        logger.info("✅ Disconnected from MatrixOne (async)")
+        
+    except Exception as e:
+        logger.error(f"❌ Async version information demo failed: {e}")
+
+
+def demo_version_context_manager():
+    """Demonstrate version info with context manager"""
+    logger.info("\n🚀 MatrixOne Version Info with Context Manager Demo")
+    logger.info("=" * 60)
+    
+    try:
+        with Client() as client:
+            client.connect("127.0.0.1", 6001, "root", "111", "test")
+            
+            logger.info("✅ Connected using context manager")
+            
+            # Get version info
+            version = client.version()
+            git_version = client.git_version()
+            
+            logger.info(f"📊 Version: {version}")
+            logger.info(f"📊 Git Version: {git_version}")
+            
+            # Context manager will automatically disconnect
+            logger.info("✅ Context manager will handle disconnection")
+            
+    except Exception as e:
+        logger.error(f"❌ Context manager demo failed: {e}")
+
+
+async def demo_async_version_context_manager():
+    """Demonstrate async version info with context manager"""
+    logger.info("\n🚀 MatrixOne Async Version Info with Context Manager Demo")
+    logger.info("=" * 60)
+    
+    try:
+        async with AsyncClient() as client:
+            await client.connect("127.0.0.1", 6001, "root", "111", "test")
+            
+            logger.info("✅ Connected using async context manager")
+            
+            # Get version info
+            version = await client.version()
+            git_version = await client.git_version()
+            
+            logger.info(f"📊 Version: {version}")
+            logger.info(f"📊 Git Version: {git_version}")
+            
+            # Context manager will automatically disconnect
+            logger.info("✅ Async context manager will handle disconnection")
+            
+    except Exception as e:
+        logger.error(f"❌ Async context manager demo failed: {e}")
 
 
 def demo_performance_monitoring():
@@ -595,12 +801,16 @@ def main():
     demo_clone_operations()
     demo_pitr_operations()
     demo_moctl_integration()
+    demo_version_information()
+    demo_version_context_manager()
     demo_performance_monitoring()
     demo_advanced_error_handling()
     demo_custom_configurations()
     
     # Run async advanced features demo
     asyncio.run(demo_async_advanced_features())
+    asyncio.run(demo_async_version_information())
+    asyncio.run(demo_async_version_context_manager())
     
     logger.info("\n🎉 Advanced features examples completed!")
     logger.info("\nKey achievements:")
@@ -608,10 +818,12 @@ def main():
     logger.info("- ✅ Clone operations and data replication")
     logger.info("- ✅ Point-in-Time Recovery (PITR)")
     logger.info("- ✅ MoCTL integration and system monitoring")
+    logger.info("- ✅ Version information retrieval and compatibility checking")
     logger.info("- ✅ Performance monitoring and optimization")
     logger.info("- ✅ Advanced error handling and recovery")
     logger.info("- ✅ Custom configurations and tuning")
     logger.info("- ✅ Async advanced features")
+    logger.info("- ✅ Context manager usage for resource management")
 
 
 if __name__ == '__main__':

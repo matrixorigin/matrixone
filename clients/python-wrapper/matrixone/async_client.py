@@ -4,6 +4,7 @@ MatrixOne Async Client - Asynchronous implementation
 
 import asyncio
 import aiomysql
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple, Union
 from contextlib import asynccontextmanager
 from sqlalchemy import create_engine, text
@@ -250,14 +251,19 @@ class AsyncPubSubManager:
     async def get_publication(self, name: str) -> Publication:
         """Get publication by name asynchronously"""
         try:
-            sql = f"SHOW PUBLICATIONS WHERE publication = {self.client._escape_string(name)}"
+            # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
+            sql = "SHOW PUBLICATIONS"
             result = await self.client.execute(sql)
             
             if not result or not result.rows:
                 raise PubSubError(f"Publication '{name}' not found")
             
-            row = result.rows[0]
-            return self._row_to_publication(row)
+            # Find publication with matching name
+            for row in result.rows:
+                if row[0] == name:  # publication name is in first column
+                    return self._row_to_publication(row)
+            
+            raise PubSubError(f"Publication '{name}' not found")
             
         except Exception as e:
             raise PubSubError(f"Failed to get publication '{name}': {e}")
@@ -267,25 +273,26 @@ class AsyncPubSubManager:
                                database: Optional[str] = None) -> List[Publication]:
         """List publications with optional filters asynchronously"""
         try:
-            conditions = []
-            
-            if account:
-                conditions.append(f"sub_account LIKE {self.client._escape_string(f'%{account}%')}")
-            if database:
-                conditions.append(f"database = {self.client._escape_string(database)}")
-            
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-            
-            sql = f"SHOW PUBLICATIONS{where_clause}"
+            # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
+            sql = "SHOW PUBLICATIONS"
             result = await self.client.execute(sql)
             
             if not result or not result.rows:
                 return []
             
-            return [self._row_to_publication(row) for row in result.rows]
+            publications = []
+            for row in result.rows:
+                pub = self._row_to_publication(row)
+                
+                # Apply filters
+                if account and account not in pub.sub_account:
+                    continue
+                if database and pub.database != database:
+                    continue
+                    
+                publications.append(pub)
+            
+            return publications
             
         except Exception as e:
             raise PubSubError(f"Failed to list publications: {e}")
@@ -365,14 +372,19 @@ class AsyncPubSubManager:
     async def get_subscription(self, name: str) -> Subscription:
         """Get subscription by name asynchronously"""
         try:
-            sql = f"SHOW SUBSCRIPTIONS WHERE sub_name = {self.client._escape_string(name)}"
+            # SHOW SUBSCRIPTIONS doesn't support WHERE clause, so we need to list all and filter
+            sql = "SHOW SUBSCRIPTIONS"
             result = await self.client.execute(sql)
             
             if not result or not result.rows:
                 raise PubSubError(f"Subscription '{name}' not found")
             
-            row = result.rows[0]
-            return self._row_to_subscription(row)
+            # Find subscription with matching name
+            for row in result.rows:
+                if row[6] == name:  # sub_name is in 7th column (index 6)
+                    return self._row_to_subscription(row)
+            
+            raise PubSubError(f"Subscription '{name}' not found")
             
         except Exception as e:
             raise PubSubError(f"Failed to get subscription '{name}': {e}")
@@ -408,15 +420,16 @@ class AsyncPubSubManager:
     def _row_to_publication(self, row: tuple) -> Publication:
         """Convert database row to Publication object"""
         # Expected columns: publication, database, tables, sub_account, subscribed_accounts, create_time, update_time, comments
+        # Based on MatrixOne official documentation: https://docs.matrixorigin.cn/en/v25.2.2.2/MatrixOne/Reference/SQL-Reference/Other/SHOW-Statements/show-publications/
         return Publication(
-            name=row[0],
-            database=row[1],
-            tables=row[2],
-            sub_account=row[3],
-            subscribed_accounts=row[4],
-            created_time=row[5] if len(row) > 5 else None,
-            update_time=row[6] if len(row) > 6 else None,
-            comments=row[7] if len(row) > 7 else None
+            name=row[0],                    # publication
+            database=row[1],                # database
+            tables=row[2],                  # tables
+            sub_account=row[3],             # sub_account
+            subscribed_accounts=row[4],     # subscribed_accounts
+            created_time=row[5] if len(row) > 5 else None,  # create_time
+            update_time=row[6] if len(row) > 6 else None,   # update_time
+            comments=row[7] if len(row) > 7 else None       # comments
         )
     
     def _row_to_subscription(self, row: tuple) -> Subscription:
@@ -883,23 +896,28 @@ class AsyncAccountManager:
     async def create_user(self, 
                         user_name: str,
                         password: str,
-                        account_name: str,
-                        host: str = '%',
-                        comment: Optional[str] = None,
-                        identified_by: Optional[str] = None) -> User:
-        """Create a new user asynchronously"""
+                        comment: Optional[str] = None) -> User:
+        """
+        Create a new user asynchronously according to MatrixOne CREATE USER syntax:
+        CREATE USER [IF NOT EXISTS] user auth_option [, user auth_option] ...
+        [DEFAULT ROLE rolename] [COMMENT 'comment_string' | ATTRIBUTE 'json_object']
+        
+        Args:
+            user_name: Name of the user to create
+            password: Password for the user
+            comment: Comment for the user (not supported in MatrixOne)
+            
+        Returns:
+            User: Created user object
+        """
         try:
             # Build CREATE USER statement according to MatrixOne syntax
             # MatrixOne syntax: CREATE USER user_name IDENTIFIED BY 'password'
             sql_parts = [f"CREATE USER {self.client._escape_identifier(user_name)}"]
             
-            if host != '%':
-                sql_parts.append(f"@{self.client._escape_string(host)}")
-            
             sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
             
-            # Note: MatrixOne doesn't support ACCOUNT, COMMENT, or ATTRIBUTE clauses in CREATE USER
-            # sql_parts.append(f"ACCOUNT {self.client._escape_identifier(account_name)}")
+            # Note: MatrixOne doesn't support COMMENT or ATTRIBUTE clauses in CREATE USER
             # if comment:
             #     sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
             # if identified_by:
@@ -908,22 +926,34 @@ class AsyncAccountManager:
             sql = " ".join(sql_parts)
             await self.client.execute(sql)
             
-            return await self.get_user(user_name, host, account_name)
+            # Return a User object with current account context
+            return User(
+                name=user_name,
+                host='%',  # Default host
+                account='sys',  # Default account
+                created_time=datetime.now(),
+                status='ACTIVE',
+                comment=comment
+            )
             
         except Exception as e:
             raise AccountError(f"Failed to create user '{user_name}': {e}")
     
-    async def drop_user(self, user_name: str, host: str = '%', account_name: Optional[str] = None) -> None:
-        """Drop a user asynchronously"""
+    async def drop_user(self, user_name: str, if_exists: bool = False) -> None:
+        """
+        Drop a user asynchronously according to MatrixOne DROP USER syntax:
+        DROP USER [IF EXISTS] user [, user] ...
+        
+        Args:
+            user_name: Name of the user to drop
+            if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
+        """
         try:
-            sql_parts = [f"DROP USER {self.client._escape_identifier(user_name)}"]
+            sql_parts = ["DROP USER"]
+            if if_exists:
+                sql_parts.append("IF EXISTS")
             
-            if host != '%':
-                sql_parts.append(f"@{self.client._escape_string(host)}")
-            
-            if account_name:
-                sql_parts.append(f"ACCOUNT {self.client._escape_identifier(account_name)}")
-            
+            sql_parts.append(self.client._escape_identifier(user_name))
             sql = " ".join(sql_parts)
             await self.client.execute(sql)
             
@@ -932,8 +962,6 @@ class AsyncAccountManager:
     
     async def alter_user(self, 
                        user_name: str,
-                       host: str = '%',
-                       account_name: Optional[str] = None,
                        password: Optional[str] = None,
                        comment: Optional[str] = None,
                        lock: Optional[bool] = None,
@@ -941,12 +969,6 @@ class AsyncAccountManager:
         """Alter a user asynchronously"""
         try:
             sql_parts = [f"ALTER USER {self.client._escape_identifier(user_name)}"]
-            
-            if host != '%':
-                sql_parts.append(f"@{self.client._escape_string(host)}")
-            
-            if account_name:
-                sql_parts.append(f"ACCOUNT {self.client._escape_identifier(account_name)}")
             
             if password is not None:
                 sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
@@ -966,13 +988,13 @@ class AsyncAccountManager:
             sql = " ".join(sql_parts)
             await self.client.execute(sql)
             
-            return await self.get_user(user_name, host, account_name)
+            return await self.get_user(user_name)
             
         except Exception as e:
             raise AccountError(f"Failed to alter user '{user_name}': {e}")
     
-    async def get_user(self, user_name: str, host: str = '%', account_name: Optional[str] = None) -> User:
-        """Get user by name, host, and account asynchronously"""
+    async def get_user(self, user_name: str) -> User:
+        """Get user by name asynchronously"""
         try:
             sql = "SHOW GRANTS"
             result = await self.client.execute(sql)
@@ -981,9 +1003,7 @@ class AsyncAccountManager:
                 raise AccountError(f"User '{user_name}' not found")
             
             for row in result.rows:
-                if (row[0] == user_name and
-                    row[1] == host and
-                    (not account_name or row[2] == account_name)):
+                if row[0] == user_name:
                     return self._row_to_user(row)
             
             raise AccountError(f"User '{user_name}' not found")
@@ -1119,13 +1139,38 @@ class AsyncClient:
     async def disconnect(self):
         """Disconnect from MatrixOne database asynchronously"""
         if self._connection:
-            self._connection.close()
-            # Wait for connection to be properly closed
-            if hasattr(self._connection, 'wait_closed'):
-                await self._connection.wait_closed()
-            elif hasattr(self._connection, 'ensure_closed'):
-                await self._connection.ensure_closed()
-            self._connection = None
+            try:
+                # Properly close the aiomysql connection
+                if hasattr(self._connection, 'close'):
+                    self._connection.close()
+                
+                # Wait for connection to be properly closed
+                if hasattr(self._connection, 'wait_closed'):
+                    await self._connection.wait_closed()
+                elif hasattr(self._connection, 'ensure_closed'):
+                    await self._connection.ensure_closed()
+                
+                # Additional cleanup for aiomysql connections
+                if hasattr(self._connection, '_writer') and self._connection._writer:
+                    if hasattr(self._connection._writer, 'transport') and self._connection._writer.transport:
+                        self._connection._writer.transport.close()
+                
+            except Exception:
+                # Ignore errors during cleanup
+                pass
+            finally:
+                self._connection = None
+    
+    def __del__(self):
+        """Cleanup when object is garbage collected"""
+        if hasattr(self, '_connection') and self._connection:
+            try:
+                # Try to close connection synchronously if possible
+                if hasattr(self._connection, 'close'):
+                    self._connection.close()
+            except:
+                # Ignore errors during cleanup
+                pass
     
     def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
         """
@@ -1341,6 +1386,65 @@ class AsyncClient:
         """Get async account manager"""
         return self._account
     
+    async def version(self) -> str:
+        """
+        Get MatrixOne server version asynchronously
+        
+        Returns:
+            str: MatrixOne server version string
+            
+        Raises:
+            ConnectionError: If not connected to MatrixOne
+            QueryError: If version query fails
+            
+        Example:
+            >>> client = AsyncClient()
+            >>> await client.connect('localhost', 6001, 'root', '111', 'test')
+            >>> version = await client.version()
+            >>> print(f"MatrixOne version: {version}")
+        """
+        if not self._connection:
+            raise ConnectionError("Not connected to MatrixOne")
+        
+        try:
+            result = await self.execute("SELECT VERSION()")
+            if result.rows:
+                return result.rows[0][0]
+            else:
+                raise QueryError("Failed to get version information")
+        except Exception as e:
+            raise QueryError(f"Failed to get version: {e}")
+    
+    async def git_version(self) -> str:
+        """
+        Get MatrixOne git version information asynchronously
+        
+        Returns:
+            str: MatrixOne git version string
+            
+        Raises:
+            ConnectionError: If not connected to MatrixOne
+            QueryError: If git version query fails
+            
+        Example:
+            >>> client = AsyncClient()
+            >>> await client.connect('localhost', 6001, 'root', '111', 'test')
+            >>> git_version = await client.git_version()
+            >>> print(f"MatrixOne git version: {git_version}")
+        """
+        if not self._connection:
+            raise ConnectionError("Not connected to MatrixOne")
+        
+        try:
+            # Use MatrixOne's built-in git_version() function
+            result = await self.execute("SELECT git_version()")
+            if result.rows:
+                return result.rows[0][0]
+            else:
+                raise QueryError("Failed to get git version information")
+        except Exception as e:
+            raise QueryError(f"Failed to get git version: {e}")
+    
     async def __aenter__(self):
         return self
     
@@ -1531,25 +1635,26 @@ class AsyncTransactionPubSubManager(AsyncPubSubManager):
                                database: Optional[str] = None) -> List[Publication]:
         """List publications within transaction asynchronously"""
         try:
-            conditions = []
-            
-            if account:
-                conditions.append(f"pub_account = {self.client._escape_string(account)}")
-            if database:
-                conditions.append(f"pub_database = {self.client._escape_string(database)}")
-            
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-            
-            sql = f"SHOW PUBLICATIONS{where_clause}"
+            # SHOW PUBLICATIONS doesn't support WHERE clause, so we need to list all and filter
+            sql = "SHOW PUBLICATIONS"
             result = await self.transaction_wrapper.execute(sql)
             
             if not result or not result.rows:
                 return []
             
-            return [self._row_to_publication(row) for row in result.rows]
+            publications = []
+            for row in result.rows:
+                pub = self._row_to_publication(row)
+                
+                # Apply filters
+                if account and account not in pub.sub_account:
+                    continue
+                if database and pub.database != database:
+                    continue
+                    
+                publications.append(pub)
+            
+            return publications
             
         except Exception as e:
             raise PubSubError(f"Failed to list publications: {e}")
@@ -1613,14 +1718,19 @@ class AsyncTransactionPubSubManager(AsyncPubSubManager):
     async def get_subscription(self, name: str) -> Subscription:
         """Get subscription within transaction asynchronously"""
         try:
-            sql = f"SHOW SUBSCRIPTIONS WHERE sub_name = {self.client._escape_string(name)}"
+            # SHOW SUBSCRIPTIONS doesn't support WHERE clause, so we need to list all and filter
+            sql = "SHOW SUBSCRIPTIONS"
             result = await self.transaction_wrapper.execute(sql)
             
             if not result or not result.rows:
                 raise PubSubError(f"Subscription '{name}' not found")
             
-            row = result.rows[0]
-            return self._row_to_subscription(row)
+            # Find subscription with matching name
+            for row in result.rows:
+                if row[6] == name:  # sub_name is in 7th column (index 6)
+                    return self._row_to_subscription(row)
+            
+            raise PubSubError(f"Subscription '{name}' not found")
             
         except Exception as e:
             raise PubSubError(f"Failed to get subscription '{name}': {e}")
@@ -2055,22 +2165,28 @@ class AsyncTransactionAccountManager:
     async def create_user(self, 
                         user_name: str,
                         password: str,
-                        account_name: str,
-                        host: str = '%',
-                        comment: Optional[str] = None,
-                        identified_by: Optional[str] = None) -> User:
-        """Create user within async transaction"""
+                        comment: Optional[str] = None) -> User:
+        """
+        Create user within async transaction according to MatrixOne CREATE USER syntax:
+        CREATE USER [IF NOT EXISTS] user auth_option [, user auth_option] ...
+        [DEFAULT ROLE rolename] [COMMENT 'comment_string' | ATTRIBUTE 'json_object']
+        
+        Args:
+            user_name: Name of the user to create
+            password: Password for the user
+            comment: Comment for the user (not supported in MatrixOne)
+            
+        Returns:
+            User: Created user object
+        """
         try:
             # Build CREATE USER statement according to MatrixOne syntax
             # MatrixOne syntax: CREATE USER user_name IDENTIFIED BY 'password'
             sql_parts = [f"CREATE USER {self.client._escape_identifier(user_name)}"]
             
-            if host != '%':
-                sql_parts.append(f"@{self.client._escape_string(host)}")
-            
             sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
             
-            # Note: MatrixOne doesn't support ACCOUNT, COMMENT, or ATTRIBUTE clauses in CREATE USER
+            # Note: MatrixOne doesn't support COMMENT or ATTRIBUTE clauses in CREATE USER
             # sql_parts.append(f"ACCOUNT {self.client._escape_identifier(account_name)}")
             # if comment:
             #     sql_parts.append(f"COMMENT {self.client._escape_string(comment)}")
@@ -2080,22 +2196,34 @@ class AsyncTransactionAccountManager:
             sql = " ".join(sql_parts)
             await self.transaction.execute(sql)
             
-            return await self.get_user(user_name, host, account_name)
+            # Return a User object with current account context
+            return User(
+                name=user_name,
+                host='%',  # Default host
+                account='sys',  # Default account
+                created_time=datetime.now(),
+                status='ACTIVE',
+                comment=comment
+            )
             
         except Exception as e:
             raise AccountError(f"Failed to create user '{user_name}': {e}")
     
-    async def drop_user(self, user_name: str, host: str = '%', account_name: Optional[str] = None) -> None:
-        """Drop user within async transaction"""
+    async def drop_user(self, user_name: str, if_exists: bool = False) -> None:
+        """
+        Drop user within async transaction according to MatrixOne DROP USER syntax:
+        DROP USER [IF EXISTS] user [, user] ...
+        
+        Args:
+            user_name: Name of the user to drop
+            if_exists: If True, add IF EXISTS clause to avoid errors when user doesn't exist
+        """
         try:
-            sql_parts = [f"DROP USER {self.client._escape_identifier(user_name)}"]
+            sql_parts = ["DROP USER"]
+            if if_exists:
+                sql_parts.append("IF EXISTS")
             
-            if host != '%':
-                sql_parts.append(f"@{self.client._escape_string(host)}")
-            
-            if account_name:
-                sql_parts.append(f"ACCOUNT {self.client._escape_identifier(account_name)}")
-            
+            sql_parts.append(self.client._escape_identifier(user_name))
             sql = " ".join(sql_parts)
             await self.transaction.execute(sql)
             
@@ -2104,8 +2232,6 @@ class AsyncTransactionAccountManager:
     
     async def alter_user(self, 
                        user_name: str,
-                       host: str = '%',
-                       account_name: Optional[str] = None,
                        password: Optional[str] = None,
                        comment: Optional[str] = None,
                        lock: Optional[bool] = None,
@@ -2113,12 +2239,6 @@ class AsyncTransactionAccountManager:
         """Alter user within async transaction"""
         try:
             sql_parts = [f"ALTER USER {self.client._escape_identifier(user_name)}"]
-            
-            if host != '%':
-                sql_parts.append(f"@{self.client._escape_string(host)}")
-            
-            if account_name:
-                sql_parts.append(f"ACCOUNT {self.client._escape_identifier(account_name)}")
             
             if password is not None:
                 sql_parts.append(f"IDENTIFIED BY {self.client._escape_string(password)}")
@@ -2138,12 +2258,12 @@ class AsyncTransactionAccountManager:
             sql = " ".join(sql_parts)
             await self.transaction.execute(sql)
             
-            return await self.get_user(user_name, host, account_name)
+            return await self.get_user(user_name)
             
         except Exception as e:
             raise AccountError(f"Failed to alter user '{user_name}': {e}")
     
-    async def get_user(self, user_name: str, host: str = '%', account_name: Optional[str] = None) -> User:
+    async def get_user(self, user_name: str) -> User:
         """Get user within async transaction"""
         try:
             sql = "SHOW GRANTS"
@@ -2153,9 +2273,7 @@ class AsyncTransactionAccountManager:
                 raise AccountError(f"User '{user_name}' not found")
             
             for row in result.rows:
-                if (row[0] == user_name and
-                    row[1] == host and
-                    (not account_name or row[2] == account_name)):
+                if row[0] == user_name:
                     return self._row_to_user(row)
             
             raise AccountError(f"User '{user_name}' not found")
