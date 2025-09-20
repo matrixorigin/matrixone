@@ -32,7 +32,11 @@ class Client:
                  charset: str = 'utf8mb4',
                  logger: Optional[MatrixOneLogger] = None,
                  enable_performance_logging: bool = False,
-                 enable_sql_logging: bool = False):
+                 enable_sql_logging: bool = False,
+                 enable_full_sql_logging: bool = False,
+                 enable_slow_sql_logging: bool = False,
+                 enable_error_sql_logging: bool = False,
+                 slow_sql_threshold: float = 1.0):
         """
         Initialize MatrixOne client
         
@@ -43,7 +47,11 @@ class Client:
             charset: Character set for connection
             logger: Custom logger instance. If None, creates a default logger
             enable_performance_logging: Enable performance logging
-            enable_sql_logging: Enable SQL query logging
+            enable_sql_logging: Enable basic SQL query logging
+            enable_full_sql_logging: Enable full SQL query logging (no truncation)
+            enable_slow_sql_logging: Enable slow SQL query logging
+            enable_error_sql_logging: Enable error SQL query logging
+            slow_sql_threshold: Threshold in seconds for slow SQL logging
         """
         self.connection_timeout = connection_timeout
         self.query_timeout = query_timeout
@@ -56,7 +64,11 @@ class Client:
         else:
             self.logger = create_default_logger(
                 enable_performance_logging=enable_performance_logging,
-                enable_sql_logging=enable_sql_logging
+                enable_sql_logging=enable_sql_logging,
+                enable_full_sql_logging=enable_full_sql_logging,
+                enable_slow_sql_logging=enable_slow_sql_logging,
+                enable_error_sql_logging=enable_error_sql_logging,
+                slow_sql_threshold=slow_sql_threshold
             )
         
         self._connection = None

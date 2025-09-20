@@ -33,7 +33,7 @@ def demo_basic_snapshot_operations():
     logger.info("=" * 60)
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test 1: Create test data
@@ -123,7 +123,7 @@ def demo_snapshot_enumeration():
     logger.info("\n=== Test 7: Snapshot Enumeration ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test table for enumeration
@@ -195,7 +195,7 @@ def demo_point_in_time_recovery():
     logger.info("\n=== Test 8: Point-in-Time Recovery (PITR) ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test data
@@ -287,7 +287,7 @@ def demo_snapshot_error_handling():
     logger.info("\n=== Test 9: Snapshot Error Handling ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test invalid snapshot name
@@ -371,7 +371,7 @@ async def demo_async_snapshot_operations():
     
     client = None
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test data
@@ -432,7 +432,7 @@ def demo_snapshot_best_practices():
     logger.info("\n=== Test 11: Snapshot Best Practices ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Best Practice 1: Use descriptive snapshot names

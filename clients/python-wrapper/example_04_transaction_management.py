@@ -33,7 +33,7 @@ def demo_basic_transaction_operations():
     logger.info("=" * 60)
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test 1: Simple transaction with commit
@@ -86,7 +86,7 @@ def demo_transaction_isolation():
     
     try:
         # Create test table
-        client1 = Client()
+        client1 = Client(enable_full_sql_logging=True)
         client1.connect('127.0.0.1', 6001, 'root', '111', 'test')
         client1.execute("CREATE TABLE IF NOT EXISTS isolation_test (id INT PRIMARY KEY, value INT)")
         client1.execute("INSERT INTO isolation_test VALUES (1, 100)")
@@ -96,11 +96,11 @@ def demo_transaction_isolation():
         logger.info("\n🔍 Test Read Committed Isolation")
         
         # Start transaction 1
-        client1 = Client()
+        client1 = Client(enable_full_sql_logging=True)
         client1.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Start transaction 2
-        client2 = Client()
+        client2 = Client(enable_full_sql_logging=True)
         client2.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Transaction 1 reads initial value
@@ -125,7 +125,7 @@ def demo_transaction_isolation():
         client2.disconnect()
         
         # Cleanup
-        cleanup_client = Client()
+        cleanup_client = Client(enable_full_sql_logging=True)
         cleanup_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         cleanup_client.execute("DROP TABLE IF EXISTS isolation_test")
         cleanup_client.disconnect()
@@ -139,7 +139,7 @@ def demo_transaction_error_handling():
     logger.info("\n=== Test 4: Transaction Error Handling ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test constraint violation
@@ -191,7 +191,7 @@ def demo_transaction_with_account_operations():
     logger.info("\n=== Test 5: Transaction with Account Operations ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         account_manager = AccountManager(client)
         
@@ -225,7 +225,7 @@ def demo_transaction_performance():
     logger.info("\n=== Test 6: Transaction Performance ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test table
@@ -270,7 +270,7 @@ async def demo_async_transaction_management():
     logger.info("\n=== Test 7: Async Transaction Management ===")
     
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test async transaction with commit
@@ -317,7 +317,7 @@ def demo_transaction_best_practices():
     logger.info("\n=== Test 8: Transaction Best Practices ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Best Practice 1: Keep transactions short

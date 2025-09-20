@@ -36,7 +36,7 @@ def demo_pubsub_operations():
     logger.info("=" * 60)
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test 1: Basic PubSub setup
@@ -92,7 +92,7 @@ def demo_clone_operations():
     logger.info("\n=== Test 5: Clone Operations ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create source table
@@ -146,7 +146,7 @@ def demo_pitr_operations():
     logger.info("\n=== Test 6: Point-in-Time Recovery (PITR) ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Use existing important data for PITR demonstration
@@ -281,7 +281,7 @@ def demo_moctl_integration():
     logger.info("\n=== Test 7: MoCTL Integration ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         logger.info("\n🔧 MoCTL Operations")
@@ -374,7 +374,7 @@ def demo_version_information():
     logger.info("🚀 MatrixOne Version Information Demo")
     logger.info("=" * 60)
     
-    client = Client()
+    client = Client(enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
@@ -465,7 +465,7 @@ async def demo_async_version_information():
     logger.info("\n🚀 MatrixOne Async Version Information Demo")
     logger.info("=" * 60)
     
-    client = AsyncClient()
+    client = AsyncClient(enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
@@ -524,7 +524,7 @@ def demo_version_context_manager():
     logger.info("=" * 60)
     
     try:
-        with Client() as client:
+        with Client(enable_full_sql_logging=True) as client:
             client.connect("127.0.0.1", 6001, "root", "111", "test")
             
             logger.info("✅ Connected using context manager")
@@ -549,7 +549,7 @@ async def demo_async_version_context_manager():
     logger.info("=" * 60)
     
     try:
-        async with AsyncClient() as client:
+        async with AsyncClient(enable_full_sql_logging=True) as client:
             await client.connect("127.0.0.1", 6001, "root", "111", "test")
             
             logger.info("✅ Connected using async context manager")
@@ -573,7 +573,7 @@ def demo_performance_monitoring():
     logger.info("\n=== Test 8: Performance Monitoring ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test table for performance testing
@@ -642,13 +642,13 @@ def demo_advanced_error_handling():
     logger.info("\n=== Test 9: Advanced Error Handling ===")
     
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test connection error handling
         logger.info("\n🔍 Connection Error Handling")
         try:
-            bad_client = Client()
+            bad_client = Client(enable_full_sql_logging=True)
             bad_client.connect('127.0.0.1', 9999, 'root', '111', 'test')
         except Exception as e:
             logger.info(f"   ✅ Connection error handled: {e}")
@@ -700,7 +700,7 @@ def demo_custom_configurations():
     try:
         # Test custom connection parameters
         logger.info("\n⚙️ Custom Connection Parameters")
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect(
             host='127.0.0.1',
             port=6001,
@@ -723,7 +723,7 @@ def demo_custom_configurations():
         # Test custom SSL configuration
         logger.info("\n⚙️ Custom SSL Configuration")
         try:
-            ssl_client = Client()
+            ssl_client = Client(enable_full_sql_logging=True)
             ssl_client.connect(
                 host='127.0.0.1',
                 port=6001,
@@ -741,7 +741,7 @@ def demo_custom_configurations():
         logger.info("\n⚙️ Custom Connection Pooling")
         clients = []
         for i in range(3):
-            client = Client(logger=logger)
+            client = Client(logger=logger, enable_full_sql_logging=True)
             client.connect('127.0.0.1', 6001, 'root', '111', 'test')
             clients.append(client)
             logger.info(f"   ✅ Created connection {i+1}")
@@ -765,7 +765,7 @@ async def demo_async_advanced_features():
     logger.info("\n=== Test 11: Async Advanced Features ===")
     
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test async performance monitoring

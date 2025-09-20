@@ -27,7 +27,7 @@ def demo_basic_pubsub_operations():
     """Demonstrate basic PubSub operations within the same account"""
     logger.info("=== Basic PubSub Operations Demo ===")
     
-    client = Client(logger=logger)
+    client = Client(logger=logger, enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
@@ -160,7 +160,7 @@ def demo_cross_account_pubsub():
     logger.info("=== Cross-Account PubSub Operations Demo ===")
     
     # Main client for account management
-    admin_client = Client()
+    admin_client = Client(enable_full_sql_logging=True)
     
     try:
         # Connect as admin
@@ -209,14 +209,14 @@ def demo_cross_account_pubsub():
         
         # Setup publisher side
         logger.info("\n📤 Setup Publisher Side")
-        publisher_client = Client()
+        publisher_client = Client(enable_full_sql_logging=True)
         
         # Connect as publisher account admin
         publisher_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
         logger.info("   ✅ Connected as publisher account admin")
         
         # Create publisher database
-        pub_admin_client = Client()
+        pub_admin_client = Client(enable_full_sql_logging=True)
         pub_admin_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
         pub_admin_client.execute("CREATE DATABASE IF NOT EXISTS publisher_data")
         pub_admin_client.disconnect()
@@ -227,7 +227,7 @@ def demo_cross_account_pubsub():
         logger.info("   ✅ Connected to publisher database")
         
         # Create tables for publishing
-        pub_admin_client = Client()
+        pub_admin_client = Client(enable_full_sql_logging=True)
         pub_admin_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
         
         pub_admin_client.execute("""
@@ -295,7 +295,7 @@ def demo_cross_account_pubsub():
         
         # Setup subscriber side
         logger.info("\n📥 Setup Subscriber Side")
-        subscriber_client = Client()
+        subscriber_client = Client(enable_full_sql_logging=True)
         
         # Connect as subscriber account admin
         subscriber_client.connect("127.0.0.1", 6001, "pub_subscriber#sub_admin", "sub_pass", "mo_catalog")
@@ -316,7 +316,7 @@ def demo_cross_account_pubsub():
         logger.info("\n🔄 Demonstrate Cross-Account Data Synchronization")
         
         # Add new data as publisher
-        pub_admin_client = Client()
+        pub_admin_client = Client(enable_full_sql_logging=True)
         pub_admin_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
         
         pub_admin_client.execute(
@@ -351,7 +351,7 @@ def demo_cross_account_pubsub():
         # Drop databases
         try:
             # Create new connection for cleanup
-            cleanup_client = Client()
+            cleanup_client = Client(enable_full_sql_logging=True)
             cleanup_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
             cleanup_client.execute("DROP DATABASE publisher_data")
             cleanup_client.disconnect()
@@ -387,7 +387,7 @@ async def demo_async_pubsub_operations():
     """Demonstrate async PubSub operations"""
     logger.info("=== Async PubSub Operations Demo ===")
     
-    client = AsyncClient(logger=logger)
+    client = AsyncClient(logger=logger, enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
@@ -501,7 +501,7 @@ def demo_pubsub_best_practices():
     """Demonstrate PubSub best practices and real-world scenarios"""
     logger.info("=== PubSub Best Practices Demo ===")
     
-    client = Client(logger=logger)
+    client = Client(logger=logger, enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne

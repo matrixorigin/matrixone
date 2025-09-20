@@ -31,7 +31,8 @@ def demo_default_logger():
     # Create client with default logger
     client = Client(
         enable_performance_logging=True,
-        enable_sql_logging=True
+        enable_sql_logging=True,
+        enable_full_sql_logging=True
     )
     
     try:
@@ -86,7 +87,7 @@ def demo_custom_logger():
     )
     
     # Create client with custom logger
-    client = Client(logger=matrixone_logger)
+    client = Client(logger=matrixone_logger, enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
@@ -116,7 +117,7 @@ def demo_structured_logging():
     )
     
     # Create client with structured logger
-    client = Client(logger=matrixone_logger)
+    client = Client(logger=matrixone_logger, enable_full_sql_logging=True)
     
     try:
         # Connect with detailed logging
@@ -164,7 +165,8 @@ async def demo_async_logger():
     # Create async client with default logger
     client = AsyncClient(
         enable_performance_logging=True,
-        enable_sql_logging=True
+        enable_sql_logging=True,
+        enable_full_sql_logging=True
     )
     
     try:
@@ -204,7 +206,7 @@ def demo_logger_levels():
         enable_sql_logging=True
     )
     
-    client = Client(logger=matrixone_logger)
+    client = Client(logger=matrixone_logger, enable_full_sql_logging=True)
     
     try:
         client.connect("127.0.0.1", 6001, "root", "111", "test")
@@ -252,7 +254,7 @@ def demo_business_integration():
     # Simulate business operations
     app_logger.info("Starting business operation")
     
-    client = Client(logger=matrixone_logger)
+    client = Client(logger=matrixone_logger, enable_full_sql_logging=True)
     
     try:
         # Business operation: Get system information
@@ -287,7 +289,7 @@ def demo_performance_monitoring():
         enable_sql_logging=True
     )
     
-    client = Client(logger=matrixone_logger)
+    client = Client(logger=matrixone_logger, enable_full_sql_logging=True)
     
     try:
         client.connect("127.0.0.1", 6001, "root", "111", "test")

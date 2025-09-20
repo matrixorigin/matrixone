@@ -32,7 +32,7 @@ def demo_account_management():
     logger.info("=" * 60)
     
     # Connect as root for account management
-    root_client = Client(logger=logger)
+    root_client = Client(logger=logger, enable_full_sql_logging=True)
     root_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
     account_manager = AccountManager(root_client)
     
@@ -74,7 +74,7 @@ def demo_account_management():
     logger.info("\n=== Test 2: User Management ===")
     try:
         # Connect as demo account admin
-        demo_admin_client = Client()
+        demo_admin_client = Client(enable_full_sql_logging=True)
         demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
@@ -108,7 +108,7 @@ def demo_account_management():
     logger.info("\n=== Test 3: Role Management ===")
     try:
         # Connect as demo account admin
-        demo_admin_client = Client()
+        demo_admin_client = Client(enable_full_sql_logging=True)
         demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
@@ -142,7 +142,7 @@ def demo_account_management():
     logger.info("\n=== Test 4: Role Assignment ===")
     try:
         # Connect as demo account admin
-        demo_admin_client = Client()
+        demo_admin_client = Client(enable_full_sql_logging=True)
         demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
@@ -173,7 +173,7 @@ def demo_account_management():
     # Test developer1 with developer_role
     logger.info("\n🔌 Test developer1 with developer_role")
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'demo_account#developer1#developer_role', 'devpass123', 'mo_catalog')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login successful: {login_info}")
@@ -188,7 +188,7 @@ def demo_account_management():
     # Test analyst1 with analyst_role
     logger.info("\n🔌 Test analyst1 with analyst_role")
     try:
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'analyst1', 'analystpass123', 'mo_catalog', 
                       account='demo_account', role='analyst_role')
         login_info = client.get_login_info()
@@ -205,7 +205,7 @@ def demo_account_management():
     logger.info("\n=== Test 6: Permission Management ===")
     try:
         # Connect as demo account admin
-        demo_admin_client = Client()
+        demo_admin_client = Client(enable_full_sql_logging=True)
         demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
@@ -226,7 +226,7 @@ def demo_account_management():
     logger.info("\n=== Test 7: Multi-tenant Scenario ===")
     try:
         # Connect as tenant account admin
-        tenant_admin_client = Client()
+        tenant_admin_client = Client(enable_full_sql_logging=True)
         tenant_admin_client.connect('127.0.0.1', 6001, 'tenant_account#tenant_admin', 'tenantpass123', 'mo_catalog')
         tenant_account_manager = AccountManager(tenant_admin_client)
         
@@ -243,7 +243,7 @@ def demo_account_management():
         logger.info("✅ Granted tenant role to tenant user")
         
         # Test tenant user login
-        tenant_client = Client()
+        tenant_client = Client(enable_full_sql_logging=True)
         tenant_client.connect('127.0.0.1', 6001, 'tenant_account#tenant_user1#tenant_role', 'tenantuserpass123', 'mo_catalog')
         login_info = tenant_client.get_login_info()
         logger.info(f"✅ Tenant user login successful: {login_info}")
@@ -258,7 +258,7 @@ def demo_account_management():
     logger.info("\n=== Test 8: User Alteration ===")
     try:
         # Connect as demo account admin
-        demo_admin_client = Client()
+        demo_admin_client = Client(enable_full_sql_logging=True)
         demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
@@ -308,7 +308,7 @@ def demo_account_management():
     logger.info("\n=== Test 9: Role Management Details ===")
     try:
         # Connect as demo account admin
-        demo_admin_client = Client()
+        demo_admin_client = Client(enable_full_sql_logging=True)
         demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
@@ -335,7 +335,7 @@ def demo_account_management():
     logger.info("\n=== Test 10: Permission Management ===")
     try:
         # Connect as demo account admin
-        demo_admin_client = Client()
+        demo_admin_client = Client(enable_full_sql_logging=True)
         demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
@@ -443,7 +443,7 @@ async def demo_async_account_management():
     
     try:
         # Connect as root
-        root_client = AsyncClient()
+        root_client = AsyncClient(enable_full_sql_logging=True)
         await root_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         logger.info("✅ Async connection successful")
         

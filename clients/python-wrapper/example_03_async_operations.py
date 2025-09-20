@@ -35,7 +35,7 @@ async def demo_basic_async_operations():
     # Test 1: Basic async connection
     logger.info("\n=== Test 1: Basic Async Connection ===")
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         logger.info("✅ Async connection successful")
         
@@ -58,7 +58,7 @@ async def demo_async_query_execution():
     logger.info("\n=== Test 2: Async Query Execution ===")
     
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test various query types
@@ -88,7 +88,7 @@ async def demo_async_transaction_management():
     logger.info("\n=== Test 3: Async Transaction Management ===")
     
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test transaction with commit
@@ -147,7 +147,7 @@ async def demo_async_concurrent_operations():
         # Create multiple async clients
         clients = []
         for i in range(3):
-            client = AsyncClient(logger=logger)
+            client = AsyncClient(logger=logger, enable_full_sql_logging=True)
             await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
             clients.append(client)
         
@@ -181,7 +181,7 @@ async def demo_async_account_management():
     
     try:
         # Connect as root
-        root_client = AsyncClient()
+        root_client = AsyncClient(enable_full_sql_logging=True)
         await root_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test async account operations
@@ -209,7 +209,7 @@ async def demo_async_error_handling():
     # Test connection errors
     logger.info("\n🔌 Test async connection errors")
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'invalid_user', 'invalid_pass', 'test')
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
@@ -218,7 +218,7 @@ async def demo_async_error_handling():
     # Test query errors
     logger.info("\n🔌 Test async query errors")
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test invalid query
@@ -231,7 +231,7 @@ async def demo_async_error_handling():
     # Test transaction errors
     logger.info("\n🔌 Test async transaction errors")
     try:
-        client = AsyncClient(logger=logger)
+        client = AsyncClient(logger=logger, enable_full_sql_logging=True)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         async with client.transaction() as tx:
@@ -269,7 +269,7 @@ async def demo_sync_vs_async_performance():
         start_time = time.time()
         
         async def async_task(task_id):
-            client = AsyncClient(logger=logger)
+            client = AsyncClient(logger=logger, enable_full_sql_logging=True)
             await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
             result = await client.execute(f"SELECT {task_id} as async_task")
             await client.disconnect()
@@ -319,7 +319,7 @@ async def demo_async_connection_pooling():
         # Create multiple async connections
         clients = []
         for i in range(3):
-            client = AsyncClient(logger=logger)
+            client = AsyncClient(logger=logger, enable_full_sql_logging=True)
             await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
             clients.append(client)
             logger.info(f"   ✅ Created async connection {i+1}")

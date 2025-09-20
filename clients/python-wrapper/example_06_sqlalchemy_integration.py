@@ -443,7 +443,7 @@ def demo_sqlalchemy_with_matrixone_features():
         
         # Test with MatrixOne client integration
         logger.info("\n🔧 MatrixOne Client Integration")
-        client = Client(logger=logger)
+        client = Client(logger=logger, enable_full_sql_logging=True)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Use MatrixOne client for account operations
