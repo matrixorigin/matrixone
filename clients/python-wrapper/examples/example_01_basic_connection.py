@@ -16,6 +16,7 @@ import asyncio
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
 from matrixone.logger import create_default_logger
+from matrixone.config import get_connection_params, print_config
 
 # Create MatrixOne logger for all logging
 logger = create_default_logger(
@@ -29,11 +30,17 @@ def demo_basic_connection():
     logger.info("🚀 MatrixOne Basic Connection Demo")
     logger.info("=" * 60)
     
+    # Print current configuration
+    print_config()
+    
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Test 1: Simple connection
     logger.info("\n=== Test 1: Simple Connection ===")
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         logger.info("✅ Basic connection successful")
         
         # Test basic query
@@ -54,11 +61,14 @@ def demo_login_formats():
     """Demonstrate all supported login formats"""
     logger.info("\n=== Test 2: Login Format Variations ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Format 1: Legacy format (simple username)
     logger.info("\n🔌 Format 1: Legacy format (simple username)")
     try:
         client = Client(logger=logger, enable_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
         client.disconnect()
@@ -69,7 +79,7 @@ def demo_login_formats():
     logger.info("\n🔌 Format 2: Direct format (account#user)")
     try:
         client = Client(logger=logger, enable_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'sys#root', '111', 'test')
+        client.connect(host, port, 'sys#root', password, database)
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
         client.disconnect()
@@ -80,7 +90,7 @@ def demo_login_formats():
     logger.info("\n🔌 Format 3: User with role (separate parameters)")
     try:
         client = Client(logger=logger, enable_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test', role='admin')
+        client.connect(host, port, user, password, database, role='admin')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
         client.disconnect()
@@ -91,7 +101,7 @@ def demo_login_formats():
     logger.info("\n🔌 Format 4: Account with separate parameters")
     try:
         client = Client(logger=logger, enable_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test', account='sys')
+        client.connect(host, port, user, password, database, account='sys')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
         client.disconnect()
@@ -103,11 +113,14 @@ def demo_connection_error_handling():
     """Demonstrate connection error handling"""
     logger.info("\n=== Test 3: Connection Error Handling ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Test invalid credentials
     logger.info("\n🔌 Test invalid credentials")
     try:
         client = Client(logger=logger, enable_error_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'invalid_user', 'invalid_pass', 'test')
+        client.connect(host, port, 'invalid_user', 'invalid_pass', database)
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
         logger.info(f"   ✅ Correctly failed: {e}")
@@ -116,7 +129,7 @@ def demo_connection_error_handling():
     logger.info("\n🔌 Test invalid host")
     try:
         client = Client(logger=logger, enable_error_sql_logging=True)
-        client.connect('192.168.1.999', 6001, 'root', '111', 'test')
+        client.connect('192.168.1.999', port, user, password, database)
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
         logger.info(f"   ✅ Correctly failed: {e}")
@@ -125,7 +138,7 @@ def demo_connection_error_handling():
     logger.info("\n🔌 Test invalid port")
     try:
         client = Client(logger=logger, enable_error_sql_logging=True)
-        client.connect('127.0.0.1', 9999, 'root', '111', 'test')
+        client.connect(host, 9999, user, password, database)
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
         logger.info(f"   ✅ Correctly failed: {e}")
@@ -135,9 +148,12 @@ def demo_connection_info():
     """Demonstrate connection information retrieval"""
     logger.info("\n=== Test 4: Connection Information ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Get login info
         login_info = client.get_login_info()
@@ -163,10 +179,13 @@ async def demo_async_connection():
     """Demonstrate async connection"""
     logger.info("\n=== Test 5: Async Connection ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     client = None
     try:
         client = AsyncClient(logger=logger)
-        await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        await client.connect(host, port, user, password, database)
         logger.info("✅ Async connection successful")
         
         # Test async query
@@ -192,12 +211,15 @@ def demo_connection_pooling():
     """Demonstrate multiple connections"""
     logger.info("\n=== Test 6: Multiple Connections ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     clients = []
     try:
         # Create multiple connections
         for i in range(3):
             client = Client(logger=logger, enable_sql_logging=True)
-            client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+            client.connect(host, port, user, password, database)
             clients.append(client)
             logger.info(f"   ✅ Created connection {i+1}")
         

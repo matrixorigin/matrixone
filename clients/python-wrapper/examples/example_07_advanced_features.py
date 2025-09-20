@@ -22,6 +22,7 @@ import json
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
 from matrixone.logger import create_default_logger
+from matrixone.config import get_connection_params, print_config
 
 # Create MatrixOne logger for all logging
 logger = create_default_logger(
@@ -35,9 +36,12 @@ def demo_pubsub_operations():
     logger.info("🚀 MatrixOne PubSub Operations Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Test 1: Basic PubSub setup
         logger.info("\n=== Test 1: Basic PubSub Setup ===")
@@ -93,7 +97,7 @@ def demo_clone_operations():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Create source table
         logger.info("\n📋 Create Source Table")
@@ -147,7 +151,7 @@ def demo_pitr_operations():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Use existing important data for PITR demonstration
         logger.info("\n📋 Prepare Important Data for PITR")
@@ -282,7 +286,7 @@ def demo_moctl_integration():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         logger.info("\n🔧 MoCTL Operations")
         
@@ -378,7 +382,7 @@ def demo_version_information():
     
     try:
         # Connect to MatrixOne
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         logger.info("✅ Connected to MatrixOne")
         
         # Get server version
@@ -469,7 +473,7 @@ async def demo_async_version_information():
     
     try:
         # Connect to MatrixOne
-        await client.connect("127.0.0.1", 6001, "root", "111", "test")
+        await client.connect(host, port, user, password, database)
         logger.info("✅ Connected to MatrixOne (async)")
         
         # Get server version
@@ -523,9 +527,12 @@ def demo_version_context_manager():
     logger.info("\n🚀 MatrixOne Version Info with Context Manager Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         with Client(enable_full_sql_logging=True) as client:
-            client.connect("127.0.0.1", 6001, "root", "111", "test")
+            client.connect(host, port, user, password, database)
             
             logger.info("✅ Connected using context manager")
             
@@ -548,9 +555,12 @@ async def demo_async_version_context_manager():
     logger.info("\n🚀 MatrixOne Async Version Info with Context Manager Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         async with AsyncClient(enable_full_sql_logging=True) as client:
-            await client.connect("127.0.0.1", 6001, "root", "111", "test")
+            await client.connect(host, port, user, password, database)
             
             logger.info("✅ Connected using async context manager")
             
@@ -574,7 +584,7 @@ def demo_performance_monitoring():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Create test table for performance testing
         logger.info("\n⚡ Performance Test Setup")
@@ -643,7 +653,7 @@ def demo_advanced_error_handling():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Test connection error handling
         logger.info("\n🔍 Connection Error Handling")
@@ -742,7 +752,7 @@ def demo_custom_configurations():
         clients = []
         for i in range(3):
             client = Client(logger=logger, enable_full_sql_logging=True)
-            client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+            client.connect(host, port, user, password, database)
             clients.append(client)
             logger.info(f"   ✅ Created connection {i+1}")
         
@@ -766,7 +776,7 @@ async def demo_async_advanced_features():
     
     try:
         client = AsyncClient(logger=logger, enable_full_sql_logging=True)
-        await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        await client.connect(host, port, user, password, database)
         
         # Test async performance monitoring
         logger.info("\n⚡ Async Performance Test")

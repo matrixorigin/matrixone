@@ -311,6 +311,51 @@ Check out the `examples/` directory for comprehensive usage examples:
 - `example_10_version_management.py` - Version management
 - `example_11_matrixone_version_demo.py` - MatrixOne version demo
 
+### Running Examples
+
+Run all examples:
+```bash
+make examples
+```
+
+Run specific examples:
+```bash
+make example-basic    # Basic connection example
+make example-async    # Async operations example
+make example-account  # Account management example
+```
+
+### Customizing Connection Parameters
+
+You can override the default connection parameters using environment variables:
+
+```bash
+# Set custom connection parameters
+export MATRIXONE_HOST=localhost
+export MATRIXONE_PORT=6001
+export MATRIXONE_USER=root
+export MATRIXONE_PASSWORD=111
+export MATRIXONE_DATABASE=test
+
+# Run examples with custom parameters
+make examples
+```
+
+Or set them inline:
+```bash
+MATRIXONE_HOST=localhost MATRIXONE_USER=admin make example-basic
+```
+
+Available environment variables:
+- `MATRIXONE_HOST`: Database host (default: 127.0.0.1)
+- `MATRIXONE_PORT`: Database port (default: 6001)
+- `MATRIXONE_USER`: Database username (default: root)
+- `MATRIXONE_PASSWORD`: Database password (default: 111)
+- `MATRIXONE_DATABASE`: Database name (default: test)
+- `MATRIXONE_CHARSET`: Character set (default: utf8mb4)
+- `MATRIXONE_CONNECT_TIMEOUT`: Connection timeout (default: 30)
+- `MATRIXONE_AUTOCOMMIT`: Auto-commit mode (default: true)
+
 ## 🧪 Testing & Development
 
 ### Python Environment Configuration

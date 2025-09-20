@@ -18,6 +18,7 @@ import asyncio
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
 from matrixone.logger import create_default_logger
+from matrixone.config import get_connection_params, print_config
 
 # Create MatrixOne logger for all logging
 logger = create_default_logger(
@@ -31,9 +32,15 @@ def demo_account_management():
     logger.info("🚀 MatrixOne Account Management Demo")
     logger.info("=" * 60)
     
+    # Print current configuration
+    print_config()
+    
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Connect as root for account management
     root_client = Client(logger=logger, enable_full_sql_logging=True)
-    root_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+    root_client.connect(host, port, user, password, database)
     account_manager = AccountManager(root_client)
     
     # Clean up any existing demo accounts
@@ -75,7 +82,7 @@ def demo_account_management():
     try:
         # Connect as demo account admin
         demo_admin_client = Client(enable_full_sql_logging=True)
-        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
         # Create users in demo account
@@ -109,7 +116,7 @@ def demo_account_management():
     try:
         # Connect as demo account admin
         demo_admin_client = Client(enable_full_sql_logging=True)
-        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
         # Create roles
@@ -143,7 +150,7 @@ def demo_account_management():
     try:
         # Connect as demo account admin
         demo_admin_client = Client(enable_full_sql_logging=True)
-        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
         # Assign roles to users
@@ -174,7 +181,7 @@ def demo_account_management():
     logger.info("\n🔌 Test developer1 with developer_role")
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'demo_account#developer1#developer_role', 'devpass123', 'mo_catalog')
+        client.connect(host, port, 'demo_account#developer1#developer_role', 'devpass123', 'mo_catalog')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login successful: {login_info}")
         
@@ -189,7 +196,7 @@ def demo_account_management():
     logger.info("\n🔌 Test analyst1 with analyst_role")
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'analyst1', 'analystpass123', 'mo_catalog', 
+        client.connect(host, port, 'analyst1', 'analystpass123', 'mo_catalog', 
                       account='demo_account', role='analyst_role')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login successful: {login_info}")
@@ -206,7 +213,7 @@ def demo_account_management():
     try:
         # Connect as demo account admin
         demo_admin_client = Client(enable_full_sql_logging=True)
-        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
         # List grants for current user
@@ -227,7 +234,7 @@ def demo_account_management():
     try:
         # Connect as tenant account admin
         tenant_admin_client = Client(enable_full_sql_logging=True)
-        tenant_admin_client.connect('127.0.0.1', 6001, 'tenant_account#tenant_admin', 'tenantpass123', 'mo_catalog')
+        tenant_admin_client.connect(host, port, 'tenant_account#tenant_admin', 'tenantpass123', 'mo_catalog')
         tenant_account_manager = AccountManager(tenant_admin_client)
         
         # Create tenant-specific user
@@ -244,7 +251,7 @@ def demo_account_management():
         
         # Test tenant user login
         tenant_client = Client(enable_full_sql_logging=True)
-        tenant_client.connect('127.0.0.1', 6001, 'tenant_account#tenant_user1#tenant_role', 'tenantuserpass123', 'mo_catalog')
+        tenant_client.connect(host, port, 'tenant_account#tenant_user1#tenant_role', 'tenantuserpass123', 'mo_catalog')
         login_info = tenant_client.get_login_info()
         logger.info(f"✅ Tenant user login successful: {login_info}")
         
@@ -259,7 +266,7 @@ def demo_account_management():
     try:
         # Connect as demo account admin
         demo_admin_client = Client(enable_full_sql_logging=True)
-        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
         # Alter user password
@@ -309,7 +316,7 @@ def demo_account_management():
     try:
         # Connect as demo account admin
         demo_admin_client = Client(enable_full_sql_logging=True)
-        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
         # Get specific role
@@ -336,7 +343,7 @@ def demo_account_management():
     try:
         # Connect as demo account admin
         demo_admin_client = Client(enable_full_sql_logging=True)
-        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_admin_client.connect(host, port, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
         demo_account_manager = AccountManager(demo_admin_client)
         
         # Grant privilege to role
@@ -441,10 +448,13 @@ async def demo_async_account_management():
     logger.info("\n🚀 MatrixOne Async Account Management Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         # Connect as root
         root_client = AsyncClient(enable_full_sql_logging=True)
-        await root_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        await root_client.connect(host, port, user, password, database)
         logger.info("✅ Async connection successful")
         
         # Test basic async operations

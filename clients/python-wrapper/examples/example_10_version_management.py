@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 from matrixone import Client
 from matrixone.version import VersionManager, VersionInfo, FeatureRequirement, requires_version
 from matrixone.exceptions import VersionError, ConnectionError, QueryError
+from matrixone.config import get_connection_params, print_config
 
 
 def demonstrate_version_parsing():

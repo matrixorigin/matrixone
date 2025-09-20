@@ -68,11 +68,14 @@ def demo_basic_sqlalchemy_setup():
     logger.info("🚀 MatrixOne Basic SQLAlchemy Setup Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         # Create engine
         logger.info("\n=== Test 1: Create SQLAlchemy Engine ===")
         engine = create_engine(
-            'mysql+pymysql://root:111@127.0.0.1:6001/test',
+            f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}',
             poolclass=QueuePool,
             pool_size=5,
             max_overflow=10,
@@ -118,7 +121,7 @@ def demo_orm_operations():
     
     try:
         # Create engine and session
-        engine = create_engine('mysql+pymysql://root:111@127.0.0.1:6001/test')
+        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
         session = SessionLocal()
         
@@ -237,7 +240,7 @@ def demo_sqlalchemy_transactions():
     logger.info("\n=== Test 6: SQLAlchemy Transactions ===")
     
     try:
-        engine = create_engine('mysql+pymysql://root:111@127.0.0.1:6001/test')
+        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
         
         # Test transaction with commit
@@ -312,7 +315,7 @@ async def demo_async_sqlalchemy():
     try:
         # Create async engine
         async_engine = create_async_engine(
-            'mysql+aiomysql://root:111@127.0.0.1:6001/test',
+            f'mysql+aiomysql://{user}:{password}@{host}:{port}/{database}',
             echo=False
         )
         
@@ -372,7 +375,7 @@ def demo_sqlalchemy_performance():
     logger.info("\n=== Test 8: SQLAlchemy Performance ===")
     
     try:
-        engine = create_engine('mysql+pymysql://root:111@127.0.0.1:6001/test')
+        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
         
         # Test bulk operations
@@ -424,7 +427,7 @@ def demo_sqlalchemy_with_matrixone_features():
     logger.info("\n=== Test 9: SQLAlchemy with MatrixOne Features ===")
     
     try:
-        engine = create_engine('mysql+pymysql://root:111@127.0.0.1:6001/test')
+        engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
         session = SessionLocal()
         
@@ -444,10 +447,11 @@ def demo_sqlalchemy_with_matrixone_features():
         # Test with MatrixOne client integration
         logger.info("\n🔧 MatrixOne Client Integration")
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Use MatrixOne client for account operations
         from matrixone.account import AccountManager
+from matrixone.config import get_connection_params, print_config
         account_manager = AccountManager(client)
         
         # Get current user info
@@ -473,7 +477,7 @@ def demo_sqlalchemy_best_practices():
         # Best Practice 1: Use connection pooling
         logger.info("\n📋 Best Practice 1: Connection Pooling")
         engine = create_engine(
-            'mysql+pymysql://root:111@127.0.0.1:6001/test',
+            f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}',
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,

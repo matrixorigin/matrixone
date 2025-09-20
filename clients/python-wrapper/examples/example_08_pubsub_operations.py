@@ -9,6 +9,7 @@ Demonstrates comprehensive Publish-Subscribe functionality including:
 
 from matrixone import Client, AsyncClient
 from matrixone.logger import create_default_logger
+from matrixone.config import get_connection_params, print_config
 import asyncio
 import logging
 import time
@@ -27,11 +28,14 @@ def demo_basic_pubsub_operations():
     """Demonstrate basic PubSub operations within the same account"""
     logger.info("=== Basic PubSub Operations Demo ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     client = Client(logger=logger, enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         logger.info("✅ Connected to MatrixOne")
         
         # Create test database and tables
@@ -159,12 +163,15 @@ def demo_cross_account_pubsub():
     """Demonstrate cross-account PubSub operations"""
     logger.info("=== Cross-Account PubSub Operations Demo ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Main client for account management
     admin_client = Client(enable_full_sql_logging=True)
     
     try:
         # Connect as admin
-        admin_client.connect("127.0.0.1", 6001, "root", "111", "mo_catalog")
+        admin_client.connect(host, port, user, password, "mo_catalog")
         logger.info("✅ Connected as admin")
         
         # Clean up any existing accounts first
@@ -212,23 +219,23 @@ def demo_cross_account_pubsub():
         publisher_client = Client(enable_full_sql_logging=True)
         
         # Connect as publisher account admin
-        publisher_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
+        publisher_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
         logger.info("   ✅ Connected as publisher account admin")
         
         # Create publisher database
         pub_admin_client = Client(enable_full_sql_logging=True)
-        pub_admin_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
+        pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
         pub_admin_client.execute("CREATE DATABASE IF NOT EXISTS publisher_data")
         pub_admin_client.disconnect()
         
         # Connect to publisher database
         publisher_client.disconnect()
-        publisher_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
+        publisher_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
         logger.info("   ✅ Connected to publisher database")
         
         # Create tables for publishing
         pub_admin_client = Client(enable_full_sql_logging=True)
-        pub_admin_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
+        pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
         
         pub_admin_client.execute("""
             CREATE TABLE IF NOT EXISTS sales_data (
@@ -298,7 +305,7 @@ def demo_cross_account_pubsub():
         subscriber_client = Client(enable_full_sql_logging=True)
         
         # Connect as subscriber account admin
-        subscriber_client.connect("127.0.0.1", 6001, "pub_subscriber#sub_admin", "sub_pass", "mo_catalog")
+        subscriber_client.connect(host, port, "pub_subscriber#sub_admin", "sub_pass", "mo_catalog")
         logger.info("   ✅ Connected as subscriber account admin")
         
         # Create subscriptions
@@ -317,7 +324,7 @@ def demo_cross_account_pubsub():
         
         # Add new data as publisher
         pub_admin_client = Client(enable_full_sql_logging=True)
-        pub_admin_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
+        pub_admin_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "publisher_data")
         
         pub_admin_client.execute(
             "INSERT INTO sales_data (product_name, quantity, price) VALUES (%s, %s, %s)",
@@ -352,7 +359,7 @@ def demo_cross_account_pubsub():
         try:
             # Create new connection for cleanup
             cleanup_client = Client(enable_full_sql_logging=True)
-            cleanup_client.connect("127.0.0.1", 6001, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
+            cleanup_client.connect(host, port, "pub_publisher#pub_admin", "pub_pass", "mo_catalog")
             cleanup_client.execute("DROP DATABASE publisher_data")
             cleanup_client.disconnect()
             logger.info("   ✅ Dropped publisher database")
@@ -387,11 +394,14 @@ async def demo_async_pubsub_operations():
     """Demonstrate async PubSub operations"""
     logger.info("=== Async PubSub Operations Demo ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     client = AsyncClient(logger=logger, enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
-        await client.connect("127.0.0.1", 6001, "root", "111", "test")
+        await client.connect(host, port, user, password, database)
         logger.info("✅ Connected to MatrixOne (async)")
         
         # Create test database and tables
@@ -501,11 +511,14 @@ def demo_pubsub_best_practices():
     """Demonstrate PubSub best practices and real-world scenarios"""
     logger.info("=== PubSub Best Practices Demo ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     client = Client(logger=logger, enable_full_sql_logging=True)
     
     try:
         # Connect to MatrixOne
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         logger.info("✅ Connected to MatrixOne")
         
         # Create a realistic e-commerce scenario

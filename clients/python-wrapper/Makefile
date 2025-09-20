@@ -100,8 +100,15 @@ test-release: ## Run pre-release tests
 
 # Example running
 .PHONY: examples
-examples: ## Run all examples
+examples: ## Run all examples (use env vars to override connection: MATRIXONE_HOST, MATRIXONE_PORT, MATRIXONE_USER, MATRIXONE_PASSWORD, MATRIXONE_DATABASE)
 	@echo "$(BLUE)Running all examples...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
 	@for example in examples/example_*.py; do \
 		echo "$(YELLOW)Running $$example...$(NC)"; \
 		PYTHONPATH=. $(PYTHON) $$example || echo "$(RED)$$example failed$(NC)"; \
@@ -110,18 +117,39 @@ examples: ## Run all examples
 	@echo "$(GREEN)All examples completed!$(NC)"
 
 .PHONY: example-basic
-example-basic: ## Run basic connection example
+example-basic: ## Run basic connection example (use env vars to override connection)
 	@echo "$(BLUE)Running basic connection example...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
 	PYTHONPATH=. $(PYTHON) examples/example_01_basic_connection.py
 
 .PHONY: example-async
-example-async: ## Run async operations example
+example-async: ## Run async operations example (use env vars to override connection)
 	@echo "$(BLUE)Running async operations example...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
 	PYTHONPATH=. $(PYTHON) examples/example_03_async_operations.py
 
 .PHONY: example-account
-example-account: ## Run account management example
+example-account: ## Run account management example (use env vars to override connection)
 	@echo "$(BLUE)Running account management example...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
 	PYTHONPATH=. $(PYTHON) examples/example_02_account_management.py
 
 # Build related

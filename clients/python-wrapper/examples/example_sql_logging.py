@@ -280,6 +280,7 @@ def demonstrate_custom_logger():
     
     # Create MatrixOne logger from custom logger
     from matrixone.logger import create_custom_logger
+from matrixone.config import get_connection_params, print_config
     mo_logger = create_custom_logger(
         logger=custom_logger,
         enable_sql_logging=True,

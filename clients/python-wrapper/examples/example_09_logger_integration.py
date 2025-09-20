@@ -17,6 +17,7 @@ import logging
 import asyncio
 from matrixone import Client, AsyncClient
 from matrixone.logger import MatrixOneLogger, create_default_logger, create_custom_logger
+from matrixone.config import get_connection_params, print_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
@@ -37,7 +38,7 @@ def demo_default_logger():
     
     try:
         # Connect to MatrixOne
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         
         # Execute some queries to see logging in action
         client.execute("SELECT 1 as test_value")
@@ -91,7 +92,7 @@ def demo_custom_logger():
     
     try:
         # Connect to MatrixOne
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         
         # Execute queries with custom logging
         client.execute("SELECT 'Custom Logger Test' as message")
@@ -121,7 +122,7 @@ def demo_structured_logging():
     
     try:
         # Connect with detailed logging
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         
         # Test account operations with structured logging
         client.account.create_account(
@@ -171,7 +172,7 @@ async def demo_async_logger():
     
     try:
         # Connect to MatrixOne
-        await client.connect("127.0.0.1", 6001, "root", "111", "test")
+        await client.connect(host, port, user, password, database)
         
         # Execute async queries
         result1 = await client.execute("SELECT 'Async Logger Test' as message")
@@ -209,7 +210,7 @@ def demo_logger_levels():
     client = Client(logger=matrixone_logger, enable_full_sql_logging=True)
     
     try:
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         
         # Test different operations to see various log levels
         client.execute("SELECT 1")  # INFO level
@@ -259,7 +260,7 @@ def demo_business_integration():
     try:
         # Business operation: Get system information
         app_logger.info("Connecting to database for system check")
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         
         # Business operation: Check system health
         app_logger.info("Checking system health")
@@ -292,7 +293,7 @@ def demo_performance_monitoring():
     client = Client(logger=matrixone_logger, enable_full_sql_logging=True)
     
     try:
-        client.connect("127.0.0.1", 6001, "root", "111", "test")
+        client.connect(host, port, user, password, database)
         
         # Test performance logging with different operations
         operations = [

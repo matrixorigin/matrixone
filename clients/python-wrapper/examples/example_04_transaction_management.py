@@ -18,6 +18,7 @@ import logging
 import asyncio
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
+from matrixone.config import get_connection_params, print_config
 from matrixone.logger import create_default_logger
 
 # Create MatrixOne logger for all logging
@@ -32,9 +33,12 @@ def demo_basic_transaction_operations():
     logger.info("🚀 MatrixOne Basic Transaction Operations Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Test 1: Simple transaction with commit
         logger.info("\n=== Test 1: Simple Transaction with Commit ===")
@@ -84,10 +88,13 @@ def demo_transaction_isolation():
     """Demonstrate transaction isolation"""
     logger.info("\n=== Test 3: Transaction Isolation ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         # Create test table
         client1 = Client(enable_full_sql_logging=True)
-        client1.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client1.connect(host, port, user, password, database)
         client1.execute("CREATE TABLE IF NOT EXISTS isolation_test (id INT PRIMARY KEY, value INT)")
         client1.execute("INSERT INTO isolation_test VALUES (1, 100)")
         client1.disconnect()
@@ -97,11 +104,11 @@ def demo_transaction_isolation():
         
         # Start transaction 1
         client1 = Client(enable_full_sql_logging=True)
-        client1.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client1.connect(host, port, user, password, database)
         
         # Start transaction 2
         client2 = Client(enable_full_sql_logging=True)
-        client2.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client2.connect(host, port, user, password, database)
         
         # Transaction 1 reads initial value
         with client1.transaction() as tx1:
@@ -126,7 +133,7 @@ def demo_transaction_isolation():
         
         # Cleanup
         cleanup_client = Client(enable_full_sql_logging=True)
-        cleanup_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        cleanup_client.connect(host, port, user, password, database)
         cleanup_client.execute("DROP TABLE IF EXISTS isolation_test")
         cleanup_client.disconnect()
         
@@ -138,9 +145,12 @@ def demo_transaction_error_handling():
     """Demonstrate transaction error handling"""
     logger.info("\n=== Test 4: Transaction Error Handling ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Test constraint violation
         logger.info("\n🔍 Test Constraint Violation (expected to fail)")
@@ -190,9 +200,12 @@ def demo_transaction_with_account_operations():
     """Demonstrate transaction with account operations"""
     logger.info("\n=== Test 5: Transaction with Account Operations ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         account_manager = AccountManager(client)
         
         # Note: Account operations may not be supported in transactions
@@ -224,9 +237,12 @@ def demo_transaction_performance():
     """Demonstrate transaction performance"""
     logger.info("\n=== Test 6: Transaction Performance ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Create test table
         client.execute("CREATE TABLE IF NOT EXISTS performance_test (id INT PRIMARY KEY, data VARCHAR(100))")
@@ -269,9 +285,12 @@ async def demo_async_transaction_management():
     """Demonstrate async transaction management"""
     logger.info("\n=== Test 7: Async Transaction Management ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = AsyncClient(logger=logger, enable_full_sql_logging=True)
-        await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        await client.connect(host, port, user, password, database)
         
         # Test async transaction with commit
         logger.info("\n🔄 Test Async Transaction with Commit")
@@ -316,9 +335,12 @@ def demo_transaction_best_practices():
     """Demonstrate transaction best practices"""
     logger.info("\n=== Test 8: Transaction Best Practices ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Best Practice 1: Keep transactions short
         logger.info("\n📋 Best Practice 1: Keep Transactions Short")

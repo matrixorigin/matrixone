@@ -19,6 +19,7 @@ import time
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
 from matrixone.logger import create_default_logger
+from matrixone.config import get_connection_params, print_config
 
 # Create MatrixOne logger for all logging
 logger = create_default_logger(
@@ -32,9 +33,12 @@ def demo_basic_snapshot_operations():
     logger.info("🚀 MatrixOne Basic Snapshot Operations Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Test 1: Create test data
         logger.info("\n=== Test 1: Create Test Data ===")
@@ -122,9 +126,12 @@ def demo_snapshot_enumeration():
     """Demonstrate snapshot enumeration and information"""
     logger.info("\n=== Test 7: Snapshot Enumeration ===")
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Create test table for enumeration
         client.execute("CREATE TABLE IF NOT EXISTS snapshot_test (id INT PRIMARY KEY, name VARCHAR(50), value INT)")
@@ -196,7 +203,7 @@ def demo_point_in_time_recovery():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Create test data
         logger.info("\n📊 Create Test Data for PITR")
@@ -288,7 +295,7 @@ def demo_snapshot_error_handling():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Test invalid snapshot name
         logger.info("\n🔍 Test Invalid Snapshot Name")
@@ -372,7 +379,7 @@ async def demo_async_snapshot_operations():
     client = None
     try:
         client = AsyncClient(logger=logger, enable_full_sql_logging=True)
-        await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        await client.connect(host, port, user, password, database)
         
         # Create test data
         await client.execute("CREATE TABLE IF NOT EXISTS asyncsnapshottest (id INT, name VARCHAR(50))")
@@ -433,7 +440,7 @@ def demo_snapshot_best_practices():
     
     try:
         client = Client(logger=logger, enable_full_sql_logging=True)
-        client.connect('127.0.0.1', 6001, 'root', '111', 'test')
+        client.connect(host, port, user, password, database)
         
         # Best Practice 1: Use descriptive snapshot names
         logger.info("\n📋 Best Practice 1: Descriptive Snapshot Names")
