@@ -73,8 +73,17 @@ matrixone-client = "matrixone.cli:main"
 where = ["."]
 include = ["matrixone*"]
 
+# Package data configuration
 [tool.setuptools.package-data]
 matrixone = ["py.typed"]
+
+# Include example files in distribution
+[tool.setuptools]
+include-package-data = true
+
+# Exclude test files from distribution
+[tool.setuptools.exclude-package-data]
+"*" = ["test_*.py", "pytest.ini", "pytest-release.ini", "test-release*.sh"]
 
 # Black configuration
 [tool.black]
