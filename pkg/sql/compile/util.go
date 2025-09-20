@@ -88,7 +88,6 @@ var (
 	deleteMoIndexesWithTableIdFormat             = `delete from mo_catalog.mo_indexes where table_id = %v;`
 	deleteMoIndexesWithTableIdAndIndexNameFormat = `delete from mo_catalog.mo_indexes where table_id = %v and name = '%s';`
 	updateMoIndexesVisibleFormat                 = `update mo_catalog.mo_indexes set is_visible = %v where table_id = %v and name = '%s';`
-	updateMoIndexesTruncateTableFormat           = `update mo_catalog.mo_indexes set table_id = %v where table_id = %v`
 	updateMoIndexesAlgoParams                    = `update mo_catalog.mo_indexes set algo_params = '%s' where table_id = %v and name = '%s';`
 	updateMoMergeSettings                        = `update mo_catalog.mo_merge_settings set tid = %v where account_id = %v and tid = %v;`
 )
@@ -438,7 +437,7 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 					if len(indexflag) > 0 {
 						if ok, err := s.isExperimentalEnabled(c, indexflag); err != nil {
 							return err
-						} else if !ok {
+						} else if !ok && !c.ignoreCheckExperimental {
 							return moerr.NewInternalError(c.proc.Ctx, fmt.Sprintf("%s is not enabled", indexflag))
 						}
 					}

@@ -20,8 +20,6 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -29,6 +27,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/assert"
 )
 
 func mockTenantUpgrade(t *testing.T) {
@@ -86,7 +85,7 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 
 	v := &versionHandle{
 		metadata: versions.Version{
-			Version: "v3.0.0",
+			Version: "v4.0.0",
 		},
 	}
 	sid := ""

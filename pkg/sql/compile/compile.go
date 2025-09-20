@@ -264,6 +264,11 @@ func (c *Compile) clear() {
 	c.isPrepare = false
 	c.hasMergeOp = false
 	c.needBlock = false
+	c.ignorePublish = false
+	c.adjustTableExtraFunc = nil
+	c.disableDropAutoIncrement = false
+	c.keepAutoIncrement = 0
+	c.disableLock = false
 
 	if c.lockMeta != nil {
 		c.lockMeta.clear(c.proc)
@@ -4800,7 +4805,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 		}
 	}
 	if accountId >= 0 {
-		ctx = defines.AttachAccountId(c.proc.Ctx, uint32(accountId))
+		opts = opts.WithAccountID(uint32(accountId))
 	}
 	return exec.Exec(ctx, sql, opts)
 }
