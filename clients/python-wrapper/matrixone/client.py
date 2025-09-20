@@ -25,9 +25,46 @@ from .version import VersionManager, get_version_manager
 
 class Client:
     """
-    MatrixOne Client - Basic implementation
+    MatrixOne Client - Main client class for database operations.
 
-    Provides basic connection and query functionality for MatrixOne database.
+    This class provides a high-level interface for connecting to and interacting
+    with MatrixOne databases. It supports both synchronous and asynchronous
+    operations, transaction management, and various database features like
+    snapshots, PITR, and account management.
+
+    Examples:
+        Basic usage::
+
+            from matrixone import Client
+
+            client = Client()
+            client.connect(
+                host='localhost',
+                port=6001,
+                user='root',
+                password='111',
+                database='test'
+            )
+
+            result = client.execute("SELECT 1 as test")
+            print(result.fetchall())
+            client.disconnect()
+
+        With transaction::
+
+            with client.transaction() as tx:
+                tx.execute("INSERT INTO users (name) VALUES ('John')")
+                tx.execute("INSERT INTO users (name) VALUES ('Jane')")
+                # Transaction will be committed automatically
+
+    Attributes:
+        host (str): Database host address
+        port (int): Database port number
+        user (str): Database username
+        password (str): Database password
+        database (str): Database name
+        connected (bool): Connection status
+        backend_version (str): Detected backend version
     """
 
     def __init__(

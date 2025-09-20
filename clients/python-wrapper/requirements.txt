@@ -20,3 +20,7 @@ python-dateutil>=2.8.0
 
 # Optional: Performance monitoring
 # psutil>=5.8.0
+
+# Documentation generation (for development)
+# sphinx>=4.0.0
+# sphinx-rtd-theme>=1.0.0

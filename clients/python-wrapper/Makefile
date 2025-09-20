@@ -41,7 +41,7 @@ install: ## Install development dependencies
 .PHONY: install-dev
 install-dev: install ## Install development environment (including testing tools)
 	@echo "$(BLUE)Installing development tools...$(NC)"
-	$(PIP) install black flake8 mypy isort
+	$(PIP) install black flake8 mypy isort sphinx sphinx-rtd-theme
 	@echo "$(GREEN)Development tools installed!$(NC)"
 
 # Code quality checks
@@ -205,16 +205,37 @@ dev-setup: install-dev ## Setup development environment
 	@echo "  make build       - Build package"
 
 .PHONY: pre-commit
-pre-commit: format test ## Pre-commit checks (format + test, skip lint for now)
-	@echo "$(GREEN)Pre-commit checks completed!$(NC)"
-
-.PHONY: pre-commit-full
 pre-commit-full: format lint test ## Full pre-commit checks (format + lint + test)
 	@echo "$(GREEN)Full pre-commit checks completed!$(NC)"
 
 .PHONY: release-check
 release-check: lint test build-release check-build ## Pre-release complete checks
 	@echo "$(GREEN)Pre-release checks completed!$(NC)"
+
+# Documentation
+.PHONY: docs
+docs: ## Generate documentation
+	@echo "$(BLUE)Generating documentation...$(NC)"
+	$(PYTHON) -m sphinx -b html docs docs/_build/html
+	@echo "$(GREEN)Documentation generated! View: docs/_build/html/index.html$(NC)"
+
+.PHONY: docs-clean
+docs-clean: ## Clean documentation build
+	@echo "$(BLUE)Cleaning documentation...$(NC)"
+	rm -rf docs/_build/
+	@echo "$(GREEN)Documentation cleaned!$(NC)"
+
+.PHONY: docs-serve
+docs-serve: docs ## Generate and serve documentation
+	@echo "$(BLUE)Serving documentation...$(NC)"
+	@echo "$(YELLOW)Open http://localhost:8000 in your browser$(NC)"
+	cd docs/_build/html && $(PYTHON) -m http.server 8000
+
+.PHONY: docs-api
+docs-api: ## Generate API documentation only
+	@echo "$(BLUE)Generating API documentation...$(NC)"
+	$(PYTHON) -m sphinx -b html -D extensions=sphinx.ext.autodoc docs docs/_build/api
+	@echo "$(GREEN)API documentation generated!$(NC)"
 
 # Information display
 .PHONY: info
