@@ -71,40 +71,40 @@ type-check: ## Run type checking
 .PHONY: test
 test: ## Run all tests
 	@echo "$(BLUE)Running all tests...$(NC)"
-	$(PYTHON) -m pytest test_*.py -v --tb=short
+	$(PYTHON) -m pytest tests/ -v --tb=short
 	@echo "$(GREEN)Tests completed!$(NC)"
 
 .PHONY: test-verbose
 test-verbose: ## Run verbose tests
 	@echo "$(BLUE)Running verbose tests...$(NC)"
-	$(PYTHON) -m pytest test_*.py -v -s --tb=long
+	$(PYTHON) -m pytest tests/ -v -s --tb=long
 	@echo "$(GREEN)Verbose tests completed!$(NC)"
 
 .PHONY: test-coverage
 test-coverage: ## Run tests and generate coverage report
 	@echo "$(BLUE)Running tests and generating coverage report...$(NC)"
-	$(PYTHON) -m pytest test_*.py --cov=matrixone --cov-report=html --cov-report=term
+	$(PYTHON) -m pytest tests/ --cov=matrixone --cov-report=html --cov-report=term
 	@echo "$(GREEN)Coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)"
 
 .PHONY: test-fast
 test-fast: ## Run fast tests (skip slow tests)
 	@echo "$(BLUE)Running fast tests...$(NC)"
-	$(PYTHON) -m pytest test_*.py -v -m "not slow" --tb=short
+	$(PYTHON) -m pytest tests/ -v -m "not slow" --tb=short
 	@echo "$(GREEN)Fast tests completed!$(NC)"
 
 .PHONY: test-release
 test-release: ## Run pre-release tests
 	@echo "$(BLUE)Running pre-release tests...$(NC)"
-	$(PYTHON) -m pytest test_*.py -v --tb=short --strict-markers
+	$(PYTHON) -m pytest tests/ -v --tb=short --strict-markers
 	@echo "$(GREEN)Pre-release tests completed!$(NC)"
 
 # Example running
 .PHONY: examples
 examples: ## Run all examples
 	@echo "$(BLUE)Running all examples...$(NC)"
-	@for example in example_*.py; do \
+	@for example in examples/example_*.py; do \
 		echo "$(YELLOW)Running $$example...$(NC)"; \
-		$(PYTHON) $$example || echo "$(RED)$$example failed$(NC)"; \
+		PYTHONPATH=. $(PYTHON) $$example || echo "$(RED)$$example failed$(NC)"; \
 		echo ""; \
 	done
 	@echo "$(GREEN)All examples completed!$(NC)"
@@ -112,17 +112,17 @@ examples: ## Run all examples
 .PHONY: example-basic
 example-basic: ## Run basic connection example
 	@echo "$(BLUE)Running basic connection example...$(NC)"
-	$(PYTHON) example_01_basic_connection.py
+	PYTHONPATH=. $(PYTHON) examples/example_01_basic_connection.py
 
 .PHONY: example-async
 example-async: ## Run async operations example
 	@echo "$(BLUE)Running async operations example...$(NC)"
-	$(PYTHON) example_03_async_operations.py
+	PYTHONPATH=. $(PYTHON) examples/example_03_async_operations.py
 
 .PHONY: example-account
 example-account: ## Run account management example
 	@echo "$(BLUE)Running account management example...$(NC)"
-	$(PYTHON) example_02_account_management.py
+	PYTHONPATH=. $(PYTHON) examples/example_02_account_management.py
 
 # Build related
 .PHONY: build
@@ -248,8 +248,8 @@ info: ## Show project information
 	@echo "  Build directory: $(BUILD_DIR)"
 	@echo ""
 	@echo "$(YELLOW)File statistics:$(NC)"
-	@echo "  Test files: $$(ls test_*.py 2>/dev/null | wc -l)"
-	@echo "  Example files: $$(ls example_*.py 2>/dev/null | wc -l)"
+	@echo "  Test files: $$(ls tests/test_*.py 2>/dev/null | wc -l)"
+	@echo "  Example files: $$(ls examples/example_*.py 2>/dev/null | wc -l)"
 	@echo "  Core modules: $$(ls matrixone/*.py 2>/dev/null | wc -l)"
 
 .PHONY: check-env
