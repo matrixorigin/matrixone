@@ -4,9 +4,9 @@ Provides Point-in-Time Recovery functionality for MatrixOne
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional
 
-from .exceptions import PitrError, VersionError
+from .exceptions import PitrError
 from .version import requires_version
 
 

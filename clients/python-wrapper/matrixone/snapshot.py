@@ -2,16 +2,11 @@
 MatrixOne Snapshot Management
 """
 
-from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
-
-from .exceptions import (CloneError, ConnectionError, QueryError,
-                         SnapshotError, VersionError)
+from .exceptions import CloneError, SnapshotError
 from .version import requires_version
 
 
@@ -154,8 +149,6 @@ class SnapshotManager:
             snapshots = []
             for row in result.fetchall():
                 # Convert timestamp to datetime
-                from datetime import datetime
-
                 timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
 
                 # Convert level string to enum
@@ -212,8 +205,6 @@ class SnapshotManager:
                 raise SnapshotError(f"Snapshot '{name}' not found")
 
             # Convert timestamp to datetime
-            from datetime import datetime
-
             timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
 
             # Convert level string to enum
@@ -477,7 +468,10 @@ class CloneManager:
         if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
 
         if snapshot_name:
-            sql = f"CREATE TABLE {if_not_exists_clause}{target_table} CLONE {source_table} {{SNAPSHOT = '{snapshot_name}'}}"
+            sql = (
+                f"CREATE TABLE {if_not_exists_clause}{target_table} "
+                f"CLONE {source_table} {{SNAPSHOT = '{snapshot_name}'}}"
+            )
         else:
             sql = f"CREATE TABLE {if_not_exists_clause}{target_table} CLONE {source_table}"
 

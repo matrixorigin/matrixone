@@ -193,7 +193,10 @@ class AsyncCloneManager:
         if_not_exists_clause = "IF NOT EXISTS" if if_not_exists else ""
 
         if snapshot_name:
-            sql = f"CREATE TABLE {target_table} {if_not_exists_clause} CLONE {source_table} FOR SNAPSHOT '{snapshot_name}'"
+            sql = (
+                f"CREATE TABLE {target_table} {if_not_exists_clause} "
+                f"CLONE {source_table} FOR SNAPSHOT '{snapshot_name}'"
+            )
         else:
             sql = f"CREATE TABLE {target_table} {if_not_exists_clause} CLONE {source_table}"
 
@@ -425,8 +428,10 @@ class AsyncPubSubManager:
 
     def _row_to_publication(self, row: tuple) -> Publication:
         """Convert database row to Publication object"""
-        # Expected columns: publication, database, tables, sub_account, subscribed_accounts, create_time, update_time, comments
-        # Based on MatrixOne official documentation: https://docs.matrixorigin.cn/en/v25.2.2.2/MatrixOne/Reference/SQL-Reference/Other/SHOW-Statements/show-publications/
+        # Expected columns: publication, database, tables, sub_account, subscribed_accounts,
+        # create_time, update_time, comments
+        # Based on MatrixOne official documentation:
+        # https://docs.matrixorigin.cn/en/v25.2.2.2/MatrixOne/Reference/SQL-Reference/Other/SHOW-Statements/show-publications/
         return Publication(
             name=row[0],  # publication
             database=row[1],  # database

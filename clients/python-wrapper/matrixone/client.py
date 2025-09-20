@@ -10,9 +10,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 from .account import AccountManager, TransactionAccountManager
-from .exceptions import (CloneError, ConfigurationError, ConnectionError,
-                         PitrError, PubSubError, QueryError, RestoreError,
-                         SnapshotError, VersionError)
+from .exceptions import ConnectionError, QueryError
 from .logger import MatrixOneLogger, create_default_logger
 from .moctl import MoCtlManager
 from .pitr import PitrManager, TransactionPitrManager
@@ -20,7 +18,7 @@ from .pubsub import PubSubManager, TransactionPubSubManager
 from .restore import RestoreManager, TransactionRestoreManager
 from .snapshot import (CloneManager, Snapshot, SnapshotLevel, SnapshotManager,
                        SnapshotQueryBuilder)
-from .version import VersionManager, get_version_manager
+from .version import get_version_manager
 
 
 class Client:
@@ -539,34 +537,6 @@ class Client:
         if not self._connection:
             raise ConnectionError("Not connected to database")
         return self._connection
-
-    def get_sqlalchemy_engine(self, **kwargs):
-        """
-        Get SQLAlchemy engine using the current connection
-
-        Args:
-            **kwargs: Additional engine parameters
-
-        Returns:
-            SQLAlchemy Engine instance
-        """
-        from sqlalchemy import create_engine
-
-        if not self._connection_params:
-            raise ConnectionError("Not connected to database")
-
-        # Build connection string
-        connection_string = (
-            f"mysql+pymysql://{self._connection_params['user']}:"
-            f"{self._connection_params['password']}@"
-            f"{self._connection_params['host']}:"
-            f"{self._connection_params['port']}/"
-            f"{self._connection_params['database']}"
-        )
-
-        # Create engine with current connection
-        engine = create_engine(connection_string, **kwargs)
-        return engine
 
     @property
     def snapshots(self) -> SnapshotManager:

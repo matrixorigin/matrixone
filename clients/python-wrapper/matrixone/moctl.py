@@ -146,7 +146,6 @@ class MoCtlManager:
 
     def custom_ctl(self, target: str, operation: str, params: str = "") -> Dict[str, Any]:
         """Execute custom moctl operation"""
-        full_params = f"{operation},{params}" if params else operation
         return self._execute_moctl(target, operation, params)
 
     def is_available(self) -> bool:

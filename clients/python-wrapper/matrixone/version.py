@@ -16,7 +16,7 @@ import functools
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Union
 
 from .exceptions import MatrixOneError
 
@@ -348,7 +348,7 @@ class VersionManager:
         current_version = self._current_backend_version
 
         if current_version is None:
-            return f"Backend version is not set. Please set the backend version using set_backend_version()."
+            return "Backend version is not set. Please set the backend version using set_backend_version()."
 
         hints = []
 

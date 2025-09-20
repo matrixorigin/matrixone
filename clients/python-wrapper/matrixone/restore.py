@@ -3,10 +3,9 @@ MatrixOne Python SDK - Restore Manager
 Provides restore functionality for MatrixOne snapshots
 """
 
-from typing import Optional, Union
+from typing import Optional
 
 from .exceptions import RestoreError
-from .snapshot import SnapshotLevel
 
 
 class RestoreManager:

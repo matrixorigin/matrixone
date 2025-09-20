@@ -21,7 +21,7 @@ def main():
 Examples:
   # Connect and execute a query
   matrixone-client -H localhost -P 6001 -u root -p 111 -d test -q "SELECT 1"
-  
+
   # Check version
   matrixone-client -H localhost -P 6001 -u root -p 111 --version
 
