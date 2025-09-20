@@ -284,33 +284,49 @@ class AccountManager:
                   comment: Optional[str] = None,
                   lock: Optional[bool] = None,
                   lock_reason: Optional[str] = None) -> User:
-        """Alter a user"""
+        """
+        Alter a user
+        
+        Note: MatrixOne ALTER USER supports:
+        - ✅ ALTER USER user IDENTIFIED BY 'password' - Password modification
+        - ✅ ALTER USER user LOCK - Lock user
+        - ✅ ALTER USER user UNLOCK - Unlock user
+        - ❌ ALTER USER user COMMENT 'comment' - Not supported
+        """
         try:
+            # Check if there are any operations to perform
+            has_operations = False
             sql_parts = [f"ALTER USER {self._client._escape_identifier(user_name)}"]
             
             if password is not None:
                 sql_parts.append(f"IDENTIFIED BY {self._client._escape_string(password)}")
+                has_operations = True
             
+            # MatrixOne doesn't support COMMENT in ALTER USER
             if comment is not None:
-                sql_parts.append(f"COMMENT {self._client._escape_string(comment)}")
+                raise AccountError(f"MatrixOne doesn't support COMMENT in ALTER USER. Comment: '{comment}'")
             
+            # MatrixOne supports LOCK/UNLOCK in ALTER USER
             if lock is not None:
                 if lock:
-                    if lock_reason:
-                        sql_parts.append(f"ACCOUNT LOCK COMMENT {self._client._escape_string(lock_reason)}")
-                    else:
-                        sql_parts.append("ACCOUNT LOCK")
+                    sql_parts.append("LOCK")
                 else:
-                    sql_parts.append("ACCOUNT UNLOCK")
+                    sql_parts.append("UNLOCK")
+                has_operations = True
             
-            sql = " ".join(sql_parts)
-            self._client.execute(sql)
+            # Only execute if there are operations to perform
+            if has_operations:
+                sql = " ".join(sql_parts)
+                self._client.execute(sql)
+            else:
+                # If no operations, just return current user info
+                pass
             
             # Return updated user info
             current_account = self._get_current_account()
             return User(
                 name=user_name,
-                host=host,
+                host='%',  # Default host
                 account=current_account,
                 created_time=datetime.now(),
                 status='LOCKED' if lock else 'ACTIVE',

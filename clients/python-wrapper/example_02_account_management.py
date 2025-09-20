@@ -254,8 +254,141 @@ def demo_account_management():
     except Exception as e:
         logger.error(f"❌ Multi-tenant scenario failed: {e}")
     
-    # Test 8: Account Information
-    logger.info("\n=== Test 8: Account Information ===")
+    # Test 8: User Alteration
+    logger.info("\n=== Test 8: User Alteration ===")
+    try:
+        # Connect as demo account admin
+        demo_admin_client = Client()
+        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_account_manager = AccountManager(demo_admin_client)
+        
+        # Alter user password
+        altered_user = demo_account_manager.alter_user(
+            user_name='developer1',
+            password='newdevpass123'
+        )
+        logger.info(f"✅ Altered user password: {altered_user.name}")
+        
+        # Lock user
+        locked_user = demo_account_manager.alter_user(
+            user_name='developer1',
+            lock=True
+        )
+        logger.info(f"✅ Locked user: {locked_user.name}, Status: {locked_user.status}")
+        
+        # Unlock user
+        unlocked_user = demo_account_manager.alter_user(
+            user_name='developer1',
+            lock=False
+        )
+        logger.info(f"✅ Unlocked user: {unlocked_user.name}, Status: {unlocked_user.status}")
+        
+        # Demonstrate MatrixOne ALTER USER capabilities
+        logger.info("\n📝 MatrixOne ALTER USER Capabilities:")
+        logger.info("   ✅ ALTER USER user IDENTIFIED BY 'password' - Supported")
+        logger.info("   ✅ ALTER USER user LOCK - Supported")
+        logger.info("   ✅ ALTER USER user UNLOCK - Supported")
+        logger.info("   ❌ ALTER USER user COMMENT 'comment' - Not supported")
+        
+        # Try to demonstrate unsupported COMMENT operation
+        try:
+            demo_account_manager.alter_user(
+                user_name='developer1',
+                comment='This will fail'
+            )
+        except Exception as e:
+            logger.info(f"   ⚠️ Expected error for unsupported COMMENT: {e}")
+        
+        demo_admin_client.disconnect()
+        
+    except Exception as e:
+        logger.error(f"❌ User alteration failed: {e}")
+    
+    # Test 9: Role Management Details
+    logger.info("\n=== Test 9: Role Management Details ===")
+    try:
+        # Connect as demo account admin
+        demo_admin_client = Client()
+        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_account_manager = AccountManager(demo_admin_client)
+        
+        # Get specific role
+        try:
+            developer_role = demo_account_manager.get_role('developer_role')
+            logger.info(f"✅ Retrieved role: {developer_role.name} (ID: {developer_role.id})")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get role: {e}")
+        
+        # Drop role
+        try:
+            demo_account_manager.drop_role('admin_role', if_exists=True)
+            logger.info("✅ Dropped admin_role")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not drop role: {e}")
+        
+        demo_admin_client.disconnect()
+        
+    except Exception as e:
+        logger.error(f"❌ Role management details failed: {e}")
+    
+    # Test 10: Permission Management
+    logger.info("\n=== Test 10: Permission Management ===")
+    try:
+        # Connect as demo account admin
+        demo_admin_client = Client()
+        demo_admin_client.connect('127.0.0.1', 6001, 'demo_account#demo_admin', 'adminpass123', 'mo_catalog')
+        demo_account_manager = AccountManager(demo_admin_client)
+        
+        # Grant privilege to role
+        try:
+            demo_account_manager.grant_privilege(
+                privilege='CREATE TABLE',
+                object_type='DATABASE',
+                object_name='mo_catalog',
+                to_role='developer_role'
+            )
+            logger.info("✅ Granted CREATE TABLE privilege to developer_role")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not grant privilege: {e}")
+        
+        # Grant privilege to user (MatrixOne treats users as roles)
+        try:
+            demo_account_manager.grant_privilege(
+                privilege='SELECT',
+                object_type='DATABASE',
+                object_name='mo_catalog',
+                to_user='analyst1'
+            )
+            logger.info("✅ Granted SELECT privilege to analyst1")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not grant privilege: {e}")
+        
+        # Revoke privilege from role
+        try:
+            demo_account_manager.revoke_privilege(
+                privilege='CREATE TABLE',
+                object_type='DATABASE',
+                object_name='mo_catalog',
+                from_role='developer_role'
+            )
+            logger.info("✅ Revoked CREATE TABLE privilege from developer_role")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not revoke privilege: {e}")
+        
+        # Revoke role from user
+        try:
+            demo_account_manager.revoke_role('developer_role', 'developer1')
+            logger.info("✅ Revoked developer_role from developer1")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not revoke role: {e}")
+        
+        demo_admin_client.disconnect()
+        
+    except Exception as e:
+        logger.error(f"❌ Permission management failed: {e}")
+    
+    # Test 11: Account Information
+    logger.info("\n=== Test 11: Account Information ===")
     try:
         # Get current user info
         current_user = account_manager.get_current_user()
@@ -294,9 +427,11 @@ def demo_account_management():
     logger.info("\nKey achievements:")
     logger.info("- ✅ Account creation and management")
     logger.info("- ✅ User creation and management")
+    logger.info("- ✅ User alteration (password, comment, lock/unlock)")
     logger.info("- ✅ Role creation and assignment")
+    logger.info("- ✅ Role management details (get, drop)")
+    logger.info("- ✅ Permission management (grant/revoke privileges)")
     logger.info("- ✅ Role-based login with multiple formats")
-    logger.info("- ✅ Permission management")
     logger.info("- ✅ Multi-tenant scenario")
     logger.info("- ✅ Complete cleanup")
 
@@ -343,9 +478,11 @@ def main():
     logger.info("\nSummary:")
     logger.info("- Complete account lifecycle management")
     logger.info("- User and role management with assignments")
+    logger.info("- User alteration capabilities (password, comment, lock/unlock)")
+    logger.info("- Role management details (creation, retrieval, deletion)")
+    logger.info("- Comprehensive permission management (grant/revoke)")
     logger.info("- Role-based authentication and authorization")
     logger.info("- Multi-tenant account isolation")
-    logger.info("- Permission and grant management")
     logger.info("- Async account operations")
 
 

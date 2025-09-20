@@ -170,7 +170,7 @@ class MatrixOneLogger:
     
     def log_connection(self, host: str, port: int, user: str, database: str, success: bool = True):
         """Log connection events"""
-        status = "✅ Connected" if success else "❌ Connection failed"
+        status = "✓ Connected" if success else "✗ Connection failed"
         # Use findCaller to get the actual caller's file and line
         import sys
         frame = sys._getframe(1)
@@ -186,7 +186,7 @@ class MatrixOneLogger:
     
     def log_disconnection(self, success: bool = True):
         """Log disconnection events"""
-        status = "✅ Disconnected" if success else "❌ Disconnection failed"
+        status = "✓ Disconnected" if success else "✗ Disconnection failed"
         # Use findCaller to get the actual caller's file and line
         import sys
         frame = sys._getframe(1)
@@ -272,7 +272,7 @@ class MatrixOneLogger:
     
     def log_transaction(self, action: str, success: bool = True, **kwargs):
         """Log transaction events"""
-        status = "✅ Transaction" if success else "❌ Transaction failed"
+        status = "✓ Transaction" if success else "✗ Transaction failed"
         
         # Use findCaller to get the actual caller's file and line
         import sys
@@ -290,7 +290,7 @@ class MatrixOneLogger:
     def log_account_operation(self, operation: str, account_name: Optional[str] = None, 
                              user_name: Optional[str] = None, success: bool = True):
         """Log account management operations"""
-        status = "✅ Account operation" if success else "❌ Account operation failed"
+        status = "✓ Account operation" if success else "✗ Account operation failed"
         kwargs = {'operation': operation}
         if account_name:
             kwargs['account'] = account_name
@@ -313,7 +313,7 @@ class MatrixOneLogger:
     def log_snapshot_operation(self, operation: str, snapshot_name: Optional[str] = None, 
                               level: Optional[str] = None, success: bool = True):
         """Log snapshot operations"""
-        status = "✅ Snapshot operation" if success else "❌ Snapshot operation failed"
+        status = "✓ Snapshot operation" if success else "✗ Snapshot operation failed"
         kwargs = {'operation': operation}
         if snapshot_name:
             kwargs['snapshot'] = snapshot_name
@@ -336,7 +336,7 @@ class MatrixOneLogger:
     def log_pubsub_operation(self, operation: str, publication_name: Optional[str] = None,
                             subscription_name: Optional[str] = None, success: bool = True):
         """Log PubSub operations"""
-        status = "✅ PubSub operation" if success else "❌ PubSub operation failed"
+        status = "✓ PubSub operation" if success else "✗ PubSub operation failed"
         kwargs = {'operation': operation}
         if publication_name:
             kwargs['publication'] = publication_name
