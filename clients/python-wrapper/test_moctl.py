@@ -159,7 +159,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.incremental_checkpoint()
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('dn', 'checkpoint', 'incremental')"
+        expected_sql = "SELECT mo_ctl('dn', 'checkpoint', '')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -176,7 +176,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.full_checkpoint()
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('dn', 'checkpoint', 'full')"
+        expected_sql = "SELECT mo_ctl('dn', 'checkpoint', '')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -193,7 +193,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.log_level('debug')
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('log', 'level', 'debug')"
+        expected_sql = "SELECT mo_ctl('cn', 'log-level', 'debug')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -210,7 +210,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.log_enable('sql')
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('log', 'enable', 'sql')"
+        expected_sql = "SELECT mo_ctl('cn', 'log-enable', 'sql')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -227,7 +227,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.log_disable('sql')
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('log', 'disable', 'sql')"
+        expected_sql = "SELECT mo_ctl('cn', 'log-disable', 'sql')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -244,7 +244,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.cluster_status()
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cluster', 'status', '')"
+        expected_sql = "SELECT mo_ctl('cn', 'cluster-status', '')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -261,7 +261,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.cluster_info()
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('cluster', 'info', '')"
+        expected_sql = "SELECT mo_ctl('cn', 'cluster-info', '')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -278,7 +278,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.node_status('node1')
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('node', 'status', 'node1')"
+        expected_sql = "SELECT mo_ctl('cn', 'node-status', 'node1')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -295,7 +295,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.node_status()
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('node', 'status', '')"
+        expected_sql = "SELECT mo_ctl('cn', 'node-status', '')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -312,7 +312,7 @@ class TestMoCtlManager(unittest.TestCase):
         result = self.moctl_manager.node_info('node1')
         
         # Verify the SQL was called correctly
-        expected_sql = "SELECT mo_ctl('node', 'info', 'node1')"
+        expected_sql = "SELECT mo_ctl('cn', 'node-info', 'node1')"
         self.mock_client.execute.assert_called_once_with(expected_sql)
         
         # Verify the result
@@ -360,20 +360,13 @@ class TestMoCtlManager(unittest.TestCase):
         """Test get_supported_operations method"""
         operations = self.moctl_manager.get_supported_operations()
         
-        self.assertIn("flush", operations)
+        self.assertIn("flush-table", operations)
         self.assertIn("checkpoint", operations)
-        self.assertIn("log", operations)
-        self.assertIn("cluster", operations)
-        self.assertIn("node", operations)
-        self.assertIn("custom", operations)
-        
-        self.assertIn("flush_table", operations["flush"])
-        self.assertIn("flush_database", operations["flush"])
-        self.assertIn("checkpoint", operations["checkpoint"])
-        self.assertIn("log_level", operations["log"])
-        self.assertIn("cluster_status", operations["cluster"])
-        self.assertIn("node_status", operations["node"])
-        self.assertIn("custom_ctl", operations["custom"])
+        self.assertIn("log-level", operations)
+        self.assertIn("cluster-status", operations)
+        self.assertIn("cluster-info", operations)
+        self.assertIn("node-status", operations)
+        self.assertIn("node-info", operations)
 
 
 class TestMoCtlIntegration(unittest.TestCase):

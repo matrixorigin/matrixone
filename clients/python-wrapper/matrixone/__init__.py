@@ -30,7 +30,7 @@ from .pubsub import PubSubManager, Publication, Subscription
 from .account import AccountManager, Account, User, Role, Grant, TransactionAccountManager
 from .version import VersionManager, VersionInfo, FeatureRequirement, requires_version
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 __all__ = [
     "Client",
     "AsyncClient",

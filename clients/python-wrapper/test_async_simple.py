@@ -5,6 +5,7 @@ Simple async test to verify AsyncClient functionality
 import asyncio
 import sys
 import os
+import pytest
 
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
@@ -13,6 +14,7 @@ from matrixone import AsyncClient
 from matrixone.snapshot import SnapshotLevel
 
 
+@pytest.mark.asyncio
 async def test_async_client():
     """Test basic async client functionality"""
     print("Testing AsyncClient...")
@@ -41,6 +43,7 @@ async def test_async_client():
     return True
 
 
+@pytest.mark.asyncio
 async def test_async_managers():
     """Test async managers"""
     print("\nTesting Async Managers...")
@@ -62,6 +65,7 @@ async def test_async_managers():
     print("✓ All managers created successfully")
 
 
+@pytest.mark.asyncio
 async def test_async_imports():
     """Test async imports"""
     print("\nTesting Async Imports...")

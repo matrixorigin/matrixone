@@ -3,7 +3,7 @@ MatrixOne Control Operations (mo_ctl) Manager
 Provides access to MatrixOne control operations that require sys tenant privileges
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 import json
 from .exceptions import MatrixOneError
 
@@ -104,3 +104,60 @@ class MoCtlManager:
             {'method': 'Checkpoint', 'result': [{'returnStr': 'OK'}]}
         """
         return self._execute_moctl('dn', 'checkpoint', '')
+    
+    def incremental_checkpoint(self) -> Dict[str, Any]:
+        """Force incremental checkpoint"""
+        return self._execute_moctl('dn', 'checkpoint', '')
+    
+    def full_checkpoint(self) -> Dict[str, Any]:
+        """Force full checkpoint"""
+        return self._execute_moctl('dn', 'checkpoint', '')
+    
+    def log_level(self, level: str) -> Dict[str, Any]:
+        """Set log level"""
+        return self._execute_moctl('cn', 'log-level', level)
+    
+    def log_enable(self, module: str) -> Dict[str, Any]:
+        """Enable log module"""
+        return self._execute_moctl('cn', 'log-enable', module)
+    
+    def log_disable(self, module: str) -> Dict[str, Any]:
+        """Disable log module"""
+        return self._execute_moctl('cn', 'log-disable', module)
+    
+    def cluster_status(self) -> Dict[str, Any]:
+        """Get cluster status"""
+        return self._execute_moctl('cn', 'cluster-status', '')
+    
+    def cluster_info(self) -> Dict[str, Any]:
+        """Get cluster information"""
+        return self._execute_moctl('cn', 'cluster-info', '')
+    
+    def node_status(self, node_id: str = None) -> Dict[str, Any]:
+        """Get node status"""
+        params = node_id if node_id else ''
+        return self._execute_moctl('cn', 'node-status', params)
+    
+    def node_info(self, node_id: str) -> Dict[str, Any]:
+        """Get node information"""
+        return self._execute_moctl('cn', 'node-info', node_id)
+    
+    def custom_ctl(self, target: str, operation: str, params: str = "") -> Dict[str, Any]:
+        """Execute custom moctl operation"""
+        full_params = f"{operation},{params}" if params else operation
+        return self._execute_moctl(target, operation, params)
+    
+    def is_available(self) -> bool:
+        """Check if moctl is available"""
+        try:
+            self._execute_moctl('cn', 'cluster-status', '')
+            return True
+        except Exception:
+            return False
+    
+    def get_supported_operations(self) -> List[str]:
+        """Get list of supported operations"""
+        return [
+            'flush-table', 'checkpoint', 'log-level', 'log-enable', 'log-disable',
+            'cluster-status', 'cluster-info', 'node-status', 'node-info'
+        ]

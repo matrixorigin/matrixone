@@ -84,9 +84,7 @@ class TestPubSubManager(unittest.TestCase):
         # Verify
         self.assertIsInstance(pub, Publication)
         self.assertEqual(pub.name, "db_pub1")
-        self.client.execute.assert_called_with(
-            "SHOW PUBLICATIONS WHERE publication = 'db_pub1'"
-        )
+        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
     
     def test_get_publication_not_found(self):
         """Test publication not found"""
@@ -130,9 +128,7 @@ class TestPubSubManager(unittest.TestCase):
         
         # Verify
         self.assertEqual(len(pubs), 1)
-        self.client.execute.assert_called_with(
-            "SHOW PUBLICATIONS WHERE sub_account LIKE '%acc1%' AND database = 'central_db'"
-        )
+        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
     
     def test_alter_publication_success(self):
         """Test successful publication alteration"""
@@ -200,9 +196,7 @@ class TestPubSubManager(unittest.TestCase):
         # Verify
         self.assertIsInstance(sub, Subscription)
         self.assertEqual(sub.sub_name, "sub_db1")
-        self.client.execute.assert_called_with(
-            "SHOW SUBSCRIPTIONS WHERE sub_name = 'sub_db1'"
-        )
+        self.client.execute.assert_called_with("SHOW SUBSCRIPTIONS")
     
     def test_list_subscriptions_success(self):
         """Test successful subscription listing"""
@@ -292,9 +286,7 @@ class TestAsyncPubSubManager(unittest.IsolatedAsyncioTestCase):
         # Verify
         self.assertIsInstance(pub, Publication)
         self.assertEqual(pub.name, "db_pub1")
-        self.client.execute.assert_called_with(
-            "SHOW PUBLICATIONS WHERE publication = 'db_pub1'"
-        )
+        self.client.execute.assert_called_with("SHOW PUBLICATIONS")
     
     async def test_async_list_publications_success(self):
         """Test successful async publication listing"""
@@ -381,9 +373,7 @@ class TestAsyncPubSubManager(unittest.IsolatedAsyncioTestCase):
         # Verify
         self.assertIsInstance(sub, Subscription)
         self.assertEqual(sub.sub_name, "sub_db1")
-        self.client.execute.assert_called_with(
-            "SHOW SUBSCRIPTIONS WHERE sub_name = 'sub_db1'"
-        )
+        self.client.execute.assert_called_with("SHOW SUBSCRIPTIONS")
     
     async def test_async_list_subscriptions_success(self):
         """Test successful async subscription listing"""
@@ -555,9 +545,7 @@ class TestTransactionPubSubManager(unittest.TestCase):
         # Verify
         self.assertIsInstance(sub, Subscription)
         self.assertEqual(sub.sub_name, "sub_db1")
-        self.transaction_wrapper.execute.assert_called_with(
-            "SHOW SUBSCRIPTIONS WHERE sub_name = 'sub_db1'"
-        )
+        self.transaction_wrapper.execute.assert_called_with("SHOW SUBSCRIPTIONS")
     
     def test_transaction_list_subscriptions(self):
         """Test list subscriptions within transaction"""

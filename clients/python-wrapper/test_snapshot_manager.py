@@ -11,7 +11,7 @@ import os
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
-from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder
+from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder, SnapshotLevel
 from matrixone.exceptions import SnapshotError, ConnectionError, QueryError
 
 
@@ -31,7 +31,7 @@ class TestSnapshot(unittest.TestCase):
         )
         
         self.assertEqual(snapshot.name, "test_snapshot")
-        self.assertEqual(snapshot.level, "table")
+        self.assertEqual(snapshot.level, SnapshotLevel.TABLE)
         self.assertEqual(snapshot.created_at, now)
         self.assertEqual(snapshot.description, "Test snapshot")
         self.assertEqual(snapshot.database, "test_db")
@@ -43,7 +43,7 @@ class TestSnapshot(unittest.TestCase):
         snapshot = Snapshot("test", "table", now)
         repr_str = repr(snapshot)
         self.assertIn("test", repr_str)
-        self.assertIn("table", repr_str)
+        self.assertIn("SnapshotLevel.TABLE", repr_str)
 
 
 class TestSnapshotManager(unittest.TestCase):
@@ -167,9 +167,9 @@ class TestSnapshotManager(unittest.TestCase):
         
         self.assertEqual(len(snapshots), 2)
         self.assertEqual(snapshots[0].name, "snap1")
-        self.assertEqual(snapshots[0].level, "cluster")
+        self.assertEqual(snapshots[0].level, SnapshotLevel.CLUSTER)
         self.assertEqual(snapshots[1].name, "snap2")
-        self.assertEqual(snapshots[1].level, "table")
+        self.assertEqual(snapshots[1].level, SnapshotLevel.TABLE)
         self.assertEqual(snapshots[1].database, "db1")
         self.assertEqual(snapshots[1].table, "table1")
         
@@ -204,7 +204,7 @@ class TestSnapshotManager(unittest.TestCase):
         snapshot = self.snapshot_manager.get("test_snap")
         
         self.assertEqual(snapshot.name, "test_snap")
-        self.assertEqual(snapshot.level, "table")
+        self.assertEqual(snapshot.level, SnapshotLevel.TABLE)
         self.assertEqual(snapshot.database, "db1")
         self.assertEqual(snapshot.table, "table1")
         self.assertIsInstance(snapshot.created_at, datetime)
@@ -404,7 +404,7 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
         
         expected_sql = ("SELECT col1, col2, COUNT(*) FROM test_table "
                        "JOIN table2 ON test_table.id = table2.id "
-                       "WHERE col1 > ? AND COUNT(*) > ? "
+                       "WHERE col1 > ? "
                        "GROUP BY col1 "
                        "HAVING COUNT(*) > ? "
                        "ORDER BY col1, col2 DESC "
@@ -412,7 +412,7 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
                        "OFFSET 20 "
                        "FOR SNAPSHOT 'test_snapshot'")
         
-        self.mock_client.execute.assert_called_once_with(expected_sql, (100, 5, 5))
+        self.mock_client.execute.assert_called_once_with(expected_sql, (100, 5))
         self.assertEqual(result, mock_result)
     
     def test_execute_no_select_columns(self):

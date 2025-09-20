@@ -17,6 +17,7 @@ import functools
 from typing import Optional, List, Dict, Any, Callable, Union, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from .exceptions import MatrixOneError
 
 
 class VersionComparison(Enum):
@@ -441,7 +442,7 @@ def requires_version(min_version: str = None,
     return decorator
 
 
-class VersionError(Exception):
+class VersionError(MatrixOneError):
     """Raised when version compatibility check fails"""
     pass
 

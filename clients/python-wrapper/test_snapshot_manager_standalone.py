@@ -20,8 +20,8 @@ sys.modules['sqlalchemy.engine'].Engine = Mock()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 # Now import the classes we want to test
-from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder, CloneManager
-from matrixone.exceptions import CloneError, ConnectionError, QueryError, CloneError
+from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder, SnapshotLevel, CloneManager
+from matrixone.exceptions import CloneError, ConnectionError, QueryError, SnapshotError
 
 
 class TestSnapshot(unittest.TestCase):
@@ -40,7 +40,7 @@ class TestSnapshot(unittest.TestCase):
         )
         
         self.assertEqual(snapshot.name, "test_snapshot")
-        self.assertEqual(snapshot.level, "table")
+        self.assertEqual(snapshot.level, SnapshotLevel.TABLE)
         self.assertEqual(snapshot.created_at, now)
         self.assertEqual(snapshot.description, "Test snapshot")
         self.assertEqual(snapshot.database, "test_db")
@@ -52,7 +52,7 @@ class TestSnapshot(unittest.TestCase):
         snapshot = Snapshot("test", "table", now)
         repr_str = repr(snapshot)
         self.assertIn("test", repr_str)
-        self.assertIn("table", repr_str)
+        self.assertIn("SnapshotLevel.TABLE", repr_str)
     
     def test_snapshot_optional_params(self):
         """Test snapshot creation with optional parameters"""
@@ -60,7 +60,7 @@ class TestSnapshot(unittest.TestCase):
         snapshot = Snapshot("test", "cluster", now)
         
         self.assertEqual(snapshot.name, "test")
-        self.assertEqual(snapshot.level, "cluster")
+        self.assertEqual(snapshot.level, SnapshotLevel.CLUSTER)
         self.assertEqual(snapshot.created_at, now)
         self.assertIsNone(snapshot.description)
         self.assertIsNone(snapshot.database)
@@ -100,8 +100,8 @@ class TestSnapshotManager(unittest.TestCase):
         self.mock_client.execute.return_value = Mock()
         
         mock_snapshot = Snapshot("account_snap", "account", datetime.now())
-        with patch.object(self.clone_manager, 'get', return_value=mock_snapshot):
-            result = self.clone_manager.create("account_snap", "account")
+        with patch.object(self.snapshot_manager, 'get', return_value=mock_snapshot):
+            result = self.snapshot_manager.create("account_snap", "account")
             
             self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT account_snap FOR ACCOUNT")
             self.assertEqual(result, mock_snapshot)
@@ -112,8 +112,8 @@ class TestSnapshotManager(unittest.TestCase):
         self.mock_client.execute.return_value = Mock()
         
         mock_snapshot = Snapshot("db_snap", "database", datetime.now(), database="test_db")
-        with patch.object(self.clone_manager, 'get', return_value=mock_snapshot):
-            result = self.clone_manager.create("db_snap", "database", database="test_db")
+        with patch.object(self.snapshot_manager, 'get', return_value=mock_snapshot):
+            result = self.snapshot_manager.create("db_snap", "database", database="test_db")
             
             self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT db_snap FOR DATABASE test_db")
             self.assertEqual(result, mock_snapshot)
@@ -124,35 +124,35 @@ class TestSnapshotManager(unittest.TestCase):
         self.mock_client.execute.return_value = Mock()
         
         mock_snapshot = Snapshot("table_snap", "table", datetime.now(), database="test_db", table="test_table")
-        with patch.object(self.clone_manager, 'get', return_value=mock_snapshot):
-            result = self.clone_manager.create("table_snap", "table", database="test_db", table="test_table")
+        with patch.object(self.snapshot_manager, 'get', return_value=mock_snapshot):
+            result = self.snapshot_manager.create("table_snap", "table", database="test_db", table="test_table")
             
             self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT table_snap FOR TABLE test_db test_table")
             self.assertEqual(result, mock_snapshot)
     
     def test_create_snapshot_missing_database(self):
         """Test creating database snapshot without database name"""
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.create("db_snap", "database")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.create("db_snap", "database")
         
         self.assertIn("Database name required", str(context.exception))
     
     def test_create_snapshot_missing_table_params(self):
         """Test creating table snapshot without database or table name"""
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.create("table_snap", "table")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.create("table_snap", "table")
         
         self.assertIn("Database and table names required", str(context.exception))
         
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.create("table_snap", "table", database="test_db")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.create("table_snap", "table", database="test_db")
         
         self.assertIn("Database and table names required", str(context.exception))
     
     def test_create_snapshot_invalid_level(self):
         """Test creating snapshot with invalid level"""
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.create("test_snap", "invalid_level")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.create("test_snap", "invalid_level")
         
         self.assertIn("Invalid snapshot level", str(context.exception))
     
@@ -161,7 +161,7 @@ class TestSnapshotManager(unittest.TestCase):
         self.mock_client._connection = None
         
         with self.assertRaises(ConnectionError) as context:
-            self.clone_manager.create("test_snap", "cluster")
+            self.snapshot_manager.create("test_snap", "cluster")
         
         self.assertIn("Not connected to database", str(context.exception))
     
@@ -169,8 +169,8 @@ class TestSnapshotManager(unittest.TestCase):
         """Test creating snapshot with execution error"""
         self.mock_client.execute = Mock(side_effect=Exception("Database error"))
         
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.create("test_snap", "cluster")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.create("test_snap", "cluster")
         
         self.assertIn("Failed to create snapshot", str(context.exception))
     
@@ -184,13 +184,13 @@ class TestSnapshotManager(unittest.TestCase):
         ]
         self.mock_client.execute = Mock(return_value=mock_result)
         
-        snapshots = self.clone_manager.list()
+        snapshots = self.snapshot_manager.list()
         
         self.assertEqual(len(snapshots), 2)
         self.assertEqual(snapshots[0].name, "snap1")
-        self.assertEqual(snapshots[0].level, "cluster")
+        self.assertEqual(snapshots[0].level, SnapshotLevel.CLUSTER)
         self.assertEqual(snapshots[1].name, "snap2")
-        self.assertEqual(snapshots[1].level, "table")
+        self.assertEqual(snapshots[1].level, SnapshotLevel.TABLE)
         self.assertEqual(snapshots[1].database, "db1")
         self.assertEqual(snapshots[1].table, "table1")
         
@@ -202,7 +202,7 @@ class TestSnapshotManager(unittest.TestCase):
         self.mock_client._connection = None
         
         with self.assertRaises(ConnectionError) as context:
-            self.clone_manager.list()
+            self.snapshot_manager.list()
         
         self.assertIn("Not connected to database", str(context.exception))
     
@@ -210,8 +210,8 @@ class TestSnapshotManager(unittest.TestCase):
         """Test listing snapshots with execution error"""
         self.mock_client.execute = Mock(side_effect=Exception("Database error"))
         
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.list()
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.list()
         
         self.assertIn("Failed to list snapshots", str(context.exception))
     
@@ -222,10 +222,10 @@ class TestSnapshotManager(unittest.TestCase):
         mock_result.fetchone.return_value = ("test_snap", 1640995200000000000, "table", "account1", "db1", "table1")
         self.mock_client.execute = Mock(return_value=mock_result)
         
-        snapshot = self.clone_manager.get("test_snap")
+        snapshot = self.snapshot_manager.get("test_snap")
         
         self.assertEqual(snapshot.name, "test_snap")
-        self.assertEqual(snapshot.level, "table")
+        self.assertEqual(snapshot.level, SnapshotLevel.TABLE)
         self.assertEqual(snapshot.database, "db1")
         self.assertEqual(snapshot.table, "table1")
         self.assertIsInstance(snapshot.created_at, datetime)
@@ -236,8 +236,8 @@ class TestSnapshotManager(unittest.TestCase):
         mock_result.fetchone.return_value = None
         self.mock_client.execute = Mock(return_value=mock_result)
         
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.get("non_existent")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.get("non_existent")
         
         self.assertIn("not found", str(context.exception))
     
@@ -246,7 +246,7 @@ class TestSnapshotManager(unittest.TestCase):
         self.mock_client._connection = None
         
         with self.assertRaises(ConnectionError) as context:
-            self.clone_manager.get("test_snap")
+            self.snapshot_manager.get("test_snap")
         
         self.assertIn("Not connected to database", str(context.exception))
     
@@ -254,8 +254,8 @@ class TestSnapshotManager(unittest.TestCase):
         """Test getting snapshot with execution error"""
         self.mock_client.execute = Mock(side_effect=Exception("Database error"))
         
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.get("test_snap")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.get("test_snap")
         
         self.assertIn("Failed to get snapshot", str(context.exception))
     
@@ -263,7 +263,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test deleting a snapshot"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.delete("test_snap")
+        self.snapshot_manager.delete("test_snap")
         
         self.mock_client.execute.assert_called_once_with("DROP SNAPSHOT test_snap")
     
@@ -272,7 +272,7 @@ class TestSnapshotManager(unittest.TestCase):
         self.mock_client._connection = None
         
         with self.assertRaises(ConnectionError) as context:
-            self.clone_manager.delete("test_snap")
+            self.snapshot_manager.delete("test_snap")
         
         self.assertIn("Not connected to database", str(context.exception))
     
@@ -280,21 +280,21 @@ class TestSnapshotManager(unittest.TestCase):
         """Test deleting snapshot with execution error"""
         self.mock_client.execute = Mock(side_effect=Exception("Database error"))
         
-        with self.assertRaises(CloneError) as context:
-            self.clone_manager.delete("test_snap")
+        with self.assertRaises(SnapshotError) as context:
+            self.snapshot_manager.delete("test_snap")
         
         self.assertIn("Failed to delete snapshot", str(context.exception))
     
     def test_exists_snapshot_true(self):
         """Test checking if snapshot exists (returns True)"""
-        with patch.object(self.clone_manager, 'get', return_value=Mock()):
-            result = self.clone_manager.exists("test_snap")
+        with patch.object(self.snapshot_manager, 'get', return_value=Mock()):
+            result = self.snapshot_manager.exists("test_snap")
             self.assertTrue(result)
     
     def test_exists_snapshot_false(self):
         """Test checking if snapshot exists (returns False)"""
-        with patch.object(self.clone_manager, 'get', side_effect=CloneError("not found")):
-            result = self.clone_manager.exists("test_snap")
+        with patch.object(self.snapshot_manager, 'get', side_effect=SnapshotError("not found")):
+            result = self.snapshot_manager.exists("test_snap")
             self.assertFalse(result)
 
 
@@ -449,7 +449,7 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
         """Test executing query without SELECT columns"""
         self.builder.from_table("test_table")
         
-        with self.assertRaises(CloneError) as context:
+        with self.assertRaises(SnapshotError) as context:
             self.builder.execute()
         
         self.assertIn("No SELECT columns specified", str(context.exception))
@@ -458,7 +458,7 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
         """Test executing query without FROM table"""
         self.builder.select("col1")
         
-        with self.assertRaises(CloneError) as context:
+        with self.assertRaises(SnapshotError) as context:
             self.builder.execute()
         
         self.assertIn("No FROM table specified", str(context.exception))
@@ -486,13 +486,13 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client = Mock()
         self.mock_client._connection = Mock()
         self.mock_client.snapshots = Mock()  # Mock snapshots manager for snapshot verification
-        self.clone_manager = CloneManager(self.mock_client)
+        self.snapshot_manager = CloneManager(self.mock_client)
     
     def test_clone_database_basic(self):
         """Test basic database clone without snapshot"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_database("target_db", "source_db")
+        self.snapshot_manager.clone_database("target_db", "source_db")
         
         expected_sql = "CREATE DATABASE target_db CLONE source_db"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -501,7 +501,7 @@ class TestCloneManager(unittest.TestCase):
         """Test database clone with IF NOT EXISTS"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_database("target_db", "source_db", if_not_exists=True)
+        self.snapshot_manager.clone_database("target_db", "source_db", if_not_exists=True)
         
         expected_sql = "CREATE DATABASE IF NOT EXISTS target_db CLONE source_db"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -510,7 +510,7 @@ class TestCloneManager(unittest.TestCase):
         """Test database clone with snapshot"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_database("target_db", "source_db", snapshot_name="test_snapshot")
+        self.snapshot_manager.clone_database("target_db", "source_db", snapshot_name="test_snapshot")
         
         expected_sql = "CREATE DATABASE target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -519,7 +519,7 @@ class TestCloneManager(unittest.TestCase):
         """Test database clone with snapshot and IF NOT EXISTS"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_database("target_db", "source_db", 
+        self.snapshot_manager.clone_database("target_db", "source_db", 
                                            snapshot_name="test_snapshot", if_not_exists=True)
         
         expected_sql = "CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
@@ -530,7 +530,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client._connection = None
         
         with self.assertRaises(ConnectionError) as context:
-            self.clone_manager.clone_database("target_db", "source_db")
+            self.snapshot_manager.clone_database("target_db", "source_db")
         
         self.assertIn("Not connected to database", str(context.exception))
     
@@ -539,7 +539,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.execute = Mock(side_effect=Exception("Database error"))
         
         with self.assertRaises(CloneError) as context:
-            self.clone_manager.clone_database("target_db", "source_db")
+            self.snapshot_manager.clone_database("target_db", "source_db")
         
         self.assertIn("Failed to clone database", str(context.exception))
     
@@ -547,7 +547,7 @@ class TestCloneManager(unittest.TestCase):
         """Test basic table clone without snapshot"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_table("target_table", "source_table")
+        self.snapshot_manager.clone_table("target_table", "source_table")
         
         expected_sql = "CREATE TABLE target_table CLONE source_table"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -556,7 +556,7 @@ class TestCloneManager(unittest.TestCase):
         """Test table clone with database names"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_table("db1.target_table", "db2.source_table")
+        self.snapshot_manager.clone_table("db1.target_table", "db2.source_table")
         
         expected_sql = "CREATE TABLE db1.target_table CLONE db2.source_table"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -565,7 +565,7 @@ class TestCloneManager(unittest.TestCase):
         """Test table clone with IF NOT EXISTS"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_table("target_table", "source_table", if_not_exists=True)
+        self.snapshot_manager.clone_table("target_table", "source_table", if_not_exists=True)
         
         expected_sql = "CREATE TABLE IF NOT EXISTS target_table CLONE source_table"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -574,7 +574,7 @@ class TestCloneManager(unittest.TestCase):
         """Test table clone with snapshot"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_table("target_table", "source_table", snapshot_name="test_snapshot")
+        self.snapshot_manager.clone_table("target_table", "source_table", snapshot_name="test_snapshot")
         
         expected_sql = "CREATE TABLE target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -583,7 +583,7 @@ class TestCloneManager(unittest.TestCase):
         """Test table clone with snapshot and IF NOT EXISTS"""
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_table("target_table", "source_table", 
+        self.snapshot_manager.clone_table("target_table", "source_table", 
                                         snapshot_name="test_snapshot", if_not_exists=True)
         
         expected_sql = "CREATE TABLE IF NOT EXISTS target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
@@ -594,7 +594,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client._connection = None
         
         with self.assertRaises(ConnectionError) as context:
-            self.clone_manager.clone_table("target_table", "source_table")
+            self.snapshot_manager.clone_table("target_table", "source_table")
         
         self.assertIn("Not connected to database", str(context.exception))
     
@@ -603,7 +603,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.execute = Mock(side_effect=Exception("Database error"))
         
         with self.assertRaises(CloneError) as context:
-            self.clone_manager.clone_table("target_table", "source_table")
+            self.snapshot_manager.clone_table("target_table", "source_table")
         
         self.assertIn("Failed to clone table", str(context.exception))
     
@@ -613,7 +613,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.snapshots.exists.return_value = True
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_database_with_snapshot("target_db", "source_db", "test_snapshot")
+        self.snapshot_manager.clone_database_with_snapshot("target_db", "source_db", "test_snapshot")
         
         expected_sql = "CREATE DATABASE target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -624,7 +624,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.snapshots.exists.return_value = False
         
         with self.assertRaises(CloneError) as context:
-            self.clone_manager.clone_database_with_snapshot("target_db", "source_db", "non_existent_snapshot")
+            self.snapshot_manager.clone_database_with_snapshot("target_db", "source_db", "non_existent_snapshot")
         
         self.assertIn("does not exist", str(context.exception))
     
@@ -634,7 +634,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.snapshots.exists.return_value = True
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_table_with_snapshot("target_table", "source_table", "test_snapshot")
+        self.snapshot_manager.clone_table_with_snapshot("target_table", "source_table", "test_snapshot")
         
         expected_sql = "CREATE TABLE target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql)
@@ -645,7 +645,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.snapshots.exists.return_value = False
         
         with self.assertRaises(CloneError) as context:
-            self.clone_manager.clone_table_with_snapshot("target_table", "source_table", "non_existent_snapshot")
+            self.snapshot_manager.clone_table_with_snapshot("target_table", "source_table", "non_existent_snapshot")
         
         self.assertIn("does not exist", str(context.exception))
     
@@ -654,7 +654,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.snapshots.exists.return_value = True
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_database_with_snapshot("target_db", "source_db", 
+        self.snapshot_manager.clone_database_with_snapshot("target_db", "source_db", 
                                                          "test_snapshot", if_not_exists=True)
         
         expected_sql = "CREATE DATABASE IF NOT EXISTS target_db CLONE source_db {SNAPSHOT = 'test_snapshot'}"
@@ -665,7 +665,7 @@ class TestCloneManager(unittest.TestCase):
         self.mock_client.snapshots.exists.return_value = True
         self.mock_client.execute = Mock()
         
-        self.clone_manager.clone_table_with_snapshot("target_table", "source_table", 
+        self.snapshot_manager.clone_table_with_snapshot("target_table", "source_table", 
                                                       "test_snapshot", if_not_exists=True)
         
         expected_sql = "CREATE TABLE IF NOT EXISTS target_table CLONE source_table {SNAPSHOT = 'test_snapshot'}"
@@ -679,7 +679,7 @@ class TestSnapshotManagerIntegration(unittest.TestCase):
         """Set up test fixtures"""
         self.mock_client = Mock()
         self.mock_client._connection = Mock()
-        self.clone_manager = SnapshotManager(self.mock_client)
+        self.snapshot_manager = SnapshotManager(self.mock_client)
     
     def test_full_workflow(self):
         """Test complete snapshot workflow"""
@@ -688,17 +688,17 @@ class TestSnapshotManagerIntegration(unittest.TestCase):
         
         # Mock get method to return a snapshot
         mock_snapshot = Snapshot("workflow_snap", "table", datetime.now(), database="test_db", table="test_table")
-        with patch.object(self.clone_manager, 'get', return_value=mock_snapshot):
+        with patch.object(self.snapshot_manager, 'get', return_value=mock_snapshot):
             # Create snapshot
-            created_snapshot = self.clone_manager.create("workflow_snap", "table", database="test_db", table="test_table")
+            created_snapshot = self.snapshot_manager.create("workflow_snap", "table", database="test_db", table="test_table")
             self.assertEqual(created_snapshot.name, "workflow_snap")
             
             # Check if exists
-            with patch.object(self.clone_manager, 'exists', return_value=True):
-                self.assertTrue(self.clone_manager.exists("workflow_snap"))
+            with patch.object(self.snapshot_manager, 'exists', return_value=True):
+                self.assertTrue(self.snapshot_manager.exists("workflow_snap"))
             
             # Delete snapshot
-            self.clone_manager.delete("workflow_snap")
+            self.snapshot_manager.delete("workflow_snap")
             self.mock_client.execute.assert_called_with("DROP SNAPSHOT workflow_snap")
     
     def test_snapshot_levels_validation(self):
@@ -709,28 +709,30 @@ class TestSnapshotManagerIntegration(unittest.TestCase):
             self.mock_client.execute = Mock()
             mock_snapshot = Snapshot(f"test_{level}", level, datetime.now())
             
-            with patch.object(self.clone_manager, 'get', return_value=mock_snapshot):
+            with patch.object(self.snapshot_manager, 'get', return_value=mock_snapshot):
                 if level == "database":
-                    result = self.clone_manager.create(f"test_{level}", level, database="test_db")
+                    result = self.snapshot_manager.create(f"test_{level}", level, database="test_db")
                 elif level == "table":
-                    result = self.clone_manager.create(f"test_{level}", level, database="test_db", table="test_table")
+                    result = self.snapshot_manager.create(f"test_{level}", level, database="test_db", table="test_table")
                 else:
-                    result = self.clone_manager.create(f"test_{level}", level)
+                    result = self.snapshot_manager.create(f"test_{level}", level)
                 
-                self.assertEqual(result.level, level)
+                # Convert string level to enum for comparison
+                expected_level = SnapshotLevel(level)
+                self.assertEqual(result.level, expected_level)
     
     def test_error_propagation(self):
         """Test that errors are properly propagated"""
         # Test connection error
         self.mock_client._connection = None
         with self.assertRaises(ConnectionError):
-            self.clone_manager.create("test", "cluster")
+            self.snapshot_manager.create("test", "cluster")
         
         # Test execution error
         self.mock_client._connection = Mock()
         self.mock_client.execute = Mock(side_effect=Exception("DB Error"))
-        with self.assertRaises(CloneError):
-            self.clone_manager.create("test", "cluster")
+        with self.assertRaises(SnapshotError):
+            self.snapshot_manager.create("test", "cluster")
 
 
 if __name__ == '__main__':

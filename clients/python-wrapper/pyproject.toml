@@ -1,0 +1,142 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matrixone-python-sdk"
+version = "1.0.0"
+description = "A high-level Python SDK for MatrixOne database operations"
+readme = "README.md"
+license = "Apache-2.0"
+authors = [
+    {name = "MatrixOne Team", email = "dev@matrixone.cloud"}
+]
+maintainers = [
+    {name = "MatrixOne Team", email = "dev@matrixone.cloud"}
+]
+keywords = ["matrixone", "database", "sql", "python", "sdk", "sqlalchemy", "async"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "PyMySQL>=1.0.0",
+    "aiomysql>=0.1.0",
+    "SQLAlchemy>=1.4.0",
+    "typing-extensions>=4.0.0",
+    "python-dateutil>=2.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-asyncio>=0.18.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.950",
+    "sphinx>=4.0",
+    "sphinx-rtd-theme>=1.0",
+]
+test = [
+    "pytest>=6.0",
+    "pytest-asyncio>=0.18.0",
+    "pytest-cov>=3.0",
+]
+docs = [
+    "sphinx>=4.0",
+    "sphinx-rtd-theme>=1.0",
+    "myst-parser>=0.18.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/matrixorigin/matrixone"
+Documentation = "https://github.com/matrixorigin/matrixone/tree/main/clients/python-wrapper#readme"
+Repository = "https://github.com/matrixorigin/matrixone.git"
+"Bug Reports" = "https://github.com/matrixorigin/matrixone/issues"
+"Source Code" = "https://github.com/matrixorigin/matrixone/tree/main/clients/python-wrapper"
+
+[project.scripts]
+matrixone-client = "matrixone.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["matrixone*"]
+
+[tool.setuptools.package-data]
+matrixone = ["py.typed"]
+
+# Black configuration
+[tool.black]
+line-length = 100
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# Flake8 configuration
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".eggs",
+    "*.egg-info",
+    ".venv",
+    ".tox",
+    ".mypy_cache",
+]
+
+# MyPy configuration
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]

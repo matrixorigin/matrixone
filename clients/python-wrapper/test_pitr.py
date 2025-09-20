@@ -142,7 +142,7 @@ class TestPitrManager(unittest.TestCase):
         # Should be called twice: once for CREATE, once for SHOW
         self.assertEqual(self.client.execute.call_count, 2)
         self.client.execute.assert_any_call(
-            "CREATE PITR `tab_pitr1` FOR TABLE `db1` TABLE `t1` RANGE 1 'y'"
+            "CREATE PITR `tab_pitr1` FOR TABLE `db1` `t1` RANGE 1 'y'"
         )
     
     def test_get_pitr_success(self):
@@ -358,7 +358,7 @@ class TestAsyncPitrManager(unittest.IsolatedAsyncioTestCase):
         # Should be called twice: once for CREATE, once for SHOW
         self.assertEqual(self.client.execute.call_count, 2)
         self.client.execute.assert_any_call(
-            "CREATE PITR `tab_pitr1` FOR TABLE `db1` TABLE `t1` RANGE 1 'y'"
+            "CREATE PITR `tab_pitr1` FOR TABLE `db1` `t1` RANGE 1 'y'"
         )
     
     async def test_async_get_pitr_success(self):

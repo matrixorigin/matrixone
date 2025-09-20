@@ -1,0 +1,44 @@
+# MatrixOne Python SDK Manifest
+
+# Include documentation
+include README.md
+include README_CN.md
+include LICENSE
+include CHANGELOG.md
+include VERSION_MANAGEMENT.md
+include VERSION_FRAMEWORK_SUMMARY.md
+include MATRIXONE_VERSION_SUMMARY.md
+
+# Include requirements
+include requirements.txt
+
+# Include examples
+recursive-include . example_*.py
+recursive-include . test_*.py
+
+# Include configuration files
+include pyproject.toml
+include setup.py
+include .gitignore
+
+# Exclude build artifacts
+exclude dist/
+exclude build/
+exclude *.egg-info/
+exclude *.whl
+exclude *.tar.gz
+
+# Exclude development files
+exclude *.pyc
+exclude *.pyo
+exclude *.pyd
+exclude __pycache__
+exclude .git*
+exclude .DS_Store
+exclude .vscode
+exclude .idea
+
+# Include package data
+recursive-include matrixone *.py
+recursive-include matrixone *.pyi
+include matrixone/py.typed
