@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "matrixone-python-sdk"
 version = "1.0.0"
 description = "A high-level Python SDK for MatrixOne database operations"
-readme = "README.md"
+readme = "README_USER.md"
 license = "Apache-2.0"
 authors = [
     {name = "MatrixOne Team", email = "dev@matrixone.cloud"}

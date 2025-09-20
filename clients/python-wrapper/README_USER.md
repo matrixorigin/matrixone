@@ -3,7 +3,6 @@
 [![PyPI version](https://badge.fury.io/py/matrixone-python-sdk.svg)](https://badge.fury.io/py/matrixone-python-sdk)
 [![Python Support](https://img.shields.io/pypi/pyversions/matrixone-python-sdk.svg)](https://pypi.org/project/matrixone-python-sdk/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Build Status](https://github.com/matrixorigin/matrixone/workflows/CI/badge.svg)](https://github.com/matrixorigin/matrixone/actions)
 
 A high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, snapshot management, PITR, restore operations, table cloning, and mo-ctl integration.
 
@@ -22,18 +21,15 @@ A high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface fo
 
 ## 🚀 Installation
 
+### Using pip (Recommended)
+
 ```bash
 pip install matrixone-python-sdk
 ```
 
-### Development Installation
-
-#### Using Virtual Environment (Recommended)
+### Using Virtual Environment (Best Practice)
 
 ```bash
-git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone/clients/python-wrapper
-
 # Create virtual environment
 python -m venv venv
 
@@ -43,41 +39,22 @@ source venv/bin/activate
 # On Windows:
 # venv\Scripts\activate
 
-# Quick setup with Makefile
-make dev-setup
+# Install MatrixOne SDK
+pip install matrixone-python-sdk
 
-# Or manual setup
-pip install -e .
+# Verify installation
+python -c "import matrixone; print('MatrixOne SDK installed successfully')"
 ```
 
-#### Using Conda Environment
+### Using Conda
 
 ```bash
-git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone/clients/python-wrapper
-
 # Create conda environment
-conda create -n matrixone-dev python=3.10
-conda activate matrixone-dev
+conda create -n matrixone python=3.10
+conda activate matrixone
 
-# Quick setup with Makefile
-make dev-setup
-
-# Or manual setup
-pip install -e .
-```
-
-#### Direct Installation (Not Recommended)
-
-```bash
-git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone/clients/python-wrapper
-
-# Quick setup with Makefile
-make dev-setup
-
-# Or manual setup
-pip install -e .
+# Install MatrixOne SDK
+pip install matrixone-python-sdk
 ```
 
 ## Quick Start
@@ -297,9 +274,9 @@ except SnapshotError as e:
 
 ## Examples
 
-Check out the `examples/` directory for comprehensive usage examples:
+The package includes comprehensive examples:
 
-- `example_01_basic_operations.py` - Basic database operations
+- `example_01_basic_connection.py` - Basic database operations
 - `example_02_account_management.py` - User and role management
 - `example_03_async_operations.py` - Async operations
 - `example_04_transaction_management.py` - Transaction handling
@@ -310,142 +287,6 @@ Check out the `examples/` directory for comprehensive usage examples:
 - `example_09_logger_integration.py` - Logging integration
 - `example_10_version_management.py` - Version management
 - `example_11_matrixone_version_demo.py` - MatrixOne version demo
-
-## 🧪 Testing & Development
-
-### Python Environment Configuration
-
-#### Configuring Python Path
-
-The Makefile uses `python3` and `pip` by default, but you can override these:
-
-```bash
-# Method 1: Set environment variables
-export PYTHON=/path/to/your/python3
-export PIP=/path/to/your/pip
-make test
-
-# Method 2: Pass variables to make command
-make test PYTHON=/path/to/your/python3 PIP=/path/to/your/pip
-
-# Method 3: Use virtual environment (recommended)
-source venv/bin/activate
-make test  # Will use the activated environment's python/pip
-```
-
-#### Check Your Environment
-
-```bash
-# Check current Python configuration
-make check-env
-
-# Show project information
-make info
-```
-
-### Virtual Environment Best Practices
-
-#### Setting Up Development Environment
-
-```bash
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On macOS/Linux
-# venv\Scripts\activate   # On Windows
-
-# Install development dependencies
-make dev-setup
-
-# Verify installation
-python -c "import matrixone; print('MatrixOne SDK installed successfully')"
-```
-
-#### Working with Virtual Environment
-
-```bash
-# Activate virtual environment before development
-source venv/bin/activate
-
-# Run tests
-make test
-
-# Run examples
-make example-basic
-
-# Deactivate when done
-deactivate
-```
-
-#### Virtual Environment Management
-
-```bash
-# Check virtual environment status
-which python  # Should show venv path
-
-# List installed packages
-pip list
-
-# Update dependencies
-pip install -r requirements.txt --upgrade
-
-# Clean virtual environment
-make clean-all  # Removes venv/ directory
-```
-
-### Quick Commands (Makefile)
-
-```bash
-# View all available commands
-make help
-
-# Setup development environment
-make dev-setup
-
-# Run tests
-make test                    # All tests
-make test-fast              # Quick tests
-make test-coverage          # With coverage report
-
-# Code quality
-make lint                   # Code quality check
-make format                 # Format code
-make type-check             # Type checking
-
-# Examples
-make examples               # Run all examples
-make example-basic          # Basic connection example
-
-# Build & Release
-make build                  # Build package
-make build-release          # Build release package (user README)
-make publish-test           # Publish to test PyPI
-make publish                # Publish to PyPI
-
-# Cleanup
-make clean                  # Clean build artifacts
-```
-
-### Manual Commands
-
-```bash
-# Run all tests
-python -m pytest
-
-# Run with coverage
-python -m pytest --cov=matrixone --cov-report=html
-
-# Format code
-black matrixone tests examples
-
-# Lint code
-flake8 matrixone tests examples
-
-# Type checking
-mypy matrixone
-
-# Build package
-python -m build
-```
 
 ## CLI Tool
 
@@ -465,66 +306,6 @@ matrixone-client -H localhost -P 6001 -u root -p 111 -d test -i
 matrixone-client --help
 ```
 
-## 📚 Documentation
-
-- **Examples**: See `example_*.py` files for comprehensive usage examples
-- **API Reference**: All classes and methods are fully documented with type hints
-- **Version Management**: Automatic backend version detection and compatibility checking
-
-## 🤝 Contributing
-
-We welcome contributions! 
-
-### Development Workflow
-
-1. **Fork the repository**
-2. **Set up development environment**
-   ```bash
-   git clone <your-fork-url>
-   cd matrixone/clients/python-wrapper
-   
-   # Create virtual environment
-   python -m venv venv
-   source venv/bin/activate  # On macOS/Linux
-   
-   # Install development dependencies
-   make dev-setup
-   ```
-3. **Create a feature branch**
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-4. **Make your changes**
-5. **Add tests** for new functionality
-6. **Run pre-commit checks**
-   ```bash
-   make pre-commit  # format + lint + test
-   ```
-7. **Submit a pull request**
-
-### Virtual Environment for Contributors
-
-```bash
-# Always work in virtual environment
-source venv/bin/activate
-
-# Before making changes
-make test  # Ensure all tests pass
-
-# After making changes
-make format    # Format code
-make lint      # Check code quality
-make test      # Run tests
-make examples  # Test examples
-
-# Before submitting PR
-make release-check  # Complete pre-release checks
-```
-
-## License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
 ## Support
 
 - 📧 Email: dev@matrixone.cloud
@@ -532,9 +313,9 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - 💬 Discussions: [GitHub Discussions](https://github.com/matrixorigin/matrixone/discussions)
 - 📖 Documentation: [MatrixOne Docs](https://docs.matrixone.cloud/)
 
-## Changelog
+## License
 
-See [CHANGELOG.md](CHANGELOG.md) for version history and changes.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ---
 

@@ -15,6 +15,9 @@ include requirements.txt
 # Include examples (recommended for user experience)
 include example_*.py
 
+# Include user-facing README for PyPI
+include README_USER.md
+
 # Exclude test files (not needed for end users)
 exclude test_*.py
 exclude pytest.ini
