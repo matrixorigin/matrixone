@@ -15,10 +15,13 @@ import logging
 import asyncio
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
+from matrixone.logger import create_default_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
+# Create MatrixOne logger for all logging
+logger = create_default_logger(
+    enable_performance_logging=True,
+    enable_sql_logging=True
+)
 
 
 def demo_basic_connection():
@@ -29,7 +32,7 @@ def demo_basic_connection():
     # Test 1: Simple connection
     logger.info("\n=== Test 1: Simple Connection ===")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         logger.info("✅ Basic connection successful")
         
@@ -54,7 +57,7 @@ def demo_login_formats():
     # Format 1: Legacy format (simple username)
     logger.info("\n🔌 Format 1: Legacy format (simple username)")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
@@ -65,7 +68,7 @@ def demo_login_formats():
     # Format 2: Direct format (account#user)
     logger.info("\n🔌 Format 2: Direct format (account#user)")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'sys#root', '111', 'test')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
@@ -76,7 +79,7 @@ def demo_login_formats():
     # Format 3: User with role (separate parameters)
     logger.info("\n🔌 Format 3: User with role (separate parameters)")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test', role='admin')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
@@ -87,7 +90,7 @@ def demo_login_formats():
     # Format 4: Account with separate parameters
     logger.info("\n🔌 Format 4: Account with separate parameters")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test', account='sys')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login info: {login_info}")
@@ -103,7 +106,7 @@ def demo_connection_error_handling():
     # Test invalid credentials
     logger.info("\n🔌 Test invalid credentials")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'invalid_user', 'invalid_pass', 'test')
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
@@ -112,7 +115,7 @@ def demo_connection_error_handling():
     # Test invalid host
     logger.info("\n🔌 Test invalid host")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('192.168.1.999', 6001, 'root', '111', 'test')
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
@@ -121,7 +124,7 @@ def demo_connection_error_handling():
     # Test invalid port
     logger.info("\n🔌 Test invalid port")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 9999, 'root', '111', 'test')
         logger.error("   ❌ Should have failed but didn't!")
     except Exception as e:
@@ -133,7 +136,7 @@ def demo_connection_info():
     logger.info("\n=== Test 4: Connection Information ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Get login info
@@ -162,7 +165,7 @@ async def demo_async_connection():
     
     client = None
     try:
-        client = AsyncClient()
+        client = AsyncClient(logger=logger)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         logger.info("✅ Async connection successful")
         
@@ -193,7 +196,7 @@ def demo_connection_pooling():
     try:
         # Create multiple connections
         for i in range(3):
-            client = Client()
+            client = Client(logger=logger)
             client.connect('127.0.0.1', 6001, 'root', '111', 'test')
             clients.append(client)
             logger.info(f"   ✅ Created connection {i+1}")

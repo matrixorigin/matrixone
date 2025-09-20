@@ -8,24 +8,26 @@ Demonstrates comprehensive Publish-Subscribe functionality including:
 """
 
 from matrixone import Client, AsyncClient
+from matrixone.logger import create_default_logger
 import asyncio
 import logging
 import time
 from datetime import datetime
 
-# Set up logging with line numbers
-logging.basicConfig(
+# Create MatrixOne logger for all logging with line numbers
+logger = create_default_logger(
     level=logging.INFO,
-    format='%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s'
+    format_string='%(asctime)s %(levelname)s [%(filename)s:%(lineno)d]: %(message)s',
+    enable_performance_logging=True,
+    enable_sql_logging=True
 )
-logger = logging.getLogger(__name__)
 
 
 def demo_basic_pubsub_operations():
     """Demonstrate basic PubSub operations within the same account"""
     logger.info("=== Basic PubSub Operations Demo ===")
     
-    client = Client()
+    client = Client(logger=logger)
     
     try:
         # Connect to MatrixOne
@@ -385,7 +387,7 @@ async def demo_async_pubsub_operations():
     """Demonstrate async PubSub operations"""
     logger.info("=== Async PubSub Operations Demo ===")
     
-    client = AsyncClient()
+    client = AsyncClient(logger=logger)
     
     try:
         # Connect to MatrixOne
@@ -499,7 +501,7 @@ def demo_pubsub_best_practices():
     """Demonstrate PubSub best practices and real-world scenarios"""
     logger.info("=== PubSub Best Practices Demo ===")
     
-    client = Client()
+    client = Client(logger=logger)
     
     try:
         # Connect to MatrixOne

@@ -21,10 +21,13 @@ import time
 import json
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
+from matrixone.logger import create_default_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
+# Create MatrixOne logger for all logging
+logger = create_default_logger(
+    enable_performance_logging=True,
+    enable_sql_logging=True
+)
 
 
 def demo_pubsub_operations():
@@ -33,7 +36,7 @@ def demo_pubsub_operations():
     logger.info("=" * 60)
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test 1: Basic PubSub setup
@@ -89,7 +92,7 @@ def demo_clone_operations():
     logger.info("\n=== Test 5: Clone Operations ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create source table
@@ -143,7 +146,7 @@ def demo_pitr_operations():
     logger.info("\n=== Test 6: Point-in-Time Recovery (PITR) ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Use existing important data for PITR demonstration
@@ -278,7 +281,7 @@ def demo_moctl_integration():
     logger.info("\n=== Test 7: MoCTL Integration ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         logger.info("\n🔧 MoCTL Operations")
@@ -570,7 +573,7 @@ def demo_performance_monitoring():
     logger.info("\n=== Test 8: Performance Monitoring ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test table for performance testing
@@ -639,7 +642,7 @@ def demo_advanced_error_handling():
     logger.info("\n=== Test 9: Advanced Error Handling ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test connection error handling
@@ -697,7 +700,7 @@ def demo_custom_configurations():
     try:
         # Test custom connection parameters
         logger.info("\n⚙️ Custom Connection Parameters")
-        client = Client()
+        client = Client(logger=logger)
         client.connect(
             host='127.0.0.1',
             port=6001,
@@ -738,7 +741,7 @@ def demo_custom_configurations():
         logger.info("\n⚙️ Custom Connection Pooling")
         clients = []
         for i in range(3):
-            client = Client()
+            client = Client(logger=logger)
             client.connect('127.0.0.1', 6001, 'root', '111', 'test')
             clients.append(client)
             logger.info(f"   ✅ Created connection {i+1}")
@@ -762,7 +765,7 @@ async def demo_async_advanced_features():
     logger.info("\n=== Test 11: Async Advanced Features ===")
     
     try:
-        client = AsyncClient()
+        client = AsyncClient(logger=logger)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test async performance monitoring

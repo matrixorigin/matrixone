@@ -17,10 +17,13 @@ import logging
 import asyncio
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
+from matrixone.logger import create_default_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
+# Create MatrixOne logger for all logging
+logger = create_default_logger(
+    enable_performance_logging=True,
+    enable_sql_logging=True
+)
 
 
 def demo_account_management():
@@ -29,7 +32,7 @@ def demo_account_management():
     logger.info("=" * 60)
     
     # Connect as root for account management
-    root_client = Client()
+    root_client = Client(logger=logger)
     root_client.connect('127.0.0.1', 6001, 'root', '111', 'test')
     account_manager = AccountManager(root_client)
     
@@ -170,7 +173,7 @@ def demo_account_management():
     # Test developer1 with developer_role
     logger.info("\n🔌 Test developer1 with developer_role")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'demo_account#developer1#developer_role', 'devpass123', 'mo_catalog')
         login_info = client.get_login_info()
         logger.info(f"   ✅ Login successful: {login_info}")
@@ -185,7 +188,7 @@ def demo_account_management():
     # Test analyst1 with analyst_role
     logger.info("\n🔌 Test analyst1 with analyst_role")
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'analyst1', 'analystpass123', 'mo_catalog', 
                       account='demo_account', role='analyst_role')
         login_info = client.get_login_info()

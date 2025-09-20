@@ -20,10 +20,13 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.pool import QueuePool
 from matrixone import Client, AsyncClient
+from matrixone.logger import create_default_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
+# Create MatrixOne logger for all logging
+logger = create_default_logger(
+    enable_performance_logging=True,
+    enable_sql_logging=True
+)
 
 # SQLAlchemy setup
 Base = declarative_base()
@@ -440,7 +443,7 @@ def demo_sqlalchemy_with_matrixone_features():
         
         # Test with MatrixOne client integration
         logger.info("\n🔧 MatrixOne Client Integration")
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Use MatrixOne client for account operations

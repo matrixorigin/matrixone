@@ -15,6 +15,7 @@ from .restore import RestoreManager, TransactionRestoreManager
 from .pitr import PitrManager, TransactionPitrManager
 from .pubsub import PubSubManager, TransactionPubSubManager
 from .account import AccountManager, TransactionAccountManager
+from .logger import MatrixOneLogger, create_default_logger
 
 
 class Client:
@@ -28,7 +29,10 @@ class Client:
                  connection_timeout: int = 30,
                  query_timeout: int = 300,
                  auto_commit: bool = True,
-                 charset: str = 'utf8mb4'):
+                 charset: str = 'utf8mb4',
+                 logger: Optional[MatrixOneLogger] = None,
+                 enable_performance_logging: bool = False,
+                 enable_sql_logging: bool = False):
         """
         Initialize MatrixOne client
         
@@ -37,11 +41,23 @@ class Client:
             query_timeout: Query timeout in seconds  
             auto_commit: Enable auto-commit mode
             charset: Character set for connection
+            logger: Custom logger instance. If None, creates a default logger
+            enable_performance_logging: Enable performance logging
+            enable_sql_logging: Enable SQL query logging
         """
         self.connection_timeout = connection_timeout
         self.query_timeout = query_timeout
         self.auto_commit = auto_commit
         self.charset = charset
+        
+        # Initialize logger
+        if logger is not None:
+            self.logger = logger
+        else:
+            self.logger = create_default_logger(
+                enable_performance_logging=enable_performance_logging,
+                enable_sql_logging=enable_sql_logging
+            )
         
         self._connection = None
         self._engine = None
@@ -113,14 +129,23 @@ class Client:
         
         try:
             self._connection = pymysql.connect(**self._connection_params)
+            self.logger.log_connection(host, port, final_user, database, success=True)
         except Exception as e:
+            self.logger.log_connection(host, port, final_user, database, success=False)
+            self.logger.log_error(e, context="Connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
     
     def disconnect(self) -> None:
         """Disconnect from MatrixOne database"""
         if self._connection:
-            self._connection.close()
-            self._connection = None
+            try:
+                self._connection.close()
+                self._connection = None
+                self.logger.log_disconnection(success=True)
+            except Exception as e:
+                self.logger.log_disconnection(success=False)
+                self.logger.log_error(e, context="Disconnection")
+                raise
         
         if self._engine:
             self._engine.dispose()
@@ -222,20 +247,32 @@ class Client:
         if not self._connection:
             raise ConnectionError("Not connected to database")
         
+        import time
+        start_time = time.time()
+        
         try:
             with self._connection.cursor() as cursor:
                 cursor.execute(sql, params)
+                
+                execution_time = time.time() - start_time
                 
                 if cursor.description:
                     # SELECT query
                     columns = [desc[0] for desc in cursor.description]
                     rows = cursor.fetchall()
-                    return ResultSet(columns, rows)
+                    result = ResultSet(columns, rows)
+                    self.logger.log_query(sql, execution_time, len(rows), success=True)
+                    return result
                 else:
                     # INSERT/UPDATE/DELETE query
-                    return ResultSet([], [], affected_rows=cursor.rowcount)
+                    result = ResultSet([], [], affected_rows=cursor.rowcount)
+                    self.logger.log_query(sql, execution_time, cursor.rowcount, success=True)
+                    return result
                     
         except Exception as e:
+            execution_time = time.time() - start_time
+            self.logger.log_query(sql, execution_time, success=False)
+            self.logger.log_error(e, context="Query execution")
             raise QueryError(f"Query execution failed: {e}")
     
     def get_sqlalchemy_engine(self, 

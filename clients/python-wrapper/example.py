@@ -3,14 +3,21 @@ MatrixOne Python SDK - Basic Example
 """
 
 from matrixone import Client
+from matrixone.logger import create_default_logger
 from sqlalchemy import text
 
 
 def basic_example():
     """Basic usage example"""
     
-    # Create client
-    client = Client()
+    # Create MatrixOne logger for all logging
+    logger = create_default_logger(
+        enable_performance_logging=True,
+        enable_sql_logging=True
+    )
+    
+    # Create client with logger
+    client = Client(logger=logger)
     
     try:
         # Connect to MatrixOne
@@ -22,11 +29,11 @@ def basic_example():
             database="test"
         )
         
-        print("Connected to MatrixOne!")
+        logger.info("Connected to MatrixOne!")
         
         # Execute simple query
         result = client.execute("SELECT VERSION() as version")
-        print(f"MatrixOne version: {result.fetchone()}")
+        logger.info(f"MatrixOne version: {result.fetchone()}")
         
         # Create a test table
         client.execute("""
@@ -37,7 +44,7 @@ def basic_example():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        print("Test table created!")
+        logger.info("Test table created!")
         
         # Insert some data
         with client.transaction() as tx:
@@ -49,30 +56,30 @@ def basic_example():
                 "INSERT INTO test_users (name, email) VALUES (%s, %s)",
                 ("Jane Smith", "jane@example.com")
             )
-        print("Data inserted!")
+        logger.info("Data inserted!")
         
         # Query data
         result = client.execute("SELECT * FROM test_users")
-        print("Users:")
+        logger.info("Users:")
         for row in result.fetchall():
-            print(f"  ID: {row[0]}, Name: {row[1]}, Email: {row[2]}")
+            logger.info(f"  ID: {row[0]}, Name: {row[1]}, Email: {row[2]}")
         
         # Use SQLAlchemy
         engine = client.get_sqlalchemy_engine()
         with engine.connect() as conn:
             result = conn.execute(text("SELECT COUNT(*) FROM test_users"))
             count = result.scalar()
-            print(f"Total users: {count}")
+            logger.info(f"Total users: {count}")
         
         # Clean up
         client.execute("DROP TABLE test_users")
-        print("Test table dropped!")
+        logger.info("Test table dropped!")
         
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
     finally:
         client.disconnect()
-        print("Disconnected from MatrixOne")
+        logger.info("Disconnected from MatrixOne")
 
 
 if __name__ == "__main__":

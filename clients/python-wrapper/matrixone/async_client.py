@@ -17,6 +17,7 @@ from .restore import RestoreManager
 from .pitr import PitrManager, Pitr
 from .pubsub import PubSubManager, Publication, Subscription
 from .account import AccountManager, Account, User, TransactionAccountManager
+from .logger import MatrixOneLogger, create_default_logger
 
 
 class AsyncResultSet:
@@ -1067,7 +1068,10 @@ class AsyncClient:
                  connection_timeout: int = 30,
                  query_timeout: int = 300,
                  auto_commit: bool = True,
-                 charset: str = 'utf8mb4'):
+                 charset: str = 'utf8mb4',
+                 logger: Optional[MatrixOneLogger] = None,
+                 enable_performance_logging: bool = False,
+                 enable_sql_logging: bool = False):
         """
         Initialize MatrixOne async client
         
@@ -1076,11 +1080,23 @@ class AsyncClient:
             query_timeout: Query timeout in seconds  
             auto_commit: Enable auto-commit mode
             charset: Character set for connection
+            logger: Custom logger instance. If None, creates a default logger
+            enable_performance_logging: Enable performance logging
+            enable_sql_logging: Enable SQL query logging
         """
         self.connection_timeout = connection_timeout
         self.query_timeout = query_timeout
         self.auto_commit = auto_commit
         self.charset = charset
+        
+        # Initialize logger
+        if logger is not None:
+            self.logger = logger
+        else:
+            self.logger = create_default_logger(
+                enable_performance_logging=enable_performance_logging,
+                enable_sql_logging=enable_sql_logging
+            )
         
         self._connection = None
         self._connection_params = {}
@@ -1132,8 +1148,11 @@ class AsyncClient:
             }
             
             self._connection = await aiomysql.connect(**self._connection_params)
+            self.logger.log_connection(host, port, final_user, database or "default", success=True)
             
         except Exception as e:
+            self.logger.log_connection(host, port, final_user, database or "default", success=False)
+            self.logger.log_error(e, context="Async connection")
             raise ConnectionError(f"Failed to connect to MatrixOne: {e}")
     
     async def disconnect(self):
@@ -1155,11 +1174,14 @@ class AsyncClient:
                     if hasattr(self._connection._writer, 'transport') and self._connection._writer.transport:
                         self._connection._writer.transport.close()
                 
-            except Exception:
+            except Exception as e:
+                self.logger.log_disconnection(success=False)
+                self.logger.log_error(e, context="Async disconnection")
                 # Ignore errors during cleanup
                 pass
             finally:
                 self._connection = None
+                self.logger.log_disconnection(success=True)
     
     def __del__(self):
         """Cleanup when object is garbage collected"""
@@ -1268,18 +1290,30 @@ class AsyncClient:
         if not self._connection:
             raise ConnectionError("Not connected to database")
         
+        import time
+        start_time = time.time()
+        
         try:
             async with self._connection.cursor() as cursor:
                 await cursor.execute(sql, params)
                 
+                execution_time = time.time() - start_time
+                
                 if cursor.description:
                     columns = [desc[0] for desc in cursor.description]
                     rows = await cursor.fetchall()
-                    return AsyncResultSet(columns, rows)
+                    result = AsyncResultSet(columns, rows)
+                    self.logger.log_query(sql, execution_time, len(rows), success=True)
+                    return result
                 else:
-                    return AsyncResultSet([], [], affected_rows=cursor.rowcount)
+                    result = AsyncResultSet([], [], affected_rows=cursor.rowcount)
+                    self.logger.log_query(sql, execution_time, cursor.rowcount, success=True)
+                    return result
                     
         except Exception as e:
+            execution_time = time.time() - start_time
+            self.logger.log_query(sql, execution_time, success=False)
+            self.logger.log_error(e, context="Async query execution")
             raise QueryError(f"Query execution failed: {e}")
     
     async def snapshot_query(self, snapshot_name: str, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:

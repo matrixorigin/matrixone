@@ -18,10 +18,13 @@ import logging
 import asyncio
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
+from matrixone.logger import create_default_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
+# Create MatrixOne logger for all logging
+logger = create_default_logger(
+    enable_performance_logging=True,
+    enable_sql_logging=True
+)
 
 
 def demo_basic_transaction_operations():
@@ -30,7 +33,7 @@ def demo_basic_transaction_operations():
     logger.info("=" * 60)
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test 1: Simple transaction with commit
@@ -136,41 +139,43 @@ def demo_transaction_error_handling():
     logger.info("\n=== Test 4: Transaction Error Handling ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test constraint violation
-        logger.info("\n🔍 Test Constraint Violation")
+        logger.info("\n🔍 Test Constraint Violation (expected to fail)")
         try:
             with client.transaction() as tx:
                 tx.execute("CREATE TABLE IF NOT EXISTS constraint_test (id INT PRIMARY KEY, name VARCHAR(50))")
                 tx.execute("INSERT INTO constraint_test VALUES (1, 'test1')")
                 tx.execute("INSERT INTO constraint_test VALUES (1, 'test2')")  # Duplicate key
         except Exception as e:
-            logger.info(f"   ✅ Constraint violation handled: {e}")
+            logger.info(f"   ✅ Expected constraint violation (test passed): {e}")
         
         # Verify no data was inserted (table might not exist due to rollback)
+        logger.info("   🔍 Verifying table doesn't exist after rollback (expected)")
         try:
             result = client.execute("SELECT COUNT(*) FROM constraint_test")
             logger.info(f"   Records after constraint violation: {result.rows[0][0]}")
         except Exception as e:
-            logger.info(f"   ✅ Table doesn't exist after rollback: {e}")
+            logger.info(f"   ✅ Expected: Table doesn't exist after rollback (test passed): {e}")
         
         # Test data type error
-        logger.info("\n🔍 Test Data Type Error")
+        logger.info("\n🔍 Test Data Type Error (expected to fail)")
         try:
             with client.transaction() as tx:
                 tx.execute("CREATE TABLE IF NOT EXISTS type_test (id INT, value INT)")
                 tx.execute("INSERT INTO type_test VALUES (1, 'invalid_string')")  # Type error
         except Exception as e:
-            logger.info(f"   ✅ Data type error handled: {e}")
+            logger.info(f"   ✅ Expected data type error (test passed): {e}")
         
         # Verify no data was inserted (table might not exist due to rollback)
+        logger.info("   🔍 Verifying table doesn't exist after rollback (expected)")
         try:
             result = client.execute("SELECT COUNT(*) FROM type_test")
             logger.info(f"   Records after type error: {result.rows[0][0]}")
         except Exception as e:
-            logger.info(f"   ✅ Table doesn't exist after rollback: {e}")
+            logger.info(f"   ✅ Expected: Table doesn't exist after rollback (test passed): {e}")
         
         # Cleanup
         client.execute("DROP TABLE IF EXISTS constraint_test")
@@ -186,7 +191,7 @@ def demo_transaction_with_account_operations():
     logger.info("\n=== Test 5: Transaction with Account Operations ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         account_manager = AccountManager(client)
         
@@ -220,7 +225,7 @@ def demo_transaction_performance():
     logger.info("\n=== Test 6: Transaction Performance ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test table
@@ -265,7 +270,7 @@ async def demo_async_transaction_management():
     logger.info("\n=== Test 7: Async Transaction Management ===")
     
     try:
-        client = AsyncClient()
+        client = AsyncClient(logger=logger)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test async transaction with commit
@@ -312,7 +317,7 @@ def demo_transaction_best_practices():
     logger.info("\n=== Test 8: Transaction Best Practices ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Best Practice 1: Keep transactions short

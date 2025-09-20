@@ -18,10 +18,13 @@ import asyncio
 import time
 from matrixone import Client, AsyncClient
 from matrixone.account import AccountManager
+from matrixone.logger import create_default_logger
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
+# Create MatrixOne logger for all logging
+logger = create_default_logger(
+    enable_performance_logging=True,
+    enable_sql_logging=True
+)
 
 
 def demo_basic_snapshot_operations():
@@ -30,7 +33,7 @@ def demo_basic_snapshot_operations():
     logger.info("=" * 60)
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test 1: Create test data
@@ -120,7 +123,7 @@ def demo_snapshot_enumeration():
     logger.info("\n=== Test 7: Snapshot Enumeration ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test table for enumeration
@@ -192,7 +195,7 @@ def demo_point_in_time_recovery():
     logger.info("\n=== Test 8: Point-in-Time Recovery (PITR) ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test data
@@ -284,7 +287,7 @@ def demo_snapshot_error_handling():
     logger.info("\n=== Test 9: Snapshot Error Handling ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Test invalid snapshot name
@@ -368,7 +371,7 @@ async def demo_async_snapshot_operations():
     
     client = None
     try:
-        client = AsyncClient()
+        client = AsyncClient(logger=logger)
         await client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Create test data
@@ -429,7 +432,7 @@ def demo_snapshot_best_practices():
     logger.info("\n=== Test 11: Snapshot Best Practices ===")
     
     try:
-        client = Client()
+        client = Client(logger=logger)
         client.connect('127.0.0.1', 6001, 'root', '111', 'test')
         
         # Best Practice 1: Use descriptive snapshot names
