@@ -29,6 +29,9 @@ def demo_default_logger():
     logger.info("🚀 MatrixOne Default Logger Demo")
     logger.info("=" * 60)
     
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
+    
     # Create client with default logger
     client = Client(
         enable_performance_logging=True,
@@ -61,6 +64,9 @@ def demo_custom_logger():
     """Demonstrate custom logger integration"""
     logger.info("\n🚀 MatrixOne Custom Logger Demo")
     logger.info("=" * 60)
+    
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     
     # Create custom logger
     custom_logger = logging.getLogger('my_app.matrixone')
@@ -105,6 +111,8 @@ def demo_custom_logger():
 
 
 def demo_structured_logging():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate structured logging with context"""
     logger.info("\n🚀 MatrixOne Structured Logging Demo")
     logger.info("=" * 60)
@@ -159,6 +167,8 @@ def demo_structured_logging():
 
 
 async def demo_async_logger():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate async client with logger"""
     logger.info("\n🚀 MatrixOne Async Logger Demo")
     logger.info("=" * 60)
@@ -196,6 +206,8 @@ async def demo_async_logger():
 
 
 def demo_logger_levels():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate different logger levels"""
     logger.info("\n🚀 MatrixOne Logger Levels Demo")
     logger.info("=" * 60)
@@ -228,6 +240,8 @@ def demo_logger_levels():
 
 
 def demo_business_integration():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate logger integration in business application"""
     logger.info("\n🚀 MatrixOne Business Integration Demo")
     logger.info("=" * 60)
@@ -280,6 +294,8 @@ def demo_business_integration():
 
 
 def demo_performance_monitoring():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate performance monitoring with logger"""
     logger.info("\n🚀 MatrixOne Performance Monitoring Demo")
     logger.info("=" * 60)

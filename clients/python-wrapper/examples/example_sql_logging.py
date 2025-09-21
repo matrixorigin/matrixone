@@ -21,7 +21,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 from matrixone.client import Client
-from matrixone.logger import create_default_logger
+from matrixone.logger import create_default_logger, create_custom_logger
 import logging
 
 
@@ -279,8 +279,6 @@ def demonstrate_custom_logger():
     custom_logger.addHandler(handler)
     
     # Create MatrixOne logger from custom logger
-    from matrixone.logger import create_custom_logger
-from matrixone.config import get_connection_params, print_config
     mo_logger = create_custom_logger(
         logger=custom_logger,
         enable_sql_logging=True,

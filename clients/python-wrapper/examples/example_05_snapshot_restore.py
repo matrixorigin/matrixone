@@ -198,6 +198,8 @@ def demo_snapshot_enumeration():
 
 
 def demo_point_in_time_recovery():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate point-in-time recovery (PITR)"""
     logger.info("\n=== Test 8: Point-in-Time Recovery (PITR) ===")
     
@@ -290,6 +292,8 @@ def demo_point_in_time_recovery():
 
 
 def demo_snapshot_error_handling():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate snapshot error handling"""
     logger.info("\n=== Test 9: Snapshot Error Handling ===")
     
@@ -373,6 +377,8 @@ def demo_snapshot_error_handling():
 
 
 async def demo_async_snapshot_operations():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate async snapshot operations"""
     logger.info("\n=== Test 10: Async Snapshot Operations ===")
     
@@ -435,6 +441,8 @@ async def demo_async_snapshot_operations():
 
 
 def demo_snapshot_best_practices():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate snapshot best practices"""
     logger.info("\n=== Test 11: Snapshot Best Practices ===")
     

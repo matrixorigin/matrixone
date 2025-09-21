@@ -233,7 +233,7 @@ dev-setup: install-dev ## Setup development environment
 	@echo "  make build       - Build package"
 
 .PHONY: pre-commit
-pre-commit-full: format lint test ## Full pre-commit checks (format + lint + test)
+pre-commit: format lint test ## Full pre-commit checks (format + lint + test)
 	@echo "$(GREEN)Full pre-commit checks completed!$(NC)"
 
 .PHONY: release-check

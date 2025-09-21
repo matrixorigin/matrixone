@@ -92,6 +92,8 @@ def demo_pubsub_operations():
 
 
 def demo_clone_operations():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate clone operations"""
     logger.info("\n=== Test 5: Clone Operations ===")
     
@@ -146,6 +148,8 @@ def demo_clone_operations():
 
 
 def demo_pitr_operations():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate Point-in-Time Recovery operations"""
     logger.info("\n=== Test 6: Point-in-Time Recovery (PITR) ===")
     
@@ -281,6 +285,8 @@ def demo_pitr_operations():
 
 
 def demo_moctl_integration():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate MoCTL integration"""
     logger.info("\n=== Test 7: MoCTL Integration ===")
     
@@ -374,6 +380,8 @@ def demo_moctl_integration():
 
 
 def demo_version_information():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate comprehensive version information retrieval"""
     logger.info("🚀 MatrixOne Version Information Demo")
     logger.info("=" * 60)
@@ -465,6 +473,8 @@ def demo_version_information():
 
 
 async def demo_async_version_information():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate asynchronous version information retrieval"""
     logger.info("\n🚀 MatrixOne Async Version Information Demo")
     logger.info("=" * 60)
@@ -579,6 +589,8 @@ async def demo_async_version_context_manager():
 
 
 def demo_performance_monitoring():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate performance monitoring"""
     logger.info("\n=== Test 8: Performance Monitoring ===")
     
@@ -648,6 +660,8 @@ def demo_performance_monitoring():
 
 
 def demo_advanced_error_handling():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate advanced error handling"""
     logger.info("\n=== Test 9: Advanced Error Handling ===")
     
@@ -704,6 +718,8 @@ def demo_advanced_error_handling():
 
 
 def demo_custom_configurations():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate custom configurations"""
     logger.info("\n=== Test 10: Custom Configurations ===")
     
@@ -771,6 +787,8 @@ def demo_custom_configurations():
 
 
 async def demo_async_advanced_features():
+    # Get connection parameters from config
+    host, port, user, password, database = get_connection_params()
     """Demonstrate async advanced features"""
     logger.info("\n=== Test 11: Async Advanced Features ===")
     
