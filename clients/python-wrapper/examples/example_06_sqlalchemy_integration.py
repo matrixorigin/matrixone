@@ -28,6 +28,17 @@ logger = create_default_logger(
     enable_sql_logging=True
 )
 
+# Get connection parameters
+def get_connection_params():
+    """Get connection parameters from environment or defaults"""
+    import os
+    host = os.getenv('MO_HOST', '127.0.0.1')
+    port = int(os.getenv('MO_PORT', '6001'))
+    user = os.getenv('MO_USER', 'root')
+    password = os.getenv('MO_PASSWORD', '111')
+    database = os.getenv('MO_DATABASE', 'test')
+    return host, port, user, password, database
+
 # SQLAlchemy setup
 Base = declarative_base()
 
@@ -120,6 +131,9 @@ def demo_orm_operations():
     logger.info("\n=== Test 5: ORM Operations ===")
     
     try:
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
         # Create engine and session
         engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
@@ -240,6 +254,9 @@ def demo_sqlalchemy_transactions():
     logger.info("\n=== Test 6: SQLAlchemy Transactions ===")
     
     try:
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
         engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
         
@@ -313,6 +330,9 @@ async def demo_async_sqlalchemy():
     
     async_engine = None
     try:
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
         # Create async engine
         async_engine = create_async_engine(
             f'mysql+aiomysql://{user}:{password}@{host}:{port}/{database}',
@@ -375,6 +395,9 @@ def demo_sqlalchemy_performance():
     logger.info("\n=== Test 8: SQLAlchemy Performance ===")
     
     try:
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
         engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
         
@@ -393,12 +416,17 @@ def demo_sqlalchemy_performance():
                 'email': f'bulk_user_{i}@example.com'
             })
         
-        # Use bulk_insert_mappings for better performance
-        session.bulk_insert_mappings(User, users_data)
-        session.commit()
-        
-        end_time = time.time()
-        logger.info(f"   ✅ Bulk inserted 100 users in {end_time - start_time:.3f} seconds")
+        # Check if bulk users already exist and skip if they do
+        existing_count = session.query(User).filter(User.username.like('bulk_user_%')).count()
+        if existing_count == 0:
+            # Use bulk_insert_mappings for better performance
+            session.bulk_insert_mappings(User, users_data)
+            session.commit()
+            end_time = time.time()
+            logger.info(f"   ✅ Bulk inserted 100 users in {end_time - start_time:.3f} seconds")
+        else:
+            end_time = time.time()
+            logger.info(f"   ✅ Bulk users already exist ({existing_count} users), skipping insertion")
         
         # Test query optimization
         logger.info("\n⚡ Query Optimization")
@@ -412,7 +440,7 @@ def demo_sqlalchemy_performance():
         logger.info(f"   ✅ Loaded {len(users_with_posts)} users with posts in {end_time - start_time:.3f} seconds")
         
         # Cleanup bulk data
-        session.query(User).filter(User.username.like('bulk_user_%')).delete()
+        session.query(User).filter(User.username.like('bulk_user_%')).delete(synchronize_session=False)
         session.commit()
         logger.info("   ✅ Cleaned up bulk data")
         
@@ -427,6 +455,9 @@ def demo_sqlalchemy_with_matrixone_features():
     logger.info("\n=== Test 9: SQLAlchemy with MatrixOne Features ===")
     
     try:
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
         engine = create_engine(f'mysql+pymysql://{user}:{password}@{host}:{port}/{database}')
         SessionLocal = sessionmaker(bind=engine)
         session = SessionLocal()
@@ -451,7 +482,6 @@ def demo_sqlalchemy_with_matrixone_features():
         
         # Use MatrixOne client for account operations
         from matrixone.account import AccountManager
-from matrixone.config import get_connection_params, print_config
         account_manager = AccountManager(client)
         
         # Get current user info
@@ -474,6 +504,9 @@ def demo_sqlalchemy_best_practices():
     logger.info("\n=== Test 10: SQLAlchemy Best Practices ===")
     
     try:
+        # Get connection parameters
+        host, port, user, password, database = get_connection_params()
+        
         # Best Practice 1: Use connection pooling
         logger.info("\n📋 Best Practice 1: Connection Pooling")
         engine = create_engine(

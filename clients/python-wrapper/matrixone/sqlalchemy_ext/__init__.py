@@ -10,13 +10,18 @@ from .table_builder import (VectorTableBuilder, create_document_vector_table,
                             create_product_vector_table,
                             create_vector_index_table, create_vector_table)
 # Import SQLAlchemy extensions
-from .vector_type import Vectorf32, Vectorf64, VectorType, VectorTypeDecorator
+from .vector_type import (VectorColumn, Vectorf32, Vectorf64, VectorType,
+                          VectorTypeDecorator, create_vector_column,
+                          vector_distance_functions)
 
 __all__ = [
     "VectorType",
     "Vectorf32",
     "Vectorf64",
     "VectorTypeDecorator",
+    "VectorColumn",
+    "create_vector_column",
+    "vector_distance_functions",
     "MatrixOneDialect",
     "VectorTableBuilder",
     "create_vector_table",

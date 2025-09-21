@@ -391,7 +391,7 @@ class Client:
             pool_recycle=pool_recycle,
             echo=echo,
         )
-        
+
         # Replace the dialect with MatrixOne dialect for proper vector type support
         original_dbapi = self._engine.dialect.dbapi
         self._engine.dialect = MatrixOneDialect()

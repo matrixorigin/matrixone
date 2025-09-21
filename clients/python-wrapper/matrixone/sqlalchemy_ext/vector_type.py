@@ -2,9 +2,9 @@
 Vector type for SQLAlchemy integration with MatrixOne.
 """
 
-from typing import Any, Optional
+from typing import Any, List, Optional, Union
 
-from sqlalchemy import Text, TypeDecorator
+from sqlalchemy import Column, Text, TypeDecorator, func
 from sqlalchemy.dialects import mysql
 from sqlalchemy.types import UserDefinedType
 
@@ -314,3 +314,167 @@ class VectorTypeDecorator(TypeDecorator):
             return f"VectorTypeDecorator(dimension={self.dimension}, precision='{self.precision}')"
         else:
             return f"VectorTypeDecorator(precision='{self.precision}')"
+
+
+class VectorColumn(Column):
+    """
+    Extended Column class with vector distance functions.
+
+    Provides convenient methods for vector similarity operations.
+    """
+
+    inherit_cache = True
+
+    def l2_distance(self, other: Union[List[float], str, Column]) -> func:
+        """
+        Calculate L2 (Euclidean) distance between vectors.
+
+        Args:
+            other: Target vector as list, string, or column
+
+        Returns:
+            SQLAlchemy function expression
+
+        Example:
+            query = session.query(Document).filter(
+                Document.embedding.l2_distance([1, 2, 3]) < 0.5
+            )
+        """
+        if isinstance(other, list):
+            # Convert list to MatrixOne vector format
+            vector_str = "[" + ",".join(map(str, other)) + "]"
+            return func.l2_distance(self, vector_str)
+        elif isinstance(other, str):
+            return func.l2_distance(self, other)
+        else:
+            return func.l2_distance(self, other)
+
+    def l2_distance_sq(self, other: Union[List[float], str, Column]) -> func:
+        """
+        Calculate squared L2 distance between vectors.
+
+        Args:
+            other: Target vector as list, string, or column
+
+        Returns:
+            SQLAlchemy function expression
+
+        Example:
+            query = session.query(Document).order_by(
+                Document.embedding.l2_distance_sq([1, 2, 3])
+            )
+        """
+        if isinstance(other, list):
+            vector_str = "[" + ",".join(map(str, other)) + "]"
+            return func.l2_distance_sq(self, vector_str)
+        elif isinstance(other, str):
+            return func.l2_distance_sq(self, other)
+        else:
+            return func.l2_distance_sq(self, other)
+
+    def cosine_distance(self, other: Union[List[float], str, Column]) -> func:
+        """
+        Calculate cosine distance between vectors.
+
+        Args:
+            other: Target vector as list, string, or column
+
+        Returns:
+            SQLAlchemy function expression
+
+        Example:
+            query = session.query(Document).filter(
+                Document.embedding.cosine_distance([1, 2, 3]) < 0.1
+            )
+        """
+        if isinstance(other, list):
+            vector_str = "[" + ",".join(map(str, other)) + "]"
+            return func.cosine_distance(self, vector_str)
+        elif isinstance(other, str):
+            return func.cosine_distance(self, other)
+        else:
+            return func.cosine_distance(self, other)
+
+    def negative_inner_product(self, other: Union[List[float], str, Column]) -> func:
+        """
+        Calculate negative inner product between vectors.
+        Note: This is implemented as -inner_product() since MatrixOne doesn't have native support.
+
+        Args:
+            other: Target vector as list, string, or column
+
+        Returns:
+            SQLAlchemy function expression
+
+        Example:
+            query = session.query(Document).order_by(
+                Document.embedding.negative_inner_product([1, 2, 3])
+            )
+        """
+        if isinstance(other, list):
+            vector_str = "[" + ",".join(map(str, other)) + "]"
+            return -func.inner_product(self, vector_str)
+        elif isinstance(other, str):
+            return -func.inner_product(self, other)
+        else:
+            return -func.inner_product(self, other)
+
+    def inner_product(self, other: Union[List[float], str, Column]) -> func:
+        """
+        Calculate inner product (dot product) between vectors.
+
+        Args:
+            other: Target vector as list, string, or column
+
+        Returns:
+            SQLAlchemy function expression
+
+        Example:
+            query = session.query(Document).order_by(
+                Document.embedding.inner_product([1, 2, 3]).desc()
+            )
+        """
+        if isinstance(other, list):
+            vector_str = "[" + ",".join(map(str, other)) + "]"
+            return func.inner_product(self, vector_str)
+        elif isinstance(other, str):
+            return func.inner_product(self, other)
+        else:
+            return func.inner_product(self, other)
+
+
+# Convenience functions for vector operations
+def create_vector_column(dimension: int, precision: str = "f32", **kwargs) -> VectorColumn:
+    """
+    Create a vector column with distance function support.
+
+    Args:
+        dimension: Vector dimension
+        precision: Vector precision ("f32" or "f64")
+        **kwargs: Additional column arguments
+
+    Returns:
+        VectorColumn instance
+
+    Example:
+        class Document(Base):
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(128, precision="f32")
+            description = Column(String(500))
+    """
+    if precision == "f32":
+        return VectorColumn(Vectorf32(dimension=dimension), **kwargs)
+    elif precision == "f64":
+        return VectorColumn(Vectorf64(dimension=dimension), **kwargs)
+    else:
+        raise ValueError("Precision must be 'f32' or 'f64'")
+
+
+def vector_distance_functions():
+    """
+    Return available vector distance functions.
+
+    Returns:
+        List of function names
+    """
+    return ["l2_distance", "l2_distance_sq", "cosine_distance", "negative_inner_product", "inner_product"]
