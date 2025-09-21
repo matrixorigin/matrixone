@@ -9,33 +9,65 @@ from unittest.mock import Mock, patch, AsyncMock
 import sys
 import os
 
-# Mock the external dependencies
-sys.modules['pymysql'] = Mock()
-sys.modules['aiomysql'] = Mock()
+# Store original modules to restore later
+_original_modules = {}
 
-# Create a more sophisticated SQLAlchemy mock that supports submodules
-sqlalchemy_mock = Mock()
-sqlalchemy_mock.create_engine = Mock()
-sqlalchemy_mock.text = Mock()
-sqlalchemy_mock.Column = Mock()
-sqlalchemy_mock.Integer = Mock()
-sqlalchemy_mock.String = Mock()
-sqlalchemy_mock.DateTime = Mock()
+def setup_mocks():
+    """Setup mocks for SQLAlchemy modules"""
+    global _original_modules
+    
+    # Store original modules
+    _original_modules['pymysql'] = sys.modules.get('pymysql')
+    _original_modules['aiomysql'] = sys.modules.get('aiomysql')
+    _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
+    _original_modules['sqlalchemy.engine'] = sys.modules.get('sqlalchemy.engine')
+    _original_modules['sqlalchemy.orm'] = sys.modules.get('sqlalchemy.orm')
+    _original_modules['sqlalchemy.ext'] = sys.modules.get('sqlalchemy.ext')
+    _original_modules['sqlalchemy.ext.asyncio'] = sys.modules.get('sqlalchemy.ext.asyncio')
+    
+    # Mock the external dependencies
+    sys.modules['pymysql'] = Mock()
+    sys.modules['aiomysql'] = Mock()
+    
+    # Create a more sophisticated SQLAlchemy mock that supports submodules
+    sqlalchemy_mock = Mock()
+    sqlalchemy_mock.create_engine = Mock()
+    sqlalchemy_mock.text = Mock()
+    sqlalchemy_mock.Column = Mock()
+    sqlalchemy_mock.Integer = Mock()
+    sqlalchemy_mock.String = Mock()
+    sqlalchemy_mock.DateTime = Mock()
+    
+    # Mock SQLAlchemy submodules
+    sys.modules['sqlalchemy'] = sqlalchemy_mock
+    sys.modules['sqlalchemy.engine'] = Mock()
+    sys.modules['sqlalchemy.engine'].Engine = Mock()
+    
+    # Mock SQLAlchemy ORM
+    sqlalchemy_orm_mock = Mock()
+    sqlalchemy_orm_mock.sessionmaker = Mock()
+    sqlalchemy_orm_mock.declarative_base = Mock()
+    sys.modules['sqlalchemy.orm'] = sqlalchemy_orm_mock
+    
+    # Mock SQLAlchemy async extensions
+    sqlalchemy_ext_mock = Mock()
+    sqlalchemy_ext_asyncio_mock = Mock()
+    sqlalchemy_ext_asyncio_mock.create_async_engine = Mock()
+    sqlalchemy_ext_asyncio_mock.AsyncSession = Mock()
+    sqlalchemy_ext_asyncio_mock.async_sessionmaker = Mock()
+    sqlalchemy_ext_mock.asyncio = sqlalchemy_ext_asyncio_mock
+    sys.modules['sqlalchemy.ext'] = sqlalchemy_ext_mock
+    sys.modules['sqlalchemy.ext.asyncio'] = sqlalchemy_ext_asyncio_mock
 
-# Mock SQLAlchemy submodules
-sys.modules['sqlalchemy'] = sqlalchemy_mock
-sys.modules['sqlalchemy.engine'] = Mock()
-sys.modules['sqlalchemy.engine'].Engine = Mock()
-sys.modules['sqlalchemy.orm'] = Mock()
-sys.modules['sqlalchemy.orm'].sessionmaker = Mock()
-sys.modules['sqlalchemy.orm'].declarative_base = Mock()
-
-# Mock SQLAlchemy async extensions
-sys.modules['sqlalchemy.ext'] = Mock()
-sys.modules['sqlalchemy.ext.asyncio'] = Mock()
-sys.modules['sqlalchemy.ext.asyncio'].create_async_engine = Mock()
-sys.modules['sqlalchemy.ext.asyncio'].AsyncSession = Mock()
-sys.modules['sqlalchemy.ext.asyncio'].async_sessionmaker = Mock()
+def teardown_mocks():
+    """Restore original modules"""
+    global _original_modules
+    
+    for module_name, original_module in _original_modules.items():
+        if original_module is not None:
+            sys.modules[module_name] = original_module
+        elif module_name in sys.modules:
+            del sys.modules[module_name]
 
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
@@ -47,6 +79,16 @@ from matrixone.exceptions import ConnectionError
 
 class TestAsyncSQLAlchemyTransaction(unittest.IsolatedAsyncioTestCase):
     """Test Async SQLAlchemy Transaction Integration"""
+    
+    @classmethod
+    def setUpClass(cls):
+        """Setup mocks for the entire test class"""
+        setup_mocks()
+    
+    @classmethod
+    def tearDownClass(cls):
+        """Restore original modules after tests"""
+        teardown_mocks()
     
     def setUp(self):
         """Set up test fixtures"""

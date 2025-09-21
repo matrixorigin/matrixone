@@ -20,6 +20,12 @@ from .pubsub import Publication, PubSubManager, Subscription
 from .restore import RestoreManager
 from .snapshot import (CloneManager, Snapshot, SnapshotLevel, SnapshotManager,
                        SnapshotQueryBuilder)
+# Import SQLAlchemy extensions
+from .sqlalchemy_ext import (MatrixOneDialect, Vectorf32, Vectorf64,
+                             VectorTableBuilder, VectorType,
+                             VectorTypeDecorator, create_document_vector_table,
+                             create_product_vector_table,
+                             create_vector_index_table, create_vector_table)
 from .version import (FeatureRequirement, VersionInfo, VersionManager,
                       requires_version)
 
@@ -62,4 +68,15 @@ __all__ = [
     "VersionInfo",
     "FeatureRequirement",
     "requires_version",
+    # SQLAlchemy extensions
+    "VectorType",
+    "Vectorf32",
+    "Vectorf64",
+    "VectorTypeDecorator",
+    "MatrixOneDialect",
+    "VectorTableBuilder",
+    "create_vector_table",
+    "create_vector_index_table",
+    "create_document_vector_table",
+    "create_product_vector_table",
 ]
