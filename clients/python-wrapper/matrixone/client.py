@@ -125,6 +125,7 @@ class Client:
         self._pitr = PitrManager(self)
         self._pubsub = PubSubManager(self)
         self._account = AccountManager(self)
+        self._vector_index = VectorIndexManager(self)
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -580,6 +581,11 @@ class Client:
         """Get account manager"""
         return self._account
 
+    @property
+    def vector_index(self) -> "VectorIndexManager":
+        """Get vector index manager for vector index operations"""
+        return VectorIndexManager(self)
+
     def version(self) -> str:
         """
         Get MatrixOne server version
@@ -872,6 +878,7 @@ class TransactionWrapper:
         self.pitr = TransactionPitrManager(client, self)
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)
+        self.vector_index = TransactionVectorIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None
@@ -1008,3 +1015,169 @@ class TransactionCloneManager(CloneManager):
         return super().clone_table_with_snapshot(
             target_table, source_table, snapshot_name, if_not_exists, self.transaction_wrapper
         )
+
+
+class VectorIndexManager:
+    """Vector index manager for client chain operations"""
+
+    def __init__(self, client):
+        self.client = client
+
+    def create(
+        self,
+        table_name: str,
+        name: str,
+        column: str,
+        index_type: str = "ivfflat",
+        lists: int = None,
+        op_type: str = "vector_l2_ops",
+    ) -> "VectorIndexManager":
+        """
+        Create a vector index using chain operations.
+
+        Args:
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            index_type: Type of vector index (ivfflat, hnsw, etc.)
+            lists: Number of lists for IVFFLAT (optional)
+            op_type: Vector operation type
+
+        Returns:
+            VectorIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
+
+        # Convert string parameters to enum values
+        if index_type == "ivfflat":
+            index_type = VectorIndexType.IVFFLAT
+        if op_type == "vector_l2_ops":
+            op_type = VectorOpType.VECTOR_L2_OPS
+
+        # IVF will be enabled automatically in the same connection by VectorIndex.create_index
+
+        success = VectorIndex.create_index(
+            engine=self.client.get_sqlalchemy_engine(),
+            table_name=table_name,
+            name=name,
+            column=column,
+            index_type=index_type,
+            lists=lists,
+            op_type=op_type,
+        )
+
+        if not success:
+            raise Exception(f"Failed to create vector index {name} on table {table_name}")
+
+        return self
+
+    def drop(self, table_name: str, name: str) -> "VectorIndexManager":
+        """
+        Drop a vector index using chain operations.
+
+        Args:
+            table_name: Name of the table
+            name: Name of the index to drop
+
+        Returns:
+            VectorIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import VectorIndex
+
+        success = VectorIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
+
+        if not success:
+            raise Exception(f"Failed to drop vector index {name} from table {table_name}")
+
+        return self
+
+    def enable_ivf(self, probe_limit: int = 1) -> "VectorIndexManager":
+        """
+        Enable IVF indexing with chain operations.
+
+        Args:
+            probe_limit: Probe limit for IVF search
+
+        Returns:
+            VectorIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import create_ivf_config
+
+        ivf_config = create_ivf_config(self.client.get_sqlalchemy_engine())
+        if not ivf_config.is_ivf_supported():
+            raise Exception("IVF indexing is not supported in this MatrixOne version")
+
+        if not ivf_config.enable_ivf_indexing():
+            raise Exception("Failed to enable IVF indexing")
+
+        if not ivf_config.set_probe_limit(probe_limit):
+            raise Exception("Failed to set probe limit")
+
+        return self
+
+    def disable_ivf(self) -> "VectorIndexManager":
+        """
+        Disable IVF indexing with chain operations.
+
+        Returns:
+            VectorIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import create_ivf_config
+
+        ivf_config = create_ivf_config(self.client.get_sqlalchemy_engine())
+        if not ivf_config.disable_ivf_indexing():
+            raise Exception("Failed to disable IVF indexing")
+
+        return self
+
+
+class TransactionVectorIndexManager(VectorIndexManager):
+    """Vector index manager that executes operations within a transaction"""
+
+    def __init__(self, client, transaction_wrapper):
+        super().__init__(client)
+        self.transaction_wrapper = transaction_wrapper
+
+    def create(
+        self,
+        table_name: str,
+        name: str,
+        column: str,
+        index_type: str = "ivfflat",
+        lists: int = None,
+        op_type: str = "vector_l2_ops",
+    ) -> "TransactionVectorIndexManager":
+        """Create a vector index within transaction"""
+        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
+
+        # Convert string parameters to enum values
+        if index_type == "ivfflat":
+            index_type = VectorIndexType.IVFFLAT
+        if op_type == "vector_l2_ops":
+            op_type = VectorOpType.VECTOR_L2_OPS
+
+        # Create index using transaction wrapper's execute method
+        index = VectorIndex(name, column, index_type, lists, op_type)
+
+        try:
+            # Enable IVF indexing in the same connection for IVFFLAT indexes
+            if index_type == VectorIndexType.IVFFLAT:
+                self.transaction_wrapper.execute("SET experimental_ivf_index = 1")
+                self.transaction_wrapper.execute("SET probe_limit = 1")
+
+            sql = index.create_sql(table_name)
+            self.transaction_wrapper.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to create vector index {name} on table {table_name} in transaction: {e}")
+
+    def drop(self, table_name: str, name: str) -> "TransactionVectorIndexManager":
+        """Drop a vector index within transaction"""
+        # Drop index using transaction wrapper's execute method
+        sql = f"DROP INDEX {name} ON {table_name}"
+
+        try:
+            self.transaction_wrapper.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to drop vector index {name} from table {table_name} in transaction: {e}")

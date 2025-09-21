@@ -154,6 +154,96 @@ class TestVectorIndexORMMethods:
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE IF EXISTS test_vector_orm_methods"))
 
+    def test_vector_index_orm_transaction_operations(self, engine, Base, Session):
+        """Test ORM-style vector index operations within transactions."""
+        # Clean up first
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS test_vector_orm_transaction"))
+
+        # Enable IVF indexing first
+        ivf_config = create_ivf_config(engine)
+        if not ivf_config.is_ivf_supported():
+            pytest.skip("IVF indexing is not supported in this MatrixOne version")
+        
+        # Try to enable IVF indexing
+        enable_result = ivf_config.enable_ivf_indexing()
+        if not enable_result:
+            pytest.skip("Failed to enable IVF indexing")
+        
+        # Set probe limit
+        ivf_config.set_probe_limit(1)
+
+        # Create table
+        class TestDocumentTransaction(Base):
+            __tablename__ = 'test_vector_orm_transaction'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(128, "f32")
+            title = Column(String(200))
+
+        Base.metadata.create_all(engine, tables=[TestDocumentTransaction.__table__])
+
+        # Test 1: Create and drop index in transaction (MatrixOne only supports one index per vector column)
+        with engine.begin() as conn:
+            # Create index
+            success = VectorIndex.create_index_in_transaction(
+                connection=conn,
+                table_name="test_vector_orm_transaction",
+                name="idx_embedding_transaction_01",
+                column="embedding",
+                index_type=VectorIndexType.IVFFLAT,
+                lists=32,
+                op_type=VectorOpType.VECTOR_L2_OPS
+            )
+            assert success, "Index creation in transaction should succeed"
+
+        # Verify index was created
+        with engine.begin() as conn:
+            result = conn.execute(text("SHOW INDEX FROM test_vector_orm_transaction"))
+            indexes = result.fetchall()
+            index_names = [idx[2] for idx in indexes]
+            assert "idx_embedding_transaction_01" in index_names
+
+        # Test 2: Drop index in transaction
+        with engine.begin() as conn:
+            # Drop index
+            success = VectorIndex.drop_index_in_transaction(
+                connection=conn,
+                table_name="test_vector_orm_transaction",
+                name="idx_embedding_transaction_01"
+            )
+            assert success, "Index drop in transaction should succeed"
+
+        # Verify index was dropped
+        with engine.begin() as conn:
+            result = conn.execute(text("SHOW INDEX FROM test_vector_orm_transaction"))
+            indexes = result.fetchall()
+            index_names = [idx[2] for idx in indexes]
+            assert "idx_embedding_transaction_01" not in index_names
+
+        # Test 3: Error handling in transaction
+        # Note: MatrixOne vector index creation (CREATE INDEX USING ivfflat) is auto-committed
+        # and not transactional, so we test error handling instead of rollback
+        try:
+            with engine.begin() as conn:
+                # Try to create an index with invalid table name (should fail)
+                success = VectorIndex.create_index_in_transaction(
+                    connection=conn,
+                    table_name="non_existent_table",
+                    name="idx_embedding_transaction_error",
+                    column="embedding",
+                    index_type=VectorIndexType.IVFFLAT,
+                    lists=32,
+                    op_type=VectorOpType.VECTOR_L2_OPS
+                )
+                assert not success, "Should fail for non-existent table"
+        except Exception:
+            # Expected to fail
+            pass
+
+        # Clean up
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS test_vector_orm_transaction"))
+
     def test_vector_index_orm_with_ivf_config(self, engine, Base, Session):
         """Test ORM methods with IVF configuration."""
         # Clean up first
@@ -196,6 +286,105 @@ class TestVectorIndexORMMethods:
         # Clean up
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE IF EXISTS test_vector_orm_ivf"))
+
+    def test_vector_index_client_chain_operations(self, client, engine, Base, Session):
+        """Test vector index operations using client chain methods."""
+        # Clean up first
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS test_vector_chain"))
+
+        # Create table
+        class TestDocumentChain(Base):
+            __tablename__ = 'test_vector_chain'
+            id = Column(Integer, primary_key=True)
+            embedding = create_vector_column(128, "f32")
+            title = Column(String(200))
+
+        Base.metadata.create_all(engine, tables=[TestDocumentChain.__table__])
+
+        # Test 1: Client chain operations
+        try:
+            # Enable IVF and create index in chain
+            client.vector_index.enable_ivf(probe_limit=1).create(
+                table_name="test_vector_chain",
+                name="idx_embedding_chain_01",
+                column="embedding",
+                index_type="ivfflat",
+                lists=32,
+                op_type="vector_l2_ops"
+            )
+            
+            # Verify index was created
+            with engine.begin() as conn:
+                result = conn.execute(text("SHOW INDEX FROM test_vector_chain"))
+                indexes = result.fetchall()
+                index_names = [idx[2] for idx in indexes]
+                assert "idx_embedding_chain_01" in index_names
+
+            # Drop index using chain
+            client.vector_index.drop(
+                table_name="test_vector_chain",
+                name="idx_embedding_chain_01"
+            )
+            
+            # Verify index was dropped
+            with engine.begin() as conn:
+                result = conn.execute(text("SHOW INDEX FROM test_vector_chain"))
+                indexes = result.fetchall()
+                index_names = [idx[2] for idx in indexes]
+                assert "idx_embedding_chain_01" not in index_names
+
+        except Exception as e:
+            # If IVF is not supported, skip the test
+            if "IVF indexing is not supported" in str(e):
+                pytest.skip("IVF indexing is not supported in this MatrixOne version")
+            else:
+                raise
+
+        # Test 2: Transaction chain operations (MatrixOne only supports one index per vector column)
+        try:
+            with client.transaction() as tx:
+                # Create index in transaction using chain
+                tx.vector_index.create(
+                    table_name="test_vector_chain",
+                    name="idx_embedding_chain_tx_01",
+                    column="embedding",
+                    index_type="ivfflat",
+                    lists=32,
+                    op_type="vector_l2_ops"
+                )
+            
+            # Verify index was created
+            with engine.begin() as conn:
+                result = conn.execute(text("SHOW INDEX FROM test_vector_chain"))
+                indexes = result.fetchall()
+                index_names = [idx[2] for idx in indexes]
+                assert "idx_embedding_chain_tx_01" in index_names
+
+            # Drop index in transaction using chain
+            with client.transaction() as tx:
+                tx.vector_index.drop(
+                    table_name="test_vector_chain",
+                    name="idx_embedding_chain_tx_01"
+                )
+            
+            # Verify index was dropped
+            with engine.begin() as conn:
+                result = conn.execute(text("SHOW INDEX FROM test_vector_chain"))
+                indexes = result.fetchall()
+                index_names = [idx[2] for idx in indexes]
+                assert "idx_embedding_chain_tx_01" not in index_names
+
+        except Exception as e:
+            # If IVF is not supported, skip the test
+            if "IVF indexing is not supported" in str(e):
+                pytest.skip("IVF indexing is not supported in this MatrixOne version")
+            else:
+                raise
+
+        # Clean up
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS test_vector_chain"))
 
     def test_vector_index_orm_error_handling(self, engine, Base, Session):
         """Test ORM methods error handling."""

@@ -125,6 +125,11 @@ class VectorIndex(Index):
             sql = index.create_sql(table_name)
 
             with engine.begin() as conn:
+                # Enable IVF indexing in the same connection for IVFFLAT indexes
+                if index_type == VectorIndexType.IVFFLAT:
+                    conn.execute(text("SET experimental_ivf_index = 1"))
+                    conn.execute(text("SET probe_limit = 1"))
+
                 conn.execute(text(sql))
             return True
         except Exception as e:
@@ -180,6 +185,97 @@ class VectorIndex(Index):
             bool: True if successful, False otherwise
         """
         return self.__class__.drop_index(engine, table_name, self.name)
+
+    @classmethod
+    def create_index_in_transaction(
+        cls,
+        connection,
+        table_name: str,
+        name: str,
+        column: Union[str, Column],
+        index_type: str = VectorIndexType.IVFFLAT,
+        lists: Optional[int] = None,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ) -> bool:
+        """
+        Create a vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection (within a transaction)
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            index_type: Type of vector index (ivfflat, hnsw, etc.)
+            lists: Number of lists for IVFFLAT (optional)
+            op_type: Vector operation type
+            **kwargs: Additional index parameters
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            index = cls(name, column, index_type, lists, op_type, **kwargs)
+            sql = index.create_sql(table_name)
+
+            # Note: IVF indexing should be enabled before calling this method
+            # The SET statements are removed to avoid interfering with transaction rollback
+
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create vector index in transaction: {e}")
+            # Re-raise the exception to ensure transaction rollback
+            raise
+
+    @classmethod
+    def drop_index_in_transaction(cls, connection, table_name: str, name: str) -> bool:
+        """
+        Drop a vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection (within a transaction)
+            table_name: Name of the table
+            name: Name of the index to drop
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            connection.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop vector index in transaction: {e}")
+            return False
+
+    def create_in_transaction(self, connection, table_name: str) -> bool:
+        """
+        Create this vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection (within a transaction)
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.__class__.create_index_in_transaction(
+            connection, table_name, self.name, self._column_name, self.index_type, self.lists, self.op_type
+        )
+
+    def drop_in_transaction(self, connection, table_name: str) -> bool:
+        """
+        Drop this vector index within an existing transaction.
+
+        Args:
+            connection: SQLAlchemy connection (within a transaction)
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.__class__.drop_index_in_transaction(connection, table_name, self.name)
 
 
 class CreateVectorIndex(DDLElement):
