@@ -18,6 +18,7 @@ from .pubsub import PubSubManager, TransactionPubSubManager
 from .restore import RestoreManager, TransactionRestoreManager
 from .snapshot import (CloneManager, Snapshot, SnapshotLevel, SnapshotManager,
                        SnapshotQueryBuilder)
+from .sqlalchemy_ext import MatrixOneDialect
 from .version import get_version_manager
 
 
@@ -381,6 +382,7 @@ class Client:
         if "ssl_ca" in self._connection_params:
             connection_string += f"?ssl_ca={self._connection_params['ssl_ca']}"
 
+        # Create engine with default MySQL dialect first
         self._engine = create_engine(
             connection_string,
             pool_size=pool_size,
@@ -389,6 +391,11 @@ class Client:
             pool_recycle=pool_recycle,
             echo=echo,
         )
+        
+        # Replace the dialect with MatrixOne dialect for proper vector type support
+        original_dbapi = self._engine.dialect.dbapi
+        self._engine.dialect = MatrixOneDialect()
+        self._engine.dialect.dbapi = original_dbapi
 
         return self._engine
 

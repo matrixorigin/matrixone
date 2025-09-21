@@ -6,38 +6,13 @@ These tests are inspired by example_06_sqlalchemy_integration.py
 
 import pytest
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, ForeignKey, text
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.pool import QueuePool
 from matrixone import Client, AsyncClient
 from matrixone.logger import create_default_logger
 
-# SQLAlchemy setup
-Base = declarative_base()
-
-# Define models
-class User(Base):
-    __tablename__ = 'users'
-    
-    id = Column(Integer, primary_key=True)
-    username = Column(String(50), unique=True, nullable=False)
-    email = Column(String(100), unique=True, nullable=False)
-    created_at = Column(DateTime)
-    
-    # Relationship
-    posts = relationship("Post", back_populates="author")
-
-class Post(Base):
-    __tablename__ = 'posts'
-    
-    id = Column(Integer, primary_key=True)
-    title = Column(String(200), nullable=False)
-    content = Column(Text)
-    author_id = Column(Integer, ForeignKey('users.id'))
-    created_at = Column(DateTime)
-    
-    # Relationship
-    author = relationship("User", back_populates="posts")
+# SQLAlchemy setup - will be created per test to avoid conflicts
 
 
 @pytest.mark.online
@@ -48,6 +23,37 @@ class TestSQLAlchemyIntegration:
         """Test basic SQLAlchemy operations"""
         # Create SQLAlchemy engine using MatrixOne client
         engine = test_client.get_sqlalchemy_engine()
+        
+        # Create independent Base and models for this test
+        Base = declarative_base()
+        
+        class User(Base):
+            __tablename__ = 'test_users_basic'
+            
+            id = Column(Integer, primary_key=True)
+            username = Column(String(50), unique=True, nullable=False)
+            email = Column(String(100), unique=True, nullable=False)
+            created_at = Column(DateTime)
+            
+            # Relationship
+            posts = relationship("Post", back_populates="author")
+
+        class Post(Base):
+            __tablename__ = 'test_posts_basic'
+            
+            id = Column(Integer, primary_key=True)
+            title = Column(String(200), nullable=False)
+            content = Column(Text)
+            author_id = Column(Integer, ForeignKey('test_users_basic.id'))
+            created_at = Column(DateTime)
+            
+            # Relationship
+            author = relationship("User", back_populates="posts")
+        
+        # Drop tables if exist and create new ones
+        with engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS test_posts_basic'))
+            conn.execute(text('DROP TABLE IF EXISTS test_users_basic'))
         
         # Create tables
         Base.metadata.create_all(engine)
@@ -104,6 +110,38 @@ class TestSQLAlchemyIntegration:
     def test_sqlalchemy_with_transactions(self, test_client):
         """Test SQLAlchemy with transactions"""
         engine = test_client.get_sqlalchemy_engine()
+        
+        # Create independent Base and models for this test
+        Base = declarative_base()
+        
+        class User(Base):
+            __tablename__ = 'test_users_transactions'
+            
+            id = Column(Integer, primary_key=True)
+            username = Column(String(50), unique=True, nullable=False)
+            email = Column(String(100), unique=True, nullable=False)
+            created_at = Column(DateTime)
+            
+            # Relationship
+            posts = relationship("Post", back_populates="author")
+
+        class Post(Base):
+            __tablename__ = 'test_posts_transactions'
+            
+            id = Column(Integer, primary_key=True)
+            title = Column(String(200), nullable=False)
+            content = Column(Text)
+            author_id = Column(Integer, ForeignKey('test_users_transactions.id'))
+            created_at = Column(DateTime)
+            
+            # Relationship
+            author = relationship("User", back_populates="posts")
+        
+        # Drop tables if exist and create new ones
+        with engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS test_posts_transactions'))
+            conn.execute(text('DROP TABLE IF EXISTS test_users_transactions'))
+        
         Base.metadata.create_all(engine)
         
         Session = sessionmaker(bind=engine)
@@ -141,6 +179,22 @@ class TestSQLAlchemyIntegration:
     def test_sqlalchemy_raw_sql(self, test_client):
         """Test SQLAlchemy with raw SQL"""
         engine = test_client.get_sqlalchemy_engine()
+        
+        # Create independent Base and models for this test
+        Base = declarative_base()
+        
+        class User(Base):
+            __tablename__ = 'test_users_raw_sql'
+            
+            id = Column(Integer, primary_key=True)
+            username = Column(String(50), unique=True, nullable=False)
+            email = Column(String(100), unique=True, nullable=False)
+            created_at = Column(DateTime)
+        
+        # Drop table if exists and create new one
+        with engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS test_users_raw_sql'))
+        
         Base.metadata.create_all(engine)
         
         Session = sessionmaker(bind=engine)
@@ -159,7 +213,7 @@ class TestSQLAlchemyIntegration:
             assert row[0] == 42
             
             # Test raw SQL for table operations
-            session.execute(text("INSERT INTO users (username, email) VALUES (:username, :email)"), 
+            session.execute(text("INSERT INTO test_users_raw_sql (username, email) VALUES (:username, :email)"), 
                           {"username": "raw_user", "email": "raw@example.com"})
             session.commit()
             
@@ -180,6 +234,21 @@ class TestSQLAlchemyIntegration:
             pool_timeout=30,
             pool_recycle=3600
         )
+        
+        # Create independent Base and models for this test
+        Base = declarative_base()
+        
+        class User(Base):
+            __tablename__ = 'test_users_pooling'
+            
+            id = Column(Integer, primary_key=True)
+            username = Column(String(50), unique=True, nullable=False)
+            email = Column(String(100), unique=True, nullable=False)
+            created_at = Column(DateTime)
+        
+        # Drop table if exists and create new one
+        with engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS test_users_pooling'))
         
         Base.metadata.create_all(engine)
         
@@ -238,6 +307,22 @@ class TestSQLAlchemyIntegration:
     def test_sqlalchemy_with_matrixone_features(self, test_client):
         """Test SQLAlchemy with MatrixOne-specific features"""
         engine = test_client.get_sqlalchemy_engine()
+        
+        # Create independent Base and models for this test
+        Base = declarative_base()
+        
+        class User(Base):
+            __tablename__ = 'test_users_matrixone'
+            
+            id = Column(Integer, primary_key=True)
+            username = Column(String(50), unique=True, nullable=False)
+            email = Column(String(100), unique=True, nullable=False)
+            created_at = Column(DateTime)
+        
+        # Drop table if exists and create new one
+        with engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS test_users_matrixone'))
+        
         Base.metadata.create_all(engine)
         
         Session = sessionmaker(bind=engine)
@@ -267,6 +352,22 @@ class TestSQLAlchemyIntegration:
     def test_sqlalchemy_error_handling(self, test_client):
         """Test SQLAlchemy error handling"""
         engine = test_client.get_sqlalchemy_engine()
+        
+        # Create independent Base and models for this test
+        Base = declarative_base()
+        
+        class User(Base):
+            __tablename__ = 'test_users_errors'
+            
+            id = Column(Integer, primary_key=True)
+            username = Column(String(50), unique=True, nullable=False)
+            email = Column(String(100), unique=True, nullable=False)
+            created_at = Column(DateTime)
+        
+        # Drop table if exists and create new one
+        with engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS test_users_errors'))
+        
         Base.metadata.create_all(engine)
         
         Session = sessionmaker(bind=engine)

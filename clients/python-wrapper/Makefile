@@ -341,12 +341,6 @@ version: ## Show current version
 	@echo "$(VERSION)"
 
 # Quick commands
-.PHONY: quick-test
-quick-test: test-fast ## Quick test alias
-
-.PHONY: full-test
-full-test: coverage ## Full test with coverage alias
-
 .PHONY: check
 check: lint test ## Check alias (lint + test)
 

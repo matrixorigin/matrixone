@@ -5,9 +5,11 @@ Tests the ability to handle vectors with very large dimensions (65535).
 
 import pytest
 import math
-from sqlalchemy import create_engine, text, MetaData, Table, Column, Integer
-from sqlalchemy.schema import CreateTable
-from matrixone.sqlalchemy_ext import Vectorf64, MatrixOneDialect
+from sqlalchemy import Column, Integer, String
+from sqlalchemy.orm import sessionmaker, declarative_base
+from matrixone import Client
+from matrixone.sqlalchemy_ext import Vectorf64, Vectorf32
+from .test_config import online_config
 
 
 @pytest.mark.online
@@ -15,47 +17,64 @@ class TestLargeVectorDimensions:
     """Test large vector dimensions (65535)."""
 
     @pytest.fixture(scope="class")
-    def engine(self):
-        """Create engine for testing."""
-        connection_string = "mysql+pymysql://root:111@localhost:6001/test"
-        engine = create_engine(connection_string)
-        # Replace the dialect with our MatrixOne dialect but preserve dbapi
-        original_dbapi = engine.dialect.dbapi
-        engine.dialect = MatrixOneDialect()
-        engine.dialect.dbapi = original_dbapi
-        return engine
-
-    def test_65535_dimension_vecf64_batch_insertion(self, engine):
-        """Test batch inserting 65535-dimensional vecf64 vectors (10 rows)."""
-        # Create table with 65535-dimensional vecf64 column
-        metadata = MetaData()
-        table = Table(
-            'test_large_vecf64_batch',
-            metadata,
-            Column('id', Integer, primary_key=True),
-            Column('vector', Vectorf64(dimension=65535)),
-            Column('batch_id', Integer)
+    def client(self):
+        """Create MatrixOne client for testing."""
+        client = Client()
+        host, port, user, password, database = online_config.get_connection_params()
+        client.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database
         )
+        return client
+
+    @pytest.fixture(scope="class")
+    def engine(self, client):
+        """Get SQLAlchemy engine from client."""
+        return client.get_sqlalchemy_engine()
+
+    @pytest.fixture(scope="function")
+    def Base(self):
+        """Create declarative base for ORM models."""
+        return declarative_base()
+
+    @pytest.fixture(scope="class")
+    def Session(self, engine):
+        """Create session maker for ORM operations."""
+        return sessionmaker(bind=engine)
+
+    def test_65535_dimension_vecf64_batch_insertion(self, engine, Base, Session):
+        """Test batch inserting 65535-dimensional vecf64 vectors (10 rows) using ORM."""
         
-        # Create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_large_vecf64_batch"))
+        class LargeVectorf64Model(Base):
+            __tablename__ = 'test_large_vecf64_batch_orm_f64'
             
-            # Generate CREATE TABLE SQL
-            create_sql = str(CreateTable(table).compile(
-                dialect=MatrixOneDialect(), 
-                compile_kwargs={"literal_binds": True}
-            ))
-            print(f"Creating table with SQL: {create_sql}")
-            conn.execute(text(create_sql))
-            
-            # Batch insert 10 rows
-            batch_size = 10
-            vf64 = Vectorf64(dimension=65535)
-            processor = vf64.process_bind_param
-            
-            print(f"Starting batch insertion of {batch_size} rows...")
-            
+            id = Column(Integer, primary_key=True)
+            vector = Column(Vectorf64(dimension=65535))
+            batch_id = Column(Integer)
+
+            @classmethod
+            def create(cls, engine):
+                Base.metadata.create_all(engine, tables=[cls.__table__])
+                print(f"Created table: {cls.__tablename__}")
+
+            @classmethod
+            def drop(cls, engine, checkfirst=False):
+                Base.metadata.drop_all(engine, tables=[cls.__table__], checkfirst=checkfirst)
+                print(f"Dropped table: {cls.__tablename__}")
+
+        LargeVectorf64Model.drop(engine, checkfirst=False)
+        LargeVectorf64Model.create(engine)
+        
+        # Batch insert 10 rows using ORM
+        batch_size = 10
+        session = Session()
+        
+        print(f"Starting batch insertion of {batch_size} rows using ORM...")
+        
+        try:
             for batch_id in range(batch_size):
                 # Generate unique vector data for each row
                 vector_data = []
@@ -64,94 +83,98 @@ class TestLargeVectorDimensions:
                     value = math.sin((i + batch_id * 1000) / 1000.0)
                     vector_data.append(value)
                 
-                # Convert to string
-                vector_string = processor(vector_data, engine.dialect)
+                # Create model instance
+                model_instance = LargeVectorf64Model(
+                    vector=vector_data,
+                    batch_id=batch_id + 1
+                )
                 
-                # Insert the vector data
-                insert_sql = text("INSERT INTO test_large_vecf64_batch (vector, batch_id) VALUES (:vector, :batch_id)")
-                result = conn.execute(insert_sql, {"vector": vector_string, "batch_id": batch_id + 1})
-                
-                print(f"Inserted row {batch_id + 1}, affected rows: {result.rowcount}")
+                session.add(model_instance)
+                print(f"Added row {batch_id + 1} to session")
             
-            # Verify count
-            count_sql = text("SELECT COUNT(*) FROM test_large_vecf64_batch")
-            result = conn.execute(count_sql)
-            count = result.fetchone()[0]
+            # Commit all changes at once
+            session.commit()
+            print(f"Committed {batch_size} rows to database")
+            
+            # Verify count using ORM
+            count = session.query(LargeVectorf64Model).count()
             print(f"Total rows in table: {count}")
             assert count == batch_size, f"Expected {batch_size} rows, got {count}"
             
-            # Verify each row individually
+            # Verify each row individually using ORM
             for batch_id in range(1, batch_size + 1):
-                select_sql = text("SELECT id, vector, batch_id FROM test_large_vecf64_batch WHERE batch_id = :batch_id")
-                result = conn.execute(select_sql, {"batch_id": batch_id})
-                row = result.fetchone()
+                model = session.query(LargeVectorf64Model).filter_by(batch_id=batch_id).first()
                 
-                assert row is not None, f"No data found for batch_id {batch_id}"
-                assert row[0] == batch_id, f"ID mismatch for batch_id {batch_id}: expected {batch_id}, got {row[0]}"
-                assert row[2] == batch_id, f"batch_id mismatch: expected {batch_id}, got {row[2]}"
+                assert model is not None, f"No data found for batch_id {batch_id}"
+                assert model.id == batch_id, f"ID mismatch for batch_id {batch_id}: expected {batch_id}, got {model.id}"
+                assert model.batch_id == batch_id, f"batch_id mismatch: expected {batch_id}, got {model.batch_id}"
                 
                 # Verify vector data matches expected pattern
-                returned_vector_str = row[1]
-                clean_str = returned_vector_str.strip("[]")
-                returned_values = [float(x.strip()) for x in clean_str.split(",")]
-                
-                assert len(returned_values) == 65535, f"Expected 65535 dimensions for batch_id {batch_id}, got {len(returned_values)}"
+                assert isinstance(model.vector, list), f"Expected list, got {type(model.vector)}"
+                assert len(model.vector) == 65535, f"Expected 65535 dimensions for batch_id {batch_id}, got {len(model.vector)}"
                 
                 # Check first few values match expected pattern
                 for i in range(10):
                     expected = math.sin((i + (batch_id - 1) * 1000) / 1000.0)
-                    actual = returned_values[i]
+                    actual = model.vector[i]
                     assert abs(expected - actual) < 1e-6, f"Value mismatch at index {i} for batch_id {batch_id}: expected {expected}, got {actual}"
                 
                 print(f"✅ Verified row {batch_id} with batch_id {batch_id}")
             
-            # Test batch count query
-            batch_count_sql = text("SELECT batch_id, COUNT(*) as count FROM test_large_vecf64_batch GROUP BY batch_id ORDER BY batch_id")
-            result = conn.execute(batch_count_sql)
-            rows = result.fetchall()
+            # Test batch count query using ORM
+            batch_counts = session.query(
+                LargeVectorf64Model.batch_id, 
+                session.query(LargeVectorf64Model).filter(LargeVectorf64Model.batch_id == LargeVectorf64Model.batch_id).count()
+            ).group_by(LargeVectorf64Model.batch_id).all()
             
-            assert len(rows) == batch_size, f"Expected {batch_size} batch groups, got {len(rows)}"
-            for i, (batch_id, count) in enumerate(rows):
-                assert batch_id == i + 1, f"Batch ID mismatch at position {i}: expected {i + 1}, got {batch_id}"
-                assert count == 1, f"Expected 1 row per batch, got {count} for batch_id {batch_id}"
+            # Alternative simpler approach
+            all_models = session.query(LargeVectorf64Model).order_by(LargeVectorf64Model.batch_id).all()
+            
+            assert len(all_models) == batch_size, f"Expected {batch_size} models, got {len(all_models)}"
+            for i, model in enumerate(all_models):
+                expected_batch_id = i + 1
+                assert model.batch_id == expected_batch_id, f"Batch ID mismatch at position {i}: expected {expected_batch_id}, got {model.batch_id}"
             
             print(f"✅ Batch insertion of {batch_size} rows successful!")
             print(f"✅ Count verification passed: {count} rows total")
             print(f"✅ Individual row verification passed for all {batch_size} rows")
+            
+        finally:
+            session.close()
+            # Clean up table
+            Base.metadata.drop_all(engine)
 
-    def test_65535_dimension_vecf32_batch_insertion(self, engine):
-        """Test batch inserting 65535-dimensional vecf32 vectors (10 rows)."""
-        # Create table with 65535-dimensional vecf32 column
-        from matrixone.sqlalchemy_ext import Vectorf32
+    def test_65535_dimension_vecf32_batch_insertion(self, engine, Base, Session):
+        """Test batch inserting 65535-dimensional vecf32 vectors (10 rows) using ORM."""
         
-        metadata = MetaData()
-        table = Table(
-            'test_large_vecf32_batch',
-            metadata,
-            Column('id', Integer, primary_key=True),
-            Column('vector', Vectorf32(dimension=65535)),
-            Column('batch_id', Integer)
-        )
+        class LargeVectorf32Model(Base):
+            __tablename__ = 'test_large_vecf32_batch_orm_f32'
+            
+            id = Column(Integer, primary_key=True)
+            vector = Column(Vectorf32(dimension=65535))
+            batch_id = Column(Integer)
+
+            @classmethod
+            def create(cls, engine):
+                Base.metadata.create_all(engine, tables=[cls.__table__])
+                print(f"Created table: {cls.__tablename__}")
+
+            @classmethod
+            def drop(cls, engine, checkfirst=False):
+                Base.metadata.drop_all(engine, tables=[cls.__table__], checkfirst=checkfirst)
+                print(f"Dropped table: {cls.__tablename__}")
         
-        # Create table
-        with engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS test_large_vecf32_batch"))
-            
-            # Generate CREATE TABLE SQL
-            create_sql = str(CreateTable(table).compile(
-                dialect=MatrixOneDialect(), 
-                compile_kwargs={"literal_binds": True}
-            ))
-            print(f"Creating table with SQL: {create_sql}")
-            conn.execute(text(create_sql))
-            
-            # Batch insert 10 rows
-            batch_size = 10
-            vf32 = Vectorf32(dimension=65535)
-            processor = vf32.process_bind_param
-            
-            print(f"Starting vecf32 batch insertion of {batch_size} rows...")
-            
+
+        LargeVectorf32Model.drop(engine, checkfirst=False)
+        LargeVectorf32Model.create(engine)
+        
+        # Batch insert 10 rows using ORM
+        batch_size = 10
+        session = Session()
+        
+        print(f"Starting vecf32 batch insertion of {batch_size} rows using ORM...")
+        
+        try:
             for batch_id in range(batch_size):
                 # Generate unique vector data for each row
                 vector_data = []
@@ -160,62 +183,62 @@ class TestLargeVectorDimensions:
                     value = math.cos((i + batch_id * 1000) / 1000.0)
                     vector_data.append(value)
                 
-                # Convert to string
-                vector_string = processor(vector_data, engine.dialect)
+                # Create model instance
+                model_instance = LargeVectorf32Model(
+                    vector=vector_data,
+                    batch_id=batch_id + 1
+                )
                 
-                # Insert the vector data
-                insert_sql = text("INSERT INTO test_large_vecf32_batch (vector, batch_id) VALUES (:vector, :batch_id)")
-                result = conn.execute(insert_sql, {"vector": vector_string, "batch_id": batch_id + 1})
-                
-                print(f"Inserted vecf32 row {batch_id + 1}, affected rows: {result.rowcount}")
+                session.add(model_instance)
+                print(f"Added vecf32 row {batch_id + 1} to session")
             
-            # Verify count
-            count_sql = text("SELECT COUNT(*) FROM test_large_vecf32_batch")
-            result = conn.execute(count_sql)
-            count = result.fetchone()[0]
+            # Commit all changes at once
+            session.commit()
+            print(f"Committed {batch_size} vecf32 rows to database")
+            
+            # Verify count using ORM
+            count = session.query(LargeVectorf32Model).count()
             print(f"Total vecf32 rows in table: {count}")
             assert count == batch_size, f"Expected {batch_size} rows, got {count}"
             
-            # Verify each row individually
+            # Verify each row individually using ORM
             for batch_id in range(1, batch_size + 1):
-                select_sql = text("SELECT id, vector, batch_id FROM test_large_vecf32_batch WHERE batch_id = :batch_id")
-                result = conn.execute(select_sql, {"batch_id": batch_id})
-                row = result.fetchone()
+                model = session.query(LargeVectorf32Model).filter_by(batch_id=batch_id).first()
                 
-                assert row is not None, f"No data found for batch_id {batch_id}"
-                assert row[0] == batch_id, f"ID mismatch for batch_id {batch_id}: expected {batch_id}, got {row[0]}"
-                assert row[2] == batch_id, f"batch_id mismatch: expected {batch_id}, got {row[2]}"
+                assert model is not None, f"No data found for batch_id {batch_id}"
+                assert model.id == batch_id, f"ID mismatch for batch_id {batch_id}: expected {batch_id}, got {model.id}"
+                assert model.batch_id == batch_id, f"batch_id mismatch: expected {batch_id}, got {model.batch_id}"
                 
                 # Verify vector data matches expected pattern
-                returned_vector_str = row[1]
-                clean_str = returned_vector_str.strip("[]")
-                returned_values = [float(x.strip()) for x in clean_str.split(",")]
-                
-                assert len(returned_values) == 65535, f"Expected 65535 dimensions for batch_id {batch_id}, got {len(returned_values)}"
+                assert isinstance(model.vector, list), f"Expected list, got {type(model.vector)}"
+                assert len(model.vector) == 65535, f"Expected 65535 dimensions for batch_id {batch_id}, got {len(model.vector)}"
                 
                 # Check first few values match expected pattern
                 for i in range(10):
                     expected = math.cos((i + (batch_id - 1) * 1000) / 1000.0)
-                    actual = returned_values[i]
+                    actual = model.vector[i]
                     assert abs(expected - actual) < 1e-6, f"Value mismatch at index {i} for batch_id {batch_id}: expected {expected}, got {actual}"
                 
                 print(f"✅ Verified vecf32 row {batch_id} with batch_id {batch_id}")
             
-            # Test batch count query
-            batch_count_sql = text("SELECT batch_id, COUNT(*) as count FROM test_large_vecf32_batch GROUP BY batch_id ORDER BY batch_id")
-            result = conn.execute(batch_count_sql)
-            rows = result.fetchall()
+            # Test batch count query using ORM
+            all_models = session.query(LargeVectorf32Model).order_by(LargeVectorf32Model.batch_id).all()
             
-            assert len(rows) == batch_size, f"Expected {batch_size} batch groups, got {len(rows)}"
-            for i, (batch_id, count) in enumerate(rows):
-                assert batch_id == i + 1, f"Batch ID mismatch at position {i}: expected {i + 1}, got {batch_id}"
-                assert count == 1, f"Expected 1 row per batch, got {count} for batch_id {batch_id}"
+            assert len(all_models) == batch_size, f"Expected {batch_size} models, got {len(all_models)}"
+            for i, model in enumerate(all_models):
+                expected_batch_id = i + 1
+                assert model.batch_id == expected_batch_id, f"Batch ID mismatch at position {i}: expected {expected_batch_id}, got {model.batch_id}"
             
             print(f"✅ vecf32 Batch insertion of {batch_size} rows successful!")
             print(f"✅ vecf32 Count verification passed: {count} rows total")
             print(f"✅ vecf32 Individual row verification passed for all {batch_size} rows")
+            
+        finally:
+            session.close()
+            # Clean up table
+            Base.metadata.drop_all(engine)
 
-    def test_vector_string_length_limits(self, engine):
+    def test_vector_string_length_limits(self, client):
         """Test the actual string length limits for large vectors."""
         # Test different dimensions to see where limits might be
         test_dimensions = [1000, 10000, 65535]
@@ -226,10 +249,8 @@ class TestLargeVectorDimensions:
             # Generate vector data
             vector_data = [math.sin(i / 1000.0) for i in range(dim)]
             
-            # Convert to string
-            vf64 = Vectorf64(dimension=dim)
-            processor = vf64.process_bind_param
-            vector_string = processor(vector_data, engine.dialect)
+            # Convert to MatrixOne vector format
+            vector_string = "[" + ",".join(map(str, vector_data)) + "]"
             
             print(f"Dimension {dim}: String length = {len(vector_string)}")
             print(f"Average chars per dimension: {len(vector_string) / dim:.2f}")

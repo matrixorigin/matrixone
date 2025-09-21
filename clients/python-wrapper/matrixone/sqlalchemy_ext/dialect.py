@@ -14,6 +14,11 @@ class MatrixOneDialect(MySQLDialect):
     """
 
     name = "matrixone"
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Initialize missing MySQL dialect attributes
+        self._connection_charset = 'utf8mb4'
 
     def _extract_error_code(self, exception):
         """Extract error code from MatrixOne exceptions."""
