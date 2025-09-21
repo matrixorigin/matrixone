@@ -126,6 +126,9 @@ class Client:
         self._pubsub = PubSubManager(self)
         self._account = AccountManager(self)
         self._vector_index = VectorIndexManager(self)
+        self._vector_table = VectorTableManager(self)
+        self._vector_query = VectorQueryManager(self)
+        self._vector_data = VectorDataManager(self)
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -584,7 +587,22 @@ class Client:
     @property
     def vector_index(self) -> "VectorIndexManager":
         """Get vector index manager for vector index operations"""
-        return VectorIndexManager(self)
+        return self._vector_index
+
+    @property
+    def vector_table(self) -> "VectorTableManager":
+        """Get vector table manager for vector table operations"""
+        return self._vector_table
+
+    @property
+    def vector_query(self) -> "VectorQueryManager":
+        """Get vector query manager for vector query operations"""
+        return self._vector_query
+
+    @property
+    def vector_data(self) -> "VectorDataManager":
+        """Get vector data manager for vector data operations"""
+        return self._vector_data
 
     def version(self) -> str:
         """
@@ -871,7 +889,7 @@ class TransactionWrapper:
     def __init__(self, connection, client):
         self.connection = connection
         self.client = client
-        # Create snapshot, clone, restore, PITR, pubsub, and account managers that use this transaction
+        # Create snapshot, clone, restore, PITR, pubsub, account, and vector managers that use this transaction
         self.snapshots = TransactionSnapshotManager(client, self)
         self.clone = TransactionCloneManager(client, self)
         self.restore = TransactionRestoreManager(client, self)
@@ -879,6 +897,9 @@ class TransactionWrapper:
         self.pubsub = TransactionPubSubManager(client, self)
         self.account = TransactionAccountManager(self)
         self.vector_index = TransactionVectorIndexManager(client, self)
+        self.vector_table = TransactionVectorTableManager(client, self)
+        self.vector_query = TransactionVectorQueryManager(client, self)
+        self.vector_data = TransactionVectorDataManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
         self._sqlalchemy_engine = None
@@ -1181,3 +1202,607 @@ class TransactionVectorIndexManager(VectorIndexManager):
             return self
         except Exception as e:
             raise Exception(f"Failed to drop vector index {name} from table {table_name} in transaction: {e}")
+
+
+class VectorTableManager:
+    """Vector table manager for client chain operations"""
+
+    def __init__(self, client):
+        self.client = client
+
+    def create(self, table_name: str, schema: dict, **kwargs) -> "VectorTableManager":
+        """
+        Create a vector table using chain operations.
+
+        Args:
+            table_name: Name of the table
+            schema: Table schema definition
+            **kwargs: Additional table parameters
+
+        Returns:
+            VectorTableManager: Self for chaining
+        """
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on schema
+        for column_name, column_def in schema.items():
+            if column_def.get("type") == "vector":
+                dimension = column_def.get("dimension", 128)
+                precision = column_def.get("precision", "f32")
+                builder.add_vector_column(column_name, dimension, precision)
+            elif column_def.get("type") == "int":
+                builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_def.get("type") == "varchar":
+                length = column_def.get("length", 255)
+                builder.add_string_column(column_name, length)
+            elif column_def.get("type") == "text":
+                builder.add_text_column(column_name)
+            else:
+                # Default to text column
+                builder.add_text_column(column_name)
+
+        # Create table
+        table = builder.build()
+        table.create(self.client.get_sqlalchemy_engine())
+
+        return self
+
+    def drop(self, table_name: str) -> "VectorTableManager":
+        """
+        Drop a vector table using chain operations.
+
+        Args:
+            table_name: Name of the table
+
+        Returns:
+            VectorTableManager: Self for chaining
+        """
+        from sqlalchemy import text
+
+        with self.client.get_sqlalchemy_engine().begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+
+        return self
+
+
+class VectorQueryManager:
+    """Vector query manager for client chain operations"""
+
+    def __init__(self, client):
+        self.client = client
+
+    def similarity_search(
+        self,
+        table_name: str,
+        vector_column: str,
+        query_vector: list,
+        limit: int = 10,
+        distance_type: str = "l2",
+        select_columns: list = None,
+        connection=None,
+    ) -> list:
+        """
+        Perform similarity search using chain operations.
+
+        Args:
+            table_name: Name of the table
+            vector_column: Name of the vector column
+            query_vector: Query vector as list
+            limit: Number of results to return
+            distance_type: Type of distance calculation (l2, cosine, inner_product)
+            select_columns: List of columns to select (None means all columns)
+            connection: Optional existing database connection (for transaction support)
+
+        Returns:
+            List of search results
+        """
+        from sqlalchemy import text
+
+        # Convert vector to string format
+        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
+
+        # Build distance function based on type
+        if distance_type == "l2":
+            distance_func = "l2_distance"
+        elif distance_type == "cosine":
+            distance_func = "cosine_distance"
+        elif distance_type == "inner_product":
+            distance_func = "inner_product"
+        else:
+            raise ValueError(f"Unsupported distance type: {distance_type}")
+
+        # Build SELECT clause
+        if select_columns is None:
+            select_clause = "*"
+        else:
+            # Ensure vector_column is included for distance calculation
+            columns_to_select = list(select_columns)
+            if vector_column not in columns_to_select:
+                columns_to_select.append(vector_column)
+            select_clause = ", ".join(columns_to_select)
+
+        # Build query
+        sql = f"""
+        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
+        FROM {table_name}
+        ORDER BY distance
+        LIMIT {limit}
+        """
+
+        if connection is not None:
+            # Use existing connection (for transaction support)
+            result = connection.execute(text(sql))
+            return result.fetchall()
+        else:
+            # Create new connection
+            with self.client.get_sqlalchemy_engine().begin() as conn:
+                result = conn.execute(text(sql))
+                return result.fetchall()
+
+    def similarity_search_in_transaction(
+        self,
+        table_name: str,
+        vector_column: str,
+        query_vector: list,
+        limit: int = 10,
+        distance_type: str = "l2",
+        select_columns: list = None,
+        connection=None,
+    ) -> list:
+        """
+        Perform similarity search within a transaction.
+
+        Args:
+            table_name: Name of the table
+            vector_column: Name of the vector column
+            query_vector: Query vector as list
+            limit: Number of results to return
+            distance_type: Type of distance calculation (l2, cosine, inner_product)
+            select_columns: List of columns to select (None means all columns)
+            connection: Database connection (required for transaction support)
+
+        Returns:
+            List of search results
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        return self.similarity_search(
+            table_name=table_name,
+            vector_column=vector_column,
+            query_vector=query_vector,
+            limit=limit,
+            distance_type=distance_type,
+            select_columns=select_columns,
+            connection=connection,
+        )
+
+    def range_search(
+        self,
+        table_name: str,
+        vector_column: str,
+        query_vector: list,
+        max_distance: float,
+        distance_type: str = "l2",
+        select_columns: list = None,
+        connection=None,
+    ) -> list:
+        """
+        Perform range search using chain operations.
+
+        Args:
+            table_name: Name of the table
+            vector_column: Name of the vector column
+            query_vector: Query vector as list
+            max_distance: Maximum distance threshold
+            distance_type: Type of distance calculation
+            select_columns: List of columns to select (None means all columns)
+            connection: Optional existing database connection (for transaction support)
+
+        Returns:
+            List of search results within range
+        """
+        from sqlalchemy import text
+
+        # Convert vector to string format
+        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
+
+        # Build distance function based on type
+        if distance_type == "l2":
+            distance_func = "l2_distance"
+        elif distance_type == "cosine":
+            distance_func = "cosine_distance"
+        elif distance_type == "inner_product":
+            distance_func = "inner_product"
+        else:
+            raise ValueError(f"Unsupported distance type: {distance_type}")
+
+        # Build SELECT clause
+        if select_columns is None:
+            select_clause = "*"
+        else:
+            # Ensure vector_column is included for distance calculation
+            columns_to_select = list(select_columns)
+            if vector_column not in columns_to_select:
+                columns_to_select.append(vector_column)
+            select_clause = ", ".join(columns_to_select)
+
+        # Build query
+        sql = f"""
+        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
+        FROM {table_name}
+        WHERE {distance_func}({vector_column}, '{vector_str}') <= {max_distance}
+        ORDER BY distance
+        """
+
+        if connection is not None:
+            # Use existing connection (for transaction support)
+            result = connection.execute(text(sql))
+            return result.fetchall()
+        else:
+            # Create new connection
+            with self.client.get_sqlalchemy_engine().begin() as conn:
+                result = conn.execute(text(sql))
+                return result.fetchall()
+
+    def range_search_in_transaction(
+        self,
+        table_name: str,
+        vector_column: str,
+        query_vector: list,
+        max_distance: float,
+        distance_type: str = "l2",
+        select_columns: list = None,
+        connection=None,
+    ) -> list:
+        """
+        Perform range search within a transaction.
+
+        Args:
+            table_name: Name of the table
+            vector_column: Name of the vector column
+            query_vector: Query vector as list
+            max_distance: Maximum distance threshold
+            distance_type: Type of distance calculation
+            select_columns: List of columns to select (None means all columns)
+            connection: Database connection (required for transaction support)
+
+        Returns:
+            List of search results within range
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        return self.range_search(
+            table_name=table_name,
+            vector_column=vector_column,
+            query_vector=query_vector,
+            max_distance=max_distance,
+            distance_type=distance_type,
+            select_columns=select_columns,
+            connection=connection,
+        )
+
+
+class VectorDataManager:
+    """Vector data manager for client chain operations"""
+
+    def __init__(self, client):
+        self.client = client
+
+    def insert(self, table_name: str, data: dict) -> "VectorDataManager":
+        """
+        Insert vector data using chain operations.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+
+        Returns:
+            VectorDataManager: Self for chaining
+        """
+        from sqlalchemy import text
+
+        # Build INSERT statement
+        columns = list(data.keys())
+        values = list(data.values())
+
+        # Convert vectors to string format
+        formatted_values = []
+        for value in values:
+            if isinstance(value, list):
+                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            else:
+                formatted_values.append(str(value))
+
+        columns_str = ", ".join(columns)
+        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+
+        with self.client.get_sqlalchemy_engine().begin() as conn:
+            conn.execute(text(sql))
+
+        return self
+
+    def batch_insert(self, table_name: str, data_list: list) -> "VectorDataManager":
+        """
+        Batch insert vector data using chain operations.
+
+        Args:
+            table_name: Name of the table
+            data_list: List of data dictionaries to insert
+
+        Returns:
+            VectorDataManager: Self for chaining
+        """
+        from sqlalchemy import text
+
+        if not data_list:
+            return self
+
+        # Get columns from first record
+        columns = list(data_list[0].keys())
+        columns_str = ", ".join(columns)
+
+        # Build VALUES clause
+        values_list = []
+        for data in data_list:
+            formatted_values = []
+            for col in columns:
+                value = data[col]
+                if isinstance(value, list):
+                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
+                else:
+                    formatted_values.append(str(value))
+            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
+            values_list.append(values_str)
+
+        values_clause = ", ".join(values_list)
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
+
+        with self.client.get_sqlalchemy_engine().begin() as conn:
+            conn.execute(text(sql))
+
+        return self
+
+    def update(self, table_name: str, data: dict, where_clause: str) -> "VectorDataManager":
+        """
+        Update vector data using chain operations.
+
+        Args:
+            table_name: Name of the table
+            data: Data to update
+            where_clause: WHERE condition
+
+        Returns:
+            VectorDataManager: Self for chaining
+        """
+        from sqlalchemy import text
+
+        # Build SET clause
+        set_clauses = []
+        for column, value in data.items():
+            if isinstance(value, list):
+                formatted_value = "[" + ",".join(map(str, value)) + "]"
+            else:
+                formatted_value = str(value)
+            set_clauses.append(f"{column} = '{formatted_value}'")
+
+        set_clause = ", ".join(set_clauses)
+        sql = f"UPDATE {table_name} SET {set_clause} WHERE {where_clause}"
+
+        with self.client.get_sqlalchemy_engine().begin() as conn:
+            conn.execute(text(sql))
+
+        return self
+
+    def delete(self, table_name: str, where_clause: str) -> "VectorDataManager":
+        """
+        Delete vector data using chain operations.
+
+        Args:
+            table_name: Name of the table
+            where_clause: WHERE condition
+
+        Returns:
+            VectorDataManager: Self for chaining
+        """
+        from sqlalchemy import text
+
+        sql = f"DELETE FROM {table_name} WHERE {where_clause}"
+
+        with self.client.get_sqlalchemy_engine().begin() as conn:
+            conn.execute(text(sql))
+
+        return self
+
+
+class TransactionVectorTableManager:
+    """Vector table manager for transaction chain operations"""
+
+    def __init__(self, client, transaction_wrapper):
+        self.client = client
+        self.transaction_wrapper = transaction_wrapper
+
+    def create(self, table_name: str, schema: dict, **kwargs) -> "TransactionVectorTableManager":
+        """Create a vector table within transaction"""
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on schema
+        for column_name, column_def in schema.items():
+            if column_def.get("type") == "vector":
+                dimension = column_def.get("dimension", 128)
+                precision = column_def.get("precision", "f32")
+                builder.add_vector_column(column_name, dimension, precision)
+            elif column_def.get("type") == "int":
+                builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_def.get("type") == "varchar":
+                length = column_def.get("length", 255)
+                builder.add_string_column(column_name, length)
+            elif column_def.get("type") == "text":
+                builder.add_text_column(column_name)
+            else:
+                # Default to text column
+                builder.add_text_column(column_name)
+
+        # Create table
+        table = builder.build()
+        from sqlalchemy.schema import CreateTable
+
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
+        self.transaction_wrapper.execute(sql)
+
+        return self
+
+    def drop(self, table_name: str) -> "TransactionVectorTableManager":
+        """Drop a vector table within transaction"""
+        sql = f"DROP TABLE IF EXISTS {table_name}"
+        self.transaction_wrapper.execute(sql)
+        return self
+
+
+class TransactionVectorQueryManager:
+    """Vector query manager for transaction chain operations"""
+
+    def __init__(self, client, transaction_wrapper):
+        self.client = client
+        self.transaction_wrapper = transaction_wrapper
+
+    def similarity_search(
+        self,
+        table_name: str,
+        vector_column: str,
+        query_vector: list,
+        limit: int = 10,
+        distance_type: str = "l2",
+        select_columns: list = None,
+    ) -> list:
+        """Perform similarity search within transaction"""
+        # Convert vector to string format
+        vector_str = "[" + ",".join(map(str, query_vector)) + "]"
+
+        # Build distance function based on type
+        if distance_type == "l2":
+            distance_func = "l2_distance"
+        elif distance_type == "cosine":
+            distance_func = "cosine_distance"
+        elif distance_type == "inner_product":
+            distance_func = "inner_product"
+        else:
+            raise ValueError(f"Unsupported distance type: {distance_type}")
+
+        # Build SELECT clause
+        if select_columns is None:
+            select_clause = "*"
+        else:
+            # Ensure vector_column is included for distance calculation
+            columns_to_select = list(select_columns)
+            if vector_column not in columns_to_select:
+                columns_to_select.append(vector_column)
+            select_clause = ", ".join(columns_to_select)
+
+        # Build query
+        sql = f"""
+        SELECT {select_clause}, {distance_func}({vector_column}, '{vector_str}') as distance
+        FROM {table_name}
+        ORDER BY distance
+        LIMIT {limit}
+        """
+
+        return self.transaction_wrapper.execute(sql)
+
+
+class TransactionVectorDataManager:
+    """Vector data manager for transaction chain operations"""
+
+    def __init__(self, client, transaction_wrapper):
+        self.client = client
+        self.transaction_wrapper = transaction_wrapper
+
+    def insert(self, table_name: str, data: dict) -> "TransactionVectorDataManager":
+        """Insert vector data within transaction"""
+        # Build INSERT statement
+        columns = list(data.keys())
+        values = list(data.values())
+
+        # Convert vectors to string format
+        formatted_values = []
+        for value in values:
+            if isinstance(value, list):
+                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            else:
+                formatted_values.append(str(value))
+
+        columns_str = ", ".join(columns)
+        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        self.transaction_wrapper.execute(sql)
+
+        return self
+
+    def batch_insert(self, table_name: str, data_list: list) -> "TransactionVectorDataManager":
+        """Batch insert vector data within transaction"""
+        if not data_list:
+            return self
+
+        # Get columns from first record
+        columns = list(data_list[0].keys())
+        columns_str = ", ".join(columns)
+
+        # Build VALUES clause
+        values_list = []
+        for data in data_list:
+            formatted_values = []
+            for col in columns:
+                value = data[col]
+                if isinstance(value, list):
+                    formatted_values.append("[" + ",".join(map(str, value)) + "]")
+                else:
+                    formatted_values.append(str(value))
+            values_str = "(" + ", ".join([f"'{v}'" for v in formatted_values]) + ")"
+            values_list.append(values_str)
+
+        values_clause = ", ".join(values_list)
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
+        self.transaction_wrapper.execute(sql)
+
+        return self
+
+    def update(self, table_name: str, data: dict, where_clause: str) -> "TransactionVectorDataManager":
+        """Update vector data within transaction"""
+        # Build SET clause
+        set_clauses = []
+        for column, value in data.items():
+            if isinstance(value, list):
+                formatted_value = "[" + ",".join(map(str, value)) + "]"
+            else:
+                formatted_value = str(value)
+            set_clauses.append(f"{column} = '{formatted_value}'")
+
+        set_clause = ", ".join(set_clauses)
+        sql = f"UPDATE {table_name} SET {set_clause} WHERE {where_clause}"
+        self.transaction_wrapper.execute(sql)
+
+        return self
+
+    def delete(self, table_name: str, where_clause: str) -> "TransactionVectorDataManager":
+        """Delete vector data within transaction"""
+        sql = f"DELETE FROM {table_name} WHERE {where_clause}"
+        self.transaction_wrapper.execute(sql)
+
+        return self
