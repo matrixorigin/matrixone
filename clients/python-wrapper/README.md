@@ -358,6 +358,198 @@ Available environment variables:
 
 ## 🧪 Testing & Development
 
+### Testing Overview
+
+The MatrixOne Python SDK includes comprehensive testing with two types of tests:
+
+#### Offline Tests (Mock-based)
+- **Purpose**: Test SDK functionality without requiring a database connection
+- **Coverage**: 419 tests covering all core functionality
+- **Speed**: Fast execution (typically 3-5 seconds)
+- **Dependencies**: No external dependencies required
+- **Command**: `make test-offline`
+
+#### Online Tests (Database Integration)
+- **Purpose**: Test real database operations and integration
+- **Coverage**: 67 tests covering database connectivity and operations
+- **Speed**: Slower execution (typically 15-20 seconds)
+- **Dependencies**: Requires running MatrixOne database
+- **Command**: `make test-online`
+
+### Online Testing Setup
+
+#### Prerequisites for Online Tests
+
+Before running online tests, ensure you have:
+
+1. **MatrixOne Database Running**
+   ```bash
+   # Start MatrixOne database (example with Docker)
+   docker run -d --name matrixone \
+     -p 6001:6001 \
+     matrixorigin/matrixone:latest
+   ```
+
+2. **Database Access**
+   - Host: `localhost` (default)
+   - Port: `6001` (default)
+   - User: `root` (default)
+   - Password: `111` (default)
+   - Database: `test` (default)
+
+#### Connection Check
+
+The SDK automatically checks database connectivity before running online tests:
+
+```bash
+# Test connection manually
+make test-online
+# Output: 🔍 Checking MatrixOne database connection...
+#         ✅ MatrixOne database connection successful!
+#         Online tests can proceed.
+```
+
+#### Environment Variables for Online Tests
+
+Customize connection parameters using environment variables:
+
+```bash
+# Set custom connection parameters
+export MATRIXONE_HOST=localhost
+export MATRIXONE_PORT=6001
+export MATRIXONE_USER=root
+export MATRIXONE_PASSWORD=111
+export MATRIXONE_DATABASE=test
+
+# Run online tests with custom parameters
+make test-online
+```
+
+Available environment variables:
+- `MATRIXONE_HOST`: Database host (default: localhost)
+- `MATRIXONE_PORT`: Database port (default: 6001)
+- `MATRIXONE_USER`: Database username (default: root)
+- `MATRIXONE_PASSWORD`: Database password (default: 111)
+- `MATRIXONE_DATABASE`: Database name (default: test)
+
+#### Online Test Behavior
+
+**When Database is Available:**
+```bash
+make test-online
+# ✅ Connection successful → Runs all 67 online tests
+# ✅ All tests pass → Shows success message
+```
+
+**When Database is Unavailable:**
+```bash
+make test-online
+# ❌ Connection failed → Shows error message
+# ❌ Exits with error code → No tests run
+```
+
+**Smart Test Execution:**
+```bash
+make test
+# 1. Runs offline tests (always)
+# 2. Checks database connection
+# 3. If available → Runs online tests
+# 4. If unavailable → Shows warning and continues
+```
+
+#### Online Test Categories
+
+The online tests cover:
+
+1. **Basic Connection Tests** (`test_basic_connection.py`)
+   - Connection establishment
+   - Basic query execution
+   - Connection cleanup
+
+2. **Account Management Tests** (`test_account_management.py`)
+   - User creation and management
+   - Role management
+   - Privilege operations
+
+3. **Advanced Features Tests** (`test_advanced_features.py`)
+   - Snapshot operations
+   - PITR (Point-in-Time Recovery)
+   - Clone operations
+   - MoCTL integration
+
+4. **Pub/Sub Operations Tests** (`test_pubsub_operations.py`)
+   - Publication creation
+   - Subscription management
+   - Data synchronization
+
+5. **Snapshot & Restore Tests** (`test_snapshot_restore.py`)
+   - Snapshot creation and management
+   - Restore operations
+   - Async snapshot operations
+
+6. **SQLAlchemy Integration Tests** (`test_sqlalchemy_integration.py`)
+   - SQLAlchemy engine integration
+   - Session management
+   - Transaction handling
+
+7. **Logger Integration Tests** (`test_logger_integration.py`)
+   - Logging configuration
+   - Performance logging
+   - SQL query logging
+
+8. **Version Management Tests** (`test_version_management.py`)
+   - Version detection
+   - Feature availability checking
+   - Compatibility validation
+
+#### Troubleshooting Online Tests
+
+**Common Issues and Solutions:**
+
+1. **Connection Refused**
+   ```bash
+   # Error: Can't connect to MySQL server on 'localhost'
+   # Solution: Start MatrixOne database
+   docker run -d --name matrixone -p 6001:6001 matrixorigin/matrixone:latest
+   ```
+
+2. **Authentication Failed**
+   ```bash
+   # Error: Access denied for user 'root'
+   # Solution: Check credentials
+   export MATRIXONE_USER=root
+   export MATRIXONE_PASSWORD=111
+   ```
+
+3. **Database Not Found**
+   ```bash
+   # Error: Unknown database 'test'
+   # Solution: Create database or use existing one
+   export MATRIXONE_DATABASE=your_database_name
+   ```
+
+4. **Port Already in Use**
+   ```bash
+   # Error: Address already in use
+   # Solution: Use different port
+   export MATRIXONE_PORT=6002
+   ```
+
+#### Coverage Reports
+
+Generate coverage reports for online tests:
+
+```bash
+# Online tests with coverage
+make coverage-online
+
+# All tests with coverage
+make coverage
+
+# View coverage report
+open htmlcov/index.html
+```
+
 ### Python Environment Configuration
 
 #### Configuring Python Path
@@ -447,9 +639,13 @@ make help
 make dev-setup
 
 # Run tests
-make test                    # All tests
+make test                    # All tests (offline + online)
+make test-offline           # Offline tests only (mock-based)
+make test-online            # Online tests only (requires database)
 make test-fast              # Quick tests
-make test-coverage          # With coverage report
+make coverage               # All tests with coverage report
+make coverage-offline       # Offline tests with coverage
+make coverage-online        # Online tests with coverage
 
 # Code quality
 make lint                   # Code quality check
@@ -555,10 +751,12 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 ## Support
 
-- 📧 Email: dev@matrixone.cloud
+- 📧 Email: contact@matrixorigin.cn
 - 🐛 Issues: [GitHub Issues](https://github.com/matrixorigin/matrixone/issues)
 - 💬 Discussions: [GitHub Discussions](https://github.com/matrixorigin/matrixone/discussions)
-- 📖 Documentation: [MatrixOne Docs](https://docs.matrixone.cloud/)
+- 📖 Documentation: 
+  - [MatrixOne Docs (English)](https://docs.matrixorigin.cn/en)
+  - [MatrixOne Docs (中文)](https://docs.matrixorigin.cn/)
 
 ## Changelog
 

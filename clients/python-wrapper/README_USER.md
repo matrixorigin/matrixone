@@ -291,10 +291,12 @@ The package includes comprehensive examples:
 
 ## Support
 
-- 📧 Email: dev@matrixone.cloud
+- 📧 Email: contact@matrixorigin.cn
 - 🐛 Issues: [GitHub Issues](https://github.com/matrixorigin/matrixone/issues)
 - 💬 Discussions: [GitHub Discussions](https://github.com/matrixorigin/matrixone/discussions)
-- 📖 Documentation: [MatrixOne Docs](https://docs.matrixone.cloud/)
+- 📖 Documentation: 
+  - [MatrixOne Docs (English)](https://docs.matrixorigin.cn/en)
+  - [MatrixOne Docs (中文)](https://docs.matrixorigin.cn/)
 
 ## License
 

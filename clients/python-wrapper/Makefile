@@ -5,7 +5,7 @@
 # Users can override these by setting environment variables or passing them to make
 # Example: make test PYTHON=/path/to/python3
 # Example: PYTHON=/path/to/python3 make test
-PYTHON ?= python3
+PYTHON ?= /Users/xupeng/miniconda3/envs/ai_env/bin/python3
 PIP ?= pip
 PACKAGE_NAME := matrixone_python_sdk
 VERSION := $(shell grep '^version' pyproject.toml | cut -d'"' -f2)
@@ -69,22 +69,47 @@ type-check: ## Run type checking
 
 # Testing related
 .PHONY: test
-test: ## Run all tests
-	@echo "$(BLUE)Running all tests...$(NC)"
-	$(PYTHON) -m pytest tests/ -v --tb=short
-	@echo "$(GREEN)Tests completed!$(NC)"
+test: test-offline ## Run all tests (offline + online)
+	@echo "$(BLUE)Running online tests...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ -v --tb=short && echo "$(GREEN)Online tests completed!$(NC)" || echo "$(YELLOW)⚠️  Online tests skipped (database not available)$(NC)"
 
-.PHONY: test-verbose
-test-verbose: ## Run verbose tests
-	@echo "$(BLUE)Running verbose tests...$(NC)"
-	$(PYTHON) -m pytest tests/ -v -s --tb=long
-	@echo "$(GREEN)Verbose tests completed!$(NC)"
+.PHONY: test-offline
+test-offline: ## Run offline tests (mock-based unit tests)
+	@echo "$(BLUE)Running offline tests...$(NC)"
+	$(PYTHON) -m pytest tests/offline/ -v --tb=short
+	@echo "$(GREEN)Offline tests completed!$(NC)"
 
-.PHONY: test-coverage
-test-coverage: ## Run tests and generate coverage report
-	@echo "$(BLUE)Running tests and generating coverage report...$(NC)"
-	$(PYTHON) -m pytest tests/ --cov=matrixone --cov-report=html --cov-report=term
-	@echo "$(GREEN)Coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)"
+.PHONY: test-online
+test-online: ## Run online tests (requires database connection)
+	@echo "$(BLUE)Running online tests...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping online tests.$(NC)" && exit 1)
+	$(PYTHON) -m pytest tests/online/ -v --tb=short
+	@echo "$(GREEN)Online tests completed!$(NC)"
+
+.PHONY: test-all
+test-all: test ## Alias for test (run all tests)
+
+.PHONY: coverage
+coverage: coverage-offline ## Run all coverage tests
+	@echo "$(BLUE)Running online tests with coverage...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py && $(PYTHON) -m pytest tests/online/ --cov=matrixone --cov-report=html --cov-report=term && echo "$(GREEN)Online coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)" || echo "$(YELLOW)⚠️  Online coverage tests skipped (database not available)$(NC)"
+
+.PHONY: coverage-offline
+coverage-offline: ## Run offline tests with coverage report
+	@echo "$(BLUE)Running offline tests with coverage...$(NC)"
+	$(PYTHON) -m pytest tests/offline/ --cov=matrixone --cov-report=html --cov-report=term
+	@echo "$(GREEN)Offline coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)"
+
+.PHONY: coverage-online
+coverage-online: ## Run online tests with coverage report (requires database)
+	@echo "$(BLUE)Running online tests with coverage...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping online coverage tests.$(NC)" && exit 1)
+	$(PYTHON) -m pytest tests/online/ --cov=matrixone --cov-report=html --cov-report=term
+	@echo "$(GREEN)Online coverage report generated! View: $(COVERAGE_DIR)/index.html$(NC)"
 
 .PHONY: test-fast
 test-fast: ## Run fast tests (skip slow tests)
@@ -92,11 +117,27 @@ test-fast: ## Run fast tests (skip slow tests)
 	$(PYTHON) -m pytest tests/ -v -m "not slow" --tb=short
 	@echo "$(GREEN)Fast tests completed!$(NC)"
 
+.PHONY: test-verbose
+test-verbose: ## Run verbose tests
+	@echo "$(BLUE)Running verbose tests...$(NC)"
+	$(PYTHON) -m pytest tests/ -v -s --tb=long
+	@echo "$(GREEN)Verbose tests completed!$(NC)"
+
 .PHONY: test-release
 test-release: ## Run pre-release tests
 	@echo "$(BLUE)Running pre-release tests...$(NC)"
 	$(PYTHON) -m pytest tests/ -v --tb=short --strict-markers
 	@echo "$(GREEN)Pre-release tests completed!$(NC)"
+
+# Legacy aliases for backward compatibility
+.PHONY: test-coverage
+test-coverage: coverage-offline ## Legacy alias for coverage-offline
+
+.PHONY: test-coverage-offline
+test-coverage-offline: coverage-offline ## Legacy alias for coverage-offline
+
+.PHONY: test-coverage-online
+test-coverage-online: coverage-online ## Legacy alias for coverage-online
 
 # Example running
 .PHONY: examples
@@ -304,10 +345,10 @@ version: ## Show current version
 quick-test: test-fast ## Quick test alias
 
 .PHONY: full-test
-full-test: test-coverage ## Full test alias
+full-test: coverage ## Full test with coverage alias
 
 .PHONY: check
-check: lint test ## Check alias
+check: lint test ## Check alias (lint + test)
 
 # Default target
 .DEFAULT_GOAL := help
