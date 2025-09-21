@@ -477,4 +477,4 @@ def vector_distance_functions():
     Returns:
         List of function names
     """
-    return ["l2_distance", "l2_distance_sq", "cosine_distance", "negative_inner_product", "inner_product"]
+    return ["l2_distance", "l2_distance_sq", "cosine_distance"]
