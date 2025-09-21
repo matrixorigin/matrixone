@@ -59,8 +59,13 @@ class VectorIndex(Index):
         # Store column name for later use
         self._column_name = str(column) if not isinstance(column, str) else column
 
-        # Call parent constructor
+        # Call parent constructor first
         super().__init__(name, column, **kwargs)
+
+        # Set dialect options after initialization to bind to matrixone dialect
+        self.dialect_options["matrixone"] = {"length": None, "using": None}
+        # Also provide mysql fallback for compatibility
+        self.dialect_options["mysql"] = {"length": None, "using": None}
 
     def _create_index_sql(self, table_name: str) -> str:
         """Generate the CREATE INDEX SQL for vector index."""
@@ -115,6 +120,36 @@ def compile_create_vector_index(element: CreateVectorIndex, compiler, **kw):
     sql_parts.append(f"op_type '{index.op_type}'")
 
     return " ".join(sql_parts)
+
+
+@compiles(SQLAlchemyCreateIndex, "matrixone")
+def compile_create_vector_index_matrixone(element: SQLAlchemyCreateIndex, compiler, **kw):
+    """Compile CREATE INDEX for VectorIndex on MatrixOne dialect."""
+    index = element.element
+
+    # Check if this is a VectorIndex
+    if isinstance(index, VectorIndex):
+        # Use the stored column name
+        column_name = index._column_name
+
+        sql_parts = ["CREATE INDEX"]
+
+        if element.if_not_exists:
+            sql_parts.append("IF NOT EXISTS")
+
+        sql_parts.append(f"{index.name} USING {index.index_type} ON {index.table.name}({column_name})")
+
+        # Add lists parameter for IVFFLAT
+        if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
+            sql_parts.append(f"lists = {index.lists}")
+
+        # Add operation type
+        sql_parts.append(f"op_type '{index.op_type}'")
+
+        return " ".join(sql_parts)
+    else:
+        # Fall back to default compilation
+        return compiler.visit_create_index(element, **kw)
 
 
 @compiles(SQLAlchemyCreateIndex, "mysql")

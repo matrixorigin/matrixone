@@ -390,51 +390,8 @@ class TestVectorIndexOnline:
                 ),
             )
         
-        ddl_success = False
-        try:
-            Base.metadata.create_all(engine, tables=[DocumentWithDDLIndex.__table__])
-            ddl_success = True
-            print("✅ DDL index creation succeeded")
-        except Exception as e:
-            print(f"⚠️ DDL index creation failed: {e}")
-            print("ℹ️ This is expected - SQLAlchemy doesn't support custom index types in DDL yet")
-            
-            # Clear the metadata to avoid conflicts
-            Base.metadata.clear()
-            
-            # Create table without index first
-            class DocumentWithoutIndex(Base):
-                __tablename__ = 'test_vector_index_online_05'
-                id = Column(Integer, primary_key=True)
-                embedding = create_vector_column(128, "f32")
-                title = Column(String(200))
-                category = Column(String(50))
-            
-            Base.metadata.create_all(engine, tables=[DocumentWithoutIndex.__table__])
-            print("✅ Table created without index")
-            
-            # Create vector index manually
-            vector_index = VectorIndex(
-                "idx_embedding_ddl_online05",
-                "embedding",
-                index_type=VectorIndexType.IVFFLAT,
-                lists=64,
-                op_type=VectorOpType.VECTOR_L2_OPS
-            )
-            
-            try:
-                with engine.begin() as conn:
-                    sql = vector_index.create_sql("test_vector_index_online_05")
-                    conn.execute(text(sql))
-                print("✅ Vector index created manually")
-            except Exception as e2:
-                pytest.skip(f"Vector index creation failed, skipping test: {e2}")
-        
-        # Use the appropriate model class
-        if ddl_success:
-            DocumentModel = DocumentWithDDLIndex
-        else:
-            DocumentModel = DocumentWithoutIndex
+        # This MUST succeed - if it fails, the test should fail
+        Base.metadata.create_all(engine, tables=[DocumentWithDDLIndex.__table__])
         
         # Verify table was created
         with engine.begin() as conn:
@@ -452,25 +409,25 @@ class TestVectorIndexOnline:
         session = Session()
         try:
             sample_docs = [
-                DocumentModel(
+                DocumentWithDDLIndex(
                     id=1,
                     embedding=[0.1] * 128,
                     title="DDL Document 1",
                     category="tech"
                 ),
-                DocumentModel(
+                DocumentWithDDLIndex(
                     id=2,
                     embedding=[0.2] * 128,
                     title="DDL Document 2",
                     category="science"
                 ),
-                DocumentModel(
+                DocumentWithDDLIndex(
                     id=3,
                     embedding=[0.3] * 128,
                     title="DDL Document 3",
                     category="tech"
                 ),
-                DocumentModel(
+                DocumentWithDDLIndex(
                     id=4,
                     embedding=[0.4] * 128,
                     title="DDL Document 4",
@@ -482,13 +439,13 @@ class TestVectorIndexOnline:
             session.commit()
             
             # Verify data was inserted
-            count = session.query(DocumentModel).count()
+            count = session.query(DocumentWithDDLIndex).count()
             assert count == 4
             
             # Test vector search using L2 distance
             query_vector = [0.25] * 128
-            results = session.query(DocumentModel).order_by(
-                DocumentModel.embedding.l2_distance(query_vector)
+            results = session.query(DocumentWithDDLIndex).order_by(
+                DocumentWithDDLIndex.embedding.l2_distance(query_vector)
             ).limit(3).all()
             
             assert len(results) == 3
@@ -497,8 +454,8 @@ class TestVectorIndexOnline:
                 assert result.title in ["DDL Document 1", "DDL Document 2", "DDL Document 3", "DDL Document 4"]
             
             # Test cosine distance search
-            cosine_results = session.query(DocumentModel).order_by(
-                DocumentModel.embedding.cosine_distance(query_vector)
+            cosine_results = session.query(DocumentWithDDLIndex).order_by(
+                DocumentWithDDLIndex.embedding.cosine_distance(query_vector)
             ).limit(2).all()
             
             assert len(cosine_results) == 2
@@ -522,13 +479,13 @@ class TestVectorIndexOnline:
         # Verify data is still accessible after index deletion
         session = Session()
         try:
-            count = session.query(DocumentModel).count()
+            count = session.query(DocumentWithDDLIndex).count()
             assert count == 4
             
             # Test vector search still works (without index)
             query_vector = [0.25] * 128
-            results = session.query(DocumentModel).order_by(
-                DocumentModel.embedding.l2_distance(query_vector)
+            results = session.query(DocumentWithDDLIndex).order_by(
+                DocumentWithDDLIndex.embedding.l2_distance(query_vector)
             ).limit(2).all()
             
             assert len(results) == 2
