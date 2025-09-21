@@ -4,7 +4,7 @@ Vector index support for SQLAlchemy integration with MatrixOne.
 
 from typing import List, Optional, Union
 
-from sqlalchemy import Column, Index
+from sqlalchemy import Column, Index, text
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.schema import DDLElement
 from sqlalchemy.sql.ddl import CreateIndex as SQLAlchemyCreateIndex
@@ -87,6 +87,99 @@ class VectorIndex(Index):
     def create_sql(self, table_name: str) -> str:
         """Generate CREATE INDEX SQL for the given table name."""
         return self._create_index_sql(table_name)
+
+    def drop_sql(self, table_name: str) -> str:
+        """Generate DROP INDEX SQL for the given table name."""
+        return f"DROP INDEX {self.name} ON {table_name}"
+
+    @classmethod
+    def create_index(
+        cls,
+        engine,
+        table_name: str,
+        name: str,
+        column: Union[str, Column],
+        index_type: str = VectorIndexType.IVFFLAT,
+        lists: Optional[int] = None,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ) -> bool:
+        """
+        Create a vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            index_type: Type of vector index (ivfflat, hnsw, etc.)
+            lists: Number of lists for IVFFLAT (optional)
+            op_type: Vector operation type
+            **kwargs: Additional index parameters
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            index = cls(name, column, index_type, lists, op_type, **kwargs)
+            sql = index.create_sql(table_name)
+
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to create vector index: {e}")
+            return False
+
+    @classmethod
+    def drop_index(cls, engine, table_name: str, name: str) -> bool:
+        """
+        Drop a vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+            name: Name of the index to drop
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return True
+        except Exception as e:
+            print(f"Failed to drop vector index: {e}")
+            return False
+
+    def create(self, engine, table_name: str) -> bool:
+        """
+        Create this vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.__class__.create_index(
+            engine, table_name, self.name, self._column_name, self.index_type, self.lists, self.op_type
+        )
+
+    def drop(self, engine, table_name: str) -> bool:
+        """
+        Drop this vector index using ORM-style method.
+
+        Args:
+            engine: SQLAlchemy engine
+            table_name: Name of the table
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        return self.__class__.drop_index(engine, table_name, self.name)
 
 
 class CreateVectorIndex(DDLElement):
