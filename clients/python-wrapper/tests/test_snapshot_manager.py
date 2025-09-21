@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder, SnapshotLevel
-from matrixone.exceptions import SnapshotError, ConnectionError, QueryError
+from matrixone.exceptions import SnapshotError, ConnectionError as MatrixOneConnectionError, QueryError
 
 
 class TestSnapshot(unittest.TestCase):
@@ -139,7 +139,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test creating snapshot when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.create("test_snap", "cluster")
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -180,7 +180,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test listing snapshots when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.list()
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -224,7 +224,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test getting snapshot when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.get("test_snap")
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -250,7 +250,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test deleting snapshot when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.delete("test_snap")
         
         self.assertIn("Not connected to database", str(context.exception))

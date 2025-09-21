@@ -66,8 +66,6 @@ Repository = "https://github.com/matrixorigin/matrixone.git"
 "Bug Reports" = "https://github.com/matrixorigin/matrixone/issues"
 "Source Code" = "https://github.com/matrixorigin/matrixone/tree/main/clients/python-wrapper"
 
-[project.scripts]
-matrixone-client = "matrixone.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

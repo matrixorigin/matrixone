@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
 # Now import the classes we want to test
 from matrixone.snapshot import SnapshotManager, Snapshot, SnapshotQueryBuilder, SnapshotLevel, CloneManager
-from matrixone.exceptions import CloneError, ConnectionError, QueryError, SnapshotError
+from matrixone.exceptions import CloneError, ConnectionError as MatrixOneConnectionError, QueryError, SnapshotError
 
 
 class TestSnapshot(unittest.TestCase):
@@ -160,7 +160,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test creating snapshot when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.create("test_snap", "cluster")
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -201,7 +201,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test listing snapshots when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.list()
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -245,7 +245,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test getting snapshot when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.get("test_snap")
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -271,7 +271,7 @@ class TestSnapshotManager(unittest.TestCase):
         """Test deleting snapshot when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.delete("test_snap")
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -529,7 +529,7 @@ class TestCloneManager(unittest.TestCase):
         """Test database clone when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.clone_database("target_db", "source_db")
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -593,7 +593,7 @@ class TestCloneManager(unittest.TestCase):
         """Test table clone when not connected"""
         self.mock_client._connection = None
         
-        with self.assertRaises(ConnectionError) as context:
+        with self.assertRaises(MatrixOneConnectionError) as context:
             self.snapshot_manager.clone_table("target_table", "source_table")
         
         self.assertIn("Not connected to database", str(context.exception))
@@ -725,7 +725,7 @@ class TestSnapshotManagerIntegration(unittest.TestCase):
         """Test that errors are properly propagated"""
         # Test connection error
         self.mock_client._connection = None
-        with self.assertRaises(ConnectionError):
+        with self.assertRaises(MatrixOneConnectionError):
             self.snapshot_manager.create("test", "cluster")
         
         # Test execution error

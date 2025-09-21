@@ -288,23 +288,6 @@ The package includes comprehensive examples:
 - `example_10_version_management.py` - Version management
 - `example_11_matrixone_version_demo.py` - MatrixOne version demo
 
-## CLI Tool
-
-The SDK includes a command-line interface:
-
-```bash
-# Show SDK version
-matrixone-client --sdk-version
-
-# Execute a query
-matrixone-client -H localhost -P 6001 -u root -p 111 -d test -q "SELECT 1"
-
-# Interactive mode
-matrixone-client -H localhost -P 6001 -u root -p 111 -d test -i
-
-# Show help
-matrixone-client --help
-```
 
 ## Support
 

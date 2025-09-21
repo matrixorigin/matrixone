@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Union
 
-from .exceptions import CloneError, SnapshotError
+from .exceptions import CloneError, ConnectionError, SnapshotError
 from .version import requires_version
 
 

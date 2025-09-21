@@ -87,9 +87,4 @@ setup(
     keywords="matrixone, database, sql, python, sdk, sqlalchemy, async",
     include_package_data=True,
     zip_safe=False,
-    entry_points={
-        "console_scripts": [
-            "matrixone-client=matrixone.cli:main",
-        ],
-    },
 )
