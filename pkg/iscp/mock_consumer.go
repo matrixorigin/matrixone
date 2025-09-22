@@ -199,6 +199,9 @@ func (s *interalSqlConsumer) createTargetTable(ctx context.Context) error {
 
 func (s *interalSqlConsumer) Consume(ctx context.Context, data DataRetriever) error {
 	s.dataRetriever = data
+	data.GetAccountID()
+	data.GetTableID()
+
 	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "consume" {
 		return moerr.NewInternalErrorNoCtx(msg)
 	}
