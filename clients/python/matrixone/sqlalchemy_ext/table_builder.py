@@ -4,10 +4,12 @@ Table builder utilities for MatrixOne vector tables.
 
 from typing import List, Optional, Union
 
-from sqlalchemy import (BigInteger, Column, ForeignKeyConstraint, Index,
-                        Integer, MetaData, PrimaryKeyConstraint, String, Table,
-                        Text)
-from sqlalchemy.dialects.mysql import JSON
+from sqlalchemy import (TIMESTAMP, BigInteger, Boolean, Column, Date, DateTime,
+                        ForeignKeyConstraint, Index, Integer, MetaData,
+                        Numeric, PrimaryKeyConstraint, SmallInteger, String,
+                        Table, Text, Time)
+from sqlalchemy.dialects.mysql import (BLOB, JSON, LONGBLOB, MEDIUMBLOB,
+                                       TINYBLOB, TINYINT, VARBINARY)
 
 from .vector_type import Vectorf32, Vectorf64, VectorType
 
@@ -79,6 +81,83 @@ class VectorTableBuilder:
     def add_vecf64_column(self, name: str, dimension: int, **kwargs):
         """Add a vecf64 column."""
         return self.add_vector_column(name, dimension, "f64", **kwargs)
+
+    def add_smallint_column(self, name: str, primary_key: bool = False, **kwargs):
+        """Add a smallint column."""
+        if primary_key:
+            kwargs["primary_key"] = True
+        return self.add_column(name, SmallInteger, **kwargs)
+
+    def add_tinyint_column(self, name: str, primary_key: bool = False, **kwargs):
+        """Add a tinyint column."""
+        if primary_key:
+            kwargs["primary_key"] = True
+        return self.add_column(name, TINYINT, **kwargs)
+
+    def add_numeric_column(self, name: str, column_type: str, precision: int = None, scale: int = None, **kwargs):
+        """Add a numeric column (float, double, decimal, numeric)."""
+        if column_type in ("float", "double"):
+            from sqlalchemy import Float
+
+            return self.add_column(name, Float(precision=precision), **kwargs)
+        elif column_type in ("decimal", "numeric"):
+            return self.add_column(name, Numeric(precision=precision, scale=scale), **kwargs)
+        else:
+            raise ValueError(f"Unsupported numeric type: {column_type}")
+
+    def add_datetime_column(self, name: str, column_type: str, **kwargs):
+        """Add a datetime column (date, datetime, timestamp, time, year)."""
+        if column_type == "date":
+            return self.add_column(name, Date, **kwargs)
+        elif column_type == "datetime":
+            return self.add_column(name, DateTime, **kwargs)
+        elif column_type == "timestamp":
+            return self.add_column(name, TIMESTAMP, **kwargs)
+        elif column_type == "time":
+            return self.add_column(name, Time, **kwargs)
+        elif column_type == "year":
+            # MySQL YEAR type
+            from sqlalchemy.dialects.mysql import YEAR
+
+            return self.add_column(name, YEAR, **kwargs)
+        else:
+            raise ValueError(f"Unsupported datetime type: {column_type}")
+
+    def add_boolean_column(self, name: str, **kwargs):
+        """Add a boolean column."""
+        return self.add_column(name, Boolean, **kwargs)
+
+    def add_binary_column(self, name: str, column_type: str, **kwargs):
+        """Add a binary column (blob, longblob, mediumblob, tinyblob, binary, varbinary)."""
+        if column_type == "blob":
+            return self.add_column(name, BLOB, **kwargs)
+        elif column_type == "longblob":
+            return self.add_column(name, LONGBLOB, **kwargs)
+        elif column_type == "mediumblob":
+            return self.add_column(name, MEDIUMBLOB, **kwargs)
+        elif column_type == "tinyblob":
+            return self.add_column(name, TINYBLOB, **kwargs)
+        elif column_type == "binary":
+            from sqlalchemy import Binary
+
+            return self.add_column(name, Binary, **kwargs)
+        elif column_type == "varbinary":
+            return self.add_column(name, VARBINARY, **kwargs)
+        else:
+            raise ValueError(f"Unsupported binary type: {column_type}")
+
+    def add_enum_column(self, name: str, column_type: str, values: list, **kwargs):
+        """Add an enum or set column."""
+        if column_type == "enum":
+            from sqlalchemy import Enum
+
+            return self.add_column(name, Enum(*values), **kwargs)
+        elif column_type == "set":
+            from sqlalchemy.dialects.mysql import SET
+
+            return self.add_column(name, SET(*values), **kwargs)
+        else:
+            raise ValueError(f"Unsupported enum type: {column_type}")
 
     def add_index(self, columns: Union[str, List[str]], name: Optional[str] = None, **kwargs):
         """Add an index to the table."""

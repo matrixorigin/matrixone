@@ -1356,20 +1356,43 @@ class VectorTableManager:
                 dimension = column_def.get("dimension", 128)
                 precision = column_def.get("precision", "f32")
                 builder.add_vector_column(column_name, dimension, precision)
-            elif column_type == "int":
+            elif column_type in ("int", "integer"):
                 builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_type == "bigint":
+            elif column_type in ("bigint", "bigint unsigned"):
                 builder.add_bigint_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_type == "varchar":
+            elif column_type in ("smallint", "tinyint"):
+                if column_type == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=column_def.get("primary_key", False))
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_type in ("varchar", "char"):
                 length = column_def.get("length", 255)
                 builder.add_string_column(column_name, length)
-            elif column_type == "text":
+            elif column_type in ("text", "longtext", "mediumtext", "tinytext"):
                 builder.add_text_column(column_name)
+            elif column_type in ("float", "double", "decimal", "numeric"):
+                precision = column_def.get("precision", None)
+                scale = column_def.get("scale", None)
+                builder.add_numeric_column(column_name, column_type, precision, scale)
+            elif column_type in ("date", "datetime", "timestamp", "time", "year"):
+                builder.add_datetime_column(column_name, column_type)
+            elif column_type in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_type in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_type in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_type)
+            elif column_type in ("enum", "set"):
+                values = column_def.get("values", [])
+                builder.add_enum_column(column_name, column_type, values)
             else:
                 # Raise error for unknown types instead of defaulting to text
                 raise ValueError(
                     f"Unsupported column type '{column_type}' for column '{column_name}'. "
-                    f"Supported types: vector, int, bigint, varchar, text"
+                    f"Supported types: vector, int/integer, bigint, smallint, tinyint, "
+                    f"varchar/char, text/longtext/mediumtext/tinytext, float/double/decimal/numeric, "
+                    f"date/datetime/timestamp/time/year, boolean/bool, json/jsonb, "
+                    f"blob/longblob/mediumblob/tinyblob/binary/varbinary, enum/set"
                 )
 
         # Create table
@@ -1411,20 +1434,43 @@ class VectorTableManager:
                 dimension = column_def.get("dimension", 128)
                 precision = column_def.get("precision", "f32")
                 builder.add_vector_column(column_name, dimension, precision)
-            elif column_type == "int":
+            elif column_type in ("int", "integer"):
                 builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_type == "bigint":
+            elif column_type in ("bigint", "bigint unsigned"):
                 builder.add_bigint_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_type == "varchar":
+            elif column_type in ("smallint", "tinyint"):
+                if column_type == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=column_def.get("primary_key", False))
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_type in ("varchar", "char"):
                 length = column_def.get("length", 255)
                 builder.add_string_column(column_name, length)
-            elif column_type == "text":
+            elif column_type in ("text", "longtext", "mediumtext", "tinytext"):
                 builder.add_text_column(column_name)
+            elif column_type in ("float", "double", "decimal", "numeric"):
+                precision = column_def.get("precision", None)
+                scale = column_def.get("scale", None)
+                builder.add_numeric_column(column_name, column_type, precision, scale)
+            elif column_type in ("date", "datetime", "timestamp", "time", "year"):
+                builder.add_datetime_column(column_name, column_type)
+            elif column_type in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_type in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_type in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_type)
+            elif column_type in ("enum", "set"):
+                values = column_def.get("values", [])
+                builder.add_enum_column(column_name, column_type, values)
             else:
                 # Raise error for unknown types instead of defaulting to text
                 raise ValueError(
                     f"Unsupported column type '{column_type}' for column '{column_name}'. "
-                    f"Supported types: vector, int, bigint, varchar, text"
+                    f"Supported types: vector, int/integer, bigint, smallint, tinyint, "
+                    f"varchar/char, text/longtext/mediumtext/tinytext, float/double/decimal/numeric, "
+                    f"date/datetime/timestamp/time/year, boolean/bool, json/jsonb, "
+                    f"blob/longblob/mediumblob/tinyblob/binary/varbinary, enum/set"
                 )
 
         # Create table using the provided connection
@@ -1873,20 +1919,43 @@ class TransactionVectorTableManager:
                 dimension = column_def.get("dimension", 128)
                 precision = column_def.get("precision", "f32")
                 builder.add_vector_column(column_name, dimension, precision)
-            elif column_type == "int":
+            elif column_type in ("int", "integer"):
                 builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_type == "bigint":
+            elif column_type in ("bigint", "bigint unsigned"):
                 builder.add_bigint_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_type == "varchar":
+            elif column_type in ("smallint", "tinyint"):
+                if column_type == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=column_def.get("primary_key", False))
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_type in ("varchar", "char"):
                 length = column_def.get("length", 255)
                 builder.add_string_column(column_name, length)
-            elif column_type == "text":
+            elif column_type in ("text", "longtext", "mediumtext", "tinytext"):
                 builder.add_text_column(column_name)
+            elif column_type in ("float", "double", "decimal", "numeric"):
+                precision = column_def.get("precision", None)
+                scale = column_def.get("scale", None)
+                builder.add_numeric_column(column_name, column_type, precision, scale)
+            elif column_type in ("date", "datetime", "timestamp", "time", "year"):
+                builder.add_datetime_column(column_name, column_type)
+            elif column_type in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_type in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_type in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_type)
+            elif column_type in ("enum", "set"):
+                values = column_def.get("values", [])
+                builder.add_enum_column(column_name, column_type, values)
             else:
                 # Raise error for unknown types instead of defaulting to text
                 raise ValueError(
                     f"Unsupported column type '{column_type}' for column '{column_name}'. "
-                    f"Supported types: vector, int, bigint, varchar, text"
+                    f"Supported types: vector, int/integer, bigint, smallint, tinyint, "
+                    f"varchar/char, text/longtext/mediumtext/tinytext, float/double/decimal/numeric, "
+                    f"date/datetime/timestamp/time/year, boolean/bool, json/jsonb, "
+                    f"blob/longblob/mediumblob/tinyblob/binary/varbinary, enum/set"
                 )
 
         # Create table
