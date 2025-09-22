@@ -54,6 +54,34 @@ func mock_runTxn(proc *process.Process, fn func(exec executor.TxnExecutor) error
 	return nil
 }
 
+func TestSyncEmptyCatalogError(t *testing.T) {
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+
+	runSql = mock_runSql_empty
+	runSql_streaming = mock_runSql_streaming
+	runCatalogSql = mock_runEmptyCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 1000)}
+
+	key := int64(1000)
+	v := []float32{0.1, 0.2, 0.3}
+
+	for i := 0; i < 1000; i++ {
+		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+		for i := range len(v) {
+			v[i] += 0.01
+		}
+	}
+
+	err := CdcSync[float32](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+	require.NotNil(t, err)
+}
+
 func TestSyncUpsertWithEmpty(t *testing.T) {
 
 	m := mpool.MustNewZero()

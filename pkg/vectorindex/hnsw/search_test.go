@@ -94,6 +94,12 @@ func mock_runCatalogSql(proc *process.Process, sql string) (executor.Result, err
 	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{makeMoIndexesBatch(proc)}}, nil
 }
 
+// give moindexes metadata [index_table_name, algo_table_type, algo_params, column_name]
+func mock_runEmptyCatalogSql(proc *process.Process, sql string) (executor.Result, error) {
+
+	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
+}
+
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
