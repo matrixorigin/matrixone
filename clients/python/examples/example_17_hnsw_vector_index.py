@@ -21,8 +21,10 @@ from matrixone import Client
 from matrixone.config import get_connection_params, print_config
 from matrixone.sqlalchemy_ext import (
     VectorIndex, VectorIndexType, VectorOpType, create_hnsw_index,
-    create_ivfflat_index, enable_hnsw_indexing, enable_ivf_indexing
+    create_ivfflat_index, enable_hnsw_indexing, enable_ivf_indexing,
+    Vectorf32, Vectorf64
 )
+from sqlalchemy import Column, BigInteger, Integer
 
 
 def main():
@@ -52,45 +54,20 @@ def main():
         # Demo 1: HNSW Configuration
         print("\n--- Demo 1: HNSW Configuration ---")
         
-        # Demo 2: DDL Table Creation with HNSW Index
-        print("\n--- Demo 2: DDL Table Creation with HNSW Index ---")
+        # Demo 2: DDL Table Creation with HNSW Index using ORM interface
+        print("\n--- Demo 2: DDL Table Creation with HNSW Index using ORM interface ---")
         
-        # Create table with HNSW index in DDL
-        schema = {
-            'a': {'type': 'bigint', 'primary_key': True},
-            'b': {'type': 'vector', 'dimension': 128, 'precision': 'f32'},
-            'c': {'type': 'int'}
-        }
-        
-        # Create table using SQLAlchemy with HNSW index
-        from sqlalchemy import create_engine, text, MetaData, Table, Column, BigInteger, Integer
-        from matrixone.sqlalchemy_ext import Vectorf32, VectorIndex
-        
-        engine = client.get_sqlalchemy_engine()
-        metadata = MetaData()
-        
-        # Create table with HNSW index
-        table = Table(
+        # Create table with HNSW index using new ORM interface
+        client.create_table_orm(
             'vector_docs_hnsw_demo',
-            metadata,
             Column('a', BigInteger, primary_key=True),
             Column('b', Vectorf32(128)),
             Column('c', Integer),
-            # HNSW index defined in DDL
             VectorIndex('idx_hnsw', 'b', index_type=VectorIndexType.HNSW, 
                        m=48, ef_construction=64, ef_search=64, 
                        op_type=VectorOpType.VECTOR_L2_OPS)
         )
-        
-        # Enable HNSW indexing and create table in the same connection
-        with engine.begin() as conn:
-            # Enable HNSW indexing in this session
-            conn.execute(text("SET experimental_hnsw_index = 1"))
-            print("✓ HNSW indexing enabled in session")
-            
-            # Create the table with HNSW index
-            metadata.create_all(bind=conn)
-        print("✓ Created table with HNSW index in DDL")
+        print("✓ Created table with HNSW index using ORM interface")
         
         # Demo 3: CREATE INDEX Statement for HNSW
         print("\n--- Demo 3: CREATE INDEX Statement for HNSW ---")
@@ -133,6 +110,8 @@ def main():
         print("✓ Inserted sample data")
         
         # Create HNSW index using CREATE INDEX statement in the same session
+        from sqlalchemy import text
+        engine = client.get_sqlalchemy_engine()
         with engine.begin() as conn:
             # Enable HNSW indexing in this session
             conn.execute(text("SET experimental_hnsw_index = 1"))
@@ -320,13 +299,13 @@ def main():
             for i in range(1, 6)
         ]
         
-        with engine.begin() as conn:
-            # Enable HNSW indexing in this session
-            conn.execute(text("SET experimental_hnsw_index = 1"))
-            print("✓ HNSW indexing enabled in session")
-            
-            for config in configs:
-                try:
+        for config in configs:
+            try:
+                with engine.begin() as conn:
+                    # Enable HNSW indexing in this session
+                    conn.execute(text("SET experimental_hnsw_index = 1"))
+                    print("✓ HNSW indexing enabled in session")
+                    
                     # Create table for this configuration using client interface in transaction
                     client.create_table_in_transaction(config["table"], {
                         'id': 'bigint',
@@ -353,8 +332,8 @@ def main():
                         op_type="vector_l2_ops"
                     )
                     print(f"✓ Created HNSW index: {config['name']} (M={config['m']}, EF_CONSTRUCTION={config['ef_construction']}, EF_SEARCH={config['ef_search']})")
-                except Exception as e:
-                    print(f"⚠️  Failed to create HNSW configuration {config['name']}: {e}")
+            except Exception as e:
+                print(f"⚠️  Failed to create HNSW configuration {config['name']}: {e}")
 
         
         # Demo 8: HNSW vs IVFFLAT Range Search

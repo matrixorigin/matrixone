@@ -1123,6 +1123,439 @@ class Client:
 
         return self
 
+    def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "Client":
+        """
+        Create a table with vector indexes using a simplified interface.
+
+        Args:
+            table_name: Name of the table
+            columns: Dictionary mapping column names to their types (same format as create_table)
+            indexes: List of index definitions, each containing:
+                    - 'name': Index name
+                    - 'column': Column name to index
+                    - 'type': Index type ('ivfflat' or 'hnsw')
+                    - 'params': Dictionary of index-specific parameters
+            **kwargs: Additional table parameters
+
+        Returns:
+            Client: Self for chaining
+
+        Example:
+            client.create_table_with_index("vector_docs", {
+                'id': 'bigint',
+                'title': 'varchar(200)',
+                'embedding': 'vector(128,f32)'
+            }, indexes=[
+                {
+                    'name': 'idx_hnsw',
+                    'column': 'embedding',
+                    'type': 'hnsw',
+                    'params': {'m': 48, 'ef_construction': 64, 'ef_search': 64}
+                }
+            ], primary_key='id')
+        """
+
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Parse primary key from kwargs
+        primary_key = kwargs.get("primary_key", None)
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on simplified format (same logic as create_table)
+        for column_name, column_def in columns.items():
+            is_primary = primary_key == column_name
+
+            if column_def.startswith("vector("):
+                # Parse vector type: vector(128,f32) or vector(128)
+                import re
+
+                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
+                if match:
+                    dimension = int(match.group(1))
+                    precision = match.group(2) or "f32"
+                    builder.add_vector_column(column_name, dimension, precision)
+                else:
+                    raise ValueError(f"Invalid vector format: {column_def}")
+
+            elif column_def.startswith("varchar("):
+                # Parse varchar type: varchar(100)
+                import re
+
+                match = re.match(r"varchar\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid varchar format: {column_def}")
+
+            elif column_def.startswith("char("):
+                # Parse char type: char(10)
+                import re
+
+                match = re.match(r"char\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid char format: {column_def}")
+
+            elif column_def.startswith("decimal("):
+                # Parse decimal type: decimal(10,2)
+                import re
+
+                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    scale = int(match.group(2))
+                    builder.add_numeric_column(column_name, "decimal", precision, scale)
+                else:
+                    raise ValueError(f"Invalid decimal format: {column_def}")
+
+            elif column_def.startswith("float("):
+                # Parse float type: float(10)
+                import re
+
+                match = re.match(r"float\((\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    builder.add_numeric_column(column_name, "float", precision)
+                else:
+                    raise ValueError(f"Invalid float format: {column_def}")
+
+            elif column_def in ("int", "integer"):
+                builder.add_int_column(column_name, primary_key=is_primary)
+            elif column_def in ("bigint", "bigint unsigned"):
+                builder.add_bigint_column(column_name, primary_key=is_primary)
+            elif column_def in ("smallint", "tinyint"):
+                if column_def == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=is_primary)
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=is_primary)
+            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
+                builder.add_text_column(column_name)
+            elif column_def in ("float", "double"):
+                builder.add_numeric_column(column_name, column_def)
+            elif column_def in ("date", "datetime", "timestamp", "time"):
+                builder.add_datetime_column(column_name, column_def)
+            elif column_def in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_def in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_def)
+            else:
+                raise ValueError(
+                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
+                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
+                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
+                    f"boolean, json, blob, vector(n,precision)"
+                )
+
+        # Create table
+        table = builder.build()
+        table.create(self.get_sqlalchemy_engine())
+
+        # Create indexes if specified
+        if indexes:
+            for index_def in indexes:
+                index_name = index_def["name"]
+                column_name = index_def["column"]
+                index_type = index_def["type"]
+                params = index_def.get("params", {})
+
+                # Convert index type and enable indexing
+                if index_type == "hnsw":
+                    # Enable HNSW indexing
+                    self.vector_index.enable_hnsw()
+                elif index_type == "ivfflat":
+                    # Enable IVF indexing
+                    self.vector_index.enable_ivf()
+                else:
+                    raise ValueError(f"Unsupported index type: {index_type}")
+
+                # Create the index
+                self.vector_index.create(
+                    table_name=table_name, name=index_name, column=column_name, index_type=index_type, **params
+                )
+
+        return self
+
+    def create_table_with_index_in_transaction(
+        self, table_name: str, columns: dict, connection, indexes: list = None, **kwargs
+    ) -> "Client":
+        """
+        Create a table with vector indexes within an existing SQLAlchemy transaction.
+
+        Args:
+            table_name: Name of the table
+            columns: Dictionary mapping column names to their types (same format as create_table)
+            connection: SQLAlchemy connection object (required for transaction support)
+            indexes: List of index definitions (same format as create_table_with_index)
+            **kwargs: Additional table parameters
+
+        Returns:
+            Client: Self for chaining
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy.schema import CreateTable
+
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Parse primary key from kwargs
+        primary_key = kwargs.get("primary_key", None)
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on simplified format (same logic as create_table)
+        for column_name, column_def in columns.items():
+            is_primary = primary_key == column_name
+
+            if column_def.startswith("vector("):
+                # Parse vector type: vector(128,f32) or vector(128)
+                import re
+
+                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
+                if match:
+                    dimension = int(match.group(1))
+                    precision = match.group(2) or "f32"
+                    builder.add_vector_column(column_name, dimension, precision)
+                else:
+                    raise ValueError(f"Invalid vector format: {column_def}")
+
+            elif column_def.startswith("varchar("):
+                # Parse varchar type: varchar(100)
+                import re
+
+                match = re.match(r"varchar\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid varchar format: {column_def}")
+
+            elif column_def.startswith("char("):
+                # Parse char type: char(10)
+                import re
+
+                match = re.match(r"char\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid char format: {column_def}")
+
+            elif column_def.startswith("decimal("):
+                # Parse decimal type: decimal(10,2)
+                import re
+
+                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    scale = int(match.group(2))
+                    builder.add_numeric_column(column_name, "decimal", precision, scale)
+                else:
+                    raise ValueError(f"Invalid decimal format: {column_def}")
+
+            elif column_def.startswith("float("):
+                # Parse float type: float(10)
+                import re
+
+                match = re.match(r"float\((\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    builder.add_numeric_column(column_name, "float", precision)
+                else:
+                    raise ValueError(f"Invalid float format: {column_def}")
+
+            elif column_def in ("int", "integer"):
+                builder.add_int_column(column_name, primary_key=is_primary)
+            elif column_def in ("bigint", "bigint unsigned"):
+                builder.add_bigint_column(column_name, primary_key=is_primary)
+            elif column_def in ("smallint", "tinyint"):
+                if column_def == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=is_primary)
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=is_primary)
+            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
+                builder.add_text_column(column_name)
+            elif column_def in ("float", "double"):
+                builder.add_numeric_column(column_name, column_def)
+            elif column_def in ("date", "datetime", "timestamp", "time"):
+                builder.add_datetime_column(column_name, column_def)
+            elif column_def in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_def in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_def)
+            else:
+                raise ValueError(
+                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
+                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
+                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
+                    f"boolean, json, blob, vector(n,precision)"
+                )
+
+        # Create table using the provided connection
+        table = builder.build()
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=connection.dialect))
+        connection.execute(sql)
+
+        # Create indexes if specified
+        if indexes:
+            for index_def in indexes:
+                index_name = index_def["name"]
+                column_name = index_def["column"]
+                index_type = index_def["type"]
+                params = index_def.get("params", {})
+
+                # Create the index using _in_transaction method
+                self.vector_index.create_in_transaction(
+                    table_name=table_name,
+                    name=index_name,
+                    column=column_name,
+                    index_type=index_type,
+                    connection=connection,
+                    **params,
+                )
+
+        return self
+
+    def create_table_orm(self, table_name: str, *columns, **kwargs) -> "Client":
+        """
+        Create a table using SQLAlchemy ORM-style column definitions.
+        Similar to SQLAlchemy Table() constructor but without metadata.
+
+        Args:
+            table_name: Name of the table
+            *columns: SQLAlchemy Column objects and Index objects (including VectorIndex)
+            **kwargs: Additional parameters (like enable_hnsw, enable_ivf)
+
+        Returns:
+            Client: Self for chaining
+
+        Example:
+            from sqlalchemy import Column, BigInteger, Integer
+            from matrixone.sqlalchemy_ext import Vectorf32, VectorIndex, VectorIndexType, VectorOpType
+
+            client.create_table_orm(
+                'vector_docs_hnsw_demo',
+                Column('a', BigInteger, primary_key=True),
+                Column('b', Vectorf32(128)),
+                Column('c', Integer),
+                VectorIndex('idx_hnsw', 'b', index_type=VectorIndexType.HNSW,
+                           m=48, ef_construction=64, ef_search=64,
+                           op_type=VectorOpType.VECTOR_L2_OPS)
+            )
+        """
+        from sqlalchemy import MetaData, Table
+
+        # Create metadata and table
+        metadata = MetaData()
+        table = Table(table_name, metadata, *columns)
+
+        # Check if we need to enable HNSW or IVF indexing
+        enable_hnsw = kwargs.get("enable_hnsw", False)
+        enable_ivf = kwargs.get("enable_ivf", False)
+
+        # Check if table has vector indexes that need special handling
+        has_hnsw_index = False
+        has_ivf_index = False
+
+        for item in table.indexes:
+            if hasattr(item, "index_type"):
+                # Check for HNSW index type (string comparison)
+                if str(item.index_type).lower() == "hnsw":
+                    has_hnsw_index = True
+                elif str(item.index_type).lower() == "ivfflat":
+                    has_ivf_index = True
+
+        # Create table using SQLAlchemy engine with proper session handling
+        engine = self.get_sqlalchemy_engine()
+
+        # Enable appropriate indexing if needed and create table in same session
+        if has_hnsw_index or enable_hnsw:
+            with engine.begin() as conn:
+                from sqlalchemy import text
+
+                conn.execute(text("SET experimental_hnsw_index = 1"))
+                # Create table and indexes in the same session
+                table.create(conn)
+        elif has_ivf_index or enable_ivf:
+            with engine.begin() as conn:
+                from sqlalchemy import text
+
+                conn.execute(text("SET experimental_ivf_index = 1"))
+                # Create table and indexes in the same session
+                table.create(conn)
+        else:
+            # No special indexing needed, create normally
+            table.create(engine)
+
+        return self
+
+    def create_table_orm_in_transaction(self, table_name: str, connection, *columns, **kwargs) -> "Client":
+        """
+        Create a table using SQLAlchemy ORM-style definitions within an existing SQLAlchemy transaction.
+
+        Args:
+            table_name: Name of the table
+            connection: SQLAlchemy connection object (required for transaction support)
+            *columns: SQLAlchemy Column objects and Index objects (including VectorIndex)
+            **kwargs: Additional parameters (like enable_hnsw, enable_ivf)
+
+        Returns:
+            Client: Self for chaining
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy import MetaData, Table
+        from sqlalchemy.schema import CreateTable
+
+        # Create metadata and table
+        metadata = MetaData()
+        table = Table(table_name, metadata, *columns)
+
+        # Check if we need to enable HNSW or IVF indexing
+        enable_hnsw = kwargs.get("enable_hnsw", False)
+        enable_ivf = kwargs.get("enable_ivf", False)
+
+        # Check if table has vector indexes that need special handling
+        has_hnsw_index = False
+        has_ivf_index = False
+
+        for item in table.indexes:
+            if hasattr(item, "index_type"):
+                # Check for HNSW index type (string comparison)
+                if str(item.index_type).lower() == "hnsw":
+                    has_hnsw_index = True
+                elif str(item.index_type).lower() == "ivfflat":
+                    has_ivf_index = True
+
+        # Enable appropriate indexing if needed (within transaction)
+        if has_hnsw_index or enable_hnsw:
+            from sqlalchemy import text
+
+            connection.execute(text("SET experimental_hnsw_index = 1"))
+        if has_ivf_index or enable_ivf:
+            from sqlalchemy import text
+
+            connection.execute(text("SET experimental_ivf_index = 1"))
+
+        # Create table using the provided connection
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=connection.dialect))
+        connection.execute(sql)
+
+        return self
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.disconnect()
 
@@ -1394,6 +1827,190 @@ class TransactionWrapper:
         """
         sql = f"DROP TABLE IF EXISTS {table_name}"
         self.execute(sql)
+        return self
+
+    def create_table_with_index(
+        self, table_name: str, columns: dict, indexes: list = None, **kwargs
+    ) -> "TransactionWrapper":
+        """
+        Create a table with vector indexes within MatrixOne transaction.
+
+        Args:
+            table_name: Name of the table
+            columns: Dictionary mapping column names to their types (same format as client.create_table)
+            indexes: List of index definitions (same format as client.create_table_with_index)
+            **kwargs: Additional table parameters
+
+        Returns:
+            TransactionWrapper: Self for chaining
+        """
+        from sqlalchemy.schema import CreateTable
+
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Parse primary key from kwargs
+        primary_key = kwargs.get("primary_key", None)
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on simplified format (same logic as client.create_table)
+        for column_name, column_def in columns.items():
+            is_primary = primary_key == column_name
+
+            if column_def.startswith("vector("):
+                # Parse vector type: vector(128,f32) or vector(128)
+                import re
+
+                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
+                if match:
+                    dimension = int(match.group(1))
+                    precision = match.group(2) or "f32"
+                    builder.add_vector_column(column_name, dimension, precision)
+                else:
+                    raise ValueError(f"Invalid vector format: {column_def}")
+
+            elif column_def.startswith("varchar("):
+                # Parse varchar type: varchar(100)
+                import re
+
+                match = re.match(r"varchar\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid varchar format: {column_def}")
+
+            elif column_def.startswith("char("):
+                # Parse char type: char(10)
+                import re
+
+                match = re.match(r"char\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid char format: {column_def}")
+
+            elif column_def.startswith("decimal("):
+                # Parse decimal type: decimal(10,2)
+                import re
+
+                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    scale = int(match.group(2))
+                    builder.add_numeric_column(column_name, "decimal", precision, scale)
+                else:
+                    raise ValueError(f"Invalid decimal format: {column_def}")
+
+            elif column_def.startswith("float("):
+                # Parse float type: float(10)
+                import re
+
+                match = re.match(r"float\((\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    builder.add_numeric_column(column_name, "float", precision)
+                else:
+                    raise ValueError(f"Invalid float format: {column_def}")
+
+            elif column_def in ("int", "integer"):
+                builder.add_int_column(column_name, primary_key=is_primary)
+            elif column_def in ("bigint", "bigint unsigned"):
+                builder.add_bigint_column(column_name, primary_key=is_primary)
+            elif column_def in ("smallint", "tinyint"):
+                if column_def == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=is_primary)
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=is_primary)
+            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
+                builder.add_text_column(column_name)
+            elif column_def in ("float", "double"):
+                builder.add_numeric_column(column_name, column_def)
+            elif column_def in ("date", "datetime", "timestamp", "time"):
+                builder.add_datetime_column(column_name, column_def)
+            elif column_def in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_def in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_def)
+            else:
+                raise ValueError(
+                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
+                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
+                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
+                    f"boolean, json, blob, vector(n,precision)"
+                )
+
+        # Create table using transaction wrapper's execute method
+        table = builder.build()
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
+        self.execute(sql)
+
+        # Create indexes if specified
+        if indexes:
+            for index_def in indexes:
+                index_name = index_def["name"]
+                column_name = index_def["column"]
+                index_type = index_def["type"]
+                params = index_def.get("params", {})
+
+                # Create the index using transaction wrapper's vector_index
+                self.vector_index.create(
+                    table_name=table_name, name=index_name, column=column_name, index_type=index_type, **params
+                )
+
+        return self
+
+    def create_table_orm(self, table_name: str, *columns, **kwargs) -> "TransactionWrapper":
+        """
+        Create a table using SQLAlchemy ORM-style definitions within MatrixOne transaction.
+
+        Args:
+            table_name: Name of the table
+            *columns: SQLAlchemy Column objects and Index objects (including VectorIndex)
+            **kwargs: Additional parameters (like enable_hnsw, enable_ivf)
+
+        Returns:
+            TransactionWrapper: Self for chaining
+        """
+        from sqlalchemy import MetaData, Table
+        from sqlalchemy.schema import CreateTable
+
+        # Create metadata and table
+        metadata = MetaData()
+        table = Table(table_name, metadata, *columns)
+
+        # Check if we need to enable HNSW or IVF indexing
+        enable_hnsw = kwargs.get("enable_hnsw", False)
+        enable_ivf = kwargs.get("enable_ivf", False)
+
+        # Check if table has vector indexes that need special handling
+        has_hnsw_index = False
+        has_ivf_index = False
+
+        for item in table.indexes:
+            if hasattr(item, "index_type"):
+                # Check for HNSW index type (string comparison)
+                if str(item.index_type).lower() == "hnsw":
+                    has_hnsw_index = True
+                elif str(item.index_type).lower() == "ivfflat":
+                    has_ivf_index = True
+
+        # Enable appropriate indexing if needed (within transaction)
+        if has_hnsw_index or enable_hnsw:
+            self.execute("SET experimental_hnsw_index = 1")
+        if has_ivf_index or enable_ivf:
+            self.execute("SET experimental_ivf_index = 1")
+
+        # Create table using transaction wrapper's execute method
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=self.client.get_sqlalchemy_engine().dialect))
+        self.execute(sql)
+
         return self
 
 
