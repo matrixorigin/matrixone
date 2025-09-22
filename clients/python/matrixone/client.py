@@ -1052,6 +1052,10 @@ class VectorIndexManager:
         index_type: str = "ivfflat",
         lists: int = None,
         op_type: str = "vector_l2_ops",
+        # HNSW parameters
+        m: int = None,
+        ef_construction: int = None,
+        ef_search: int = None,
     ) -> "VectorIndexManager":
         """
         Create a vector index using chain operations.
@@ -1063,6 +1067,9 @@ class VectorIndexManager:
             index_type: Type of vector index (ivfflat, hnsw, etc.)
             lists: Number of lists for IVFFLAT (optional)
             op_type: Vector operation type
+            m: Number of bi-directional links for HNSW (optional)
+            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
+            ef_search: Size of dynamic candidate list for HNSW search (optional)
 
         Returns:
             VectorIndexManager: Self for chaining
@@ -1072,10 +1079,12 @@ class VectorIndexManager:
         # Convert string parameters to enum values
         if index_type == "ivfflat":
             index_type = VectorIndexType.IVFFLAT
+        elif index_type == "hnsw":
+            index_type = VectorIndexType.HNSW
         if op_type == "vector_l2_ops":
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        # IVF will be enabled automatically in the same connection by VectorIndex.create_index
+        # Indexing will be enabled automatically in the same connection by VectorIndex.create_index
 
         success = VectorIndex.create_index(
             engine=self.client.get_sqlalchemy_engine(),
@@ -1085,6 +1094,9 @@ class VectorIndexManager:
             index_type=index_type,
             lists=lists,
             op_type=op_type,
+            m=m,
+            ef_construction=ef_construction,
+            ef_search=ef_search,
         )
 
         if not success:
@@ -1151,6 +1163,36 @@ class VectorIndexManager:
 
         return self
 
+    def enable_hnsw(self) -> "VectorIndexManager":
+        """
+        Enable HNSW indexing with chain operations.
+
+        Returns:
+            VectorIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import create_hnsw_config
+
+        hnsw_config = create_hnsw_config(self.client.get_sqlalchemy_engine())
+        if not hnsw_config.enable_hnsw_indexing():
+            raise Exception("Failed to enable HNSW indexing")
+
+        return self
+
+    def disable_hnsw(self) -> "VectorIndexManager":
+        """
+        Disable HNSW indexing with chain operations.
+
+        Returns:
+            VectorIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import create_hnsw_config
+
+        hnsw_config = create_hnsw_config(self.client.get_sqlalchemy_engine())
+        if not hnsw_config.disable_hnsw_indexing():
+            raise Exception("Failed to disable HNSW indexing")
+
+        return self
+
 
 class TransactionVectorIndexManager(VectorIndexManager):
     """Vector index manager that executes operations within a transaction"""
@@ -1167,6 +1209,10 @@ class TransactionVectorIndexManager(VectorIndexManager):
         index_type: str = "ivfflat",
         lists: int = None,
         op_type: str = "vector_l2_ops",
+        # HNSW parameters
+        m: int = None,
+        ef_construction: int = None,
+        ef_search: int = None,
     ) -> "TransactionVectorIndexManager":
         """Create a vector index within transaction"""
         from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
@@ -1174,17 +1220,21 @@ class TransactionVectorIndexManager(VectorIndexManager):
         # Convert string parameters to enum values
         if index_type == "ivfflat":
             index_type = VectorIndexType.IVFFLAT
+        elif index_type == "hnsw":
+            index_type = VectorIndexType.HNSW
         if op_type == "vector_l2_ops":
             op_type = VectorOpType.VECTOR_L2_OPS
 
         # Create index using transaction wrapper's execute method
-        index = VectorIndex(name, column, index_type, lists, op_type)
+        index = VectorIndex(name, column, index_type, lists, op_type, m, ef_construction, ef_search)
 
         try:
-            # Enable IVF indexing in the same connection for IVFFLAT indexes
+            # Enable appropriate indexing in the same connection
             if index_type == VectorIndexType.IVFFLAT:
                 self.transaction_wrapper.execute("SET experimental_ivf_index = 1")
                 self.transaction_wrapper.execute("SET probe_limit = 1")
+            elif index_type == VectorIndexType.HNSW:
+                self.transaction_wrapper.execute("SET experimental_hnsw_index = 1")
 
             sql = index.create_sql(table_name)
             self.transaction_wrapper.execute(sql)
@@ -1229,20 +1279,26 @@ class VectorTableManager:
 
         # Add columns based on schema
         for column_name, column_def in schema.items():
-            if column_def.get("type") == "vector":
+            column_type = column_def.get("type")
+            if column_type == "vector":
                 dimension = column_def.get("dimension", 128)
                 precision = column_def.get("precision", "f32")
                 builder.add_vector_column(column_name, dimension, precision)
-            elif column_def.get("type") == "int":
+            elif column_type == "int":
                 builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_def.get("type") == "varchar":
+            elif column_type == "bigint":
+                builder.add_bigint_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_type == "varchar":
                 length = column_def.get("length", 255)
                 builder.add_string_column(column_name, length)
-            elif column_def.get("type") == "text":
+            elif column_type == "text":
                 builder.add_text_column(column_name)
             else:
-                # Default to text column
-                builder.add_text_column(column_name)
+                # Raise error for unknown types instead of defaulting to text
+                raise ValueError(
+                    f"Unsupported column type '{column_type}' for column '{column_name}'. "
+                    f"Supported types: vector, int, bigint, varchar, text"
+                )
 
         # Create table
         table = builder.build()
@@ -1643,20 +1699,26 @@ class TransactionVectorTableManager:
 
         # Add columns based on schema
         for column_name, column_def in schema.items():
-            if column_def.get("type") == "vector":
+            column_type = column_def.get("type")
+            if column_type == "vector":
                 dimension = column_def.get("dimension", 128)
                 precision = column_def.get("precision", "f32")
                 builder.add_vector_column(column_name, dimension, precision)
-            elif column_def.get("type") == "int":
+            elif column_type == "int":
                 builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
-            elif column_def.get("type") == "varchar":
+            elif column_type == "bigint":
+                builder.add_bigint_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_type == "varchar":
                 length = column_def.get("length", 255)
                 builder.add_string_column(column_name, length)
-            elif column_def.get("type") == "text":
+            elif column_type == "text":
                 builder.add_text_column(column_name)
             else:
-                # Default to text column
-                builder.add_text_column(column_name)
+                # Raise error for unknown types instead of defaulting to text
+                raise ValueError(
+                    f"Unsupported column type '{column_type}' for column '{column_name}'. "
+                    f"Supported types: vector, int, bigint, varchar, text"
+                )
 
         # Create table
         table = builder.build()

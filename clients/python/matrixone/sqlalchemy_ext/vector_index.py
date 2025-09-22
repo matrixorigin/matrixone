@@ -39,6 +39,10 @@ class VectorIndex(Index):
         index_type: str = VectorIndexType.IVFFLAT,
         lists: Optional[int] = None,
         op_type: str = VectorOpType.VECTOR_L2_OPS,
+        # HNSW parameters
+        m: Optional[int] = None,
+        ef_construction: Optional[int] = None,
+        ef_search: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -50,11 +54,18 @@ class VectorIndex(Index):
             index_type: Type of vector index (ivfflat, hnsw, etc.)
             lists: Number of lists for IVFFLAT (optional)
             op_type: Vector operation type
+            m: Number of bi-directional links for HNSW (optional)
+            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
+            ef_search: Size of dynamic candidate list for HNSW search (optional)
             **kwargs: Additional index parameters
         """
         self.index_type = index_type
         self.lists = lists
         self.op_type = op_type
+        # HNSW parameters
+        self.m = m
+        self.ef_construction = ef_construction
+        self.ef_search = ef_search
 
         # Store column name for later use
         self._column_name = str(column) if not isinstance(column, str) else column
@@ -75,9 +86,17 @@ class VectorIndex(Index):
 
         sql_parts = [f"CREATE INDEX {self.name} USING {self.index_type} ON {table_name}({column_name})"]
 
-        # Add lists parameter for IVFFLAT
+        # Add parameters based on index type
         if self.index_type == VectorIndexType.IVFFLAT and self.lists is not None:
             sql_parts.append(f"lists = {self.lists}")
+        elif self.index_type == VectorIndexType.HNSW:
+            # Add HNSW parameters
+            if self.m is not None:
+                sql_parts.append(f"M {self.m}")
+            if self.ef_construction is not None:
+                sql_parts.append(f"EF_CONSTRUCTION {self.ef_construction}")
+            if self.ef_search is not None:
+                sql_parts.append(f"EF_SEARCH {self.ef_search}")
 
         # Add operation type
         sql_parts.append(f"op_type '{self.op_type}'")
@@ -102,6 +121,10 @@ class VectorIndex(Index):
         index_type: str = VectorIndexType.IVFFLAT,
         lists: Optional[int] = None,
         op_type: str = VectorOpType.VECTOR_L2_OPS,
+        # HNSW parameters
+        m: Optional[int] = None,
+        ef_construction: Optional[int] = None,
+        ef_search: Optional[int] = None,
         **kwargs,
     ) -> bool:
         """
@@ -115,20 +138,25 @@ class VectorIndex(Index):
             index_type: Type of vector index (ivfflat, hnsw, etc.)
             lists: Number of lists for IVFFLAT (optional)
             op_type: Vector operation type
+            m: Number of bi-directional links for HNSW (optional)
+            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
+            ef_search: Size of dynamic candidate list for HNSW search (optional)
             **kwargs: Additional index parameters
 
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            index = cls(name, column, index_type, lists, op_type, **kwargs)
+            index = cls(name, column, index_type, lists, op_type, m, ef_construction, ef_search, **kwargs)
             sql = index.create_sql(table_name)
 
             with engine.begin() as conn:
-                # Enable IVF indexing in the same connection for IVFFLAT indexes
+                # Enable appropriate indexing in the same connection
                 if index_type == VectorIndexType.IVFFLAT:
                     conn.execute(text("SET experimental_ivf_index = 1"))
                     conn.execute(text("SET probe_limit = 1"))
+                elif index_type == VectorIndexType.HNSW:
+                    conn.execute(text("SET experimental_hnsw_index = 1"))
 
                 conn.execute(text(sql))
             return True
@@ -170,7 +198,16 @@ class VectorIndex(Index):
             bool: True if successful, False otherwise
         """
         return self.__class__.create_index(
-            engine, table_name, self.name, self._column_name, self.index_type, self.lists, self.op_type
+            engine,
+            table_name,
+            self.name,
+            self._column_name,
+            self.index_type,
+            self.lists,
+            self.op_type,
+            self.m,
+            self.ef_construction,
+            self.ef_search,
         )
 
     def drop(self, engine, table_name: str) -> bool:
@@ -196,6 +233,10 @@ class VectorIndex(Index):
         index_type: str = VectorIndexType.IVFFLAT,
         lists: Optional[int] = None,
         op_type: str = VectorOpType.VECTOR_L2_OPS,
+        # HNSW parameters
+        m: Optional[int] = None,
+        ef_construction: Optional[int] = None,
+        ef_search: Optional[int] = None,
         **kwargs,
     ) -> bool:
         """
@@ -209,16 +250,19 @@ class VectorIndex(Index):
             index_type: Type of vector index (ivfflat, hnsw, etc.)
             lists: Number of lists for IVFFLAT (optional)
             op_type: Vector operation type
+            m: Number of bi-directional links for HNSW (optional)
+            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
+            ef_search: Size of dynamic candidate list for HNSW search (optional)
             **kwargs: Additional index parameters
 
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            index = cls(name, column, index_type, lists, op_type, **kwargs)
+            index = cls(name, column, index_type, lists, op_type, m, ef_construction, ef_search, **kwargs)
             sql = index.create_sql(table_name)
 
-            # Note: IVF indexing should be enabled before calling this method
+            # Note: Indexing should be enabled before calling this method
             # The SET statements are removed to avoid interfering with transaction rollback
 
             connection.execute(text(sql))
@@ -261,7 +305,16 @@ class VectorIndex(Index):
             bool: True if successful, False otherwise
         """
         return self.__class__.create_index_in_transaction(
-            connection, table_name, self.name, self._column_name, self.index_type, self.lists, self.op_type
+            connection,
+            table_name,
+            self.name,
+            self._column_name,
+            self.index_type,
+            self.lists,
+            self.op_type,
+            self.m,
+            self.ef_construction,
+            self.ef_search,
         )
 
     def drop_in_transaction(self, connection, table_name: str) -> bool:
@@ -301,9 +354,17 @@ def compile_create_vector_index(element: CreateVectorIndex, compiler, **kw):
 
     sql_parts.append(f"{index.name} USING {index.index_type} ON {index.table.name}({column_name})")
 
-    # Add lists parameter for IVFFLAT
+    # Add parameters based on index type
     if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
         sql_parts.append(f"lists = {index.lists}")
+    elif index.index_type == VectorIndexType.HNSW:
+        # Add HNSW parameters
+        if index.m is not None:
+            sql_parts.append(f"M {index.m}")
+        if index.ef_construction is not None:
+            sql_parts.append(f"EF_CONSTRUCTION {index.ef_construction}")
+        if index.ef_search is not None:
+            sql_parts.append(f"EF_SEARCH {index.ef_search}")
 
     # Add operation type
     sql_parts.append(f"op_type '{index.op_type}'")
@@ -328,9 +389,17 @@ def compile_create_vector_index_matrixone(element: SQLAlchemyCreateIndex, compil
 
         sql_parts.append(f"{index.name} USING {index.index_type} ON {index.table.name}({column_name})")
 
-        # Add lists parameter for IVFFLAT
+        # Add parameters based on index type
         if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
             sql_parts.append(f"lists = {index.lists}")
+        elif index.index_type == VectorIndexType.HNSW:
+            # Add HNSW parameters
+            if index.m is not None:
+                sql_parts.append(f"M {index.m}")
+            if index.ef_construction is not None:
+                sql_parts.append(f"EF_CONSTRUCTION {index.ef_construction}")
+            if index.ef_search is not None:
+                sql_parts.append(f"EF_SEARCH {index.ef_search}")
 
         # Add operation type
         sql_parts.append(f"op_type '{index.op_type}'")
@@ -358,9 +427,17 @@ def compile_create_vector_index_mysql(element: SQLAlchemyCreateIndex, compiler, 
 
         sql_parts.append(f"{index.name} USING {index.index_type} ON {index.table.name}({column_name})")
 
-        # Add lists parameter for IVFFLAT
+        # Add parameters based on index type
         if index.index_type == VectorIndexType.IVFFLAT and index.lists is not None:
             sql_parts.append(f"lists = {index.lists}")
+        elif index.index_type == VectorIndexType.HNSW:
+            # Add HNSW parameters
+            if index.m is not None:
+                sql_parts.append(f"M {index.m}")
+            if index.ef_construction is not None:
+                sql_parts.append(f"EF_CONSTRUCTION {index.ef_construction}")
+            if index.ef_search is not None:
+                sql_parts.append(f"EF_SEARCH {index.ef_search}")
 
         # Add operation type
         sql_parts.append(f"op_type '{index.op_type}'")
@@ -377,6 +454,10 @@ def create_vector_index(
     index_type: str = VectorIndexType.IVFFLAT,
     lists: Optional[int] = None,
     op_type: str = VectorOpType.VECTOR_L2_OPS,
+    # HNSW parameters
+    m: Optional[int] = None,
+    ef_construction: Optional[int] = None,
+    ef_search: Optional[int] = None,
     **kwargs,
 ) -> VectorIndex:
     """
@@ -388,6 +469,9 @@ def create_vector_index(
         index_type: Type of vector index (ivfflat, hnsw, etc.)
         lists: Number of lists for IVFFLAT (optional)
         op_type: Vector operation type
+        m: Number of bi-directional links for HNSW (optional)
+        ef_construction: Size of dynamic candidate list for HNSW construction (optional)
+        ef_search: Size of dynamic candidate list for HNSW search (optional)
         **kwargs: Additional index parameters
 
     Returns:
@@ -402,8 +486,29 @@ def create_vector_index(
             lists=256,
             op_type="vector_l2_ops"
         )
+
+        # Create HNSW index with custom parameters
+        idx = create_vector_index(
+            "idx_vector_hnsw",
+            "embedding",
+            index_type="hnsw",
+            m=48,
+            ef_construction=64,
+            ef_search=64,
+            op_type="vector_l2_ops"
+        )
     """
-    return VectorIndex(name=name, column=column, index_type=index_type, lists=lists, op_type=op_type, **kwargs)
+    return VectorIndex(
+        name=name,
+        column=column,
+        index_type=index_type,
+        lists=lists,
+        op_type=op_type,
+        m=m,
+        ef_construction=ef_construction,
+        ef_search=ef_search,
+        **kwargs,
+    )
 
 
 def create_ivfflat_index(
@@ -436,6 +541,56 @@ def create_ivfflat_index(
     """
     return create_vector_index(
         name=name, column=column, index_type=VectorIndexType.IVFFLAT, lists=lists, op_type=op_type, **kwargs
+    )
+
+
+def create_hnsw_index(
+    name: str,
+    column: Union[str, Column],
+    m: int = 48,
+    ef_construction: int = 64,
+    ef_search: int = 64,
+    op_type: str = VectorOpType.VECTOR_L2_OPS,
+    **kwargs,
+) -> VectorIndex:
+    """
+    Create an HNSW vector index.
+
+    Args:
+        name: Index name
+        column: Vector column to index
+        m: Number of bi-directional links (default: 48)
+        ef_construction: Size of dynamic candidate list for construction (default: 64)
+        ef_search: Size of dynamic candidate list for search (default: 64)
+        op_type: Vector operation type (default: vector_l2_ops)
+        **kwargs: Additional index parameters
+
+    Returns:
+        VectorIndex instance
+
+    Example:
+        # Create HNSW index with default parameters
+        idx = create_hnsw_index("idx_embedding_hnsw", "embedding")
+
+        # Create HNSW index with custom parameters
+        idx = create_hnsw_index(
+            "idx_embedding_hnsw_custom",
+            "embedding",
+            m=32,
+            ef_construction=128,
+            ef_search=128,
+            op_type="vector_cosine_ops"
+        )
+    """
+    return create_vector_index(
+        name=name,
+        column=column,
+        index_type=VectorIndexType.HNSW,
+        m=m,
+        ef_construction=ef_construction,
+        ef_search=ef_search,
+        op_type=op_type,
+        **kwargs,
     )
 
 
@@ -514,6 +669,102 @@ class VectorIndexBuilder:
             Self for method chaining
         """
         return self.ivfflat(name, lists, VectorOpType.VECTOR_IP_OPS, **kwargs)
+
+    def hnsw(
+        self,
+        name: str,
+        m: int = 48,
+        ef_construction: int = 64,
+        ef_search: int = 64,
+        op_type: str = VectorOpType.VECTOR_L2_OPS,
+        **kwargs,
+    ) -> "VectorIndexBuilder":
+        """
+        Add an HNSW index.
+
+        Args:
+            name: Index name
+            m: Number of bi-directional links
+            ef_construction: Size of dynamic candidate list for construction
+            ef_search: Size of dynamic candidate list for search
+            op_type: Vector operation type
+            **kwargs: Additional parameters
+
+        Returns:
+            Self for method chaining
+        """
+        index = create_hnsw_index(name, self.column, m, ef_construction, ef_search, op_type, **kwargs)
+        self._indexes.append(index)
+        return self
+
+    def hnsw_l2_index(
+        self,
+        name: str,
+        m: int = 48,
+        ef_construction: int = 64,
+        ef_search: int = 64,
+        **kwargs,
+    ) -> "VectorIndexBuilder":
+        """
+        Add an HNSW L2 distance index.
+
+        Args:
+            name: Index name
+            m: Number of bi-directional links
+            ef_construction: Size of dynamic candidate list for construction
+            ef_search: Size of dynamic candidate list for search
+            **kwargs: Additional parameters
+
+        Returns:
+            Self for method chaining
+        """
+        return self.hnsw(name, m, ef_construction, ef_search, VectorOpType.VECTOR_L2_OPS, **kwargs)
+
+    def hnsw_cosine_index(
+        self,
+        name: str,
+        m: int = 48,
+        ef_construction: int = 64,
+        ef_search: int = 64,
+        **kwargs,
+    ) -> "VectorIndexBuilder":
+        """
+        Add an HNSW cosine similarity index.
+
+        Args:
+            name: Index name
+            m: Number of bi-directional links
+            ef_construction: Size of dynamic candidate list for construction
+            ef_search: Size of dynamic candidate list for search
+            **kwargs: Additional parameters
+
+        Returns:
+            Self for method chaining
+        """
+        return self.hnsw(name, m, ef_construction, ef_search, VectorOpType.VECTOR_COSINE_OPS, **kwargs)
+
+    def hnsw_ip_index(
+        self,
+        name: str,
+        m: int = 48,
+        ef_construction: int = 64,
+        ef_search: int = 64,
+        **kwargs,
+    ) -> "VectorIndexBuilder":
+        """
+        Add an HNSW inner product index.
+
+        Args:
+            name: Index name
+            m: Number of bi-directional links
+            ef_construction: Size of dynamic candidate list for construction
+            ef_search: Size of dynamic candidate list for search
+            **kwargs: Additional parameters
+
+        Returns:
+            Self for method chaining
+        """
+        return self.hnsw(name, m, ef_construction, ef_search, VectorOpType.VECTOR_IP_OPS, **kwargs)
 
     def build(self) -> List[VectorIndex]:
         """

@@ -62,10 +62,12 @@ class TestLargeVectorDimensions:
 
             @classmethod
             def drop(cls, engine, checkfirst=False):
-                Base.metadata.drop_all(engine, tables=[cls.__table__], checkfirst=checkfirst)
+                from sqlalchemy import text
+                with engine.begin() as conn:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {cls.__tablename__}"))
                 print(f"Dropped table: {cls.__tablename__}")
 
-        LargeVectorf64Model.drop(engine, checkfirst=False)
+        LargeVectorf64Model.drop(engine, checkfirst=True)
         LargeVectorf64Model.create(engine)
         
         # Batch insert 10 rows using ORM
@@ -161,11 +163,13 @@ class TestLargeVectorDimensions:
 
             @classmethod
             def drop(cls, engine, checkfirst=False):
-                Base.metadata.drop_all(engine, tables=[cls.__table__], checkfirst=checkfirst)
+                from sqlalchemy import text
+                with engine.begin() as conn:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {cls.__tablename__}"))
                 print(f"Dropped table: {cls.__tablename__}")
         
 
-        LargeVectorf32Model.drop(engine, checkfirst=False)
+        LargeVectorf32Model.drop(engine, checkfirst=True)
         LargeVectorf32Model.create(engine)
         
         # Batch insert 10 rows using ORM

@@ -22,10 +22,13 @@ from .snapshot import (CloneManager, Snapshot, SnapshotLevel, SnapshotManager,
                        SnapshotQueryBuilder)
 # Import SQLAlchemy extensions
 from .sqlalchemy_ext import (MatrixOneDialect, Vectorf32, Vectorf64,
+                             VectorIndex, VectorIndexType, VectorOpType,
                              VectorTableBuilder, VectorType,
                              VectorTypeDecorator, create_document_vector_table,
+                             create_hnsw_index, create_ivfflat_index,
                              create_product_vector_table,
-                             create_vector_index_table, create_vector_table)
+                             create_vector_index_table, create_vector_table,
+                             enable_hnsw_indexing, enable_ivf_indexing)
 from .version import (FeatureRequirement, VersionInfo, VersionManager,
                       requires_version)
 
@@ -79,4 +82,11 @@ __all__ = [
     "create_vector_index_table",
     "create_document_vector_table",
     "create_product_vector_table",
+    "VectorIndex",
+    "VectorIndexType",
+    "VectorOpType",
+    "create_hnsw_index",
+    "create_ivfflat_index",
+    "enable_hnsw_indexing",
+    "enable_ivf_indexing",
 ]

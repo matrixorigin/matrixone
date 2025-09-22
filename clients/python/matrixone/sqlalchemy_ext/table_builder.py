@@ -4,8 +4,9 @@ Table builder utilities for MatrixOne vector tables.
 
 from typing import List, Optional, Union
 
-from sqlalchemy import (Column, ForeignKeyConstraint, Index, Integer, MetaData,
-                        PrimaryKeyConstraint, String, Table, Text)
+from sqlalchemy import (BigInteger, Column, ForeignKeyConstraint, Index,
+                        Integer, MetaData, PrimaryKeyConstraint, String, Table,
+                        Text)
 from sqlalchemy.dialects.mysql import JSON
 
 from .vector_type import Vectorf32, Vectorf64, VectorType
@@ -41,6 +42,12 @@ class VectorTableBuilder:
         if primary_key:
             kwargs["primary_key"] = True
         return self.add_column(name, Integer, **kwargs)
+
+    def add_bigint_column(self, name: str, primary_key: bool = False, **kwargs):
+        """Add a bigint column."""
+        if primary_key:
+            kwargs["primary_key"] = True
+        return self.add_column(name, BigInteger, **kwargs)
 
     def add_string_column(self, name: str, length: int = 255, **kwargs):
         """Add a string column."""
