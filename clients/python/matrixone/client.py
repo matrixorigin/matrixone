@@ -1104,6 +1104,78 @@ class VectorIndexManager:
 
         return self
 
+    def create_in_transaction(
+        self,
+        table_name: str,
+        name: str,
+        column: str,
+        connection,
+        index_type: str = "ivfflat",
+        lists: int = None,
+        op_type: str = "vector_l2_ops",
+        # HNSW parameters
+        m: int = None,
+        ef_construction: int = None,
+        ef_search: int = None,
+    ) -> "VectorIndexManager":
+        """
+        Create a vector index within an existing SQLAlchemy transaction.
+
+        Args:
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            connection: SQLAlchemy connection object (required for transaction support)
+            index_type: Type of vector index (ivfflat, hnsw, etc.)
+            lists: Number of lists for IVFFLAT (optional)
+            op_type: Vector operation type
+            m: Number of bi-directional links for HNSW (optional)
+            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
+            ef_search: Size of dynamic candidate list for HNSW search (optional)
+
+        Returns:
+            VectorIndexManager: Self for chaining
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy import text
+
+        # Build CREATE INDEX statement
+        if index_type == "ivfflat":
+            if lists is None:
+                lists = 100  # Default value
+            sql = f"CREATE INDEX {name} USING ivfflat ON {table_name}({column}) LISTS {lists} op_type '{op_type}'"
+        elif index_type == "hnsw":
+            if m is None:
+                m = 48  # Default value
+            if ef_construction is None:
+                ef_construction = 64  # Default value
+            if ef_search is None:
+                ef_search = 64  # Default value
+            sql = (
+                f"CREATE INDEX {name} USING hnsw ON {table_name}({column}) "
+                f"M {m} EF_CONSTRUCTION {ef_construction} EF_SEARCH {ef_search} "
+                f"op_type '{op_type}'"
+            )
+        else:
+            raise ValueError(f"Unsupported index type: {index_type}")
+
+        # Enable appropriate indexing if needed
+        if index_type == "hnsw":
+            connection.execute(text("SET experimental_hnsw_index = 1"))
+        elif index_type == "ivfflat":
+            connection.execute(text("SET experimental_ivf_index = 1"))
+            connection.execute(text("SET probe_limit = 1"))
+
+        # Create the index
+        connection.execute(text(sql))
+
+        return self
+
     def drop(self, table_name: str, name: str) -> "VectorIndexManager":
         """
         Drop a vector index using chain operations.
@@ -1303,6 +1375,63 @@ class VectorTableManager:
         # Create table
         table = builder.build()
         table.create(self.client.get_sqlalchemy_engine())
+
+        return self
+
+    def create_in_transaction(self, table_name: str, schema: dict, connection, **kwargs) -> "VectorTableManager":
+        """
+        Create a vector table within an existing SQLAlchemy transaction.
+
+        Args:
+            table_name: Name of the table
+            schema: Table schema definition
+            connection: SQLAlchemy connection object (required for transaction support)
+            **kwargs: Additional table parameters
+
+        Returns:
+            VectorTableManager: Self for chaining
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy.schema import CreateTable
+
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on schema
+        for column_name, column_def in schema.items():
+            column_type = column_def.get("type")
+            if column_type == "vector":
+                dimension = column_def.get("dimension", 128)
+                precision = column_def.get("precision", "f32")
+                builder.add_vector_column(column_name, dimension, precision)
+            elif column_type == "int":
+                builder.add_int_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_type == "bigint":
+                builder.add_bigint_column(column_name, primary_key=column_def.get("primary_key", False))
+            elif column_type == "varchar":
+                length = column_def.get("length", 255)
+                builder.add_string_column(column_name, length)
+            elif column_type == "text":
+                builder.add_text_column(column_name)
+            else:
+                # Raise error for unknown types instead of defaulting to text
+                raise ValueError(
+                    f"Unsupported column type '{column_type}' for column '{column_name}'. "
+                    f"Supported types: vector, int, bigint, varchar, text"
+                )
+
+        # Create table using the provided connection
+        table = builder.build()
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=connection.dialect))
+        connection.execute(sql)
 
         return self
 
@@ -1587,6 +1716,46 @@ class VectorDataManager:
 
         with self.client.get_sqlalchemy_engine().begin() as conn:
             conn.execute(text(sql))
+
+        return self
+
+    def insert_in_transaction(self, table_name: str, data: dict, connection) -> "VectorDataManager":
+        """
+        Insert vector data within an existing SQLAlchemy transaction.
+
+        Args:
+            table_name: Name of the table
+            data: Data to insert (dict with column names as keys)
+            connection: SQLAlchemy connection object (required for transaction support)
+
+        Returns:
+            VectorDataManager: Self for chaining
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy import text
+
+        # Build INSERT statement
+        columns = list(data.keys())
+        values = list(data.values())
+
+        # Convert vectors to string format
+        formatted_values = []
+        for value in values:
+            if isinstance(value, list):
+                formatted_values.append("[" + ",".join(map(str, value)) + "]")
+            else:
+                formatted_values.append(str(value))
+
+        columns_str = ", ".join(columns)
+        values_str = ", ".join([f"'{v}'" for v in formatted_values])
+
+        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        connection.execute(text(sql))
 
         return self
 

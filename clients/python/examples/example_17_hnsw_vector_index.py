@@ -90,7 +90,7 @@ def main():
             
             # Create the table with HNSW index
             metadata.create_all(bind=conn)
-            print("✓ Created table with HNSW index in DDL")
+        print("✓ Created table with HNSW index in DDL")
         
         # Demo 3: CREATE INDEX Statement for HNSW
         print("\n--- Demo 3: CREATE INDEX Statement for HNSW ---")
@@ -140,19 +140,19 @@ def main():
             # Enable HNSW indexing in this session
             conn.execute(text("SET experimental_hnsw_index = 1"))
             print("✓ HNSW indexing enabled in session")
-            
-            # Create HNSW index using CREATE INDEX statement
-            client.vector_index.create(
-                table_name="vector_docs_ivfflat_demo",
-                name="idx01",
-                column="embedding",
-                index_type="hnsw",
-                m=48,
-                ef_construction=64,
-                ef_search=64,
-                op_type="vector_l2_ops"
-            )
-            print("✓ Created HNSW index using CREATE INDEX statement")
+        
+        # Create HNSW index using CREATE INDEX statement
+        client.vector_index.create(
+            table_name="vector_docs_ivfflat_demo",
+            name="idx01",
+            column="embedding",
+            index_type="hnsw",
+            m=48,
+            ef_construction=64,
+            ef_search=64,
+            op_type="vector_l2_ops"
+        )
+        print("✓ Created HNSW index using CREATE INDEX statement")
         
         # Demo 4: Insert Sample Data
         print("\n--- Demo 4: Insert Sample Data ---")
@@ -330,19 +330,21 @@ def main():
             
             for config in configs:
                 try:
-                    # Create table for this configuration
-                    client.vector_table.create(config["table"], schema3)
+                    # Create table for this configuration using _in_transaction method
+                    client.vector_table.create_in_transaction(config["table"], schema3, conn)
                     print(f"✓ Created table: {config['table']}")
                     
-                    # Insert test data
-                    client.vector_data.batch_insert(config["table"], test_docs)
+                    # Insert test data using _in_transaction method
+                    for doc in test_docs:
+                        client.vector_data.insert_in_transaction(config["table"], doc, conn)
                     print(f"✓ Inserted test data into {config['table']}")
                     
-                    # Create HNSW index
-                    client.vector_index.create(
+                    # Create HNSW index using _in_transaction method
+                    client.vector_index.create_in_transaction(
                         table_name=config["table"],
                         name="idx_hnsw",
                         column="embedding",
+                        connection=conn,
                         index_type="hnsw",
                         m=config["m"],
                         ef_construction=config["ef_construction"],
@@ -396,8 +398,159 @@ def main():
         print("- HNSW: High-dimensional vectors, read-heavy workloads, need fast search")
         print("- IVFFLAT: Lower-dimensional vectors, write-heavy workloads, need fast index updates")
         
-        # Demo 10: Cleanup
-        print("\n--- Demo 10: Cleanup ---")
+        # Demo 10: Transaction Operations with HNSW
+        print("\n--- Demo 10: Transaction Operations with HNSW ---")
+        
+        # Demonstrate transaction operations with HNSW vector tables
+        try:
+            with client.transaction() as tx:
+                print("✓ Started transaction")
+                
+                # Create table within transaction
+                schema_tx = {
+                    'id': {'type': 'bigint', 'primary_key': True},
+                    'embedding': {'type': 'vector', 'dimension': 128, 'precision': 'f32'},
+                    'title': {'type': 'varchar', 'length': 200},
+                    'category': {'type': 'varchar', 'length': 50}
+                }
+                
+                tx.vector_table.create("vector_docs_transaction_demo", schema_tx)
+                print("✓ Created table within transaction")
+                
+                # Insert data within transaction
+                tx_data = [
+                    {
+                        'id': 1,
+                        'embedding': [0.1] * 128,
+                        'title': 'Transaction Document 1',
+                        'category': 'transaction'
+                    },
+                    {
+                        'id': 2,
+                        'embedding': [0.2] * 128,
+                        'title': 'Transaction Document 2',
+                        'category': 'transaction'
+                    }
+                ]
+                
+                for doc in tx_data:
+                    tx.vector_data.insert("vector_docs_transaction_demo", doc)
+                print("✓ Inserted data within transaction")
+                
+                # Create HNSW index within transaction
+                # Enable HNSW indexing using transaction wrapper (not separate connection)
+                tx.execute("SET experimental_hnsw_index = 1")
+                print("✓ Enabled HNSW indexing in transaction")
+                
+                # Create index using transaction wrapper
+                tx.vector_index.create(
+                    table_name="vector_docs_transaction_demo",
+                    name="idx_tx_hnsw",
+                    column="embedding",
+                    index_type="hnsw",
+                    m=32,
+                    ef_construction=64,
+                    ef_search=32,
+                    op_type="vector_l2_ops"
+                )
+                print("✓ Created HNSW index within transaction")
+                
+                # Perform search within transaction
+                query_vector = [0.15] * 128
+                results = tx.vector_query.similarity_search(
+                    table_name="vector_docs_transaction_demo",
+                    vector_column="embedding",
+                    query_vector=query_vector,
+                    limit=2,
+                    distance_type="l2",
+                    select_columns=["id", "title", "category"]
+                )
+                print(f"✓ Transaction search returned {len(results)} results:")
+                for i, result in enumerate(results):
+                    print(f"  {i+1}. ID: {result[0]}, Title: {result[1]}, Category: {result[2]} (distance: {result[-1]:.4f})")
+                
+                print("✓ Transaction completed successfully - all operations committed")
+                
+        except Exception as e:
+            print(f"⚠️  Transaction failed: {e}")
+            print("✓ Transaction rolled back automatically")
+        
+        # Demo 11: SQLAlchemy Transaction Mode with _in_transaction methods
+        print("\n--- Demo 11: SQLAlchemy Transaction Mode with _in_transaction methods ---")
+        
+        # Demonstrate SQLAlchemy transaction mode using _in_transaction methods
+        try:
+            with engine.begin() as conn:
+                print("✓ Started SQLAlchemy transaction")
+                
+                # Create table using _in_transaction method
+                schema_sqlalchemy = {
+                    'id': {'type': 'bigint', 'primary_key': True},
+                    'embedding': {'type': 'vector', 'dimension': 128, 'precision': 'f32'},
+                    'title': {'type': 'varchar', 'length': 200},
+                    'category': {'type': 'varchar', 'length': 50}
+                }
+                
+                client.vector_table.create_in_transaction("vector_docs_sqlalchemy_demo", schema_sqlalchemy, conn)
+                print("✓ Created table using create_in_transaction method")
+                
+                # Insert data using _in_transaction method
+                sqlalchemy_data = [
+                    {
+                        'id': 1,
+                        'embedding': [0.1] * 128,
+                        'title': 'SQLAlchemy Transaction Document 1',
+                        'category': 'sqlalchemy'
+                    },
+                    {
+                        'id': 2,
+                        'embedding': [0.2] * 128,
+                        'title': 'SQLAlchemy Transaction Document 2',
+                        'category': 'sqlalchemy'
+                    }
+                ]
+                
+                for doc in sqlalchemy_data:
+                    client.vector_data.insert_in_transaction("vector_docs_sqlalchemy_demo", doc, conn)
+                print("✓ Inserted data using insert_in_transaction method")
+                
+                # Create HNSW index using _in_transaction method
+                client.vector_index.create_in_transaction(
+                    table_name="vector_docs_sqlalchemy_demo",
+                    name="idx_sqlalchemy_hnsw",
+                    column="embedding",
+                    connection=conn,
+                    index_type="hnsw",
+                    m=32,
+                    ef_construction=64,
+                    ef_search=32,
+                    op_type="vector_l2_ops"
+                )
+                print("✓ Created HNSW index using create_in_transaction method")
+                
+                # Perform search using existing _in_transaction method
+                query_vector = [0.15] * 128
+                results = client.vector_query.similarity_search_in_transaction(
+                    table_name="vector_docs_sqlalchemy_demo",
+                    vector_column="embedding",
+                    query_vector=query_vector,
+                    limit=2,
+                    distance_type="l2",
+                    select_columns=["id", "title", "category"],
+                    connection=conn
+                )
+                print(f"✓ SQLAlchemy transaction search returned {len(results)} results:")
+                for i, result in enumerate(results):
+                    print(f"  {i+1}. ID: {result[0]}, Title: {result[1]}, Category: {result[2]} (distance: {result[-1]:.4f})")
+                
+                print("✓ SQLAlchemy transaction completed successfully - all operations committed")
+                
+        except Exception as e:
+            print(f"⚠️  SQLAlchemy transaction failed: {e}")
+            print("✓ SQLAlchemy transaction rolled back automatically")
+        
+        # Demo 12: Cleanup
+        print("\n--- Demo 12: Cleanup ---")
         
         # Drop tables
         client.vector_table.drop("vector_docs_hnsw_demo")
@@ -405,6 +558,8 @@ def main():
         client.vector_table.drop("vector_docs_hnsw_fast")
         client.vector_table.drop("vector_docs_hnsw_balanced")
         client.vector_table.drop("vector_docs_hnsw_accurate")
+        client.vector_table.drop("vector_docs_transaction_demo")
+        client.vector_table.drop("vector_docs_sqlalchemy_demo")
         print("✓ Cleaned up test tables")
         
         # Disable HNSW indexing
