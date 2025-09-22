@@ -222,7 +222,7 @@ func TestConsumer(t *testing.T) {
 	info := newTestConsumerInfo()
 	job := newTestJobID()
 
-	consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
+	consumer, err := NewConsumer(cnUUID, tblDef, job, info)
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
@@ -244,7 +244,7 @@ func TestHnswSnapshot(t *testing.T) {
 	job := newTestJobID()
 
 	t.Run("snapshot", func(t *testing.T) {
-		consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
+		consumer, err := NewConsumer(cnUUID, tblDef, job, info)
 		require.NoError(t, err)
 
 		bat := testutil.NewBatchWithVectors(
@@ -279,7 +279,7 @@ func TestHnswSnapshot(t *testing.T) {
 	})
 
 	t.Run("noMoreData", func(t *testing.T) {
-		consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
+		consumer, err := NewConsumer(cnUUID, tblDef, job, info)
 		require.NoError(t, err)
 
 		output := &MockRetriever{
@@ -310,7 +310,7 @@ func TestHnswTail(t *testing.T) {
 	info := newTestConsumerInfo()
 	job := newTestJobID()
 
-	consumer, err := NewIndexConsumer(cnUUID, tblDef, job, info)
+	consumer, err := NewConsumer(cnUUID, tblDef, job, info)
 	require.NoError(t, err)
 
 	bat := testutil.NewBatchWithVectors(
