@@ -75,16 +75,17 @@ func ConstructCreateTableSQL(
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
-		accountId, err := ctx.GetAccountId()
-		if err != nil {
-			return "", nil, err
-		}
 
-		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable &&
-			(accountId != catalog.System_Account || IsSnapshotValid(snapshot) || useDbName) {
-			// useDbName reuse in build alter table sql
-			// if use in other place, need to check or add a new parameter
-			continue
+		if util.IsClusterTableAttribute(colNameOrigin) && isClusterTable {
+			accountId, err := ctx.GetAccountId()
+			if err != nil {
+				return "", nil, err
+			}
+			if accountId != catalog.System_Account || IsSnapshotValid(snapshot) || useDbName {
+				// useDbName reuse in build alter table sql
+				// if use in other place, need to check or add a new parameter
+				continue
+			}
 		}
 
 		//-------------------------------------------------------------------------------------------------------------
@@ -546,7 +547,10 @@ func ConstructCreateTableSQL(
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
 	}
-	stmt, err := getRewriteSQLStmt(ctx, createStr)
+	var stmt tree.Statement
+	if ctx != nil {
+		stmt, err = getRewriteSQLStmt(ctx, createStr)
+	}
 	return createStr, stmt, err
 }
 
