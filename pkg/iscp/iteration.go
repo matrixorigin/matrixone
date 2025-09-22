@@ -211,10 +211,10 @@ func ExecuteIteration(
 
 	ctxWithCancel, cancel := context.WithCancel(ctx)
 	changeHandelWg := sync.WaitGroup{}
+	changeHandelWg.Add(1)
 	go func() {
 		defer cancel()
 		defer changeHandelWg.Done()
-		changeHandelWg.Add(1)
 		for {
 			select {
 			case <-ctxWithCancel.Done():
