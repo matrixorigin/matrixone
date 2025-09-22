@@ -19,11 +19,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +41,21 @@ import (
 
 func mockTableDef() *plan.TableDef {
 	return &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{
+				Name: "pk",
+				Typ:  plan.Type{Id: int32(types.T_uint64)},
+				Default: &plan.Default{
+					NullAbility: false,
+				},
+			},
+		},
+	}
+}
+
+func mockClusterTableDef() *plan.TableDef {
+	return &plan.TableDef{
+		TableType: catalog.SystemClusterRel,
 		Cols: []*plan.ColDef{
 			{
 				Name: "pk",
@@ -121,6 +138,24 @@ func TestNewSinker(t *testing.T) {
 			},
 			want:    nil,
 			wantErr: assert.NoError,
+		},
+		{
+			args: args{
+				sinkUri: UriInfo{
+					SinkTyp: CDCSinkType_MySQL,
+				},
+				dbTblInfo: &DbTableInfo{
+					SourceCreateSql: "create table t1 (a int, b int, c int)",
+					IdChanged:       true,
+				},
+				watermarkUpdater: nil,
+				tableDef:         mockClusterTableDef(),
+				retryTimes:       0,
+				retryDuration:    0,
+				ar:               NewCdcActiveRoutine(),
+			},
+			want:    nil,
+			wantErr: assert.Error,
 		},
 	}
 
