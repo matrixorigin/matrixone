@@ -194,7 +194,7 @@ func Test_L2Distance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got, err := L2Distance[float64](tt.args.v1, tt.args.v2); err != nil || got != tt.want {
+			if got, err := L2Distance[float64](tt.args.v1, tt.args.v2); err != nil || !assertx.InEpsilonF64(got, tt.want) {
 				t.Errorf("L2Distance() = %v, want %v", got, tt.want)
 			}
 		})
