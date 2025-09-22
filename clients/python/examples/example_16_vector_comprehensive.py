@@ -46,8 +46,8 @@ def main():
         # Clean up any existing tables first
         print("\n--- Cleanup ---")
         try:
-            client.vector_table.drop("vector_docs_comprehensive")
-            client.vector_table.drop("vector_docs_tx")
+            client.drop_table("vector_docs_comprehensive")
+            client.drop_table("vector_docs_tx")
             print("✓ Cleaned up existing tables")
         except:
             pass  # Tables might not exist
@@ -72,7 +72,15 @@ def main():
         }
         
         # Create table using chain operations
-        client.vector_table.create("vector_docs_comprehensive", schema)
+        client.create_table("vector_docs_comprehensive", {
+            'id': 'bigint',
+            'title': 'varchar(200)',
+            'content': 'text',
+            'embedding': 'vector(128,f32)',
+            'category': 'varchar(50)',
+            'score': 'int',
+            'metadata': 'text'
+        }, primary_key='id')
         print("✓ Created comprehensive vector table")
         
         # Demo 2: Vector Data Operations
@@ -212,7 +220,15 @@ def main():
         
         with client.transaction() as tx:
             # Create another table within transaction
-            tx.vector_table.create("vector_docs_tx", schema)
+            tx.create_table("vector_docs_tx", {
+                'id': 'bigint',
+                'title': 'varchar(200)',
+                'content': 'text',
+                'embedding': 'vector(128,f32)',
+                'category': 'varchar(50)',
+                'score': 'int',
+                'metadata': 'text'
+            }, primary_key='id')
             print("✓ Created table in transaction")
             
             # Insert data
@@ -461,8 +477,8 @@ def main():
         # Cleanup
         print("\n--- Cleanup ---")
         try:
-            client.vector_table.drop("vector_docs_comprehensive")
-            client.vector_table.drop("vector_docs_tx")
+            client.drop_table("vector_docs_comprehensive")
+            client.drop_table("vector_docs_tx")
             print("✓ Cleaned up test tables")
         except:
             pass

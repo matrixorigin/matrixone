@@ -45,8 +45,8 @@ def main():
     try:
         # Clean up any existing tables first
         print("\n--- Cleanup ---")
-        client.vector_table.drop("vector_docs_hnsw_demo")
-        client.vector_table.drop("vector_docs_ivfflat_demo")
+        client.drop_table("vector_docs_hnsw_demo")
+        client.drop_table("vector_docs_ivfflat_demo")
         print("✓ Cleaned up existing tables")
         
         # Demo 1: HNSW Configuration
@@ -103,8 +103,8 @@ def main():
             'category': {'type': 'varchar', 'length': 50}
         }
         
-        # Create table using simplified interface
-        client.vector_table.create_simple("vector_docs_ivfflat_demo", {
+        # Create table using client interface
+        client.create_table("vector_docs_ivfflat_demo", {
             'id': 'bigint',
             'title': 'varchar(200)',
             'embedding': 'vector(128,f32)',
@@ -327,8 +327,8 @@ def main():
             
             for config in configs:
                 try:
-                    # Create table for this configuration using simplified interface in transaction
-                    client.vector_table.create_simple_in_transaction(config["table"], {
+                    # Create table for this configuration using client interface in transaction
+                    client.create_table_in_transaction(config["table"], {
                         'id': 'bigint',
                         'embedding': 'vector(128,f32)',
                         'text': 'varchar(200)'
@@ -407,15 +407,13 @@ def main():
             with client.transaction() as tx:
                 print("✓ Started transaction")
                 
-                # Create table within transaction
-                schema_tx = {
-                    'id': {'type': 'bigint', 'primary_key': True},
-                    'embedding': {'type': 'vector', 'dimension': 128, 'precision': 'f32'},
-                    'title': {'type': 'varchar', 'length': 200},
-                    'category': {'type': 'varchar', 'length': 50}
-                }
-                
-                tx.vector_table.create("vector_docs_transaction_demo", schema_tx)
+                # Create table within transaction using client interface
+                tx.create_table("vector_docs_transaction_demo", {
+                    'id': 'bigint',
+                    'embedding': 'vector(128,f32)',
+                    'title': 'varchar(200)',
+                    'category': 'varchar(50)'
+                }, primary_key='id')
                 print("✓ Created table within transaction")
                 
                 # Insert data within transaction
@@ -484,16 +482,14 @@ def main():
             with engine.begin() as conn:
                 print("✓ Started SQLAlchemy transaction")
                 
-                # Create table using _in_transaction method
-                schema_sqlalchemy = {
-                    'id': {'type': 'bigint', 'primary_key': True},
-                    'embedding': {'type': 'vector', 'dimension': 128, 'precision': 'f32'},
-                    'title': {'type': 'varchar', 'length': 200},
-                    'category': {'type': 'varchar', 'length': 50}
-                }
-                
-                client.vector_table.create_in_transaction("vector_docs_sqlalchemy_demo", schema_sqlalchemy, conn)
-                print("✓ Created table using create_in_transaction method")
+                # Create table using client interface in transaction
+                client.create_table_in_transaction("vector_docs_sqlalchemy_demo", {
+                    'id': 'bigint',
+                    'embedding': 'vector(128,f32)',
+                    'title': 'varchar(200)',
+                    'category': 'varchar(50)'
+                }, conn, primary_key='id')
+                print("✓ Created table using client interface in transaction")
                 
                 # Insert data using _in_transaction method
                 sqlalchemy_data = [
@@ -554,13 +550,13 @@ def main():
         print("\n--- Demo 12: Cleanup ---")
         
         # Drop tables
-        client.vector_table.drop("vector_docs_hnsw_demo")
-        client.vector_table.drop("vector_docs_ivfflat_demo")
-        client.vector_table.drop("vector_docs_hnsw_fast")
-        client.vector_table.drop("vector_docs_hnsw_balanced")
-        client.vector_table.drop("vector_docs_hnsw_accurate")
-        client.vector_table.drop("vector_docs_transaction_demo")
-        client.vector_table.drop("vector_docs_sqlalchemy_demo")
+        client.drop_table("vector_docs_hnsw_demo")
+        client.drop_table("vector_docs_ivfflat_demo")
+        client.drop_table("vector_docs_hnsw_fast")
+        client.drop_table("vector_docs_hnsw_balanced")
+        client.drop_table("vector_docs_hnsw_accurate")
+        client.drop_table("vector_docs_transaction_demo")
+        client.drop_table("vector_docs_sqlalchemy_demo")
         print("✓ Cleaned up test tables")
         
         # Disable HNSW indexing
