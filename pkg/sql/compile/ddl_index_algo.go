@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -140,47 +139,23 @@ func (s *Scope) handleFullTextIndexTable(
 	} else if !ok {
 		return moerr.NewInternalErrorNoCtx("FullText index is not enabled")
 	}
-
-	// create hidden tables
-	if indexInfo != nil {
-		if len(indexInfo.GetIndexTables()) != 1 {
-			return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
-		}
-
-		def := indexInfo.GetIndexTables()[0]
-		err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
-		if err != nil {
-			return err
-		}
+	if len(indexInfo.GetIndexTables()) != 1 {
+		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
 	}
 
-	insertSQLs, err := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
+	def := indexInfo.GetIndexTables()[0]
+	err := indexTableBuild(c, mainTableID, mainExtra, def, dbSource)
 	if err != nil {
 		return err
 	}
 
+	insertSQLs := genInsertIndexTableSqlForFullTextIndex(originalTableDef, indexDef, qryDatabase)
 	for _, insertSQL := range insertSQLs {
 		err = c.runSql(insertSQL)
 		if err != nil {
 			return err
 		}
 	}
-
-	async, err := catalog.IsIndexAsync(indexDef.IndexAlgoParams)
-	if err != nil {
-		return err
-	}
-	// TODO: HNSWCDC create PITR and CDC TASK here
-	if async {
-		logutil.Infof("fulltext index Async is true")
-		sinker_type := getSinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
-		err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name,
-			indexDef.IndexName, sinker_type)
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -600,13 +575,6 @@ func (s *Scope) handleVectorHnswIndex(
 		if err != nil {
 			return err
 		}
-	}
-
-	// TODO: HNSWCDC 4. register CDC update
-	sinker_type := getSinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
-	err = CreateIndexCdcTask(c, qryDatabase, originalTableDef.Name, indexDefs[catalog.Hnsw_TblType_Metadata].IndexName, sinker_type)
-	if err != nil {
-		return err
 	}
 
 	return nil

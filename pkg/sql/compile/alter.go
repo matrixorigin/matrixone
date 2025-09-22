@@ -17,10 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
-	"slices"
-
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,7 +47,6 @@ func convertDBEOB(ctx context.Context, e error, name string) error {
 func (s *Scope) AlterTableCopy(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
-
 	if dbName == "" {
 		dbName = c.db
 	}
@@ -149,24 +147,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if qry.Options.SkipPkDedup || len(qry.Options.SkipUniqueIdxDedup) > 0 {
 		opt = opt.WithAlterCopyOpt(qry.Options)
 	}
-
-	//4. obtain relation for new tables
-	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
-	if err != nil {
-		c.proc.Error(c.proc.Ctx, "obtain new relation for copy table for alter table",
-			zap.String("databaseName", dbName),
-			zap.String("origin tableName", qry.GetTableDef().Name),
-			zap.String("copy table name", qry.CopyTableDef.Name),
-			zap.Error(err))
-		return err
-	}
-
-	//5. ISCP: temp table already created pitr and iscp job with temp table name
-	// and we don't want iscp to run with temp table so drop pitr and iscp job with the temp table here
-	newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
-	DropAllIndexCdcTasks(c, newTmpTableDef, dbName, qry.CopyTableDef.Name)
-
-	// 6. copy the original table data to the temporary replica table
+	// 4. copy the original table data to the temporary replica table
 	err = c.runSqlWithOptions(qry.InsertTmpDataSql, opt)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "insert data to copy table for alter table",
@@ -178,6 +159,17 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
+	//5. obtain relation for new tables
+	newRel, err := dbSource.Relation(c.proc.Ctx, qry.CopyTableDef.Name, nil)
+	if err != nil {
+		c.proc.Error(c.proc.Ctx, "obtain new relation for copy table for alter table",
+			zap.String("databaseName", dbName),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Error(err))
+		return err
+	}
+
 	//6. copy on writing unaffected index table
 	if err = cowUnaffectedIndexes(
 		c, dbName, qry.AffectedCols, newRel, qry.TableDef, nil,
@@ -185,8 +177,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 
-	// 7. drop original table.
-	// ISCP: That will also drop ISCP related jobs and pitr of the original table.
+	// 7. drop original table
 	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
 	if err := c.runSqlWithOptions(
 		dropSql,
@@ -243,7 +234,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
-
 	//--------------------------------------------------------------------------------------------------------------
 	{
 		// 9. invoke reindex for the new table, if it contains ivf index.
@@ -263,17 +253,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				}
 				ty := catalog.ToLower(indexDef.IndexAlgoTableType)
 				multiTableIndexes[indexDef.IndexName].IndexDefs[ty] = indexDef
-			}
-			if catalog.IsFullTextIndexAlgo(indexDef.IndexAlgo) {
-				err = s.handleFullTextIndexTable(c, id, extra, dbSource, indexDef, qry.Database, newTableDef, nil)
-				if err != nil {
-					c.proc.Error(c.proc.Ctx, "invoke reindex for the new table for alter table",
-						zap.String("origin tableName", qry.GetTableDef().Name),
-						zap.String("copy table name", qry.CopyTableDef.Name),
-						zap.String("indexAlgo", indexDef.IndexAlgo),
-						zap.Error(err))
-					return err
-				}
 			}
 		}
 		for _, multiTableIndex := range multiTableIndexes {
