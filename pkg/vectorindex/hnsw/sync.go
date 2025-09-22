@@ -81,29 +81,24 @@ func CdcSync[T types.RealNumbers](proc *process.Process, db string, tbl string, 
 	idxtblcfg.DbName = db
 	idxtblcfg.SrcTable = tbl
 
-	/*
-		// GetResolveVariableFunc() is nil because of internal SQL proc don't have ResolveVariableFunc().
-		if proc.GetResolveVariableFunc() != nil {
-			val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
-			if err != nil {
-				return err
-			}
-			idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(val.(int64))
-
-			idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
-			if err != nil {
-				return err
-			}
-			idxtblcfg.IndexCapacity = idxcap.(int64)
-		} else {
-
-			idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(0)
-			idxtblcfg.IndexCapacity = 1000000
+	// GetResolveVariableFunc() is nil because of internal SQL proc don't have ResolveVariableFunc().
+	if proc.GetResolveVariableFunc() != nil {
+		val, err := proc.GetResolveVariableFunc()("hnsw_threads_build", true, false)
+		if err != nil {
+			return err
 		}
-	*/
+		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(val.(int64))
 
-	idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(0)
-	idxtblcfg.IndexCapacity = 1000000
+		idxcap, err := proc.GetResolveVariableFunc()("hnsw_max_index_capacity", true, false)
+		if err != nil {
+			return err
+		}
+		idxtblcfg.IndexCapacity = idxcap.(int64)
+	} else {
+
+		idxtblcfg.ThreadsBuild = vectorindex.GetConcurrencyForBuild(0)
+		idxtblcfg.IndexCapacity = 1000000
+	}
 
 	for i := 0; i < bat.RowCount(); i++ {
 

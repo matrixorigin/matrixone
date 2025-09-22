@@ -18,10 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -44,6 +46,28 @@ func mock_runSql_streaming(proc *process.Process, sql string, ch chan executor.R
 }
 */
 
+type MockTxnExecutor struct {
+}
+
+func (e *MockTxnExecutor) Use(db string) {
+}
+func (e *MockTxnExecutor) LockTable(table string) error {
+	return nil
+}
+
+// NOTE: If you specify `AccoundId` in `StatementOption`, sql will be executed under that tenant.
+// If not specified, it will be executed under the system tenant by default.
+func (e *MockTxnExecutor) Exec(sql string, options executor.StatementOption) (executor.Result, error) {
+	if sql == "fake" {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("MockTxnExecutor error")
+	}
+	return executor.Result{}, nil
+}
+
+func (e *MockTxnExecutor) Txn() client.TxnOperator {
+	return nil
+}
+
 // give metadata [index_id, checksum, timestamp]
 func mock_runSql_empty(proc *process.Process, sql string) (executor.Result, error) {
 
@@ -51,7 +75,26 @@ func mock_runSql_empty(proc *process.Process, sql string) (executor.Result, erro
 }
 
 func mock_runTxn(proc *process.Process, fn func(exec executor.TxnExecutor) error) error {
-	return nil
+	exec := &MockTxnExecutor{}
+	err := fn(exec)
+	return err
+}
+
+func TestSyncRunSqls(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	runTxn = mock_runTxn
+
+	sync := &HnswSync[float32]{}
+	defer sync.destroy()
+
+	sqls := []string{"fake"}
+	err := sync.runSqls(proc, sqls)
+	require.NotNil(t, err)
+
+	sqls = []string{"sql"}
+	err = sync.runSqls(proc, sqls)
+	require.Nil(t, err)
 }
 
 func TestSyncEmptyCatalogError(t *testing.T) {
@@ -411,4 +454,54 @@ func TestSyncUpdateInsertShuffle2FilesF32(t *testing.T) {
 
 func TestSyncUpdateInsertShuffle2FilesF64(t *testing.T) {
 	runSyncUpdateInsertShuffle2Files[float64](t)
+}
+
+func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+
+	proc.SetResolveVariableFunc(func(key string, b1 bool, b2 bool) (any, error) {
+		switch key {
+		case "hnsw_max_index_capacity":
+			return int64(10), nil
+		case "hnsw_threads_build":
+			return int64(8), nil
+		default:
+			return int64(0), nil
+		}
+	})
+
+	runSql = mock_runSql_2files
+	runSql_streaming = mock_runSql_streaming_2files
+	runCatalogSql = mock_runCatalogSql
+	runTxn = mock_runTxn
+
+	cdc := vectorindex.VectorIndexCdc[T]{Data: make([]vectorindex.VectorIndexCdcEntry[T], 0, 100)}
+
+	key := int64(0)
+	v := []T{0.1, 0.2, 0.3}
+
+	// 0 - 199 key exists, 200 - 399 new insert
+	for i := 0; i < 400; i++ {
+		e := vectorindex.VectorIndexCdcEntry[T]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
+		cdc.Data = append(cdc.Data, e)
+		key += 1
+	}
+
+	rand.Seed(uint64(time.Now().UnixNano()))
+	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+
+	var ff T
+	switch any(ff).(type) {
+	case float32:
+		err := CdcSync[T](proc, "db", "src", int32(types.T_array_float32), 3, &cdc)
+		require.Nil(t, err)
+	case float64:
+		err := CdcSync[T](proc, "db", "src", int32(types.T_array_float64), 3, &cdc)
+		require.Nil(t, err)
+	}
+}
+
+func TestSyncUpdateInsertShuffle2FilesF32WithSmallCap(t *testing.T) {
+	runSyncUpdateInsertShuffle2FilesWithSmallCap[float32](t)
 }
