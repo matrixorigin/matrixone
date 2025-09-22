@@ -103,16 +103,13 @@ def main():
             'category': {'type': 'varchar', 'length': 50}
         }
         
-        # Create table using SQL to ensure proper primary key
-        with engine.begin() as conn:
-            conn.execute(text("""
-                CREATE TABLE vector_docs_ivfflat_demo (
-                    id BIGINT PRIMARY KEY,
-                    title VARCHAR(200),
-                    embedding VECF32(128),
-                    category VARCHAR(50)
-                )
-            """))
+        # Create table using simplified interface
+        client.vector_table.create_simple("vector_docs_ivfflat_demo", {
+            'id': 'bigint',
+            'title': 'varchar(200)',
+            'embedding': 'vector(128,f32)',
+            'category': 'varchar(50)'
+        }, primary_key='id')
         print("✓ Created table without index")
         
         # Insert some sample data first (MatrixOne requires data before creating vector index)
@@ -330,8 +327,12 @@ def main():
             
             for config in configs:
                 try:
-                    # Create table for this configuration using _in_transaction method
-                    client.vector_table.create_in_transaction(config["table"], schema3, conn)
+                    # Create table for this configuration using simplified interface in transaction
+                    client.vector_table.create_simple_in_transaction(config["table"], {
+                        'id': 'bigint',
+                        'embedding': 'vector(128,f32)',
+                        'text': 'varchar(200)'
+                    }, conn, primary_key='id')
                     print(f"✓ Created table: {config['table']}")
                     
                     # Insert test data using _in_transaction method

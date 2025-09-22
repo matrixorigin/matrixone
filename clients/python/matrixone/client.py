@@ -1481,6 +1481,266 @@ class VectorTableManager:
 
         return self
 
+    def create_simple(self, table_name: str, columns: dict, **kwargs) -> "VectorTableManager":
+        """
+        Create a vector table with a simplified interface.
+
+        Args:
+            table_name: Name of the table
+            columns: Dictionary mapping column names to their types
+                    Supported formats:
+                    - 'id': 'bigint' (with primary_key=True if needed)
+                    - 'name': 'varchar(100)'
+                    - 'embedding': 'vector(128,f32)'
+                    - 'score': 'float'
+                    - 'created_at': 'datetime'
+                    - 'is_active': 'boolean'
+            **kwargs: Additional table parameters
+
+        Returns:
+            VectorTableManager: Self for chaining
+
+        Example:
+            client.vector_table.create_simple("users", {
+                'id': 'bigint',
+                'name': 'varchar(100)',
+                'email': 'varchar(255)',
+                'embedding': 'vector(128,f32)',
+                'score': 'float',
+                'created_at': 'datetime',
+                'is_active': 'boolean'
+            }, primary_key='id')
+        """
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Parse primary key from kwargs
+        primary_key = kwargs.get("primary_key", None)
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on simplified format
+        for column_name, column_def in columns.items():
+            is_primary = primary_key == column_name
+
+            if column_def.startswith("vector("):
+                # Parse vector type: vector(128,f32) or vector(128)
+                import re
+
+                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
+                if match:
+                    dimension = int(match.group(1))
+                    precision = match.group(2) or "f32"
+                    builder.add_vector_column(column_name, dimension, precision)
+                else:
+                    raise ValueError(f"Invalid vector format: {column_def}")
+
+            elif column_def.startswith("varchar("):
+                # Parse varchar type: varchar(100)
+                import re
+
+                match = re.match(r"varchar\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid varchar format: {column_def}")
+
+            elif column_def.startswith("char("):
+                # Parse char type: char(10)
+                import re
+
+                match = re.match(r"char\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid char format: {column_def}")
+
+            elif column_def.startswith("decimal("):
+                # Parse decimal type: decimal(10,2)
+                import re
+
+                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    scale = int(match.group(2))
+                    builder.add_numeric_column(column_name, "decimal", precision, scale)
+                else:
+                    raise ValueError(f"Invalid decimal format: {column_def}")
+
+            elif column_def.startswith("float("):
+                # Parse float type: float(10)
+                import re
+
+                match = re.match(r"float\((\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    builder.add_numeric_column(column_name, "float", precision)
+                else:
+                    raise ValueError(f"Invalid float format: {column_def}")
+
+            elif column_def in ("int", "integer"):
+                builder.add_int_column(column_name, primary_key=is_primary)
+            elif column_def in ("bigint", "bigint unsigned"):
+                builder.add_bigint_column(column_name, primary_key=is_primary)
+            elif column_def in ("smallint", "tinyint"):
+                if column_def == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=is_primary)
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=is_primary)
+            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
+                builder.add_text_column(column_name)
+            elif column_def in ("float", "double"):
+                builder.add_numeric_column(column_name, column_def)
+            elif column_def in ("date", "datetime", "timestamp", "time"):
+                builder.add_datetime_column(column_name, column_def)
+            elif column_def in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_def in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_def)
+            else:
+                raise ValueError(
+                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
+                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
+                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
+                    f"boolean, json, blob, vector(n,precision)"
+                )
+
+        # Create table
+        table = builder.build()
+        table.create(self.client.get_sqlalchemy_engine())
+
+        return self
+
+    def create_simple_in_transaction(
+        self, table_name: str, columns: dict, connection, **kwargs
+    ) -> "VectorTableManager":
+        """
+        Create a vector table with a simplified interface within an existing transaction.
+
+        Args:
+            table_name: Name of the table
+            columns: Dictionary mapping column names to their types (same format as create_simple)
+            connection: SQLAlchemy connection object (required for transaction support)
+            **kwargs: Additional table parameters
+
+        Returns:
+            VectorTableManager: Self for chaining
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy.schema import CreateTable
+
+        from .sqlalchemy_ext import VectorTableBuilder
+
+        # Parse primary key from kwargs
+        primary_key = kwargs.get("primary_key", None)
+
+        # Create table using VectorTableBuilder
+        builder = VectorTableBuilder(table_name)
+
+        # Add columns based on simplified format (same logic as create_simple)
+        for column_name, column_def in columns.items():
+            is_primary = primary_key == column_name
+
+            if column_def.startswith("vector("):
+                # Parse vector type: vector(128,f32) or vector(128)
+                import re
+
+                match = re.match(r"vector\((\d+)(?:,(\w+))?\)", column_def)
+                if match:
+                    dimension = int(match.group(1))
+                    precision = match.group(2) or "f32"
+                    builder.add_vector_column(column_name, dimension, precision)
+                else:
+                    raise ValueError(f"Invalid vector format: {column_def}")
+
+            elif column_def.startswith("varchar("):
+                # Parse varchar type: varchar(100)
+                import re
+
+                match = re.match(r"varchar\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid varchar format: {column_def}")
+
+            elif column_def.startswith("char("):
+                # Parse char type: char(10)
+                import re
+
+                match = re.match(r"char\((\d+)\)", column_def)
+                if match:
+                    length = int(match.group(1))
+                    builder.add_string_column(column_name, length)
+                else:
+                    raise ValueError(f"Invalid char format: {column_def}")
+
+            elif column_def.startswith("decimal("):
+                # Parse decimal type: decimal(10,2)
+                import re
+
+                match = re.match(r"decimal\((\d+),(\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    scale = int(match.group(2))
+                    builder.add_numeric_column(column_name, "decimal", precision, scale)
+                else:
+                    raise ValueError(f"Invalid decimal format: {column_def}")
+
+            elif column_def.startswith("float("):
+                # Parse float type: float(10)
+                import re
+
+                match = re.match(r"float\((\d+)\)", column_def)
+                if match:
+                    precision = int(match.group(1))
+                    builder.add_numeric_column(column_name, "float", precision)
+                else:
+                    raise ValueError(f"Invalid float format: {column_def}")
+
+            elif column_def in ("int", "integer"):
+                builder.add_int_column(column_name, primary_key=is_primary)
+            elif column_def in ("bigint", "bigint unsigned"):
+                builder.add_bigint_column(column_name, primary_key=is_primary)
+            elif column_def in ("smallint", "tinyint"):
+                if column_def == "smallint":
+                    builder.add_smallint_column(column_name, primary_key=is_primary)
+                else:
+                    builder.add_tinyint_column(column_name, primary_key=is_primary)
+            elif column_def in ("text", "longtext", "mediumtext", "tinytext"):
+                builder.add_text_column(column_name)
+            elif column_def in ("float", "double"):
+                builder.add_numeric_column(column_name, column_def)
+            elif column_def in ("date", "datetime", "timestamp", "time"):
+                builder.add_datetime_column(column_name, column_def)
+            elif column_def in ("boolean", "bool"):
+                builder.add_boolean_column(column_name)
+            elif column_def in ("json", "jsonb"):
+                builder.add_json_column(column_name)
+            elif column_def in ("blob", "longblob", "mediumblob", "tinyblob", "binary", "varbinary"):
+                builder.add_binary_column(column_name, column_def)
+            else:
+                raise ValueError(
+                    f"Unsupported column type '{column_def}' for column '{column_name}'. "
+                    f"Supported types: int, bigint, smallint, tinyint, varchar(n), char(n), "
+                    f"text, float, double, decimal(p,s), date, datetime, timestamp, time, "
+                    f"boolean, json, blob, vector(n,precision)"
+                )
+
+        # Create table using the provided connection
+        table = builder.build()
+        create_sql = CreateTable(table)
+        sql = str(create_sql.compile(dialect=connection.dialect))
+        connection.execute(sql)
+
+        return self
+
     def drop(self, table_name: str) -> "VectorTableManager":
         """
         Drop a vector table using chain operations.
