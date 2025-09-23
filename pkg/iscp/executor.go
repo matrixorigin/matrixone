@@ -571,6 +571,10 @@ func (exec *ISCPTaskExecutor) applyISCPLogWithRel(ctx context.Context, rel engin
 }
 
 func (exec *ISCPTaskExecutor) replay(ctx context.Context) (err error) {
+	if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "replay" {
+		err = moerr.NewInternalErrorNoCtx(msg)
+		return
+	}
 	jobCount := 0
 	defer func() {
 		var logger func(msg string, fields ...zap.Field)
