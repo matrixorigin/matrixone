@@ -305,11 +305,10 @@ class TestVectorIndexORMMethods:
         # Test 1: Client chain operations
         try:
             # Enable IVF and create index in chain
-            client.vector_index.enable_ivf(probe_limit=1).create(
+            client.vector_index.enable_ivf(probe_limit=1).create_ivf(
                 table_name="test_vector_chain",
                 name="idx_embedding_chain_01",
                 column="embedding",
-                index_type="ivfflat",
                 lists=32,
                 op_type="vector_l2_ops"
             )
@@ -345,11 +344,10 @@ class TestVectorIndexORMMethods:
         try:
             with client.transaction() as tx:
                 # Create index in transaction using chain
-                tx.vector_index.create(
+                tx.vector_index.create_ivf(
                     table_name="test_vector_chain",
                     name="idx_embedding_chain_tx_01",
                     column="embedding",
-                    index_type="ivfflat",
                     lists=32,
                     op_type="vector_l2_ops"
                 )

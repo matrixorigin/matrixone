@@ -3,7 +3,8 @@
 Example 15: Vector Index Client Chain Operations
 
 This example demonstrates the client chain operations for vector index management.
-It shows how to use the client's vector_index property for fluent API operations.
+It shows how to use the client's vector_index property for fluent API operations,
+including the new separated APIs for IVFFLAT and HNSW indexes.
 """
 
 import sys
@@ -75,11 +76,10 @@ def main():
     print("\n--- Demo 1: Basic Client Chain Operations ---")
     try:
         # Enable IVF and create index in chain
-        client.vector_index.enable_ivf(probe_limit=1).create(
+        client.vector_index.enable_ivf(probe_limit=1).create_ivf(
             table_name="vector_chain_demo",
             name="idx_embedding_chain_01",
             column="embedding",
-            index_type="ivfflat",
             lists=32,
             op_type="vector_l2_ops"
         )
@@ -117,11 +117,10 @@ def main():
     try:
         with client.transaction() as tx:
             # Create index in transaction using chain
-            tx.vector_index.create(
+            tx.vector_index.create_ivf(
                 table_name="vector_chain_demo",
                 name="idx_embedding_chain_tx_01",
                 column="embedding",
-                index_type="ivfflat",
                 lists=32,
                 op_type="vector_l2_ops"
             )
@@ -159,11 +158,10 @@ def main():
     print("\n--- Demo 3: Complex Chain Operations ---")
     try:
         # Enable IVF, create index, then disable IVF in chain
-        client.vector_index.enable_ivf(probe_limit=2).create(
+        client.vector_index.enable_ivf(probe_limit=2).create_ivf(
             table_name="vector_chain_demo",
             name="idx_embedding_chain_complex",
             column="embedding",
-            index_type="ivfflat",
             lists=16,
             op_type="vector_l2_ops"
         )
@@ -200,11 +198,10 @@ def main():
     print("\n--- Demo 4: Error Handling in Chain Operations ---")
     try:
         # Try to create index without enabling IVF first
-        client.vector_index.create(
+        client.vector_index.create_ivf(
             table_name="vector_chain_demo",
             name="idx_embedding_chain_error",
             column="embedding",
-            index_type="ivfflat",
             lists=32,
             op_type="vector_l2_ops"
         )
@@ -223,6 +220,144 @@ def main():
         
     except Exception as e:
         print(f"✓ Error handling: drop non-existent - Expected error: {e}")
+    
+    # Demo 5: Separated APIs demonstration
+    print("\n--- Demo 5: Separated APIs Demonstration ---")
+    try:
+        # Create separate tables for different index types
+        client.execute("""
+            CREATE TABLE vector_docs_ivf_demo (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                embedding vecf32(128),
+                content TEXT
+            )
+        """)
+        
+        client.execute("""
+            CREATE TABLE vector_docs_hnsw_demo (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                embedding vecf32(128),
+                content TEXT
+            )
+        """)
+        
+        # Insert sample data
+        sample_data = [
+            "Document about machine learning and AI",
+            "Guide to database optimization techniques",
+            "Introduction to vector similarity search"
+        ]
+        
+        for i, content in enumerate(sample_data):
+            embedding = [float(j) for j in range(i * 10, i * 10 + 128)]
+            embedding_str = "[" + ",".join(map(str, embedding)) + "]"
+            
+            client.execute(f"""
+                INSERT INTO vector_docs_ivf_demo (embedding, content) 
+                VALUES ('{embedding_str}', '{content}')
+            """)
+            
+            client.execute(f"""
+                INSERT INTO vector_docs_hnsw_demo (embedding, content) 
+                VALUES ('{embedding_str}', '{content}')
+            """)
+        
+        print("✓ Created demo tables and inserted sample data")
+        
+        # Create IVFFLAT index using separated API
+        print("\n5️⃣ Creating IVFFLAT index with create_ivf():")
+        import time
+        start_time = time.time()
+        
+        client.vector_index.create_ivf(
+            table_name="vector_docs_ivf_demo",
+            name="idx_ivf_separated",
+            column="embedding",
+            lists=50,
+            op_type="vector_l2_ops"
+        )
+        
+        ivf_time = time.time() - start_time
+        print(f"   ✓ Created IVFFLAT index in {ivf_time:.2f} seconds")
+        
+        # Create HNSW index using separated API
+        print("\n6️⃣ Creating HNSW index with create_hnsw():")
+        start_time = time.time()
+        
+        client.vector_index.create_hnsw(
+            table_name="vector_docs_hnsw_demo",
+            name="idx_hnsw_separated",
+            column="embedding",
+            m=16,
+            ef_construction=200,
+            ef_search=50,
+            op_type="vector_l2_ops"
+        )
+        
+        hnsw_time = time.time() - start_time
+        print(f"   ✓ Created HNSW index in {hnsw_time:.2f} seconds")
+        
+        # Demonstrate method chaining with separated APIs
+        print("\n7️⃣ Demonstrating method chaining with separated APIs:")
+        # Create a separate table for chaining demo to avoid multiple index limitation
+        client.execute("""
+            CREATE TABLE vector_chain_separated_demo (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                embedding vecf32(128),
+                content TEXT
+            )
+        """)
+        
+        client.vector_index.create_ivf(
+            table_name="vector_chain_separated_demo",
+            name="idx_ivf_chain_separated",
+            column="embedding",
+            lists=30
+        ).enable_ivf(probe_limit=2)
+        print("   ✓ Created IVFFLAT index with chaining using separated API")
+        
+        # Clean up the chaining demo table
+        client.drop_table("vector_chain_separated_demo")
+        
+        # Show API usage examples
+        print("\n8️⃣ Vector Index API Usage Examples:")
+        print("   # For IVFFLAT indexes:")
+        print("   client.vector_index.create_ivf(")
+        print("       table_name='table', name='idx', column='embedding', lists=100")
+        print("   )")
+        print()
+        print("   # For HNSW indexes:")
+        print("   client.vector_index.create_hnsw(")
+        print("       table_name='table', name='idx', column='embedding',")
+        print("       m=16, ef_construction=200, ef_search=50")
+        print("   )")
+        
+        # Performance summary
+        print(f"\n--- Performance Summary ---")
+        print(f"IVFFLAT index creation time: {ivf_time:.2f} seconds")
+        print(f"HNSW index creation time: {hnsw_time:.2f} seconds")
+        print(f"Index creation ratio (HNSW/IVF): {hnsw_time/ivf_time:.2f}x")
+        
+        print("\n--- Benefits of Separated APIs ---")
+        print("✓ Type safety: Each method only accepts relevant parameters")
+        print("✓ Better documentation: Clear parameter descriptions for each index type")
+        print("✓ IDE support: Better autocomplete and parameter hints")
+        print("✓ Reduced errors: No confusion about which parameters apply to which index type")
+        print("✓ Clean API: Dedicated methods for each index type")
+        
+        # Clean up demo tables
+        client.drop_table("vector_docs_ivf_demo")
+        client.drop_table("vector_docs_hnsw_demo")
+        print("✓ Cleaned up demo tables")
+        
+    except Exception as e:
+        print(f"✗ Separated APIs demonstration failed: {e}")
+        # Clean up demo tables on error
+        try:
+            client.drop_table("vector_docs_ivf_demo")
+            client.drop_table("vector_docs_hnsw_demo")
+        except:
+            pass
     
     # Clean up
     print("\n--- Cleanup ---")

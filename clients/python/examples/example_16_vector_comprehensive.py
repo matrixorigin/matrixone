@@ -147,11 +147,10 @@ def main():
         print("\n--- Demo 3: Vector Index Operations ---")
         
         # Create vector index
-        client.vector_index.create(
+        client.vector_index.create_ivf(
             table_name="vector_docs_comprehensive",
             name="idx_embedding_comprehensive",
             column="embedding",
-            index_type="ivfflat",
             lists=32,
             op_type="vector_l2_ops"
         )
@@ -245,11 +244,10 @@ def main():
             print("✓ Inserted document in transaction")
             
             # Create index
-            tx.vector_index.create(
+            tx.vector_index.create_ivf(
                 table_name="vector_docs_tx",
                 name="idx_embedding_tx",
                 column="embedding",
-                index_type="ivfflat",
                 lists=16,
                 op_type="vector_l2_ops"
             )

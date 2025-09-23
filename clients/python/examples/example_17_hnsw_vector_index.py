@@ -5,9 +5,10 @@ MatrixOne HNSW Vector Index Example
 This example demonstrates how to use HNSW (Hierarchical Navigable Small World)
 vector indexes in MatrixOne, including:
 - DDL table creation with HNSW indexes
-- CREATE INDEX statements for HNSW
+- CREATE INDEX statements for HNSW using the new separated API
 - HNSW configuration management
 - Performance comparison between IVFFLAT and HNSW
+- Method chaining with separated APIs
 """
 
 import sys
@@ -118,17 +119,21 @@ def main():
             print("✓ HNSW indexing enabled in session")
         
         # Create HNSW index using CREATE INDEX statement
-        client.vector_index.create(
+        client.vector_index.create_hnsw(
             table_name="vector_docs_ivfflat_demo",
             name="idx01",
             column="embedding",
-            index_type="hnsw",
             m=48,
             ef_construction=64,
             ef_search=64,
             op_type="vector_l2_ops"
         )
         print("✓ Created HNSW index using CREATE INDEX statement")
+        
+        # Note about separated APIs
+        print("\n📝 Note: Using the new separated API create_hnsw()")
+        print("   This provides better type safety and clearer parameter handling")
+        print("   compared to the legacy create() method.")
         
         # Demo 4: Insert Sample Data
         print("\n--- Demo 4: Insert Sample Data ---")
@@ -319,13 +324,12 @@ def main():
                         client.vector_data.insert_in_transaction(config["table"], doc, conn)
                     print(f"✓ Inserted test data into {config['table']}")
                     
-                    # Create HNSW index using _in_transaction method
-                    client.vector_index.create_in_transaction(
+                    # Create HNSW index using separated API
+                    client.vector_index.create_hnsw_in_transaction(
                         table_name=config["table"],
                         name="idx_hnsw",
                         column="embedding",
                         connection=conn,
-                        index_type="hnsw",
                         m=config["m"],
                         ef_construction=config["ef_construction"],
                         ef_search=config["ef_search"],
@@ -421,11 +425,10 @@ def main():
                 print("✓ Enabled HNSW indexing in transaction")
                 
                 # Create index using transaction wrapper
-                tx.vector_index.create(
+                tx.vector_index.create_hnsw(
                     table_name="vector_docs_transaction_demo",
                     name="idx_tx_hnsw",
                     column="embedding",
-                    index_type="hnsw",
                     m=32,
                     ef_construction=64,
                     ef_search=32,
@@ -490,19 +493,18 @@ def main():
                     client.vector_data.insert_in_transaction("vector_docs_sqlalchemy_demo", doc, conn)
                 print("✓ Inserted data using insert_in_transaction method")
                 
-                # Create HNSW index using _in_transaction method
-                client.vector_index.create_in_transaction(
+                # Create HNSW index using separated API in transaction
+                client.vector_index.create_hnsw_in_transaction(
                     table_name="vector_docs_sqlalchemy_demo",
                     name="idx_sqlalchemy_hnsw",
                     column="embedding",
                     connection=conn,
-                    index_type="hnsw",
                     m=32,
                     ef_construction=64,
                     ef_search=32,
                     op_type="vector_l2_ops"
                 )
-                print("✓ Created HNSW index using create_in_transaction method")
+                print("✓ Created HNSW index using separated API in transaction")
                 
                 # Perform search using existing _in_transaction method
                 query_vector = [0.15] * 128

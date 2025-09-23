@@ -435,46 +435,15 @@ class Client:
             self.logger.log_error(e, context="Query execution")
             raise QueryError(f"Query execution failed: {e}")
 
-    def get_sqlalchemy_engine(self, **pool_kwargs) -> Engine:
+    def get_sqlalchemy_engine(self) -> Engine:
         """
         Get SQLAlchemy engine
-
-        Args:
-            **pool_kwargs: Optional connection pool parameters (pool_size, max_overflow, etc.)
 
         Returns:
             SQLAlchemy Engine
         """
         if not self._engine:
             raise ConnectionError("Not connected to database")
-
-        # If pool parameters are provided, create a new engine with those settings
-        if pool_kwargs:
-            # Build connection string
-            connection_string = (
-                f"mysql+pymysql://{self._connection_params['user']}:"
-                f"{self._connection_params['password']}@"
-                f"{self._connection_params['host']}:"
-                f"{self._connection_params['port']}/"
-                f"{self._connection_params['database']}"
-            )
-
-            # Add SSL parameters if needed
-            if "ssl_ca" in self._connection_params:
-                connection_string += f"?ssl_ca={self._connection_params['ssl_ca']}"
-
-            # Create engine with custom connection pooling
-            engine = create_engine(
-                connection_string, pool_pre_ping=True, **pool_kwargs  # Enable connection health checks
-            )
-
-            # Replace the dialect with MatrixOne dialect for proper vector type support
-            original_dbapi = engine.dialect.dbapi
-            engine.dialect = MatrixOneDialect()
-            engine.dialect.dbapi = original_dbapi
-
-            return engine
-
         return self._engine
 
     def snapshot_query(self, snapshot_name: str, sql: str, params: Optional[Tuple] = None, conn=None) -> "ResultSet":
@@ -1307,10 +1276,13 @@ class Client:
                 else:
                     raise ValueError(f"Unsupported index type: {index_type}")
 
-                # Create the index
-                self.vector_index.create(
-                    table_name=table_name, name=index_name, column=column_name, index_type=index_type, **params
-                )
+                # Create the index using separated APIs
+                if index_type == "ivfflat":
+                    self.vector_index.create_ivf(table_name=table_name, name=index_name, column=column_name, **params)
+                elif index_type == "hnsw":
+                    self.vector_index.create_hnsw(table_name=table_name, name=index_name, column=column_name, **params)
+                else:
+                    raise ValueError(f"Unsupported index type: {index_type}")
 
         return self
 
@@ -1447,15 +1419,13 @@ class Client:
                 index_type = index_def["type"]
                 params = index_def.get("params", {})
 
-                # Create the index using _in_transaction method
-                self.vector_index.create_in_transaction(
-                    table_name=table_name,
-                    name=index_name,
-                    column=column_name,
-                    index_type=index_type,
-                    connection=connection,
-                    **params,
-                )
+                # Create the index using separated APIs
+                if index_type == "ivfflat":
+                    self.vector_index.create_ivf(table_name=table_name, name=index_name, column=column_name, **params)
+                elif index_type == "hnsw":
+                    self.vector_index.create_hnsw(table_name=table_name, name=index_name, column=column_name, **params)
+                else:
+                    raise ValueError(f"Unsupported index type: {index_type}")
 
         return self
 
@@ -1966,10 +1936,13 @@ class TransactionWrapper:
                 index_type = index_def["type"]
                 params = index_def.get("params", {})
 
-                # Create the index using transaction wrapper's vector_index
-                self.vector_index.create(
-                    table_name=table_name, name=index_name, column=column_name, index_type=index_type, **params
-                )
+                # Create the index using transaction wrapper's vector_index with separated APIs
+                if index_type == "ivfflat":
+                    self.vector_index.create_ivf(table_name=table_name, name=index_name, column=column_name, **params)
+                elif index_type == "hnsw":
+                    self.vector_index.create_hnsw(table_name=table_name, name=index_name, column=column_name, **params)
+                else:
+                    raise ValueError(f"Unsupported index type: {index_type}")
 
         return self
 
@@ -2091,32 +2064,23 @@ class VectorIndexManager:
     def __init__(self, client):
         self.client = client
 
-    def create(
+    def create_ivf(
         self,
         table_name: str,
         name: str,
         column: str,
-        index_type: str = "ivfflat",
-        lists: int = None,
+        lists: int = 100,
         op_type: str = "vector_l2_ops",
-        # HNSW parameters
-        m: int = None,
-        ef_construction: int = None,
-        ef_search: int = None,
     ) -> "VectorIndexManager":
         """
-        Create a vector index using chain operations.
+        Create an IVFFLAT vector index using chain operations.
 
         Args:
             table_name: Name of the table
             name: Name of the index
             column: Vector column to index
-            index_type: Type of vector index (ivfflat, hnsw, etc.)
-            lists: Number of lists for IVFFLAT (optional)
-            op_type: Vector operation type
-            m: Number of bi-directional links for HNSW (optional)
-            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
-            ef_search: Size of dynamic candidate list for HNSW search (optional)
+            lists: Number of lists for IVFFLAT (default: 100)
+            op_type: Vector operation type (default: vector_l2_ops)
 
         Returns:
             VectorIndexManager: Self for chaining
@@ -2124,14 +2088,9 @@ class VectorIndexManager:
         from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
 
         # Convert string parameters to enum values
-        if index_type == "ivfflat":
-            index_type = VectorIndexType.IVFFLAT
-        elif index_type == "hnsw":
-            index_type = VectorIndexType.HNSW
+        index_type = VectorIndexType.IVFFLAT
         if op_type == "vector_l2_ops":
             op_type = VectorOpType.VECTOR_L2_OPS
-
-        # Indexing will be enabled automatically in the same connection by VectorIndex.create_index
 
         success = VectorIndex.create_index(
             engine=self.client.get_sqlalchemy_engine(),
@@ -2141,44 +2100,81 @@ class VectorIndexManager:
             index_type=index_type,
             lists=lists,
             op_type=op_type,
+        )
+
+        if not success:
+            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name}")
+
+        return self
+
+    def create_hnsw(
+        self,
+        table_name: str,
+        name: str,
+        column: str,
+        m: int = 16,
+        ef_construction: int = 200,
+        ef_search: int = 50,
+        op_type: str = "vector_l2_ops",
+    ) -> "VectorIndexManager":
+        """
+        Create an HNSW vector index using chain operations.
+
+        Args:
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            m: Number of bi-directional links for HNSW (default: 16)
+            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
+            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
+            op_type: Vector operation type (default: vector_l2_ops)
+
+        Returns:
+            VectorIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
+
+        # Convert string parameters to enum values
+        index_type = VectorIndexType.HNSW
+        if op_type == "vector_l2_ops":
+            op_type = VectorOpType.VECTOR_L2_OPS
+
+        success = VectorIndex.create_index(
+            engine=self.client.get_sqlalchemy_engine(),
+            table_name=table_name,
+            name=name,
+            column=column,
+            index_type=index_type,
+            op_type=op_type,
             m=m,
             ef_construction=ef_construction,
             ef_search=ef_search,
         )
 
         if not success:
-            raise Exception(f"Failed to create vector index {name} on table {table_name}")
+            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name}")
 
         return self
 
-    def create_in_transaction(
+    def create_ivf_in_transaction(
         self,
         table_name: str,
         name: str,
         column: str,
         connection,
-        index_type: str = "ivfflat",
-        lists: int = None,
+        lists: int = 100,
         op_type: str = "vector_l2_ops",
-        # HNSW parameters
-        m: int = None,
-        ef_construction: int = None,
-        ef_search: int = None,
     ) -> "VectorIndexManager":
         """
-        Create a vector index within an existing SQLAlchemy transaction.
+        Create an IVFFLAT vector index within an existing SQLAlchemy transaction.
 
         Args:
             table_name: Name of the table
             name: Name of the index
             column: Vector column to index
             connection: SQLAlchemy connection object (required for transaction support)
-            index_type: Type of vector index (ivfflat, hnsw, etc.)
-            lists: Number of lists for IVFFLAT (optional)
-            op_type: Vector operation type
-            m: Number of bi-directional links for HNSW (optional)
-            ef_construction: Size of dynamic candidate list for HNSW construction (optional)
-            ef_search: Size of dynamic candidate list for HNSW search (optional)
+            lists: Number of lists for IVFFLAT (default: 100)
+            op_type: Vector operation type (default: vector_l2_ops)
 
         Returns:
             VectorIndexManager: Self for chaining
@@ -2191,32 +2187,62 @@ class VectorIndexManager:
 
         from sqlalchemy import text
 
-        # Build CREATE INDEX statement
-        if index_type == "ivfflat":
-            if lists is None:
-                lists = 100  # Default value
-            sql = f"CREATE INDEX {name} USING ivfflat ON {table_name}({column}) LISTS {lists} op_type '{op_type}'"
-        elif index_type == "hnsw":
-            if m is None:
-                m = 48  # Default value
-            if ef_construction is None:
-                ef_construction = 64  # Default value
-            if ef_search is None:
-                ef_search = 64  # Default value
-            sql = (
-                f"CREATE INDEX {name} USING hnsw ON {table_name}({column}) "
-                f"M {m} EF_CONSTRUCTION {ef_construction} EF_SEARCH {ef_search} "
-                f"op_type '{op_type}'"
-            )
-        else:
-            raise ValueError(f"Unsupported index type: {index_type}")
+        # Enable IVF indexing if needed
+        connection.execute(text("SET experimental_ivf_index = 1"))
+        connection.execute(text("SET probe_limit = 1"))
 
-        # Enable appropriate indexing if needed
-        if index_type == "hnsw":
-            connection.execute(text("SET experimental_hnsw_index = 1"))
-        elif index_type == "ivfflat":
-            connection.execute(text("SET experimental_ivf_index = 1"))
-            connection.execute(text("SET probe_limit = 1"))
+        # Build CREATE INDEX statement
+        sql = f"CREATE INDEX {name} USING ivfflat ON {table_name}({column}) LISTS {lists} op_type '{op_type}'"
+
+        # Create the index
+        connection.execute(text(sql))
+
+        return self
+
+    def create_hnsw_in_transaction(
+        self,
+        table_name: str,
+        name: str,
+        column: str,
+        connection,
+        m: int = 16,
+        ef_construction: int = 200,
+        ef_search: int = 50,
+        op_type: str = "vector_l2_ops",
+    ) -> "VectorIndexManager":
+        """
+        Create an HNSW vector index within an existing SQLAlchemy transaction.
+
+        Args:
+            table_name: Name of the table
+            name: Name of the index
+            column: Vector column to index
+            connection: SQLAlchemy connection object (required for transaction support)
+            m: Number of bi-directional links for HNSW (default: 16)
+            ef_construction: Size of dynamic candidate list for HNSW construction (default: 200)
+            ef_search: Size of dynamic candidate list for HNSW search (default: 50)
+            op_type: Vector operation type (default: vector_l2_ops)
+
+        Returns:
+            VectorIndexManager: Self for chaining
+
+        Raises:
+            ValueError: If connection is not provided
+        """
+        if connection is None:
+            raise ValueError("connection parameter is required for transaction operations")
+
+        from sqlalchemy import text
+
+        # Enable HNSW indexing if needed
+        connection.execute(text("SET experimental_hnsw_index = 1"))
+
+        # Build CREATE INDEX statement
+        sql = (
+            f"CREATE INDEX {name} USING hnsw ON {table_name}({column}) "
+            f"M {m} EF_CONSTRUCTION {ef_construction} EF_SEARCH {ef_search} "
+            f"op_type '{op_type}'"
+        )
 
         # Create the index
         connection.execute(text(sql))
@@ -2320,46 +2346,66 @@ class TransactionVectorIndexManager(VectorIndexManager):
         super().__init__(client)
         self.transaction_wrapper = transaction_wrapper
 
-    def create(
+    def create_ivf(
         self,
         table_name: str,
         name: str,
         column: str,
-        index_type: str = "ivfflat",
-        lists: int = None,
+        lists: int = 100,
         op_type: str = "vector_l2_ops",
-        # HNSW parameters
-        m: int = None,
-        ef_construction: int = None,
-        ef_search: int = None,
     ) -> "TransactionVectorIndexManager":
-        """Create a vector index within transaction"""
+        """Create an IVFFLAT vector index within transaction"""
         from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
 
         # Convert string parameters to enum values
-        if index_type == "ivfflat":
-            index_type = VectorIndexType.IVFFLAT
-        elif index_type == "hnsw":
-            index_type = VectorIndexType.HNSW
+        index_type = VectorIndexType.IVFFLAT
         if op_type == "vector_l2_ops":
             op_type = VectorOpType.VECTOR_L2_OPS
 
         # Create index using transaction wrapper's execute method
-        index = VectorIndex(name, column, index_type, lists, op_type, m, ef_construction, ef_search)
+        index = VectorIndex(name, column, index_type, lists, op_type)
 
         try:
-            # Enable appropriate indexing in the same connection
-            if index_type == VectorIndexType.IVFFLAT:
-                self.transaction_wrapper.execute("SET experimental_ivf_index = 1")
-                self.transaction_wrapper.execute("SET probe_limit = 1")
-            elif index_type == VectorIndexType.HNSW:
-                self.transaction_wrapper.execute("SET experimental_hnsw_index = 1")
+            # Enable IVF indexing in the same connection
+            self.transaction_wrapper.execute("SET experimental_ivf_index = 1")
+            self.transaction_wrapper.execute("SET probe_limit = 1")
 
             sql = index.create_sql(table_name)
             self.transaction_wrapper.execute(sql)
             return self
         except Exception as e:
-            raise Exception(f"Failed to create vector index {name} on table {table_name} in transaction: {e}")
+            raise Exception(f"Failed to create IVFFLAT vector index {name} on table {table_name} in transaction: {e}")
+
+    def create_hnsw(
+        self,
+        table_name: str,
+        name: str,
+        column: str,
+        m: int = 16,
+        ef_construction: int = 200,
+        ef_search: int = 50,
+        op_type: str = "vector_l2_ops",
+    ) -> "TransactionVectorIndexManager":
+        """Create an HNSW vector index within transaction"""
+        from .sqlalchemy_ext import VectorIndex, VectorIndexType, VectorOpType
+
+        # Convert string parameters to enum values
+        index_type = VectorIndexType.HNSW
+        if op_type == "vector_l2_ops":
+            op_type = VectorOpType.VECTOR_L2_OPS
+
+        # Create index using transaction wrapper's execute method
+        index = VectorIndex(name, column, index_type, None, op_type, m, ef_construction, ef_search)
+
+        try:
+            # Enable HNSW indexing in the same connection
+            self.transaction_wrapper.execute("SET experimental_hnsw_index = 1")
+
+            sql = index.create_sql(table_name)
+            self.transaction_wrapper.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to create HNSW vector index {name} on table {table_name} in transaction: {e}")
 
     def drop(self, table_name: str, name: str) -> "TransactionVectorIndexManager":
         """Drop a vector index within transaction"""
