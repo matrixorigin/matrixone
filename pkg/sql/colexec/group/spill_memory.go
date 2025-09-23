@@ -16,6 +16,7 @@ package group
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,6 +26,7 @@ type MemorySpillManager struct {
 	data     map[SpillID][]byte
 	nextID   int64
 	totalMem int64
+	mu       sync.Mutex
 }
 
 func NewMemorySpillManager() *MemorySpillManager {
@@ -40,12 +42,17 @@ func (m *MemorySpillManager) Spill(data SpillableData) (SpillID, error) {
 	}
 
 	id := SpillID(fmt.Sprintf("spill_%d", atomic.AddInt64(&m.nextID, 1)))
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.data[id] = serialized
 	atomic.AddInt64(&m.totalMem, int64(len(serialized)))
 	return id, nil
 }
 
 func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableData, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	serialized, exists := m.data[id]
 	if !exists {
 		return nil, fmt.Errorf("spill data not found: %s", id)
@@ -60,6 +67,9 @@ func (m *MemorySpillManager) Retrieve(id SpillID, mp *mpool.MPool) (SpillableDat
 }
 
 func (m *MemorySpillManager) Delete(id SpillID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if serialized, exists := m.data[id]; exists {
 		atomic.AddInt64(&m.totalMem, -int64(len(serialized)))
 		delete(m.data, id)
@@ -68,6 +78,9 @@ func (m *MemorySpillManager) Delete(id SpillID) error {
 }
 
 func (m *MemorySpillManager) Free() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for id := range m.data {
 		m.Delete(id)
 	}
