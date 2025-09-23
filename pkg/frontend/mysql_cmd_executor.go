@@ -2496,7 +2496,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 		minWriteTime = writeTime
 	}
 
-	const maxRetries = 100                // Maximum number of consecutive errors
+	const maxRetries = 500                // Maximum number of consecutive errors
 	const maxTotalTime = 30 * time.Minute // Maximum total consecutive processing time
 	var consecutiveErrors int
 	consecutiveLoopStartTime := time.Now()
@@ -2532,13 +2532,7 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: processing timeout after %v", maxTotalTime)
 			}
 
-			// Add a small delay before retry to avoid overwhelming the system, but check for cancellation
-			select {
-			case <-execCtx.reqCtx.Done():
-				ses.Infof(execCtx.reqCtx, "processLoadLocal: context cancelled during retry delay")
-				return execCtx.reqCtx.Err()
-			case <-time.After(10 * time.Millisecond):
-			}
+			time.Sleep(10 * time.Millisecond)
 		} else {
 			consecutiveErrors = 0
 			consecutiveLoopStartTime = time.Now()
