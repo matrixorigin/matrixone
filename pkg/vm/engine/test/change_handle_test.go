@@ -4207,7 +4207,7 @@ func TestISCPExecutorStartError(t *testing.T) {
 	require.NoError(t, err)
 
 	cdcExecutor.Stop()
-	
+
 	fault.Enable()
 	defer fault.Disable()
 	rmFn, err := objectio.InjectCDCExecutor("replay")
