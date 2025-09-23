@@ -202,8 +202,8 @@ func TestFallocate(t *testing.T) {
 }
 
 func makeMoIndexesBatch(proc *process.Process) *batch.Batch {
-	//param := "{\"op_type\": \"vector_l2_ops\", \"m\":\"128\",\"ef_construction\":\"256\", \"ef_search\":\"100\"}"
-	param := "{\"op_type\": \"vector_l2_ops\"}"
+	param := "{\"op_type\": \"vector_l2_ops\", \"m\":\"128\",\"ef_construction\":\"256\", \"ef_search\":\"100\"}"
+	//	param := "{\"op_type\": \"vector_l2_ops\"}"
 	bat := batch.NewWithSize(4)
 	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // index_table_name
 	bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // alog_table_type
