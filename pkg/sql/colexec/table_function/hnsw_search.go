@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 type hnswSearchState struct {
@@ -50,7 +51,13 @@ type hnswSearchState struct {
 var newHnswAlgo = newHnswAlgoFn
 
 func newHnswAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	return hnsw.NewHnswSearch(idxcfg, tblcfg)
+	switch idxcfg.Usearch.Quantization {
+	case usearch.F32:
+		return hnsw.NewHnswSearch[float32](idxcfg, tblcfg)
+	case usearch.F64:
+		return hnsw.NewHnswSearch[float64](idxcfg, tblcfg)
+	}
+	panic("invalid quantization")
 }
 
 func (u *hnswSearchState) end(tf *TableFunction, proc *process.Process) error {
@@ -128,14 +135,6 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 			}
 		}
 
-		if len(u.param.Quantization) > 0 {
-			var ok bool
-			u.idxcfg.Usearch.Quantization, ok = vectorindex.QuantizationValid(u.param.Quantization)
-			if !ok {
-				return moerr.NewInternalError(proc.Ctx, "Invalid quantization value")
-			}
-		}
-
 		if len(u.param.M) > 0 {
 			val, err := strconv.Atoi(u.param.M)
 			if err != nil {
@@ -149,6 +148,7 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 		if !ok {
 			return moerr.NewInternalError(proc.Ctx, "Invalid op_type")
 		}
+		u.idxcfg.OpType = u.param.OpType
 		u.idxcfg.Usearch.Metric = metrictype
 
 		if len(u.param.EfConstruction) > 0 {
@@ -184,16 +184,19 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 			return err
 		}
 
-		// f32vec
-		f32aVec := tf.ctr.argVecs[1]
-		if f32aVec.GetType().Oid != types.T_array_float32 {
-			return moerr.NewInvalidInput(proc.Ctx, "Third argument (vector must be a vecfs32 type")
+		// array vector
+		faVec := tf.ctr.argVecs[1]
+
+		// quantization
+		u.idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(int32(faVec.GetType().Oid))
+		if err != nil {
+			return err
 		}
-		dimension := f32aVec.GetType().Width
 
 		// dimension
+		dimension := faVec.GetType().Width
 		u.idxcfg.Usearch.Dimensions = uint(dimension)
-		u.idxcfg.Type = "hnsw"
+		u.idxcfg.Type = vectorindex.HNSW
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
@@ -207,22 +210,35 @@ func (u *hnswSearchState) start(tf *TableFunction, proc *process.Process, nthRow
 	// cleanup the batch
 	u.batch.CleanOnlyData()
 
-	f32aVec := tf.ctr.argVecs[1]
-	if f32aVec.IsNull(uint64(nthRow)) {
+	faVec := tf.ctr.argVecs[1]
+	if faVec.IsNull(uint64(nthRow)) {
 		return nil
-	}
-
-	f32a := types.BytesToArray[float32](f32aVec.GetBytesAt(nthRow))
-	if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(f32a)))
 	}
 
 	veccache.Cache.Once()
 
+	switch u.idxcfg.Usearch.Quantization {
+	case usearch.F32:
+		return runHnswSearch[float32](proc, u, faVec, nthRow)
+	case usearch.F64:
+		return runHnswSearch[float64](proc, u, faVec, nthRow)
+	default:
+		// should not go here
+		panic("invalid Quantization")
+	}
+}
+
+func runHnswSearch[T types.RealNumbers](proc *process.Process, u *hnswSearchState, faVec *vector.Vector, nthRow int) (err error) {
+
+	fa := types.BytesToArray[T](faVec.GetBytesAt(nthRow))
+	if uint(len(fa)) != u.idxcfg.Usearch.Dimensions {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Usearch.Dimensions, len(fa)))
+	}
+
 	algo := newHnswAlgo(u.idxcfg, u.tblcfg)
 
 	var keys any
-	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, f32a, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
+	keys, u.distances, err = veccache.Cache.Search(proc, u.tblcfg.IndexTable, algo, fa, vectorindex.RuntimeConfig{Limit: uint(u.limit)})
 	if err != nil {
 		return err
 	}

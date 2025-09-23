@@ -68,6 +68,12 @@ func Test_ResolveFun(t *testing.T) {
 			normalize:  false,
 		},
 		{
+			metricType: Metric_L2sqDistance,
+			spherical:  false,
+			distfn:     L2DistanceSq[float32],
+			normalize:  false,
+		},
+		{
 			metricType: Metric_InnerProduct,
 			spherical:  false,
 			distfn:     L2Distance[float32],

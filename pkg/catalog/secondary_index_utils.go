@@ -20,9 +20,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -85,6 +85,7 @@ const (
 	HnswEfConstruction   = "ef_construction"
 	HnswQuantization     = "quantization"
 	HnswEfSearch         = "ef_search"
+	Async                = "async"
 )
 
 /* 1. ToString Functions */
@@ -115,15 +116,6 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", HnswEfSearch, val)
 	}
 
-	if val, ok := result[HnswQuantization]; ok {
-		val = ToLower(val)
-		_, ok := vectorindex.QuantizationValid(val)
-		if !ok {
-			return "", moerr.NewInternalErrorNoCtxf("invalid quantization '%s'", val)
-		}
-		res += fmt.Sprintf(" %s '%s' ", HnswQuantization, val)
-	}
-
 	if opType, ok := result[IndexAlgoParamOpType]; ok {
 		opType = ToLower(opType)
 		if _, ok := metric.OpTypeToIvfMetric[opType]; !ok {
@@ -131,6 +123,12 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		}
 
 		res += fmt.Sprintf(" %s '%s' ", IndexAlgoParamOpType, opType)
+	}
+
+	if val, ok := result[Async]; ok {
+		if val == "true" {
+			res += fmt.Sprintf(" %s ", Async)
+		}
 	}
 
 	return res, nil
@@ -179,10 +177,16 @@ func fullTextIndexParamsToMap(def *tree.FullTextIndex) (map[string]string, error
 	// fulltext index here
 	if def.IndexOption != nil {
 		parsername := strings.ToLower(def.IndexOption.ParserName)
-		if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
-			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
+		if len(parsername) > 0 {
+			if parsername != "ngram" && parsername != "default" && parsername != "json" && parsername != "json_value" {
+				return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid parser %s", parsername))
+			}
+			res["parser"] = parsername
 		}
-		res["parser"] = parsername
+
+		if def.IndexOption.Async {
+			res[Async] = "true"
+		}
 	}
 	return res, nil
 }
@@ -224,6 +228,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			} else {
 				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 			}
+
+			if idx.IndexOption.Async {
+				res[Async] = "true"
+			}
 		case tree.INDEX_TYPE_HNSW:
 			if idx.IndexOption.HnswM < 0 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid M. hnsw.M must be > 0")
@@ -233,12 +241,6 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 			}
 			if idx.IndexOption.HnswEfSearch < 0 {
 				return nil, moerr.NewInternalErrorNoCtx("invalid ef_search. hnsw.ef_search must be > 0")
-			}
-			if len(idx.IndexOption.HnswQuantization) > 0 {
-				_, ok := vectorindex.QuantizationValid(idx.IndexOption.HnswQuantization)
-				if !ok {
-					return nil, moerr.NewInternalErrorNoCtx("invalid hnsw quantization.")
-				}
 			}
 
 			// hnswM or HnswEfConstruction == 0, use usearch default value
@@ -252,10 +254,6 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[HnswEfSearch] = strconv.FormatInt(idx.IndexOption.HnswEfSearch, 10)
 			}
 
-			if len(idx.IndexOption.HnswQuantization) > 0 {
-				res[HnswQuantization] = idx.IndexOption.HnswQuantization
-			}
-
 			if len(idx.IndexOption.AlgoParamVectorOpType) > 0 {
 				opType := ToLower(idx.IndexOption.AlgoParamVectorOpType)
 				if _, ok := metric.OpTypeToUsearchMetric[opType]; !ok {
@@ -264,6 +262,10 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 				res[IndexAlgoParamOpType] = idx.IndexOption.AlgoParamVectorOpType
 			} else {
 				res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
+			}
+
+			if idx.IndexOption.Async {
+				res[Async] = "true"
 			}
 		default:
 			return nil, moerr.NewInternalErrorNoCtx("invalid index alogorithm type")
@@ -279,6 +281,24 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	res[IndexAlgoParamLists] = "1"                       // set lists = 1 as default
 	res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
 	return res
+}
+
+func IsIndexAsync(indexAlgoParams string) (bool, error) {
+	if len(indexAlgoParams) > 0 {
+		val, err := sonic.Get([]byte(indexAlgoParams), Async)
+		if err != nil {
+			// key not exist
+			return false, nil
+		}
+
+		async, err := val.StrictString()
+		if err != nil {
+			return false, err
+		}
+
+		return async == "true", nil
+	}
+	return false, nil
 }
 
 //------------------------[END] IndexAlgoParams------------------------

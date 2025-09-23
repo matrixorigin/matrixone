@@ -240,6 +240,9 @@ func ResolveKmeansDistanceFnForDense[T types.RealNumbers](metric MetricType) (Di
 	case Metric_L2Distance:
 		distanceFunction = L2Distance[T]
 		normalize = false
+	case Metric_L2sqDistance:
+		distanceFunction = L2Distance[T]
+		normalize = false
 	case Metric_InnerProduct:
 		distanceFunction = L2Distance[T]
 		normalize = false
@@ -265,6 +268,9 @@ func ResolveKmeansDistanceFnForSparse[T types.RealNumbers](metric MetricType) (D
 	case Metric_L2Distance:
 		distanceFunction = L2Distance[T]
 		normalize = false
+	case Metric_L2sqDistance:
+		distanceFunction = L2Distance[T]
+		normalize = false
 	case Metric_InnerProduct:
 		distanceFunction = SphericalDistance[T]
 		normalize = true
@@ -286,6 +292,8 @@ func ResolveDistanceFn[T types.RealNumbers](metric MetricType) (DistanceFunction
 	var distanceFunction DistanceFunction[T]
 	switch metric {
 	case Metric_L2Distance:
+		distanceFunction = L2DistanceSq[T]
+	case Metric_L2sqDistance:
 		distanceFunction = L2DistanceSq[T]
 	case Metric_InnerProduct:
 		distanceFunction = InnerProduct[T]
