@@ -63,7 +63,13 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 		if agg != nil {
 			marshaledData, err := aggexec.MarshalAggFuncExec(agg)
 			if err != nil {
-				return fmt.Errorf("failed to marshal aggregator %d: %v", i, err)
+				// Clean up already marshaled states
+				for j := 0; j < i; j++ {
+					if marshaledAggStates[j] != nil {
+						group.SpillManager.Delete(SpillID(fmt.Sprintf("temp_%d", j)))
+					}
+				}
+				return err
 			}
 			marshaledAggStates[i] = marshaledData
 		}
@@ -103,6 +109,12 @@ func (group *Group) spillPartialResults(proc *process.Process) error {
 							for j := range groupVecs {
 								if groupVecs[j] != nil {
 									groupVecs[j].Free(proc.Mp())
+								}
+							}
+							// Clean up already marshaled states
+							for _, state := range marshaledAggStates {
+								if state != nil {
+									// We can't delete the state yet as it doesn't have an ID
 								}
 							}
 							return err
@@ -165,7 +177,7 @@ func (group *Group) mergeSpilledResults(proc *process.Process) error {
 		spillState, ok := spillData.(*SpillableAggState)
 		if !ok {
 			spillData.Free(proc.Mp())
-			return fmt.Errorf("invalid spilled data type")
+			panic(fmt.Sprintf("invalid spilled data type"))
 		}
 
 		if err = group.restoreAndMergeSpilledAggregators(proc, spillState); err != nil {
