@@ -154,6 +154,7 @@ class Client:
         self._vector_index = None
         self._vector_query = None
         self._vector_data = None
+        self._fulltext_index = None
 
         # Initialize version manager
         self._version_manager = get_version_manager()
@@ -296,6 +297,7 @@ class Client:
         self._vector_index = VectorIndexManager(self)
         self._vector_query = VectorQueryManager(self)
         self._vector_data = VectorDataManager(self)
+        self._fulltext_index = FulltextIndexManager(self)
 
     def disconnect(self) -> None:
         """Disconnect from MatrixOne database and dispose engine"""
@@ -585,6 +587,11 @@ class Client:
     def vector_index(self) -> Optional["VectorIndexManager"]:
         """Get vector index manager for vector index operations"""
         return self._vector_index
+
+    @property
+    def fulltext_index(self) -> Optional["FulltextIndexManager"]:
+        """Get fulltext index manager for fulltext index operations"""
+        return self._fulltext_index
 
     @property
     def vector_query(self) -> Optional["VectorQueryManager"]:
@@ -1623,6 +1630,7 @@ class TransactionWrapper:
         self.vector_index = TransactionVectorIndexManager(client, self)
         self.vector_query = TransactionVectorQueryManager(client, self)
         self.vector_data = TransactionVectorDataManager(client, self)
+        self.fulltext_index = TransactionFulltextIndexManager(client, self)
         # SQLAlchemy integration
         self._sqlalchemy_session = None
 
@@ -2945,3 +2953,145 @@ class TransactionVectorDataManager:
         self.transaction_wrapper.execute(sql)
 
         return self
+
+
+class FulltextIndexManager:
+    """Fulltext index manager for client chain operations"""
+
+    def __init__(self, client: "Client"):
+        """Initialize fulltext index manager"""
+        self.client = client
+
+    def create(
+        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+    ) -> "FulltextIndexManager":
+        """
+        Create a fulltext index using chain operations.
+
+        Args:
+            table_name: Target table name
+            name: Index name
+            columns: Column(s) to index
+            algorithm: Fulltext algorithm type (TF-IDF or BM25)
+
+        Returns:
+            FulltextIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import FulltextIndex
+
+        success = FulltextIndex.create_index(
+            engine=self.client.get_sqlalchemy_engine(),
+            table_name=table_name,
+            name=name,
+            columns=columns,
+            algorithm=algorithm,
+        )
+
+        if not success:
+            raise Exception(f"Failed to create fulltext index {name} on table {table_name}")
+
+        return self
+
+    def create_in_transaction(
+        self, transaction_wrapper, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+    ) -> "FulltextIndexManager":
+        """
+        Create a fulltext index within an existing transaction.
+
+        Args:
+            transaction_wrapper: Transaction wrapper
+            table_name: Target table name
+            name: Index name
+            columns: Column(s) to index
+            algorithm: Fulltext algorithm type
+
+        Returns:
+            FulltextIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import FulltextIndex
+
+        success = FulltextIndex.create_index_in_transaction(
+            connection=transaction_wrapper.connection,
+            table_name=table_name,
+            name=name,
+            columns=columns,
+            algorithm=algorithm,
+        )
+
+        if not success:
+            raise Exception(f"Failed to create fulltext index {name} on table {table_name} in transaction")
+
+        return self
+
+    def drop(self, table_name: str, name: str) -> "FulltextIndexManager":
+        """
+        Drop a fulltext index using chain operations.
+
+        Args:
+            table_name: Target table name
+            name: Index name
+
+        Returns:
+            FulltextIndexManager: Self for chaining
+        """
+        from .sqlalchemy_ext import FulltextIndex
+
+        success = FulltextIndex.drop_index(engine=self.client.get_sqlalchemy_engine(), table_name=table_name, name=name)
+
+        if not success:
+            raise Exception(f"Failed to drop fulltext index {name} from table {table_name}")
+
+        return self
+
+    def search(
+        self, table_name: str, columns: Union[str, List[str]], search_term: str, mode: str = "natural language mode"
+    ):
+        """
+        Create a fulltext search builder.
+
+        Args:
+            table_name: Table to search in
+            columns: Column(s) to search in
+            search_term: Search term
+            mode: Search mode
+
+        Returns:
+            FulltextSearchBuilder: Search builder instance
+        """
+        from .sqlalchemy_ext import FulltextSearchBuilder
+
+        return FulltextSearchBuilder(table_name, columns).search(search_term).mode(mode)
+
+
+class TransactionFulltextIndexManager(FulltextIndexManager):
+    """Fulltext index manager that executes operations within a transaction"""
+
+    def __init__(self, client: "Client", transaction_wrapper):
+        """Initialize transaction fulltext index manager"""
+        super().__init__(client)
+        self.transaction_wrapper = transaction_wrapper
+
+    def create(
+        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+    ) -> "TransactionFulltextIndexManager":
+        """Create a fulltext index within transaction"""
+        try:
+            if isinstance(columns, str):
+                columns = [columns]
+
+            columns_str = ", ".join(columns)
+            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
+
+            self.transaction_wrapper.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to create fulltext index {name} on table {table_name} in transaction: {e}")
+
+    def drop(self, table_name: str, name: str) -> "TransactionFulltextIndexManager":
+        """Drop a fulltext index within transaction"""
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+            self.transaction_wrapper.execute(sql)
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to drop fulltext index {name} from table {table_name} in transaction: {e}")

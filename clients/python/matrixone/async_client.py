@@ -1083,6 +1083,68 @@ class AsyncAccountManager:
         )
 
 
+class AsyncFulltextIndexManager:
+    """Async fulltext index manager for client chain operations"""
+
+    def __init__(self, client: "AsyncClient"):
+        """Initialize async fulltext index manager"""
+        self.client = client
+
+    async def create(
+        self, table_name: str, name: str, columns: Union[str, List[str]], algorithm: str = "TF-IDF"
+    ) -> "AsyncFulltextIndexManager":
+        """
+        Create a fulltext index using chain operations.
+
+        Args:
+            table_name: Target table name
+            name: Index name
+            columns: Column(s) to index
+            algorithm: Fulltext algorithm type (TF-IDF or BM25)
+
+        Returns:
+            AsyncFulltextIndexManager: Self for chaining
+        """
+        from sqlalchemy import text
+
+        try:
+            if isinstance(columns, str):
+                columns = [columns]
+
+            columns_str = ", ".join(columns)
+            sql = f"CREATE FULLTEXT INDEX {name} ON {table_name} ({columns_str})"
+
+            async with self.client.get_sqlalchemy_engine().begin() as conn:
+                await conn.execute(text(sql))
+
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to create fulltext index {name} on table {table_name}: {e}")
+
+    async def drop(self, table_name: str, name: str) -> "AsyncFulltextIndexManager":
+        """
+        Drop a fulltext index using chain operations.
+
+        Args:
+            table_name: Target table name
+            name: Index name
+
+        Returns:
+            AsyncFulltextIndexManager: Self for chaining
+        """
+        from sqlalchemy import text
+
+        try:
+            sql = f"DROP INDEX {name} ON {table_name}"
+
+            async with self.client.get_sqlalchemy_engine().begin() as conn:
+                await conn.execute(text(sql))
+
+            return self
+        except Exception as e:
+            raise Exception(f"Failed to drop fulltext index {name} on table {table_name}: {e}")
+
+
 class AsyncClient:
     """
     MatrixOne Async Client
@@ -1155,6 +1217,7 @@ class AsyncClient:
         self._vector_index = None
         self._vector_query = None
         self._vector_data = None
+        self._fulltext_index = None
 
     async def connect(
         self,
@@ -1252,11 +1315,13 @@ class AsyncClient:
             self._vector_index = VectorIndexManager(self)
             self._vector_query = VectorQueryManager(self)
             self._vector_data = VectorDataManager(self)
+            self._fulltext_index = AsyncFulltextIndexManager(self)
         except ImportError:
             # Vector managers not available
             self._vector_index = None
             self._vector_query = None
             self._vector_data = None
+            self._fulltext_index = None
 
     async def disconnect(self):
         """Disconnect from MatrixOne database asynchronously"""
@@ -1269,8 +1334,14 @@ class AsyncClient:
                 self.logger.log_disconnection(success=False)
                 self.logger.log_error(e, context="Async disconnection")
             finally:
+                # Ensure all references are cleared
                 self._engine = None
                 self._connection = None
+                # Clear any cached managers
+                self._vector_index = None
+                self._vector_query = None
+                self._vector_data = None
+                self._fulltext_index = None
 
     def disconnect_sync(self):
         """Synchronous disconnect for cleanup when event loop is closed"""
@@ -1285,17 +1356,15 @@ class AsyncClient:
             except Exception as e:
                 self.logger.log_disconnection(success=False)
                 self.logger.log_error(e, context="Sync disconnection")
+                # Ensure cleanup even if logging fails
                 self._engine = None
                 self._connection = None
 
     def __del__(self):
         """Cleanup when object is garbage collected"""
-        if hasattr(self, "_engine") and self._engine:
-            try:
-                self.disconnect_sync()
-            except Exception:
-                # Ignore any errors during cleanup
-                pass
+        # Don't try to cleanup in __del__ as it can cause issues with event loops
+        # The fixture should handle proper cleanup
+        pass
 
     def get_sqlalchemy_engine(self) -> AsyncEngine:
         """
@@ -1569,6 +1638,11 @@ class AsyncClient:
     def vector_index(self):
         """Get vector index manager for vector index operations"""
         return self._vector_index
+
+    @property
+    def fulltext_index(self):
+        """Get fulltext index manager for fulltext index operations"""
+        return self._fulltext_index
 
     @property
     def vector_query(self):

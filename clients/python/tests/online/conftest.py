@@ -135,16 +135,5 @@ async def test_async_client(db_helper, async_db_connection_test):
     try:
         yield client
     finally:
-        try:
-            # Ensure proper async cleanup - AsyncClient now handles the timing internally
-            await client.disconnect()
-        except Exception as e:
-            # Log the error but don't ignore it - this could indicate a real problem
-            print(f"Warning: Failed to disconnect async test client: {e}")
-            # Try sync cleanup as fallback
-            try:
-                client.disconnect_sync()
-            except Exception:
-                pass
-            # Re-raise to ensure test framework knows about the issue
-            raise
+        # Simple cleanup - let the client handle its own cleanup
+        await client.disconnect()
