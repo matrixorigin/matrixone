@@ -2502,6 +2502,14 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 	consecutiveLoopStartTime := time.Now()
 
 	for {
+		// Check if context is cancelled first
+		select {
+		case <-execCtx.reqCtx.Done():
+			ses.Infof(execCtx.reqCtx, "processLoadLocal: context cancelled, stopping load local operation")
+			return execCtx.reqCtx.Err()
+		default:
+		}
+
 		skipWrite, readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRrWr, skipWrite, epoch)
 		if err != nil {
 			if errors.Is(err, errorInvalidLength0) {
@@ -2524,8 +2532,13 @@ func processLoadLocal(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, 
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "load local file failed: processing timeout after %v", maxTotalTime)
 			}
 
-			// Add a small delay before retry to avoid overwhelming the system
-			time.Sleep(10 * time.Millisecond)
+			// Add a small delay before retry to avoid overwhelming the system, but check for cancellation
+			select {
+			case <-execCtx.reqCtx.Done():
+				ses.Infof(execCtx.reqCtx, "processLoadLocal: context cancelled during retry delay")
+				return execCtx.reqCtx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
 		} else {
 			consecutiveErrors = 0
 			consecutiveLoopStartTime = time.Now()
