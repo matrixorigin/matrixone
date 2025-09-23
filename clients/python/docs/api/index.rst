@@ -20,6 +20,16 @@ Core Classes
    logger
    exceptions
 
+SQLAlchemy Extensions
+--------------------
+
+.. toctree::
+   :maxdepth: 2
+
+   fulltext_index
+   vector_index
+   vector_type
+
 Utilities
 ---------
 

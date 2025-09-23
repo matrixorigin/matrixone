@@ -117,6 +117,31 @@ test-fast: ## Run fast tests (skip slow tests)
 	$(PYTHON) -m pytest tests/ -v -m "not slow" --tb=short
 	@echo "$(GREEN)Fast tests completed!$(NC)"
 
+.PHONY: test-fulltext
+test-fulltext: ## Run fulltext index tests
+	@echo "$(BLUE)Running fulltext index tests...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping fulltext tests.$(NC)" && exit 1)
+	$(PYTHON) -m pytest tests/online/test_fulltext_index_online.py -v --tb=short
+	$(PYTHON) -m pytest tests/offline/test_fulltext_index.py -v --tb=short
+	@echo "$(GREEN)Fulltext tests completed!$(NC)"
+
+.PHONY: test-vector
+test-vector: ## Run vector search tests
+	@echo "$(BLUE)Running vector search tests...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping vector tests.$(NC)" && exit 1)
+	$(PYTHON) -m pytest tests/online/test_vector_* -v --tb=short
+	@echo "$(GREEN)Vector tests completed!$(NC)"
+
+.PHONY: test-vector-index
+test-vector-index: ## Run vector index tests
+	@echo "$(BLUE)Running vector index tests...$(NC)"
+	@echo "$(YELLOW)Note: This requires a running MatrixOne database$(NC)"
+	@$(PYTHON) scripts/check_connection.py || (echo "$(RED)❌ Cannot connect to MatrixOne database. Skipping vector index tests.$(NC)" && exit 1)
+	$(PYTHON) -m pytest tests/online/test_vector_index_* -v --tb=short
+	@echo "$(GREEN)Vector index tests completed!$(NC)"
+
 .PHONY: test-verbose
 test-verbose: ## Run verbose tests
 	@echo "$(BLUE)Running verbose tests...$(NC)"
@@ -192,6 +217,66 @@ example-account: ## Run account management example (use env vars to override con
 	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
 	@echo ""
 	PYTHONPATH=. $(PYTHON) examples/example_02_account_management.py
+
+.PHONY: example-fulltext
+example-fulltext: ## Run fulltext index example (use env vars to override connection)
+	@echo "$(BLUE)Running fulltext index example...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
+	PYTHONPATH=. $(PYTHON) examples/example_fulltext_index.py
+
+.PHONY: example-vector
+example-vector: ## Run vector search example (use env vars to override connection)
+	@echo "$(BLUE)Running vector search example...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
+	PYTHONPATH=. $(PYTHON) examples/example_12_vector_search.py
+
+.PHONY: example-vector-index
+example-vector-index: ## Run vector index example (use env vars to override connection)
+	@echo "$(BLUE)Running vector index example...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
+	PYTHONPATH=. $(PYTHON) examples/example_13_vector_index.py
+
+.PHONY: example-vector-comprehensive
+example-vector-comprehensive: ## Run comprehensive vector examples (use env vars to override connection)
+	@echo "$(BLUE)Running comprehensive vector examples...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
+	PYTHONPATH=. $(PYTHON) examples/example_16_vector_comprehensive.py
+
+.PHONY: example-hnsw
+example-hnsw: ## Run HNSW vector index example (use env vars to override connection)
+	@echo "$(BLUE)Running HNSW vector index example...$(NC)"
+	@echo "$(YELLOW)Connection config:$(NC)"
+	@echo "  Host: $${MATRIXONE_HOST:-127.0.0.1}"
+	@echo "  Port: $${MATRIXONE_PORT:-6001}"
+	@echo "  User: $${MATRIXONE_USER:-root}"
+	@echo "  Password: $${MATRIXONE_PASSWORD:-111}"
+	@echo "  Database: $${MATRIXONE_DATABASE:-test}"
+	@echo ""
+	PYTHONPATH=. $(PYTHON) examples/example_17_hnsw_vector_index.py
 
 # Build related
 .PHONY: build
@@ -277,10 +362,6 @@ dev-setup: install-dev ## Setup development environment
 pre-commit: format lint test ## Full pre-commit checks (format + lint + test)
 	@echo "$(GREEN)Full pre-commit checks completed!$(NC)"
 
-.PHONY: release-check
-release-check: lint test build-release check-build ## Pre-release complete checks
-	@echo "$(GREEN)Pre-release checks completed!$(NC)"
-
 # Documentation
 .PHONY: docs
 docs: ## Generate documentation
@@ -305,6 +386,57 @@ docs-api: ## Generate API documentation only
 	@echo "$(BLUE)Generating API documentation...$(NC)"
 	$(PYTHON) -m sphinx -b html -D extensions=sphinx.ext.autodoc docs docs/_build/api
 	@echo "$(GREEN)API documentation generated!$(NC)"
+
+# Version management
+.PHONY: version-update
+version-update: ## Update version number (usage: make version-update VERSION=1.2.3)
+	@if [ -z "$(VERSION)" ]; then \
+		echo "$(RED)Error: VERSION is required$(NC)"; \
+		echo "Usage: make version-update VERSION=1.2.3"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Updating version to $(VERSION)...$(NC)"
+	$(PYTHON) scripts/update_version.py $(VERSION)
+	@echo "$(GREEN)Version updated to $(VERSION)!$(NC)"
+
+.PHONY: version-increment
+version-increment: ## Increment version (usage: make version-increment PART=patch)
+	@if [ -z "$(PART)" ]; then \
+		echo "$(RED)Error: PART is required$(NC)"; \
+		echo "Usage: make version-increment PART=patch|minor|major"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Incrementing $(PART) version...$(NC)"
+	$(PYTHON) scripts/update_version.py --increment $(PART)
+	@echo "$(GREEN)Version incremented!$(NC)"
+
+.PHONY: version-current
+version-current: ## Show current version
+	@echo "$(BLUE)Current version:$(NC)"
+	$(PYTHON) scripts/update_version.py --current
+
+# Release management
+.PHONY: release-check
+release-check: lint test build-release check-build ## Pre-release complete checks
+	@echo "$(GREEN)Pre-release checks completed!$(NC)"
+
+.PHONY: release-testpypi
+release-testpypi: ## Publish to test PyPI
+	@echo "$(BLUE)Publishing to test PyPI...$(NC)"
+	$(PYTHON) scripts/release.py --testpypi
+	@echo "$(GREEN)Published to test PyPI!$(NC)"
+
+.PHONY: release-pypi
+release-pypi: ## Publish to PyPI
+	@echo "$(BLUE)Publishing to PyPI...$(NC)"
+	$(PYTHON) scripts/release.py --pypi
+	@echo "$(GREEN)Published to PyPI!$(NC)"
+
+.PHONY: release-full
+release-full: ## Full release process (check + build + publish to test PyPI)
+	@echo "$(BLUE)Running full release process...$(NC)"
+	$(PYTHON) scripts/release.py --testpypi
+	@echo "$(GREEN)Full release process completed!$(NC)"
 
 # Information display
 .PHONY: info

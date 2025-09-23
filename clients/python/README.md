@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Build Status](https://github.com/matrixorigin/matrixone/workflows/CI/badge.svg)](https://github.com/matrixorigin/matrixone/actions)
 
-A high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, snapshot management, PITR, restore operations, table cloning, and mo-ctl integration.
+A comprehensive Python SDK for MatrixOne that provides SQLAlchemy-like interface for database operations, vector search, fulltext search, snapshot management, PITR, restore operations, table cloning, and mo-ctl integration.
 
 ## ✨ Features
 
@@ -19,6 +19,10 @@ A high-level Python SDK for MatrixOne that provides SQLAlchemy-like interface fo
 - 🔧 **Version Management**: Automatic backend version detection and compatibility checking
 - 🛡️ **Type Safety**: Full type hints support
 - 📚 **SQLAlchemy Integration**: Seamless SQLAlchemy integration
+- 🔍 **Fulltext Search**: Advanced fulltext indexing and search capabilities with TF-IDF and BM25 algorithms
+- 🧮 **Vector Search**: High-performance vector similarity search with HNSW and IVF algorithms
+- 📊 **Vector Indexes**: Create and manage vector indexes for AI/ML applications
+- 🎯 **Multi-Modal Support**: Support for various vector dimensions and data types
 
 ## 🚀 Installation
 
@@ -32,7 +36,7 @@ pip install matrixone-python-sdk
 
 ```bash
 git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone/clients/python-wrapper
+cd matrixone/clients/python
 
 # Create virtual environment
 python -m venv venv
@@ -54,7 +58,7 @@ pip install -e .
 
 ```bash
 git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone/clients/python-wrapper
+cd matrixone/clients/python
 
 # Create conda environment
 conda create -n matrixone-dev python=3.10
@@ -71,7 +75,7 @@ pip install -e .
 
 ```bash
 git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone/clients/python-wrapper
+cd matrixone/clients/python
 
 # Quick setup with Makefile
 make dev-setup
@@ -299,7 +303,7 @@ except SnapshotError as e:
 
 Check out the `examples/` directory for comprehensive usage examples:
 
-- `example_01_basic_operations.py` - Basic database operations
+- `example_01_basic_connection.py` - Basic database operations
 - `example_02_account_management.py` - User and role management
 - `example_03_async_operations.py` - Async operations
 - `example_04_transaction_management.py` - Transaction handling
@@ -310,6 +314,15 @@ Check out the `examples/` directory for comprehensive usage examples:
 - `example_09_logger_integration.py` - Logging integration
 - `example_10_version_management.py` - Version management
 - `example_11_matrixone_version_demo.py` - MatrixOne version demo
+- `example_12_vector_search.py` - Vector similarity search
+- `example_13_vector_index.py` - Vector index creation and management
+- `example_14_vector_index_orm.py` - Vector operations with SQLAlchemy ORM
+- `example_15_vector_index_client_chain.py` - Chained vector operations
+- `example_16_vector_comprehensive.py` - Comprehensive vector examples
+- `example_17_hnsw_vector_index.py` - HNSW vector index examples
+- `example_18_specialized_vector_indexes.py` - Specialized vector index types
+- `example_fulltext_index.py` - Fulltext indexing and search
+- `example_sql_logging.py` - SQL query logging
 
 ### Running Examples
 
@@ -320,9 +333,14 @@ make examples
 
 Run specific examples:
 ```bash
-make example-basic    # Basic connection example
-make example-async    # Async operations example
-make example-account  # Account management example
+make example-basic              # Basic connection example
+make example-async              # Async operations example
+make example-account            # Account management example
+make example-vector             # Vector search example
+make example-vector-index       # Vector index example
+make example-vector-comprehensive # Comprehensive vector examples
+make example-hnsw               # HNSW vector index example
+make example-fulltext           # Fulltext index example
 ```
 
 ### Customizing Connection Parameters
@@ -364,17 +382,22 @@ The MatrixOne Python SDK includes comprehensive testing with two types of tests:
 
 #### Offline Tests (Mock-based)
 - **Purpose**: Test SDK functionality without requiring a database connection
-- **Coverage**: 419 tests covering all core functionality
+- **Coverage**: 450+ tests covering all core functionality including vector and fulltext features
 - **Speed**: Fast execution (typically 3-5 seconds)
 - **Dependencies**: No external dependencies required
 - **Command**: `make test-offline`
 
 #### Online Tests (Database Integration)
 - **Purpose**: Test real database operations and integration
-- **Coverage**: 67 tests covering database connectivity and operations
-- **Speed**: Slower execution (typically 15-20 seconds)
+- **Coverage**: 100+ tests covering database connectivity, vector search, fulltext search, and operations
+- **Speed**: Slower execution (typically 20-30 seconds)
 - **Dependencies**: Requires running MatrixOne database
 - **Command**: `make test-online`
+
+#### Specialized Test Suites
+- **Vector Tests**: `make test-vector` - Vector search and similarity operations
+- **Vector Index Tests**: `make test-vector-index` - Vector index creation and management
+- **Fulltext Tests**: `make test-fulltext` - Fulltext indexing and search operations
 
 ### Online Testing Setup
 
@@ -705,7 +728,7 @@ We welcome contributions!
 2. **Set up development environment**
    ```bash
    git clone <your-fork-url>
-   cd matrixone/clients/python-wrapper
+   cd matrixone/clients/python
    
    # Create virtual environment
    python -m venv venv

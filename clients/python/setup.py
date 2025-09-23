@@ -40,7 +40,7 @@ setup(
     version=get_version(),
     author="MatrixOne Team",
     author_email="dev@matrixone.cloud",
-    description="A high-level Python SDK for MatrixOne database operations",
+    description="A comprehensive Python SDK for MatrixOne database operations with vector search, fulltext search, and advanced features",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/matrixorigin/matrixone",
@@ -84,7 +84,7 @@ setup(
             "sqlalchemy>=1.4.0",
         ],
     },
-    keywords="matrixone, database, sql, python, sdk, sqlalchemy, async",
+    keywords="matrixone, database, sql, python, sdk, sqlalchemy, async, fulltext, search, vector, similarity, ai, ml, embedding, hnsw, ivf",
     include_package_data=True,
     zip_safe=False,
 )
