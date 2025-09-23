@@ -97,7 +97,10 @@ func ISCPTaskExecutorFactory(
 		if exec.running {
 			return nil
 		}
-		exec.initStateLocked()
+		err = exec.initStateLocked()
+		if err != nil {
+			return err
+		}
 		exec.run(ctx)
 		return nil
 	}
@@ -207,7 +210,10 @@ func (exec *ISCPTaskExecutor) deleteTableEntry(table *TableEntry) {
 }
 
 func (exec *ISCPTaskExecutor) Resume() error {
-	exec.Start()
+	err := exec.Start()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 func (exec *ISCPTaskExecutor) Pause() error {
@@ -220,20 +226,27 @@ func (exec *ISCPTaskExecutor) Cancel() error {
 }
 func (exec *ISCPTaskExecutor) Restart() error {
 	exec.Stop()
-	exec.Start()
+	err := exec.Start()
+	if err != nil {
+		return err
+	}
 	return nil
 }
-func (exec *ISCPTaskExecutor) Start() {
+func (exec *ISCPTaskExecutor) Start() error {
 	exec.runningMu.Lock()
 	defer exec.runningMu.Unlock()
 	if exec.running {
-		return
+		return nil
 	}
-	exec.initStateLocked()
+	err := exec.initStateLocked()
+	if err != nil {
+		return err
+	}
 	go exec.run(context.Background())
+	return nil
 }
 
-func (exec *ISCPTaskExecutor) initStateLocked() {
+func (exec *ISCPTaskExecutor) initStateLocked() error {
 	exec.running = true
 	logutil.Info(
 		"ISCP-Task Start",
@@ -250,10 +263,10 @@ func (exec *ISCPTaskExecutor) initStateLocked() {
 		exec.option.RetryTimes,
 	)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	exec.wg.Add(1)
-
+	return nil
 }
 
 func (exec *ISCPTaskExecutor) Stop() {
