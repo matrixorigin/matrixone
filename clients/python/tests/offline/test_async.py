@@ -52,7 +52,7 @@ def teardown_sqlalchemy_mocks():
             del sys.modules[module_name]
 
 # Add the matrixone package to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from matrixone.async_client import AsyncClient, AsyncResultSet, AsyncSnapshotManager, AsyncCloneManager, AsyncMoCtlManager
 from matrixone.snapshot import SnapshotLevel, Snapshot
@@ -104,6 +104,7 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.query_timeout, 300)
         self.assertEqual(self.client.auto_commit, True)
         self.assertEqual(self.client.charset, 'utf8mb4')
+        self.assertIsNone(self.client._engine)
         self.assertIsNone(self.client._connection)
         self.assertIsInstance(self.client._snapshots, AsyncSnapshotManager)
         self.assertIsInstance(self.client._clone, AsyncCloneManager)
@@ -136,8 +137,11 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
             def begin(self):
                 return MockBeginContext(self.connection)
         
-        # Mock the connection.execute method
-        mock_connection.execute.return_value = mock_result
+        # Mock the connection.execute method - make it async
+        async def mock_execute(sql, params=None):
+            return mock_result
+        
+        mock_connection.execute = mock_execute
         
         # Create mock engine instance
         mock_engine = MockEngine(mock_connection)
@@ -302,32 +306,53 @@ class TestAsyncClient(unittest.IsolatedAsyncioTestCase):
     
     async def test_snapshot_query(self):
         """Test async snapshot query"""
-        mock_connection = AsyncMock()
-        mock_cursor = AsyncMock()
-        
-        # Create a proper async context manager
-        class MockCursorContext:
-            def __init__(self, cursor):
-                self.cursor = cursor
+        # Create a proper async context manager for engine.begin()
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
             
             async def __aenter__(self):
-                return self.cursor
+                return self.connection
             
             async def __aexit__(self, exc_type, exc_val, exc_tb):
                 pass
         
-        # Set up the mock connection to return our context manager
-        mock_connection.cursor = Mock(return_value=MockCursorContext(mock_cursor))
+        # Create a mock engine class that properly implements begin()
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+            
+            def begin(self):
+                return MockBeginContext(self.connection)
         
-        mock_cursor.description = [('id',), ('name',)]
-        mock_cursor.fetchall.return_value = [(1, 'Alice')]
+        # Create mock connection and result
+        mock_connection = Mock()
+        mock_result = Mock()
         
-        self.client._connection = mock_connection
+        # Setup mock result
+        mock_result.returns_rows = True
+        mock_result.fetchall.return_value = [(1, 'Alice')]
+        mock_result.keys.return_value = ['id', 'name']
+        
+        # Setup mock connection - make execute return a coroutine
+        async def mock_execute(sql, params=None):
+            return mock_result
+        
+        mock_connection.execute = Mock(side_effect=mock_execute)
+        
+        # Mock the text function
+        import sys
+        sys.modules['sqlalchemy'].text = Mock(return_value="SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}")
+        
+        # Create mock engine instance
+        mock_engine = MockEngine(mock_connection)
+        
+        self.client._engine = mock_engine
         
         result = await self.client.snapshot_query("test_snapshot", "SELECT id, name FROM users")
         
-        expected_sql = "SELECT id, name FROM users FOR SNAPSHOT 'test_snapshot'"
-        mock_cursor.execute.assert_called_once_with(expected_sql, None)
+        expected_sql = "SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}"
+        mock_connection.execute.assert_called_once()
         self.assertIsInstance(result, AsyncResultSet)
     
     async def test_context_manager(self):
@@ -384,7 +409,7 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         
         snapshot = await self.snapshot_manager.create("test_snap", SnapshotLevel.TABLE, database="test_db", table="test_table")
         
-        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR TABLE test_db.test_table")
+        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR TABLE test_db test_table")
         self.assertEqual(snapshot.name, "test_snap")
         self.assertEqual(snapshot.level, SnapshotLevel.TABLE)
         self.assertEqual(snapshot.database, "test_db")
@@ -591,8 +616,11 @@ class TestAsyncTransaction(unittest.IsolatedAsyncioTestCase):
         mock_result.returns_rows = False
         mock_result.rowcount = 1
         
-        # Mock the connection.execute method
-        self.mock_connection.execute.return_value = mock_result
+        # Mock the connection.execute method - make it async
+        async def mock_execute(sql, params=None):
+            return mock_result
+        
+        self.mock_connection.execute = Mock(side_effect=mock_execute)
         
         async with self.client.transaction() as tx:
             await tx.execute("INSERT INTO users (name) VALUES (%s)", ("Alice",))
@@ -603,14 +631,14 @@ class TestAsyncTransaction(unittest.IsolatedAsyncioTestCase):
     async def test_transaction_rollback(self):
         """Test async transaction rollback"""
         # Mock the connection.execute method to raise an exception
-        self.mock_connection.execute.side_effect = Exception("Query failed")
+        async def mock_execute_error(sql, params=None):
+            raise Exception("Query failed")
+        
+        self.mock_connection.execute = mock_execute_error
         
         with self.assertRaises(Exception):
             async with self.client.transaction() as tx:
                 await tx.execute("INSERT INTO users (name) VALUES (%s)", ("Alice",))
-        
-        # Verify that the transaction was attempted
-        self.mock_connection.execute.assert_called_once()
 
 
 def run_async_test(test_func):

@@ -438,7 +438,7 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
         
         result = self.builder.execute()
         
-        expected_sql = "SELECT col1, col2 FROM test_table FOR SNAPSHOT 'test_snapshot'"
+        expected_sql = "SELECT col1, col2 FROM test_table {SNAPSHOT = 'test_snapshot'}"
         self.mock_client.execute.assert_called_once_with(expected_sql, None)
         self.assertEqual(result, mock_result)
     
@@ -468,7 +468,7 @@ class TestSnapshotQueryBuilder(unittest.TestCase):
                        "ORDER BY col1, col2 DESC "
                        "LIMIT 10 "
                        "OFFSET 20 "
-                       "FOR SNAPSHOT 'test_snapshot'")
+                       "{SNAPSHOT = 'test_snapshot'}")
         
         self.mock_client.execute.assert_called_once_with(expected_sql, (100, 5))
         self.assertEqual(result, mock_result)

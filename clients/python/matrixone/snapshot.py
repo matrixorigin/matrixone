@@ -378,7 +378,7 @@ class SnapshotQueryBuilder:
             sql += f" OFFSET {self._offset_count}"
 
         # Add snapshot hint
-        sql += f" FOR SNAPSHOT '{self.snapshot_name}'"
+        sql += f" {{SNAPSHOT = '{self.snapshot_name}'}}"
 
         # Execute with parameters
         params = tuple(self._where_params + self._having_params)

@@ -461,7 +461,7 @@ class Client:
         """
         if conn:
             # Use provided SQLAlchemy connection
-            snapshot_sql = f"{sql} FOR SNAPSHOT '{snapshot_name}'"
+            snapshot_sql = f"{sql} {{SNAPSHOT = '{snapshot_name}'}}"
             result = conn.execute(text(snapshot_sql), params or {})
 
             if result.returns_rows:
@@ -472,7 +472,7 @@ class Client:
                 return ResultSet([], [], affected_rows=result.rowcount)
         else:
             # Use engine connection pool
-            snapshot_sql = f"{sql} FOR SNAPSHOT '{snapshot_name}'"
+            snapshot_sql = f"{sql} {{SNAPSHOT = '{snapshot_name}'}}"
             return self.execute(snapshot_sql, params)
 
     def snapshot_query_builder(self, snapshot_name: str) -> SnapshotQueryBuilder:

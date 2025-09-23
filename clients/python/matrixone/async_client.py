@@ -2,8 +2,6 @@
 MatrixOne Async Client - Asynchronous implementation
 """
 
-import asyncio
-
 try:
     import aiomysql
 except ImportError:
@@ -94,7 +92,7 @@ class AsyncSnapshotManager:
         elif level == SnapshotLevel.TABLE:
             if not database or not table:
                 raise SnapshotError("Database and table names are required for table level snapshot")
-            sql = f"CREATE SNAPSHOT {name} FOR TABLE {database}.{table}"
+            sql = f"CREATE SNAPSHOT {name} FOR TABLE {database} {table}"
         else:
             raise SnapshotError(f"Invalid snapshot level: {level}")
 
@@ -1154,6 +1152,9 @@ class AsyncClient:
         self._pitr = AsyncPitrManager(self)
         self._pubsub = AsyncPubSubManager(self)
         self._account = AsyncAccountManager(self)
+        self._vector_index = None
+        self._vector_query = None
+        self._vector_data = None
 
     async def connect(
         self,
@@ -1203,6 +1204,9 @@ class AsyncClient:
             async with self._engine.begin() as conn:
                 await conn.execute(text("SELECT 1"))
 
+            # Initialize vector managers after successful connection
+            self._initialize_vector_managers()
+
             self.logger.log_connection(host, port, final_user, database or "default", success=True)
 
         except Exception as e:
@@ -1228,31 +1232,66 @@ class AsyncClient:
         # Create async engine with connection pooling
         engine = create_async_engine(
             connection_string,
-            pool_size=10,  # Default pool size
-            max_overflow=20,  # Default max overflow
+            pool_size=5,  # Smaller pool size for testing
+            max_overflow=10,  # Smaller max overflow
             pool_timeout=30,  # Default pool timeout
             pool_recycle=3600,  # Recycle connections after 1 hour
+            pool_pre_ping=True,  # Verify connections before use
+            pool_reset_on_return="commit",  # Reset connections on return
             echo=False,  # Set to True for SQL logging
         )
 
         return engine
 
+    def _initialize_vector_managers(self) -> None:
+        """Initialize vector managers after successful connection"""
+        try:
+            from .client import (VectorDataManager, VectorIndexManager,
+                                 VectorQueryManager)
+
+            self._vector_index = VectorIndexManager(self)
+            self._vector_query = VectorQueryManager(self)
+            self._vector_data = VectorDataManager(self)
+        except ImportError:
+            # Vector managers not available
+            self._vector_index = None
+            self._vector_query = None
+            self._vector_data = None
+
     async def disconnect(self):
         """Disconnect from MatrixOne database asynchronously"""
         if self._engine:
             try:
-                # Dispose the SQLAlchemy async engine
                 await self._engine.dispose()
-                self._engine = None
                 self.logger.log_disconnection(success=True)
             except Exception as e:
                 self.logger.log_disconnection(success=False)
                 self.logger.log_error(e, context="Async disconnection")
-                # Ignore errors during cleanup
-                pass
             finally:
-                # Clear connection reference for backward compatibility
+                self._engine = None
                 self._connection = None
+
+    def disconnect_sync(self):
+        """Synchronous disconnect for cleanup when event loop is closed"""
+        if self._engine:
+            try:
+                self._engine = None
+                self._connection = None
+                self.logger.log_disconnection(success=True)
+            except Exception as e:
+                self.logger.log_disconnection(success=False)
+                self.logger.log_error(e, context="Sync disconnection")
+                self._engine = None
+                self._connection = None
+
+    def __del__(self):
+        """Cleanup when object is garbage collected"""
+        if hasattr(self, "_engine") and self._engine:
+            try:
+                self.disconnect_sync()
+            except Exception:
+                # Ignore any errors during cleanup
+                pass
 
     def get_sqlalchemy_engine(self) -> AsyncEngine:
         """
@@ -1305,22 +1344,6 @@ class AsyncClient:
             self.logger.log_query(sql, execution_time, success=False)
             self.logger.log_error(e, context="Async query execution")
             raise QueryError(f"Query execution failed: {e}")
-
-    def __del__(self):
-        """Cleanup when object is garbage collected"""
-        if hasattr(self, "_connection") and self._connection:
-            try:
-                # Try to close connection synchronously if possible
-                if hasattr(self._connection, "close"):
-                    # Check if close is a coroutine function
-                    if asyncio.iscoroutinefunction(self._connection.close):
-                        # For async close, we can't await in __del__, so just log
-                        pass
-                    else:
-                        self._connection.close()
-            except Exception:
-                # Ignore errors during cleanup
-                pass
 
     def _build_login_info(
         self, user: str, account: Optional[str] = None, role: Optional[str] = None
@@ -1405,6 +1428,38 @@ class AsyncClient:
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
 
+    def snapshot_query_builder(self, snapshot_name: str):
+        """
+        Get snapshot query builder
+
+        Args:
+            snapshot_name: Name of the snapshot
+
+        Returns:
+            SnapshotQueryBuilder instance
+        """
+        from .client import SnapshotQueryBuilder
+
+        return SnapshotQueryBuilder(snapshot_name, self)
+
+    @asynccontextmanager
+    async def snapshot(self, snapshot_name: str):
+        """
+        Snapshot context manager
+
+        Usage:
+            async with client.snapshot("daily_backup") as snapshot_client:
+                result = await snapshot_client.execute("SELECT * FROM users")
+        """
+        if not self._engine:
+            raise ConnectionError("Not connected to database")
+
+        # Create a snapshot client wrapper
+        from .client import SnapshotClient
+
+        snapshot_client = SnapshotClient(self, snapshot_name)
+        yield snapshot_client
+
     async def snapshot_query(self, snapshot_name: str, sql: str, params: Optional[Tuple] = None) -> AsyncResultSet:
         """
         Execute query with snapshot asynchronously
@@ -1417,20 +1472,21 @@ class AsyncClient:
         Returns:
             AsyncResultSet with query results
         """
-        if not self._connection:
+        if not self._engine:
             raise ConnectionError("Not connected to database")
 
         try:
-            async with self._connection.cursor() as cursor:
-                snapshot_sql = f"{sql} FOR SNAPSHOT '{snapshot_name}'"
-                await cursor.execute(snapshot_sql, params)
+            # Use MatrixOne snapshot syntax: {SNAPSHOT = 'name'}
+            snapshot_sql = f"{sql} {{SNAPSHOT = '{snapshot_name}'}}"
+            async with self._engine.begin() as conn:
+                result = await conn.execute(text(snapshot_sql), params or {})
 
-                if cursor.description:
-                    columns = [desc[0] for desc in cursor.description]
-                    rows = await cursor.fetchall()
+                if result.returns_rows:
+                    rows = result.fetchall()
+                    columns = list(result.keys()) if hasattr(result, "keys") else []
                     return AsyncResultSet(columns, rows)
                 else:
-                    return AsyncResultSet([], [], affected_rows=cursor.rowcount)
+                    return AsyncResultSet([], [], affected_rows=result.rowcount)
 
         except Exception as e:
             raise QueryError(f"Snapshot query execution failed: {e}")
@@ -1501,6 +1557,25 @@ class AsyncClient:
         """Get async account manager"""
         return self._account
 
+    def connected(self) -> bool:
+        """Check if client is connected to database"""
+        return self._engine is not None
+
+    @property
+    def vector_index(self):
+        """Get vector index manager for vector index operations"""
+        return self._vector_index
+
+    @property
+    def vector_query(self):
+        """Get vector query manager for vector query operations"""
+        return self._vector_query
+
+    @property
+    def vector_data(self):
+        """Get vector data manager for vector data operations"""
+        return self._vector_data
+
     async def version(self) -> str:
         """
         Get MatrixOne server version asynchronously
@@ -1565,6 +1640,139 @@ class AsyncClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.disconnect()
+
+    async def create_table(self, table_name: str, columns: dict, **kwargs) -> "AsyncClient":
+        """
+        Create a table asynchronously
+
+        Args:
+            table_name: Name of the table to create
+            columns: Dictionary mapping column names to their definitions
+            **kwargs: Additional table creation options
+
+        Returns:
+            AsyncClient: Self for chaining
+
+        Example:
+            >>> await client.create_table("users", {
+            ...     "id": "int primary key",
+            ...     "name": "varchar(100)",
+            ...     "email": "varchar(255)"
+            ... })
+        """
+        if not self._engine:
+            raise ConnectionError("Not connected to database")
+
+        # Build CREATE TABLE SQL
+        column_definitions = []
+        for column_name, column_def in columns.items():
+            column_definitions.append(f"{column_name} {column_def}")
+
+        sql = f"CREATE TABLE {table_name} ({', '.join(column_definitions)})"
+
+        await self.execute(sql)
+        return self
+
+    async def drop_table(self, table_name: str) -> "AsyncClient":
+        """
+        Drop a table asynchronously
+
+        Args:
+            table_name: Name of the table to drop
+
+        Returns:
+            AsyncClient: Self for chaining
+
+        Example:
+            >>> await client.drop_table("users")
+        """
+        if not self._engine:
+            raise ConnectionError("Not connected to database")
+
+        sql = f"DROP TABLE IF EXISTS {table_name}"
+        await self.execute(sql)
+        return self
+
+    async def create_table_with_index(
+        self, table_name: str, columns: dict, indexes: list = None, **kwargs
+    ) -> "AsyncClient":
+        """
+        Create a table with indexes asynchronously
+
+        Args:
+            table_name: Name of the table to create
+            columns: Dictionary mapping column names to their definitions
+            indexes: List of index definitions
+            **kwargs: Additional table creation options
+
+        Returns:
+            AsyncClient: Self for chaining
+
+        Example:
+            >>> await client.create_table_with_index("users", {
+            ...     "id": "int primary key",
+            ...     "name": "varchar(100)",
+            ...     "email": "varchar(255)"
+            ... }, [
+            ...     {"name": "idx_name", "columns": ["name"]},
+            ...     {"name": "idx_email", "columns": ["email"], "unique": True}
+            ... ])
+        """
+        if not self._engine:
+            raise ConnectionError("Not connected to database")
+
+        # Build CREATE TABLE SQL
+        column_definitions = []
+        for column_name, column_def in columns.items():
+            column_definitions.append(f"{column_name} {column_def}")
+
+        sql = f"CREATE TABLE {table_name} ({', '.join(column_definitions)})"
+        await self.execute(sql)
+
+        # Create indexes if provided
+        if indexes:
+            for index_def in indexes:
+                index_name = index_def["name"]
+                index_columns = ", ".join(index_def["columns"])
+                unique = "UNIQUE " if index_def.get("unique", False) else ""
+                index_sql = f"CREATE {unique}INDEX {index_name} ON {table_name} ({index_columns})"
+                await self.execute(index_sql)
+
+        return self
+
+    async def create_table_orm(self, table_name: str, *columns, **kwargs) -> "AsyncClient":
+        """
+        Create a table using SQLAlchemy ORM asynchronously
+
+        Args:
+            table_name: Name of the table to create
+            *columns: SQLAlchemy column definitions
+            **kwargs: Additional table creation options
+
+        Returns:
+            AsyncClient: Self for chaining
+
+        Example:
+            >>> from sqlalchemy import Column, Integer, String
+            >>> await client.create_table_orm("users",
+            ...     Column("id", Integer, primary_key=True),
+            ...     Column("name", String(100)),
+            ...     Column("email", String(255))
+            ... )
+        """
+        if not self._engine:
+            raise ConnectionError("Not connected to database")
+
+        from sqlalchemy import MetaData, Table
+
+        metadata = MetaData()
+        Table(table_name, metadata, *columns)
+
+        # Create the table
+        async with self._engine.begin() as conn:
+            await conn.run_sync(metadata.create_all)
+
+        return self
 
 
 class AsyncTransactionWrapper:
