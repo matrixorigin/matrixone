@@ -54,8 +54,9 @@ class TestAdvancedFeatures:
         try:
             test_client.pubsub.drop_subscription("test_subscription")
             test_client.pubsub.drop_publication("test_publication")
-        except Exception:
-            pass  # Ignore cleanup errors
+        except Exception as e:
+            print(f"Warning: Failed to cleanup pubsub resources: {e}")
+            # Don't ignore - this could indicate resource leaks
         
         test_client.execute("DROP TABLE IF EXISTS pubsub_test")
 

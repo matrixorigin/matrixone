@@ -130,8 +130,10 @@ class TestLoggerIntegration:
             # Test error logging
             try:
                 client.execute("INVALID SQL")
-            except Exception:
-                pass  # Expected to fail, but should be logged
+            except Exception as e:
+                # Expected to fail, verify it's a SQL error
+                assert "syntax" in str(e).lower() or "error" in str(e).lower()
+                # The error should have been logged by the client
             
         finally:
             client.disconnect()
@@ -155,13 +157,17 @@ class TestLoggerIntegration:
             # Test error scenarios that should be logged
             try:
                 client.execute("SELECT * FROM nonexistent_table")
-            except Exception:
-                pass  # Expected to fail, but should be logged
+            except Exception as e:
+                # Expected to fail, verify it's a table not found error
+                assert "table" in str(e).lower() or "not found" in str(e).lower()
+                # The error should have been logged by the client
             
             try:
                 client.execute("INVALID SQL SYNTAX")
-            except Exception:
-                pass  # Expected to fail, but should be logged
+            except Exception as e:
+                # Expected to fail, verify it's a syntax error
+                assert "syntax" in str(e).lower() or "error" in str(e).lower()
+                # The error should have been logged by the client
             
         finally:
             client.disconnect()
@@ -188,8 +194,10 @@ class TestLoggerIntegration:
                 with client.transaction():
                     client.execute("SELECT 1 as test_value")
                     client.execute("INVALID SQL")  # This should cause rollback
-            except Exception:
-                pass  # Expected to fail and rollback
+            except Exception as e:
+                # Expected to fail and rollback, verify it's a SQL error
+                assert "syntax" in str(e).lower() or "error" in str(e).lower()
+                # The rollback should have been logged by the client
             
         finally:
             client.disconnect()

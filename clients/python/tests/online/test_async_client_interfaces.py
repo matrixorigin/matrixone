@@ -6,6 +6,7 @@ This test file covers the interfaces that were missing in AsyncClient
 compared to Client and have been added to ensure feature parity.
 """
 
+import asyncio
 import pytest
 import pytest_asyncio
 from matrixone import AsyncClient
@@ -26,9 +27,18 @@ class TestAsyncClientMissingInterfaces:
             yield client
         finally:
             try:
+                # Ensure proper async cleanup - AsyncClient now handles the timing internally
                 await client.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                # Log the error but don't ignore it - this could indicate a real problem
+                print(f"Warning: Failed to disconnect async client: {e}")
+                # Try sync cleanup as fallback
+                try:
+                    client.disconnect_sync()
+                except Exception:
+                    pass
+                # Re-raise to ensure test framework knows about the issue
+                raise
 
     @pytest.mark.asyncio
     async def test_connected_method(self, client):

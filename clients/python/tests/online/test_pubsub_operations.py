@@ -79,8 +79,9 @@ class TestPubSubOperations:
             try:
                 test_client.pubsub.drop_subscription("product_subscription")
                 test_client.pubsub.drop_publication("product_updates")
-            except Exception:
-                pass  # Ignore cleanup errors
+            except Exception as e:
+                print(f"Warning: Failed to cleanup pubsub resources: {e}")
+                # Don't ignore - this could indicate resource leaks
             
             test_client.execute("DROP DATABASE IF EXISTS pubsub_test")
 
@@ -148,8 +149,8 @@ class TestPubSubOperations:
             # Cleanup
             try:
                 test_client.pubsub.drop_publication("multi_table_publication")
-            except Exception:
-                pass  # Ignore cleanup errors
+            except Exception as e:
+                print(f"Warning: Failed to cleanup multi-table publication: {e}")
             
             test_client.execute("DROP DATABASE IF EXISTS pubsub_multi_test")
 
@@ -226,8 +227,8 @@ class TestPubSubOperations:
             try:
                 test_client.pubsub.drop_subscription("list_test_subscription")
                 test_client.pubsub.drop_publication("list_test_publication")
-            except Exception:
-                pass  # Ignore cleanup errors
+            except Exception as e:
+                print(f"Warning: Failed to cleanup list test resources: {e}")
             
             test_client.execute("DROP DATABASE IF EXISTS pubsub_list_test")
 
@@ -267,8 +268,8 @@ class TestPubSubOperations:
             try:
                 await test_async_client.pubsub.drop_subscription("async_test_subscription")
                 await test_async_client.pubsub.drop_publication("async_test_publication")
-            except Exception:
-                pass  # Ignore cleanup errors
+            except Exception as e:
+                print(f"Warning: Failed to cleanup async pubsub resources: {e}")
             
             await test_async_client.execute("DROP DATABASE IF EXISTS async_pubsub_test")
 
@@ -313,8 +314,8 @@ class TestPubSubOperations:
             # Cleanup
             try:
                 client.pubsub.drop_publication("log_test_publication")
-            except Exception:
-                pass  # Ignore cleanup errors
+            except Exception as e:
+                print(f"Warning: Failed to cleanup logging test publication: {e}")
             
             client.execute("DROP DATABASE IF EXISTS pubsub_log_test")
             

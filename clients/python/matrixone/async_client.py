@@ -1262,6 +1262,7 @@ class AsyncClient:
         """Disconnect from MatrixOne database asynchronously"""
         if self._engine:
             try:
+                # Properly dispose of the engine - this closes all connections in the pool
                 await self._engine.dispose()
                 self.logger.log_disconnection(success=True)
             except Exception as e:
@@ -1275,6 +1276,9 @@ class AsyncClient:
         """Synchronous disconnect for cleanup when event loop is closed"""
         if self._engine:
             try:
+                # For sync cleanup, we can't await, but we can try to close the pool
+                # The engine will be garbage collected and connections will be closed
+                # by the underlying connection pool's cleanup
                 self._engine = None
                 self._connection = None
                 self.logger.log_disconnection(success=True)
