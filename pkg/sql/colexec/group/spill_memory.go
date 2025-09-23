@@ -86,3 +86,10 @@ func (m *MemorySpillManager) Free() {
 	}
 	m.data = nil
 }
+
+func (m *MemorySpillManager) TotalMem() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return atomic.LoadInt64(&m.totalMem)
+}
